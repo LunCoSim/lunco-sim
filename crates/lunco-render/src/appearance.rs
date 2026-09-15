@@ -96,21 +96,16 @@ pub struct PbrLook {
     /// Skip lighting entirely: output `base_color` verbatim, ignoring lights, normals
     /// and shadows.
     ///
-    /// **Render intent, NOT a material property — and deliberately not persisted.**
-    /// It says "this geometry is a *symbol*, not a surface": trajectory lines, the
-    /// terrain brush overlay, name labels. Asking how the sun falls on an orbit line
-    /// is a category error, which is why `UsdPreviewSurface` has no such input and is
-    /// right not to.
+    /// For USD-authored scene surfaces this is projected from the registered
+    /// `LunCoSurfaceAPI` `lunco:surface:unlit` property because
+    /// `UsdPreviewSurface` has no standard unlit input. Rust-created overlays
+    /// may set the same generic render intent directly.
     ///
     /// It matters more here than in a terrestrial renderer: the Moon has no
     /// atmosphere, so there is no ambient fill, and geometry facing away from the sun
     /// renders *pure black*. A lit trajectory line would vanish on the night side —
     /// exactly where you need to see where the spacecraft is going.
     ///
-    /// Set from Rust at the few overlay call sites. No `.usda` authors it. If a
-    /// *scene* surface ever needs to be unlit, say so the USD way — an emissive-only
-    /// `UsdPreviewSurface` (`diffuseColor` 0, `emissiveColor` C, `specularColor` 0) —
-    /// rather than reaching for this flag.
     pub unlit: bool,
     /// Render back faces too.
     pub double_sided: bool,

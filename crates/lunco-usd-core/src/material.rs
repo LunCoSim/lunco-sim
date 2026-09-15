@@ -292,11 +292,10 @@ fn apply_material_binding_api(
 /// that edits a look authors the SAME USD.
 ///
 /// `None` is a real answer, not a gap:
-/// - `unlit` has no `UsdPreviewSurface` input, and should not: it is not a claim
-///   about a surface but about the geometry's *role* ("this is a symbol, not a
-///   surface" — trajectory lines, overlays, labels). It is render-only intent, set
-///   from Rust, and no scene authors it. A genuinely unlit *surface* is spelled the
-///   USD way: emissive-only (`diffuseColor` 0, `emissiveColor` C, `specularColor` 0).
+/// - `unlit` has no `UsdPreviewSurface` input because it is a geometry-level
+///   render intent. Scene-authored symbols use the registered
+///   `LunCoSurfaceAPI` `lunco:surface:unlit` property, which the gprim reader
+///   maps to `PbrLook`; it is not represented by emissive radiance.
 /// - `double_sided` is NOT a surface input at all — it is `uniform bool
 ///   doubleSided` on `UsdGeomGprim`, i.e. a property of the *geometry*, not the
 ///   material. It is handled by the caller, on the geom prim.

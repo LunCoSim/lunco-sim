@@ -337,25 +337,19 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
   see through — a trimmed surface reads as a hole from one side and nothing from
   the other without it.
 - Alpha: `opacity < 1` or a connected `inputs:opacity` → Blend;
-  `opacityThreshold > 0` → Mask. No blend-mode control, no unlit from USD (use an
-  emissive-only surface: `diffuseColor` 0, `emissiveColor` C).
+  `opacityThreshold > 0` → Mask. For a symbol that must bypass lighting,
+  normals, and shadows, apply `LunCoSurfaceAPI` to the gprim and author
+  `bool lunco:surface:unlit = true`. This maps to `PbrLook.unlit`; it is not
+  emissive radiance and must not be simulated with an emissive-only surface.
 - Navigational annotations use the authored opacity appropriate to their visual
-  job. The reusable waypoint dome uses `float[] primvars:displayOpacity =
-  [0.2]` so a rover inside remains readable; landing locations and predicted
-  landing annotations remain opaque unless their own review contract changes.
-  All three use the emissive-only surface with
-  `primvars:doNotCastShadows = true`, so appearance stays independent of scene
-  lighting and the waypoint's invisible Trigger remains separate from its
-  translucent visual dome.
-- For an emissive annotation that must remain visible without occluding geometry
-  behind it, author `bool lunco:surface:additive = true` on the gprim (as the
-  waypoint dome does). This uses the existing additive,
-  depth-tested/non-depth-writing render intent; do not hide the problem with a
-  camera offset or a second overlay mechanism.
-- Reusable waypoint markers also author `float3
-  lunco:waypoint:inactiveColor` on the marker root. Rhai reads that composed USD
-  value on arrival and writes the visited color to the bound visual at runtime;
-  do not hardcode a visited tint in Rust or in each mission script.
+  job. The reusable route-point dome is opaque, unlit, and shadowless, with a
+  bright amber pending colour. The generic route policy applies a bright green
+  transient material-colour override when its sensor event reaches the point.
+  Its invisible Trigger remains a separate overlap-only prim.
+- For an annotation that is genuinely meant to emit visible radiance, use
+  `inputs:emissiveColor`; for one that must not emit light, keep that input black.
+  `lunco:surface:additive` is reserved for authored additive glow surfaces and
+  is not a substitute for unlit presentation.
 - Textures: `UsdUVTexture` via `inputs:file`, `wrapS`/`wrapT`,
   `inputs:sourceColorSpace`. **There is no UV primvar reader** —
   `UsdPrimvarReader_float2`/`inputs:st` is inert; UVs come from the mesh's own
