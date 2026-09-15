@@ -173,7 +173,8 @@ The two CLI binaries compose:
 #    every bundled asset model + any explicitly requested source classes.
 #    Takes ~7 min cold, ~30s if the parse cache from a prior run is intact.
 LUNCOSIM_WARM_DIRS="$(pwd)/assets/models" \
-  cargo run --release -p lunco-modelica-core --bin modelica_library_indexer -- --warm
+  cargo run --release -p lunco-modelica-core --features native-library-indexer \
+    --bin modelica_library_indexer -- --warm
 
 # 2. Run AnnotatedRocketStage.RocketStage for 10s, dump per-step telemetry
 #    to CSV. After the warm pass above, compile is ~ms instead of minutes.

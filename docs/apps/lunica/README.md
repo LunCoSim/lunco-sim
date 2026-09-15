@@ -36,9 +36,9 @@ Lunica can be served as a web application:
 ### 1. Modelica source-library bootstrap
 Lunica needs its configured source libraries on hand. On first use (desktop):
 1. **Download source libraries**: Ensure the configured source-library roots are installed in the LunCo cache.
-2. **Index the source libraries**: Run the indexer to produce the pre-parsed cache:
+2. **Index the source libraries**: Run the opt-in native indexer to produce the pre-parsed cache:
    ```bash
-   cargo run --release -p lunco-modelica-core --bin modelica_library_indexer
+   cargo run --release -p lunco-modelica-core --features native-library-indexer --bin modelica_library_indexer
    ```
 
 ### 2. Modeling & Simulation

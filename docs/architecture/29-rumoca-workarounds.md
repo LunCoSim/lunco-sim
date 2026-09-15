@@ -318,7 +318,8 @@ On every rumoca bump, in this order:
    `StoredDefinition` layout is version-sensitive and a stale bundle decodes to
    garbage.
 4. Remove `.cache/lunco/library/parsed-library.bin` and run
-   `cargo run --release --bin modelica_library_indexer -- --warm`.
+   `cargo run --release -p lunco-modelica-core --features native-library-indexer \
+   --bin modelica_library_indexer -- --warm`.
 5. `cargo test --workspace` **and** `cargo test -p lunco-modelica-ui -- --ignored`
    (the ignored set is where the upstream-bug pins live — that's how the 0.9.20
    bump revealed 7 fixed bugs).

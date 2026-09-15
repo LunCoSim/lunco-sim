@@ -5,11 +5,25 @@ edition = "2021"
 license.workspace = true
 description = "Headless Modelica compiler, worker, and simulation runtime for LunCoSim"
 
+[[bin]]
+name = "modelica_library_indexer"
+path = "src/bin/modelica_library_indexer.rs"
+required-features = ["native-library-indexer"]
+
+[[bin]]
+name = "modelica_library_parse_bench"
+path = "src/bin/modelica_library_parse_bench.rs"
+required-features = ["native-library-indexer"]
+
 [features]
 # The compiler core is transport-free by default. API command completion is an
 # explicit host capability; Modelica query providers live in the separate
 # `lunco-modelica-api` package.
 default = []
+# Native source-library indexing is a provisioning/build capability. Keep it
+# out of headless compiler and server consumers; the Modelica UI enables it
+# when it owns the source-library browser and its rebuild action.
+native-library-indexer = ["dep:lunco-assets-datasets", "dep:regex"]
 # Compile the transport-free API contracts. Application roots add
 # `lunco-api-transport` when they expose native HTTP or the browser bridge.
 api = ["dep:lunco-api"]
@@ -133,12 +147,12 @@ uuid = { workspace = true }
 # (missing `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs).
 # Enable with `cargo run --features tracy --bin lunica` when profiling.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Native-only source indexing. The indexer walks the host filesystem and is not
-# part of the wasm runtime; keeping these edges target-gated prevents the web
-# worker from compiling its parallel parser and scanner dependencies.
-lunco-assets-datasets = { path = "../lunco-assets-datasets" }
+# The worker still uses rayon for native solve preparation. The indexer's
+# dataset/regex edges are optional below because source indexing is a
+# provisioning capability, not part of the default compiler runtime.
+lunco-assets-datasets = { path = "../lunco-assets-datasets", optional = true }
 rayon = { workspace = true }
-regex = "1.10"
+regex = { version = "1.10", optional = true }
 
 # OS clipboard for the code editor's menu / toolbar / right-click Paste
 # buttons on native. Ctrl/Cmd+V already works through bevy_egui's own

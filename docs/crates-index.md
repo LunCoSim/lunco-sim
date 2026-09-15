@@ -206,7 +206,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
 | **`lunco-modelica-icon-ui`** | — | Reusable egui Modelica icon/diagram graphics renderer used by the diagram canvas and model preview. |
 | **`lunco-modelica-docs-ui`** | — | Reusable egui Modelica documentation renderer used by the model view. |
-| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `modelica_library_indexer`, `modelica_library_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI or Modelica API query capability. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
+| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`; opt-in `modelica_library_indexer` and `modelica_library_parse_bench` | Headless Modelica compiler/worker runtime. Native source-library indexing is an explicit `native-library-indexer` feature used by the Modelica UI and provisioning workflow, keeping its dataset/regex closure out of lean compiler consumers. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
 | **`lunco-modelica-api`** | — | API query capability installed by API-enabled Modelica and LunCoSim hosts. |
 
 > Other binaries: `build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).

@@ -1214,9 +1214,11 @@ pub mod experiments_runner;
 /// artifacts this produces (`library_remote` fetches the bundle over HTTP and
 /// installs it via `install_global_parsed_source_bundle`). It used to be an unconditional
 /// `pub mod`, so ~1.6k lines of dead directory-walking code shipped in the wasm
-/// bundle and tripped the wasm lint. Native-gated now: the web source library path is
-/// `library_remote`, and this is the thing that makes its input.
-#[cfg(not(target_arch = "wasm32"))]
+/// bundle and tripped the wasm lint. It is now behind the explicit
+/// `native-library-indexer` feature: the web source-library path is
+/// `library_remote`, and headless compiler consumers do not compile the host
+/// scanner or dataset integration.
+#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
 pub mod indexer;
 pub mod modelica_library_settings;
 pub mod worker;

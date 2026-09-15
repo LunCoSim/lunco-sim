@@ -5,8 +5,9 @@
 //! on `AsyncComputeTaskPool` after a fresh source download. This binary
 //! parses CLI arguments and invokes `indexer::run`.
 //!
-//! Native-only: `lunco_modelica_core::indexer` is `#[cfg(not(wasm32))]` (it walks a
-//! filesystem the browser doesn't have), and indexing is a build/host step —
+//! Native-only: `lunco_modelica_core::indexer` is enabled by the
+//! `native-library-indexer` feature (it walks a filesystem the browser
+//! doesn't have), and indexing is a build/host step —
 //! the web consumes the artifacts it writes. The wasm stub exists only so the
 //! bin target still has a `main` when the workspace is checked/linted for
 //! `wasm32-unknown-unknown`.
