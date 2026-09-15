@@ -15,7 +15,10 @@ fn main() -> lunco_luncosim_core::AppExit {
     velopack::VelopackApp::build().run();
 
     #[cfg(not(target_family = "wasm"))]
-    if std::env::args().skip(1).any(|a| a == "test") {
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "test" || a == "test-component")
+    {
         std::process::exit(lunco_luncosim::debug_scene::run() as i32);
     }
 

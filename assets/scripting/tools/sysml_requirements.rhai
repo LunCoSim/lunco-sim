@@ -62,6 +62,26 @@ fn _find_requirement(report, expected) {
     ()
 }
 
+fn _lazy_attribute(report, name) {
+    if report == () || report.path == () || report.path == "" { return (); }
+    let selected = query("ValidateSysml", #{path: report.path,
+        compact: true, attributes: [name]});
+    if selected == () || selected.ok != true
+        || selected.attributes_qualified == () { return (); }
+    let found = ();
+    // `attributes_qualified` is an identity-preserving Rhai map, not an
+    // array.  Iterate its keys so the bridge remains valid for both exact
+    // qualified requests and short-name projections.
+    for qualified in selected.attributes_qualified.keys() {
+        let entry = selected.attributes_qualified[qualified];
+        if qualified == name || qualified.ends_with("::" + name) {
+            if found != () { throw("ambiguous SysML attribute `" + name + "`"); }
+            found = entry;
+        }
+    }
+    found
+}
+
 // Resolve one typed SysML attribute without silently choosing a colliding
 // short name. Qualified names are the stable contract; a local name is only
 // accepted when the validator proved it unique.
@@ -73,6 +93,8 @@ fn attribute(report, name) {
         if report.attributes_qualified != () && report.attributes_qualified[name] != () {
             return #{ok: true, record: report.attributes_qualified[name]};
         }
+        let lazy = _lazy_attribute(report, name);
+        if lazy != () { return #{ok: true, record: lazy}; }
         return #{ok: false, error: "qualified SysML attribute is missing: " + name};
     }
     if report.attribute_collisions != () {
@@ -83,6 +105,14 @@ fn attribute(report, name) {
         }
     }
     if report.attributes == () || report.attributes[name] == () {
+        // The compact source snapshot is intentionally bounded.  When it was
+        // requested with `attributes: []`, resolve one literal through the
+        // same ValidateSysml provider instead of moving the entire source set
+        // across the Rhai value boundary.  This is a projection, not a
+        // default: a missing or ambiguous name still returns an explicit
+        // failure to the caller.
+        let lazy = _lazy_attribute(report, name);
+        if lazy != () { return #{ok: true, record: lazy}; }
         return #{ok: false, error: "SysML attribute is missing: " + name};
     }
     #{ok: true, record: report.attributes[name]}
@@ -423,5 +453,9 @@ fn evaluate(source_report, checks) {
 fn source() {
     let name = twin_name();
     if name == "" { return #{ok: false, error: "active Twin is unavailable"}; }
-    query("ValidateSysml", #{path: "twin://" + name, compact: true})
+    // Keep the source snapshot bounded independently of Twin size.  Typed
+    // literals are fetched lazily by `attribute()` through the same provider,
+    // so adding another subsystem cannot make every Rhai test exceed the
+    // engine's value budget.
+    query("ValidateSysml", #{path: "twin://" + name, compact: true, attributes: []})
 }

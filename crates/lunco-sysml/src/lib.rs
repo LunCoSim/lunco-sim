@@ -7,7 +7,6 @@
 //! in [`lunco_sysml_ast`], keeping the expensive language implementation out
 //! of consumers that only need the document contract.
 
-
 mod document;
 mod source_asset;
 mod twin_source;

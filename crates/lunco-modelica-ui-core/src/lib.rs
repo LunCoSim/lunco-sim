@@ -6,7 +6,6 @@
 //! or renderer dependency. Concrete behavior stays in the package that owns
 //! the corresponding UI surface.
 
-
 use bevy::ecs::reflect::ReflectEvent;
 use bevy::reflect::std_traits::ReflectDefault;
 use lunco_core::Command;

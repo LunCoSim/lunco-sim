@@ -14,8 +14,8 @@
 
 /// Distance between two entities in metres, or -1.0 if either lacks a position.
 fn distance(a, b) {
-    let pa = world_pos(a);
-    let pb = world_pos(b);
+    let pa = world_pos3(a);
+    let pb = world_pos3(b);
     if pa == () || pb == () { return -1.0; }
     vlen(vsub(pa, pb))
 }
@@ -26,35 +26,48 @@ fn distance(a, b) {
 /// body pose sits at its support height. A full 3-D norm would make a task's
 /// arrival predicate disagree with `nav_to` for every rover.
 fn arrived(entity, target, radius) {
-    let p = world_pos(entity);
-    if p == () { return false; }
-    let delta = vsub(p, target);
-    vlen([delta[0], 0.0, delta[2]]) <= radius
+    let p = world_pos3(entity);
+    if p == () || target == () { return false; }
+    let delta = vsub(p, vec3_from(target));
+    vlen(vec3(delta.x, 0.0, delta.z)) <= radius
 }
 
-// ── Orientation, all derived from world_rotation(id) → [x,y,z,w] ────────────
+// ── Orientation, all derived from native world_rotation_quat(id) ────────────
 // The core exposes ONE orientation accessor (the quaternion) and one native
 // `qrot`; every world axis and tilt below is a composition of those, which is
 // what the prelude is for.
 
 /// World up-vector of an entity ([x,y,z]), or () if it has no orientation.
-fn world_up(id) {
-    let q = world_rotation(id);
+fn world_up3(id) {
+    let q = world_rotation_quat(id);
     if q == () { return (); }
-    qrot(q, [0.0, 1.0, 0.0])
+    qrot(q, vec3(0.0, 1.0, 0.0))
 }
 
-/// World right-vector of an entity ([x,y,z]), or ().
-fn world_right(id) {
-    let q = world_rotation(id);
+/// Compatibility array form for reports and API payloads.
+fn world_up(id) {
+    let u = world_up3(id);
+    if u == () { return (); }
+    vec3_array(u)
+}
+
+fn world_right3(id) {
+    let q = world_rotation_quat(id);
     if q == () { return (); }
-    qrot(q, [1.0, 0.0, 0.0])
+    qrot(q, vec3(1.0, 0.0, 0.0))
+}
+
+/// Compatibility array form for reports and API payloads.
+fn world_right(id) {
+    let r = world_right3(id);
+    if r == () { return (); }
+    vec3_array(r)
 }
 
 /// Tilt of an entity from upright, in DEGREES (angle between its up-vector and
 /// world up), or -1.0 if it has no orientation. 0 = level, 90 = on its side.
 fn tilt_deg(id) {
-    let u = world_up(id);
+    let u = world_up3(id);
     if u == () { return -1.0; }
     // Through `angle_deg` so the domain of `acos` is enforced in one place. A
     // body whose orientation is degenerate has no tilt to report, and -1.0 is
@@ -91,10 +104,10 @@ fn is_tipped(id, max_deg) {
 /// tilt; a suspension whose spring reads no load while the vehicle stands on it
 /// has usually found a rigid path, and the bend is where it went.
 fn joint_lock_error_deg(body0, axis0, body1, axis1) {
-    let q0 = world_rotation(body0);
-    let q1 = world_rotation(body1);
+    let q0 = world_rotation_quat(body0);
+    let q1 = world_rotation_quat(body1);
     if q0 == () || q1 == () { return -1.0; }
-    let deg = angle_deg(qrot(q0, axis0), qrot(q1, axis1));
+    let deg = angle_deg(qrot(q0, vec3_from(axis0)), qrot(q1, vec3_from(axis1)));
     if deg == () { return -1.0; }
     deg
 }

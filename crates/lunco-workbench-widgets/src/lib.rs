@@ -5,7 +5,6 @@
 //! code, and alternate hosts without pulling in docking, viewport, or window
 //! management.
 
-
 pub mod icons;
 pub mod text_editor;
 pub mod tree;

@@ -30,7 +30,6 @@
 //! - Stub variants on [`StorageHandle`] for the future backends so
 //!   callers can pattern-match exhaustively when we add them.
 
-
 use std::path::{Path, PathBuf};
 
 pub mod file_storage;

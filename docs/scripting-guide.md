@@ -310,7 +310,8 @@ You'll use these constantly (the complete table is in
 | `query("ListSpawnCatalog", #{})` | **READ** — discover the authoritative `entry_id`, name, category, default transform, source, and `origin` (`builtin` or named `twin`) for assets accepted by `cmd("SpawnEntity", ...)`. |
 | `query("ValidateTwin", #{path: "/work/rover-twin", policy: "warn"})` | **READ** — inspect Twin-wide Modelica, USD, Rhai tool, shader, and asset resolver namespaces; collisions are warnings by default and become errors with `policy: "error"`. |
 | `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`); scalar co-simulation names use the canonical `PortRegistry` surface. |
-| `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame vector. Use `world_point(id)` when the value crosses a position or authoring boundary. |
+| `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame array vector. Use `world_point(id)` when the value crosses a position or authoring boundary. |
+| `world_pos3(id)` / `world_forward3(id)` / `world_rotation_quat(id)` | native glam `Vec3`/`Quat` pose for hot loops; use `vec3_array`/`quat_array` when producing a wire/report value. |
 | `world_point(id)` / `point3(values, frame)` | read or construct an explicit frame-tagged `point3`; use `point_values`, `point_frame`, `point_delta`, `point_distance`, and `point_offset` for frame-safe position work. |
 | `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` on the next scenario pass); scalar, array, and map payloads keep their typed structure. |
 | `notify(msg)` / `notify_kind(msg, kind)` | HUD notification (`kind`: `"info"`/`"warn"`/`"error"`). |
@@ -332,7 +333,7 @@ The prelude turns raw verbs into rover behaviour (read the topic files for the
 authoritative list; highlights in [Part II §B](#b-prelude-helpers)):
 
 - **Drive:** `drive(rover, fwd, steer)`, `brake(rover)`, `nav_to(entity, target, speed, radius)`.
-- **Sense:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
+- **Sense:** `velocity3`/`velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Math:** `distance`, `arrived`, `vsub`/`vlen`/`vnorm`/`vcross`, `clamp`.
 - **Collisions:** `collision_pair`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
 
@@ -371,9 +372,12 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `set_twin_setting("namespace.key", value)` | bool | persist a scalar in the active Twin manifest through the generic `SetTwinSetting` command |
 | `get_exposure("namespace", "property")` | value \| `()` | read one raw engine capability value; Rhai owns selection and presentation policy |
 | `world_pos(id)` | `[x,y,z]` \| `()` | f64 active-frame position; independent of camera recentering and celestial ancestors |
+| `world_pos3(id)` | `Vec3` \| `()` | native glam active-frame position for hot-loop calculations |
 | `world_point(id)` | `point3` \| `()` | active-frame position with an explicit `frame: "active_physics"` tag |
 | `point3(values, frame)` | `point3` \| `()` | construct a frame-tagged position; rejects missing or non-3D values |
 | `world_forward(id)` | `[x,y,z]` \| `()` | active-frame heading |
+| `world_forward3(id)` | `Vec3` \| `()` | native glam active-frame heading |
+| `world_rotation_quat(id)` | `Quat` \| `()` | native glam active-frame orientation |
 | `find(name)` | id (`-1` if none) | entity id by canonical `Name` |
 | `name(id)` | string \| `()` | human-readable presentation label; use `QueryEntity` for the canonical USD path |
 | `usd_path(id)` | string \| `()` | prelude helper resolving `QueryEntity.usd_prim_path` for topology addressing |
@@ -398,6 +402,11 @@ contract). Both directions are native: `get`/`get_setting` build rhai values
 straight from reflect, and `set`/`set_setting` write rhai values straight back —
 no JSON round-trip on the read or write path.
 
+Rhai's standard scalar math (`sin`, `cos`, `exp`, `sqrt`, `atan(x, y)`, and related
+functions) is already implemented with Rust `f64` operations; do not shadow it
+in a prelude/tool. Native `Vec3`/`Quat` operations are registered by
+`lunco-scripting` and reject non-finite values loudly at their owner.
+
 > **`set` vs `cmd`.** Use `set`/`set_setting` for host-side tuning through the
 > reflected field surface or the canonical scalar co-simulation port surface.
 > This is a raw write, not a persistent hold; use
@@ -416,7 +425,7 @@ The [`prelude/`](../assets/scripting/prelude) directory (one `.rhai` per topic �
 `math`, `select`, `hud`, …) is the hot-reloadable helper library on top of the
 verbs — read the topic files for the full, authoritative list. Highlights:
 
-- **Vector math:** `vsub`/`vadd`/`vlen`/`vdot`/`vcross`/`vnorm`/`vscale`/`clamp`, `distance`, `arrived`.
+- **Vector math:** `vsub`/`vadd`/`vlen`/`vdot`/`vcross`/`vnorm`/`vscale`/`clamp`, `distance`, `arrived`. Use native `Vec3`/`Quat` (`world_pos3`, `world_forward3`, `world_rotation_quat`) in hot loops; arrays are the explicit USD/JSON/telemetry interchange form and are lowered with `vec3_array`/`quat_array`.
 - **Navigation:** `drive(rover, fwd, steer)`, `brake(rover)`, `steer_to`, `nav_to(entity, target, speed, radius)`.
 - **Discrete controls:** `intent_edge(target, intent, edge)` and `intent_pulse(target, intent)` emit one atomic `pressed`, `released`, or `pulse` edge; handle `intent.edge` in `on_event`.
 - **Causal control inspection:** `query("CausalTrace", #{target: id, correlation_id: edge.id})` joins one semantic edge to its binding, selected port owner, USD/Avian admission state, and current measurements.

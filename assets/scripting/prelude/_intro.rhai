@@ -14,8 +14,12 @@
 //                                        owning crate, not in scripting
 //   world_pos(id) -> [x,y,z]      read:  float-origin-correct vector; use
 //                                        world_point(id) at position boundaries
+//   world_pos3(id) -> Vec3        read:  native glam vector for hot loops;
+//                                        lower with vec3_array at wire boundaries
 //   world_point(id) -> point3     read:  position tagged `active_physics`
 //   world_forward(id) -> [x,y,z]  read:  world heading
+//   world_forward3(id) -> Vec3    read:  native glam heading
+//   world_rotation_quat(id) -> Quat read: native glam orientation
 //   get(id, "Comp.field")         read:  reflected field; vectors/quats come
 //                                        back as arrays ([x,y,z]/[x,y,z,w]),
 //                                        structs as maps

@@ -81,6 +81,26 @@ sets `usd.editor_autosave = true`. For physics scene evidence, compose
 `physics_acceptance` instead of adding one-off threshold code to every test.
 It reads existing runtime facts and leaves solver policy in Rust.
 
+### Native value boundary
+
+Use the common engine's native `Vec3`/`Quat` values for repeated geometry,
+pose, and control math. They are the simulator's `bevy::math::DVec3` and
+`DQuat`, registered once by `lunco-scripting`; do not define tuple/vector
+helpers in a tool library. `world_pos3`, `world_forward3`, and
+`world_rotation_quat` keep the hot path native, and `vadd`/`vsub`/`vscale`/
+`vcross`/`vdot`/`vlen`/`vnorm`/`qrot` dispatch to Rust for native operands.
+Constructors and quaternion/Euler conversions reject non-finite or degenerate
+values with a script error.
+
+Use `[x, y, z]`/`[x, y, z, w]` only when a standard USD literal, JSON command or
+query parameter, telemetry payload, or legacy scenario requires the
+interchange representation. Call `vec3_array`/`quat_array` explicitly at that
+boundary. The bridge accepts native vectors in `cmd`, `query`, and `set` and
+lowers them once; unknown custom values must be rejected, never
+stringified or changed into `null`. Rhai's built-in scalar math (`sin`, `cos`,
+`exp`, `sqrt`, `atan(x, y)`, and related functions) is already Rust-backed, so do
+not shadow those names in a tool.
+
 ### Generic parameter edits
 
 Use `assembly_builder::parameter_plan(edit_target, path, parameters)` for a

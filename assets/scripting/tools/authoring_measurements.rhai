@@ -28,11 +28,10 @@ fn unavailable(subject, kind, message, source) {
 }
 
 fn distance3(a, b) {
-    if a == () || b == () || a.len() != 3 || b.len() != 3 { return (); }
-    let dx = a[0] - b[0];
-    let dy = a[1] - b[1];
-    let dz = a[2] - b[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
+    if a == () || b == () { return (); }
+    if type_of(a) != "Vec3" && (type_of(a) != "array" || a.len() != 3) { return (); }
+    if type_of(b) != "Vec3" && (type_of(b) != "array" || b.len() != 3) { return (); }
+    vlen(vsub(vec3_from(a), vec3_from(b)))
 }
 
 fn verdict(actual, expected, tolerance) {

@@ -108,6 +108,8 @@ impl TwinToolLibraries {
 ///     ownership and restoration stay in one place.
 ///   - `mathx` — a NATIVE (Rust) tool, proving the backend-agnostic abstraction:
 ///     the same `name::fn(...)` call site works whether the tool is rhai or Rust.
+///     It only contributes `lerp`; scalar math such as `hypot` is already part
+///     of Rhai's Rust-backed `BasicMathPackage` and is not shadowed here.
 pub fn register_builtins() {
     let tools = lunco_assets_core::scripting::active_tool_libraries().unwrap_or_else(|error| {
         panic!("active Rhai tool libraries must be readable: {error}");
@@ -117,10 +119,9 @@ pub fn register_builtins() {
     }
     lunco_tools_rhai::register_native_tool(
         "mathx",
-        vec!["hypot/2".into(), "lerp/3".into()],
+        vec!["lerp/3".into()],
         |_engine| {
             let mut m = rhai::Module::new();
-            m.set_native_fn("hypot", |a: f64, b: f64| Ok((a * a + b * b).sqrt()));
             m.set_native_fn("lerp", |a: f64, b: f64, t: f64| Ok(a + (b - a) * t));
             Ok(m)
         },

@@ -53,6 +53,31 @@ The native shared-library probe is lazy: the scripting plugin keeps Python
 runtime. A Python participant then resolves availability at the USD bind seam;
 an unavailable interpreter is reported as a terminal participant error.
 
+### Native math values and boundary lowering
+
+The common Rhai engine registers the simulator's existing `bevy::math` values
+directly: `DVec3` is exposed as `Vec3` and `DQuat` as `Quat`. This is a type
+registration, not a second tuple/vector implementation. Constructors and math
+operations (`vec3`, `quat`, `vadd`, `vsub`, `vscale`, `vcross`, `vdot`, `vlen`,
+`vnorm`, `qrot`, quaternion multiplication/inversion, and XYZ-degree Euler
+conversion) execute in Rust/glam and validate finite, non-degenerate inputs.
+Native values are immutable from Rhai properties; invalid construction or an
+overflowing operation is a script error at the call site.
+
+Existing `[x, y, z]` and `[x, y, z, w]` values remain the explicit interchange
+form for authored USD literals, JSON command/query parameters, telemetry, and
+legacy scenarios. `world_pos3`, `world_forward3`, and
+`world_rotation_quat` opt into the native path; `vec3_array` and `quat_array`
+perform the one intentional lowering when a value crosses a wire/report
+boundary. The bridge recursively lowers these native types to JSON and rejects
+unknown custom values instead of converting them to `null` or a display string.
+
+Rhai's standard scalar math package already calls Rust `f64` methods (`sin`,
+`cos`, `exp`, `sqrt`, `atan(x, y)`, and related functions), so LunCoSim does not
+register duplicate scalar names. Domain-specific checked operations belong in
+the shared Rust math surface; sequencing, frame policy, and requirement
+decisions remain authored Rhai.
+
 ---
 
 ## Running scenarios

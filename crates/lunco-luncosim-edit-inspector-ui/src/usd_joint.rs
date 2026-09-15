@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_usd_authoring::author::normalize_value_literal;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, stage_convention, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages, stage_convention};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_document::document::{LayerId, UsdOp};
 use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};

@@ -33,12 +33,25 @@ calls `lunco_luncosim_core::run_headless()`.
 |---|---|
 | `luncosim` | The windowed GUI app |
 | `luncosim test` | The headless runner for authored USD + Rhai scene tests (`scripts/run_scene_tests.sh`) |
+| `luncosim test-component` | Select one manifest-owned component and run its declared USD/Rhai verification harness |
 
 For a long-running, render-free host, use `luncosim-server`. Add
 `--headless-max-speed` to run that same production simulation loop without a
 wall-clock wait; it advances one fixed simulation duration per update and still
 honours the co-simulation barrier. The deterministic `luncosim test` runner is
 already manually clocked and runs at the speed the CPU permits.
+
+`test-component` is the component-level entry point:
+
+```bash
+luncosim test-component --twin ./my-twin --component mobility.wheel
+```
+
+The command resolves `[[components]]` in `twin.toml`, validates its requirement
+and verification bindings, then delegates to the same deterministic runner as
+`test --scene`. The selected Rhai verification owns component-specific asset
+loading and observations through the typed USD authoring/query tools; the CLI
+does not duplicate component geometry or requirements.
 
 ## Project Hierarchy
 

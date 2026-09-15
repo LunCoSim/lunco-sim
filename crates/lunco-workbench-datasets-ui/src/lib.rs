@@ -5,7 +5,6 @@
 //! as a browser section. The host still chooses separately whether to install
 //! the native provisioning runtime.
 
-
 use bevy::prelude::*;
 
 use lunco_workbench_browser::{BrowserSectionRegistry, TwinBrowserPlugin};
