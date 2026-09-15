@@ -54,8 +54,6 @@
 //! assert_eq!(host.document().value, 5);
 //! ```
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use std::collections::VecDeque;
 use std::fmt;

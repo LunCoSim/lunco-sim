@@ -15,7 +15,7 @@ path = "src/main.rs"
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false, features = ["server"] }
 
 [features]
-default = []
+default = ["sysml"]
 sysml = ["lunco-luncosim-core/sysml"]
 
 [lints]

@@ -7,8 +7,6 @@
 //! dependencies only at the application boundary that explicitly downloads or
 //! processes data.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 mod manifest;
 mod registry;

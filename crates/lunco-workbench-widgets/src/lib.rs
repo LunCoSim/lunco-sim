@@ -5,8 +5,6 @@
 //! code, and alternate hosts without pulling in docking, viewport, or window
 //! management.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod icons;
 pub mod text_editor;

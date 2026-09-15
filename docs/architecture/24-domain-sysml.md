@@ -232,14 +232,16 @@ authored runtime verdict:
    source and one qualified verification case. Shared requirement sources,
    scenes, scripts, missing mappings, and unsafe USD prim roots are rejected;
    the case supplies the component's Twin-local USD fixture and Rhai observer.
-5. **Read-only Rhai bridge.** `ValidateSysml`,
+5. **Read-only Rhai bridge and lint.** `ValidateSysml`,
    `sysml_requirements::source()` and the native report helpers expose the
    resolved requirement/verification snapshot and source revision. The generic
    `sysml_requirements::evaluate` tool observes the composed USD stage and
    `report_structured_verdict` emits machine-readable evidence plus the normal
-   test verdict envelope. The existing `RunLint` command likewise executes
-   `assets/scripting/policy/lint_<domain>.rhai` over typed runtime facts. No
-   requirement-specific Rust assertion is added.
+   test verdict envelope. The explicit `ValidateAsset`/`ValidateSysml` paths
+   also run `lint.sysml` from `assets/scripting/policy/lint_sysml.rhai` over
+   typed AST facts, so missing subjects, empty verification cases, unresolved
+   verification targets, and uncovered requirement usages are reported by
+   reloadable Rhai policy. No requirement-specific Rust assertion is added.
 6. **Production selector.** `luncosim test --scene <PATH> --verification
    QUALIFIED_NAME` validates the Twin mapping before constructing the
    simulation and selects its declared verdict channel. The mapped Rhai
@@ -271,8 +273,8 @@ this integration. `SysmlPlugin` opens the checked Twin source set after
 
 ## 7. Status
 
-The SysML v2 integration is implemented in the current runtime behind the
-opt-in `sysml` feature: the pure AST projection, Bevy source/document plugin,
+The SysML v2 integration is enabled by default in the production app, core, and
+server (and can be explicitly removed with `--no-default-features`): the pure AST projection, Bevy source/document plugin,
 canonical journal domain, `.sysml`/`.kerml` classification, `[sysml]` Twin
 manifest source roots, manifest-aware source discovery, pre-flight validation,
 read-only Rhai requirement/verification reports, structured evidence,

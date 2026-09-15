@@ -126,8 +126,8 @@ the stage, or silently save. See the [model-authoring guide](../../docs/scriptin
 | Ext | Checks | Can it FAIL? |
 |---|---|---|
 | `.mo` | rumoca `parse_to_syntax` + AST facts + authored `lint.modelica` policy | yes |
+| `.sysml`/`.kerml` | SysML parser/resolver + typed requirement/verification facts + authored `lint.sysml` policy | yes |
 | `.usda` | layer parse → **compose the reference closure** → strict `WheelParams::read` on every `PhysxVehicleWheelAPI` prim | yes |
-| `.sysml` / `.kerml` | shared SysML parser/resolver, semantic projections, requirement/verification records and source revision | yes |
 | `.wgsl` | `ParamSchema::parse` — reflect the `struct Material` uniform + `//!@` annotations | **no** — warnings only |
 | `.rhai` | `rhai::Engine::new().compile()`, nothing executed | yes |
 | anything else | `unsupported extension` error | yes |

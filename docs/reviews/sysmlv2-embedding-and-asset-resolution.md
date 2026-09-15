@@ -27,7 +27,9 @@ Twin/FileEntry
 
 ## Implemented in terrain
 
-The first production slice now exists behind the opt-in `sysml` feature:
+The first production slice is enabled by default in the production app, core,
+and server. A deliberately lean build may still opt out with
+`--no-default-features`:
 
 - `lunco-sysml-ast` pins the upstream parser/semantic crates, loads the
   embedded standard library, and emits serializable elements, references, and
@@ -307,10 +309,10 @@ Expose a single application feature, analogous to `python`, `networking`, and
 sysml = ["dep:lunco-sysml", "dep:lunco-sysml-rhai"]
 ```
 
-The initial feature can be opt-in for lean server builds. Once a Twin's
-requirements are required by the normal production test path, include `sysml`
-in that profile. Keep any UI panels behind the existing `ui` feature; parsing
-and requirement reports must work headlessly.
+The production profiles include `sysml` by default. A deliberately lean server
+can opt out with `--no-default-features`; this is an explicit build choice, not
+a runtime fallback. Keep any UI panels behind the existing `ui` feature;
+parsing and requirement reports work headlessly.
 
 `sysmlv2-stdlib` is text data with an EPL-2.0 license. If it is redistributed,
 retain its `LICENSE`/`NOTICE` attribution. It is small enough to parse once per

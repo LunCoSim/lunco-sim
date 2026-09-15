@@ -30,8 +30,6 @@
 //! - Stub variants on [`StorageHandle`] for the future backends so
 //!   callers can pattern-match exhaustively when we add them.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use std::path::{Path, PathBuf};
 

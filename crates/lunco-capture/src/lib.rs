@@ -4,8 +4,6 @@
 //! workbench shell does not own capture-specific source or dependencies. Add
 //! the `api` feature when the host exposes the screenshot command surface.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 #[cfg(feature = "api")]
 pub mod screenshot;

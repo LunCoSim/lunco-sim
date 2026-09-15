@@ -57,8 +57,6 @@
 //! - **Save/export of Documents.** Manifest save only (`save_manifest`);
 //!   Document serialization is each domain's responsibility.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

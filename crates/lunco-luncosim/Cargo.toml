@@ -122,7 +122,7 @@ ureq = { workspace = true, optional = true }
 # player with no wire: `--no-default-features --features ui,celestial,lunco-api`.
 # The wasm build sets its own feature set (`--no-default-features`), so this
 # default does not affect it.
-default = ["ui", "celestial", "api-transport", "transport-http"]
+default = ["ui", "celestial", "api-transport", "transport-http", "sysml"]
 # Windowed GUI: the winit windowing backend + render-effect features + every
 # UI crate (egui workbench, material editors, doc/theme/ui).
 #

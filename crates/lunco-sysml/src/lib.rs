@@ -7,8 +7,6 @@
 //! in [`lunco_sysml_ast`], keeping the expensive language implementation out
 //! of consumers that only need the document contract.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 mod document;
 mod source_asset;

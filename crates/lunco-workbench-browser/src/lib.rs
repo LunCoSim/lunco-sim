@@ -6,8 +6,6 @@
 //! package so hosts that only need browsing do not link the provisioning and
 //! processing closure from `lunco-assets`.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use bevy::prelude::*;
 use lunco_workbench_core::commands::FocusPanel;

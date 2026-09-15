@@ -6,7 +6,6 @@
 //! separate means interaction-only hosts do not compile the large inspector
 //! and USD authoring surface.
 
-#![forbid(unsafe_code)]
 
 use bevy::prelude::*;
 use lunco_luncosim_edit_ui::ui::{usd_selection_view_changed, ViewModelAppExt};

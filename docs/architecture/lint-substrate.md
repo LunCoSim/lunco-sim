@@ -41,18 +41,20 @@ separate — one giant rule file is read by no one:
 domain "usd"      → hook `lint.usd`      → assets/scripting/policy/lint_usd.rhai
 domain "rhai"     → hook `lint.rhai`     → assets/scripting/policy/lint_rhai.rhai
 domain "modelica" → hook `lint.modelica` → assets/scripting/policy/lint_modelica.rhai
+domain "sysml"    → hook `lint.sysml`    → assets/scripting/policy/lint_sysml.rhai
 domain "twin"     → hook `lint.twin`     → assets/scripting/policy/lint_twin.rhai
 ```
 
 A domain is just a name: `lunco_lint::run_lint(domain, facts)` invokes
 `lint.<domain>` and parses the findings. **No policy registered ⇒ no findings**,
-so an app built without scripting behaves exactly as before. Today the USD domain
-is wired end to end; `modelica` facts come from the pure `lunco-modelica-ast`
-parse/extraction boundary and `ValidateAsset` supplies the shared file facts.
-The Modelica policy derives comparisons, subsets, and branch findings from
-those AST-backed declaration/construct facts in Rhai, so changing a rule does
-not rebuild the parser crate. Rust does not scan Modelica source for lint
-keywords; it only projects evidence Rumoca already parsed.
+so an app built without scripting behaves exactly as before. The USD domain is
+wired end to end; `modelica` facts come from the pure `lunco-modelica-ast`
+parse/extraction boundary, and `sysml` facts come from the pure
+`lunco-sysml-ast` semantic projection. `ValidateAsset` supplies the shared
+file facts and applies the corresponding policy. Both policies derive findings
+from AST-backed facts in Rhai, so changing a rule does not rebuild the parser
+crate. Rust does not scan source for lint keywords; it only projects evidence
+the owning parser already produced.
 
 ### The policy contract
 

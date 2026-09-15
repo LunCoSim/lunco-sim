@@ -5,8 +5,6 @@
 //! actuator components; controller policy and command propagation remain in
 //! `lunco-cosim`.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use bevy::prelude::*;
 use lunco_cosim_core::{ForceActuator, TorqueActuator};

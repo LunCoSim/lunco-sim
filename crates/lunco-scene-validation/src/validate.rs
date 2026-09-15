@@ -209,6 +209,10 @@ fn finish_sysml_report(
         "source_revision_hex": format!("0x{:016x}", analysis.source_revision()),
         "stdlib": analysis.includes_stdlib(),
     });
+    // Keep the policy input on the same immutable analysis snapshot as the
+    // report. `ValidateAsset` and `ValidateSysml` must not silently diverge:
+    // both paths run the same typed SysML facts through `lint.sysml`.
+    report.lint_facts = Some(lunco_sysml_ast::lint_facts::sysml_facts(analysis));
     report.finish()
 }
 
@@ -936,7 +940,8 @@ fn validate_sysml_reference(world: &World, reference: &str) -> ValidationReport 
         return ValidationReport::new(reference, "unknown")
             .error("ValidateSysml twin:// path must end in .sysml or .kerml");
     }
-    validate_sysml(reference, &path, &text)
+    let report = validate_sysml(reference, &path, &text);
+    apply_lint_policy(report, &text)
 }
 
 fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> ValidationReport {
@@ -985,6 +990,7 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
     };
 
     let mut sources = Vec::with_capacity(relative_sources.len());
+    let mut policy_source = String::new();
     let mut revision_input = Vec::new();
     for relative in relative_sources {
         let path = root.join(&relative);
@@ -999,6 +1005,8 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
         revision_input.extend_from_slice(logical.as_bytes());
         revision_input.push(0);
         revision_input.extend_from_slice(text.as_bytes());
+        policy_source.push_str(&text);
+        policy_source.push('\n');
         sources.push((logical, text));
     }
     let analysis = lunco_sysml_ast::SysmlAnalysis::build_cached(
@@ -1040,7 +1048,7 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
         report.errors.extend(binding_errors);
         report.ok = false;
     }
-    report.finish()
+    apply_lint_policy(report, &policy_source)
 }
 
 /// `ValidateTwin { path, policy? }` → [`TwinValidationReport`].

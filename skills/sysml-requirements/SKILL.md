@@ -22,7 +22,7 @@ Check the feature set and owner before saying that a capability is missing:
 
 | Concern | Authoritative owner | Normal availability | Use it for |
 |---|---|---|---|
-| System structure and requirement intent | standard SysML v2 `.sysml`/`.kerml` | `sysml` feature, opt-in | parts, ports, connections, requirements, satisfy/verify links, scalar literals |
+| System structure and requirement intent | standard SysML v2 `.sysml`/`.kerml` | default in the production app/core/server; `--no-default-features` remains available for a deliberately lean build | parts, ports, connections, requirements, satisfy/verify links, scalar literals |
 | Scene identity, topology, geometry and authored physical facts | USD | standard runtime path | prim paths, schemas, relationships, dimensions, materials, physics topology |
 | Continuous equations and domain state | Modelica | standard domain backend | propulsion, electrical, thermal and other continuous models |
 | Scenario policy, observations, checks and verdicts | Rhai | default scenario backend | runtime observation, actuation, generic requirement evaluation and test policy |
@@ -341,8 +341,10 @@ For a change to a Twin's requirements or verification:
 1. Read the owning source and this skill, then search the current checkout for
    existing SysML vocabulary, evaluator checks, manifest fields, commands and
    tests. Do not add a second parser, registry, or report format.
-2. Confirm the binary feature set. SysML runtime integration is opt-in:
-   `cargo build -p lunco-luncosim --bin luncosim --features sysml -j 4`.
+2. Confirm the binary feature set. SysML is enabled by default in the
+   production app and server:
+   `cargo build -p lunco-luncosim --bin luncosim -j 4`.
+   Use `--no-default-features` only when a deliberately lean build is needed.
    Rhai is the default scenario backend. Python is a separate opt-in
    `python` feature and is not used by this workflow.
 3. Author standard SysML source and put source-set/execution selection in

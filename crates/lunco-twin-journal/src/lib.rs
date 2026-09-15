@@ -41,7 +41,6 @@
 //! - **Not the persistence layer** — entries live in memory today; backend
 //!   swap (yrs / disk) replaces `Journal` internals only.
 
-#![forbid(unsafe_code)]
 
 use lunco_doc::DocumentId;
 use serde::{Deserialize, Serialize};

@@ -263,6 +263,26 @@ fn rhai_lint_rejects_production_tick_and_allows_test_tick() {
     );
 }
 
+/// SysML structural rules and their synthetic fixtures are authored in Rhai.
+/// Rust only loads the same policy/test pair a runtime session would use.
+#[test]
+fn sysml_lint_reports_structural_traceability_faults() {
+    let policy = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/scripting/policy/lint_sysml.rhai"),
+    )
+    .expect("SysML lint policy");
+    let test = std::fs::read_to_string(tests_dir().join("test_sysml_lint.rhai"))
+        .expect("SysML lint self-test");
+    let printed = run_capturing_print(&format!("{policy}\n{test}"));
+    assert_eq!(
+        printed.last().map(String::as_str),
+        Some("SYSML_LINT_SELFTEST PASS"),
+        "SysML lint policy self-test did not pass:\n{}",
+        printed.join("\n")
+    );
+}
+
 #[test]
 fn usd_lint_enforces_authored_wheel_realizations() {
     let policy = std::fs::read_to_string(

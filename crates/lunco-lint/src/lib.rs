@@ -29,7 +29,7 @@
 //!
 //! # One axis: the domain
 //!
-//! Linters are **separate per domain** — `usd`, `rhai`, `modelica`, and whatever
+//! Linters are **separate per domain** — `usd`, `rhai`, `modelica`, `sysml`, and whatever
 //! comes next — because their subjects, their vocabulary and the people who tune
 //! them are different, and one giant rule file would be read by no one. The
 //! substrate is universal; the rules are not shared. A domain is just a name:
@@ -38,6 +38,7 @@
 //!   domain "usd"      → hook `lint.usd`      → assets/scripting/policy/lint_usd.rhai
 //!   domain "rhai"     → hook `lint.rhai`     → assets/scripting/policy/lint_rhai.rhai
 //!   domain "modelica" → hook `lint.modelica` → assets/scripting/policy/lint_modelica.rhai
+//!   domain "sysml"    → hook `lint.sysml`    → assets/scripting/policy/lint_sysml.rhai
 //! ```
 //!
 //! # The contract with a policy
@@ -51,8 +52,6 @@
 //! faults, yields no findings and logs why — a broken linter must never be able to
 //! stop a scene from loading.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use bevy::prelude::*;
 use lunco_hooks::HookValue as H;

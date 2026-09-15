@@ -6,8 +6,6 @@
 //! a co-simulation projection can use the same authoritative extraction path
 //! without linking the Modelica workbench.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod ast_extract;
 pub mod lint_facts;
