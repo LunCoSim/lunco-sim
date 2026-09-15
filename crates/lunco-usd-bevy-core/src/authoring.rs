@@ -5,11 +5,11 @@
 //! [`crate::read`] and [`crate::view`].
 
 use lunco_usd_compose::parse_usda;
-use lunco_usd_document::usd_data::UsdDataExt;
+use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{Data, Path as SdfPath, Value};
 
 /// Read the `defaultPrim` authored on a layer, without composition.
-pub fn layer_default_prim(layer: &lunco_usd_document::usd_data::UsdData) -> Option<String> {
+pub fn layer_default_prim(layer: &lunco_usd_data::usd_data::UsdData) -> Option<String> {
     let name = layer.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
     (!name.is_empty()).then(|| name.to_string())
 }

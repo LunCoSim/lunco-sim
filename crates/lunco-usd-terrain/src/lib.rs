@@ -29,7 +29,7 @@ use bevy::prelude::*;
 // document registry hands back for the authoring tier's child walks.
 use lunco_usd_bevy_core::{read_transform_from_usd, StageView, UsdRead};
 use lunco_usd_bevy_scene::{read_primitive_axis, read_shape_dims, ShapeDims};
-use lunco_usd_document::usd_data::UsdDataExt;
+use lunco_usd_data::usd_data::UsdDataExt;
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
 /// edits back onto the backing document's runtime layer.
@@ -79,7 +79,7 @@ struct TerrainSchemaStatus {
 
 impl TerrainSchemaStatus {
     fn from_registry() -> Self {
-        let registry = match lunco_usd_document::schema::SchemaRegistry::global().read() {
+        let registry = match lunco_usd_authoring::schema::SchemaRegistry::global().read() {
             Ok(registry) => registry,
             Err(_) => {
                 return Self {
@@ -243,7 +243,7 @@ fn ns_attr(ns: &str, name: &str) -> String {
     // the single runtime contract; schema validation is enforced by the USD schema
     // tests and this diagnostic is the production signal if a packaged artifact is
     // stale or malformed.
-    match lunco_usd_document::schema::SchemaRegistry::global().read() {
+    match lunco_usd_authoring::schema::SchemaRegistry::global().read() {
         Ok(registry) if registry.property(&full).is_some() => {}
         Ok(_) => warn_once!("[usd-terrain] canonical property `{full}` is absent from luncoSchema"),
         Err(_) => {
@@ -2184,8 +2184,8 @@ mod dem_bridge_tests {
     use bevy::prelude::*;
     use lunco_doc_bevy::DocumentRegistry;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_compose::recipe::StageRecipe;
     use lunco_usd_document::document::UsdDocument;
-    use lunco_usd_document::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
     /// A minimal layered DEM terrain: `lunco:assetMode = "dem"` + a `dem` ground

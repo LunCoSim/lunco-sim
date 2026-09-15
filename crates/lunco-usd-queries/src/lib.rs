@@ -11,7 +11,7 @@ use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
 use lunco_usd_bevy_core::UsdRead;
-use lunco_usd_document::usd_data::UsdDataExt;
+use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
 use lunco_usd_core::edit_session::UsdEditSessions;
@@ -33,7 +33,7 @@ fn journal_position(world: &World, doc: DocumentId) -> serde_json::Value {
 }
 
 fn runtime_source(document: &UsdDocument) -> Result<String, String> {
-    lunco_usd_document::author::data_to_usda(document.runtime_data())
+    lunco_usd_authoring::author::data_to_usda(document.runtime_data())
         .map_err(|error| format!("could not serialize runtime layer: {error}"))
 }
 
@@ -117,7 +117,7 @@ fn composed_attribute_inspection(
                     _ => return None,
                 };
                 let value = spec.get("default").cloned().and_then(|value| {
-                    lunco_usd_document::author::value_to_literal(&type_name, value)
+                    lunco_usd_authoring::author::value_to_literal(&type_name, value)
                 });
                 Some(serde_json::json!({
                     "name": property.name(),
@@ -149,7 +149,7 @@ fn composed_attribute_inspection(
             .filter_map(|name| {
                 let type_name = reader.attr_type_name(path, &name)?;
                 let value = reader.attr_value(path, &name).and_then(|value| {
-                    lunco_usd_document::author::value_to_literal(&type_name, value)
+                    lunco_usd_authoring::author::value_to_literal(&type_name, value)
                 });
                 Some(serde_json::json!({
                     "name": name,
@@ -419,7 +419,7 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
         };
         let document = host.document();
         let source = document.source();
-        let runtime_bytes = lunco_usd_document::author::data_to_usda(document.runtime_data())
+        let runtime_bytes = lunco_usd_authoring::author::data_to_usda(document.runtime_data())
             .map_or(0, |source| source.len());
         let mut diagnostics = Vec::new();
         if let Some(error) = document.parse_error() {

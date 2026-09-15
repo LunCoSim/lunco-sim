@@ -980,7 +980,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let v = if is_string {
                 openusd::sdf::Value::String(value.clone())
             } else {
-                match lunco_usd_document::author::parse_attribute_value(type_name, value) {
+                match lunco_usd_authoring::author::parse_attribute_value(type_name, value) {
                     Ok(v) => v,
                     Err(e) => {
                         warn!("[twin] parse attribute {path}.{name} ({type_name}): {e}");
@@ -1097,7 +1097,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
-            let v = match lunco_usd_document::author::parse_attribute_value(type_name, value) {
+            let v = match lunco_usd_authoring::author::parse_attribute_value(type_name, value) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("[twin] parse keyframe {path}.{name} ({type_name}) @ {time}: {e}");
@@ -1561,7 +1561,7 @@ fn rebuild_scene_from_composed(
     composed_source: &str,
 ) {
     use lunco_usd_bevy_core::canonical::CanonicalStages;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
     // Recipe = the edited composed source as the root layer + every referenced
     // `.usda` the current stage already loaded (keyed by the same canonical ids).
     let (scene_layer, mut bytes) = {

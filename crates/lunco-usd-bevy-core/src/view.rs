@@ -14,7 +14,7 @@ use openusd::usd::{compute_included_paths, Collection, PrimPredicate, Stage};
 /// reads. `!Send` — construct per-system from the runtime adapter's `NonSend`
 /// canonical stage.
 ///
-/// [`UsdDataExt`]: lunco_usd_document::usd_data::UsdDataExt
+/// [`UsdDataExt`]: lunco_usd_data::usd_data::UsdDataExt
 pub struct StageView<'a> {
     stage: &'a Stage,
 }
@@ -30,7 +30,7 @@ impl<'a> StageView<'a> {
     }
 
     /// A prim's composed `typeName` (e.g. `"Xform"`, `"Mesh"`), if any.
-    /// Mirrors [`UsdDataExt::prim_type_name`](lunco_usd_document::usd_data::UsdDataExt::prim_type_name).
+    /// Mirrors [`UsdDataExt::prim_type_name`](lunco_usd_data::usd_data::UsdDataExt::prim_type_name).
     pub fn prim_type_name(&self, prim: &SdfPath) -> Option<String> {
         self.stage
             .prim(prim.clone())
@@ -42,7 +42,7 @@ impl<'a> StageView<'a> {
 
     /// The default-time composed value of attribute `name` on `prim`, typed as
     /// `T`. Mirrors
-    /// [`UsdDataExt::prim_attribute_value`](lunco_usd_document::usd_data::UsdDataExt::prim_attribute_value).
+    /// [`UsdDataExt::prim_attribute_value`](lunco_usd_data::usd_data::UsdDataExt::prim_attribute_value).
     pub fn value<T>(&self, prim: &SdfPath, name: &str) -> Option<T>
     where
         T: TryFrom<Value>,

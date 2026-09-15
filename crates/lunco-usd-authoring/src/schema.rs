@@ -56,7 +56,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::author::usda_to_data;
-use crate::metadata::AttrUiHint;
+use lunco_usd_data::metadata::AttrUiHint;
 use openusd::sdf::{self, SpecType};
 
 /// The generated `luncoSchema` definitions — the file a USD runtime registers.
@@ -113,7 +113,10 @@ pub enum LinearUnit {
     /// authored unit represents — `1.0` for ordinary lengths, `0.1` for
     /// `UsdGeomCamera`'s focal length and apertures, which USD defines in TENTHS
     /// of a world unit.
-    Length { stage_units_per_unit: f64 },
+    Length {
+        /// Number of stage linear units represented by one authored unit.
+        stage_units_per_unit: f64,
+    },
 }
 
 /// The linear-unit facts core USD states in prose but encodes in no type.

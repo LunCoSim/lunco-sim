@@ -161,7 +161,7 @@ The headless USD document model lives in `lunco-usd-document::document`
 `lunco-usd-core`; pure authoring helpers, schema metadata, and layer recipes
 live in `lunco-usd-document`; runtime document commands and projections remain
 in this crate. Edits author through OpenUSD's `Stage` by SDF path
-(`lunco_usd_document::author`).
+(`lunco_usd_authoring::author`).
 
 ## Engineering metadata
 

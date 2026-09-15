@@ -797,7 +797,7 @@ mod tests {
     use lunco_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
     use lunco_usd_bevy_core::{canonical::CanonicalStage, UsdRead, UsdStageAsset};
     use lunco_usd_bevy_scene::UsdPrimPath;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
 
     #[derive(Component)]
     struct ModelicaInput;

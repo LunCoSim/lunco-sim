@@ -15,11 +15,12 @@ lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
-lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-usd-data = { path = "../lunco-usd-data" }
 openusd = { workspace = true }
 
 [dev-dependencies]
 lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
 tempfile = { workspace = true }
 
 [lints]

@@ -71,6 +71,7 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd_authoring::author::open_doc_stage;
 use lunco_usd_bevy_core::read::UsdRead;
 use lunco_usd_bevy_core::view::StageView;
 use lunco_usd_bevy_core::{
@@ -81,7 +82,6 @@ use lunco_usd_bevy_scene::collision::{collision_aabb, prim_geometry_aabb, Object
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_usd_bevy_twin::{canonical_stage_for_document, scene_document_for, DocBackedTwinScenes};
-use lunco_usd_document::author::open_doc_stage;
 use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
 

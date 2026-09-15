@@ -149,7 +149,7 @@ namespace.
   (`lunco-usd-bevy-scene`) is the per-entity link back to its prim.
 - Reverse lookup (prim path → entity) exists only as an **ad-hoc, per-call HashMap**
   (`lunco-usd-sim-cosim/src/lib.rs`), not a maintained index.
-- Reading composed attrs: `UsdDataExt` (`lunco-usd-document/src/usd_data.rs`) —
+- Reading composed attrs: `UsdDataExt` (`lunco-usd-data/src/usd_data.rs`) —
   `prim_children`, `prim_attribute_value::<T>`, `field`, `prim_type_name`.
 - Shader projection reads authored `inputs:*` from the composed bound Shader;
   connected inputs remain graph-owned and are not treated as local parameter
@@ -300,7 +300,7 @@ prim→entity.
 - `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
 - `lunco-usd/src/commands.rs` — scene command admission and document registration
 - `lunco-usd-bevy-core/src/asset.rs` — `UsdStageAsset`; `lunco-usd-bevy-scene/src/lib.rs` — `UsdPrimPath`
-- `lunco-usd-document/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
+- `lunco-usd-data/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
 - `lunco-usd-sim-cosim/src/lib.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
 - `lunco-usd-terrain/src/lib.rs` — `refresh_layered_terrain_layers` (the
   per-domain projection-on-`Modified` precedent)

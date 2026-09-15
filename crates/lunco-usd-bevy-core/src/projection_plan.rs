@@ -15,8 +15,8 @@ use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::Stage;
 
 use crate::{MaterialPurpose, StageView, UsdRead};
-use lunco_usd_document::metadata::AttrUiHint;
-use lunco_usd_document::recipe::StageRecipe;
+use lunco_usd_compose::recipe::StageRecipe;
+use lunco_usd_data::metadata::AttrUiHint;
 
 /// One composed prim's owned facts needed by the initial visual projection.
 #[derive(Clone, Debug)]

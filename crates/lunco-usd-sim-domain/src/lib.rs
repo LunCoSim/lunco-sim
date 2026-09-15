@@ -4332,7 +4332,7 @@ mod tests {
     #[test]
     fn authored_member_telemetry_owns_the_public_output_identity() {
         let stage =
-            CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+            CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
                 "telemetry-owner.usda",
                 r#"#usda 1.0
 def Scope "Rig"

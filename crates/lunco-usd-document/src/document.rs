@@ -16,7 +16,7 @@
 //! composition: references, payloads, and sublayer opinions survive verbatim,
 //! so the document still round-trips losslessly with external USD tools
 //! (Omniverse, USDView, Blender). Edits route through openusd's authoring
-//! engine: [`crate::author`] opens the data as a transient `Stage`,
+//! engine: [`lunco_usd_authoring::author`] opens the data as a transient `Stage`,
 //! authors the op **by SDF path** (which cannot touch a sibling/nested prim
 //! that shares a name), and extracts the updated root layer back out.
 //!
@@ -82,18 +82,18 @@
 
 use std::collections::VecDeque;
 
-use crate::author::{
-    self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
-};
-use crate::recipe::StageRecipe;
-use crate::units::{ConventionTransform, StageMetrics};
-use crate::usd_data::UsdDataExt;
 use bevy::log::warn;
 use bevy::math::DVec3;
 use bevy::reflect::Reflect;
 use lunco_doc::{
     Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin, ForkableDocument,
 };
+use lunco_usd_authoring::author::{
+    self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
+};
+use lunco_usd_compose::recipe::StageRecipe;
+use lunco_usd_data::units::{ConventionTransform, StageMetrics};
+use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{self, Path as SdfPath, SpecType};
 
 /// How many recent changes to keep in the per-document ring buffer.
@@ -231,7 +231,7 @@ pub enum UsdChange {
 /// [`LayerId::runtime`] (ephemeral, non-persisted overlay); `apply` routes to
 /// each. Unknown identifiers are rejected.
 ///
-/// Forward application routes through [`crate::author`] — the op is
+/// Forward application routes through [`lunco_usd_authoring::author`] — the op is
 /// authored by SDF path into a transient `Stage` and the updated root layer
 /// is extracted back as [`sdf::Data`]. Inverses are typed where it is cheap
 /// and exact — structural pairs (`AddPrim` ↔ `RemovePrim`, `MovePrim`) and
@@ -867,7 +867,7 @@ impl UsdDocument {
     }
 
     /// The authored **base** layer data (references intact). Query it with the
-    /// [`UsdDataExt`](crate::usd_data::UsdDataExt) helpers. The runtime
+    /// [`UsdDataExt`](lunco_usd_data::usd_data::UsdDataExt) helpers. The runtime
     /// overlay is not folded in here — read it separately via
     /// [`runtime_data`](Self::runtime_data) until a consumer needs a composed
     /// view (deferred with the runtime-producer wiring).
@@ -1247,8 +1247,12 @@ impl UsdDocument {
     /// unique by construction (that is what the namespace is for), so resolving one
     /// by name is unambiguous and saves walking the `apiSchemas` list op for a
     /// lookup that could only ever have one answer.
-    fn linear_unit_of(&self, prim: &SdfPath, attr: &str) -> crate::schema::LinearUnit {
-        use crate::schema::{LinearUnit, SchemaRegistry};
+    fn linear_unit_of(
+        &self,
+        prim: &SdfPath,
+        attr: &str,
+    ) -> lunco_usd_authoring::schema::LinearUnit {
+        use lunco_usd_authoring::schema::{LinearUnit, SchemaRegistry};
         let Ok(reg) = SchemaRegistry::global().read() else {
             return LinearUnit::None;
         };
@@ -2304,7 +2308,7 @@ impl Document for UsdDocument {
                 // "is a length" flag would still author those wrong by 10x.
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let val = match linear {
-                    crate::schema::LinearUnit::Length {
+                    lunco_usd_authoring::schema::LinearUnit::Length {
                         stage_units_per_unit,
                     } if !conv.is_identity() => {
                         scale_scalar_value(val, |m| conv.stage_length(m) / stage_units_per_unit)
@@ -2338,7 +2342,7 @@ impl Document for UsdDocument {
                     prior
                         .map(|old| conv.canonical_physics_joint_value(&name, &type_name, old))
                         .map(|old| match linear {
-                            crate::schema::LinearUnit::Length {
+                            lunco_usd_authoring::schema::LinearUnit::Length {
                                 stage_units_per_unit,
                             } if !conv.is_identity() => {
                                 scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))
@@ -2358,7 +2362,7 @@ impl Document for UsdDocument {
                     None => self.coarse_inverse(target, &id),
                 };
                 // Variability and `custom` are declared by the SCHEMA, not by the
-                // call site — see `crate::schema`. Deciding them here, in the one
+                // call site — see `lunco_usd_authoring::schema`. Deciding them here, in the one
                 // place attributes are authored, is what makes it impossible for a
                 // caller to author `info:id` as `varying` (which is how it *was*
                 // authored, because nothing knew better) or to omit `custom` on a
@@ -2370,9 +2374,9 @@ impl Document for UsdDocument {
                 stage
                     .create_attribute(format!("{path}.{name}"), type_name.as_str())
                     .map_err(author_err)?
-                    .set_variability(crate::schema::variability_of(&name))
+                    .set_variability(lunco_usd_authoring::schema::variability_of(&name))
                     .map_err(author_err)?
-                    .set_custom(crate::schema::is_custom(&name))
+                    .set_custom(lunco_usd_authoring::schema::is_custom(&name))
                     .map_err(author_err)?
                     .set(val)
                     .map_err(author_err)?;
@@ -2406,7 +2410,7 @@ impl Document for UsdDocument {
                 let val = conv.stage_physics_joint_value(&name, &type_name, val);
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let val = match linear {
-                    crate::schema::LinearUnit::Length {
+                    lunco_usd_authoring::schema::LinearUnit::Length {
                         stage_units_per_unit,
                     } if !conv.is_identity() => {
                         scale_scalar_value(val, |m| conv.stage_length(m) / stage_units_per_unit)
@@ -2447,7 +2451,7 @@ impl Document for UsdDocument {
                     .map(|old| {
                         let old = conv.canonical_physics_joint_value(&name, &type_name, old);
                         match linear {
-                            crate::schema::LinearUnit::Length {
+                            lunco_usd_authoring::schema::LinearUnit::Length {
                                 stage_units_per_unit,
                             } if !conv.is_identity() => {
                                 scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))
@@ -2532,7 +2536,7 @@ impl Document for UsdDocument {
                 let recovered = prior_type.zip(prior_value).and_then(|(ty, old)| {
                     let old = conv.canonical_physics_joint_value(&name, &ty, old);
                     let old = match linear {
-                        crate::schema::LinearUnit::Length {
+                        lunco_usd_authoring::schema::LinearUnit::Length {
                             stage_units_per_unit,
                         } if !conv.is_identity() => {
                             scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))

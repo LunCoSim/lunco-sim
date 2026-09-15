@@ -20,8 +20,10 @@ lunco-core = { path = "../lunco-core" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
+lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
@@ -31,6 +33,9 @@ lunco-doc = { path = "../lunco-doc" }
 # step / one journal change set. `default-features = false` keeps `lunco-doc-bevy/ui`
 # (→ bevy_egui) out of the headless closure.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+
+[dev-dependencies]
+lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [lints]
 workspace = true

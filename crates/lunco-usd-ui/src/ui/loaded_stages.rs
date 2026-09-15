@@ -33,7 +33,7 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_compose::parse_usda;
-use lunco_usd_document::usd_data::UsdData;
+use lunco_usd_data::usd_data::UsdData;
 
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_core::edit_session::{UsdEditSessions, UsdProposalSummary};
@@ -339,7 +339,7 @@ mod tests {
     use super::*;
     use lunco_doc::DocumentId;
     // `prim_children` is a `UsdDataExt` method — bring the trait into scope.
-    use lunco_usd_document::usd_data::UsdDataExt;
+    use lunco_usd_data::usd_data::UsdDataExt;
     use openusd::sdf;
 
     /// `unregister` matches by id and reports whether anything was

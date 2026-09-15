@@ -13,7 +13,7 @@ mod curve_mesh_quality_tests {
     use super::*;
 
     fn stage(source: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+        CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
             "curve.usda",
             source,
         ))
@@ -166,7 +166,7 @@ mod parametric_surface_tests {
 
     #[test]
     fn lathe_api_owns_surface_even_when_profile_is_invalid() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "lathe.usda",
             r#"#usda 1.0
 def NurbsPatch "Nozzle" (
@@ -192,7 +192,7 @@ def NurbsPatch "Nozzle" (
 
     #[test]
     fn lathe_api_rejects_invalid_profile_parameters_without_clamping_them() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "lathe.usda",
             r#"#usda 1.0
 def NurbsPatch "Nozzle" (
@@ -219,7 +219,7 @@ def NurbsPatch "Nozzle" (
 
     #[test]
     fn lathe_api_requires_standard_sampling_fields() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "lathe.usda",
             r#"#usda 1.0
 def NurbsPatch "Nozzle" (
@@ -244,7 +244,7 @@ def NurbsPatch "Nozzle" (
 
     #[test]
     fn authored_patch_requires_standard_sampling_fields() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "patch.usda",
             r#"#usda 1.0
 def NurbsPatch "Patch"
@@ -263,7 +263,7 @@ def NurbsPatch "Patch"
 
     #[test]
     fn authored_patch_requires_authored_knot_vectors() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "patch.usda",
             r#"#usda 1.0
 def NurbsPatch "Patch"
@@ -286,7 +286,7 @@ def NurbsPatch "Patch"
 
     #[test]
     fn authored_trim_data_cannot_fall_back_to_an_untrimmed_patch() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "patch.usda",
             r#"#usda 1.0
 def NurbsPatch "Patch"
@@ -324,7 +324,7 @@ mod mesh_tests {
     /// live, PCP-composed stage — which is the ONLY read path now that the
     /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+        CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
             "t.usda", usda,
         ))
         .expect("build canonical stage")

@@ -8,6 +8,8 @@
 
 mod resolver;
 
+pub mod recipe;
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::path::Path;

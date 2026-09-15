@@ -75,7 +75,9 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-usd-document`** | Headless authored OpenUSD document/layer substrate: `UsdDocument`, authoring helpers, schema metadata, stage recipes, and unit/data readers. No runtime, physics, rendering, or UI. |
+| **`lunco-usd-document`** | Headless authored OpenUSD document/layer lifecycle and typed operation substrate: `UsdDocument`, layer identity, edit history, and document state. No runtime, physics, rendering, or UI. |
+| **`lunco-usd-data`** | Reusable render-free authored USD data contracts: metadata, stage units/conventions, and composed-value readers. No document lifecycle, authoring registry, runtime, physics, rendering, or UI. |
+| **`lunco-usd-authoring`** | OpenUSD authored-layer operations and schema registry: path-addressed authoring, USDA conversion, reference/list-op helpers, and registered schema metadata. No document lifecycle, runtime, physics, rendering, or UI. |
 | **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
 | **`lunco-usd`** | UI-free USD runtime orchestration, document commands, and engineering metadata mapping. |
@@ -346,8 +348,22 @@ Input mapping and translation. Owns the persisted `InputBindingsSettings` keymap
 
 **`lunco-usd-document`**
 Headless authored OpenUSD document/layer substrate: `UsdDocument`, authoring
-helpers, schema metadata, stage recipes, and authored-data readers. It has no
+state, typed operations, layer identity, and edit history. Reusable authored
+data lives in `lunco-usd-data`, authoring and schema helpers in
+`lunco-usd-authoring`, and `StageRecipe` in `lunco-usd-compose`. It has no
 runtime projection, command observers, physics, rendering, or UI dependency.
+
+**`lunco-usd-data`**
+Reusable render-free authored USD data contracts: stage metadata, unit and
+up-axis conversion, and composed-value readers. It is the lower boundary for
+readers that need USD conventions without the document lifecycle or authoring
+registry.
+
+**`lunco-usd-authoring`**
+OpenUSD authored-layer operations and schema registry. It owns path-addressed
+authoring, USDA conversion, reference/list-op helpers, and registered schema
+metadata without owning document identity, journaling, runtime composition, or
+UI.
 
 **`lunco-usd-core`**
 Headless typed USD operation, assembly, edit-session, and edit-policy

@@ -66,5 +66,8 @@ lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-scripting = { path = "../lunco-scripting" }
 
+[dev-dependencies]
+lunco-usd-compose = { path = "../lunco-usd-compose" }
+
 [lints]
 workspace = true

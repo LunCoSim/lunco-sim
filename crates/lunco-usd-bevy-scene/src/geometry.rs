@@ -285,7 +285,7 @@ mod primitive_attribute_tests {
     use openusd::sdf::Path as SdfPath;
 
     fn parse(source: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+        CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
             "primitive.usda",
             source,
         ))
@@ -355,7 +355,7 @@ mod indexed_mesh_tests {
     use openusd::sdf::Path as SdfPath;
 
     fn parse(usda: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+        CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
             "t.usda", usda,
         ))
         .expect("build canonical stage")
@@ -404,15 +404,15 @@ mod stage_metrics_import_tests {
     use super::{read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims};
     use bevy::prelude::{Quat, Vec3};
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_bevy_core::units::{StageMetrics, UpAxis};
     use lunco_usd_bevy_core::{local_transform_at, stage_convention};
+    use lunco_usd_data::units::{StageMetrics, UpAxis};
     use openusd::sdf::Path as SdfPath;
 
     /// Build a real composed stage. The extractors read through `StageView` — the
     /// live, PCP-composed stage — which is the ONLY read path now that the
     /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+        CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
             "t.usda", usda,
         ))
         .expect("build canonical stage")
@@ -580,14 +580,12 @@ def Xform "World"
         let error = StageMetrics::from_reader(&bogus.view()).expect_err("malformed metadata");
         assert!(matches!(
             error,
-            lunco_usd_document::units::StageMetricsError::InvalidUpAxis(_)
+            lunco_usd_data::units::StageMetricsError::InvalidUpAxis(_)
         ));
         assert!(stage_convention(&bogus.view()).is_err());
         assert!(matches!(
             StageMetrics::from_stage(bogus.stage()),
-            Err(lunco_usd_document::units::StageMetricsError::InvalidUpAxis(
-                _
-            ))
+            Err(lunco_usd_data::units::StageMetricsError::InvalidUpAxis(_))
         ));
 
         let malformed_units = parse(
@@ -595,11 +593,11 @@ def Xform "World"
         );
         assert!(matches!(
             StageMetrics::from_reader(&malformed_units.view()),
-            Err(lunco_usd_document::units::StageMetricsError::InvalidMetersPerUnit(_))
+            Err(lunco_usd_data::units::StageMetricsError::InvalidMetersPerUnit(_))
         ));
         assert!(matches!(
             StageMetrics::from_stage(malformed_units.stage()),
-            Err(lunco_usd_document::units::StageMetricsError::InvalidMetersPerUnit(_))
+            Err(lunco_usd_data::units::StageMetricsError::InvalidMetersPerUnit(_))
         ));
     }
 }
