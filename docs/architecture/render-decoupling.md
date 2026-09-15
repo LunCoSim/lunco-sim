@@ -208,6 +208,13 @@ whose shader layout or declared images are not ready clears it until the normal
 readiness pass proves the dependency contract again. This keeps terrain edge
 stitch variants from entering a deferred remove/re-add cycle.
 
+Stage readiness is a positive contract: the fragment source must expose
+`@fragment`, and an authored optional vertex source must expose `@vertex`.
+Combined WGSL modules are valid. A missing stage is not converted to a PBR or
+neutral material; the shader owner removes the invalid concrete binding and
+publishes a `RuntimeDiagnostics` error. Any recovery is an explicit USD/Rhai
+authoring decision, not a renderer fallback.
+
 ### Two rules you must not break
 
 1. **Identical looks share one material.** The binders cache by the look's *content*

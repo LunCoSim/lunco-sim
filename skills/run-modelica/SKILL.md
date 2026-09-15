@@ -131,7 +131,8 @@ Bundled and workspace source roots are parsed to completion before admission and
 installed as one parsed source set. A failed member therefore keeps the root out
 of the Rumoca session; do not treat a nonzero parsed count as readiness.
 
-For policy-owned generated models, keep contract assertions in
+For policy-owned generated models, keep contract assertions in authored
+`assets/scenarios/tests/*.rhai` scenes; standalone live probes may use
 `assets/scripting/tests/*.rhai`. Rust should provide the composed facts and
 invoke the registered policy; Rhai should assert the generated source,
 topology, layout, and UI metadata. The policy result is strict: it must return

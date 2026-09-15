@@ -56,6 +56,9 @@ Use the shared prelude:
 Progression must observe semantic commands or authoritative state. Never gate a
 lesson on a physical key name or a timer. A lesson must not open a USD layer
 directly; if it needs a world, the catalog's `scene_asset` is the request.
+Never branch on the Rust build profile (`is_debug()` or `debug_assertions`). The
+authored `lint.rhai` policy rejects that coupling; use `is_unattended()` when
+attended and automated execution need different behavior.
 
 Example objective:
 

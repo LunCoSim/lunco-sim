@@ -5,10 +5,9 @@
 // only the prelude directory, so nothing here is ever auto-loaded into a running
 // scenario. Test code must not ride along in production scripts; a harness
 // concatenates these libs ahead of a test file explicitly — either
-// `cargo test -p lunco-scripting --test rhai_test_harness` for the pure suites,
-// or `target/debug/luncosim rhai --api <port> --stdout -e "<prelude>\n<test>"`
-// for the ones needing a live stage (the shape `scripts/scenario_sync_test.sh`
-// uses).
+// `scripts/api/run_rhai_test.sh <port> <test.rhai> [probe-prim]` for both pure
+// and live suites. The wrapper prepends these assertion libraries and sends
+// the authored source through the production Rhai bridge.
 //
 // ## Why every helper returns a string
 //

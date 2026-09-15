@@ -37,6 +37,33 @@ pub fn anchor_of(path: &AssetPath) -> String {
     }
 }
 
+/// Resolve a document-root-relative asset into the document's registered
+/// source.
+///
+/// A `twin://name/...` source carries its Twin authority in the first path
+/// component. The default Bevy source is the engine library, so it is promoted
+/// to the canonical `lunco://` identity instead of being guessed from the
+/// document's directory. This keeps all callers on the same URI algebra and
+/// prevents a relative asset from crossing into a different source.
+pub fn source_relative_uri(path: &AssetPath, relative: &str) -> Option<String> {
+    let relative = relative_path(relative)?;
+    let relative = slashed(relative);
+    match path.source() {
+        AssetSourceId::Default => Some(crate::engine_asset_uri(&relative)),
+        AssetSourceId::Name(name) if name.to_string() == crate::LUNCO_SCHEME => {
+            Some(crate::engine_asset_uri(&relative))
+        }
+        AssetSourceId::Name(name) => {
+            let root = path
+                .path()
+                .components()
+                .next()
+                .and_then(|component| component.as_os_str().to_str())?;
+            Some(uri(name, &format!("{root}/{relative}")))
+        }
+    }
+}
+
 /// Collapse `.` and `..` segments without touching the filesystem.
 ///
 /// A leading `..` with nothing to pop is PRESERVED. `std::fs::canonicalize` cannot
@@ -278,6 +305,21 @@ mod tests {
         assert_eq!(
             canonicalize("twin://ep1/lib.rhai", "lunco://scenes/x.usda"),
             "twin://ep1/lib.rhai"
+        );
+    }
+
+    #[test]
+    fn source_relative_uri_preserves_asset_authority() {
+        let path = AssetPath::parse("twin://moonbase/scenes/main.usda").into_owned();
+        assert_eq!(
+            source_relative_uri(&path, "textures/albedo.png").as_deref(),
+            Some("twin://moonbase/textures/albedo.png")
+        );
+
+        let library = AssetPath::parse("scenes/main.usda").into_owned();
+        assert_eq!(
+            source_relative_uri(&library, "textures/albedo.png").as_deref(),
+            Some("lunco://textures/albedo.png")
         );
     }
 

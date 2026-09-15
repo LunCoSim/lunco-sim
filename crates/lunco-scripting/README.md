@@ -110,10 +110,16 @@ The crate builds with `rhai`, with `--no-default-features` (script-free), with
 ## Testing
 
 ```bash
-# rhai backend (lib + live end-to-end scenario tests).
-# Note the env var: rhai debug info can stress the linker — line-tables-only avoids it.
-CARGO_PROFILE_TEST_DEBUG=line-tables-only scripts/run_rust_tests.sh -p lunco-scripting --module rhai_rover_live_test
+# Authored prelude, tool, and policy assets through the production runtime.
+LUNCOSIM_BIN=target/debug/luncosim ./scripts/run_scene_tests.sh --no-build --exact scripting_asset_contracts
 ```
+
+Shipped prelude, tool, policy, and scenario behavior is tested beside the
+authored assets through production scene gates. This crate does not maintain a
+second Rust integration harness for scripting product behavior. Low-level Rust
+tests, when needed for mechanisms that the authored runtime cannot observe,
+use inline Rhai source and do not enumerate or read repository assets through
+`lunco-assets-core` or `lunco-storage`.
 
 ## Docs
 

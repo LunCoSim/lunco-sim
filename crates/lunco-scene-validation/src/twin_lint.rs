@@ -489,13 +489,23 @@ mod tests {
     #[test]
     fn indexed_twin_reports_real_same_root_collision_without_cross_root_false_positive() {
         let temp = tempfile::tempdir().expect("temporary Twin root");
-        std::fs::create_dir_all(temp.path().join("other")).expect("nested source root");
-        std::fs::write(temp.path().join("a.mo"), "model Drive end Drive;")
-            .expect("first Modelica source");
-        std::fs::write(temp.path().join("b.mo"), "model Drive end Drive;")
-            .expect("second Modelica source");
-        std::fs::write(temp.path().join("other/Drive.mo"), "model Drive end Drive;")
-            .expect("independent Modelica source root");
+        lunco_storage::ensure_directory_sync(&temp.path().join("other"))
+            .expect("nested source root");
+        lunco_storage::write_file_sync(
+            &temp.path().join("a.mo"),
+            b"model Drive end Drive;",
+        )
+        .expect("first Modelica source");
+        lunco_storage::write_file_sync(
+            &temp.path().join("b.mo"),
+            b"model Drive end Drive;",
+        )
+        .expect("second Modelica source");
+        lunco_storage::write_file_sync(
+            &temp.path().join("other/Drive.mo"),
+            b"model Drive end Drive;",
+        )
+        .expect("independent Modelica source root");
 
         let mode = lunco_twin::TwinMode::open(temp.path()).expect("open Twin folder");
         let twin = match mode {

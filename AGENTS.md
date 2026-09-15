@@ -73,6 +73,10 @@ package checks after changing skill metadata or packaging.
   tutorial flow belongs in Rhai. Add Rust behavior only when it is an
   authoritative engine mechanism that cannot be expressed by composing the
   existing Rhai-facing API.
+- Generic Rust crates and tests must not enumerate, load, or assert on tutorial
+  assets or lesson names. Tutorial behavior and tutorial-specific acceptance
+  belong in authored USD/Rhai scene tests; only the application-owned menu and
+  the shared asset layer may expose the tutorial catalog/source to consumers.
 - Every new mechanism must identify its authoritative owner, real consumer, and
   production-level test.
 - USD owns scene facts and standard fields (`doc`, `metersPerUnit`, `UsdShade`,
@@ -182,6 +186,16 @@ package checks after changing skill metadata or packaging.
   seams. Do not duplicate an observable runtime assertion in Rust merely because
   the implementation is Rust; tutorial behavior tests belong in authored Rhai so
   tutorial edits do not require a core rebuild.
+- Do not embed repository or Twin asset paths in Rust tests. That is a strong
+  signal that the test is exercising an asset/runtime contract and belongs in an
+  authored USD + Rhai production scene gate (or through `ValidateAsset`/the live
+  API). Rust tests may use inline source strings or pure parser/schema fixtures
+  when the mechanism itself is the subject, but they must not become a second
+  asset test runner or pin scene paths outside the authored test fixture. Routing
+  the same asset path through `lunco-assets-core` or `lunco-storage` fixes the
+  access boundary, not the test's ownership; the test still belongs beside the
+  asset. Use those crates in Rust only when testing their generic identity,
+  resolution, or storage mechanism with inline/temp fixtures.
 - Build and invoke only the production binary resolved through `LUNCOSIM_BIN`
   for scene tests and visual validation. In a source checkout this is usually
   `target/debug/luncosim`; an installed GitHub build may be on `PATH` or at an

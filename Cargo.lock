@@ -8377,6 +8377,7 @@ dependencies = [
  "lunco-lint",
  "lunco-materials",
  "lunco-modelica-ast",
+ "lunco-storage",
  "lunco-sysml-ast",
  "lunco-sysml-report",
  "lunco-tools",

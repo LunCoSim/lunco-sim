@@ -131,7 +131,7 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    let text = match std::fs::read_to_string(&path) {
+    let text = match lunco_assets_core::read_asset_file_string(&path) {
         Ok(t) => t,
         Err(e) => {
             return ValidationReport::new(reference, "unknown")
@@ -921,7 +921,7 @@ fn validate_sysml_reference(world: &World, reference: &str) -> ValidationReport 
                 .error(format!("cannot resolve {reference}: {error}"));
         }
     };
-    let text = match std::fs::read_to_string(&path) {
+    let text = match lunco_assets_core::read_asset_file_string(&path) {
         Ok(text) => text,
         Err(error) => {
             return ValidationReport::new(reference, "sysml")
@@ -988,7 +988,7 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
     let mut revision_input = Vec::new();
     for relative in relative_sources {
         let path = root.join(&relative);
-        let text = match std::fs::read_to_string(&path) {
+        let text = match lunco_assets_core::read_asset_file_string(&path) {
             Ok(text) => text,
             Err(error) => {
                 return ValidationReport::new(reference, "sysml")
@@ -1095,17 +1095,17 @@ mod tests {
     /// real `validate_asset` entry point.
     fn temp_usda(name: &str, body: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("lunco-validate-controls");
-        std::fs::create_dir_all(&dir).expect("temp dir");
+        lunco_storage::ensure_directory_sync(&dir).expect("temp dir");
         let path = dir.join(name);
-        std::fs::write(&path, body).expect("write temp usda");
+        lunco_storage::write_file_sync(&path, body.as_bytes()).expect("write temp usda");
         path
     }
 
     fn temp_sysml(name: &str, body: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("lunco-validate-sysml");
-        std::fs::create_dir_all(&dir).expect("temp dir");
+        lunco_storage::ensure_directory_sync(&dir).expect("temp dir");
         let path = dir.join(name);
-        std::fs::write(&path, body).expect("write temp sysml");
+        lunco_storage::write_file_sync(&path, body.as_bytes()).expect("write temp sysml");
         path
     }
 

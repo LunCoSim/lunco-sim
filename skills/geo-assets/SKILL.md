@@ -162,7 +162,10 @@ def Scope "Looks"
 
         def Shader "Surface"
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
+            # Optional for streamed CDLOD; omit for a static/root mesh.
+            uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
             asset inputs:albedo_map  = @terrain/<site>/materials/textures/albedo.png@
             float inputs:weight_albedo = 1.0
             asset inputs:normal_map  = @terrain/<site>/materials/textures/normal.png@
@@ -215,6 +218,14 @@ travel with the twin. The generic USD shader projection walks
 one `ShaderLook`; the terrain source reconciler derives the typed roles from that
 same look. Roles are `albedo`, `mineral`, `surface` (packed R=rough G=AO B=rockDens),
 and `normal`.
+
+The bound Shader also owns the render stages: `info:wgsl:sourceAsset` must expose
+`@fragment`, and optional `info:wgsl:vertexAsset` must expose `@vertex`. A single
+WGSL module may provide both. Missing or invalid stages are reported as a
+structured diagnostic and leave the material unbound. Rust never swaps in a
+neutral or terrain shader to hide a bad asset; if a Twin wants an explicit
+non-authored material, author that choice in USD/Rhai so it can be changed
+without rebuilding the renderer.
 
 - Every `inputs:*` is a live-tunable, journaled knob (networked, undoable) and
   the network is inspectable in usdview/Blender.

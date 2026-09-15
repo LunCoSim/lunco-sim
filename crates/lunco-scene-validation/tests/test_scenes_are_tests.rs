@@ -27,24 +27,22 @@
 use std::path::{Path, PathBuf};
 
 fn assets_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+    lunco_assets_core::assets_dir_abs()
 }
 
 fn usda_files(dir: &Path) -> Vec<(String, PathBuf)> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir)
-        .expect("read scenes dir")
-        .map(|entry| entry.expect("read scene directory entry"))
-    {
-        let path = entry.path();
-        if path.extension().is_none_or(|x| x != "usda") {
-            continue;
-        }
-        out.push((
-            path.file_stem().unwrap().to_string_lossy().to_string(),
-            path,
-        ));
-    }
+    let mut out = lunco_assets_core::discovery::scan_library(dir)
+        .into_iter()
+        .filter(|relative| !relative.contains('/') && relative.ends_with(".usda"))
+        .map(|relative| {
+            let path = dir.join(relative);
+            (
+                path.file_stem().unwrap().to_string_lossy().to_string(),
+                path,
+            )
+        })
+        .collect::<Vec<_>>();
+    out.sort();
     out
 }
 

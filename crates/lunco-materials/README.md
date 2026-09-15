@@ -75,7 +75,7 @@ def Xform "World"
             rel outputs:surface.connect = </World/Looks/MyObject_Mat/Surface.outputs:surface>
             def Shader "Surface"
             {
-                uniform token info:id = "UsdPreviewSurface"
+                uniform token info:implementationSource = "sourceAsset"
                 asset info:wgsl:sourceAsset = @lunco://shaders/my_material.wgsl@
                 color3f inputs:diffuseColor = (0.2, 0.4, 0.9)
                 float inputs:roughness = 0.3
@@ -115,16 +115,18 @@ not `UsdSimPlugin` does not project the USD `UsdShade` shader network into a
 
 ```
 crates/lunco-materials/
-├── src/
-│   ├── lib.rs              # re-exports
-│   ├── dyn_params.rs       # ParamSchema/ParamValue: WGSL `struct Material` reflection + std140 packing
-│   └── shader_material.rs  # the one general ShaderMaterial + ShaderMaterialPlugin
-└── tests/
-    └── materials_test.rs   # dynamic packing + blueprint.wgsl schema reflection
+└── src/
+    ├── lib.rs              # re-exports
+    ├── dyn_params.rs       # ParamSchema/ParamValue: WGSL `struct Material` reflection + std140 packing
+    └── shader_material.rs  # the one general ShaderMaterial + ShaderMaterialPlugin
+```
 
 Shaders live in `assets/shaders/*.wgsl` (e.g. blueprint.wgsl, solar_panel.wgsl,
 regolith.wgsl, terrain_layered.wgsl, wheel.wgsl) — pure assets, hot-reloaded.
-```
+Their shipped schema and composed USD/render contracts are exercised by the
+authored `assets/scenes/tests/shader_asset_contracts.usda` scene and its Rhai
+observer. Rust tests in this crate use inline WGSL only for the generic
+reflection and packing mechanism; they do not open repository shader files.
 
 The 256-byte uniform block caps all params (named + engine-filled) at 64 f32 lanes;
 supported types are `f32 / i32 / u32 / vec2 / vec3 / vec4` (std140).

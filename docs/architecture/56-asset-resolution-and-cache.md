@@ -142,6 +142,7 @@ re-derives one:
 | Parse a Twin URI | `parse_twin_uri` |
 | "already addressable?" | `has_scheme` |
 | Library URI ⇄ relative | `engine_asset_uri` / `engine_asset_rel` |
+| Document-root-relative asset URI | `asset_path::source_relative_uri` |
 | Any URI → local path | `local_path(reference, twins)` |
 | Library root | `lunco-assets-core::assets_dir_abs` (`LUNCO_ASSET_ROOT` when set; otherwise executable/package ancestry, then current-directory ancestry) |
 | Library root (of a file) | `shipped_asset_root` |
