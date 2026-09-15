@@ -310,7 +310,7 @@ const STATIC_TOOLS = [
   // ── Avatar camera control ────────────────────────────────────────────
   {
     name: 'possess_vessel',
-    description: 'Take direct control of a vessel (rover, spacecraft). Inserts `ControllerLink` so keyboard input drives the target plus a `SpringArmCamera` chase view. Idempotent: re-issuing for the same target is a no-op. Pass entity IDs from `list_entities`.',
+    description: 'Take direct control of a vessel (rover, spacecraft). Inserts the generic `ControlLink` so keyboard input drives the target plus a `SpringArmCamera` chase view. Idempotent: re-issuing for the same target is a no-op. Pass entity IDs from `list_entities`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -322,7 +322,7 @@ const STATIC_TOOLS = [
   },
   {
     name: 'follow_target',
-    description: 'Chase-camera-only follow: tracks any `SelectableRoot` entity (balloons, props, …) without binding controls. Inserts `SpringArmCamera` and removes any prior `ControllerLink`. Use for observation and scripted camera moves.',
+    description: 'Chase-camera-only follow: tracks any `SelectableRoot` entity (balloons, props, …) without binding controls. Inserts `SpringArmCamera` and removes any prior `ControlLink`. Use for observation and scripted camera moves.',
     inputSchema: {
       type: 'object',
       properties: {
