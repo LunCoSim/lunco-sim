@@ -17,6 +17,7 @@ lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 
 [dev-dependencies]
 lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-document = { path = "../lunco-usd-document" }
 
 [lints]
 workspace = true

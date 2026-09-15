@@ -92,7 +92,7 @@ use openusd::sdf::Path as SdfPath;
 use serde::{Deserialize, Serialize};
 
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd_core::document::{LayerId, UsdDocument};
+use lunco_usd_document::document::{LayerId, UsdDocument};
 
 use std::collections::{HashMap, HashSet};
 
@@ -4553,7 +4553,7 @@ mod tests {
     use super::*;
     use lunco_render::SceneCamera;
     use lunco_usd::commands::UsdCommandsPlugin;
-    use lunco_usd_core::document::UsdOp;
+    use lunco_usd_document::document::UsdOp;
     /// Without any rendering plugins (`Assets<Image>` absent), opening a
     /// document does not allocate a preview session or panic.
     #[test]

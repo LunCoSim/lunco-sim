@@ -20,8 +20,8 @@ use lunco_scene_catalog::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, S
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
-use lunco_usd_core::document::UsdDocument;
-use lunco_usd_core::document::{LayerId, UsdOp};
+use lunco_usd_document::document::UsdDocument;
+use lunco_usd_document::document::{LayerId, UsdOp};
 use openusd::schemas::lux::tokens as ltok;
 
 /// Select one live scene entity through the render-free shared selection
@@ -1370,7 +1370,7 @@ fn is_mount_component(
     };
     registry.host(doc).is_some_and(|host| {
         let composed = host.document().composed();
-        lunco_usd_core::usd_data::has_authored_api_schema(
+        lunco_usd_document::usd_data::has_authored_api_schema(
             &composed,
             &path,
             "LunCoMountAttachmentAPI",

@@ -5,13 +5,13 @@
 //! scene and authoring packages submit USD edits without depending on the
 //! aggregate runtime package.
 
-use crate::document::UsdOp;
 use crate::edit_session::{UsdEditScope, UsdProposalId};
 use bevy::ecs::reflect::ReflectEvent;
 use bevy::prelude::{Reflect, Resource};
 use bevy::reflect::std_traits::ReflectDefault;
 use lunco_core::Command;
 use lunco_doc::{DocumentId, OpenOutcome};
+use lunco_usd_document::document::UsdOp;
 
 /// Apply one [`UsdOp`] to a document through the typed command bus.
 ///

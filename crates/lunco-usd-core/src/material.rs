@@ -37,7 +37,7 @@
 //! real geom attributes (a viewport hint for un-shaded prims) and are still both
 //! read and written.
 
-use crate::document::{LayerId, UsdOp};
+use lunco_usd_document::document::{LayerId, UsdOp};
 
 /// The shader prim's name inside its `Material`.
 const SURFACE: &str = "Surface";

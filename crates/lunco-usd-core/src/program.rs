@@ -5,8 +5,8 @@
 //! Rhai, and HTTP callers. The cosimulation runtime remains the reader of the
 //! resulting `LunCoProgramAPI` prim.
 
-use crate::document::{LayerId, UsdOp};
 use bevy::prelude::Reflect;
+use lunco_usd_document::document::{LayerId, UsdOp};
 
 /// One scalar input declared by an attached program.
 #[derive(Debug, Clone, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]

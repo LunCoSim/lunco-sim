@@ -10,15 +10,9 @@
 //! python3 scripts/gen_schema.py --check
 //! ```
 
-use std::path::PathBuf;
-
-fn schema_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schema")
-}
-
 #[test]
 fn generated_schema_is_in_sync() {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let status = std::process::Command::new("python3")
         .args(["scripts/gen_schema.py", "--check"])
         .current_dir(workspace)
@@ -38,10 +32,8 @@ fn generated_schema_is_in_sync() {
 /// regenerates.)
 #[test]
 fn every_generated_class_is_in_pluginfo() {
-    let generated = std::fs::read_to_string(schema_dir().join("generatedSchema.usda"))
-        .expect("read schema/generatedSchema.usda");
-    let plug_info = std::fs::read_to_string(schema_dir().join("plugInfo.json"))
-        .expect("read schema/plugInfo.json");
+    let generated = include_str!("../schema/generatedSchema.usda");
+    let plug_info = include_str!("../schema/plugInfo.json");
 
     let mut checked = 0usize;
     for line in generated.lines() {

@@ -1,0 +1,20 @@
+[package]
+name = "lunco-usd-document"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Headless authored OpenUSD document and layer substrate for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+anyhow = { workspace = true }
+openusd = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-twin-journal = { path = "../lunco-twin-journal" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

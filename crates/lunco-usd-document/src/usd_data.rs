@@ -10,6 +10,9 @@ use openusd::sdf::{self, Path, SpecType, Value};
 use openusd::tf;
 use openusd::usd::InterpolationType;
 
+/// Send-safe authored layer data used by document and authoring APIs.
+pub type UsdData = sdf::Data;
+
 /// Ergonomic reads over authored [`sdf::Data`].
 pub trait UsdDataExt {
     /// The raw value of field `key` on the spec at `path`, if present. (A

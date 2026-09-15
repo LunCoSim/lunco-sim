@@ -9,7 +9,7 @@ use lunco_assets_core::asset_path::{canonicalize, canonicalize_root};
 use lunco_usd_bevy_core::compose::build_stage_with_resolver;
 use lunco_usd_bevy_core::read::runtime_port_provider;
 use lunco_usd_bevy_core::{StageView, UsdRead};
-use lunco_usd_core::StageRecipe;
+use lunco_usd_document::recipe::StageRecipe;
 use openusd::usd::Stage;
 use std::collections::HashMap;
 
@@ -39,10 +39,9 @@ mod inherits_compose_tests {
         let usda = "#usda 1.0\n\
 class \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:factor = 1\n        }\n    }\n}\n\
 def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
-        let stage = build_stage_from_closure(&lunco_usd_core::StageRecipe::from_source(
-            "inherits.usda",
-            usda,
-        ))
+        let stage = build_stage_from_closure(
+            &lunco_usd_document::recipe::StageRecipe::from_source("inherits.usda", usda),
+        )
         .expect("compose");
         let view = StageView::new(&stage);
         let fwd = SdfPath::new("/Rover/Controls/forward").unwrap();
@@ -94,8 +93,9 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
             (root_id.clone(), scene.as_bytes().to_vec()),
             (wrapper_id, wrapper.as_bytes().to_vec()),
         ]);
-        let stage = build_stage_from_closure(&lunco_usd_core::StageRecipe { root_id, bytes })
-            .expect("compose scene→wrapper→glb");
+        let stage =
+            build_stage_from_closure(&lunco_usd_document::recipe::StageRecipe { root_id, bytes })
+                .expect("compose scene→wrapper→glb");
         let view = StageView::new(&stage);
 
         let visual = SdfPath::new("/Scene/Bldg/Visual").unwrap();
@@ -117,10 +117,9 @@ def Xform \"Visual\" (\n\
 )\n\
 {\n\
 }\n";
-        let stage = build_stage_from_closure(&lunco_usd_core::StageRecipe::from_source(
-            "scene.usda",
-            source,
-        ))
+        let stage = build_stage_from_closure(
+            &lunco_usd_document::recipe::StageRecipe::from_source("scene.usda", source),
+        )
         .expect("compose binary arcs");
         let view = StageView::new(&stage);
         let visual = SdfPath::new("/Visual").unwrap();
@@ -544,7 +543,7 @@ mod real_reader_tests {
     use super::UsdRead;
     use lunco_usd_bevy_core::compose::build_stage_with_resolver;
     use lunco_usd_bevy_core::StageView;
-    use lunco_usd_core::StageRecipe;
+    use lunco_usd_document::recipe::StageRecipe;
     use openusd::sdf::{Path as SdfPath, Value};
     use openusd::usd::Stage;
 

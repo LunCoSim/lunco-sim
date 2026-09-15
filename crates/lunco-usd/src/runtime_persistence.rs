@@ -1,6 +1,6 @@
 //! Runtime-layer persistence (C5-A).
 //!
-//! A [`UsdDocument`](lunco_usd_core::document::UsdDocument) has two layers: the authored
+//! A [`UsdDocument`](lunco_usd_document::document::UsdDocument) has two layers: the authored
 //! `base` (serialized to the scene `.usda` on Save) and a generated `runtime`
 //! overlay — the C4b spawns + moved transforms — that is deliberately **not**
 //! part of the authored file. The edit journal records the runtime ops but
@@ -16,7 +16,7 @@
 //!
 //! - **Load** on [`DocumentOpened`]: only when the active Twin's
 //!   [`RUNTIME_PERSISTENCE_SETTING`] is `true`, read the overlay and
-//!   [`restore_runtime`](lunco_usd_core::document::UsdDocument::restore_runtime) it into
+//!   [`restore_runtime`](lunco_usd_document::document::UsdDocument::restore_runtime) it into
 //!   the freshly-built document.
 //! - **Save** on [`DocumentChanged`]: controlled by the same Twin setting. A
 //!   stale or corrupt `.lunco` file cannot affect the normal authored-scene
@@ -26,7 +26,7 @@
 //! non-twin docs (nowhere stable to persist) and when no `WorkspaceResource`
 //! is present.
 
-use lunco_usd_core::document::UsdDocument;
+use lunco_usd_document::document::UsdDocument;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
@@ -170,7 +170,7 @@ pub(crate) fn restore_doc_runtime(
     };
     let data = match String::from_utf8(bytes)
         .ok()
-        .and_then(|text| lunco_usd_core::author::usda_to_data(&text).ok())
+        .and_then(|text| lunco_usd_document::author::usda_to_data(&text).ok())
     {
         Some(data) => data,
         None => {
@@ -247,7 +247,7 @@ pub(crate) fn on_doc_changed_save_runtime(
     if !runtime_has_content(runtime) {
         return; // no spawns / moves — don't litter `.lunco` with empty overlays
     }
-    let text = match lunco_usd_core::author::data_to_usda(runtime) {
+    let text = match lunco_usd_document::author::data_to_usda(runtime) {
         Ok(text) => text,
         Err(e) => {
             warn!("[usd-runtime] serialize of runtime layer failed: {e}");
@@ -263,8 +263,8 @@ pub(crate) fn on_doc_changed_save_runtime(
 mod tests {
     use super::*;
     use lunco_doc::{Document, DocumentOrigin};
-    use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
     use lunco_usd_core::runtime::RUNTIME_PERSISTENCE_SETTING;
+    use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
     use openusd::sdf::Path as SdfPath;
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
@@ -368,7 +368,7 @@ mod tests {
                 reference_prim_path: None,
             })
             .unwrap();
-        let text = lunco_usd_core::author::data_to_usda(source.runtime_data()).unwrap();
+        let text = lunco_usd_document::author::data_to_usda(source.runtime_data()).unwrap();
         write_bytes(
             &dir.path().join(".lunco/runtime/scene.usda"),
             text.as_bytes(),
@@ -423,7 +423,7 @@ mod tests {
         assert!(runtime_has_content(src.runtime_data()));
 
         // 2. Persist the runtime layer to its `.lunco` file.
-        let text = lunco_usd_core::author::data_to_usda(src.runtime_data()).unwrap();
+        let text = lunco_usd_document::author::data_to_usda(src.runtime_data()).unwrap();
         write_bytes(&rt_file, text.as_bytes()).unwrap();
         assert!(rt_file.exists());
 
@@ -440,7 +440,7 @@ mod tests {
 
         let bytes = read_bytes(&rt_file).expect("overlay present");
         let data =
-            lunco_usd_core::author::usda_to_data(&String::from_utf8(bytes).unwrap()).unwrap();
+            lunco_usd_document::author::usda_to_data(&String::from_utf8(bytes).unwrap()).unwrap();
         reopened.restore_runtime(data);
 
         // The spawn is back in the runtime layer + composed view, base still clean.
@@ -497,7 +497,7 @@ mod tests {
             reference_prim_path: None,
         })
         .unwrap();
-        let text = lunco_usd_core::author::data_to_usda(src.runtime_data()).unwrap();
+        let text = lunco_usd_document::author::data_to_usda(src.runtime_data()).unwrap();
         write_bytes(
             &dir.path().join(".lunco/runtime/scene.usda"),
             text.as_bytes(),

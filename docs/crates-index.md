@@ -75,7 +75,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-usd-core`** | Headless USD document, authored `ApplyUsdOp`/`ApplyUsdOps` and disposable `ApplyUsdTransientOps` command contracts, operation, schema, unit-conversion, and asset-closure substrate. No runtime, physics, rendering, or UI. |
+| **`lunco-usd-document`** | Headless authored OpenUSD document/layer substrate: `UsdDocument`, authoring helpers, schema metadata, stage recipes, and unit/data readers. No runtime, physics, rendering, or UI. |
+| **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
 | **`lunco-usd`** | UI-free USD runtime orchestration, document commands, and engineering metadata mapping. |
 | **`lunco-usd-bevy-runtime`** | Application-level USD plugin bundle composing visual, diagnostics, physics, simulation, and document-command projections. |
@@ -340,10 +341,16 @@ Input mapping and translation. Owns the persisted `InputBindingsSettings` keymap
 
 ### USD Integration Layer
 
-**`lunco-usd-core`**
-Headless OpenUSD document, authoring, shared USD mutation command contracts,
-operation, schema, unit-conversion, and asset-closure substrate. It has no
+**`lunco-usd-document`**
+Headless authored OpenUSD document/layer substrate: `UsdDocument`, authoring
+helpers, schema metadata, stage recipes, and authored-data readers. It has no
 runtime projection, command observers, physics, rendering, or UI dependency.
+
+**`lunco-usd-core`**
+Headless typed USD operation, assembly, edit-session, and edit-policy
+substrate. It owns `ApplyUsdOp`/`ApplyUsdOps`, disposable
+`ApplyUsdTransientOps`, and operation lowerings, while depending on the
+document package for authored-layer state.
 
 **`lunco-usd`**
 UI-free USD runtime orchestration and engineering metadata bridge. Maps

@@ -5,16 +5,18 @@
 > USD (Pixar Universal Scene Description) is the scene-graph and asset format
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
-> [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
+> [`../../crates/lunco-usd-document/`](../../crates/lunco-usd-document), [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
 > `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
 > `lunco-usd-sim-domain`, `lunco-usd-sim-domain-api`.
 
-Package ownership follows the same boundary: `lunco-usd-core` contains the
-headless document/authoring surface, schemas, pure probes, and shared USD
-command/event contracts; `lunco-usd` contains UI-free runtime orchestration
+Package ownership follows the same boundary: `lunco-usd-document` contains
+the headless authored document/layer surface, schema registry, authoring
+helpers, recipes, and data readers; `lunco-usd-core` contains pure operation
+lowerings, assembly, edit-session, and shared USD command/event contracts;
+`lunco-usd` contains UI-free runtime orchestration
 and the observers that execute those contracts; `lunco-usd-queries` owns the
 UI-free public query providers for document inspection, edit sessions,
 document synchronization, and explicit assembly-target resolution;
@@ -108,7 +110,7 @@ view produces a **typed `UsdOp`** that applies to the document; every other view
 updates. The op is the single description of the delta — never a diff re-derived
 by reading state back (the *author-once coherence* invariant, below).
 
-Current `UsdOp` set (`lunco-usd-core/src/document.rs`), each carrying an
+Current `UsdOp` set (`lunco-usd-document/src/document.rs`), each carrying an
 `edit_target: LayerId` naming which layer receives the opinion:
 
 ```rust
@@ -163,7 +165,7 @@ Views observing a `UsdDocument`:
 A running scene is held in **two** forms, and neither absorbs the other — this is
 USD's own `SdfLayer` (authored opinions you save) vs `UsdStage` (the composition) split:
 
-- **`UsdDocument`** (`lunco-usd-core/src/document.rs`) — the authored `sdf::Data` **layers**:
+- **`UsdDocument`** (`lunco-usd-document/src/document.rs`) — the authored `sdf::Data` **layers**:
   `base` (persisted root layer, written on Save) **⊕** `runtime` (ephemeral overlay —
   spawns, moves, obstacle fields — *not* saved). `LayerId::root()` vs `LayerId::runtime()`
   route each op. Plain, `Send`, serializable: this is what Save writes, the journal
