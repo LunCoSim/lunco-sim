@@ -749,38 +749,45 @@ pub fn tire_patch_force(
     }
 }
 
-/// Static friction demanded by a locked wheel at one contact patch.
+/// Resolve the static-friction force for a locked wheel, including the
+/// measured tangential contact velocity.
 ///
-/// `normal_force` is the suspension load for this wheel, so the gravity share
-/// is independent of wheel count.  Clamping to the authored Coulomb cone keeps
-/// an over-steep slope physically free to slide instead of turning the parking
-/// brake into an invisible constraint.
-fn parking_brake_force(
+/// The support load gives this wheel's mass share (`N / |g_normal|`), so the
+/// requested impulse is derived from the fixed physics step rather than a tuned
+/// damping constant.  The result is capped by the authored friction cone; an
+/// over-steep or under-gripped surface still slides physically.
+fn parking_brake_force_with_velocity(
     gravity: DVec3,
     contact_normal: DVec3,
     normal_force: f64,
     friction_mu: f64,
+    tangential_velocity: DVec3,
+    dt: f64,
 ) -> DVec3 {
-    if normal_force <= 0.0 || friction_mu <= 0.0 || !gravity.is_finite() {
+    if dt <= 0.0 || !dt.is_finite() || !tangential_velocity.is_finite() {
         return DVec3::ZERO;
     }
     let normal = contact_normal.normalize_or_zero();
     if normal == DVec3::ZERO {
         return DVec3::ZERO;
     }
-    let tangent_gravity = gravity - normal * gravity.dot(normal);
-    let tangent_len = tangent_gravity.length();
-    // At static equilibrium N = m * |g_normal|, therefore this contact's
-    // supported mass share is N / |g_normal|. Using |g| here underestimates the
-    // required hold force by cos(slope), guaranteeing slow downhill creep on
-    // every non-flat surface even with the parking brake fully engaged.
     let normal_accel = -gravity.dot(normal);
-    if normal_accel <= f64::EPSILON || tangent_len <= f64::EPSILON {
+    if normal_force <= 0.0 || friction_mu <= 0.0 || normal_accel <= f64::EPSILON {
         return DVec3::ZERO;
     }
-    let requested = normal_force * tangent_len / normal_accel;
-    let available = friction_mu.max(0.0) * normal_force;
-    -tangent_gravity / tangent_len * requested.min(available)
+
+    let tangent_gravity = gravity - normal * gravity.dot(normal);
+    let tangent_velocity = tangential_velocity - normal * tangential_velocity.dot(normal);
+    let supported_mass = normal_force / normal_accel;
+    let requested_accel = -tangent_gravity - tangent_velocity / dt;
+    let requested = requested_accel * supported_mass;
+    let available = friction_mu * normal_force;
+    let magnitude = requested.length();
+    if magnitude <= f64::EPSILON {
+        DVec3::ZERO
+    } else {
+        requested * (available / magnitude).min(1.0)
+    }
 }
 
 /// Advance the analytic raycast longitudinal tire/axle solve by one fixed step.
@@ -838,9 +845,7 @@ pub fn longitudinal_tire_step(
 
 #[cfg(test)]
 mod tire_patch_tests {
-    use super::{
-        longitudinal_tire_step, parking_brake_force, tire_patch_force, TireLateralStiffnessGraph,
-    };
+    use super::{longitudinal_tire_step, tire_patch_force, TireLateralStiffnessGraph};
     use bevy::math::DVec3;
 
     #[test]
@@ -901,7 +906,14 @@ mod tire_patch_tests {
     fn parking_brake_cancels_gravity_on_a_holdable_slope() {
         let gravity = DVec3::new(0.0, -1.62, -0.8);
         let normal_force = 400.0;
-        let force = parking_brake_force(gravity, DVec3::Y, normal_force, 1.5);
+        let force = super::parking_brake_force_with_velocity(
+            gravity,
+            DVec3::Y,
+            normal_force,
+            1.5,
+            DVec3::ZERO,
+            1.0 / 60.0,
+        );
         assert!(force.z > 0.0);
         assert!((force.y).abs() < 1.0e-12);
         assert!(force.length() <= 1.5 * normal_force + 1.0e-9);
@@ -910,6 +922,21 @@ mod tire_patch_tests {
             (force.z + supported_mass * gravity.z).abs() < 1.0e-9,
             "parking force must exactly balance this contact's tangential gravity share"
         );
+    }
+
+    #[test]
+    fn parking_brake_opposes_residual_contact_velocity() {
+        let gravity = DVec3::new(0.0, -1.62, 0.0);
+        let force = super::parking_brake_force_with_velocity(
+            gravity,
+            DVec3::Y,
+            400.0,
+            1.5,
+            DVec3::new(2.0, 0.0, -1.0),
+            0.1,
+        );
+        assert!(force.x < 0.0 && force.z > 0.0);
+        assert!(force.length() <= 1.5 * 400.0 + 1.0e-9);
     }
 
     #[test]
@@ -1371,8 +1398,10 @@ fn apply_wheel_drive(
     >,
     fixed_joints: Query<&FixedJoint>,
     q_bodies: Query<&RigidBody>,
+    time: Res<Time<Fixed>>,
 ) {
     let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
+    let dt = time.delta_secs_f64();
 
     for (wheel, susp, wheel_tf, hits, mount) in q_wheels.iter() {
         let parent_entity = mount.body;
@@ -1436,11 +1465,13 @@ fn apply_wheel_drive(
                     let parking_force = if inputs.is_some_and(|i| i.brake_active) {
                         gravity
                             .map(|g| {
-                                parking_brake_force(
+                                parking_brake_force_with_velocity(
                                     g.0,
                                     hit.normal,
                                     normal_force,
                                     wheel.friction_mu,
+                                    forces.velocity_at_point(contact_point),
+                                    dt,
                                 )
                             })
                             .unwrap_or(DVec3::ZERO)

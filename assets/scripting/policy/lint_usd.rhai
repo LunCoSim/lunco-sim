@@ -61,6 +61,13 @@
 //       live-only evidence for runtime provider endpoints. File validation
 //       supplies an empty array because it cannot observe ECS projection.
 //
+//   facts.runtime_joints[] #{ entity_bits, subject, linked, pending, native,
+//                             graph, graph_available, detach_requested }
+//       live-only evidence for the one joint-detach lifecycle. `linked` is the
+//       projected PhysicsJointLink contract; the other bits identify pending,
+//       native, graph, and requested states. File validation supplies an empty
+//       array because these are ECS facts, not authored USD opinions.
+//
 //   facts.control_bindings[] #{ prim, intent, port, valid }
 //       composed control profiles projected from the canonical loader parser.
 //
@@ -306,6 +313,7 @@ fn lint_usd(facts) {
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
     for f in connection_contract(facts) { out.push(f); }
     for f in runtime_connection_contract(facts) { out.push(f); }
+    for f in runtime_joint_contract(facts) { out.push(f); }
     for f in collision_enabled_without_api(facts) { out.push(f); }
     for f in wheel_realization_collision_contract(facts) { out.push(f); }
     for f in vehicle_part_collision_contract(facts) { out.push(f); }
@@ -455,6 +463,49 @@ fn runtime_connection_contract(facts) {
                 "error",
                 connection.subject,
                 message,
+            ));
+        }
+    }
+    out
+}
+
+/// A live joint-shaped entity must have the bridge's endpoint link and an
+/// installed graph resource. This is an ECS projection check, so it is only
+/// populated by `RunLint` on a loaded stage; file validation leaves the array
+/// empty. The command path rejects the same malformed state before it can
+/// bypass solver-owned retirement.
+fn runtime_joint_state_present(joint) {
+    joint.pending || joint.native || joint.graph || joint.detach_requested
+}
+
+fn runtime_joint_contract(facts) {
+    let out = [];
+    if facts.runtime_joints == () { return out; }
+    for joint in facts.runtime_joints {
+        if !joint.graph_available {
+            out.push(finding(
+                "runtime-joint-graph-unavailable",
+                "error",
+                joint.subject,
+                "the live joint has no Avian JointGraph resource; physics admission/detachment is not installed — add the physics bridge before running the scene",
+            ));
+            continue;
+        }
+        if runtime_joint_state_present(joint) && !joint.linked {
+            out.push(finding(
+                "runtime-joint-link-missing",
+                "error",
+                joint.subject,
+                "the live joint carries solver state without PhysicsJointLink; repair authored/projection topology before detaching or integrating",
+            ));
+            continue;
+        }
+        if joint.linked && !runtime_joint_state_present(joint) {
+            out.push(finding(
+                "runtime-joint-not-admitted",
+                "warn",
+                joint.subject,
+                "PhysicsJointLink is present but the joint has not reached pending/native/graph admission; inspect projection readiness before treating it as attached",
             ));
         }
     }

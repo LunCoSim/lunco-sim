@@ -275,7 +275,10 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `DetachJoint`
 
- Detach a joint by despawning it.
+ Generic entity-detach command. Ordinary non-joint entities are removed by the
+ normal entity path. Targets carrying native or pending joint state are retired
+ through the solver-owned joint lifecycle; they are never directly despawned by
+ the command observer.
 
  The live command also records the authored joint path on both linked bodies.
  Dynamic admission uses that endpoint-local marker to retire the detached
@@ -287,8 +290,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Entity` |  The joint entity to despawn. |
-| `intent` | `lunco_core :: EditIntent` |  Persistent (default) authors the joint's removal into the scene's runtime layer, using active=false when the prim is base-authored or composed. Interactive just pops the live joint (a throwaway test), no journal. See [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`. |
+| `target` | `Entity` |  Entity to detach. Joint state is classified from its components; malformed joint state without `PhysicsJointLink` is rejected with a visible warning and should be repaired by the authored topology linter. |
+| `intent` | `lunco_core :: EditIntent` |  Persistent (default) authors removal into the scene's runtime layer, using active=false when the prim is base-authored or composed. Interactive removes only the live target (a throwaway test), with no journal. See [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`. |
 
 #### `FocusEntityById`
 

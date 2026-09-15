@@ -432,6 +432,7 @@ mod tests {
                 heading_port: port,
                 heading_axis: DVec3::Y,
                 wheel_radius: 0.5,
+                wheel_width: 0.28,
                 visual_entity: Some(visual),
                 last_normal_force: 100.0, // ≥1 ⇒ on_ground (with a hit present)
                 spin_angle: 0.0,
@@ -535,6 +536,7 @@ mod tests {
                     heading_port: port,
                     heading_axis: DVec3::Y,
                     wheel_radius: 0.4,
+                    wheel_width: 0.28,
                     visual_entity: Some(visual),
                     // AIRBORNE: no normal force, no hit — the solved shaft torque
                     // and authored bearing loss are the only rotational terms.

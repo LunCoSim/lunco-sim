@@ -13,7 +13,7 @@ use avian3d::prelude::{AngularVelocity, LinearVelocity, RigidBody};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, register_commands, Command, SpawnEntity};
+use lunco_core::{on_command, register_commands, Ack, Command, OpId, SpawnEntity};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_scene_catalog::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
@@ -131,16 +131,17 @@ fn reconcile_stable_scene_selection(
     selected.entities = resolved;
 }
 
-/// Detach a joint by despawning it.
+/// Request an entity detachment (joint-aware when joint state is present).
 #[Command(reflect_default)]
 pub struct DetachJoint {
-    /// The joint entity to despawn.
+    /// Entity to detach. Joint state, when present, is retired through the
+    /// physics lifecycle; ordinary entities use normal removal.
     pub target: Entity,
     /// Persistent (default) authors the joint's removal into the scene's runtime
     /// layer — removing runtime-only prims and deactivating base/composed prims
-    /// — so it journals, syncs, and survives reload, before despawning.
-    /// Interactive just pops the live joint (a throwaway test), no journal. See
-    /// [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`.
+    /// — so it journals, syncs, and survives reload. Interactive is a throwaway
+    /// live operation with no journal. See [`lunco_core::EditIntent`]. Omitted
+    /// by API callers → `Persistent`.
     #[serde(default)]
     pub intent: lunco_core::EditIntent,
 }
@@ -154,8 +155,15 @@ impl Default for DetachJoint {
     }
 }
 
-/// Observer that handles DetachJoint commands — despawns the live joint entity in
-/// BOTH modes (the visible effect). Persistence is a decoupled observer below.
+/// Observer that handles `DetachJoint` commands.
+///
+/// This is a generic entity-detach verb, not a `PhysicsJointLink` allow-list:
+/// an ordinary entity is removed directly, while an entity carrying any joint
+/// state is routed through the physics lifecycle marker.  The USD/Avian bridge
+/// owns that joint teardown path.  Keeping native-joint despawn out of this
+/// command layer is important: Bevy's recursive despawn removes joint
+/// components in an unspecified order, while Avian requires graph/island
+/// retirement first.
 #[on_command(DetachJoint)]
 pub fn on_detach_joint(
     trigger: On<DetachJoint>,
@@ -163,20 +171,72 @@ pub fn on_detach_joint(
     q_joint: Query<(
         Option<&lunco_physics::PhysicsJointLink>,
         Option<&UsdPrimPath>,
+        Option<&lunco_physics::PhysicsJointDetachRequested>,
+        Option<&lunco_physics::PhysicsJointPending>,
+        Option<&avian3d::dynamics::solver::joint_graph::JointComponentId>,
     )>,
     q_detached: Query<Option<&lunco_physics::PhysicsJointDetachSet>>,
-) {
+) -> Result<Ack, String> {
     let cmd = trigger.event();
-    let (link, path) = q_joint
+    let (link, path, already_requested, pending, native) = q_joint
         .get(cmd.target)
         .ok()
-        .map(|(link, path)| (link.copied(), path.map(|path| path.path.clone())))
-        .unwrap_or((None, None));
-    if let (Some(link), Some(path)) = (link, path) {
-        // The marker is written to both endpoints before the joint entity is
-        // despawned. Admission can then retire exactly this authored topology
-        // edge without promoting a body that still has another unresolved
-        // joint. Keep the existing endpoint list when several joints release.
+        .map(|(link, path, requested, pending, native)| {
+            (
+                link.copied(),
+                path.map(|path| path.path.clone()),
+                requested.is_some(),
+                pending.is_some(),
+                native.is_some(),
+            )
+        })
+        .unwrap_or((None, None, false, false, false));
+    let Some(mut entity) = commands.get_entity(cmd.target).ok() else {
+        warn!(
+            "DETACH_JOINT rejected: target {:?} does not exist",
+            cmd.target
+        );
+        return Err(format!("target {:?} does not exist", cmd.target));
+    };
+    if already_requested {
+        warn!(
+            "DETACH_JOINT ignored: target {:?} already has a pending detach",
+            cmd.target
+        );
+        return Ok(Ack::new(OpId::new()));
+    }
+    let path = path.unwrap_or_default();
+    let Some(link) = link else {
+        if pending || native {
+            warn!(
+                "DETACH_JOINT rejected: target {:?} has joint state but no PhysicsJointLink; repair attachment topology before detaching",
+                cmd.target
+            );
+            return Err(format!(
+                "target {:?} has joint state but no PhysicsJointLink; repair attachment topology before detaching",
+                cmd.target
+            ));
+        }
+        entity.try_despawn();
+        info!(
+            "DETACH_JOINT: removed ordinary non-joint entity {:?} ({:?})",
+            cmd.target, cmd.intent
+        );
+        return Ok(Ack::new(OpId::new()));
+    };
+    {
+        entity.try_insert(lunco_physics::PhysicsJointDetachRequested);
+        info!(
+            "DETACH_JOINT: queued solver-safe retirement for {:?} ({:?})",
+            cmd.target, cmd.intent
+        );
+    }
+    if !path.is_empty() {
+        // The marker is written to both endpoints before the lifecycle owner
+        // retires the joint. Admission can then release exactly this authored
+        // topology edge without promoting a body that still has another
+        // unresolved joint. Keep the existing endpoint list when several
+        // joints release.
         for body in [link.body0, link.body1] {
             let mut detached = q_detached
                 .get(body)
@@ -190,13 +250,7 @@ pub fn on_detach_joint(
             }
         }
     }
-    if let Ok(mut entity) = commands.get_entity(cmd.target) {
-        entity.try_despawn();
-        info!(
-            "DETACH_JOINT: despawned joint entity {:?} ({:?})",
-            cmd.target, cmd.intent
-        );
-    }
+    Ok(Ack::new(OpId::new()))
 }
 
 /// Persist a **`Persistent`** `DetachJoint` into the active USD document's
@@ -1467,9 +1521,34 @@ pub fn on_delete_entity(
     usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
+    q_joint_state: Query<
+        (),
+        Or<(
+            With<lunco_physics::PhysicsJointLink>,
+            With<lunco_physics::PhysicsJointPending>,
+            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
+        )>,
+    >,
     mut commands: Commands,
-) {
+) -> Result<Ack, String> {
     let cmd = trigger.event();
+    if q_joint_state.contains(cmd.target) {
+        warn!(
+            "DELETE_ENTITY rejected for joint {:?}; use DetachJoint so the physics bridge retires the solver edge",
+            cmd.target
+        );
+        return Err(format!(
+            "target {:?} is a joint; use DetachJoint so the physics bridge retires the solver edge",
+            cmd.target
+        ));
+    }
+    let Some(mut entity) = commands.get_entity(cmd.target).ok() else {
+        warn!(
+            "DELETE_ENTITY rejected: target {:?} does not exist",
+            cmd.target
+        );
+        return Err(format!("target {:?} does not exist", cmd.target));
+    };
     if let Some(registry) = usd_registry.as_deref() {
         let attachment = lunco_scene_authoring::doc_resolve::authorable_prim(
             cmd.target,
@@ -1483,18 +1562,21 @@ pub fn on_delete_entity(
                     "DELETE_ENTITY rejected for attached component {}; use DetachComponent",
                     path
                 );
-                return;
+                return Err(format!(
+                    "target {path} is an attached component; use DetachComponent"
+                ));
             }
         }
     }
     let deleted_path = q_prim.get(cmd.target).ok().map(|prim| prim.path.clone());
-    commands.entity(cmd.target).try_despawn();
+    entity.try_despawn();
     if let Some(mut selected) = selected {
         selected.entities.retain(|e| *e != cmd.target);
         if let Some(path) = deleted_path {
             selected.stable_paths.retain(|selected| selected != &path);
         }
     }
+    Ok(Ack::new(OpId::new()))
 }
 
 /// Authoring leg: apply the generic USD delete edit, so the deletion persists,
@@ -1505,9 +1587,24 @@ pub fn persist_delete_to_runtime_layer(
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
+    q_joint_state: Query<
+        (),
+        Or<(
+            With<lunco_physics::PhysicsJointLink>,
+            With<lunco_physics::PhysicsJointPending>,
+            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
+        )>,
+    >,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
+    if q_joint_state.contains(cmd.target) {
+        warn!(
+            "DELETE_ENTITY persistence rejected for joint {:?}; use DetachJoint",
+            cmd.target
+        );
+        return;
+    }
     if !cmd.intent.is_persistent() {
         return;
     }
@@ -2129,6 +2226,65 @@ mod tests {
             rotation: None,
         };
         assert_eq!(cmd.entry_id, "test");
+    }
+
+    #[test]
+    fn detach_joint_remains_generic_for_ordinary_entities() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>();
+        app.add_observer(on_detach_joint);
+
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(DetachJoint {
+            target: entity,
+            intent: lunco_core::EditIntent::Interactive,
+        });
+        app.update();
+
+        assert!(
+            app.world().get_entity(entity).is_err(),
+            "generic DetachJoint must not require PhysicsJointLink for an ordinary entity"
+        );
+    }
+
+    #[test]
+    fn malformed_joint_detach_is_rejected_without_despawn_or_panic() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>();
+        app.add_observer(on_detach_joint);
+
+        // A pending/native joint without the link is malformed topology. The
+        // command must leave it intact for the authored linter to diagnose;
+        // direct despawn would bypass the solver's graph lifecycle.
+        let malformed = app
+            .world_mut()
+            .spawn(lunco_physics::PhysicsJointPending)
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(Some(41));
+        app.world_mut().trigger(DetachJoint {
+            target: malformed,
+            intent: lunco_core::EditIntent::Interactive,
+        });
+        app.update();
+
+        assert!(app.world().get_entity(malformed).is_ok());
+        assert!(matches!(
+            app.world()
+                .resource::<lunco_core::CommandResults>()
+                .get(41),
+            Some(lunco_core::CommandOutcome::Failed(message))
+                if message.contains("PhysicsJointLink")
+        ));
     }
 
     #[test]

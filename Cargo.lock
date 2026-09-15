@@ -8333,6 +8333,7 @@ dependencies = [
  "lunco-sysml-report",
  "lunco-tools",
  "lunco-twin",
+ "lunco-usd-avian",
  "lunco-usd-avian-lint",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
