@@ -34,6 +34,13 @@ why; USD states what is authored and observable; Modelica states equations;
 Rhai executes the observation and policy. A verification registry selects a
 scene and script but does not duplicate requirement text or thresholds.
 
+The existing Rhai lint substrate is part of this path: `RunLint` executes the
+domain policy in `assets/scripting/policy/lint_<domain>.rhai` over Rust-produced
+facts, while Twin verification scripts use
+`assets/scripting/tools/sysml_requirements.rhai` to read the mounted SysML
+snapshot and evaluate composed USD evidence. Keep both in Rhai; Rust supplies
+typed facts and lifecycle, not Griffin- or component-specific assertions.
+
 Relevant implementation and design references:
 
 - [`24-domain-sysml.md`](../../docs/architecture/24-domain-sysml.md) — domain
@@ -135,7 +142,8 @@ The current supported subset is source-backed and deterministic:
   memberships;
 - qualified names, typed scalar literal projections, source spans, diagnostics,
   source files, and a deterministic `source_revision`;
-- Twin-indexed source-set discovery through the existing asset manifest;
+- Twin-indexed source-set discovery through the existing asset manifest, with
+  `SysmlPlugin` opening the checked set automatically after `TwinAssetMounted`;
 - a Twin-owned verification registry mapping a qualified SysML verification
   name to one scene, one Rhai observer, and an optional verdict channel;
 - native Rhai maps from `sysml_report()` and
@@ -148,7 +156,7 @@ The current supported subset is source-backed and deterministic:
 It does not provide a full SysML/KerML execution engine. Do not promise or
 silently emulate interface definitions, arbitrary expressions and constraints,
 parametrics, state machines, behaviors, allocations/refinements, a full SysML
-editor, automatic UI source-set discovery, or a SysML-to-USD projection. If a
+editor, full UI source-set browsing, or a SysML-to-USD projection. If a
 request needs one of those, report the exact bounded gap after checking the
 current owner and dependencies.
 

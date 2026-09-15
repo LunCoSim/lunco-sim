@@ -1,7 +1,7 @@
 # SysML v2 embedding in the terrain worktree
 
-**Status:** Foundation, Twin verification registry, CLI selection, typed Rhai projections, and structured evidence implemented; automatic UI source-set loading and full constraint evaluation remain follow-up work
-**Reviewed:** 2026-09-14
+**Status:** Foundation, Twin verification registry, CLI selection, typed Rhai projections, structured evidence, and automatic Twin source/document loading implemented; full constraint evaluation remains follow-up work
+**Reviewed:** 2026-09-15
 **Worktree:** `terrain` (`terrain-streaming`)
 
 ## Executive decision
@@ -59,10 +59,10 @@ The first production slice now exists behind the opt-in `sysml` feature:
   `sysml` feature gate; default builds remain unchanged.
 
 This deliberately does not add a full SysML editor, an arbitrary filesystem
-source-root walker, a BREP/CAD pipeline, automatic UI source-set discovery, or
-full constraint/expression execution. Twin manifest discovery reuses the
-indexed file set; the remaining pieces can consume the stable projections
-above without changing the parser or document contracts.
+source-root walker, a BREP/CAD pipeline, or full constraint/expression
+execution. Twin manifest discovery reuses the indexed file set; the runtime
+plugin opens that set through the existing `twin://` asset authority and
+canonical document registry.
 
 ## Rhai-to-SysML verification migration
 
@@ -369,11 +369,12 @@ absolute cache path.
 - The engine asset manifest lists `usda`, `wgsl`, and `rhai`, not `sysml`.
   Add SysML to the shipped manifest only if the engine library contains SysML
   assets. Twin-local documents already come from the Twin index.
-- The runtime plugin does not yet scan `Twin::files()` and open every source
-  automatically. A caller still supplies the existing canonical asset/source
-  event to `DocumentRegistry::open_file`.
-- No cross-file `RefIndex` adapter, async source-set worker, or automatic UI
-  source loader exists yet. The production `luncosim test --verification`
+- The runtime plugin scans the checked `Twin::files()` source set after
+  `TwinAssetMounted` and opens each ready asset through
+  `DocumentRegistry::open_file`; clean documents are leased to the Twin and
+  dirty documents are retained as loose user work on Twin close.
+- No cross-file `RefIndex` adapter, async semantic worker, or full UI source
+  browser exists yet. The production `luncosim test --verification`
   command now validates the Twin registry mapping and verdict channel before
   starting the runner; the read-only `ValidateSysml` query accepts either one
   source or a manifest-aware `twin://name` source set.
@@ -381,9 +382,9 @@ absolute cache path.
   and `verify`/`satisfy`/realization fields for requirement and verification
   records. Full constraint/expression evaluation remains out of scope for the
   first subset.
-- The registry and CLI selector are now present, but there is no UI picker or
-  automatic source-set document loader yet. A caller still opens the selected
-  Twin files through the existing document lifecycle.
+- The registry and CLI selector are present. A UI picker is still future work;
+  source documents themselves are opened automatically by `SysmlPlugin` and
+  appear through the shared Workspace document list.
 - The typed verdict sink remains intentionally small: Rhai emits the structured
   evidence and the compatibility `TESTS_OK`/`TESTS_FAIL` envelope. Durable
   journal persistence and a standard `VerificationCases::VerdictKind` adapter

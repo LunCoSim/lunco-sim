@@ -1,6 +1,6 @@
 # 24 — SysML Domain
 
-> Status: Foundation implemented · Audience: contributors extending SysML v2 structure & requirements
+> Status: Foundation + Twin source/document loading implemented · Audience: contributors extending SysML v2 structure & requirements
 >
 SysML v2 is the source of truth for **system structure and
 requirements** — a peer domain inside a Twin, co-equal with Modelica
@@ -237,15 +237,18 @@ authored runtime verdict:
    resolved requirement/verification snapshot and source revision. The generic
    `sysml_requirements::evaluate` tool observes the composed USD stage and
    `report_structured_verdict` emits machine-readable evidence plus the normal
-   test verdict envelope. No requirement-specific Rust assertion is added.
+   test verdict envelope. The existing `RunLint` command likewise executes
+   `assets/scripting/policy/lint_<domain>.rhai` over typed runtime facts. No
+   requirement-specific Rust assertion is added.
 6. **Production selector.** `luncosim test --scene <PATH> --verification
    QUALIFIED_NAME` validates the Twin mapping before constructing the
    simulation and selects its declared verdict channel. The mapped Rhai
    observer still owns measurement and verdict policy.
 
 The remaining work is bounded follow-up: full KerML expression/constraint
-execution, a full SysML editor, automatic UI source-set discovery, and a
-SysML-to-USD projection are not part of this integration.
+execution, a full SysML editor, and a SysML-to-USD projection are not part of
+this integration. `SysmlPlugin` opens the checked Twin source set after
+`TwinAssetMounted`; a full source browser remains a UI concern.
 
 ### Migration rules
 
@@ -274,8 +277,8 @@ canonical journal domain, `.sysml`/`.kerml` classification, `[sysml]` Twin
 manifest source roots, manifest-aware source discovery, pre-flight validation,
 read-only Rhai requirement/verification reports, structured evidence,
 verification registry, and CLI selector are available. Full KerML expression
-execution, a full editor, automatic UI source discovery, and automatic
-SysML-to-USD projection remain outside the supported subset.
+execution, a full editor, and automatic SysML-to-USD projection remain outside
+the supported subset.
 
 ## 8. What this does NOT do
 
