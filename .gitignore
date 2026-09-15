@@ -2,6 +2,21 @@
 .agents/
 target/
 
+# Native C++ compiler/CMake products. Chrono build/install trees use target/chrono/.
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.exe
+*.dll
+*.so
+*.so.*
+*.dylib
+*.a
+*.lib
+*.o
+*.pdb
+*.ilk
+
 # Downloaded mission data
 .cache/
 extern/
