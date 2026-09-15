@@ -8,6 +8,16 @@ separate USD document. It projects that document's prims and connections into
 the existing canvas, prim-tree, inspector, and isolated USD viewport surfaces.
 It does not create a second scene model or a vehicle-specific assembly API.
 
+The repository's normal editing unit is one component, not a whole vehicle
+batch. The canonical runbook is
+[`interactive-component-authoring`](../../skills/interactive-component-authoring/SKILL.md):
+discover the exact document/preview/generation, apply one typed Rhai plan,
+wait for projection, query the composed paths and dimensions, inspect the
+focused Editor view, run the component's Rhai requirement gate, and only then
+continue to the next component. The assembly receives a separate integration
+checkpoint. This preserves the short human feedback loop used by established
+CAD/CAE workflows while retaining USD's reference and transform semantics.
+
 The workbench exposes this surface through the registered `editor`
 perspective. The registered `terrain_sculpt` perspective exposes the existing
 terrain tools and keeps sculpting separate from object assembly. Editor is

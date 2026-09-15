@@ -105,6 +105,13 @@ defer_to = ["validate-assets", "inspect-simulation"]
 evidence = "skills/assembly-quality/SKILL.md"
 
 [[skills]]
+name = "interactive-component-authoring"
+category = "authoring"
+primary_for = ["component-by-component Editor authoring", "interactive assembly cycle"]
+defer_to = ["edit-usd-assembly", "assembly-quality", "author-usd-component"]
+evidence = "skills/interactive-component-authoring/SKILL.md"
+
+[[skills]]
 name = "author-usd-physics"
 category = "authoring"
 primary_for = ["USD joints", "rigid bodies", "physics authoring"]

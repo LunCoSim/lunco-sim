@@ -43,6 +43,9 @@ assembly authoring with screenshot/user-feedback checkpoints),
 [`test-via-api`](../test-via-api/SKILL.md) (verify), [`compose-multidomain-twin`](../compose-multidomain-twin/SKILL.md).
 For creating or hot-registering reusable Rhai builders, lints, and component
 tests, read [`author-rhai-tool`](../author-rhai-tool/SKILL.md).
+For the agreed live feedback loop and the Blender/FreeCAD/Fusion/SOLIDWORKS/
+COMSOL/OpenUSD practice mapping, read
+[`interactive-component-authoring`](../interactive-component-authoring/SKILL.md).
 
 ## Component contract before geometry
 

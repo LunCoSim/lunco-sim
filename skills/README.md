@@ -82,6 +82,7 @@ parse check into runtime evidence.
 | [**build-usd-scene**](build-usd-scene/SKILL.md) | Assemble a scene from assets that already exist — load, spawn, place, and tune objects |
 | [**edit-usd-assembly**](edit-usd-assembly/SKILL.md) | Create or modify a reusable rover/lander assembly in a live headful Editor session, with screenshot review and user feedback |
 | [**assembly-quality**](assembly-quality/SKILL.md) | Apply Editor-first, typed-USD, componentized geometry, placement, dimension, and visual-evidence gates to any assembly |
+| [**interactive-component-authoring**](interactive-component-authoring/SKILL.md) | Follow the agreed one-component-at-a-time Editor cycle, with live projection, typed readback, and a Rhai gate after every component |
 | [**update-documents**](update-documents/SKILL.md) | Update canonical docs, agent guidance, and skills without duplicating retired contracts |
 | [**author-usd-physics**](author-usd-physics/SKILL.md) | Author physics in USD — joints and joint FRAMES, gravity per scene, why a mechanism is rigid, a vehicle flies apart, or a part falls off it |
 | [**author-scenario**](author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions, multi-entity coordination |

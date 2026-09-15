@@ -47,6 +47,7 @@ cross-host entry point instead of copying that table into a second source.
 
 - Unknown capability or owner: [`capability-discovery`](capability-discovery/SKILL.md)
 - New reusable component or scene: [`author-usd-component`](author-usd-component/SKILL.md)
+- Component-by-component live Editor cycle: [`interactive-component-authoring`](interactive-component-authoring/SKILL.md)
 - Vehicle or mission: [`build-vehicle`](build-vehicle/SKILL.md)
 - SysML requirements and verification: [`sysml-requirements`](sysml-requirements/SKILL.md)
 - Live observation or proof: [`inspect-simulation`](inspect-simulation/SKILL.md)
