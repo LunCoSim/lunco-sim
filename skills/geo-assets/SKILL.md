@@ -1,6 +1,6 @@
 ---
 name: geo-assets
-description: Download and process lunar geo assets (DEMs, ortho/slope/shade maps, normal maps) with lunco-assets — Assets.toml entries, ROI cropping, terrain layer wiring in USD, quality presets, bake keys. Use when adding a terrain site to a twin, baking layer maps, or debugging the asset pipeline.
+description: Download and process lunar geo assets (DEMs, stable material albedo, ortho/slope/shade maps, normal maps) with lunco-assets — Assets.toml entries, ROI cropping, terrain layer wiring in USD, quality presets, bake keys. Use when adding a terrain site to a twin, baking layer maps, or debugging the asset pipeline.
 ---
 
 # Geo assets: download & process lunar terrain for a Twin
@@ -91,6 +91,7 @@ vertical datum, or record the native-tool gap as blocked work.
 |---|---|---|
 | `dem` | DTM (GeoTIFF/.IMG) | `<output>/materials/textures/heightmap.tif` — square float32, georef in tags. `output` is a FOLDER; scenes reference it as `demSource = @terrain/<site>@` |
 | `map` | co-registered raster (ortho `.IMG`, `_SHADE`/`_SLOPE`/`_CLRGRAD` `.TIF`) | 8-bit RGB PNG at `output` (a FILE). Gray sources get a 1–99 percentile stretch in linear contrast space, then sRGB encoding for the runtime loader |
+| `albedo` | illumination-bearing grayscale orthophoto | stable linear material-albedo PNG at `output` (a FILE) |
 | `normalmap` | DTM | DEM-local ENU normal PNG (`RGB = n*0.5+0.5`, decoded by the shared terrain-surface shader kernel) |
 | `texture` | any image | resized PNG (non-geo default) |
 | `gltf` | .glb | Bevy-clean .glb (needs npx) |
@@ -98,6 +99,18 @@ vertical datum, or record the native-tool gap as blocked work.
 Shared ROI fields: `center_lat`, `center_lon`, `window_m`,
 `target_resolution = [n, n]`, `pixel_scale_m`, `src_min/max_lat`,
 `src_min/max_lon`, `frame = "MOON_ME"`, `output_root = "twin"`.
+
+For a grayscale orthophoto used as terrain colour, add a separate `albedo`
+process entry. Its optional native-only parameters are
+`albedo_base_linear` (neutral material base, default `0.13`),
+`albedo_detail_strength` (retained local contrast, default `0.35`), and
+`albedo_illumination_radius_m` (low-frequency field radius, default `40`). The
+processor writes a stable `albedo.png`; it does not claim to perform full
+photometric calibration. Keep `map` for analysis/display outputs. In Rhai,
+`assembly_builder::lunar_albedo_material_plan(...)` returns standard USD
+`SetAttribute` operations for the produced albedo/normal assets; submit those
+through `assembly_edit::batch` or `assembly_edit::propose`. This keeps heavy
+image math in Rust while making the assembly policy replaceable and extensible.
 
 ## Adding a new territory to a twin
 
@@ -140,7 +153,7 @@ def Scope "Looks"
         def Shader "Surface"
         {
             uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
-            asset inputs:albedo_map  = @terrain/<site>/materials/textures/ortho.png@
+            asset inputs:albedo_map  = @terrain/<site>/materials/textures/albedo.png@
             float inputs:weight_albedo = 1.0
             asset inputs:normal_map  = @terrain/<site>/materials/textures/normal.png@
             float inputs:weight_normal = 0.5
@@ -151,13 +164,18 @@ def Scope "Looks"
 }
 ```
 
-Keep production albedo and normal rasters as authored assets. The render binder
-builds their missing RGBA8 mip levels once per image asset version, off-thread and with
-role-aware filtering (linear-light colour, linear scalars, renormalized normals)
-before enabling trilinear/anisotropic sampling. Do not replace an orthophoto
-with a hillshade, slope, or elevation-colour diagnostic to hide minification
-aliasing; those remain optional analysis products and their authored role/weight
-must stay explicit.
+Keep production albedo and normal rasters as authored assets. An illumination-
+bearing grayscale orthophoto is not intrinsic albedo: declare it as
+`kind = "albedo"` so native Rust removes its low-frequency acquisition-light
+field and retains stable local variation around the authored neutral regolith
+base. Bind the resulting `albedo.png`, which is lit once by the runtime sun
+and shadows. A calibrated reflectance raster may use `texture` when its colour
+contract is known. Do not replace an orthophoto with a hillshade, slope, or
+elevation-colour diagnostic to hide minification aliasing; those remain
+optional analysis products and their authored role/weight must stay explicit.
+The render binder still builds missing RGBA8 mip levels once per image asset
+version, off-thread and with role-aware filtering (linear-light colour, linear
+scalars, renormalized normals) before enabling trilinear/anisotropic sampling.
 
 ### Physics parameters for a DEM generator
 
@@ -242,7 +260,8 @@ multi-domain architecture before introducing a new graph owner.
 ## Gotchas
 
 - `*_50CM`/`*_2M` `.IMG` companions are ORTHOPHOTOS (brightness), never
-  elevation — `kind = "map"`, never `kind = "dem"`.
+  elevation — `kind = "albedo"` for terrain colour, `kind = "map"` only for
+  analysis/display, and never `kind = "dem"`.
 - Confirm the DEM datum and the scene's celestial-body radius before combining
   terrain elevations with orbital or body-fixed coordinates. Do not encode a
   product-specific radius correction in the asset pipeline.

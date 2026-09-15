@@ -80,14 +80,18 @@ silently select a replacement shader. Add a cross-file ABI test when maintaining
 a multi-stage shader pair. See
 [`shader-layers-and-params.md`](../../docs/architecture/shader-layers-and-params.md).
 
-Keep authored grayscale orthophoto handling in the shared
-`lunco::lunar::orthophoto_factor` transfer: percentile-stretched maps are linear
-contrast signals, not linear reflectance. The map processor sRGB-encodes that
-signal for the 8-bit PNG, the texture loader decodes it back to linear, and the
-shared transfer must not be bypassed by multiplying the map directly into albedo.
-When `weight_albedo` is fully authored, it owns terrain colour variation; scale
-the layered path's procedural dust/mottle colour by `1 - weight_albedo`, while
-keeping relief normals, roughness, ambient occlusion, and photometry independent.
+Treat an illumination-bearing grayscale orthophoto as measured imagery, not
+intrinsic reflectance. The native `lunco-assets` `kind = "albedo"` pipeline
+removes its low-frequency illumination field, anchors local detail at a
+neutral material base, and sRGB-encodes the resulting linear colour for the
+8-bit PNG contract. The texture loader decodes that material back to linear;
+terrain shaders use it directly and have no orthophoto compensation function.
+`kind = "map"` remains an analysis/display contrast map and must not be bound
+directly as `inputs:albedo_map`. When `weight_albedo` is authored, it owns
+terrain colour variation; scale procedural dust/mottle by `1 - weight_albedo`,
+while keeping relief normals, roughness, ambient occlusion, and photometry
+independent. Heavy raster math stays in Rust; Rhai assembly policy selects and
+authors the standard USD material inputs.
 The packed surface map's G channel is ambient occlusion: route it through the
 shared `terrain_surface_occlusion` helper into Bevy's
 `PbrInput.diffuse_occlusion`, never into base albedo. AO is indirect-light

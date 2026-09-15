@@ -147,6 +147,50 @@ fn parameter_plan(edit_target, path, parameters) {
     #{ ok: true, kind: "parameter_edit", path: path, parameters: names, ops: ops }
 }
 
+// Build the standard authored terrain-material inputs for a stable lunar
+// albedo. The expensive orthophoto decode and illumination-field removal are
+// performed once by the native `lunco-assets` `kind = "albedo"` pipeline. This
+// helper is deliberately policy-only: it validates the logical asset paths and
+// returns ordinary USD SetAttribute operations for the caller's existing
+// generation-checked assembly_edit boundary.
+//
+// `shader_path` is the exact UsdShade.Shader prim, not the geometry prim. The
+// caller may extend the returned parameter list with mineral/surface inputs or
+// a Twin-specific weight without adding another Rust writer.
+fn lunar_albedo_material_plan(edit_target, shader_path, albedo_asset, normal_asset, albedo_weight, normal_weight) {
+    if edit_target == () || shader_path == () || albedo_asset == () {
+        return plan_error("lunar_albedo_material_plan requires edit target, shader path, and albedo asset");
+    }
+    if !shader_path.starts_with("/") || shader_path.ends_with("/") {
+        return plan_error("lunar_albedo_material_plan requires an absolute UsdShade.Shader path");
+    }
+    if type_of(albedo_asset) != "string" || albedo_asset == ""
+        || (!albedo_asset.starts_with("twin://") && !albedo_asset.starts_with("lunco://")) {
+        return plan_error("albedo asset must be a logical twin:// or lunco:// asset path");
+    }
+    if (type_of(albedo_weight) != "i64" && type_of(albedo_weight) != "f64")
+        || albedo_weight < 0.0 || albedo_weight > 1.0 {
+        return plan_error("albedo weight must be in [0, 1]");
+    }
+    let params = [
+        #{ name: "inputs:albedo_map", type_name: "asset", value: "@" + albedo_asset + "@" },
+        #{ name: "inputs:weight_albedo", type_name: "float", value: albedo_weight },
+    ];
+    if normal_asset != () {
+        if type_of(normal_asset) != "string" || normal_asset == ""
+            || (!normal_asset.starts_with("twin://") && !normal_asset.starts_with("lunco://")) {
+            return plan_error("normal asset must be a logical twin:// or lunco:// asset path");
+        }
+        if (type_of(normal_weight) != "i64" && type_of(normal_weight) != "f64")
+            || normal_weight < 0.0 || normal_weight > 1.0 {
+            return plan_error("normal weight must be in [0, 1]");
+        }
+        params.push(#{ name: "inputs:normal_map", type_name: "asset", value: "@" + normal_asset + "@" });
+        params.push(#{ name: "inputs:weight_normal", type_name: "float", value: normal_weight });
+    }
+    parameter_plan(edit_target, shader_path, params)
+}
+
 // Return the small, schema-owned field vocabulary exposed by the editor.
 // Names outside this vocabulary are rejected instead of being guessed from a
 // prim or written as an unregistered LunCo property. `inputs:` and `outputs:`

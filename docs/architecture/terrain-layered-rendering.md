@@ -38,13 +38,17 @@ diagnostic replacement:
    anti-aliased detail, roughness, and sun visibility. Streamed and static
    delivery may retain different vertex stages, but they must not choose
    different physical surface laws or distance-dependent colour/normal rules.
-   When USD supplies a grayscale albedo raster, the asset pipeline percentile-
-   stretches its linear contrast, sRGB-encodes the PNG, and the texture loader
-   decodes it back to linear before the shared bounded orthophoto transfer
-   applies it at its authored weight. The static layered path scales its
-   procedural dust/mottle colour by `1 - weight_albedo`. Relief normals,
-   roughness, ambient occlusion, and photometry remain independent, so camera
-   footprint or CDLOD replacement cannot introduce unrelated colour changes.
+   When USD supplies an illumination-bearing grayscale orthophoto, the native
+   asset pipeline's `kind = "albedo"` bake removes its low-frequency source
+   illumination, anchors local detail at a neutral regolith value, sRGB-encodes
+   the linear material colour, and lets the texture loader decode it back to
+   linear. The terrain shaders use that authored material directly at its
+   weight; they do not apply an orthophoto transfer at runtime. `kind = "map"`
+   remains an analysis/display product and is not a valid direct albedo input.
+   The static layered path scales its procedural dust/mottle colour by
+   `1 - weight_albedo`. Relief normals, roughness, ambient occlusion, and
+   photometry remain independent, so camera footprint or CDLOD replacement
+   cannot introduce unrelated colour changes.
    The packed surface map's G channel is ambient occlusion and is sent to
    Bevy's `PbrInput.diffuse_occlusion`, where it modulates indirect diffuse
    light only. It must never be multiplied into base albedo: doing so turns a
@@ -56,12 +60,13 @@ diagnostic replacement:
    terrain. It is not a user-selectable DEM quality mode, and it must not hide
    missing authored source data.
 
-The existing `terrain_surface.wgsl` and `lunar_brdf.wgsl` modules are the
-authoritative owners for shared procedural transfer and lunar photometry. The
-next implementation step is to make both DEM delivery paths consume that same
-base contract; it must not duplicate a second shader-side fallback or move
-terrain selection into Rust. USD-authored `UsdShade` source and map roles remain
-the source of intent, while the existing terrain reconciler supplies only the
+The existing `terrain_surface.wgsl` and `lunar_brdf.wgsl` modules remain the
+authoritative owners for shared procedural detail and lunar photometry. Heavy
+orthophoto decode/filter work belongs to the native Rust asset processor. The
+authored Rhai assembly tools may select the resulting standard `albedo_map`,
+normal, and weight inputs, but must not reproduce the raster math or create a
+second material representation. USD-authored `UsdShade` source and map roles
+remain the source of intent, while the terrain reconciler supplies only the
 engine-derived products that USD did not author.
 
 ### Shadow ownership
