@@ -413,7 +413,9 @@ fn replay_scenario_journal(
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
     local_scenario: Option<Res<lunco_networking::scenario::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    mut registry: ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>,
+    mut registry: ResMut<
+        lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
+    >,
     // Entry ids already projected onto the scene (once-per-entry guard).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
     // The host's replay base, latched the first frame its manifest exists.
@@ -1347,7 +1349,7 @@ fn on_set_rhai_policy(
     mut commands: Commands,
 ) {
     use lunco_usd_core::commands::ApplyUsdOp;
-    use lunco_usd_core::{LayerId, UsdOp};
+    use lunco_usd_document::document::{LayerId, UsdOp};
     let cmd = trigger.event();
     let roots: Vec<_> = roots.iter().collect();
     let [root] = roots.as_slice() else {

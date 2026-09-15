@@ -29,7 +29,7 @@ use bevy::prelude::*;
 // document registry hands back for the authoring tier's child walks.
 use lunco_usd_bevy_core::{read_transform_from_usd, StageView, UsdRead};
 use lunco_usd_bevy_scene::{read_primitive_axis, read_shape_dims, ShapeDims};
-use lunco_usd_core::UsdDataExt;
+use lunco_usd_document::usd_data::UsdDataExt;
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
 /// edits back onto the backing document's runtime layer.
@@ -79,7 +79,7 @@ struct TerrainSchemaStatus {
 
 impl TerrainSchemaStatus {
     fn from_registry() -> Self {
-        let registry = match lunco_usd_core::schema::SchemaRegistry::global().read() {
+        let registry = match lunco_usd_document::schema::SchemaRegistry::global().read() {
             Ok(registry) => registry,
             Err(_) => {
                 return Self {
@@ -243,7 +243,7 @@ fn ns_attr(ns: &str, name: &str) -> String {
     // the single runtime contract; schema validation is enforced by the USD schema
     // tests and this diagnostic is the production signal if a packaged artifact is
     // stale or malformed.
-    match lunco_usd_core::schema::SchemaRegistry::global().read() {
+    match lunco_usd_document::schema::SchemaRegistry::global().read() {
         Ok(registry) if registry.property(&full).is_some() => {}
         Ok(_) => warn_once!("[usd-terrain] canonical property `{full}` is absent from luncoSchema"),
         Err(_) => {
@@ -631,7 +631,7 @@ struct TerrainEditPrimSeq(u64);
 /// (not doc-mount time) so it cannot race the `DocumentOpened` runtime-overlay
 /// restore; `composed_arc` is memoized by generation, so this is a cheap child walk.
 fn seed_edit_seq_past_children(
-    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>,
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
     doc: lunco_doc::DocumentId,
     terrain_path: &str,
     seq: &mut TerrainEditPrimSeq,
@@ -672,7 +672,7 @@ fn author_terrain_edit(
         (&lunco_usd_bevy_scene::UsdPrimPath, &TerrainDocument),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
-    registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>,
+    registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
     seq: &mut TerrainEditPrimSeq,
     journal: Option<&lunco_doc_bevy::JournalResource>,
 ) {
@@ -691,8 +691,8 @@ fn author_terrain_edit(
         // nothing validated the string, `allowedTokens` could not constrain the kind,
         // and no other DCC could read it. The change set gives us the atomicity without
         // the encoding.
-        let mut ops = vec![lunco_usd_core::UsdOp::AddPrim {
-            edit_target: lunco_usd_core::LayerId::runtime(),
+        let mut ops = vec![lunco_usd_document::document::UsdOp::AddPrim {
+            edit_target: lunco_usd_document::document::LayerId::runtime(),
             parent_path: prim_path.path.clone(),
             name,
             type_name: None,
@@ -702,8 +702,8 @@ fn author_terrain_edit(
         // Logical names from the USD-free layer crate; `ns_attr` binds them into
         // `lunco:edit:` — the one place that namespace is applied.
         for (attr, ty, value) in lunco_terrain_surface::edit_attr_writes(&kind) {
-            ops.push(lunco_usd_core::UsdOp::SetAttribute {
-                edit_target: lunco_usd_core::LayerId::runtime(),
+            ops.push(lunco_usd_document::document::UsdOp::SetAttribute {
+                edit_target: lunco_usd_document::document::LayerId::runtime(),
                 path: edit_prim.clone(),
                 name: ns_attr(NS_EDIT, attr),
                 type_name: ty.to_string(),
@@ -712,7 +712,7 @@ fn author_terrain_edit(
         }
 
         let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<
-            lunco_usd_core::document::UsdDocument,
+            lunco_usd_document::document::UsdDocument,
         >| {
             for op in ops {
                 if let Err(e) = registry.apply(doc, op) {
@@ -735,7 +735,7 @@ fn on_brush_terrain_authored(
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: Option<
-        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>,
+        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -769,7 +769,7 @@ fn on_flatten_terrain_authored(
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: Option<
-        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>,
+        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -803,7 +803,7 @@ fn on_place_crater_authored(
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: Option<
-        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>,
+        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -840,7 +840,7 @@ fn on_place_rock_authored(
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: Option<
-        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>,
+        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -860,8 +860,8 @@ fn on_place_rock_authored(
         // `LunCoTerrainLayerAPI`. Namespaced, not bare: a bare `size` here is
         // `UsdGeomCube`'s real `double size` under a different meaning. `ns_attr` is
         // the one place the namespace is applied, and it checks the schema declares it.
-        let mut ops = vec![lunco_usd_core::UsdOp::AddPrim {
-            edit_target: lunco_usd_core::LayerId::runtime(),
+        let mut ops = vec![lunco_usd_document::document::UsdOp::AddPrim {
+            edit_target: lunco_usd_document::document::LayerId::runtime(),
             parent_path: prim_path.path.clone(),
             name,
             type_name: None,
@@ -884,8 +884,8 @@ fn on_place_rock_authored(
             ),
         ];
         for (attr, ty, value) in attrs {
-            ops.push(lunco_usd_core::UsdOp::SetAttribute {
-                edit_target: lunco_usd_core::LayerId::runtime(),
+            ops.push(lunco_usd_document::document::UsdOp::SetAttribute {
+                edit_target: lunco_usd_document::document::LayerId::runtime(),
                 path: rock_prim.clone(),
                 name: attr.to_string(),
                 type_name: ty.to_string(),
@@ -896,7 +896,7 @@ fn on_place_rock_authored(
         // ONE change set: a rock is one undo step, not six. (It used to apply each op
         // on its own, so undo peeled a rock apart attribute by attribute.)
         let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<
-            lunco_usd_core::document::UsdDocument,
+            lunco_usd_document::document::UsdDocument,
         >| {
             for op in ops {
                 if let Err(e) = registry.apply(doc, op) {
@@ -918,7 +918,7 @@ fn on_remove_terrain_edit_authored(
     trigger: On<lunco_terrain_surface::RemoveTerrainLayer>,
     terrains: Query<&TerrainDocument, With<lunco_terrain_surface::DemTerrainSurface>>,
     registry: Option<
-        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>,
+        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
     >,
 ) {
     let Some(mut registry) = registry else { return };
@@ -926,8 +926,8 @@ fn on_remove_terrain_edit_authored(
     for td in &terrains {
         let _ = registry.apply(
             lunco_doc::DocumentId::new(td.doc),
-            lunco_usd_core::UsdOp::RemovePrim {
-                edit_target: lunco_usd_core::LayerId::runtime(),
+            lunco_usd_document::document::UsdOp::RemovePrim {
+                edit_target: lunco_usd_document::document::LayerId::runtime(),
                 path: path.clone(),
             },
         );
@@ -1017,7 +1017,9 @@ fn resync_touches_terrain(changed: &str, terrain: &str) -> bool {
 /// generation is the re-bake trigger. One re-bake path keyed on the document, not the
 /// projected asset — covering twin default and live-imported (`OpenFile`) scenes alike.
 fn refresh_docbacked_terrain_from_doc(
-    registry: Option<Res<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>>,
+    registry: Option<
+        Res<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
+    >,
     // The live PCP-composed stage. Terrain projection reads the same
     // `CanonicalStage` as every other runtime projector; the stage is the
     // composed document that twin_projection updates for every authored op.
@@ -1060,7 +1062,7 @@ fn refresh_docbacked_terrain_from_doc(
                 // re-bake (measured: 791 tile bakes / 9.8 s on an idle scene).
                 // Only a change on the terrain subtree (or a structural resync of
                 // an ancestor / full reload) re-parses.
-                use lunco_usd_core::document::UsdChange;
+                use lunco_usd_document::document::UsdChange;
                 let mut touched = false;
                 let mut oldest_seen: Option<u64> = None;
                 for (gen, change) in host.document().changes_since(last) {
@@ -1145,14 +1147,14 @@ fn refresh_docbacked_terrain_from_doc(
 
 /// Queue one logical terrain-layer attribute as its canonical USD namespaced op.
 fn push_layer_attr(
-    ops: &mut Vec<lunco_usd_core::UsdOp>,
+    ops: &mut Vec<lunco_usd_document::document::UsdOp>,
     path: &str,
     name: &str,
     type_name: &str,
     value: String,
 ) {
-    ops.push(lunco_usd_core::UsdOp::SetAttribute {
-        edit_target: lunco_usd_core::LayerId::runtime(),
+    ops.push(lunco_usd_document::document::UsdOp::SetAttribute {
+        edit_target: lunco_usd_document::document::LayerId::runtime(),
         path: path.to_string(),
         name: ns_attr(NS_LAYER, name),
         type_name: type_name.to_string(),
@@ -1164,7 +1166,7 @@ fn push_layer_attr(
 /// This also sees a runtime AddPrim immediately, before the canonical stage has
 /// had a chance to recompose, so repeated UI edits cannot queue a duplicate.
 fn document_layer_path(
-    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>,
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
     doc: lunco_doc::DocumentId,
     terrain_path: &str,
     layer_type: &str,
@@ -1191,7 +1193,7 @@ fn document_layer_path(
 fn next_layer_name(
     reader: &StageView<'_>,
     terrain: &openusd::sdf::Path,
-    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>,
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
     doc: lunco_doc::DocumentId,
     base: &str,
 ) -> String {
@@ -1242,10 +1244,10 @@ fn next_layer_name(
 /// The operations are returned to the caller's existing `ApplyUsdOps` change set,
 /// preserving its all-or-nothing validation and one undo/journal unit.
 fn ensure_document_parent_chain_ops(
-    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>,
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
     doc: lunco_doc::DocumentId,
     parent_path: &str,
-) -> Option<Vec<lunco_usd_core::UsdOp>> {
+) -> Option<Vec<lunco_usd_document::document::UsdOp>> {
     let segments: Vec<&str> = parent_path
         .trim_matches('/')
         .split('/')
@@ -1261,8 +1263,8 @@ fn ensure_document_parent_chain_ops(
                 || host.document().runtime_data().spec(&sdf).is_some()
         });
         if !exists {
-            ops.push(lunco_usd_core::UsdOp::AddPrim {
-                edit_target: lunco_usd_core::LayerId::runtime(),
+            ops.push(lunco_usd_document::document::UsdOp::AddPrim {
+                edit_target: lunco_usd_document::document::LayerId::runtime(),
                 parent_path: if current.is_empty() {
                     "/".to_string()
                 } else {
@@ -1280,7 +1282,7 @@ fn ensure_document_parent_chain_ops(
 }
 
 fn author_crater_layer_attrs(
-    ops: &mut Vec<lunco_usd_core::UsdOp>,
+    ops: &mut Vec<lunco_usd_document::document::UsdOp>,
     path: &str,
     spec: &lunco_obstacle_field::spec::ObstacleFieldSpec,
 ) {
@@ -1339,7 +1341,7 @@ fn author_crater_layer_attrs(
 }
 
 fn author_rock_layer_attrs(
-    ops: &mut Vec<lunco_usd_core::UsdOp>,
+    ops: &mut Vec<lunco_usd_document::document::UsdOp>,
     path: &str,
     spec: &lunco_obstacle_field::spec::ObstacleFieldSpec,
     seed: u64,
@@ -1404,7 +1406,9 @@ fn on_obstacle_spec_authored(
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     stages: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
-    registry: Option<Res<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>>,
+    registry: Option<
+        Res<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
+    >,
     mut commands: Commands,
 ) {
     if !status.is_valid() {
@@ -1489,16 +1493,16 @@ fn on_obstacle_spec_authored(
                 }
                 let name = next_layer_name(&reader, &sdf, &registry, doc, base_name);
                 let path = format!("{}/{}", prim_path.path.trim_end_matches('/'), name);
-                ops.push(lunco_usd_core::UsdOp::AddPrim {
-                    edit_target: lunco_usd_core::LayerId::runtime(),
+                ops.push(lunco_usd_document::document::UsdOp::AddPrim {
+                    edit_target: lunco_usd_document::document::LayerId::runtime(),
                     parent_path: prim_path.path.clone(),
                     name,
                     type_name: Some("Xform".to_string()),
                     reference: None,
                     reference_prim_path: None,
                 });
-                ops.push(lunco_usd_core::UsdOp::SetAttribute {
-                    edit_target: lunco_usd_core::LayerId::runtime(),
+                ops.push(lunco_usd_document::document::UsdOp::SetAttribute {
+                    edit_target: lunco_usd_document::document::LayerId::runtime(),
                     path: path.clone(),
                     name: "lunco:layer".to_string(),
                     type_name: "token".to_string(),
@@ -2180,8 +2184,8 @@ mod dem_bridge_tests {
     use bevy::prelude::*;
     use lunco_doc_bevy::DocumentRegistry;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_core::document::UsdDocument;
-    use lunco_usd_core::StageRecipe;
+    use lunco_usd_document::document::UsdDocument;
+    use lunco_usd_document::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
     /// A minimal layered DEM terrain: `lunco:assetMode = "dem"` + a `dem` ground
@@ -2211,7 +2215,7 @@ mod dem_bridge_tests {
             "float",
             "2.5".into(),
         );
-        let lunco_usd_core::UsdOp::SetAttribute { name, .. } = &ops[0] else {
+        let lunco_usd_document::document::UsdOp::SetAttribute { name, .. } = &ops[0] else {
             panic!("terrain authoring must lower to SetAttribute");
         };
         assert_eq!(name, "lunco:layer:density");
@@ -2233,7 +2237,7 @@ def Xform \"Traverse\"\n{\n}\n"
         assert_eq!(ops.len(), 1);
         assert!(matches!(
             &ops[0],
-            lunco_usd_core::UsdOp::AddPrim {
+            lunco_usd_document::document::UsdOp::AddPrim {
                 parent_path,
                 name,
                 type_name: Some(type_name),
@@ -2307,7 +2311,7 @@ def Xform \"Traverse\"\n{\n}\n"
         let mut ops = Vec::new();
         super::author_rock_layer_attrs(&mut ops, "/Terrain/Rocks", &spec, 1234);
         let seed = ops.iter().find_map(|op| match op {
-            lunco_usd_core::UsdOp::SetAttribute { name, value, .. }
+            lunco_usd_document::document::UsdOp::SetAttribute { name, value, .. }
                 if name == "lunco:layer:seed" =>
             {
                 Some(value.as_str())

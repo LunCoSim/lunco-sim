@@ -50,7 +50,7 @@ use lunco_workbench_browser::{
 };
 
 use lunco_usd_core::commands::is_usd_path;
-use lunco_usd_core::document::UsdDocument;
+use lunco_usd_document::document::UsdDocument;
 
 /// What kind of file a row is — decides its group and its click action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

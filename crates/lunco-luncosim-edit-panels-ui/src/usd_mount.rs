@@ -75,7 +75,7 @@ pub struct MountItem {
 pub struct UsdMountSessionView {
     pub preview: UsdPreviewId,
     pub doc: lunco_doc::DocumentId,
-    pub edit_target: lunco_usd_core::document::LayerId,
+    pub edit_target: lunco_usd_document::document::LayerId,
     pub generation: u64,
     pub entity: Option<Entity>,
     pub host_path: String,

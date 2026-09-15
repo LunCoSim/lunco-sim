@@ -16,7 +16,7 @@ use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::UsdVisualPlugin;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
-use lunco_usd_core::StageRecipe;
+use lunco_usd_document::recipe::StageRecipe;
 
 #[test]
 fn test_usd_material_binding_parsing() {

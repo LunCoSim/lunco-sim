@@ -3,23 +3,19 @@ name = "lunco-usd-core"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "Headless OpenUSD document, authoring, schema, and operation substrate for LunCoSim"
+description = "Headless OpenUSD operation, assembly, and edit-policy substrate for LunCoSim"
 
 [dependencies]
 # The core uses only Bevy's ECS-free log, math, and reflection substrate for
 # authored command/document types. It does not enable rendering, windows, or
 # UI features.
 bevy = { workspace = true }
-anyhow = { workspace = true }
-openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-twin = { path = "../lunco-twin" }
-lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
+lunco-usd-document = { path = "../lunco-usd-document" }
 serde = { workspace = true }
-serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
