@@ -159,8 +159,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use lunco_core::SimTick;
+use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_core::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
@@ -265,6 +265,9 @@ struct Verdict {
 fn parse_args() -> Result<Cli, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut scene: Option<String> = None;
+    let component_mode = args.iter().any(|argument| argument == "test-component");
+    let mut twin: Option<String> = None;
+    let mut component: Option<String> = None;
     let mut max_ticks = DEFAULT_MAX_TICKS;
     let mut tick_hz = lunco_core::FIXED_HZ;
     let mut verdict_channel: Option<String> = None;
@@ -287,6 +290,14 @@ fn parse_args() -> Result<Cli, String> {
                 .ok_or_else(|| format!("{flag} needs a value"))
         };
         match args[i].as_str() {
+            "--twin" => {
+                twin = Some(need(i, "--twin")?);
+                i += 2;
+            }
+            "--component" => {
+                component = Some(need(i, "--component")?);
+                i += 2;
+            }
             "--scene" => {
                 scene = Some(need(i, "--scene")?);
                 i += 2;
@@ -373,6 +384,23 @@ fn parse_args() -> Result<Cli, String> {
         }
     }
 
+    if component_mode {
+        if scene.is_some() {
+            return Err(
+                "test-component selects the scene from the Twin manifest; omit --scene".to_owned(),
+            );
+        }
+        let twin =
+            twin.ok_or_else(|| format!("test-component requires --twin <PATH>\n\n{}", usage()))?;
+        let component = component
+            .ok_or_else(|| format!("test-component requires --component <NAME>\n\n{}", usage()))?;
+        let selected = resolve_component_test(Path::new(&twin), &component)?;
+        scene = Some(selected.scene);
+        verification = Some(selected.verification);
+        if verdict_channel.is_none() {
+            verdict_channel = selected.verdict_channel;
+        }
+    }
     let scene = scene.ok_or_else(|| format!("--scene is required\n\n{}", usage()))?;
     Ok(Cli {
         scene,
@@ -389,6 +417,103 @@ fn parse_args() -> Result<Cli, String> {
     })
 }
 
+/// Resolve one Twin component to its declared verification harness.
+///
+/// The manifest is the component index: it names the owned requirement source
+/// and qualified verification, while that verification case names the Rhai
+/// observer and USD fixture. The runner then executes the same deterministic
+/// path as `test --scene`; no component-specific loading or assertion logic is
+/// embedded in this CLI resolver.
+struct ComponentTestSelection {
+    scene: String,
+    verification: String,
+    verdict_channel: Option<String>,
+}
+
+fn resolve_component_test(
+    twin_path: &Path,
+    component_name: &str,
+) -> Result<ComponentTestSelection, String> {
+    if component_name.trim().is_empty() {
+        return Err("--component requires a non-empty Twin component name".to_owned());
+    }
+    let mode = lunco_twin::TwinMode::open(twin_path).map_err(|error| {
+        format!(
+            "cannot open Twin for component `{component_name}` at `{}`: {error}",
+            twin_path.display()
+        )
+    })?;
+    let twin = match mode {
+        lunco_twin::TwinMode::Twin(twin) | lunco_twin::TwinMode::Folder(twin) => twin,
+        lunco_twin::TwinMode::Orphan(path) => {
+            return Err(format!(
+                "component tests require a Twin folder; `{}` is a standalone file",
+                path.display()
+            ));
+        }
+    };
+    let mut structural = twin.verification_registry_errors();
+    structural.extend(twin.component_registry_errors());
+    if !structural.is_empty() {
+        return Err(format!(
+            "Twin component registry is invalid: {}",
+            structural.join("; ")
+        ));
+    }
+    let matches: Vec<_> = twin
+        .components()
+        .iter()
+        .filter(|component| component.name == component_name)
+        .collect();
+    let component = match matches.as_slice() {
+        [component] => *component,
+        [] => {
+            let names: Vec<_> = twin
+                .components()
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect();
+            return Err(format!(
+                "Twin `{}` has no component `{component_name}` (available: {})",
+                twin.manifest
+                    .as_ref()
+                    .map(|manifest| manifest.name.as_str())
+                    .unwrap_or("<folder>"),
+                if names.is_empty() {
+                    "none".to_owned()
+                } else {
+                    names.join(", ")
+                }
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "Twin declares duplicate component `{component_name}`"
+            ));
+        }
+    };
+    let case = twin
+        .verification_case(&component.verification)
+        .ok_or_else(|| {
+            format!(
+                "component `{component_name}` references unregistered verification `{}`",
+                component.verification
+            )
+        })?;
+    let scene = twin.root.join(&case.scene);
+    if !scene.is_file() {
+        return Err(format!(
+            "component `{component_name}` verification scene is missing: `{}`",
+            scene.display()
+        ));
+    }
+    Ok(ComponentTestSelection {
+        scene: scene.to_string_lossy().into_owned(),
+        verification: component.verification.clone(),
+        verdict_channel: case.verdict_channel.clone(),
+    })
+}
+
 fn usage() -> String {
     format!(
         "\
@@ -396,6 +521,9 @@ fn usage() -> String {
 
 USAGE:
     luncosim test --scene <PATH> [--verification QUALIFIED_NAME]
+               [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
+               [--threads N] [--jitter FRAC] [--seed U64] [--readiness-timeout SECS]
+    luncosim test-component --twin <PATH> --component <NAME>
                [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
                [--threads N] [--jitter FRAC] [--seed U64] [--readiness-timeout SECS]
     luncosim test --list
@@ -415,6 +543,10 @@ USAGE:
     --verification NAME      Require the scene to match a Twin manifest's
                              qualified SysML verification mapping and use its
                              declared verdict channel by default.
+    --twin PATH              Twin folder used by `test-component`.
+    --component NAME         Stable `[[components]].name` selected by
+                             `test-component`; its manifest verification owns
+                             the scene and Rhai observer that are executed.
 
 DIAGNOSTIC AXES (defaults reproduce the deterministic gate exactly):
     --threads N              Compute-pool threads (default 1).
@@ -1437,7 +1569,7 @@ pub fn run() -> u8 {
         #[cfg(feature = "ui")]
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
-                use lunco_luncosim_edit_ui::selection::{compute_selection_aabb, Selected};
+                use lunco_luncosim_edit_ui::selection::{Selected, compute_selection_aabb};
                 use lunco_usd_bevy_scene::UsdPrimPath;
 
                 let target_ent = {
@@ -1559,7 +1691,11 @@ pub fn run() -> u8 {
         );
         println!(
             "  the scenario declared expect_runtime_fault({}) but no terminal runtime fault was raised",
-            expected_runtime.iter().cloned().collect::<Vec<_>>().join(", ")
+            expected_runtime
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         return 1;
     }
