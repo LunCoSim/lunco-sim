@@ -141,7 +141,6 @@ members = [
     # `cargo test --workspace`.
     "tools/gen-command-docs"
 ]
-exclude = ["vendor/mitchty-transform-gizmo"]
 # Bare `cargo build`/`check`/`test` (no `-p`/`--workspace`) operates on just the
 # two app crates and their dependency closure. This skips workspace members that
 # no binary reaches — the feature-gated lunco-networking — so default builds don't
@@ -184,11 +183,9 @@ resolver = "2"
 openusd = { git = "https://github.com/LunCoSim/openusd", branch = "main" }
 
 # transform-gizmo is the maintained LunCoSim Bevy 0.19 / egui 0.35 fork.
-# Keep the fork in the repository because its Bevy picking backend must apply
-# the same GizmoOptions::viewport_rect mapping as its renderer for isolated
-# USD previews. The vendored package remains the one gizmo frontend and the
-# application only supplies the existing viewport rectangle.
-transform-gizmo-bevy = { path = "vendor/mitchty-transform-gizmo/crates/transform-gizmo-bevy" }
+# Pin the fork revision because its Bevy picking backend must apply the same
+# GizmoOptions::viewport_rect mapping as its renderer for isolated USD previews.
+transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "8e5d26f6d8bcae547ed0d269f9e25cd62ceacb53" }
 
 # [patch."https://github.com/LunCoSim/openusd"]
 # openusd = { path = "../openusd" }
