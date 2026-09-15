@@ -54,6 +54,14 @@ pub enum SurfaceAlpha {
     Add,
 }
 
+/// Marks a scene entity as the procedural camera background.
+///
+/// This is render intent rather than a shader-material concern. The render
+/// binder combines it with a shader look and draws that look in the fullscreen
+/// background pass instead of requiring a finite enclosing mesh.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ProceduralSkybox;
+
 /// The texture channels a PBR surface can carry.
 ///
 /// `Handle<Image>` is `bevy_image` — render-free — so a texture-bearing surface is

@@ -43,10 +43,10 @@ use bevy::render::render_resource::{TextureDimension, TextureFormat};
 use bevy::shader::Shader;
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_materials::{
-    rgba8_mip_chain, validate_shader_stage, ParamSchema, ProceduralSkybox, Rgba8MipMode,
-    ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, ShaderStage, TextureLayer,
+    rgba8_mip_chain, validate_shader_stage, ParamSchema, Rgba8MipMode, ShaderLook, ShaderLookBound,
+    ShaderLookKey, ShaderLookReady, ShaderStage, TextureLayer,
 };
-use lunco_render::SurfaceAlpha;
+use lunco_render::{ProceduralSkybox, SurfaceAlpha};
 use std::sync::Arc;
 
 /// Shared `ShaderMaterial` per distinct [`ShaderLookKey`] — see the module docs.
@@ -418,15 +418,13 @@ fn rebind_changed_shader_look(
                 // per-tick id compare. Textures compare slot-by-slot
                 // (`textures_match`): a TEXTURED look whose texture SET is
                 // unchanged takes the cheap param path like everything else.
-                let want_shader_id =
-                    shader_id_for(&look.shader, &mut shader_ids, &asset_server);
+                let want_shader_id = shader_id_for(&look.shader, &mut shader_ids, &asset_server);
                 let want_vertex_shader_id = look
                     .vertex_shader
                     .as_deref()
                     .map(|path| shader_id_for(path, &mut shader_ids, &asset_server));
                 let structural = existing.shader.id() != want_shader_id
-                    || existing.vertex_shader.as_ref().map(Handle::id)
-                        != want_vertex_shader_id
+                    || existing.vertex_shader.as_ref().map(Handle::id) != want_vertex_shader_id
                     || !textures_match(&existing, look);
                 if structural {
                     let schema = existing.schema.clone();
@@ -651,14 +649,7 @@ fn validate_shader_assets_on_change(
             continue;
         };
         let handle = material_for(look, &mut cache, &mut materials, &asset_server);
-        bind_shader_render_components(
-            entity,
-            handle,
-            look,
-            skybox,
-            &asset_server,
-            &mut commands,
-        );
+        bind_shader_render_components(entity, handle, look, skybox, &asset_server, &mut commands);
         apply_shadow_intent(&mut commands, entity, look);
     }
     if let Some(mut diagnostics) = diagnostics {

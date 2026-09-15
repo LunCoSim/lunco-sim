@@ -8794,7 +8794,6 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-core",
- "lunco-materials",
  "lunco-render",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",

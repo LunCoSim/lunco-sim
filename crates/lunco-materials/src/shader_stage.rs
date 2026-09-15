@@ -56,10 +56,7 @@ impl fmt::Display for ShaderStageError {
 /// This deliberately checks only the stage being requested. A combined module
 /// is valid for either use, and a module may contain helper text mentioning an
 /// entry-point attribute in comments without satisfying the contract.
-pub fn validate_shader_stage(
-    source: &str,
-    stage: ShaderStage,
-) -> Result<(), ShaderStageError> {
+pub fn validate_shader_stage(source: &str, stage: ShaderStage) -> Result<(), ShaderStageError> {
     let code = strip_wgsl_comments(source);
     let attribute = stage.attribute();
     let Some(attribute_start) = code.match_indices(attribute).find_map(|(start, _)| {
@@ -107,9 +104,7 @@ fn function_follows_attributes(mut source: &str) -> bool {
             return false;
         };
         let name_len = after_at
-            .find(|character: char| {
-                !(character.is_ascii_alphanumeric() || character == '_')
-            })
+            .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
             .unwrap_or(after_at.len());
         if name_len == 0 {
             return false;
@@ -201,13 +196,15 @@ mod tests {
 
     #[test]
     fn rejects_an_attribute_without_a_function() {
-        assert!(validate_shader_stage("@fragment struct Material {}", ShaderStage::Fragment)
-            .is_err());
+        assert!(
+            validate_shader_stage("@fragment struct Material {}", ShaderStage::Fragment).is_err()
+        );
     }
 
     #[test]
     fn requires_a_complete_attribute_token() {
-        assert!(validate_shader_stage("@fragmented fn fragment() {}", ShaderStage::Fragment)
-            .is_err());
+        assert!(
+            validate_shader_stage("@fragmented fn fragment() {}", ShaderStage::Fragment).is_err()
+        );
     }
 }

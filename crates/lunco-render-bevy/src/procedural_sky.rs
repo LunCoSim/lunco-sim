@@ -45,7 +45,7 @@ use bevy::render::{
 use bevy::shader::Shader;
 use bevy::shader::ShaderDefVal;
 use bevy::utils::default;
-use lunco_materials::ProceduralSkybox;
+use lunco_render::ProceduralSkybox;
 use std::any::TypeId;
 use std::collections::HashMap;
 
