@@ -730,7 +730,7 @@ use std::sync::Arc;
 /// fresh `SimulationSession` is built from `&dae` alone
 /// ([`crate::simulation_session::live`]), so Reset and Step auto-init rebuild
 /// steppers from `compiled` WITHOUT touching the compiler — instant, where the
-/// old source-only cache recompiled for seconds on MSL-heavy models.
+/// old source-only cache recompiled for seconds on source library-heavy models.
 ///
 /// The artifact is valid only for what it was built from: `unit_hash` keys the
 /// assembled [`CompileUnit`] (stripped primary + extras + model name + session
@@ -2314,7 +2314,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         let mut unit = assemble_compile_unit(&source, extra_sources);
 
                         // Loud breadcrumbs around the two opaque-and-slow
-                        // steps (MSL preload + rumoca compile). Without
+                        // steps (source library preload + rumoca compile). Without
                         // these, the worker silently disappears for the
                         // duration — the rumoca log macros may or may
                         // not route through the workbench's tracing sink
@@ -2711,7 +2711,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             let elapsed = cmd_started.elapsed();
             // Flag anything slow enough that a user would perceive it
             // as "stuck" at WARN so it shows up even without verbose
-            // logging. The 2s threshold is well above a typical MSL
+            // logging. The 2s threshold is well above a typical source library
             // compile (<500ms) but below "waited through it" (>5s).
             if elapsed > std::time::Duration::from_secs(2) {
                 log::warn!(

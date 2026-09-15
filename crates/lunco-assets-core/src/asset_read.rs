@@ -28,7 +28,7 @@
 use crate::discovery::AssetFile;
 
 /// Cache-Storage bucket for the shipped engine library. Versioned like the other
-/// buckets (`lunco-msl-v1`, `lunco-twin-v1`) so a format change can invalidate
+/// buckets (`lunco-library-v1`, `lunco-twin-v1`) so a format change can invalidate
 /// it wholesale.
 #[cfg(target_arch = "wasm32")]
 pub const ASSET_CACHE_BUCKET: &str = "lunco-assets-v1";

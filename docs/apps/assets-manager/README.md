@@ -1,6 +1,6 @@
 # Assets Manager
 
-The **Assets Manager** (`lunco-assets`) is a command-line tool for managing external assets (textures, MSL, models) used by LunCoSim. It handles downloading, SHA-256 verification, and processing (resizing/conversion).
+The **Assets Manager** (`lunco-assets`) is a command-line tool for managing external assets (textures, source libraries, models) used by LunCoSim. It handles downloading, SHA-256 verification, and processing (resizing/conversion).
 
 ## What it does
 
@@ -41,8 +41,8 @@ Assets are stored in the OS-global cache returned by `lunco_assets_core::cache_d
 ├── textures/
 │   ├── earth_source.jpg   (raw download)
 │   └── earth.png          (processed for engine)
-├── msl/
-│   └── 4.1.0/             (Modelica Standard Library)
+├── library/
+│   └── 4.1.0/             (configured source library)
 └── models/                (External glTF/USD assets)
 ```
 

@@ -65,7 +65,7 @@ done
 case "$TARGET" in
     luncosim|lunica)
         # WASM client — hand off to the web pipeline (it owns wasm-bindgen,
-        # asset staging, the MSL bundle, the worker, and the optional wasm-opt
+        # asset staging, the source-library bundle, the worker, and the optional wasm-opt
         # size pass under --release).
         args=(build "$TARGET")
         [ "$RELEASE" -eq 1 ] && args+=(--release)

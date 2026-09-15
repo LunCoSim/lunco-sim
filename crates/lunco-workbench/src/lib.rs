@@ -195,7 +195,7 @@ impl Default for DockSizes {
 
 /// Name of the binary actually running, for the Help menu's build line.
 ///
-/// This crate is a LIBRARY shared by every workbench app (`luncosim`, `lunica`,
+/// This crate is a source library shared by every workbench app (`luncosim`, `lunica`,
 /// …), so it cannot know at compile time which one linked it — `CARGO_BIN_NAME`
 /// is set for bin targets and would be wrong (or absent) here. The running
 /// executable's own file stem is the one answer that is true in every app, so
@@ -4806,7 +4806,7 @@ fn perspective_help_anchor(id: PerspectiveId) -> String {
 /// Render a single panel inside its own egui container (side-panel mode).
 /// Mirrors PanelTabViewer's lookup-and-take-back pattern.
 /// Render the bottom status strip. Reads from [`lunco_status_core::status_bus::StatusBus`]
-/// (cross-cutting; populated by MSL load, compile, sim, etc.) and
+/// (cross-cutting; populated by source library load, compile, sim, etc.) and
 /// renders a click-to-expand popup with recent history.
 fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme) {
     use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};

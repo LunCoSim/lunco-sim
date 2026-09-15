@@ -21,18 +21,18 @@
 //! postMessage round-trips so back-to-back Step commands hit the warm
 //! stepper without any re-compile cost.
 //!
-//! MSL
+//! source library
 //! ---
-//! The worker needs MSL in its own `GLOBAL_PARSED_MSL` slot before the first
+//! The worker needs source library in its own `GLOBAL_PARSED_SOURCE_BUNDLE` slot before the first
 //! Compile can resolve any `Modelica.*` reference — its wasm instance has a
 //! separate linear memory from the page's, so nothing is shared implicitly.
 //! That handoff is WIRED: `worker_transport::WireMessage` wraps every
 //! `ModelicaCommand` and carries two extra variants —
-//! `InstallParsedMslCompressed { bytes, provide_to_main }` (the boot path: the
+//! `InstallParsedLibraryCompressed { bytes, provide_to_main }` (the boot path: the
 //! ~19 MB zstd blob, decompressed + bincode-decoded here, off the main thread).
-//! The worker installs it and answers `WireResult::MslReady`; with
+//! The worker installs it and answers `WireResult::LibraryReady`; with
 //! `provide_to_main` it also hands the decoded bytes back to the page
-//! (`msl_remote::ingest_worker_decoded_msl`) for bounded main-thread
+//! (`library_remote::ingest_worker_decoded_library`) for bounded main-thread
 //! deserialization.
 
 // Wasm32-only binary; the desktop stub below keeps `cargo build` for the
@@ -122,20 +122,21 @@ mod wasm {
         }
     }
 
-    /// Ship the decompressed MSL bincode bytes to the main thread as a *transferred*
+    /// Ship the decompressed source library bincode bytes to the main thread as a *transferred*
     /// `ArrayBuffer` (zero-copy move, not a structured-clone copy). Posted as a bare
     /// `ArrayBuffer` — the only non-`Uint8Array` message in the protocol — which the
-    /// main `onmessage` handler routes to `msl_remote::ingest_worker_decoded_msl`.
+    /// main `onmessage` handler routes to `library_remote::ingest_worker_decoded_library`.
     /// Sending the raw bytes (rather than a bincode `WireResult`) avoids re-encoding
     /// ~165 MB and lets the transfer be zero-copy.
-    fn post_decoded_msl_transfer(scope: &DedicatedWorkerGlobalScope, bytes: Vec<u8>) {
+    fn post_decoded_library_transfer(scope: &DedicatedWorkerGlobalScope, bytes: Vec<u8>) {
         let array = Uint8Array::new_with_length(bytes.len() as u32);
         array.copy_from(&bytes);
         let buffer = array.buffer();
         let transfer = js_sys::Array::of1(&buffer);
         if let Err(e) = scope.post_message_with_transfer(&buffer, &transfer) {
             web_sys::console::error_1(
-                &format!("[lunica_worker] post decoded MSL transfer failed: {e:?}").into(),
+                &format!("[lunica_worker] post decoded source library transfer failed: {e:?}")
+                    .into(),
             );
         }
     }
@@ -143,9 +144,9 @@ mod wasm {
     /// Send editor metadata in bounded messages. The source bundle is decoded
     /// in this worker; chunking the structured result keeps each main-thread
     /// wire decode small enough that the browser remains responsive.
-    fn post_msl_index_chunks(
+    fn post_library_index_chunks(
         scope: &DedicatedWorkerGlobalScope,
-        index: lunco_modelica_core::visual_diagram::MslIndex,
+        index: lunco_modelica_core::visual_diagram::LibraryIndex,
     ) {
         const COMPONENTS_PER_MESSAGE: usize = 64;
         let mut bundled = Some(index.bundled);
@@ -153,7 +154,7 @@ mod wasm {
         if components.is_empty() {
             post_wire(
                 scope,
-                &WireResult::MslIndexChunk {
+                &WireResult::LibraryIndexChunk {
                     components: Vec::new(),
                     bundled: bundled.take().unwrap_or_default(),
                     done: true,
@@ -165,7 +166,7 @@ mod wasm {
         for (message_index, chunk) in components.chunks(COMPONENTS_PER_MESSAGE).enumerate() {
             post_wire(
                 scope,
-                &WireResult::MslIndexChunk {
+                &WireResult::LibraryIndexChunk {
                     components: chunk.to_vec(),
                     bundled: if message_index == 0 {
                         bundled.take().unwrap_or_default()
@@ -528,7 +529,7 @@ mod wasm {
                         }
                     }
                 }
-                WireMessage::InstallParsedMslCompressed {
+                WireMessage::InstallParsedLibraryCompressed {
                     bytes,
                     provide_to_main,
                 } => {
@@ -541,28 +542,31 @@ mod wasm {
                     // heap. Non-primary pool workers skip that transfer — the main
                     // thread needs exactly one copy and would dedupe the rest.
                     let started = web_time::Instant::now();
-                    match lunco_modelica_core::msl_remote::decompress_parsed_bundle(&bytes) {
+                    match lunco_modelica_core::library_remote::decompress_parsed_bundle(&bytes) {
                         Ok(decoded) => {
-                            match lunco_modelica_core::msl_remote::deserialize_parsed_bundle(
+                            match lunco_modelica_core::library_remote::deserialize_parsed_bundle(
                                 &decoded,
                             ) {
                                 Ok(parsed) => {
                                     let count = parsed.len();
-                                    lunco_modelica_core::msl_remote::install_global_parsed_msl_pub(
+                                    lunco_modelica_core::library_remote::install_global_parsed_source_bundle_pub(
                                         parsed,
                                     );
                                     // Ship the decoded bytes to main (transferred
-                                    // ArrayBuffer, zero-copy) BEFORE MslReady so the
+                                    // ArrayBuffer, zero-copy) BEFORE LibraryReady so the
                                     // resolution/autocomplete heap fills as early as
                                     // possible. `decoded` is moved out here.
                                     if provide_to_main {
-                                        post_decoded_msl_transfer(&scope_for_cb, decoded);
+                                        post_decoded_library_transfer(&scope_for_cb, decoded);
                                     }
-                                    post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
+                                    post_wire(
+                                        &scope_for_cb,
+                                        &WireResult::LibraryReady { docs: count },
+                                    );
                                     post_log(
                                         &scope_for_cb,
                                         format!(
-                                            "decoded compressed MSL: {count} docs in {:.2}s{}",
+                                            "decoded compressed source library: {count} docs in {:.2}s{}",
                                             started.elapsed().as_secs_f64(),
                                             if provide_to_main {
                                                 " (provided to main)"
@@ -575,8 +579,10 @@ mod wasm {
                                 Err(e) => {
                                     post_wire(
                                         &scope_for_cb,
-                                        &WireResult::MslFailed {
-                                            error: format!("MSL deserialize failed: {e}"),
+                                        &WireResult::LibraryFailed {
+                                            error: format!(
+                                                "source library deserialize failed: {e}"
+                                            ),
                                         },
                                     );
                                 }
@@ -585,19 +591,20 @@ mod wasm {
                         Err(e) => {
                             post_wire(
                                 &scope_for_cb,
-                                &WireResult::MslFailed {
-                                    error: format!("MSL decompress failed: {e}"),
+                                &WireResult::LibraryFailed {
+                                    error: format!("source library decompress failed: {e}"),
                                 },
                             );
                         }
                     }
                 }
-                WireMessage::InstallMslIndexFromSource { bytes } => {
-                    match lunco_modelica_core::msl_remote::load_msl_index_from_source_bundle(&bytes)
-                    {
-                        Ok(index) => post_msl_index_chunks(&scope_for_cb, index),
+                WireMessage::InstallLibraryIndexFromSource { bytes } => {
+                    match lunco_modelica_core::library_remote::load_library_index_from_source_bundle(
+                        &bytes,
+                    ) {
+                        Ok(index) => post_library_index_chunks(&scope_for_cb, index),
                         Err(error) => {
-                            post_wire(&scope_for_cb, &WireResult::MslIndexFailed { error })
+                            post_wire(&scope_for_cb, &WireResult::LibraryIndexFailed { error })
                         }
                     }
                 }
@@ -605,8 +612,8 @@ mod wasm {
                     post_log(
                         &scope_for_cb,
                         format!(
-                            "pong: {tag} (msl={})",
-                            lunco_modelica_core::msl_remote::global_parsed_msl()
+                            "pong: {tag} (library={})",
+                            lunco_modelica_core::library_remote::global_parsed_source_bundle()
                                 .map(|m| m.len())
                                 .unwrap_or(0)
                         ),

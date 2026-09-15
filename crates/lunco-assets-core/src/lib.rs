@@ -53,6 +53,7 @@ pub mod asset_sources;
 pub mod closure;
 pub mod discovery;
 pub mod font;
+pub mod library;
 /// `lunco://` asset source — the engine asset *library*. Resolves `assets/`
 /// first, then the download cache, so a logical `lunco://` address covers both
 /// git-tracked content and externally-fetched binaries without any authored
@@ -61,7 +62,6 @@ pub mod lunco_source;
 pub mod missions;
 pub mod modelica;
 pub mod models;
-pub mod library;
 /// Scheme → local filesystem root, as an open registry — the read-side mirror of
 /// [`register_lunco_asset_sources`].
 pub mod scheme_registry;
@@ -70,7 +70,7 @@ pub mod scripting;
 pub mod tutorials;
 pub mod twin_source;
 /// Generic browser fetch + Cache-Storage + tar.zst-unpack primitives shared by
-/// every bundle distributor (MSL, twin bundles). Web-only — native downloads go
+/// every bundle distributor (source library, twin bundles). Web-only — native downloads go
 /// through [`download`].
 #[cfg(target_arch = "wasm32")]
 pub mod web_fetch;
@@ -103,7 +103,7 @@ pub const ASSET_ROOT_ENV: &str = "LUNCO_ASSET_ROOT";
 // ============================================================================
 
 /// Resolves the shared cache directory — ONE location for every worktree
-/// and every Twin, holding regenerable artifacts (MSL, textures, ephemeris,
+/// and every Twin, holding regenerable artifacts (source library, textures, ephemeris,
 /// engine downloads, and Twin declarations marked `shared = true`). Twin
 /// declarations with the default ownership write beside the Twin; all Twin
 /// readers may still reuse this global pool.
@@ -216,8 +216,8 @@ pub fn engine_manifests() -> Result<Vec<(String, PathBuf)>, std::io::Error> {
 }
 
 /// The text of one engine manifest by group name, or `None` when there is no
-/// such group. For a consumer that wants its OWN declarations and nothing else
-/// (the MSL installer reading `[msl]`), rather than the whole set.
+/// such group. This is for a consumer that wants one group's declarations
+/// rather than the whole manifest set.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn engine_manifest_text(group: &str) -> Option<String> {
     std::fs::read_to_string(manifests_dir().join(format!("{group}.toml"))).ok()
@@ -365,23 +365,21 @@ pub fn source_library_dir(name: &str) -> PathBuf {
     cache_subdir(name)
 }
 
-/// Returns a materialised filesystem path for a source library when its marker
-/// exists on this target.
+/// Returns a materialised filesystem path for a source library when its cache
+/// directory exists on this target.
 ///
 /// This is narrower than [`source_library_dir`] because it returns `None` when
 /// the requested source tree is absent or when the target has no filesystem.
 ///
 /// # What's at this path
 ///
-/// The returned path is the cache container, not the marker's parent. This
-/// allows a library to ship several top-level entities as siblings:
-///
-/// Library adapters decide which marker identifies their root and how source
-/// bytes are admitted into their parser.
+/// The returned path is the cache container. A source bundle may contain
+/// several top-level packages as siblings; callers derive their root names from
+/// the package contents rather than selecting one package by name.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn source_library_root_path(cache_name: &str, marker: &str) -> Option<PathBuf> {
+pub fn source_library_root_path(cache_name: &str) -> Option<PathBuf> {
     let root = source_library_dir(cache_name);
-    if !root.join(marker).exists() {
+    if !root.is_dir() {
         return None;
     }
     // Canonicalize so callers see the same absolute path regardless of CWD.
@@ -393,7 +391,7 @@ pub fn source_library_root_path(cache_name: &str, marker: &str) -> Option<PathBu
 
 /// wasm has no filesystem-backed source-library root.
 #[cfg(target_arch = "wasm32")]
-pub fn source_library_root_path(_cache_name: &str, _marker: &str) -> Option<PathBuf> {
+pub fn source_library_root_path(_cache_name: &str) -> Option<PathBuf> {
     None
 }
 

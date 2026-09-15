@@ -47,7 +47,7 @@ interactive window therefore have one policy and one cache/path resolver.
 - **Shared cache** — the OS-global cache (`~/.cache/lunco` on Linux,
   `~/Library/Caches/lunco` on macOS, `%LOCALAPPDATA%\\lunco` on Windows).
   `LUNCOSIM_CACHE` remains an explicit CI/custom-install override. Every
-  worktree and Twin therefore shares one pool of regenerable data (MSL,
+  worktree and Twin therefore shares one pool of regenerable data (source libraries,
   textures, ephemeris, downloaded sources).
 - **Twin cache** — `<TWIN>/.cache`. A Twin's default-owned downloads land
   beside the Twin. `twin://` reads resolve `<twin>/<rel>` first, then

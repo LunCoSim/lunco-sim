@@ -640,11 +640,11 @@ pub(crate) fn render_compile_class_picker(
 // command path alone.
 
 /// The source text to overlay into the compiler session when compiling a
-/// document — and the crux of running MSL/library examples correctly.
+/// document — and the crux of running source-library examples correctly.
 ///
 /// A read-only library document (`DocumentOrigin::File { writable: false }`,
-/// what a drilled-in MSL class is) holds a class that is *already present in
-/// the loaded library session* (the MSL pre-parsed bundle, installed via
+/// what a drilled-in source library class is) holds a class that is *already present in
+/// the loaded library session* (the source library pre-parsed bundle, installed via
 /// `replace_parsed_source_set`). Overlaying its extracted source would
 /// register the same qualified class a SECOND time under `model.mo` and trip
 /// rumoca's "Duplicate class … with non-identical definition" resolver error.
@@ -713,9 +713,9 @@ pub fn on_compile_model(
     //
     // Use the document's already-parsed AST for the metadata
     // extraction. Calling the `_source` variants here re-parses
-    // via rumoca on the main thread — a 152 KB MSL package file
+    // via rumoca on the main thread — a 152 KB source library package file
     // costs ~30 s per call in debug builds, and there are four
-    // calls, so clicking Compile on an MSL example would lock the
+    // calls, so clicking Compile on a source-library example would lock the
     // UI for minutes. Pulling from the cached AST is constant-time.
     // Note: previously this site called `refresh_ast_now()` to force
     // a fresh parse before extracting metadata. That ran a 2.5 s
@@ -894,7 +894,7 @@ pub fn on_compile_model(
     // duplicates), the bare leaf fails `model not found` in Instantiate — so
     // qualify the target with `P`. Mirrors the run path in
     // `dispatch_experiment`. No-op for top-level scratch models (no `within`)
-    // and for drilled MSL classes (empty overlay source → no `within`).
+    // and for drilled source library classes (empty overlay source → no `within`).
     let model_name = match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
         Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
             format!("{pkg}.{model_name}")
@@ -1121,7 +1121,7 @@ pub fn on_compile_model(
                 if other_doc == doc {
                     return None;
                 }
-                // A read-only library doc (a drilled-in MSL class) is already
+                // A read-only library doc (a drilled-in source library class) is already
                 // in the loaded session — overlaying it as a cross-doc source
                 // would re-register its class and duplicate-collide. Skip.
                 if is_library_document(host.document()) {
@@ -1150,7 +1150,7 @@ pub fn on_compile_model(
         // doc, so the open-doc scan above can't supply it — the compile fails
         // `unresolved type reference: 'Tank'`. Re-seat the whole bundled
         // package so rumoca can satisfy those references in the same `within`
-        // scope. Mirrors the run path in `dispatch_experiment`. MSL
+        // scope. Mirrors the run path in `dispatch_experiment`. source library
         // within-packages are not bundled (return None) and are left alone;
         // the `claimed` guard avoids a duplicate-class collision if the
         // package is somehow already overlaid.
@@ -1164,7 +1164,7 @@ pub fn on_compile_model(
         // Source-root dependency scan + lazy load.
         //
         // Walk the doc's AST to find every qualified type root
-        // (`Modelica.X`, `ThermofluidStream.Y`, ...). For each known
+        // (`Package.X`, `External.Y`, ...). For each known
         // root that isn't yet `Ready`, publish its location to the
         // process-wide handle so the worker's `ModelicaCompiler::new`
         // preloads it on its first construction. The actual parse
@@ -1176,7 +1176,7 @@ pub fn on_compile_model(
         // `undefined type` by rumoca's typecheck. With it: deps are
         // ensured available before the Compile dispatches, so the
         // first compile after a dep-discovering edit may take a few
-        // extra seconds (MSL preload), but subsequent compiles see
+        // extra seconds (source library preload), but subsequent compiles see
         // a warm session.
         if let Some(ast) = registry.host(doc).and_then(|h| h.document().strict_ast()) {
             if let Some(roots) = world_source_roots.as_deref_mut() {
@@ -1642,7 +1642,7 @@ fn dispatch_experiment(
             let document = host.document();
             // Library classes compile from the loaded session, not a temp
             // overlay (see `compile_overlay_source`) — this is what makes a
-            // drilled MSL example (e.g. `Modelica.Blocks.Examples.PID_Controller`)
+            // drilled source library example (e.g. `Modelica.Blocks.Examples.PID_Controller`)
             // run without a self-duplicate-class collision.
             let source = compile_overlay_source(document);
             // The document's stable session URI — the SAME canonical identity
@@ -1742,12 +1742,12 @@ fn dispatch_experiment(
         // A duplicated *nested* class (e.g. `AnnotatedRocketStage.RocketStage`)
         // is emitted as `within P; <leaf>` — dropping the sibling classes it
         // refers to (`Tank`, `Valve`, `Engine`, …) that live alongside it in
-        // package P. For a filesystem/MSL `within`, P is already on the global
+        // package P. For a filesystem/source library `within`, P is already on the global
         // session path so those siblings resolve. But a *bundled* example
         // package is on no search path: compiling the lone leaf fails
         // `unresolved type reference: 'Tank'`. Re-attach the whole bundled
         // package as an extra source so `compile_str_multi` merges the siblings
-        // back into the same `within` scope. MSL within-packages are not
+        // back into the same `within` scope. source library within-packages are not
         // bundled (return None here) and are left untouched.
         let extras: Vec<(String, String)> =
             match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {

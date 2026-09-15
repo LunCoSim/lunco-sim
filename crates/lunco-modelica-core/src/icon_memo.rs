@@ -2,7 +2,7 @@
 //!
 //! Icon extraction is expensive enough that several layers memoise it — the
 //! engine's merged-icon result (`extract_icon_via_engine` walks the whole
-//! inheritance chain and clones every `ClassDef` along it: ~80 ms for a deep MSL
+//! inheritance chain and clones every `ClassDef` along it: ~80 ms for a deep source library
 //! chain), and the paint side's decoded `Bitmap` textures. Each memo is keyed by a
 //! class name or filename, and each caches its **misses** too — a missing asset must
 //! not be re-probed every frame.
@@ -11,7 +11,7 @@
 //! module the signal did not exist: three memos were invalidated by three unrelated
 //! mechanisms and the bitmap-texture cache was invalidated by **nothing at all**. A
 //! Bitmap icon whose file was missing cached `None` *for the life of the process* —
-//! and on wasm the MSL bundle ships no `Resources/`, so every Bitmap icon takes that
+//! and on wasm the source library bundle ships no `Resources/`, so every Bitmap icon takes that
 //! path. The moment the bundler starts shipping images, they would still have
 //! rendered blank until restart. A stale `.png` on native had the same shape.
 //!
@@ -119,7 +119,7 @@ mod tests {
     }
 
     /// THE BUG THIS MODULE EXISTS FOR. A remembered *negative* must also clear —
-    /// otherwise an asset that was missing (every MSL bitmap on wasm today) is
+    /// otherwise an asset that was missing (every source library bitmap on wasm today) is
     /// remembered as missing forever, and never re-probed once it lands.
     #[test]
     fn invalidation_drops_a_remembered_negative() {

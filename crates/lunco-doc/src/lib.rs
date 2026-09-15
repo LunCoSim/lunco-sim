@@ -225,7 +225,7 @@ impl fmt::Display for DocumentId {
 /// UI affordances (tab title, read-only badge, Save button).
 ///
 /// Deliberately minimal: two variants. Fancier classifications
-/// (MSL / bundled / third-party library / user project) are a
+/// (source library / bundled / third-party library / user project) are a
 /// *Package Browser* concern — at the document level, all that
 /// matters is "does it have a path we can write to?".
 ///
@@ -464,7 +464,7 @@ impl DocumentOrigin {
 pub enum DocumentError {
     /// The operation is invalid for the current document state.
     ValidationFailed(String),
-    /// The document is read-only — its origin (e.g. an MSL library
+    /// The document is read-only — its origin (e.g. a source-library
     /// class or a bundled example) does not allow mutation. Callers
     /// should surface this as "duplicate to workspace first" rather
     /// than retry. The document layer is the single source of truth

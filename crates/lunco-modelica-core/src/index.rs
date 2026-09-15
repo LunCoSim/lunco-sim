@@ -181,7 +181,7 @@ pub struct ClassEntry {
     #[serde(default)]
     pub experiment: Option<crate::annotations::Experiment>,
     /// Extends-flattened port list. Populated by the indexer for
-    /// MSL classes (pre-baked into `msl_index.json`) and by the
+    /// source library classes (pre-baked into `library_index.json`) and by the
     /// projector for live user code on first paint. Empty by
     /// default; live AST rebuilds don't fill this — the projector
     /// or shape-flattening pass does.
@@ -200,10 +200,10 @@ pub struct ClassEntry {
     /// a hyperbolic-cosine block). Populated by the indexer.
     #[serde(default)]
     pub icon_text: Option<String>,
-    /// Category for grouping in the MSL palette — slash-separated
+    /// Category for grouping in the source library palette — slash-separated
     /// segments of the path inside the library
     /// (`"Electrical/Analog/Basic"`). Populated by the indexer; empty
-    /// for non-MSL classes.
+    /// for non-source library classes.
     #[serde(default)]
     pub category: String,
     /// Whether the class definition was resolved by the shared source engine.
@@ -261,8 +261,7 @@ impl ClassEntry {
 
     /// First plain-text paragraph of the class's Documentation(info=…)
     /// annotation, when authored. Same as `documentation.0` —
-    /// preserved as a method for symmetry with the deleted
-    /// `MSLComponentDef::documentation_info` field.
+    /// preserved as a method for symmetry with the palette metadata API.
     pub fn documentation_info(&self) -> Option<&str> {
         self.documentation.0.as_deref()
     }

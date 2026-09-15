@@ -146,7 +146,7 @@ the physics solver empties. Never block that queue:
   the same contract: it traverses extracted UI nodes only when an authored,
   visible surface is required by an active recording contract.
 - The Modelica editor index is an asset task, not a boot-time render dependency.
-  Native MSL source readiness installs the source root immediately; the large
+  Native source-library readiness installs the source root immediately; the large
   generated palette index is decoded off-thread and publishes one readiness
   event for the browser to enrich its already-available bundled-model view.
 - Asset catalog enumeration is an async projection of the shared discovery
@@ -166,13 +166,13 @@ the physics solver empties. Never block that queue:
   `Time::delta` (bevy). Never assume 60 Hz.
 
 ## 3. Heavy work goes off-thread or behind a cache
-Parsing a large `.mo` file, rasterising an SVG, indexing an MSL
+Parsing a large `.mo` file, rasterising an SVG, indexing a Modelica source library
 package — none of these belong on the UI thread every frame. Patterns:
 
 - **One-shot + cache**: global `OnceLock<Mutex<HashMap>>` keyed by
   a stable identifier (path, hash, id). Cache-hit returns a
   `Arc<T>` clone. Reference: `svg_bytes_for` in the canvas panel,
-  `msl_component_library` in `visual_diagram.rs`.
+  the source-library component index in `visual_diagram.rs`.
 - **Background task + poll**: `AsyncComputeTaskPool::get().spawn(...)`
   returns a `Task<T>`; `future::poll_once(&mut task)` in an Update
   system yields the result when ready without blocking. Reference:

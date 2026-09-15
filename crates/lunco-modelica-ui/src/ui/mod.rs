@@ -259,7 +259,7 @@ fn close_drilled_tabs_on_class_removed(
 // and per-doc `ModelicaIndex.classes` already holds it, so a separate
 // `ModelicaWorld` resource just duplicates state. The unified
 // read-side resolver (`class_metadata::resolve_metadata`) consults
-// the pre-baked MSL library + the live per-doc index directly.
+// the pre-baked source-library index + the live per-doc index directly.
 
 /// Derive `WorkspaceResource.DocumentEntry.title` from the AST's
 /// first top-level class name. Modelica's class-first identity model
@@ -506,7 +506,7 @@ impl Perspective for AnalyzePerspective {
         // section to that browser, so there is one authoritative browse
         // surface for workspace classes and standard libraries.
         // Two sibling tabs in the side dock — Twin (everything you
-        // browse by name: workspace classes, MSL, bundled, future
+        // browse by name: workspace classes, source library, bundled, future
         // USD/SysML — matches Dymola/OMEdit's single-Package-Browser
         // pattern) and Files (raw FS). Twin is leftmost so it's the
         // default active tab on first launch.
@@ -604,7 +604,7 @@ impl Plugin for ModelicaUiPlugin {
         // the doc's AST for cross-package type references and prime
         // rumoca's caches in the background. Drill-in projection
         // sees a populated cache instead of paying the cold-walk
-        // seconds per first-time MSL chain.
+        // seconds per first-time source library chain.
         app.add_plugins(crate::icon_warmer::IconWarmerPlugin);
 
         // Intent layer: key chords → EditorIntent. Domain resolvers
@@ -684,11 +684,11 @@ impl Plugin for ModelicaUiPlugin {
             )
             // Forward StatusBus events to the Console panel so the
             // user has a chronological audit trail of every status
-            // event from every subsystem (MSL, compile, sim, …).
+            // event from every subsystem (source library, compile, sim, …).
             .add_systems(Update, fan_status_bus_to_console)
-            // Reactive UI observer of core `MslLoadState` → status bus (moved
-            // here from the core MSL plugin; core no longer touches the bus).
-            .add_systems(Update, core_observers::mirror_msl_state_to_status_bus)
+            // Reactive UI observer of core `LibraryLoadState` → status bus (moved
+            // here from the core source library plugin; core no longer touches the bus).
+            .add_systems(Update, core_observers::mirror_library_state_to_status_bus)
             // Reactive UI observer: drain core live-sim samples → viz plots.
             // The core worker no longer references lunco_viz.
             .add_systems(Update, core_observers::drain_sim_samples_to_viz)
@@ -727,16 +727,16 @@ impl Plugin for ModelicaUiPlugin {
             .add_systems(Update, browser_dispatch::drain_browser_actions)
             .add_systems(Update, panels::package_browser::handle_package_loading_tasks)
             .add_systems(Update, panels::package_browser::reconcile_library_roots_on_ready)
-            // Reactive: fires once, the frame MSL enters the engine session —
+            // Reactive: fires once, the frame source library enters the engine session —
             // re-projects open canvas tabs (so std-lib icons resolve), rebuilds
             // the bundled-examples tree, reconciles library roots. Previously
             // lived in the never-added `PackageBrowserPlugin`; wired here so it
             // actually runs (the bug behind "Modelica files not updated after
-            // MSL loaded": restored/auto-opened tabs projected empty pre-MSL
+            // source library loaded": restored/auto-opened tabs projected empty pre-source library
             // and never recovered).
-            .add_observer(panels::package_browser::on_msl_became_ready)
-            .add_observer(panels::package_browser::on_msl_editor_index_became_ready)
-            .add_observer(panels::package_browser::on_modelica_library_became_ready)
+            .add_observer(panels::package_browser::on_source_bundle_became_ready)
+            .add_observer(panels::package_browser::on_library_editor_index_became_ready)
+            .add_observer(panels::package_browser::on_source_root_became_ready)
             .add_systems(Update, cleanup_removed_simulators)
             .add_systems(Update, link_added_simulators)
             // `drain_document_changes` + the A3 journal-wire auto-bridge moved
@@ -1019,7 +1019,7 @@ fn register_settings_submenu(world: &mut World) {
     menus.register_settings_submenu("Modelica", render_assets_settings);
 }
 
-/// Settings rows for the Modelica section — MSL readiness and local override.
+/// Settings rows for the Modelica section — source library readiness and local override.
 /// Native dataset download actions live in the generic Data & libraries panel.
 fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     use bevy_egui::egui;
@@ -1028,14 +1028,21 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     // Current state line.
     let state = ctx.resource::<LibraryLoadState>().cloned();
 
-    // If the Modelica UI is active, the MslSettings resource MUST exist
-    // by architectural design (ModelicaPlugin adds ModelicaCorePlugin adds MslRemotePlugin).
-    let Some(mut settings) = ctx.resource::<crate::msl_settings::MslSettings>().cloned() else {
+    // If the Modelica UI is active, the LibrarySettings resource MUST exist
+    // by architectural design (ModelicaPlugin adds ModelicaCorePlugin adds LibraryRemotePlugin).
+    let Some(mut settings) = ctx
+        .resource::<crate::modelica_library_settings::LibrarySettings>()
+        .cloned()
+    else {
         return;
     };
     let original_settings = settings.clone();
 
-    ui.label(egui::RichText::new("Assets — MSL").weak().small());
+    ui.label(
+        egui::RichText::new("Assets — source library")
+            .weak()
+            .small(),
+    );
 
     match state.as_ref() {
         Some(LibraryLoadState::Ready {
@@ -1086,8 +1093,8 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     }
 
     // Resolved on-disk path. May be the explicit-install destination, the
-    // workspace `.cache/msl/`, or a user-supplied override.
-    let root = lunco_assets_core::source_library_root_path("msl", "Modelica");
+    // workspace `.cache/library/`, or a user-supplied override.
+    let root = lunco_assets_core::source_library_root_path("library");
     match root.as_ref() {
         Some(p) => {
             ui.horizontal(|ui| {
@@ -1111,7 +1118,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             )
             .clicked()
     {
-        ctx.trigger(crate::msl_remote::NativeMslIndexAction::Rebuild);
+        ctx.trigger(crate::library_remote::NativeLibraryIndexAction::Rebuild);
     }
 
     // Local-root override — wins over an explicit download. Restart needed
@@ -1128,12 +1135,11 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             .add(
                 lunco_workbench_widgets::text_editor::singleline(&mut local)
                     .desired_width(360.0)
-                    .hint_text("/path/to/msl (parent of Modelica/)"),
+                    .hint_text("/path/to/source-library"),
             )
             .on_hover_text(
-                "Absolute path to a Modelica Standard Library tree on \
-                 disk. The directory must contain a `Modelica/` \
-                 subdirectory. Takes precedence over a downloaded copy. \
+                "Absolute path to a Modelica source-library tree on \
+                 disk. Takes precedence over a downloaded copy. \
                  Restart required.",
             )
             .changed()
@@ -1149,14 +1155,14 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         ctx.set_resource(settings);
     }
 
-    // Native downloads are dispatched by the generic dataset panel so MSL,
+    // Native downloads are dispatched by the generic dataset panel so source library,
     // terrain and Twin resources share one lifecycle and retry UX.
     #[cfg(not(target_arch = "wasm32"))]
-    ui.label("Download MSL from Settings ▸ Data & libraries.");
+    ui.label("Download source library from Settings ▸ Data & libraries.");
 
     #[cfg(target_arch = "wasm32")]
     {
-        // Web MSL is a host-served bundle rather than a native dataset, so its
+        // Web source library is a host-served bundle rather than a native dataset, so its
         // platform-specific fetch controls remain here.
         let load_state = ctx
             .resource::<lunco_assets_core::library::LibraryLoadState>()
@@ -1177,42 +1183,42 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             // While an install is in flight, show Cancel. Before the first
             // install, show Install. Once finished, show Reinstall/Retry.
             if install_running {
-                ui.label("MSL bundle loading…");
+                ui.label("source library bundle loading…");
             } else if matches!(
                 load_state,
                 Some(lunco_assets_core::library::LibraryLoadState::NotStarted) | None
             ) {
                 if ui
-                    .button("Install MSL")
+                    .button("Install source library")
                     .on_hover_text(
-                        "Download and index the Modelica Standard Library. \
+                        "Download and index the source library. \
                      Nothing is downloaded until you click this button.",
                     )
                     .clicked()
                 {
-                    ctx.trigger(crate::msl_remote::MslInstallAction::Install);
+                    ctx.trigger(crate::library_remote::LibraryInstallAction::Install);
                 }
             } else if install_failed {
                 if ui
                     .button("Retry")
                     .on_hover_text(
-                        "Re-run the MSL download + indexer. Clears the \
+                        "Re-run the source library download + indexer. Clears the \
                      previous cache so a partial install is wiped.",
                     )
                     .clicked()
                 {
-                    ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
+                    ctx.trigger(crate::library_remote::LibraryInstallAction::Reinstall);
                 }
             } else if install_ready
                 && ui
                     .button("Reinstall")
                     .on_hover_text(
-                        "Force-redownload MSL and rebuild the bincode cache. \
+                        "Force-redownload source library and rebuild the bincode cache. \
                  Wipes the current cache directory first.",
                     )
                     .clicked()
             {
-                ctx.trigger(crate::msl_remote::MslInstallAction::Reinstall);
+                ctx.trigger(crate::library_remote::LibraryInstallAction::Reinstall);
             }
         });
     }
@@ -1293,7 +1299,7 @@ fn install_image_loaders_once(
         return;
     };
     // The graphics package owns both the raster decoder and the custom
-    // `modelica://Package/Resources/…` loader used by MSL Documentation.
+    // `modelica://Package/Resources/…` loader used by source library Documentation.
     lunco_modelica_icon_ui::install_image_loaders(ctx);
     bevy::log::info!("[ModelicaImageLoader] installed Modelica image loaders");
 

@@ -38,7 +38,7 @@ use std::sync::RwLock;
 /// have predictable output. Application code (the workbench binary)
 /// is free to install a different policy at startup via
 /// [`set_options`] — for instance, tab-indented output that matches
-/// how Dymola and hand-authored MSL packages ship.
+/// how Dymola and hand-authored source library packages ship.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrettyOptions {
     /// Indent used on the first line of a component declaration or
@@ -50,7 +50,7 @@ pub struct PrettyOptions {
 
 impl PrettyOptions {
     /// Preset: tab indentation (`"\t"` / `"\t\t"`) — the convention
-    /// in most hand-authored MSL packages and what the workbench
+    /// in most hand-authored source library packages and what the workbench
     /// installs as the user-facing default.
     pub fn tabs() -> Self {
         Self {
@@ -222,7 +222,7 @@ pub struct Line {
 
 /// Format a float the way Modelica tools do: no trailing `.0` for integer
 /// values, no scientific notation, trimmed trailing zeros. This matches
-/// the shape of numbers found in hand-authored MSL `annotation(...)`
+/// the shape of numbers found in hand-authored source library `annotation(...)`
 /// clauses so diffs between our output and existing sources stay small.
 fn fmt_num(n: f32) -> String {
     if n.is_nan() {

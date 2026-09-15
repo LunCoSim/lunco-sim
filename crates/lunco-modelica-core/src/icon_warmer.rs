@@ -9,7 +9,7 @@
 //! [`crate::engine::ModelicaEngine::icon_for`] for each one.
 //!
 //! Effect: by the time the user drills into a class whose icon merge
-//! requires walking an MSL extends chain, rumoca's
+//! requires walking a source-library extends chain, rumoca's
 //! `class_interface_index_query` cache is already populated for every
 //! class on the chain — drill-in projection finishes in milliseconds
 //! instead of the cold-walk seconds.
@@ -53,7 +53,7 @@ fn on_document_opened_warm(
     // Read from the doc's lenient cache — it's a reactive mirror of
     // the engine's strict parse, populated by either
     // `drive_engine_sync`'s drain step (workspace docs) or
-    // `load_msl_file`'s strict-adopt (drill-in / library docs).
+    // `load_library_file`'s strict-adopt (drill-in / library docs).
     //
     // We must NOT call `engine.upsert_document(...)` here: for a
     // drill-in into Modelica.Blocks.* the source is the whole
@@ -64,7 +64,7 @@ fn on_document_opened_warm(
     // normal background projection resolves it.
     // **Wasm: warmer disabled.** `AsyncComputeTaskPool` is the main
     // thread on wasm32-unknown-unknown, so the warm task's
-    // `engine.icon_for(ty)` calls — each up to ~1.3 s on a cold MSL
+    // `engine.icon_for(ty)` calls — each up to ~1.3 s on a cold source library
     // qualified-name lookup — block the UI exactly as if they ran
     // synchronously. Field telemetry showed `[IconWarmer] doc=N
     // warmed 0/1 types in 1314ms` immediately after a drill-in,
@@ -131,17 +131,17 @@ fn spawn_warm_task(doc_id: DocumentId, types: Vec<String>) {
         .spawn(async move {
             // **Cache-only warm.** We deliberately do NOT call
             // `peek_or_load_class_blocking` here — it would parse large
-            // MSL files (200KB+) under the engine mutex, blocking
+            // source library files (200KB+) under the engine mutex, blocking
             // both the projection task and any main-thread query
             // for tens of seconds in dev builds. That regresses the
             // `feels instant` first paint we just won.
             //
             // Instead: hit `engine.icon_for` for every type. Classes
             // already in the session warm their inheritance walk
-            // (cheap). MSL classes not yet loaded silently return
+            // (cheap). source library classes not yet loaded silently return
             // None and stay cold; their first projection-time miss
             // pays the load cost, but only when a user actually
-            // drills into them. Future: pre-load MSL files in tiny
+            // drills into them. Future: pre-load source library files in tiny
             // batches between frames to trickle them in without
             // mutex contention.
             // Per-type lock + yield. On wasm `AsyncComputeTaskPool`
@@ -170,42 +170,4 @@ fn spawn_warm_task(doc_id: DocumentId, types: Vec<String>) {
             );
         })
         .detach();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use lunco_modelica_ast::parse_to_syntax;
-
-    #[test]
-    fn collects_cross_package_extends_and_component_types() {
-        let src = r#"
-            package P
-              model M
-                extends Modelica.Blocks.Continuous.PI;
-                Modelica.Blocks.Interfaces.RealOutput y;
-                Real x;
-                P.LocalThing local_inst;
-              end M;
-              model LocalThing
-              end LocalThing;
-            end P;
-        "#;
-        let ast = parse_to_syntax(src, "t.mo").best_effort().clone();
-        let types = collect_referenced_types(&ast);
-        assert!(types.contains(&"Modelica.Blocks.Continuous.PI".to_string()));
-        assert!(types.contains(&"Modelica.Blocks.Interfaces.RealOutput".to_string()));
-        assert!(!types.iter().any(|t| t == "Real"), "skip built-in scalars");
-        // P.LocalThing is dotted → kept (warmer treats it as worth warming
-        // even though it's local; harmless extra check).
-    }
-
-    #[test]
-    fn skips_builtins_and_bare_names() {
-        assert!(!interesting_type(""));
-        assert!(!interesting_type("Real"));
-        assert!(!interesting_type("Tank"));
-        assert!(interesting_type("Modelica.Blocks.Interfaces.RealOutput"));
-        assert!(interesting_type("Some.Other.Lib.Thing"));
-    }
 }

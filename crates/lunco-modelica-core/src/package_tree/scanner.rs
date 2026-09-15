@@ -1,32 +1,32 @@
 //! Backend scanning logic for the Package Browser.
 
 use super::types::PackageNode;
-use crate::state::ModelLibrary;
+use crate::state::ModelSource;
 use bevy::prelude::*;
 use std::path::Path;
 
-/// Canonical tree-node id for an MSL / third-party class, keyed by its dotted
+/// Canonical tree-node id for a source-library / third-party class, keyed by its dotted
 /// qualified name (`Modelica.Blocks.Examples.PID_Controller`).
 ///
 /// SINGLE SOURCE OF TRUTH — every scanner site (native fs walk + web in-memory
 /// walk) mints ids through here, and it MUST stay in sync with
-/// [`crate::class_ref::ClassRef::parse_tree_id`] (the `msl_path:` scheme it
+/// [`crate::class_ref::ClassRef::parse_tree_id`] (the `library_path:` scheme it
 /// reverses on click). The id is built straight from the dotted name; we never
-/// substitute `.`→`_`. The lossy `msl_<dots→underscores>` form
+/// substitute `.`→`_`. The lossy `library_<dots→underscores>` form
 /// (`PID_Controller` ⇄ `PID.Controller`) is not emitted or parsed. Routing
 /// both backends through one helper keeps them from diverging.
-pub(crate) fn msl_tree_id(qualified: &str) -> String {
-    format!("msl_path:{qualified}")
+pub(crate) fn library_tree_id(qualified: &str) -> String {
+    format!("library_path:{qualified}")
 }
 
-// ─── MSL Scanning ────────────────────────────────────────────────────────────
+// ─── source library Scanning ────────────────────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
-    if crate::msl_remote::global_parsed_msl().is_none() {
+pub(crate) fn scan_library_inmem(package_path: &str) -> Vec<PackageNode> {
+    if crate::library_remote::global_parsed_source_bundle().is_none() {
         return Vec::new();
     }
-    let tree = msl_inmem_index();
+    let tree = library_inmem_index();
     let Some(children) = tree.get(package_path) else {
         return Vec::new();
     };
@@ -38,7 +38,7 @@ pub(crate) fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
             format!("{package_path}.{short}")
         };
         let has_children = tree.get(&qname).map(|v| !v.is_empty()).unwrap_or(false);
-        let id = msl_tree_id(&qname);
+        let id = library_tree_id(&qname);
         if has_children {
             out.push(PackageNode::Category {
                 id,
@@ -52,7 +52,7 @@ pub(crate) fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
             out.push(PackageNode::Model {
                 id,
                 name: short.clone(),
-                library: ModelLibrary::MSL,
+                library: ModelSource::Source,
                 class_kind: Some(*kind),
             });
         }
@@ -61,53 +61,44 @@ pub(crate) fn scan_msl_inmem(package_path: &str) -> Vec<PackageNode> {
     out
 }
 
-/// Third-party library roots present in the in-memory parsed bundle, minus
-/// the MSL core and its required companions (those render under the dedicated
-/// "Modelica Standard Library" root). Whatever remains is an extra library
-/// shipped in the same bundle (`build_msl_assets --extra-root/--discover-extras`).
+/// Top-level source roots present in the in-memory parsed bundle.
 ///
-/// This is the web counterpart to [`discover_third_party_libs`]: on wasm there
-/// is no filesystem cache to scan, so the palette derives its extra-lib roots
-/// from the parsed AST that the bundle fetcher already installed.
+/// The bundle is an ordinary source store: every authored top-level package is
+/// exposed, with no built-in allow-list or companion-package filtering.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn msl_inmem_top_level_libs() -> Vec<String> {
-    use super::library_tree::MSL_OWNED;
-    // Don't touch the `msl_inmem_index()` OnceLock before the parsed bundle is
+pub(crate) fn library_inmem_top_level_libs() -> Vec<String> {
+    // Don't touch the `library_inmem_index()` OnceLock before the parsed bundle is
     // resident — it would cache an empty tree permanently (same guard as
-    // `scan_msl_inmem`).
-    if crate::msl_remote::global_parsed_msl().is_none() {
+    // `scan_library_inmem`).
+    if crate::library_remote::global_parsed_source_bundle().is_none() {
         return Vec::new();
     }
-    let tree = msl_inmem_index();
+    let tree = library_inmem_index();
     let Some(top) = tree.get("") else {
         return Vec::new();
     };
-    let mut libs: Vec<String> = top
-        .iter()
-        .map(|(short, _)| short.clone())
-        .filter(|s| !MSL_OWNED.contains(&s.as_str()))
-        .collect();
+    let mut libs: Vec<String> = top.iter().map(|(short, _)| short.clone()).collect();
     libs.sort();
     libs.dedup();
     libs
 }
 
 #[cfg(target_arch = "wasm32")]
-fn msl_inmem_index(
+fn library_inmem_index(
 ) -> &'static std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>> {
     use std::sync::OnceLock;
     static CACHE: OnceLock<
         std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>>,
     > = OnceLock::new();
-    CACHE.get_or_init(build_msl_inmem_index)
+    CACHE.get_or_init(build_library_inmem_index)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn build_msl_inmem_index(
+fn build_library_inmem_index(
 ) -> std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>> {
     use std::collections::HashMap;
     let mut tree: HashMap<String, Vec<(String, crate::index::ClassKind)>> = HashMap::new();
-    let Some(parsed) = crate::msl_remote::global_parsed_msl() else {
+    let Some(parsed) = crate::library_remote::global_parsed_source_bundle() else {
         return tree;
     };
 
@@ -150,7 +141,7 @@ fn build_msl_inmem_index(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn scan_msl_dir_native(dir: &Path, package_path: String) -> Vec<PackageNode> {
+pub(crate) fn scan_library_dir_native(dir: &Path, package_path: String) -> Vec<PackageNode> {
     let mut results = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -163,7 +154,7 @@ pub(crate) fn scan_msl_dir_native(dir: &Path, package_path: String) -> Vec<Packa
                     continue;
                 }
                 let sub_path = format!("{}.{}", package_path, name);
-                let id = msl_tree_id(&sub_path);
+                let id = library_tree_id(&sub_path);
                 results.push(PackageNode::Category {
                     id,
                     name,
@@ -265,18 +256,18 @@ impl LeafKind {
 /// inline-package files (`package Foo … model X … end Foo;`) become
 /// a [`PackageNode::Category`] whose children mirror the nested
 /// classes, so the user can drill into individual entries (the
-/// MSL `Modelica.Blocks.Continuous` case).
+/// source library `Modelica.Blocks.Continuous` case).
 ///
-/// Native-only, like its single caller [`scan_msl_dir_native`]: it reads a `.mo`
-/// off the on-disk MSL tree. The web has no such tree — the Package Browser
-/// there is built by [`scan_msl_inmem`] from the parsed bundle
+/// Native-only, like its single caller [`scan_library_dir_native`]: it reads a `.mo`
+/// off the on-disk source library tree. The web has no such tree — the Package Browser
+/// there is built by [`scan_library_inmem`] from the parsed bundle
 /// (`InMemoryLibraryTree`), which needs no file reads at all.
 #[cfg(not(target_arch = "wasm32"))]
 fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> PackageNode {
     let leaf_unknown = || PackageNode::Model {
-        id: msl_tree_id(qualified),
+        id: library_tree_id(qualified),
         name: display_name.to_string(),
-        library: ModelLibrary::MSL,
+        library: ModelSource::Source,
         class_kind: None,
     };
     let Ok(source) = std::fs::read_to_string(path) else {
@@ -297,8 +288,8 @@ pub fn peek_class_kind_from_source(src: &str) -> Option<crate::index::ClassKind>
         .map(|(_, def)| crate::index::map_class_type(&def.class_type))
 }
 
-/// Native-only: both callers ([`scan_msl_dir_native`], [`node_from_modelica_file`])
-/// are. The web builds its nodes from the parsed bundle in [`scan_msl_inmem`].
+/// Native-only: both callers ([`scan_library_dir_native`], [`node_from_modelica_file`])
+/// are. The web builds its nodes from the parsed bundle in [`scan_library_inmem`].
 #[cfg(not(target_arch = "wasm32"))]
 fn class_def_to_node(
     path: &Path,
@@ -323,7 +314,7 @@ fn class_def_to_node(
             .collect();
         children.sort_by_key(omedit_sort_key);
         PackageNode::Category {
-            id: msl_tree_id(qualified),
+            id: library_tree_id(qualified),
             name: short_name.to_string(),
             package_path: qualified.to_string(),
             fs_path: path.to_path_buf(),
@@ -332,52 +323,10 @@ fn class_def_to_node(
         }
     } else {
         PackageNode::Model {
-            id: msl_tree_id(qualified),
+            id: library_tree_id(qualified),
             name: short_name.to_string(),
-            library: ModelLibrary::MSL,
+            library: ModelSource::Source,
             class_kind: Some(crate::index::map_class_type(&def.class_type)),
         }
     }
-}
-
-/// Third-party Modelica libraries in the `lunco-assets` cache, as
-/// `(cache_subdir, top_level_package_dir)`. Memoized: the cache layout is fixed
-/// for the process lifetime (the palette is built once at startup), so the
-/// `read_dir` scan runs once and every later call (e.g. per extra-lib expand
-/// via `fs_root_for`) is a cheap clone of the cached result.
-pub fn discover_third_party_libs() -> Vec<(String, String)> {
-    use std::sync::OnceLock;
-    static CACHE: OnceLock<Vec<(String, String)>> = OnceLock::new();
-    CACHE.get_or_init(scan_third_party_libs).clone()
-}
-
-fn scan_third_party_libs() -> Vec<(String, String)> {
-    let cache = lunco_assets_core::cache_dir();
-    let Ok(entries) = std::fs::read_dir(&cache) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let subdir = entry.file_name().to_string_lossy().into_owned();
-        if subdir == "msl" || subdir.starts_with('.') {
-            continue;
-        }
-        let Ok(inner) = std::fs::read_dir(&path) else {
-            continue;
-        };
-        for inner_entry in inner.flatten() {
-            let inner_path = inner_entry.path();
-            if inner_path.is_dir() && inner_path.join("package.mo").is_file() {
-                let pkg = inner_entry.file_name().to_string_lossy().into_owned();
-                out.push((subdir.clone(), pkg));
-                break;
-            }
-        }
-    }
-    out.sort();
-    out
 }

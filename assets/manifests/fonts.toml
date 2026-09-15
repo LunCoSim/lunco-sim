@@ -1,6 +1,6 @@
 # lunco-theme Assets
 #
-# External fonts required by the theme / icon-paint pipeline so MSL
+# External fonts required by the theme / icon-paint pipeline so Modelica
 # icons render math / Greek / arrow / logic-operator glyphs without
 # tofu boxes. See `src/fonts.rs` for why DejaVu Sans in particular —
 # the Noto Sans + Noto Sans Symbols 2 pair originally considered both

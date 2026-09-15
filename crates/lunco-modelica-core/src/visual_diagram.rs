@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! ┌──────────────┐     ┌─────────────────┐     ┌──────────────────┐
-//! │ MSL Palette  │──▶  │ Visual Canvas   │──▶  │ Code Generator   │
+//! │ source library Palette  │──▶  │ Visual Canvas   │──▶  │ Code Generator   │
 //! │ (components) │     │ (nodes + edges) │     │ (.mo temp file)  │
 //! └──────────────┘     └─────────────────┘     └────────┬─────────┘
 //!                                                       │
@@ -76,7 +76,7 @@ impl Default for DiagramNodeId {
 /// connector class's variable declarations. Drives the port marker
 /// shape (square / triangle / circle) and the wire's arrowhead
 /// behaviour in the canvas renderer — replaces earlier leaf-name
-/// heuristics (`ends_with("Input")`) that only worked for MSL's
+/// heuristics (`ends_with("Input")`) that only worked for source library's
 /// naming conventions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PortKind {
@@ -106,15 +106,15 @@ pub struct FlowVarMeta {
     pub unit: String,
 }
 
-/// A port definition for an MSL component.
+/// A port definition for a source-library component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortDef {
     /// Port name (e.g., "p", "n", "flange_a").
     pub name: String,
     /// Connector type (e.g., "Pin", "Flange_a").
     pub connector_type: String,
-    /// MSL path of the connector type.
-    pub msl_path: String,
+    /// source library path of the connector type.
+    pub library_path: String,
     /// Whether this port is a flow connector.
     pub is_flow: bool,
     /// Port position in Modelica diagram coordinates (-100..100).
@@ -137,7 +137,7 @@ pub struct PortDef {
     /// from `annotation(Placement(transformation(extent=...)))` on the
     /// connector declaration. Used by the canvas painter to render
     /// the connector class's authored `Icon` at the correct scale —
-    /// MSL convention is to draw a connector instance at its placement
+    /// source library convention is to draw a connector instance at its placement
     /// extent (typically 20×20 in icon coords, scaled with the parent
     /// to produce the small ~2-unit flange dot OMEdit shows). Defaults
     /// to (20, 20) when the placement is missing — safe fallback that
@@ -171,7 +171,7 @@ impl PortDef {
     }
 }
 
-/// A parameter definition for an MSL component.
+/// A parameter definition for a source-library component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamDef {
     /// Parameter name (e.g., "R", "C", "V").
@@ -184,12 +184,12 @@ pub struct ParamDef {
     pub unit: Option<String>,
 }
 
-/// On-disk shape of `msl_index.json` — the one form the indexer writes and
-/// [`decode_msl_index`] reads. Carries the component payload alongside the
+/// On-disk shape of `library_index.json` — the one form the indexer writes and
+/// [`decode_library_index`] reads. Carries the component payload alongside the
 /// pre-baked bundled `PackageNode` tree so the indexer ships both in a single
 /// artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MslIndex {
+pub struct LibraryIndex {
     /// Palette / component metadata — what `crate::index::ClassEntry` has
     /// always carried.
     pub components: Vec<crate::index::ClassEntry>,
@@ -229,7 +229,7 @@ pub struct DiagramNode {
     /// Whether the node is selected.
     pub selected: bool,
     /// True when the source declares the component with an `if <cond>`
-    /// clause — MSL convention is to render these dimmed/translucent
+    /// clause — source library convention is to render these dimmed/translucent
     /// because they're "design-time visible, runtime-conditional"
     /// (e.g. `Constant Dzero(k=0) if not with_D` in `LimPID`).
     #[serde(default)]
@@ -411,78 +411,81 @@ impl VisualDiagram {
 }
 
 // ---------------------------------------------------------------------------
-// MSL Component Library
+// source library Component Library
 // ---------------------------------------------------------------------------
 
 use std::sync::OnceLock;
 
-static MSL_LIBRARY: OnceLock<MslIndex> = OnceLock::new();
+static SOURCE_LIBRARY_INDEX: OnceLock<LibraryIndex> = OnceLock::new();
 
 /// Notify the UI that the editor index has been decoded and is available.
 ///
-/// MSL source installation and editor metadata are separate readiness edges:
+/// Source-bundle installation and editor metadata are separate readiness edges:
 /// source resolution must not wait for a multi-megabyte palette index, and the
 /// index must not be decoded on the render thread.
 #[derive(Event, Clone, Copy, Debug)]
-pub struct MslEditorIndexBecameReady;
+pub struct LibraryEditorIndexBecameReady;
 
 /// Install the decoded editor index exactly once.
-pub fn install_msl_index(index: MslIndex) -> bool {
-    MSL_LIBRARY.set(index).is_ok()
+pub fn install_library_index(index: LibraryIndex) -> bool {
+    SOURCE_LIBRARY_INDEX.set(index).is_ok()
 }
 
-/// Load and decode the editor index through the asset-owned MSL source.
+/// Load and decode the editor index through the asset-owned source bundle.
 ///
 /// This function performs blocking I/O and JSON decoding by design; callers
 /// must run it on the native asset/index task, never from a render system.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_msl_index_from_assets() -> Result<MslIndex, String> {
-    let bytes = lunco_assets_core::library::library_read(std::path::Path::new("msl_index.json"))
-        .ok_or_else(|| "MSL editor index is not present".to_string())?;
-    decode_msl_index(&bytes)
+pub fn load_library_index_from_assets() -> Result<LibraryIndex, String> {
+    let bytes =
+        lunco_assets_core::library::library_read(std::path::Path::new("library_index.json"))
+            .ok_or_else(|| "source library editor index is not present".to_string())?;
+    decode_library_index(&bytes)
 }
 
 /// Decode the one generated editor-index format shared by native and web.
 /// Callers own the scheduling boundary: native uses the asset task and web
 /// uses the Modelica worker, so this pure decoder never runs in a render path.
-pub fn decode_msl_index(bytes: &[u8]) -> Result<MslIndex, String> {
+pub fn decode_library_index(bytes: &[u8]) -> Result<LibraryIndex, String> {
     let text = std::str::from_utf8(bytes)
-        .map_err(|error| format!("MSL editor index is not UTF-8: {error}"))?;
+        .map_err(|error| format!("source library editor index is not UTF-8: {error}"))?;
     serde_json::from_str(text)
-        .map_err(|error| format!("MSL editor index has an invalid format: {error}"))
+        .map_err(|error| format!("source library editor index has an invalid format: {error}"))
 }
 
-/// Returns the MSL component definitions available in the palette.
-/// Loaded from the asset-owned `msl_index.json` by the background MSL index
+/// Returns the source library component definitions available in the palette.
+/// Loaded from the asset-owned `library_index.json` by the background source library index
 /// task. The render path only reads the resident immutable snapshot.
 ///
 /// The cache uses `OnceLock::set` only after the background index task has
 /// decoded a valid artifact. Per-frame cost while the task is in flight is one
 /// `OnceLock::get` plus the empty-slice projection — negligible.
-pub fn msl_class_library() -> &'static [crate::index::ClassEntry] {
-    msl_index().map(|i| i.components.as_slice()).unwrap_or(&[])
+pub fn library_class_library() -> &'static [crate::index::ClassEntry] {
+    library_index()
+        .map(|i| i.components.as_slice())
+        .unwrap_or(&[])
 }
 
 /// Pre-baked `PackageNode` tree for the bundled-models root in the
 /// Package Browser. Empty until the background editor-index task completes.
-pub fn msl_bundled_nodes() -> &'static [crate::package_tree::types::PackageNode] {
-    msl_index().map(|i| i.bundled.as_slice()).unwrap_or(&[])
+pub fn library_bundled_nodes() -> &'static [crate::package_tree::types::PackageNode] {
+    library_index().map(|i| i.bundled.as_slice()).unwrap_or(&[])
 }
 
 /// Whether the generated palette/example index is present and in the current
 /// runtime format. This is a non-blocking resident-state query; loading and
-/// validation happen in the MSL index task.
-pub fn msl_index_available() -> bool {
-    msl_index().is_some()
+/// validation happen in the source library index task.
+pub fn library_index_available() -> bool {
+    library_index().is_some()
 }
 
-fn msl_index() -> Option<&'static MslIndex> {
-    MSL_LIBRARY.get()
+fn library_index() -> Option<&'static LibraryIndex> {
+    SOURCE_LIBRARY_INDEX.get()
 }
 
-/// Get unique categories from the MSL library.
-pub fn msl_categories() -> Vec<String> {
-    let mut cats: Vec<String> = msl_class_library()
+/// Get unique categories from the source-library index.
+pub fn library_categories() -> Vec<String> {
+    let mut cats: Vec<String> = library_class_library()
         .iter()
         .map(|c| c.category.clone())
         .collect();
@@ -492,17 +495,20 @@ pub fn msl_categories() -> Vec<String> {
 }
 
 /// Get components in a category.
-pub fn msl_classes_in_category(category: &str) -> Vec<crate::index::ClassEntry> {
-    msl_class_library()
+pub fn library_classes_in_category(category: &str) -> Vec<crate::index::ClassEntry> {
+    library_class_library()
         .iter()
         .filter(|c| c.category == category)
         .cloned()
         .collect()
 }
 
-/// Lookup a component definition by its MSL path.
-pub fn msl_class_by_path(path: &str) -> Option<crate::index::ClassEntry> {
-    msl_class_library().iter().find(|c| c.name == path).cloned()
+/// Lookup a component definition by its source library path.
+pub fn library_class_by_path(path: &str) -> Option<crate::index::ClassEntry> {
+    library_class_library()
+        .iter()
+        .find(|c| c.name == path)
+        .cloned()
 }
 
 #[cfg(test)]
@@ -510,7 +516,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_msl_index_accepts_indexer_output() {
+    fn parse_library_index_accepts_indexer_output() {
         let component = |name: &str, category: &str| crate::index::ClassEntry {
             name: name.to_owned(),
             kind: crate::index::ClassKind::Model,
@@ -531,7 +537,7 @@ mod tests {
             resolution: crate::index::ClassResolutionState::Resolved,
             resolution_message: None,
         };
-        let expected = MslIndex {
+        let expected = LibraryIndex {
             components: vec![
                 component(
                     "Modelica.Electrical.Analog.Basic.Resistor",
@@ -545,7 +551,7 @@ mod tests {
             bundled: Vec::new(),
         };
         let encoded = serde_json::to_string(&expected).expect("test index serializes");
-        let decoded = decode_msl_index(encoded.as_bytes()).expect("indexer format parses");
+        let decoded = decode_library_index(encoded.as_bytes()).expect("indexer format parses");
 
         assert_eq!(decoded.components.len(), 2);
         assert!(decoded

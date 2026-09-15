@@ -1,8 +1,8 @@
-//! MSL package palette tree + render-as-context-menu.
+//! source library package palette tree + render-as-context-menu.
 //!
-//! Builds a static [`MslPackageNode`] tree from
-//! [`crate::visual_diagram::msl_class_library`] and renders it as
-//! a nested egui submenu so users can pick MSL components without
+//! Builds a static [`LibraryPackageNode`] tree from
+//! [`crate::visual_diagram::library_class_library`] and renders it as
+//! a nested egui submenu so users can pick source library components without
 //! leaving the canvas. Also houses the user-tunable [`PaletteSettings`]
 //! and [`crate::ui::panels::canvas_diagram::DiagramProjectionLimits`] resources.
 
@@ -15,14 +15,14 @@ use crate::document::ModelicaOp;
 use super::ops::{op_add_component_with_name, pick_add_instance_name};
 use super::CanvasDiagramState;
 
-/// One node in the MSL package hierarchy. `classes` are instantiable
+/// One node in the source library package hierarchy. `classes` are instantiable
 /// at this level (instances we'd add to the diagram), `subpackages`
 /// are deeper navigation. `BTreeMap` for stable alphabetical order
 /// regardless of the source list's order.
-pub(super) struct MslPackageNode {
-    subpackages: std::collections::BTreeMap<String, MslPackageNode>,
+pub(super) struct LibraryPackageNode {
+    subpackages: std::collections::BTreeMap<String, LibraryPackageNode>,
     /// Classes at this level. Pre-sorted alphabetically by short name
-    /// once at tree-build time so `render_msl_package_menu` doesn't
+    /// once at tree-build time so `render_library_package_menu` doesn't
     /// clone-and-sort on every render frame (the menu re-renders
     /// every frame the pointer is over it; per-frame O(n log n)
     /// across nested submenus is the cause of the laggy right-click
@@ -34,7 +34,7 @@ pub(super) struct MslPackageNode {
     has_non_icon_class: bool,
 }
 
-impl MslPackageNode {
+impl LibraryPackageNode {
     fn new() -> Self {
         Self {
             subpackages: Default::default(),
@@ -44,7 +44,7 @@ impl MslPackageNode {
     }
 }
 
-/// User-facing toggles for the MSL add-component menu. Default
+/// User-facing toggles for the source library add-component menu. Default
 /// values are tuned for the common case ("a user dropping a
 /// component expects a functional block, not an icon shell").
 /// Persisted as a Bevy resource; the Settings dropdown flips the
@@ -53,7 +53,7 @@ impl MslPackageNode {
 pub struct PaletteSettings {
     /// When `true`, pure-icon classes (matched by
     /// [`crate::ui::class_display::is_icon_only_class`]) appear in the
-    /// MSL add-component submenus. Default `false` — matches
+    /// source library add-component submenus. Default `false` — matches
     /// Dymola's "hide `.Icons.*`" default.
     pub show_icon_only_classes: bool,
 }
@@ -98,20 +98,20 @@ impl Default for DiagramProjectionLimits {
 /// Was previously recursive — fine for one open-frame, expensive
 /// when called on every render for every visible submenu (the
 /// right-click menu re-runs every frame the pointer is over it).
-pub(super) fn package_has_visible_classes(node: &MslPackageNode) -> bool {
+pub(super) fn package_has_visible_classes(node: &LibraryPackageNode) -> bool {
     node.has_non_icon_class
 }
 
 /// Lazily-built package tree. Walks every entry in
-/// [`crate::visual_diagram::msl_class_library`] once and
+/// [`crate::visual_diagram::library_class_library`] once and
 /// inserts it under its dotted package path. Cached for the life
-/// of the process — MSL content doesn't change at runtime.
-pub(super) fn msl_package_tree() -> &'static MslPackageNode {
+/// of the process — source library content doesn't change at runtime.
+pub(super) fn library_package_tree() -> &'static LibraryPackageNode {
     use std::sync::OnceLock;
-    static TREE: OnceLock<MslPackageNode> = OnceLock::new();
+    static TREE: OnceLock<LibraryPackageNode> = OnceLock::new();
     TREE.get_or_init(|| {
-        let mut root = MslPackageNode::new();
-        for comp in crate::visual_diagram::msl_class_library() {
+        let mut root = LibraryPackageNode::new();
+        for comp in crate::visual_diagram::library_class_library() {
             // Split the qualified path into package segments + a
             // trailing class name. `Modelica.Electrical.Analog.
             // Basic.Resistor` → walk subpackages
@@ -126,7 +126,7 @@ pub(super) fn msl_package_tree() -> &'static MslPackageNode {
                 node = node
                     .subpackages
                     .entry(seg.to_string())
-                    .or_insert_with(MslPackageNode::new);
+                    .or_insert_with(LibraryPackageNode::new);
             }
             node.classes.push(comp);
         }
@@ -140,7 +140,7 @@ pub(super) fn msl_package_tree() -> &'static MslPackageNode {
     })
 }
 
-pub(super) fn finalize_tree(node: &mut MslPackageNode) {
+pub(super) fn finalize_tree(node: &mut LibraryPackageNode) {
     node.classes.sort_by(|a, b| a.name.cmp(&b.name));
     let mut any_visible = node
         .classes
@@ -162,12 +162,12 @@ pub(super) fn finalize_tree(node: &mut MslPackageNode) {
 ///
 /// On click of a class item we emit `AddComponent` through `out`
 /// exactly as the flat menu did.
-pub(super) fn render_msl_package_menu(
+pub(super) fn render_library_package_menu(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
     state: &mut CanvasDiagramState,
     doc_id: Option<lunco_doc::DocumentId>,
-    node: &MslPackageNode,
+    node: &LibraryPackageNode,
     click_world: lunco_canvas::Pos,
     editing_class: Option<&str>,
     show_icons: bool,
@@ -182,7 +182,7 @@ pub(super) fn render_msl_package_menu(
             continue;
         }
         ui.menu_button(name, |ui| {
-            render_msl_package_menu(
+            render_library_package_menu(
                 ui,
                 ctx,
                 state,
@@ -240,7 +240,7 @@ pub(super) fn render_msl_package_menu(
                         .and_then(|c| c.tab_id);
                     pick_add_instance_name(comp, &state.get_for_render(tab, doc_id).canvas.scene)
                 };
-                // Optimistic scene synthesis (`synthesize_msl_node`) was
+                // Optimistic scene synthesis (`synthesize_library_node`) was
                 // removed. Now: emit the op, gen bumps in
                 // `apply_patch`, the next frame's projection re-derives
                 // the scene from the new AST. Same-frame visual

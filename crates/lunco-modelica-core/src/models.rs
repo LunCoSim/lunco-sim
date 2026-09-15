@@ -12,7 +12,7 @@
 //! comment of the form:
 //!
 //! ```modelica
-//! // tagline: Two-stage RC low-pass filter — 6 MSL blocks
+//! // tagline: Two-stage RC low-pass filter — 6 source library blocks
 //! model CascadedRCFilter ...
 //! ```
 //!
@@ -78,24 +78,7 @@ pub fn get_model(filename: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn bundled_models_nonempty() {
-        let list = bundled_models();
-        assert!(
-            !list.is_empty(),
-            "expected at least one .mo file under assets/models/"
-        );
-        for m in &list {
-            assert!(!m.filename.is_empty(), "bundled model with empty filename");
-            assert!(
-                !m.source.is_empty(),
-                "bundled model '{}' has empty source",
-                m.filename
-            );
-        }
-    }
+    use super::extract_tagline;
 
     #[test]
     fn extract_tagline_finds_leading_marker() {

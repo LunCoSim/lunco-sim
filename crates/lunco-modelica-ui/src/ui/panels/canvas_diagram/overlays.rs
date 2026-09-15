@@ -15,7 +15,7 @@ use crate::ui::theme::ModelicaThemeExt;
 use super::active_doc_from_world_ctx;
 // `crate::sim_default::drilled_class_for_doc`.
 
-/// Painted when a drill-in / duplicate load failed (e.g. MSL bundle
+/// Painted when a drill-in / duplicate load failed (e.g. source library bundle
 /// not yet ready, class missing, parse error). Replaces the spinner
 /// so the tab doesn't sit on "Loading resource…" forever.
 pub(super) fn render_error_overlay(
@@ -84,7 +84,7 @@ pub(super) fn render_error_overlay(
 
 /// When the canvas scene has no nodes — common for equation-only
 /// leaf models (Battery, RocketEngine, BouncyBall, SpringMass) and
-/// MSL building blocks (Integrator, Resistor, Inertia) — paint a
+/// source library building blocks (Integrator, Resistor, Inertia) — paint a
 /// "data sheet" card in the centre of the canvas. Treats the class
 /// as a first-class display object instead of leaving the user
 /// staring at the blank grid.

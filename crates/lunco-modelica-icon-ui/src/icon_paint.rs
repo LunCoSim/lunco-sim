@@ -63,7 +63,7 @@ fn remap_color(c: egui::Color32) -> egui::Color32 {
 /// means "no fill".
 ///
 /// Per MLS Annex D, missing `fillColor` defaults to **black**
-/// (`{0,0,0}`) — *not* transparent. Many MSL icons rely on this:
+/// (`{0,0,0}`) — *not* transparent. Many source library icons rely on this:
 /// the canonical PartialTorque arrowhead `Polygon(points={...},
 /// fillPattern=FillPattern.Solid)` omits `fillColor` and expects a
 /// solid black arrow. Defaulting to transparent here renders only
@@ -104,7 +104,7 @@ pub fn paint_graphics(
 /// the screen-rect mapping. Used by the canvas projector to honour the
 /// `Placement(transformation(rotation, extent={{x_high,…},…}))` of the
 /// instance the icon was placed by — without this, rotated/mirrored
-/// MSL components rendered axis-aligned even though their *ports*
+/// source library components rendered axis-aligned even though their *ports*
 /// were already on the correct edges (the visible "the body and the
 /// ports disagree" bug).
 pub fn paint_graphics_with_orientation(
@@ -233,7 +233,7 @@ impl<'a> TextSubstitution<'a> {
     /// Apply the substitutions to `s`. Modelica's substitution syntax
     /// is `%name`, `%class`, `%<paramName>`, and `%%` (literal `%`).
     /// We resolve `%name` and `%class` from the fields above; any
-    /// other `%<ident>` is stripped (replaced with empty) so MSL
+    /// other `%<ident>` is stripped (replaced with empty) so source library
     /// icons don't display their literal placeholder text (`%R`,
     /// `%controllerType`, …) when the parameter resolver isn't wired.
     /// Plumbing parameter values through `paint_graphics` is a
@@ -624,7 +624,7 @@ fn paint_line(painter: &egui::Painter, xf: &CoordXform, l: &Line) {
 
     // Arrow heads at start (pointing *backwards* along the first
     // segment) and end (forwards along the last segment). Signal
-    // wires in MSL use this to indicate flow direction.
+    // wires in source library use this to indicate flow direction.
     let head_px = ((l.arrow_size as f32) * xf.scale).max(4.0);
     let color = color_or_default(l.color, egui::Color32::BLACK);
     if !matches!(l.arrow[0], Arrow::None) && pts.len() >= 2 {
@@ -727,7 +727,7 @@ fn paint_text(
     if base.is_empty() {
         return;
     }
-    // Substitute `%name` / `%class` before rendering. Most MSL icons
+    // Substitute `%name` / `%class` before rendering. Most source library icons
     // set `textString="%name"` so this is where "Resistor" becomes
     // "R1" across the entire diagram.
     let rendered: String = match substitution {
@@ -746,7 +746,7 @@ fn paint_text(
     // width/height swap, so picking either alone gives different
     // sizes for the same authored Text on rotated vs unrotated
     // instances. Use the SHORTER dimension so rotation is invariant.
-    // 0.7× and a [10, 48] clamp keep MSL %name labels readable at
+    // 0.7× and a [10, 48] clamp keep source library %name labels readable at
     // fit-zoom without dwarfing the component icons.
     // No clamp — text scales linearly with the rect (which scales
     // with the icon, which scales with viewport zoom). A label that
@@ -761,7 +761,7 @@ fn paint_text(
         // dimensions: start at extent height (the natural cap height
         // for one-line text), then shrink uniformly if the rendered
         // text width exceeds the extent width. Without the width
-        // shrink, wide MSL diagram labels like
+        // shrink, wide source library diagram labels like
         // `extent={{-98,59},{-31,51}}` "reference speed generation"
         // (67 wide × 8 tall) render at a 8-icon-unit font that's far
         // too wide for the 67-unit extent, so the label visibly
@@ -966,7 +966,7 @@ fn paint_ellipse(painter: &egui::Painter, xf: &CoordXform, e: &Ellipse) {
 /// Paint a Bitmap primitive.
 ///
 /// Supports `filename="modelica://Package.Name/path/img.png"` (resolved
-/// via the MSL asset source) and `filename="modelica://Package.Name/file.png"`
+/// via the source library asset source) and `filename="modelica://Package.Name/file.png"`
 /// (same). Base64 `imageSource` is not yet wired — decoding inline
 /// buffers every frame is the wrong shape; when we need it, the
 /// base64 will be decoded once and cached by hash.
@@ -1022,7 +1022,7 @@ fn texture_for_bitmap(ctx: &egui::Context, filename: &str) -> Option<egui::Textu
     // error) — and it is a `SourceMemo` so that remembered failure is DROPPED when
     // the library changes. It previously had no invalidation of any kind: a bitmap
     // missing at first paint stayed blank for the life of the process, which is the
-    // state every MSL bitmap is in on wasm (the bundle ships no `Resources/`).
+    // state every source library bitmap is in on wasm (the bundle ships no `Resources/`).
     static CACHE: OnceLock<Mutex<SourceMemo<egui::TextureHandle>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(SourceMemo::default()));
     if let Ok(mut memo) = cache.lock() {
@@ -1070,14 +1070,14 @@ fn texture_for_bitmap(ctx: &egui::Context, filename: &str) -> Option<egui::Textu
 
 /// Resolve a Modelica `fileName` value to raw bytes on disk.
 ///
-/// - `modelica://Pkg/path/img.png` → the MSL virtual path `Pkg/path/img.png`.
-/// - Plain relative path → the same MSL-root-relative path (best effort).
+/// - `modelica://Pkg/path/img.png` → the source library virtual path `Pkg/path/img.png`.
+/// - Plain relative path → the same source library-root-relative path (best effort).
 fn load_bitmap_bytes(filename: &str) -> Option<Vec<u8>> {
     let rel = match filename.strip_prefix("modelica://") {
         Some(tail) => tail.to_string(),
         None => filename.to_string(),
     };
-    // Read through the MSL virtual source. This keeps bitmap resolution on the
+    // Read through the source library virtual source. This keeps bitmap resolution on the
     // same asset boundary as documentation images and works for both the native
     // filesystem source and the browser's in-memory bundle.
     lunco_assets_core::library::library_read(std::path::Path::new(&rel))

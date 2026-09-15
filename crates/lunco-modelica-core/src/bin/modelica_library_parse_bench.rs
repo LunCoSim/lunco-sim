@@ -1,7 +1,7 @@
-//! Throwaway benchmark: compare the two MSL parse paths head-to-head.
+//! Throwaway benchmark: compare the source parse paths head-to-head.
 //!
-//! - `perfile` → `indexer::parse_native_msl_bundle` (one file at a time —
-//!   what `msl_indexer` and the workbench cold path now both use).
+//! - `perfile` → `indexer::parse_native_library_bundle` (one file at a time —
+//!   what `modelica_library_indexer` and the workbench cold path now both use).
 //! - `batch`   → rumoca's `parse_source_root_with_cache_in` (the old
 //!   workbench cold path — a single all-files rayon batch).
 //!
@@ -10,8 +10,8 @@
 //! with `/usr/bin/time -v` to capture peak RSS (the metric that decides
 //! whether a weak machine swaps).
 
-// Native-only benchmark: it drives `indexer::parse_native_msl_bundle` (a
-// `#[cfg(not(wasm32))]` module) over an on-disk MSL tree, which does not exist
+// Native-only benchmark: it drives `indexer::parse_native_library_bundle` (a
+// `#[cfg(not(wasm32))]` module) over an on-disk source library tree, which does not exist
 // in a browser. The whole body lives in `mod native` so `wasm32` sees only the
 // stub `main` below — nothing here is meant to run, or lint, on the web.
 #[cfg(not(target_arch = "wasm32"))]
@@ -53,7 +53,7 @@ mod native {
         let t = Instant::now();
         match mode.as_str() {
             "perfile" => {
-                let docs = lunco_modelica_core::indexer::parse_native_msl_bundle();
+                let docs = lunco_modelica_core::indexer::parse_native_library_bundle();
                 println!(
                     "perfile: {} docs in {:.2}s",
                     docs.len(),
@@ -61,38 +61,41 @@ mod native {
                 );
             }
             "bundle" => {
-                // Time loading the cached parsed-msl.bin (the warm fast path):
+                // Time loading the cached parsed-library.bin (the warm fast path):
                 // zstd + bincode decode of the prebuilt bundle, no parsing.
-                match lunco_modelica_core::msl_remote::parsed_msl_bundle() {
+                match lunco_modelica_core::library_remote::parsed_source_bundle() {
                     Some(b) => println!(
                         "bundle-decode: {} docs in {:.2}s",
                         b.len(),
                         t.elapsed().as_secs_f64()
                     ),
-                    None => println!("bundle-decode: no parsed-msl.bin on disk"),
+                    None => println!("bundle-decode: no parsed-library.bin on disk"),
                 }
             }
             "raw" => {
                 // Exact production code path (raw parse_to_ast + dedicated pool).
-                // Thread count via LUNCO_MSL_PARSE_THREADS. Standalone = clean
+                // Thread count via LUNCO_LIBRARY_PARSE_THREADS. Standalone = clean
                 // floor (no Bevy contention).
-                let docs = lunco_modelica_core::indexer::parse_native_msl_bundle();
+                let docs = lunco_modelica_core::indexer::parse_native_library_bundle();
                 println!(
                     "raw(threads={}): {} docs in {:.2}s",
-                    std::env::var("LUNCO_MSL_PARSE_THREADS").unwrap_or_else(|_| "auto".into()),
+                    std::env::var("LUNCO_LIBRARY_PARSE_THREADS").unwrap_or_else(|_| "auto".into()),
                     docs.len(),
                     t.elapsed().as_secs_f64()
                 );
             }
             "chunked" => {
-                // Parse all native MSL files in fixed-size parallel chunks: up
+                // Parse all native source library files in fixed-size parallel chunks: up
                 // to N files in flight at once (bounded peak), N-way parallel.
                 let n: usize = std::env::args()
                     .nth(3)
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(8);
                 let mut paths: Vec<std::path::PathBuf> = Vec::new();
-                walk_mo(&lunco_assets_core::source_library_dir("msl"), &mut paths);
+                walk_mo(
+                    &lunco_assets_core::source_library_dir("library"),
+                    &mut paths,
+                );
                 // Retain the full bundle (the real output) so peak RSS is
                 // comparable to perfile/batch, which both build it.
                 let mut bundle: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
@@ -109,7 +112,7 @@ mod native {
                 );
             }
             "batch" => {
-                let root = lunco_assets_core::source_library_root_path("msl", "Modelica")
+                let root = lunco_assets_core::source_library_root_path("library")
                     .expect("no Modelica library root on disk");
                 let cache = rumoca_compile::source_roots::resolve_source_root_cache_dir();
                 let parsed = rumoca_compile::source_roots::parse_source_root_with_cache_in(
@@ -125,7 +128,7 @@ mod native {
                 );
             }
             other => {
-                eprintln!("usage: msl_parse_bench perfile|batch (got {other:?})");
+                eprintln!("usage: library_parse_bench perfile|batch (got {other:?})");
                 std::process::exit(2);
             }
         }

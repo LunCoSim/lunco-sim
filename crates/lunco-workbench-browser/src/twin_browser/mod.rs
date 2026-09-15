@@ -133,10 +133,10 @@ pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 #[non_exhaustive]
 pub enum BrowserScope {
     /// Sections rendered inside the Twin panel. Today: Modelica
-    /// workspace, MSL standard library, bundled examples. Future:
+    /// workspace, source library standard library, bundled examples. Future:
     /// USD scenes, SysML packages, Julia modules, pinned externals.
     /// One panel hosts everything you'd browse "by name" — matches
-    /// Dymola/OMEdit's single-Package-Browser pattern where MSL and
+    /// Dymola/OMEdit's single-Package-Browser pattern where source library and
     /// user packages share one tree.
     Models,
     /// Sections rendered inside the Files panel. Raw on-disk content
@@ -541,7 +541,7 @@ impl Panel for TwinBrowserPanel {
             }
 
             ctx.resource_scope::<BrowserActions, _>(|ctx, actions| {
-                // ScrollArea wraps every section so a fully-expanded MSL
+                // ScrollArea wraps every section so a fully-expanded source library
                 // tree (~2500 entries) doesn't push later sections off
                 // screen. `auto_shrink=[false; 2]` fills the panel rect.
                 egui::ScrollArea::vertical()

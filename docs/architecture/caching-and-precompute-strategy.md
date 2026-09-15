@@ -56,12 +56,12 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | Primitive | Where | What it gives us |
 |---|---|---|
 | Per-platform cache root | `lunco-assets-core/src/lib.rs` `cache_dir()` | `~/.cache/lunco` (Linux) / `~/Library/Caches/lunco` (mac) / `%LOCALAPPDATA%\lunco` (win), `LUNCOSIM_CACHE` override. wasm returns nominal (no FS). |
-| Named cache subdirs | `lunco-assets-core` `cache_subdir`, `textures_dir`, `msl_dir`, … | An established taxonomy under the root. |
+| Named cache subdirs | `lunco-assets-core` `cache_subdir`, `textures_dir`, `source_library_root_path`, … | An established taxonomy under the root. |
 | **Content-addressed disk bake (reference impl)** | `lunco-terrain-surface/src/derived_layers.rs:110` `bake_or_load` | FNV-1a over params + **every height sample** → `<cache_dir>/terrain/derived/<key>/`, load-if-present else bake+write, `CACHE_FORMAT_VERSION` invalidation. **This is the pattern to replicate everywhere.** |
 | In-memory async dedup | **The ECS idiom** — a `Task` *Component* + `Without<BakeTask>` in the spawning query (`lunco-environment/src/horizon.rs:274`, `terrain-surface/src/derived_layers.rs:96`, `celestial/src/trajectories.rs:82`, …) | Entity-keyed load with in-flight dedup **for free** — the query filter *is* the pending set. This is what the codebase actually converged on; see the note below. |
 | I/O chokepoint | `lunco-storage` `atomic_write` / `read_file_sync` | Cross-target, wasm-aware; tmp+fsync+rename. |
 | SHA-256 asset pinning | `lunco-assets-download/src/download.rs` | Integrity + skip-redownload on hash match. |
-| rumoca parse cache | `.cache/rumoca/parsed-files/` (content-hash keyed) + `parsed-msl.bin` bincode bundle | Cold-parse avoidance for Modelica. |
+| rumoca parse cache | `.cache/rumoca/parsed-files/` (content-hash keyed) + `parsed-library.bin` bincode bundle | Cold-parse avoidance for Modelica source libraries. |
 | Structural change-detection | `Added<SimConnection>` (`lunco-cosim/src/lib.rs:252`), USD `Without<Marker>` gates | Recompute-only-on-change is already idiomatic here. |
 | **Real CIDv1 content-address** | `lunco-networking/src/scenario.rs:54-66` `cid_for_content`/`cid_from_bytes` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`scenario_sync.rs:88-94`). **First real content-addressing in the repo** — but scoped to networking. |
 | **OPFS web blob backend** | `lunco-storage/src/opfs_storage.rs` | Working async `read`/`write`/`exists` on wasm via `createWritable` (main-thread-legal). Path-keyed on `StorageHandle::File`. |
@@ -366,7 +366,7 @@ the shadow path needed for objects to shade the terrain.
 ## 6. In-RAM memoization (existing, sound — leave alone)
 
 Terrain derived layers (disk), `LodMeshCache`/`LodMaterials` (RAM), rumoca
-session phase caches + MSL bincode bundle, the worker's shared DAE/prepared
+session phase caches + source-library bincode bundle, the worker's shared DAE/prepared
 solve-IR caches, per-entity `CachedModel` for Reset, Modelica icon/class/
 negative-resolution caches, USD generation-gated parse cache. The
 change-detection idiom (`Added<>`, marker `Without<>`) is sound and should be

@@ -107,7 +107,7 @@ pub enum ModelicaChange {
     /// added class on the same generation.
     ///
     /// Consumers keyed by class name (open tabs, experiment
-    /// records, parameter drafts, MSL caches…) re-key from `old`
+    /// records, parameter drafts, source library caches…) re-key from `old`
     /// to `new` instead of dropping state.
     ClassRenamed {
         /// Prior fully-qualified class name.

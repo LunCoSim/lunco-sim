@@ -1,6 +1,6 @@
 //! Cross-cutting status bus for the workbench.
 //!
-//! Every subsystem (MSL load, compile, sim, save, API, …) publishes
+//! Every subsystem (source library load, compile, sim, save, API, …) publishes
 //! `StatusEvent`s into the [`StatusBus`] resource. A single set of
 //! renderers fans events out to:
 //!
@@ -19,13 +19,13 @@
 //! - **Discrete** events ([`StatusBus::push`]) are appended to `history`
 //!   and shown in Console / Diagnostics. Consecutive identical snapshots
 //!   from the same source and level are coalesced at this boundary. Use for
-//!   "MSL ready", "compile started", "save failed".
+//!   "source library ready", "compile started", "save failed".
 //! - **Progress** events ([`StatusBus::set_progress`]) replace the
 //!   most recent progress entry from the same source instead of being
 //!   appended — they would otherwise spam the history during a long
 //!   download. Each `(done, total)` tick *replaces* the prior tick from
 //!   that source. Once `done == total`, callers typically follow with
-//!   a discrete `Info` event (e.g. "MSL ready") to terminate.
+//!   a discrete `Info` event (e.g. "source library ready") to terminate.
 //!
 //! ## Change detection
 //!
@@ -208,7 +208,7 @@ pub struct StatusEvent {
     /// Scope of this event. Discrete events default to [`BusyScope::Global`];
     /// scoped progress originates from [`StatusBus::begin`].
     pub scope: BusyScope,
-    /// Short subsystem identifier shown to the user (`"MSL"`, `"Compile"`).
+    /// Short subsystem identifier shown to the user (`"source library"`, `"Compile"`).
     pub source: &'static str,
     /// Severity classification — drives icon, log level, and Diagnostics inclusion.
     pub level: StatusLevel,
@@ -408,10 +408,10 @@ impl StatusBus {
     /// existing entry at the same `(Global, source)` key, the original
     /// `at` is preserved rather than reset to now. This keeps
     /// [`Self::display_latest`]'s "longest-running stays pinned" contract
-    /// intact for sources that tick continuously — e.g. the MSL download
+    /// intact for sources that tick continuously — e.g. the source library download
     /// (which starts at boot and re-pushes every frame) must stay the
     /// pinned status-bar entry even when a later, shorter task (a queued
-    /// compile) begins. Resetting `at` each tick made MSL perennially the
+    /// compile) begins. Resetting `at` each tick made source library perennially the
     /// *youngest* entry, so the bar flipped to "Compiling…" and the
     /// download progress disappeared.
     pub fn set_progress(
@@ -1001,10 +1001,10 @@ mod tests {
     #[test]
     fn mirrored_progress_targets_global_scope() {
         let mut bus = StatusBus::default();
-        bus.set_progress("MSL", "loading", 1, 10);
+        bus.set_progress("source library", "loading", 1, 10);
         assert!(bus.is_busy(BusyScope::Global));
         assert_eq!(bus.entries_in(BusyScope::Global).count(), 1);
-        bus.remove_progress("MSL");
+        bus.remove_progress("source library");
         assert!(!bus.is_busy(BusyScope::Global));
     }
 
@@ -1050,20 +1050,23 @@ mod tests {
     #[test]
     fn mirrored_progress_preserves_start_time_so_display_latest_pins_oldest() {
         // The status bar's `display_latest` shows the longest-running
-        // active entry. A continuously-ticking source (MSL download) must
+        // active entry. A continuously-ticking source (source library download) must
         // stay pinned even when a later, shorter task (compile) begins —
         // updating progress must NOT reset the entry's `at` to now.
         let mut bus = StatusBus::default();
-        bus.set_progress("MSL", "downloading", 1, 100);
-        let msl_at = bus.display_latest().expect("msl entry").at;
-        // A later task starts after MSL.
+        bus.set_progress("source library", "downloading", 1, 100);
+        let library_at = bus.display_latest().expect("library entry").at;
+        // A later task starts after source library.
         let _compile = bus.begin(BusyScope::Document(1), "compile", "Compiling…");
-        // MSL keeps ticking (every frame).
-        bus.set_progress("MSL", "downloading", 50, 100);
-        // The pinned entry is still MSL (oldest start), not the compile.
+        // source library keeps ticking (every frame).
+        bus.set_progress("source library", "downloading", 50, 100);
+        // The pinned entry is still source library (oldest start), not the compile.
         let shown = bus.display_latest().expect("an entry");
-        assert_eq!(shown.source, "MSL");
-        assert_eq!(shown.at, msl_at, "set_progress must preserve start time");
+        assert_eq!(shown.source, "source library");
+        assert_eq!(
+            shown.at, library_at,
+            "set_progress must preserve start time"
+        );
     }
 
     #[test]

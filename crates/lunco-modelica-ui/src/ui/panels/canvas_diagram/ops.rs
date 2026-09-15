@@ -67,7 +67,7 @@ pub(super) fn resolve_doc_context(
     //
     // The previous `s.classes.keys().next()` returned the IndexMap's
     // first key, which for a multi-class file wrapped in a `package`
-    // (AnnotatedRocketStage, every MSL example, …) is the *package*
+    // (AnnotatedRocketStage, every source library example, …) is the *package*
     // wrapper. Adding a component to a package corrupts the file —
     // packages can only contain classes, not components.
     let drilled_in = crate::ui::context::drilled_class_for_doc(ctx, doc_id);
@@ -492,7 +492,7 @@ pub(super) fn op_add_component_with_name(
     }
 }
 
-// `synthesize_msl_node` — optimistic-scene helper — was deleted in
+// `synthesize_library_node` — optimistic-scene helper — was deleted in
 // A.4. Used to insert a Node into the canvas scene the same frame the
 // op fired, ahead of the projection re-derivation. After A.2 the
 // AST-canonical apply path is fast (no debounced reparse during
@@ -649,7 +649,7 @@ pub(super) fn apply_ops(
         .any(|op| matches!(op, ModelicaOp::SetPlacement { .. }));
 
     // Core mutation (egui-free): batch deferral + per-op kernel + canonical
-    // journal + read-only banner + mark_changed + MSL preload. Shared with
+    // journal + read-only banner + mark_changed + source library preload. Shared with
     // the API / headless path (`crate::doc_ops::apply_ops_as`) so the canvas
     // and the API apply ops identically. Returns whether anything applied
     // synchronously (false on full-batch deferral or all-no-op).
@@ -706,7 +706,7 @@ pub(super) fn apply_ops(
         // editing tab to suppress projection — the assumption being
         // that the canvas had already optimistically synthesised the
         // affected node/edge before dispatch. That optimistic-synth
-        // path (`synthesize_msl_node`) was deleted; menu-add /
+        // path (`synthesize_library_node`) was deleted; menu-add /
         // palette-drop / context-menu ops now produce *no* same-frame
         // scene change. Acking the gen here was telling the projection
         // gate "scene already matches new state" — a lie — and the
@@ -888,7 +888,7 @@ pub(super) fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId)
 }
 
 /// Resolve the active class name for an Auto-Arrange target. Prefers
-/// the drilled-in class name (for MSL drill-in tabs); falls back to
+/// the drilled-in class name (for source library drill-in tabs); falls back to
 /// the open document's detected model name.
 pub fn active_class_for_doc(world: &mut World, doc_id: lunco_doc::DocumentId) -> Option<String> {
     // A document may have both its root tab and drilled-in class tabs. The

@@ -160,13 +160,13 @@ pub(crate) fn render_diagram_canvas(
         }
     }
 
-    // ─── "Icons update when MSL loaded" hint ───
+    // ─── "Icons update when source library loaded" hint ───
     //
-    // On web the MSL bundle decodes in the background (~tens of
+    // On web the source library bundle decodes in the background (~tens of
     // seconds). Until the source root is installed, the diagram stays
     // in its explicit loading/error lifecycle; it must not present a
     // fabricated gray component as if that were the class's icon.
-    // `MslBecameReady` reprojects every open tab with the authored
+    // `SourceBundleBecameReady` reprojects every open tab with the authored
     // Modelica annotation graphics once the standard library is ready.
     //
     // Show a library status only for an actual loading, unavailable, or
@@ -180,16 +180,16 @@ pub(crate) fn render_diagram_canvas(
                     .map(|host| crate::state::is_generated_document(host.document()))
             })
             .unwrap_or(false);
-        let msl_state = ctx.resource::<lunco_assets_core::library::LibraryLoadState>();
-        let msl_resident = crate::msl_remote::global_parsed_msl().is_some()
+        let library_state = ctx.resource::<lunco_assets_core::library::LibraryLoadState>();
+        let library_resident = crate::library_remote::global_parsed_source_bundle().is_some()
             || ctx
                 .resource::<crate::engine_resource::ModelicaEngineHandle>()
                 .and_then(|handle| handle.try_lock())
-                .is_some_and(|engine| engine.source_set_installed("msl"));
+                .is_some_and(|engine| engine.source_set_installed("source-bundle"));
         // Live load detail (phase + %) while the bundle is still arriving,
         // so the diagram shows *why* the icons are gray and how far along
         // the download/parse is — not just a static "loading" string.
-        let (msl_message, msl_is_loading) = match (msl_state, msl_resident) {
+        let (library_message, library_is_loading) = match (library_state, library_resident) {
             (
                 Some(lunco_assets_core::library::LibraryLoadState::Loading {
                     phase,
@@ -198,35 +198,37 @@ pub(crate) fn render_diagram_canvas(
                 }),
                 false,
             ) => (
-                Some(format_msl_loading_hint(*phase, *bytes_done, *bytes_total)),
+                Some(format_library_loading_hint(
+                    *phase,
+                    *bytes_done,
+                    *bytes_total,
+                )),
                 true,
             ),
-            (Some(lunco_assets_core::library::LibraryLoadState::Failed(msg)), false) => (
-                Some(format!("Modelica Standard Library error: {msg}")),
-                false,
-            ),
-            (Some(lunco_assets_core::library::LibraryLoadState::NotStarted), false) => (
-                Some("Modelica Standard Library unavailable".to_string()),
-                false,
-            ),
+            (Some(lunco_assets_core::library::LibraryLoadState::Failed(msg)), false) => {
+                (Some(format!("Source library error: {msg}")), false)
+            }
+            (Some(lunco_assets_core::library::LibraryLoadState::NotStarted), false) => {
+                (Some("Source library unavailable".to_string()), false)
+            }
             _ => (None, false),
         };
         let has_content = {
             let docstate = state.get_for_render(render_tab_id, active_doc);
             docstate.canvas.scene.node_count() > 0
         };
-        if !generated_document && msl_message.is_some() && has_content {
-            // A compile or run dispatched while MSL is loading can't
+        if !generated_document && library_message.is_some() && has_content {
+            // A compile or run dispatched while source library is loading can't
             // finish until the standard library installs (the worker parse
-            // path needs MSL resident — but the worker queues it and runs it
-            // on its `MslReady`, see worker_transport.rs). When one is
+            // path needs source library resident — but the worker queues it and runs it
+            // on its `LibraryReady`, see worker_transport.rs). When one is
             // pending, extend the hint with a second line so the user knows
             // the action wasn't lost.
             //
             // Compile is doc-scoped (`is_compiling(d)`). A Fast Run is tracked
             // only by the process-global runner, so we light the run line
             // whenever it has queued/in-flight work — acceptable here because
-            // this hint only shows *while MSL is still loading*, when the one
+            // this hint only shows *while source library is still loading*, when the one
             // queued thing is what the user just clicked.
             let compile_pending = active_doc
                 .and_then(|d| {
@@ -239,7 +241,7 @@ pub(crate) fn render_diagram_canvas(
                 .map(|r| r.0.in_flight_count() > 0 || r.0.queued_count() > 0)
                 .unwrap_or(false);
             let tokens = &ctx.resource_expect::<lunco_theme::Theme>().tokens;
-            let color = if msl_is_loading {
+            let color = if library_is_loading {
                 tokens.warning
             } else {
                 tokens.error
@@ -250,15 +252,17 @@ pub(crate) fn render_diagram_canvas(
                 .with_clip_rect(ui.clip_rect().intersect(response.rect));
             let font = egui::FontId::proportional(11.0);
             let mut y = response.rect.bottom() - 8.0;
-            let first_line = if msl_is_loading {
+            let first_line = if library_is_loading {
                 format!(
                     "{} · icons update when ready",
-                    msl_message.as_deref().unwrap_or("Loading MSL")
+                    library_message
+                        .as_deref()
+                        .unwrap_or("Loading source library")
                 )
             } else {
-                msl_message
+                library_message
                     .as_deref()
-                    .unwrap_or("Modelica Standard Library unavailable")
+                    .unwrap_or("Source library unavailable")
                     .to_string()
             };
             painter.text(
@@ -270,12 +274,12 @@ pub(crate) fn render_diagram_canvas(
             );
             // Second line: deferred-action notice (compile takes priority
             // over run since it's doc-scoped and more specific).
-            let deferred = if !msl_is_loading {
+            let deferred = if !library_is_loading {
                 None
             } else if compile_pending {
-                Some("Compilation will run when MSL is ready")
+                Some("Compilation will run when source library is ready")
             } else if run_pending {
-                Some("Simulation will start when MSL is ready")
+                Some("Simulation will start when source library is ready")
             } else {
                 None
             };
@@ -289,7 +293,7 @@ pub(crate) fn render_diagram_canvas(
                     color,
                 );
             }
-            // Coarse poll, not a per-frame spin: MSL readiness flips on a
+            // Coarse poll, not a per-frame spin: source library readiness flips on a
             // background task, so a ~250ms re-check clears the hint promptly
             // without pinning the whole workbench to full-rate redraw for the
             // entire (slow, resource-constrained) decode window.
@@ -433,12 +437,12 @@ fn apply_pending_fit(
     egui_ctx.request_repaint();
 }
 
-/// Human-readable one-liner for the in-diagram MSL-loading hint, e.g.
-/// `Loading Modelica library — downloading MSL 47%` or
-/// `Loading Modelica library — parsing MSL 1200/2555`. The `Parsing`
+/// Human-readable one-liner for the in-diagram source library-loading hint, e.g.
+/// `Loading Modelica library — downloading source library 47%` or
+/// `Loading Modelica library — parsing source library 1200/2555`. The `Parsing`
 /// phase carries file counts in `done`/`total`; other phases carry bytes.
 /// Falls back to a bare phase label when `total` is unknown (`0`).
-fn format_msl_loading_hint(
+fn format_library_loading_hint(
     phase: lunco_assets_core::library::LibraryLoadPhase,
     done: u64,
     total: u64,

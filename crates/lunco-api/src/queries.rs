@@ -6,7 +6,7 @@
 //!
 //! `lunco-api` already has built-in query variants (`ListEntities` and
 //! `DiscoverSchema`) that read ECS state and return JSON
-//! synchronously. Adding bundled-model / Twin / MSL listing the same way
+//! synchronously. Adding bundled-model / Twin / source library listing the same way
 //! would require `lunco-api` to depend on `lunco-modelica-core` and
 //! `lunco-workspace` — a layering inversion (those crates already depend
 //! on `lunco-api` for the executor plugin).
@@ -62,7 +62,7 @@ use crate::schema::ApiResponse;
 pub trait ApiQueryProvider: Send + Sync + 'static {
     /// Stable name matched against the `command` field of incoming
     /// `ExecuteCommand` requests. Convention: PascalCase verb-prefixed,
-    /// e.g. `"ListBundled"`, `"MslStatus"`, `"ListOpenDocuments"`.
+    /// e.g. `"ListBundled"`, `"LibraryStatus"`, `"ListOpenDocuments"`.
     fn name(&self) -> &'static str;
 
     /// Run the query against the ECS world. Returning an

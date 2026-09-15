@@ -1,6 +1,6 @@
-//! MSL bundle loader.
+//! source library bundle loader.
 //!
-//! Inserts [`MslAssetSource`] and [`MslLoadState`] into the world.
+//! Inserts [`LibraryAssetSource`] and [`LibraryLoadState`] into the world.
 //!
 //! ## Native
 //!
@@ -13,7 +13,7 @@
 //!
 //! The Settings menu can start a `wasm_bindgen_futures::spawn_local` task that:
 //!
-//! 1. `fetch`es `msl/manifest.json` (same-origin).
+//! 1. `fetch`es `library/manifest.json` (same-origin).
 //! 2. Parses it into the generic source-library bundle manifest.
 //! 3. `fetch`es the compressed bundles named in the manifest.
 //! 4. Verifies bundle sizes and artifact tags.
@@ -30,66 +30,68 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use bevy::prelude::*;
 
-use lunco_assets_core::library::{
-    LibraryLoadPhase as MslLoadPhase, LibraryLoadState as MslLoadState,
-    LibrarySource as MslAssetSource,
-};
 #[cfg(target_arch = "wasm32")]
-use lunco_assets_core::library::InMemoryLibrary as MslInMemory;
+use lunco_assets_core::library::InMemoryLibrary as LibraryInMemory;
+use lunco_assets_core::library::{
+    LibraryLoadPhase, LibraryLoadState, LibrarySource as LibraryAssetSource,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_datasets::{DatasetRegistry, DatasetState};
 
-/// Process-wide pre-parsed MSL documents. Populated on wasm by the
+/// Process-wide pre-parsed source library documents. Populated on wasm by the
 /// chunked parse driver once the full bundle has been turned into
 /// `StoredDefinition`s. `ModelicaCompiler::new` reads it (via
-/// [`global_parsed_msl`]) and installs into rumoca via
+/// [`global_parsed_source_bundle`]) and installs into rumoca via
 /// `Session::replace_parsed_source_set` — the entire parse cost is
 /// already paid by then, so compile init is fast.
-static GLOBAL_PARSED_MSL: OnceLock<Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> =
-    OnceLock::new();
+static GLOBAL_PARSED_SOURCE_BUNDLE: OnceLock<
+    Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>,
+> = OnceLock::new();
 
-/// Serializes the native lazy decode of `parsed-msl.bin`. `GLOBAL_PARSED_MSL`
+/// Serializes the native lazy decode of `parsed-library.bin`. `GLOBAL_PARSED_SOURCE_BUNDLE`
 /// (a `OnceLock`) dedupes the stored *value* but not the *work*: two callers
 /// that both miss `get()` will each run the full ~1.2 s zstd+bincode decode,
 /// and the loser's `set()` is silently dropped. In the sandbox that race is
 /// real — the worker's `ModelicaCompiler` session and the main-thread
-/// `ModelicaEngine` session both reach for MSL on the first compile. This lock
+/// `ModelicaEngine` session both reach for source library on the first compile. This lock
 /// makes the second caller block on the first decode and reuse it. Native-only;
 /// wasm is single-threaded so no race exists there.
 #[cfg(not(target_arch = "wasm32"))]
-static MSL_DECODE_LOCK: Mutex<()> = Mutex::new(());
+static SOURCE_BUNDLE_DECODE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Read the pre-parsed MSL bundle if any has been installed.
-pub fn global_parsed_msl(
+/// Read the pre-parsed source library bundle if any has been installed.
+pub fn global_parsed_source_bundle(
 ) -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
-    GLOBAL_PARSED_MSL.get()
+    GLOBAL_PARSED_SOURCE_BUNDLE.get()
 }
 
-/// Publish a freshly parsed MSL bundle to the process-wide slot. Only
+/// Publish a freshly parsed source library bundle to the process-wide slot. Only
 /// the first install wins; subsequent calls are silently ignored
 /// (the `OnceLock` guarantees a stable handle for the lifetime of
 /// the page session).
-fn install_global_parsed_msl(parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>) {
-    let _ = GLOBAL_PARSED_MSL.set(Arc::new(parsed));
+fn install_global_parsed_source_bundle(
+    parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
+) {
+    let _ = GLOBAL_PARSED_SOURCE_BUNDLE.set(Arc::new(parsed));
 }
 
-/// The pre-parsed MSL bundle, loading it on demand if not yet present.
+/// The pre-parsed source library bundle, loading it on demand if not yet present.
 ///
 /// This is the **unified** accessor that drill-in / class-lookup paths
 /// use on both targets:
-/// - If [`global_parsed_msl`] is already populated (wasm chunked decode,
+/// - If [`global_parsed_source_bundle`] is already populated (wasm chunked decode,
 ///   worker hand-off, or a prior native lazy-load), return it.
-/// - On **native**, lazily deserialize `parsed-msl.bin` (the bundle the
-///   `msl_indexer` writes) into the process-wide slot on first call —
+/// - On **native**, lazily deserialize `parsed-library.bin` (the bundle the
+///   `modelica_library_indexer` writes) into the process-wide slot on first call —
 ///   one ~1–3 s bincode decode, then every subsequent lookup is an
 ///   in-memory hit. This replaces the old per-file `parse_files_parallel`
 ///   path that paid a full rumoca parse (tens of seconds for big
 ///   `package.mo` wrappers) on every drill-in.
 /// - On **wasm** there is no synchronous disk path, so a miss just
 ///   returns `None` (the worker transfer fills the slot asynchronously).
-pub fn parsed_msl_bundle(
+pub fn parsed_source_bundle(
 ) -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
-    if let Some(bundle) = GLOBAL_PARSED_MSL.get() {
+    if let Some(bundle) = GLOBAL_PARSED_SOURCE_BUNDLE.get() {
         return Some(bundle);
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -97,11 +99,14 @@ pub fn parsed_msl_bundle(
         // Hold the decode lock for the whole miss path, then re-check: a
         // peer may have filled the slot while we waited on the lock, in
         // which case we skip the redundant decode entirely.
-        let _guard = MSL_DECODE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(bundle) = GLOBAL_PARSED_MSL.get() {
+        let _guard = SOURCE_BUNDLE_DECODE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(bundle) = GLOBAL_PARSED_SOURCE_BUNDLE.get() {
             return Some(bundle);
         }
-        let bundle_path = lunco_assets_core::source_library_dir("msl").join("parsed-msl.bin");
+        let bundle_path =
+            lunco_assets_core::source_library_dir("library").join("parsed-library.bin");
         // The bundle is zstd-compressed bincode (~10× smaller on disk than the
         // raw bincode it replaced). A stale/foreign bundle that fails to decode
         // returns `Err` below → the caller cold-parses and rewrites it. The
@@ -109,12 +114,12 @@ pub fn parsed_msl_bundle(
         match read_parsed_bundle_file(&bundle_path) {
             Ok(Some(docs)) => {
                 info!(
-                    "[MSL] lazy-loaded pre-parsed bundle ({} docs) from `{}` \
+                    "[source library] lazy-loaded pre-parsed bundle ({} docs) from `{}` \
                      into process-wide slot",
                     docs.len(),
                     bundle_path.display()
                 );
-                install_global_parsed_msl(docs);
+                install_global_parsed_source_bundle(docs);
             }
             // No bundle on disk yet (indexer hasn't run) — caller parses source.
             Ok(None) => {}
@@ -122,23 +127,23 @@ pub fn parsed_msl_bundle(
                 // Stale/format-mismatched bundle (e.g. after a rumoca bump) —
                 // caller falls back to a direct parse.
                 warn!(
-                    "[MSL] parsed bundle at `{}` failed to decode ({e}); \
+                    "[source library] parsed bundle at `{}` failed to decode ({e}); \
                      drill-in will parse source directly",
                     bundle_path.display()
                 );
             }
         }
     }
-    GLOBAL_PARSED_MSL.get()
+    GLOBAL_PARSED_SOURCE_BUNDLE.get()
 }
 
-/// zstd level for the native `parsed-msl.bin` write. 9 is a good
+/// zstd level for the native `parsed-library.bin` write. 9 is a good
 /// ratio/speed balance for a one-time (cold-parse / indexer) write — the
 /// disk win over raw bincode is ~10× either way; higher levels buy little.
 #[cfg(not(target_arch = "wasm32"))]
 const PARSED_BUNDLE_ZSTD_LEVEL: i32 = 9;
 
-/// Read the native `parsed-msl.bin` fast-path bundle (zstd-compressed
+/// Read the native `parsed-library.bin` fast-path bundle (zstd-compressed
 /// bincode), streaming the decode so the whole file is never held as a
 /// `Vec<u8>`.
 ///
@@ -168,10 +173,10 @@ fn read_parsed_bundle_file(
 }
 
 /// Write `docs` to `path` as zstd-compressed bincode (the native
-/// `parsed-msl.bin` fast-path bundle). Streams straight into the encoder, so
+/// `parsed-library.bin` fast-path bundle). Streams straight into the encoder, so
 /// the ~165 MB of uncompressed bincode is never held in memory, and the file
 /// lands ~10× smaller than the raw bincode it replaces. Shared by the
-/// `msl_indexer` build step and `ModelicaCompiler`'s cold-parse repair path.
+/// `modelica_library_indexer` build step and `ModelicaCompiler`'s cold-parse repair path.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn write_parsed_bundle(
     path: &std::path::Path,
@@ -191,7 +196,7 @@ pub(crate) fn write_parsed_bundle(
 /// (`bincode::deserialize` the returned bytes) **and** ship the same decoded
 /// bytes to the main thread (transferred `ArrayBuffer`) — letting the main
 /// thread skip the ruzstd decompress and only deserialize. See
-/// [`ingest_worker_decoded_msl`].
+/// [`ingest_worker_decoded_library`].
 #[cfg(target_arch = "wasm32")]
 pub fn decompress_parsed_bundle(compressed: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
@@ -222,29 +227,29 @@ pub fn deserialize_parsed_bundle(
 /// materialising Modelica ASTs. The worker uses this on the pre-parsed fast
 /// path, where the source archive is otherwise retained only for lazy drill-in.
 #[cfg(target_arch = "wasm32")]
-pub fn load_msl_index_from_source_bundle(
+pub fn load_library_index_from_source_bundle(
     compressed: &[u8],
-) -> Result<crate::visual_diagram::MslIndex, String> {
+) -> Result<crate::visual_diagram::LibraryIndex, String> {
     let files = lunco_assets_core::web_fetch::unpack_tar_zst(compressed, 1)?;
     let bytes = files
-        .get(std::path::Path::new("msl_index.json"))
-        .ok_or_else(|| "source bundle has no generated msl_index.json".to_string())?;
-    crate::visual_diagram::decode_msl_index(bytes)
+        .get(std::path::Path::new("library_index.json"))
+        .ok_or_else(|| "source bundle has no generated library_index.json".to_string())?;
+    crate::visual_diagram::decode_library_index(bytes)
 }
 
-// ─── Chunked main-thread MSL deserialize ──────────────────────────
+// ─── Chunked main-thread source library deserialize ──────────────────────────
 //
-// On wasm the main-thread rumoca session needs the MSL ASTs in *its own*
+// On wasm the main-thread rumoca session needs the source library ASTs in *its own*
 // linear memory for reference resolution / autocomplete — the worker's copy
 // lives in a separate memory and can't be shared. So the main thread must
 // spend the CPU to materialise ~173 MB of `StoredDefinition`s. Doing it in one
 // `bincode::deserialize_from` call froze the page for seconds; instead we
 // time-slice it across frames (chunked decompress, then chunked deserialize)
-// so the UI stays responsive while MSL becomes ready a second or two in.
+// so the UI stays responsive while source library becomes ready a second or two in.
 //
 // State lives in a `thread_local` (wasm is single-threaded) rather than a Bevy
 // resource so its large deserialize accumulator stays outside Bevy's resource
-// graph. `drive_msl_main_decode` ticks it each `Update`.
+// graph. `drive_library_main_decode` ticks it each `Update`.
 
 #[cfg(target_arch = "wasm32")]
 struct MainDecodeState {
@@ -270,7 +275,7 @@ thread_local! {
 /// already underway or the bundle is already installed.
 #[cfg(target_arch = "wasm32")]
 fn seed_main_decode(state: MainDecodeState) -> bool {
-    if global_parsed_msl().is_some() {
+    if global_parsed_source_bundle().is_some() {
         return false;
     }
     MAIN_DECODE.with(|cell| {
@@ -288,7 +293,7 @@ fn seed_main_decode(state: MainDecodeState) -> bool {
 /// chunked bincode deserialize into its own heap. No-op if a deserialize is
 /// already underway or finished.
 #[cfg(target_arch = "wasm32")]
-pub fn ingest_worker_decoded_msl(decoded: Vec<u8>) {
+pub fn ingest_worker_decoded_library(decoded: Vec<u8>) {
     let seeded = seed_main_decode(MainDecodeState {
         out: decoded,
         pos: 0,
@@ -299,18 +304,18 @@ pub fn ingest_worker_decoded_msl(decoded: Vec<u8>) {
     });
     if seeded {
         info!(
-            "[MSL] received decoded MSL bytes from worker — deserialize only (no main decompress)"
+            "[source library] received decoded source library bytes from worker — deserialize only (no main decompress)"
         );
     }
 }
 
-/// Per-frame driver for the chunked main-thread MSL deserialize. No-op once the
+/// Per-frame driver for the chunked main-thread source library deserialize. No-op once the
 /// `MAIN_DECODE` slot is empty (the common case after boot). On completion it
-/// installs `GLOBAL_PARSED_MSL` and flips `MslLoadState` to `Ready`, after
-/// which `drive_msl_bootstrap` seeds the workspace engine session exactly as
+/// installs `GLOBAL_PARSED_SOURCE_BUNDLE` and flips `LibraryLoadState` to `Ready`, after
+/// which `drive_source_bundle_bootstrap` seeds the workspace engine session exactly as
 /// before — so resolution/autocomplete are unaffected, just non-blocking.
 #[cfg(target_arch = "wasm32")]
-fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
+fn drive_library_main_decode(mut state: ResMut<LibraryLoadState>) {
     // Tuned so each frame's slice stays a few ms. Deserialization allocates
     // deep ASTs, so its chunk is in documents.
     const DESER_CHUNK: usize = 96;
@@ -337,7 +342,7 @@ fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
                     d.acc.reserve(count as usize);
                 }
                 Err(e) => {
-                    warn!("[MSL] main decode: bad bundle header: {e}");
+                    warn!("[source library] main decode: bad bundle header: {e}");
                     *guard = None;
                     return;
                 }
@@ -359,7 +364,7 @@ fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
                     d.remaining -= 1;
                 }
                 Err(e) => {
-                    warn!("[MSL] main decode deserialize error: {e}");
+                    warn!("[source library] main decode deserialize error: {e}");
                     d.remaining = 0;
                     break;
                 }
@@ -370,19 +375,19 @@ fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
             let docs = std::mem::take(&mut d.acc);
             let count = docs.len();
             let uncompressed = d.out.len() as u64;
-            install_global_parsed_msl(docs);
+            install_global_parsed_source_bundle(docs);
             *guard = None; // frees `out`
-            *state = MslLoadState::Ready {
+            *state = LibraryLoadState::Ready {
                 file_count: count,
                 compressed_bytes: 0,
                 uncompressed_bytes: uncompressed,
             };
             info!(
-                "[MSL] main-thread deserialize complete: {count} docs — resolution/autocomplete ready"
+                "[source library] main-thread deserialize complete: {count} docs — resolution/autocomplete ready"
             );
         } else {
-            *state = MslLoadState::Loading {
-                phase: MslLoadPhase::Parsing,
+            *state = LibraryLoadState::Loading {
+                phase: LibraryLoadPhase::Parsing,
                 bytes_done: d.total - d.remaining,
                 bytes_total: d.total,
             };
@@ -392,88 +397,67 @@ fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
 
 // ─── Lazy source-bundle unpack ─────────────────────────────────────
 //
-// The 37 MB source tree is only needed when the user drills into an MSL file
+// The 37 MB source tree is only needed when the user drills into a source-library file
 // in the editor — so we keep it compressed and untar it on first demand
-// (`ensure_msl_source_unpacked`) instead of on the boot future, where it was a
+// (`ensure_library_source_unpacked`) instead of on the boot future, where it was a
 // second freeze. Image/icon loading is disabled on wasm, so nothing else needs
 // it at boot.
 #[cfg(target_arch = "wasm32")]
-static MSL_SOURCE_COMPRESSED: OnceLock<(Vec<u8>, lunco_assets_core::library::LibraryBundleEntry)> =
-    OnceLock::new();
+static LIBRARY_SOURCE_COMPRESSED: OnceLock<(
+    Vec<u8>,
+    lunco_assets_core::library::LibraryBundleEntry,
+)> = OnceLock::new();
 
 #[cfg(target_arch = "wasm32")]
 fn stash_compressed_source(bytes: Vec<u8>, meta: lunco_assets_core::library::LibraryBundleEntry) {
-    let _ = MSL_SOURCE_COMPRESSED.set((bytes, meta));
+    let _ = LIBRARY_SOURCE_COMPRESSED.set((bytes, meta));
 }
 
-/// Build the ordered library-root list to install from a primary
-/// source. On native, also registers any third-party Modelica libraries
-/// already unpacked in the cache (so palette / drill-in resolve them
-/// too); on web the bundle already carries every shipped library in the
-/// one in-memory root, so the primary stands alone.
-fn sources_with_extras(primary: MslAssetSource) -> Vec<MslAssetSource> {
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut sources = vec![primary];
-    #[cfg(target_arch = "wasm32")]
-    let sources = vec![primary];
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if matches!(sources[0], MslAssetSource::Filesystem(_)) {
-            for (subdir, _pkg) in crate::package_tree::scanner::discover_third_party_libs() {
-                sources.push(MslAssetSource::Filesystem(
-                    lunco_assets_core::cache_dir().join(subdir),
-                ));
-            }
-        }
-    }
-    sources
-}
-
-/// Untar the MSL source bundle into the process-wide `MslAssetSource` on first
-/// use (idempotent). Called by the drill-in paths (`Document::load_msl_class` /
-/// `load_msl_file`) before they read MSL source text. No-op if already
+/// Untar the source bundle into the process-wide `LibraryAssetSource` on first
+/// use (idempotent). Called by the drill-in paths (`Document::load_library_class` /
+/// `load_library_file`) before they read source text. No-op if already
 /// unpacked or if no compressed source was stashed.
 #[cfg(target_arch = "wasm32")]
-pub fn ensure_msl_source_unpacked() {
+pub fn ensure_library_source_unpacked() {
     if lunco_assets_core::library::has_library_source() {
         return;
     }
-    let Some((bytes, meta)) = MSL_SOURCE_COMPRESSED.get() else {
+    let Some((bytes, meta)) = LIBRARY_SOURCE_COMPRESSED.get() else {
         return;
     };
     match lunco_assets_core::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
         Ok(files) => {
             let n = files.len();
-            lunco_assets_core::library::install_global_library_sources(sources_with_extras(
-                MslAssetSource::InMemory(Arc::new(MslInMemory { files })),
-            ));
-            info!("[MSL] source bundle unpacked lazily ({n} files) for drill-in");
+            lunco_assets_core::library::install_global_library_sources(vec![
+                LibraryAssetSource::InMemory(Arc::new(LibraryInMemory { files })),
+            ]);
+            info!("[source library] source bundle unpacked lazily ({n} files) for drill-in");
         }
-        Err(e) => warn!("[MSL] lazy source unpack failed: {e}"),
+        Err(e) => warn!("[source library] lazy source unpack failed: {e}"),
     }
 }
 
-/// `pub` re-export of `install_global_parsed_msl` so the off-thread
-/// worker bin (`bin/lunica_worker.rs`) can install the MSL bundle it
+/// `pub` re-export of `install_global_parsed_source_bundle` so the off-thread
+/// worker bin (`bin/lunica_worker.rs`) can install the source library bundle it
 /// receives over postMessage.
 #[cfg(target_arch = "wasm32")]
-pub fn install_global_parsed_msl_pub(
+pub fn install_global_parsed_source_bundle_pub(
     parsed: Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
 ) {
-    install_global_parsed_msl(parsed);
+    install_global_parsed_source_bundle(parsed);
 }
 
 #[cfg(target_arch = "wasm32")]
-struct WebMslIndexAssembly {
+struct WebLibraryIndexAssembly {
     components: Vec<crate::index::ClassEntry>,
     bundled: Vec<crate::package_tree::types::PackageNode>,
 }
 
 #[cfg(target_arch = "wasm32")]
 thread_local! {
-    static WEB_MSL_INDEX: std::cell::RefCell<Option<WebMslIndexAssembly>> =
+    static WEB_LIBRARY_INDEX: std::cell::RefCell<Option<WebLibraryIndexAssembly>> =
         const { std::cell::RefCell::new(None) };
-    static WEB_MSL_INDEX_READY: std::cell::RefCell<Option<crate::visual_diagram::MslIndex>> =
+    static WEB_LIBRARY_INDEX_READY: std::cell::RefCell<Option<crate::visual_diagram::LibraryIndex>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -481,14 +465,14 @@ thread_local! {
 /// chunks on the main side avoids decoding the entire generated index inside
 /// one browser event-loop turn.
 #[cfg(target_arch = "wasm32")]
-pub fn ingest_worker_msl_index_chunk(
+pub fn ingest_worker_library_index_chunk(
     components: Vec<crate::index::ClassEntry>,
     bundled: Vec<crate::package_tree::types::PackageNode>,
     done: bool,
 ) {
-    WEB_MSL_INDEX.with(|slot| {
+    WEB_LIBRARY_INDEX.with(|slot| {
         let mut slot = slot.borrow_mut();
-        let assembly = slot.get_or_insert_with(|| WebMslIndexAssembly {
+        let assembly = slot.get_or_insert_with(|| WebLibraryIndexAssembly {
             components: Vec::new(),
             bundled: Vec::new(),
         });
@@ -497,9 +481,9 @@ pub fn ingest_worker_msl_index_chunk(
         if done {
             let assembly = slot
                 .take()
-                .expect("MSL index assembly disappeared while completing");
-            WEB_MSL_INDEX_READY.with(|ready| {
-                *ready.borrow_mut() = Some(crate::visual_diagram::MslIndex {
+                .expect("source library index assembly disappeared while completing");
+            WEB_LIBRARY_INDEX_READY.with(|ready| {
+                *ready.borrow_mut() = Some(crate::visual_diagram::LibraryIndex {
                     components: assembly.components,
                     bundled: assembly.bundled,
                 });
@@ -509,100 +493,100 @@ pub fn ingest_worker_msl_index_chunk(
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn fail_worker_msl_index(error: String) {
-    WEB_MSL_INDEX.with(|slot| *slot.borrow_mut() = None);
-    bevy::log::error!("[MSL] editor index load failed: {error}");
+pub fn fail_worker_library_index(error: String) {
+    WEB_LIBRARY_INDEX.with(|slot| *slot.borrow_mut() = None);
+    bevy::log::error!("[source library] editor index load failed: {error}");
 }
 
-/// Publish a terminal worker failure to the Bevy-owned MSL state. The worker
+/// Publish a terminal worker failure to the Bevy-owned source library state. The worker
 /// callback has no `World` access, so it crosses the same shared slot used by
-/// the fetch task and lets `drain_msl_load_slot` update the resource.
+/// the fetch task and lets `drain_library_load_slot` update the resource.
 #[cfg(target_arch = "wasm32")]
-pub fn fail_worker_msl(error: String) {
-    if let Some(slot) = WEB_MSL_SLOT.get() {
+pub fn fail_worker_library(error: String) {
+    if let Some(slot) = WEB_LIBRARY_SLOT.get() {
         if let Ok(mut slot) = slot.lock() {
             slot.pending_parsed_compressed = None;
             slot.pending_source_compressed = None;
-            slot.pending_state = Some(MslLoadState::Failed(error));
+            slot.pending_state = Some(LibraryLoadState::Failed(error));
         }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn drive_web_msl_index(mut commands: Commands) {
-    let index = WEB_MSL_INDEX_READY.with(|ready| ready.borrow_mut().take());
+fn drive_web_library_index(mut commands: Commands) {
+    let index = WEB_LIBRARY_INDEX_READY.with(|ready| ready.borrow_mut().take());
     let Some(index) = index else { return };
-    if crate::visual_diagram::install_msl_index(index) {
-        bevy::log::info!("[MSL] editor index loaded in bounded worker chunks");
-        commands.trigger(crate::visual_diagram::MslEditorIndexBecameReady);
+    if crate::visual_diagram::install_library_index(index) {
+        bevy::log::info!("[source library] editor index loaded in bounded worker chunks");
+        commands.trigger(crate::visual_diagram::LibraryEditorIndexBecameReady);
     }
 }
 
-/// Web: a Settings action requests one explicit async MSL fetch.
+/// Web: a Settings action requests one explicit async source library fetch.
 #[cfg(target_arch = "wasm32")]
-fn kick_web_msl_fetcher(
-    slot: Res<MslLoadSlot>,
-    mut request: ResMut<WebMslInstallRequest>,
-    mut state: ResMut<MslLoadState>,
+fn kick_web_library_fetcher(
+    slot: Res<LibraryLoadSlot>,
+    mut request: ResMut<WebLibraryInstallRequest>,
+    mut state: ResMut<LibraryLoadState>,
     settings: Res<lunco_settings::DownloadSettings>,
 ) {
     if !request.0 {
         return;
     }
     request.0 = false;
-    *state = MslLoadState::Loading {
-        phase: MslLoadPhase::FetchingManifest,
+    *state = LibraryLoadState::Loading {
+        phase: LibraryLoadPhase::FetchingManifest,
         bytes_done: 0,
         bytes_total: 0,
     };
     wasm_bindgen_futures::spawn_local(web::run_fetcher(slot.0.clone(), settings.clone()));
 }
 
-/// Plugin that owns MSL asset loading. Add once during app build.
-pub struct MslRemotePlugin;
+/// Plugin that owns source library asset loading. Add once during app build.
+pub struct LibraryRemotePlugin;
 
-/// Web-only user intent for the MSL bundle fetcher. Native downloads are
+/// Web-only user intent for the source library bundle fetcher. Native downloads are
 /// owned by [`DatasetRegistry`] and requested by the generic data panel.
 #[cfg(target_arch = "wasm32")]
 #[derive(Event, Clone, Copy, Debug)]
-pub enum MslInstallAction {
+pub enum LibraryInstallAction {
     Install,
     Reinstall,
 }
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Resource, Default)]
-struct WebMslInstallRequest(bool);
+struct WebLibraryInstallRequest(bool);
 
-impl Plugin for MslRemotePlugin {
+impl Plugin for LibraryRemotePlugin {
     fn build(&self, app: &mut App) {
         lunco_settings::ensure_download_settings(app);
-        app.init_resource::<MslLoadState>();
+        app.init_resource::<LibraryLoadState>();
         // Persisted user settings (the local-root override). Lives in
         // settings.json so the Settings menu and source resolver share one
         // source of truth.
         use lunco_settings::AppSettingsExt;
-        app.register_settings_section::<crate::msl_settings::MslSettings>();
+        app.register_settings_section::<crate::modelica_library_settings::LibrarySettings>();
 
         #[cfg(target_arch = "wasm32")]
-        app.add_observer(on_msl_install_action);
+        app.add_observer(on_library_install_action);
         #[cfg(not(target_arch = "wasm32"))]
         {
-            app.add_observer(on_native_msl_index_action);
+            app.add_observer(on_native_library_index_action);
             app.add_systems(
                 Update,
                 (
-                    drain_native_msl_install,
-                    drive_native_msl_dataset,
-                    drive_native_msl_index,
+                    drain_native_library_install,
+                    drive_native_library_dataset,
+                    drive_native_library_index,
                 )
                     .chain(),
             );
         }
 
-        // (The MSL-state → status-bus mirror is a UI reactive observer; it
+        // (The source library-state → status-bus mirror is a UI reactive observer; it
         // lives in `ui::core_observers` and is registered by the UI plugin.
-        // Core just owns `MslLoadState`.)
+        // Core just owns `LibraryLoadState`.)
 
         // Native: use an already-materialised tree (workspace dev cache or a
         // user-supplied override). The generic dataset registry owns any
@@ -612,64 +596,64 @@ impl Plugin for MslRemotePlugin {
         {
             let settings = app
                 .world()
-                .resource::<crate::msl_settings::MslSettings>()
+                .resource::<crate::modelica_library_settings::LibrarySettings>()
                 .clone();
 
             // 1. Settings-level override wins — user explicitly pointed
             //    us at a tree on disk (e.g. a system install, a local
             //    Modelica checkout).
             let override_root = settings.local_root_override.as_ref().and_then(|p| {
-                if p.join("Modelica").exists() {
+                if p.is_dir() {
                     Some(p.clone())
                 } else {
                     warn!(
-                        "[MSL] settings.msl.local_root_override = {} has no Modelica/ subdir; ignoring",
+                        "[source-library] settings.library.local_root_override = {} is not a directory; ignoring",
                         p.display()
                     );
                     None
                 }
             });
 
-            let resolved_root = override_root
-                .or_else(|| lunco_assets_core::source_library_root_path("msl", "Modelica"));
+            let resolved_root =
+                override_root.or_else(|| lunco_assets_core::source_library_root_path("library"));
 
             if let Some(root) = resolved_root {
                 let count = count_mo_files(&root);
-                let index_present = root.join("msl_index.json").is_file();
+                let index_present = root.join("library_index.json").is_file();
                 info!(
-                    "[MSL] using on-disk root {} ({count} .mo files)",
+                    "[source library] using on-disk root {} ({count} .mo files)",
                     root.display()
                 );
-                lunco_assets_core::library::install_global_library_sources(sources_with_extras(
-                    MslAssetSource::Filesystem(root.clone()),
-                ));
-                app.insert_resource(NativeMslIndexLoad::new());
+                lunco_assets_core::library::install_global_library_sources(vec![
+                    LibraryAssetSource::Filesystem(root.clone()),
+                ]);
+                app.insert_resource(NativeLibraryIndexLoad::new());
                 if index_present {
-                    app.insert_resource(MslLoadState::Ready {
+                    app.insert_resource(LibraryLoadState::Ready {
                         file_count: count,
                         compressed_bytes: 0,
                         uncompressed_bytes: 0,
                     });
                 } else {
                     info!(
-                        "[MSL] source root is present but its generated editor index is missing; indexing in the background"
+                        "[source library] source root is present but its generated editor index is missing; indexing in the background"
                     );
-                    app.insert_resource(MslLoadState::Loading {
-                        phase: MslLoadPhase::Parsing,
+                    app.insert_resource(LibraryLoadState::Loading {
+                        phase: LibraryLoadPhase::Parsing,
                         bytes_done: 0,
                         bytes_total: 0,
                     });
                     app.insert_resource(native_index_resources(root));
                 }
             } else {
-                info!("[MSL] no on-disk root — waiting for the dataset registry");
-                app.insert_resource(MslLoadState::NotStarted);
+                info!("[source library] no on-disk root — waiting for the dataset registry");
+                app.insert_resource(LibraryLoadState::NotStarted);
             }
 
             // NO startup warm. Filling the parsed slot here would flip
-            // `drive_msl_bootstrap` onto its eager branch on every native launch,
+            // `drive_source_bundle_bootstrap` onto its eager branch on every native launch,
             // costing a measured 1645 ms main-thread stall on a scene with no
-            // Modelica in it. `parsed_msl_bundle` loads lazily at first lookup.
+            // Modelica in it. `parsed_source_bundle` loads lazily at first lookup.
         }
 
         // Web: create the dormant fetch slot. The Settings menu inserts an
@@ -677,17 +661,17 @@ impl Plugin for MslRemotePlugin {
         #[cfg(target_arch = "wasm32")]
         {
             let slot: SharedSlot = Arc::new(Mutex::new(SlotInner::default()));
-            let _ = WEB_MSL_SLOT.set(slot.clone());
-            app.insert_resource(MslLoadState::NotStarted);
-            app.insert_resource(MslLoadSlot(slot));
-            app.init_resource::<WebMslInstallRequest>();
+            let _ = WEB_LIBRARY_SLOT.set(slot.clone());
+            app.insert_resource(LibraryLoadState::NotStarted);
+            app.insert_resource(LibraryLoadSlot(slot));
+            app.init_resource::<WebLibraryInstallRequest>();
             app.add_systems(
                 Update,
                 (
-                    kick_web_msl_fetcher,
-                    drain_msl_load_slot,
-                    drive_msl_main_decode,
-                    drive_web_msl_index,
+                    kick_web_library_fetcher,
+                    drain_library_load_slot,
+                    drive_library_main_decode,
+                    drive_web_library_index,
                 )
                     .chain(),
             );
@@ -708,25 +692,25 @@ type NativeInstallSlot = Arc<Mutex<NativeInstallSlotInner>>;
 #[derive(Default)]
 struct NativeInstallSlotInner {
     /// Latest load-state the worker has reported; drained each frame.
-    pending_state: Option<MslLoadState>,
+    pending_state: Option<LibraryLoadState>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
-struct NativeMslInstallSlot {
+struct NativeLibraryInstallSlot {
     state: NativeInstallSlot,
     cancel: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
-struct NativeMslIndexLoad {
-    task: Option<bevy::tasks::Task<Result<crate::visual_diagram::MslIndex, String>>>,
+struct NativeLibraryIndexLoad {
+    task: Option<bevy::tasks::Task<Result<crate::visual_diagram::LibraryIndex, String>>>,
     failed: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl NativeMslIndexLoad {
+impl NativeLibraryIndexLoad {
     fn new() -> Self {
         Self {
             task: None,
@@ -736,14 +720,14 @@ impl NativeMslIndexLoad {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn native_index_resources(root: std::path::PathBuf) -> NativeMslInstallSlot {
+fn native_index_resources(root: std::path::PathBuf) -> NativeLibraryInstallSlot {
     let slot: NativeInstallSlot = Arc::new(Mutex::new(NativeInstallSlotInner::default()));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    lunco_assets_core::library::install_global_library_sources(sources_with_extras(
-        MslAssetSource::Filesystem(root.clone()),
-    ));
+    lunco_assets_core::library::install_global_library_sources(vec![
+        LibraryAssetSource::Filesystem(root.clone()),
+    ]);
     spawn_native_index(slot.clone(), root, cancel.clone());
-    NativeMslInstallSlot {
+    NativeLibraryInstallSlot {
         state: slot,
         cancel,
     }
@@ -757,7 +741,10 @@ fn spawn_native_index(
 ) {
     bevy::tasks::AsyncComputeTaskPool::get()
         .spawn(async move {
-            bevy::log::info!("[MSL] indexing editor metadata for {}…", root.display());
+            bevy::log::info!(
+                "[source library] indexing editor metadata for {}…",
+                root.display()
+            );
             let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 crate::indexer::run_with_cancel(
                     crate::indexer::Options::for_source_root(root.clone()),
@@ -770,12 +757,12 @@ fn spawn_native_index(
                 return;
             }
 
-            if !completed || !root.join("msl_index.json").is_file() {
+            if !completed || !root.join("library_index.json").is_file() {
                 set_install_state(
                     &slot,
-                    MslLoadState::Failed(format!(
-                        "MSL editor index was not generated at {}",
-                        root.join("msl_index.json").display()
+                    LibraryLoadState::Failed(format!(
+                        "source library editor index was not generated at {}",
+                        root.join("library_index.json").display()
                     )),
                 );
                 return;
@@ -783,7 +770,7 @@ fn spawn_native_index(
 
             set_install_state(
                 &slot,
-                MslLoadState::Ready {
+                LibraryLoadState::Ready {
                     file_count: count_mo_files(&root),
                     compressed_bytes: 0,
                     uncompressed_bytes: 0,
@@ -794,10 +781,13 @@ fn spawn_native_index(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn on_msl_install_action(trigger: On<MslInstallAction>, mut request: ResMut<WebMslInstallRequest>) {
+fn on_library_install_action(
+    trigger: On<LibraryInstallAction>,
+    mut request: ResMut<WebLibraryInstallRequest>,
+) {
     match *trigger.event() {
-        MslInstallAction::Install => request.0 = true,
-        MslInstallAction::Reinstall => {
+        LibraryInstallAction::Install => request.0 = true,
+        LibraryInstallAction::Reinstall => {
             crate::worker_transport::reset_worker_pipeline();
             request.0 = true;
         }
@@ -805,16 +795,16 @@ fn on_msl_install_action(trigger: On<MslInstallAction>, mut request: ResMut<WebM
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn set_install_state(slot: &NativeInstallSlot, state: MslLoadState) {
+fn set_install_state(slot: &NativeInstallSlot, state: LibraryLoadState) {
     if let Ok(mut inner) = slot.lock() {
         inner.pending_state = Some(state);
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn drain_native_msl_install(
-    slot: Option<Res<NativeMslInstallSlot>>,
-    mut state: ResMut<MslLoadState>,
+fn drain_native_library_install(
+    slot: Option<Res<NativeLibraryInstallSlot>>,
+    mut state: ResMut<LibraryLoadState>,
 ) {
     let Some(slot) = slot else { return };
     let Ok(mut inner) = slot.state.lock() else {
@@ -822,8 +812,10 @@ fn drain_native_msl_install(
     };
     if let Some(new_state) = inner.pending_state.take() {
         match (&*state, &new_state) {
-            (MslLoadState::Loading { phase: a, .. }, MslLoadState::Loading { phase: b, .. })
-                if a == b => {}
+            (
+                LibraryLoadState::Loading { phase: a, .. },
+                LibraryLoadState::Loading { phase: b, .. },
+            ) if a == b => {}
             _ => log_state_transition(&new_state),
         }
         *state = new_state;
@@ -831,30 +823,30 @@ fn drain_native_msl_install(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const NATIVE_MSL_DATASET_ID: &str = "engine/modelica/msl";
+const NATIVE_LIBRARY_DATASET_ID: &str = "engine/modelica/library";
 
 /// User intent to rebuild the native editor index after a failed post-download
 /// indexing attempt. Downloading remains the generic dataset registry's job;
 /// this action only restarts Modelica's domain projection.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Event, Clone, Copy, Debug)]
-pub enum NativeMslIndexAction {
+pub enum NativeLibraryIndexAction {
     Rebuild,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn on_native_msl_index_action(
-    trigger: On<NativeMslIndexAction>,
-    state: Res<MslLoadState>,
-    existing: Option<Res<NativeMslInstallSlot>>,
+fn on_native_library_index_action(
+    trigger: On<NativeLibraryIndexAction>,
+    state: Res<LibraryLoadState>,
+    existing: Option<Res<NativeLibraryInstallSlot>>,
     mut commands: Commands,
 ) {
-    if !matches!(*trigger.event(), NativeMslIndexAction::Rebuild)
-        || !matches!(*state, MslLoadState::Failed(_))
+    if !matches!(*trigger.event(), NativeLibraryIndexAction::Rebuild)
+        || !matches!(*state, LibraryLoadState::Failed(_))
     {
         return;
     }
-    let Some(root) = lunco_assets_core::source_library_root_path("msl", "Modelica") else {
+    let Some(root) = lunco_assets_core::source_library_root_path("library") else {
         return;
     };
     if let Some(existing) = existing {
@@ -862,60 +854,60 @@ fn on_native_msl_index_action(
             .cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    commands.insert_resource(MslLoadState::Loading {
-        phase: MslLoadPhase::Parsing,
+    commands.insert_resource(LibraryLoadState::Loading {
+        phase: LibraryLoadPhase::Parsing,
         bytes_done: 0,
         bytes_total: 0,
     });
-    commands.insert_resource(NativeMslIndexLoad::new());
+    commands.insert_resource(NativeLibraryIndexLoad::new());
     commands.insert_resource(native_index_resources(root));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn drive_native_msl_dataset(
+fn drive_native_library_dataset(
     registry: Option<Res<DatasetRegistry>>,
-    slot: Option<Res<NativeMslInstallSlot>>,
-    index_load: Option<Res<NativeMslIndexLoad>>,
-    mut state: ResMut<MslLoadState>,
+    slot: Option<Res<NativeLibraryInstallSlot>>,
+    index_load: Option<Res<NativeLibraryIndexLoad>>,
+    mut state: ResMut<LibraryLoadState>,
     mut commands: Commands,
 ) {
     let Some(registry) = registry else { return };
     let Some(dataset) = registry
         .entries()
         .iter()
-        .find(|entry| entry.id == NATIVE_MSL_DATASET_ID)
+        .find(|entry| entry.id == NATIVE_LIBRARY_DATASET_ID)
     else {
         return;
     };
 
     match &dataset.state {
-        DatasetState::Missing => *state = MslLoadState::NotStarted,
+        DatasetState::Missing => *state = LibraryLoadState::NotStarted,
         DatasetState::Downloading {
             bytes_done,
             bytes_total,
         } => {
-            *state = MslLoadState::Loading {
-                phase: MslLoadPhase::FetchingBundle,
+            *state = LibraryLoadState::Loading {
+                phase: LibraryLoadPhase::FetchingBundle,
                 bytes_done: *bytes_done,
                 bytes_total: *bytes_total,
             };
         }
         DatasetState::Processing { .. } => {
-            *state = MslLoadState::Loading {
-                phase: MslLoadPhase::Parsing,
+            *state = LibraryLoadState::Loading {
+                phase: LibraryLoadPhase::Parsing,
                 bytes_done: 0,
                 bytes_total: 0,
             };
         }
         DatasetState::Cancelling => {
-            *state = MslLoadState::Loading {
-                phase: MslLoadPhase::FetchingBundle,
+            *state = LibraryLoadState::Loading {
+                phase: LibraryLoadPhase::FetchingBundle,
                 bytes_done: 0,
                 bytes_total: 0,
             };
         }
-        DatasetState::Cancelled => *state = MslLoadState::NotStarted,
-        DatasetState::Failed(error) => *state = MslLoadState::Failed(error.clone()),
+        DatasetState::Cancelled => *state = LibraryLoadState::NotStarted,
+        DatasetState::Failed(error) => *state = LibraryLoadState::Failed(error.clone()),
         DatasetState::Installed => {
             // A slot remains as the lifecycle marker for the one index attempt.
             // This prevents a failed indexer from being relaunched every frame.
@@ -928,28 +920,28 @@ fn drive_native_msl_dataset(
             if index_load.as_ref().is_some_and(|load| load.failed) {
                 return;
             }
-            let Some(root) = lunco_assets_core::source_library_root_path("msl", "Modelica") else {
-                *state = MslLoadState::Failed(
+            let Some(root) = lunco_assets_core::source_library_root_path("library") else {
+                *state = LibraryLoadState::Failed(
                     "dataset is installed but no Modelica/ tree exists in the cache".into(),
                 );
                 return;
             };
-            if root.join("msl_index.json").is_file() {
-                lunco_assets_core::library::install_global_library_sources(sources_with_extras(
-                    MslAssetSource::Filesystem(root.clone()),
-                ));
-                *state = MslLoadState::Ready {
+            if root.join("library_index.json").is_file() {
+                lunco_assets_core::library::install_global_library_sources(vec![
+                    LibraryAssetSource::Filesystem(root.clone()),
+                ]);
+                *state = LibraryLoadState::Ready {
                     file_count: count_mo_files(&root),
                     compressed_bytes: 0,
                     uncompressed_bytes: 0,
                 };
                 if index_load.is_none() {
-                    commands.insert_resource(NativeMslIndexLoad::new());
+                    commands.insert_resource(NativeLibraryIndexLoad::new());
                 }
                 return;
             }
-            *state = MslLoadState::Loading {
-                phase: MslLoadPhase::Parsing,
+            *state = LibraryLoadState::Loading {
+                phase: LibraryLoadPhase::Parsing,
                 bytes_done: 0,
                 bytes_total: 0,
             };
@@ -959,9 +951,9 @@ fn drive_native_msl_dataset(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn drive_native_msl_index(
-    index_load: Option<ResMut<NativeMslIndexLoad>>,
-    state: Option<Res<MslLoadState>>,
+fn drive_native_library_index(
+    index_load: Option<ResMut<NativeLibraryIndexLoad>>,
+    state: Option<Res<LibraryLoadState>>,
     mut commands: Commands,
 ) {
     use bevy::tasks::futures_lite::future;
@@ -970,7 +962,7 @@ fn drive_native_msl_index(
         return;
     };
 
-    if index_load.failed || crate::visual_diagram::msl_index_available() {
+    if index_load.failed || crate::visual_diagram::library_index_available() {
         return;
     }
 
@@ -979,7 +971,7 @@ fn drive_native_msl_index(
             let task = index_load
                 .task
                 .as_mut()
-                .expect("MSL index task disappeared while being polled");
+                .expect("source library index task disappeared while being polled");
             future::block_on(future::poll_once(task))
         };
         let Some(result) = result else {
@@ -988,14 +980,14 @@ fn drive_native_msl_index(
         index_load.task = None;
         match result {
             Ok(index) => {
-                if crate::visual_diagram::install_msl_index(index) {
-                    bevy::log::info!("[MSL] editor index loaded off-thread");
-                    commands.trigger(crate::visual_diagram::MslEditorIndexBecameReady);
+                if crate::visual_diagram::install_library_index(index) {
+                    bevy::log::info!("[source library] editor index loaded off-thread");
+                    commands.trigger(crate::visual_diagram::LibraryEditorIndexBecameReady);
                 }
             }
             Err(error) => {
                 index_load.failed = true;
-                bevy::log::error!("[MSL] editor index load failed: {error}");
+                bevy::log::error!("[source library] editor index load failed: {error}");
             }
         }
         return;
@@ -1005,10 +997,10 @@ fn drive_native_msl_index(
         return;
     }
 
-    bevy::log::info!("[MSL] loading editor index off-thread");
+    bevy::log::info!("[source library] loading editor index off-thread");
     index_load.task = Some(
         bevy::tasks::AsyncComputeTaskPool::get()
-            .spawn(async { crate::visual_diagram::load_msl_index_from_assets() }),
+            .spawn(async { crate::visual_diagram::load_library_index_from_assets() }),
     );
 }
 
@@ -1036,32 +1028,29 @@ fn count_mo_files(root: &std::path::Path) -> usize {
 type SharedSlot = Arc<Mutex<SlotInner>>;
 
 #[cfg(target_arch = "wasm32")]
-static WEB_MSL_SLOT: OnceLock<SharedSlot> = OnceLock::new();
+static WEB_LIBRARY_SLOT: OnceLock<SharedSlot> = OnceLock::new();
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 struct SlotInner {
     /// Latest state the fetcher has reported. The drain system replaces
-    /// the world's `MslLoadState` whenever this `take`s out a new value.
-    pending_state: Option<MslLoadState>,
+    /// the world's `LibraryLoadState` whenever this `take`s out a new value.
+    pending_state: Option<LibraryLoadState>,
     /// Raw **compressed** `parsed-*.bin.zst` bytes. Decompressed/decoded off
     /// the boot future: shipped to the worker + chunk-decoded on main. This is
     /// the fast path when the manifest advertises a pre-parsed bundle.
     pending_parsed_compressed: Option<Vec<u8>>,
     /// Raw **compressed** `sources-*.tar.zst` bytes + their manifest entry,
     /// stashed for lazy unpack on first editor drill-in.
-    pending_source_compressed: Option<(
-        Vec<u8>,
-        lunco_assets_core::library::LibraryBundleEntry,
-    )>,
+    pending_source_compressed: Option<(Vec<u8>, lunco_assets_core::library::LibraryBundleEntry)>,
 }
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Resource)]
-struct MslLoadSlot(SharedSlot);
+struct LibraryLoadSlot(SharedSlot);
 
 #[cfg(target_arch = "wasm32")]
-fn drain_msl_load_slot(slot: Res<MslLoadSlot>, mut state: ResMut<MslLoadState>) {
+fn drain_library_load_slot(slot: Res<LibraryLoadSlot>, mut state: ResMut<LibraryLoadState>) {
     let mut inner = match slot.0.lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -1070,8 +1059,10 @@ fn drain_msl_load_slot(slot: Res<MslLoadSlot>, mut state: ResMut<MslLoadState>) 
         // Log only on phase transitions / terminal states; progress
         // updates within the same phase would spam the console.
         match (&*state, &new_state) {
-            (MslLoadState::Loading { phase: a, .. }, MslLoadState::Loading { phase: b, .. })
-                if a == b => {}
+            (
+                LibraryLoadState::Loading { phase: a, .. },
+                LibraryLoadState::Loading { phase: b, .. },
+            ) if a == b => {}
             _ => log_state_transition(&new_state),
         }
         *state = new_state;
@@ -1079,69 +1070,69 @@ fn drain_msl_load_slot(slot: Res<MslLoadSlot>, mut state: ResMut<MslLoadState>) 
     // Fast boot path: a compressed parsed bundle is waiting. Ship it to the
     // worker for decompression/deserialization and transfer the decoded bytes
     // back for chunked main-thread deserialization (resolution/autocomplete).
-    // Stash the compressed source for lazy drill-in unpack. `MslLoadState`
-    // stays `Loading{Parsing}` until `drive_msl_main_decode` finishes.
+    // Stash the compressed source for lazy drill-in unpack. `LibraryLoadState`
+    // stays `Loading{Parsing}` until `drive_library_main_decode` finishes.
     if let Some(pbytes) = inner.pending_parsed_compressed.take() {
         // Ship the compressed bundle to the off-thread worker(s). The worker
         // decompresses + deserializes for its own compiles, then transfers the
         // decoded bincode bytes back so the main thread skips the ruzstd
         // decompress and only deserializes into its own heap (resolution /
-        // autocomplete) — see `ingest_worker_decoded_msl`.
-        let shipped = crate::worker_transport::install_msl_compressed_in_worker(&pbytes);
+        // autocomplete) — see `ingest_worker_decoded_library`.
+        let shipped = crate::worker_transport::install_library_compressed_in_worker(&pbytes);
         if shipped == 0 {
             let error =
                 "Modelica Web Worker is unavailable; rebuild the browser worker bundle".to_string();
             crate::worker_transport::fail_worker_pipeline(error.clone());
-            inner.pending_state = Some(MslLoadState::Failed(error));
+            inner.pending_state = Some(LibraryLoadState::Failed(error));
             inner.pending_source_compressed = None;
             return;
         }
         if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
-            crate::worker_transport::load_msl_index_in_worker(&sbytes);
+            crate::worker_transport::load_library_index_in_worker(&sbytes);
             stash_compressed_source(sbytes, smeta);
         }
         return;
     }
 }
 
-fn log_state_transition(s: &MslLoadState) {
+fn log_state_transition(s: &LibraryLoadState) {
     match s {
-        MslLoadState::NotStarted => {}
-        MslLoadState::Loading {
+        LibraryLoadState::NotStarted => {}
+        LibraryLoadState::Loading {
             phase,
             bytes_done,
             bytes_total,
         } => {
             if *bytes_total > 0 {
                 bevy::log::info!(
-                    "[MSL] {} ({:.1}/{:.1} MB)",
+                    "[source library] {} ({:.1}/{:.1} MB)",
                     phase.as_str(),
                     *bytes_done as f64 / 1_048_576.0,
                     *bytes_total as f64 / 1_048_576.0,
                 );
             } else {
-                bevy::log::info!("[MSL] {}", phase.as_str());
+                bevy::log::info!("[source library] {}", phase.as_str());
             }
         }
-        MslLoadState::Ready {
+        LibraryLoadState::Ready {
             file_count,
             compressed_bytes,
             uncompressed_bytes,
         } => {
             bevy::log::info!(
-                "[MSL] ready — {file_count} files ({:.1} MB compressed → {:.1} MB)",
+                "[source library] ready — {file_count} files ({:.1} MB compressed → {:.1} MB)",
                 *compressed_bytes as f64 / 1_048_576.0,
                 *uncompressed_bytes as f64 / 1_048_576.0,
             );
         }
-        MslLoadState::Failed(msg) => {
-            bevy::log::error!("[MSL] failed: {msg}");
+        LibraryLoadState::Failed(msg) => {
+            bevy::log::error!("[source library] failed: {msg}");
         }
     }
 }
 
-// The MSL-state → status-bus mirror moved to `crate::ui::core_observers`
-// (reactive UI layer). Core here only owns `MslLoadState` + `MslLoadPhase`.
+// The source library-state → status-bus mirror moved to `crate::ui::core_observers`
+// (reactive UI layer). Core here only owns `LibraryLoadState` + `LibraryLoadPhase`.
 
 // ─── Web fetcher implementation ─────────────────────────────────────
 
@@ -1150,7 +1141,7 @@ mod web {
     use super::*;
     use std::collections::HashSet;
 
-    use lunco_assets_core::library::LibraryManifest as MslManifest;
+    use lunco_assets_core::library::LibraryManifest;
     use lunco_assets_core::web_fetch;
     use wasm_bindgen::prelude::*;
 
@@ -1160,13 +1151,13 @@ mod web {
             Err(e) => {
                 crate::worker_transport::fail_worker_pipeline(e.clone());
                 if let Ok(mut s) = slot.lock() {
-                    s.pending_state = Some(MslLoadState::Failed(e));
+                    s.pending_state = Some(LibraryLoadState::Failed(e));
                 }
             }
         }
     }
 
-    fn set_state(slot: &SharedSlot, state: MslLoadState) {
+    fn set_state(slot: &SharedSlot, state: LibraryLoadState) {
         if let Ok(mut s) = slot.lock() {
             s.pending_state = Some(state);
         }
@@ -1178,16 +1169,17 @@ mod web {
     ) -> Result<(), String> {
         set_state(
             slot,
-            MslLoadState::Loading {
-                phase: MslLoadPhase::FetchingManifest,
+            LibraryLoadState::Loading {
+                phase: LibraryLoadPhase::FetchingManifest,
                 bytes_done: 0,
                 bytes_total: 0,
             },
         );
 
         let manifest_bytes =
-            web_fetch::fetch_bytes_revalidated(CACHE_NAME, "msl/manifest.json", settings).await?;
-        let manifest: MslManifest = serde_json::from_slice(&manifest_bytes)
+            web_fetch::fetch_bytes_revalidated(CACHE_NAME, "library/manifest.json", settings)
+                .await?;
+        let manifest: LibraryManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| format!("manifest.json parse: {e}"))?;
         if manifest.schema_version != 1 {
             return Err(format!(
@@ -1197,8 +1189,8 @@ mod web {
         }
 
         // ── Sources blob (small, always shipped). Used by the editor for
-        // ── opening MSL files after the runtime artifact is installed.
-        let bundle_path = format!("msl/{}", manifest.sources.filename);
+        // ── opening source library files after the runtime artifact is installed.
+        let bundle_path = format!("library/{}", manifest.sources.filename);
         let phase1 = bundle_fetch_phase(&bundle_path).await;
         // Per-blob progress: this download sweeps 0..its own size, so the bar
         // Each blob reports progress over its own byte range, so the bar
@@ -1209,7 +1201,7 @@ mod web {
         let progress_slot1 = slot.clone();
         let progress_cb1 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
             if let Ok(mut s) = progress_slot1.lock() {
-                s.pending_state = Some(MslLoadState::Loading {
+                s.pending_state = Some(LibraryLoadState::Loading {
                     phase: phase1,
                     bytes_done: done as u64,
                     bytes_total: total as u64,
@@ -1235,22 +1227,23 @@ mod web {
             ));
         }
 
-        if manifest.rumoca_artifact_tag != lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG {
+        if manifest.rumoca_artifact_tag != lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG
+        {
             return Err(format!(
-                "MSL parsed artifact tag `{}` does not match runtime `{}`; rebuild the MSL bundle",
+                "source library parsed artifact tag `{}` does not match runtime `{}`; rebuild the source library bundle",
                 manifest.rumoca_artifact_tag,
                 lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG,
             ));
         }
         let parsed_meta = &manifest.parsed;
-        let parsed_path = format!("msl/{}", parsed_meta.filename);
+        let parsed_path = format!("library/{}", parsed_meta.filename);
         let phase2 = bundle_fetch_phase(&parsed_path).await;
         // Per-blob again: the (larger) parsed bundle sweeps 0..its own size.
         let parsed_total = parsed_meta.compressed_bytes;
         let progress_slot2 = slot.clone();
         let progress_cb2 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
             if let Ok(mut s) = progress_slot2.lock() {
-                s.pending_state = Some(MslLoadState::Loading {
+                s.pending_state = Some(LibraryLoadState::Loading {
                     phase: phase2,
                     bytes_done: done as u64,
                     bytes_total: total as u64,
@@ -1281,7 +1274,7 @@ mod web {
         // the load.
         {
             // Filenames the current manifest references; everything else in the
-            // MSL bucket is a superseded release and gets evicted.
+            // source library bucket is a superseded release and gets evicted.
             let mut keep = HashSet::new();
             keep.insert("manifest.json".to_string());
             keep.insert(manifest.sources.filename.clone());
@@ -1295,8 +1288,8 @@ mod web {
         // the source bundle remains compressed until the editor opens a file.
         set_state(
             slot,
-            MslLoadState::Loading {
-                phase: MslLoadPhase::Parsing,
+            LibraryLoadState::Loading {
+                phase: LibraryLoadPhase::Parsing,
                 bytes_done: 0,
                 bytes_total: manifest.parsed.file_count as u64,
             },
@@ -1309,16 +1302,16 @@ mod web {
         Ok(())
     }
 
-    const CACHE_NAME: &str = "lunco-msl-v1";
+    const CACHE_NAME: &str = "lunco-library-v1";
 
     /// The progress phase to show while fetching `path`: a cache hit loads
-    /// locally (no network), so report [`LoadingCache`](MslLoadPhase::LoadingCache)
-    /// instead of [`FetchingBundle`](MslLoadPhase::FetchingBundle) ("downloading").
-    async fn bundle_fetch_phase(path: &str) -> MslLoadPhase {
+    /// locally (no network), so report [`LoadingCache`](LibraryLoadPhase::LoadingCache)
+    /// instead of [`FetchingBundle`](LibraryLoadPhase::FetchingBundle) ("downloading").
+    async fn bundle_fetch_phase(path: &str) -> LibraryLoadPhase {
         if web_fetch::cache_has(CACHE_NAME, path).await {
-            MslLoadPhase::LoadingCache
+            LibraryLoadPhase::LoadingCache
         } else {
-            MslLoadPhase::FetchingBundle
+            LibraryLoadPhase::FetchingBundle
         }
     }
 }
@@ -1340,7 +1333,7 @@ mod parsed_bundle_tests {
     fn zstd_bundle_roundtrips() {
         let dir = std::env::temp_dir().join("lunco_parsed_bundle_zstd");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("parsed-msl.bin");
+        let path = dir.join("parsed-library.bin");
         let docs = sample_docs();
 
         write_parsed_bundle(&path, &docs).expect("write compressed bundle");

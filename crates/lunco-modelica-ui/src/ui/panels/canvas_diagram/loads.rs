@@ -1,6 +1,6 @@
 //! Drill-in and duplicate document loaders.
 //!
-//! Two parallel pipelines: drill-in opens MSL classes read-only,
+//! Two parallel pipelines: drill-in opens source library classes read-only,
 //! duplicate creates an editable Untitled copy. Both reserve a doc
 //! id eagerly, spawn an off-thread loader on
 //! `AsyncComputeTaskPool`, and install the prebuilt
@@ -43,7 +43,7 @@ pub(crate) fn on_drill_into_class_requested(
 pub struct DrillInBinding {
     pub qualified: String,
     /// Off-thread document load. Built via
-    /// [`crate::document::ModelicaDocument::load_msl_file`] which
+    /// [`crate::document::ModelicaDocument::load_library_file`] which
     /// hits rumoca's content-hash artifact cache, so a class whose
     /// containing file the engine session has already parsed
     /// installs in milliseconds. Driven by [`drive_drill_in_loads`].
@@ -185,7 +185,7 @@ pub fn drive_duplicate_loads(
                 });
             }
         }
-        // Pre-warm the MSL inheritance chain on a dedicated thread so
+        // Pre-warm the source library inheritance chain on a dedicated thread so
         // the projection finds inherited connectors. Same pattern as
         // the drill-in path. The duplicated copy carries `within
         // <origin package>;` so the within-prefixed qualified path
@@ -340,19 +340,19 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
             id: "modelica_analyze".into(),
         });
 
-    // On web the MSL *source* tar is unpacked lazily: the fast-path bundle
-    // install registers only the parsed AST (`GLOBAL_PARSED_MSL`), leaving
+    // On web the source library *source* tar is unpacked lazily: the fast-path bundle
+    // install registers only the parsed AST (`GLOBAL_PARSED_SOURCE_BUNDLE`), leaving
     // the source files stashed compressed. The path resolvers below query
-    // `global_msl_sources()`, which is empty for source files until that
-    // unpack runs — so without this, clicking any MSL class in the library
+    // `global_library_sources()`, which is empty for source files until that
+    // unpack runs — so without this, clicking any source library class in the library
     // tree (or a canvas drill-in) silently no-ops on web. Unpack now;
     // it's idempotent and one-time. Native already has the sources on disk.
     #[cfg(target_arch = "wasm32")]
-    crate::msl_remote::ensure_msl_source_unpacked();
+    crate::library_remote::ensure_library_source_unpacked();
 
-    // Try MSL paths first (resolves Modelica.* and any other MSL-rooted
+    // Try source library paths first (resolves Modelica.* and any other source library-rooted
     // qualified path). Fallback: scan the open document registry for a
-    // doc whose AST contains the requested class — handles non-MSL
+    // doc whose AST contains the requested class — handles non-source library
     // user-opened files (e.g. `assets/models/AnnotatedRocketStage.mo`)
     // where the qualified name lives only in a workspace document.
     let file_path = crate::library_fs::resolve_class_path_indexed(qualified)
@@ -404,7 +404,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
     // Bundled fallback: a LunCoSim example shipped in the binary
     // (`assets/models/*.mo`, embedded via `include_str!` — no file path). This
     // is the third `SourceRootKind` (`Bundled`), so routing it here means
-    // `OpenClass{qualified}` resolves the WHOLE schema — MSL, open workspace
+    // `OpenClass{qualified}` resolves the WHOLE schema — source library, open workspace
     // docs, AND bundled demos — through one command instead of the Welcome
     // panel owning a separate bundled opener. Match the top-level qualified
     // segment against a bundled model's filename stem and open it in-memory.
@@ -422,7 +422,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
         return;
     }
     bevy::log::warn!(
-        "[CanvasDiagram] drill-in: could not locate `{}` (no MSL match, no open doc, no bundled model)",
+        "[CanvasDiagram] drill-in: could not locate `{}` (no source library match, no open doc, no bundled model)",
         qualified
     );
 }
@@ -442,11 +442,11 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
 fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::Path) {
     // Find or allocate the doc. Reuse an existing one only if the
     // same `(file, drilled-in class)` was opened before — keying on
-    // file alone collapsed sibling MSL classes (e.g. `Integrator`
+    // file alone collapsed sibling source library classes (e.g. `Integrator`
     // and `Derivative` both in `Continuous.mo`) onto one tab, so a
     // second drill silently focused the first tab instead of
     // showing the requested class.
-    let model_path_id = format!("msl://{qualified}");
+    let model_path_id = format!("library://{qualified}");
     let existing_doc = {
         let registry = world.resource::<ModelicaDocumentRegistry>();
         let tabs = world.resource::<crate::model_tabs::ModelTabs>();
@@ -482,7 +482,7 @@ fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::
     };
 
     if needs_load {
-        // Spawn the off-thread load. `load_msl_class` extracts only
+        // Spawn the off-thread load. `load_library_class` extracts only
         // the target class from the wrapper file: a 152 KB
         // `Modelica/Blocks/package.mo` becomes a ~7 KB doc holding
         // just `PID_Controller` + a `within Modelica.Blocks.Examples;`
@@ -492,7 +492,7 @@ fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::
         let path_for_task = file_path.to_path_buf();
         let qualified_for_task = qualified.to_string();
         let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-            crate::document::ModelicaDocument::load_msl_class(
+            crate::document::ModelicaDocument::load_library_class(
                 doc_id,
                 &path_for_task,
                 &qualified_for_task,

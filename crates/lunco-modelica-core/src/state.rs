@@ -11,11 +11,11 @@ pub fn is_generated_document(document: &ModelicaDocument) -> bool {
     lunco_modelica_runtime::generated_source::is_generated_origin(document.origin())
 }
 
-/// Which library a model belongs to.
+/// Which source kind a model belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum ModelLibrary {
-    /// Modelica Standard Library (read-only).
-    MSL,
+pub enum ModelSource {
+    /// A read-only source library or package.
+    Source,
     /// Bundled models shipped with LunCoSim (read-only for now).
     #[default]
     Bundled,
@@ -169,7 +169,7 @@ impl ModelicaDocumentRegistry {
     /// Allocate a fresh [`lunco_doc::DocumentId`] WITHOUT building the host.
     /// Pairs with [`Self::install_prebuilt`]: caller uses the id
     /// to build a `ModelicaDocument` off-thread (the parse can take
-    /// seconds on large MSL package files), then installs the
+    /// seconds on large source library package files), then installs the
     /// fully-parsed host back in the registry on the main thread.
     ///
     /// Emits no `Opened` / `Changed` yet — those fire on

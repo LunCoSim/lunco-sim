@@ -11,7 +11,7 @@
 //! The standard egui image loaders don't know this scheme. Until we
 //! register ours they'd log `unsupported uri scheme`, leaving the
 //! image placeholder empty. This loader resolves the URI through the
-//! MSL asset source and hands the bytes off to egui's cached decoder.
+//! source library asset source and hands the bytes off to egui's cached decoder.
 //!
 //! Non-`modelica://` URIs are left to the raster loader installed by
 //! [`egui_extras::install_image_loaders`] — this one returns
@@ -19,17 +19,17 @@
 //!
 //! # One path, both targets
 //!
-//! Bytes are fetched through [`lunco_assets_core::msl::msl_read`] — the MSL
-//! *virtual* filesystem — not `std::fs`. `msl_read` resolves a
-//! bundle-relative path (`Modelica/Resources/Images/…`) against whichever MSL
+//! Bytes are fetched through [`lunco_assets_core::library::library_read`] — the source library
+//! *virtual* filesystem — not `std::fs`. `library_read` resolves a
+//! bundle-relative path (`Modelica/Resources/Images/…`) against whichever source library
 //! root is installed: the on-disk tree on native, the in-memory bundle the web
 //! fetcher unpacked on wasm. So this loader compiles and runs identically on
 //! both targets, with no `#[cfg]` in the load path.
 //!
-//! **Known gap (not in this crate):** the *web* MSL bundle currently carries
-//! only `.mo` sources — `crates/lunco-modelica-assets/src/bin/build_msl_assets.rs`
+//! **Known gap (not in this crate):** the *web* source library bundle currently carries
+//! only `.mo` sources — `crates/lunco-modelica-assets/src/bin/build_library_assets.rs`
 //! explicitly skips `Resources/` (images, matrix data). Until that bundler ships
-//! them, `msl_read` returns `None` in the browser and Documentation images fall
+//! them, `library_read` returns `None` in the browser and Documentation images fall
 //! back to their `alt` text, exactly as before. The fix is one step in the
 //! bundler, and this loader needs no change when it lands.
 
@@ -67,7 +67,7 @@ enum Slot {
 }
 
 /// Image loader that resolves `modelica://Package/sub/path.png`
-/// against the on-disk MSL tree.
+/// against the on-disk source library tree.
 ///
 /// Every disk read runs on a background thread: first poll spawns
 /// the worker and returns `BytesPoll::Pending`; egui's image loader
@@ -97,7 +97,7 @@ impl ModelicaImageLoader {
     ///
     /// Pre-warming the icon cache eliminates the visible "node has
     /// no icon for ~2 seconds after Add" gap that the optimistic
-    /// synth path exhibits when a fresh MSL component first appears
+    /// synth path exhibits when a fresh source library component first appears
     /// on the canvas. With the bytes already in `Slot::Ready`, the
     /// next paint just reads them — no async file load, no decode
     /// hitch, no perceived freeze.
@@ -145,19 +145,19 @@ impl ModelicaImageLoader {
             .detach();
     }
 
-    /// Resolve `modelica://Modelica/Resources/…` → an **MSL-root-relative**
+    /// Resolve `modelica://Modelica/Resources/…` → an **source library-root-relative**
     /// path (`Modelica/Resources/…`), the key
-    /// [`lunco_assets_core::msl::msl_read`] takes. The root itself (a directory on
+    /// [`lunco_assets_core::library::library_read`] takes. The root itself (a directory on
     /// native, the in-memory bundle on wasm) is the storage layer's business,
     /// not ours — which is what makes this one function correct on both
     /// targets.
     ///
     /// Returns `None` for non-`modelica://` URIs and for any path segment `..`
-    /// (defence-in-depth: a malformed URI must not climb out of the MSL root).
+    /// (defence-in-depth: a malformed URI must not climb out of the source library root).
     fn resolve_uri(uri: &str) -> Option<std::path::PathBuf> {
         let rest = uri.strip_prefix("modelica://")?;
         // Strip a leading "Modelica/" if present so both
-        // `modelica://Modelica/Resources/…` (MSL-internal) and
+        // `modelica://Modelica/Resources/…` (source library-internal) and
         // `modelica:///Resources/…` resolve the same way.
         let rel: &str = rest.strip_prefix("Modelica/").unwrap_or(rest);
         if rel.split('/').any(|seg| seg == "..") {
@@ -234,7 +234,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         let path = match Self::resolve_uri(uri) {
             Some(p) => p,
             None => {
-                let msg = format!("modelica:// URI outside MSL root: {uri}");
+                let msg = format!("modelica:// URI outside source library root: {uri}");
                 cache.insert(uri.to_string(), Slot::Failed(msg.clone()));
                 return Err(egui::load::LoadError::Loading(msg));
             }
@@ -254,7 +254,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         let ctx = ctx.clone();
         bevy::tasks::IoTaskPool::get()
             .spawn(async move {
-                // MSL virtual FS: on-disk tree (native) or in-memory bundle (web).
+                // source library virtual FS: on-disk tree (native) or in-memory bundle (web).
                 let read_result: Result<Arc<[u8]>, String> =
                     match lunco_assets_core::library::library_read(&path) {
                         Some(bytes) => {
@@ -268,12 +268,12 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
                         }
                         None => {
                             bevy::log::warn!(
-                                "[ModelicaImageLoader] not found in any MSL root: {} → {}",
+                                "[ModelicaImageLoader] not found in any source library root: {} → {}",
                                 uri_for_worker,
                                 path.display(),
                             );
                             Err(format!(
-                                "modelica:// image not found in the MSL root ({})",
+                                "modelica:// image not found in the source library root ({})",
                                 path.display(),
                             ))
                         }

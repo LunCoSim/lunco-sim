@@ -3,7 +3,7 @@
 //!
 //! If any of these fail we need to fix the foundation before wiring the
 //! diagram panel (Phase α) to it. Passing means the ops scale to real
-//! MSL-shaped circuits.
+//! source library-shaped circuits.
 
 use lunco_doc::{DocumentHost, DocumentId};
 use lunco_modelica_ast::pretty::{ComponentDecl, ConnectEquation, Line, Placement, PortRef};
@@ -46,7 +46,7 @@ fn latest_change_idx(host: &DocumentHost<ModelicaDocument>) -> u64 {
 
 #[test]
 fn build_rc_circuit_from_empty_model() {
-    // Start with just a model skeleton. Populate it with MSL-shaped
+    // Start with just a model skeleton. Populate it with source library-shaped
     // components and connect them — exactly what the diagram panel
     // will do on drag+drop + wire.
     let mut host = doc("model Circuit\nend Circuit;\n");
@@ -201,7 +201,7 @@ end Gamma;
 #[test]
 fn connect_components_of_different_types_within_one_model() {
     // Two components of *different* connector-having types,
-    // connected together — like an MSL Voltage source + Resistor.
+    // connected together — like an external Voltage source + Resistor.
     // This is the normal diagram case.
     let source = "\
 connector Pin

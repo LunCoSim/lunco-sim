@@ -314,10 +314,11 @@ On every rumoca bump, in this order:
 1. `cargo update -p rumoca-compile` (all rumoca crates share one git source, so
    this moves them together).
 2. Re-run the probes above; delete any workaround whose probe went green.
-3. Bump `EXPECTED_RUMOCA_ARTIFACT_TAG` in `lunco-assets-core/src/msl.rs` — the bincode'd
+3. Bump `EXPECTED_RUMOCA_ARTIFACT_TAG` in `lunco-assets-core/src/library.rs` — the bincode'd
    `StoredDefinition` layout is version-sensitive and a stale bundle decodes to
    garbage.
-4. `rm .cache/msl/parsed-msl.bin && cargo run --release --bin msl_indexer -- --warm`.
+4. Remove `.cache/lunco/library/parsed-library.bin` and run
+   `cargo run --release --bin modelica_library_indexer -- --warm`.
 5. `cargo test --workspace` **and** `cargo test -p lunco-modelica-ui -- --ignored`
    (the ignored set is where the upstream-bug pins live — that's how the 0.9.20
    bump revealed 7 fixed bugs).

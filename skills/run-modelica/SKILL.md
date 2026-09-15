@@ -238,7 +238,7 @@ Two kinds of `command` share this envelope:
 API=http://127.0.0.1:4101/api/commands
 post(){ curl -s -X POST $API -H "Content-Type: application/json" -d "$1"; }
 
-# 1. Open a model. Prefer the unified opener (bundled example / MSL name / path):
+# 1. Open a model. Prefer the unified opener (bundled example / qualified source-library name / path):
 post '{"type":"ExecuteCommand","command":"Open","params":{"uri":"bundled://SpringMass.mo"}}'
 #    bundled://Name.mo | Modelica.Blocks.Examples.PID_Controller | /abs/path.mo | mem://Untitled
 #    List embedded examples first: {"type":"ExecuteCommand","command":"ListBundled","params":{}}
@@ -399,8 +399,8 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 |---|---|---|
 | `Ping` | `{}` | readiness check |
 | `ListBundled` | `{}` | embedded example models (`bundled://` URIs) |
-| `FindModel` | `{query, limit?}` | fuzzy search examples/Twin/MSL/open docs → URIs |
-| `Open` | `{uri}` | open bundled/MSL/path/mem into a tab |
+| `FindModel` | `{query, limit?}` | fuzzy search examples/Twin/source libraries/open docs → URIs |
+| `Open` | `{uri}` | open bundled/source-library/path/mem into a tab |
 | `ListOpenDocuments` | `{}` | `doc_id, title, kind, origin, dirty, active` per tab |
 | `DescribeModel` | `{doc, class?}` | AST: components, connections, inputs, parameters, outputs (pre-compile) |
 | `CompileStatus` | `{doc}` | `state, ast_parsed, candidates, picker_pending, drilled_in_class` |

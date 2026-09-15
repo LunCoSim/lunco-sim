@@ -284,7 +284,7 @@ large healthy DEM can continue while a silent peer releases its worker.
 
 `lunco-settings::DownloadSettings` is the single application-wide transport
 policy. It is persisted in `<OS config dir>/lunco/settings.json` and is used by
-the CLI, interactive asset registry, scenario HTTP, MSL, terrain, browser
+the CLI, interactive asset registry, scenario HTTP, Modelica source libraries, terrain, browser
 Cache Storage fetches, and the desktop updater. `max_attempts` counts the first
 request; subsequent waits use exponential backoff with a configured multiplier
 and maximum delay. No downloader owns a second retry constant or settings file.
@@ -429,8 +429,8 @@ never enter a release by accident.
 
 Target names distinguish delivery profiles where the same binary has different
 packaging owners: `lunica-native`, `luncosim-native`, `lunica-web`, and
-`luncosim-web`. The web build still creates its dedicated MSL bundle through
-`lunco-modelica-assets`'s `build_msl_assets`; raw MSL entries therefore target
+`luncosim-web`. The web build still creates its dedicated source-library bundle through
+`lunco-modelica-assets`'s `build_modelica_library_assets`; raw source-library entries therefore target
 native packaging only.
 
 The downloader qualifies bundle keys as `<group>/<key>` for actionable errors,

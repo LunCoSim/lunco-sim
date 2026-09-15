@@ -124,9 +124,7 @@ pub fn draw_input_overlay(
                         };
                         for (_, binding) in bindings {
                             let label = key_label(&binding);
-                            let pressed = binding
-                                .iter()
-                                .any(|key| keys.pressed(*key));
+                            let pressed = binding.iter().any(|key| keys.pressed(*key));
                             draw_key(ui, &label, pressed);
                         }
                         ui.separator();
@@ -179,9 +177,7 @@ pub fn draw_input_overlay(
         });
 }
 
-register_commands!(
-    on_toggle_input_overlay,
-);
+register_commands!(on_toggle_input_overlay,);
 
 /// Register the typed presentation commands without installing an egui panel.
 /// Offscreen/headless scenario runners still receive the shared command surface.

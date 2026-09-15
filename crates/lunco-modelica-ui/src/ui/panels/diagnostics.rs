@@ -307,7 +307,7 @@ pub fn refresh_diagnostics(
 
     // 3. Lint findings — `rumoca-tool-lint` runs on the source and
     // returns warnings/style issues with line+column. For 150KB+
-    // MSL package files the lint pass used to take 100–500ms on the
+    // source library package files the lint pass used to take 100–500ms on the
     // main thread whenever the AST generation changed (opening a
     // class, every keystroke). We now dispatch to a background
     // thread and merge results once they arrive. The
@@ -357,7 +357,7 @@ pub fn refresh_diagnostics(
             // **Wasm: lint disabled.** `rumoca_tool_lint::lint` does a
             // synchronous rumoca parse on the source. On
             // `wasm32-unknown-unknown`, `AsyncComputeTaskPool` runs
-            // cooperatively on the main thread — a 150 KB MSL file
+            // cooperatively on the main thread — a 150 KB source library file
             // (e.g. `Modelica/Blocks/Continuous.mo`) freezes the UI
             // for tens of seconds inside that single parse. Park the
             // empty entry list as a permanent cache so the dedup gate
