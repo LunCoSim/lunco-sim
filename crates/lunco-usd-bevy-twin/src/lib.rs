@@ -329,6 +329,8 @@ pub fn wake_twin_projection(world: &mut World) {
 
 #[cfg(test)]
 mod tests {
+    use bevy::asset::AssetIndex;
+
     use super::*;
 
     #[test]
@@ -386,5 +388,22 @@ mod tests {
             Some(("assembly".into(), "scene.usda".into()))
         );
         assert!(backed.coords_of(doc).is_none());
+    }
+
+    #[test]
+    fn standalone_preview_marks_typed_stage_generation_consumed() {
+        let doc = DocumentId::new(7);
+        let stage: AssetId<UsdStageAsset> = AssetIndex::from_bits(11).into();
+        let mut backed = DocBackedTwinScenes::default();
+        backed.track_preview(doc, "assembly".into(), "component.usda".into());
+
+        backed.mark_applied(doc, stage, 4);
+        assert_eq!(backed.synced_generation(doc), None);
+
+        // Preview stages do not pass through the live ECS sink.  The
+        // projection owner therefore closes their cursor explicitly once the
+        // canonical stage has been updated.
+        backed.mark_stage_projected(stage);
+        assert_eq!(backed.synced_generation(doc), Some(4));
     }
 }
