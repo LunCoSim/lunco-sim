@@ -40,6 +40,12 @@ that lifecycle edge rather than relying on a timer. Sensor events may carry a
 nested collider; match the entrant through the generic `parent()` chain to the
 authored subject instead of adding a route-specific child relationship.
 
+The reusable route marker is an opaque, unlit annotation: its authored pending
+colour is bright amber in standard `primvars:displayColor`, and `route_follow`
+changes that gprim colour to bright green through `waypoint_editor`'s transient
+USD view operation when the generic sensor event reaches it. This is
+presentation state, not a vessel component or a second route fact.
+
 Script source edits made by a user go through the `ScriptDocument` host, so
 undo, redo, and the Twin journal see the same typed `ScriptOp`. A file-backed
 or USD-embedded source refresh uses the shared external-baseline path instead;

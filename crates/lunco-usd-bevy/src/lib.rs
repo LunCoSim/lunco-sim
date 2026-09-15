@@ -2591,6 +2591,11 @@ fn read_standard_material(
     // it. Read it here, at the USD material boundary, so every additive surface
     // (not only this episode's plume) gets the same render semantics.
     let additive = read_material_bool(reader, sdf_path, "lunco:surface:additive")?.unwrap_or(false);
+    // `UsdPreviewSurface` has no standard unlit switch. The registered
+    // LunCoSurfaceAPI property is the project-level spelling for a scene
+    // annotation that must bypass light, normal, and shadow evaluation; it
+    // maps directly to the generic PbrLook render intent.
+    let unlit = read_material_bool(reader, sdf_path, "lunco:surface:unlit")?.unwrap_or(false);
     let alpha_mode = if additive {
         SurfaceAlpha::Add
     } else if opacity_threshold > 0.0 {
@@ -2635,6 +2640,7 @@ fn read_standard_material(
             normal_map: normal_map_texture,
             occlusion: occlusion_texture,
         },
+        unlit,
         unshared: animated,
         // `doubleSided` — core `UsdGeomGprim`, and it was not being read at all.
         //

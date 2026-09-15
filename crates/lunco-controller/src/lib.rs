@@ -678,11 +678,15 @@ impl Plugin for LunCoControllerPlugin {
         app.add_systems(Update, refresh_live_input_maps);
         // WindowEvent is consumed by Bevy Picking in First, while the typed
         // keyboard/mouse messages are consumed by InputSystems in PreUpdate.
+        // This bridge is only valid for a windowed host: headless/offscreen
+        // hosts have no native window-message resources to initialize.
         // Emit before Picking so one pending gesture reaches both consumers in
         // the same frame; the typed messages remain available for PreUpdate.
         app.add_systems(
             First,
-            emit_pending_window_input.before(bevy::picking::PickingSystems::Input),
+            emit_pending_window_input
+                .run_if(any_with_component::<PrimaryWindow>)
+                .before(bevy::picking::PickingSystems::Input),
         );
         app.add_systems(PostUpdate, restore_injected_cursor);
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
@@ -1754,6 +1758,27 @@ mod tests {
             WindowEvent::MouseButtonInput(_)
         ));
         assert!(matches!(observed.aggregate[3], WindowEvent::MouseWheel(_)));
+    }
+
+    #[test]
+    fn injected_window_input_is_safe_without_window_event_stream() {
+        let mut app = App::new();
+        app.add_message::<PendingWindowInput>()
+            .init_resource::<InputBindingsSettings>()
+            .init_resource::<InjectedCursorRestore>()
+            .add_systems(
+                Update,
+                emit_pending_window_input.run_if(any_with_component::<PrimaryWindow>),
+            );
+
+        app.world_mut()
+            .resource_mut::<Messages<PendingWindowInput>>()
+            .write(PendingWindowInput(WindowInputEvent::PointerMove {
+                x: 12.0,
+                y: 34.0,
+            }));
+
+        app.update();
     }
 
     #[derive(Resource, Default)]

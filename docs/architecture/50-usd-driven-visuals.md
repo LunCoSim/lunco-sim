@@ -190,25 +190,32 @@ casting, and `material:binding` is not the place to say so.
 > `PhysxRigidBodyAPI` and `PhysxGearJoint`; rover motion remains an authored
 > program over generic joints and ports rather than a vendor vehicle mode.
 
-## Unlit is not yours to author
+## Unlit is a USD-authored geometry intent
 
 A beam, a plume, a trajectory line is a **symbol**, not a surface: asking how the sun
 falls on it is a category error. On the Moon it is not cosmetic either — there is no
 atmosphere, so no ambient fill, and a lit surface facing away from the sun renders *pure
 black*. A lit beam vanishes on the night side, exactly where an altimeter earns its keep.
 
-`PbrLook.unlit` does this, but it is **render intent for Rust-spawned overlays** — the
-brush, name labels, trajectory lines — and no `.usda` authors it. Authored scene content
-says it the USD way, which `UsdPreviewSurface` expresses perfectly well:
+`UsdPreviewSurface` has no standard unlit input, so scene-authored symbols use the
+registered `LunCoSurfaceAPI` property on the gprim. The USD reader projects it to
+`PbrLook.unlit`, and the render binder sets the concrete material's `unlit` flag. This
+bypasses light, normal, and shadow evaluation without adding radiance:
 
 ```usda
-color3f inputs:diffuseColor  = (0.0, 0.0, 0.0)
-color3f inputs:emissiveColor = (1.0, 0.1, 0.1)
-color3f inputs:specularColor = (0.0, 0.0, 0.0)
-float   inputs:opacity       = 0.85   # sub-1 ⇒ Blend ⇒ alpha means something
+def Sphere "RoutePoint" (
+    prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"]
+)
+{
+    bool lunco:surface:unlit = true
+    bool primvars:doNotCastShadows = true
+}
 ```
 
-The beam is authored, so it takes the USD route. The rule is the `unlit` doc's own.
+The marker's bound `UsdPreviewSurface` carries its constant opaque diffuse colour and
+zero emissive colour. `doNotCastShadows` remains a separate gprim intent. Use
+`emissiveColor` only for a surface that is meant to emit visible radiance; it is not a
+replacement for unlit presentation.
 
 ## Engine-filled shader uniforms — a provider registry, not a branch
 

@@ -117,7 +117,7 @@ base-only redirect.
 | `shader` | swaps the `ShaderLook`'s shader | no |
 | `visible` | sets `Visibility` (Hidden/Visible) | yes, when a document owns the prim |
 | `base_color`, `emissive`, `metallic`, `roughness`, `ior`, `alpha`, `double_sided` | the entity's `PbrLook` via `apply_pbr_look` | **yes** — as `UsdPreviewSurface` `inputs:*` (`double_sided` → `doubleSided` on the Gprim) |
-| `unlit` | the entity's `PbrLook` | no — render-only intent (overlay geometry); USD has no equivalent, by design |
+| `unlit` | the entity's `PbrLook` | yes — `lunco:surface:unlit` on the gprim through registered `LunCoSurfaceAPI` |
 | reflected shader param | the entity's `ShaderLook` values (`lunco_materials`) + the shared bound-Shader resolver | yes — typed `inputs:<snake_case>` on the bound `UsdShade.Shader` |
 
 All five mutate **appearance intent**, never a material asset: `lunco-render-bevy`

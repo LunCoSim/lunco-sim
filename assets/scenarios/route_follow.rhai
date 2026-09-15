@@ -381,6 +381,15 @@ fn start_route(me, state) {
     if subject < 0 {
         return route_failure("the route has no valid subject");
     }
+    // Route-point presentation is a transient USD view and may still be
+    // settling after an edit. Prepare it before taking control so a retry
+    // cannot issue PossessVessel repeatedly after a partial start.
+    let reset = waypoint_editor::reset_marker_states(
+        route_document(me), route_path(me),
+    );
+    if reset.ok != true {
+        return route_view_failure(reset, "the route-point state tool returned no result");
+    }
     // An autonomous program is a control session, but it must not steal the
     // operator's camera. Possession still goes through the generic authority
     // command so the authored controller sees the same piloted gate as a human.
@@ -400,6 +409,7 @@ fn on_start(me) {
     this.selected = route_is_selected(me);
     this.route_revision = ();
     this.route_error = "";
+    this.start_requested = false;
     let view = refresh_route_view(me, this);
     if view.ok != true {
         if view.retryable != true {
@@ -456,7 +466,10 @@ fn on_event(me, evt) {
                 this.current_path = ();
                 this.sensor_entered = #{};
                 this.route_error = "";
+                this.start_requested = false;
                 emit("route_started");
+            } else if started.retryable == true {
+                this.start_requested = true;
             } else if this.route_error != started.error {
                 notify_kind("Route program stopped: " + started.error, "error");
                 this.route_error = started.error;
@@ -475,12 +488,26 @@ fn on_event(me, evt) {
             this.current_path = ();
             this.sensor_entered = #{};
             this.route_error = "";
+            this.start_requested = false;
             emit("route_started");
+        } else if started.retryable == true {
+            this.start_requested = true;
         } else if this.route_error != started.error {
             notify_kind("Route program stopped: " + started.error, "error");
             this.route_error = started.error;
         }
     } else if transition.kind == "advance" {
+        let point = current_point(me, this);
+        let visual = waypoint_editor::set_marker_state(
+            route_document(me), point, true,
+        );
+        if visual.ok != true {
+            if this.route_error != visual.error {
+                notify_kind("Route program stopped: " + visual.error, "error");
+                this.route_error = visual.error;
+            }
+            return;
+        }
         emit("route_point_reached", this.route_index);
         this.route_index = transition.index;
         this.current_path = ();
@@ -492,6 +519,23 @@ fn on_event(me, evt) {
 // ribbon; sensor events remain the sole progression authority.
 fn task(me) {
     forever(step(|m| {
+        // A start request is independent of the disposable ribbon view. Do
+        // not let a concurrent ribbon rebuild consume the one-shot action;
+        // retry the typed start transaction until its authored markers are
+        // visible in the canonical USD projection.
+        if this.start_requested && !this.enabled {
+            if !this.selected { this.selected = route_is_selected(m); }
+            if !this.selected { return false; }
+            let started = start_route(m, this);
+            if started.ok != true { return false; }
+            this.enabled = true;
+            this.route_index = route_start_index(m, this);
+            this.current_path = ();
+            this.sensor_entered = #{};
+            this.route_error = "";
+            this.start_requested = false;
+            emit("route_started");
+        }
         // The ribbon is a presentation of the authored program, not the
         // control authority. Keep it synchronized for every live program so
         // selecting a different program cannot make the previous view stale.

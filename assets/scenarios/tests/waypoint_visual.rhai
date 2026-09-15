@@ -67,6 +67,20 @@ fn annotation_shader_is_emissive(shader_path) {
         && emissive != () && (emissive[0] > 0.0 || emissive[1] > 0.0 || emissive[2] > 0.0)
 }
 
+fn annotation_shader_is_unlit(shader_path) {
+    let shader = query("QueryUsdPrim", #{
+        path: shader_path,
+        attrs: ["inputs:diffuseColor", "inputs:specularColor", "inputs:emissiveColor"],
+    });
+    if shader == () || shader.ok == false || shader.attrs == () { return false; }
+    let diffuse = shader.attrs["inputs:diffuseColor"];
+    let specular = shader.attrs["inputs:specularColor"];
+    let emissive = shader.attrs["inputs:emissiveColor"];
+    diffuse == ()
+        && specular != () && specular[0] == 0.0 && specular[1] == 0.0 && specular[2] == 0.0
+        && emissive != () && emissive[0] == 0.0 && emissive[1] == 0.0 && emissive[2] == 0.0
+}
+
 fn annotation_shader_is_opaque(shader_path) {
     let shader = query("QueryUsdPrim", #{
         path: shader_path,
@@ -80,14 +94,27 @@ fn annotation_shader_is_opaque(shader_path) {
 fn route_point_uses_annotation_material() {
     let dome = query("QueryUsdPrim", #{
         path: ROUTE_POINT + "/Dome",
-        attrs: ["primvars:doNotCastShadows", "primvars:displayOpacity", "lunco:surface:additive"],
+        attrs: ["primvars:doNotCastShadows", "primvars:displayOpacity", "lunco:surface:additive", "lunco:surface:unlit"],
     });
     if dome == () || dome.ok == false || dome.attrs == () { return false; }
-    let opacity = dome.attrs["primvars:displayOpacity"];
     dome.attrs["primvars:doNotCastShadows"] == true
-        && opacity != () && opacity.len() == 1 && (opacity[0] - 0.08).abs() < 0.000001
-        && dome.attrs["lunco:surface:additive"] == true
-        && annotation_shader_is_emissive(ROUTE_POINT + "/Looks/Dome_Mat/Surface")
+        && dome.attrs["primvars:displayOpacity"] == ()
+        && dome.attrs["lunco:surface:additive"] == ()
+        && dome.attrs["lunco:surface:unlit"] == true
+        && annotation_shader_is_unlit(ROUTE_POINT + "/Looks/Dome_Mat/Surface")
+}
+
+fn route_point_uses_pending_color() {
+    let shader = query("QueryUsdPrim", #{
+        path: ROUTE_POINT + "/Dome",
+        attrs: ["primvars:displayColor"],
+    });
+    if shader == () || shader.ok == false || shader.attrs == () { return false; }
+    let color = shader.attrs["primvars:displayColor"];
+    color != () && color.len() == 1 && color[0].len() == 3
+        && (color[0][0] - 1.0).abs() < 0.000001
+        && (color[0][1] - 0.35).abs() < 0.000001
+        && (color[0][2] - 0.02).abs() < 0.000001
 }
 
 fn landing_location_uses_annotation_material() {
@@ -143,7 +170,9 @@ fn on_tick(me) {
     checks.push(t_true(route_point_uses_shared_billboard_contract(),
         "route-point marker does not expose the shared bounded-label contract"));
     checks.push(t_true(route_point_uses_annotation_material(),
-        "route point does not expose the emissive shadowless annotation material"));
+        "route point does not expose the opaque unlit shadowless annotation material"));
+    checks.push(t_true(route_point_uses_pending_color(),
+        "route point does not expose its bright pending-state colour"));
     checks.push(t_true(landing_location_uses_annotation_material(),
         "landing location does not expose the emissive shadowless annotation material"));
     checks.push(t_true(predicted_landing_uses_annotation_material(),

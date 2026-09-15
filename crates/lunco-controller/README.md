@@ -85,7 +85,9 @@ Rhai owns gesture policy and sequencing. For example, an authored Alt-click is
 composed from `input_key_press("AltLeft")`, `input_click("primary", x, y)`,
 and `input_key_release("AltLeft")`; no waypoint or editor code is called
 directly. The command is client-local and requires a primary window, so it is
-not a simulation/network control channel.
+not a simulation/network control channel. The native event bridge is gated by
+the presence of that primary window, so headless/offscreen scene-test hosts
+skip it without creating window-message resources.
 
 `SetPorts` latches each named command value at the shared port receiver, so a
 one-shot API/Rhai write remains deterministic across fixed ticks. Use
