@@ -223,7 +223,7 @@ The environment layer computes per-entity physical state (gravity, atmosphere, r
 A component on a celestial-body entity that defines **how** an environment quantity varies with position. Example: a `GravityProvider` wraps a `GravityModel` (point-mass, spherical harmonics, etc.) that can compute gravitational acceleration at any world position.
 
 ### Local\* component (`LocalGravity`, `LocalAtmosphere`, ...)
-A cached, per-entity result of applying a provider at the entity's position. Computed each `FixedUpdate` by the environment systems. Read by Avian force application, cosim input injection, UI displays — anything that needs "what gravity does this entity feel right now."
+A cached, per-entity result of applying a provider at the entity's position. Computed each `FixedUpdate` by the environment systems. Read by Avian's standard persistent-acceleration projection, cosim input injection, UI displays — anything that needs "what gravity does this entity feel right now."
 
 ### GravityBody
 A link component on a non-body entity that identifies which celestial-body entity it is gravitationally bound to. Needed for `Gravity::Surface` mode. In Modelica terms: this is the ECS analog of `outer World`.

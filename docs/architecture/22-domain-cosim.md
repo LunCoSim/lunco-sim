@@ -361,9 +361,9 @@ identical to today's behaviour. Partitioner lands without regression.
 Balloon (and other subsystem-driven bodies) are `RigidBody::Dynamic`.
 Modelica's `netForce` flows through `SimConnection` into `AvianSim.inputs`,
 then `apply_sim_forces` applies it via `Forces::apply_force`. Avian's own
-integrator advances velocity and position. Gravity is applied by
-[`lunco-environment`](23-domain-environment.md)'s
-`apply_gravity_to_rigid_bodies` system — Modelica models no longer subtract
+integrator advances velocity and position. Gravity is projected by
+[`lunco-environment`](23-domain-environment.md) onto Avian's standard
+`ConstantLinearAcceleration` component — Modelica models no longer subtract
 weight; they only produce aerodynamic / buoyancy force.
 
 Current invariant: subsystem-driven bodies are Dynamic and receive forces

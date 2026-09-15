@@ -29,7 +29,7 @@ Moon." Environmental state must be **per-entity and position-dependent**.
        PROVIDERS                     COMPUTED                  CONSUMERS
    (on celestial Body)          (on each entity)
 
-   GravityProvider ─────►    LocalGravity ────────► apply_gravity_to_rigid_bodies (Avian)
+   GravityProvider ─────►    LocalGravity ────────► ConstantLinearAcceleration (Avian)
                                                     inject_environment (cosim — planned)
    AtmosphereProvider ──sys►  LocalAtmosphere ────► aerodynamic models, cosim
    RadiationProvider ───►    LocalRadiation ─────► solar panel models, cosim
@@ -192,7 +192,7 @@ in ECS:
 ## Status
 
 - **Gravity:** implemented. `LocalGravity`, `compute_local_gravity`,
-  `apply_gravity_to_rigid_bodies` (the Avian force applier) all live in
+  `sync_local_gravity_to_avian` (the Avian acceleration projection) all live in
   `lunco-environment`. Replaces the previous standalone `gravity_system`
   in `lunco-celestial`.
 - **Atmosphere, radiation, magnetic field, thermal ambient:** scaffolded

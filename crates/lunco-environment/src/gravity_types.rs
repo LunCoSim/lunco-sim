@@ -3,7 +3,7 @@
 //!
 //! These are pure type/component/resource definitions (no systems). The gravity
 //! *compute* systems live in two places:
-//! - `lunco_environment`'s force application (`apply_gravity_to_rigid_bodies`,
+//! - `lunco_environment`'s acceleration projection (`sync_local_gravity_to_avian`,
 //!   consuming the per-entity `LocalGravity` component), and
 //! - `lunco_celestial`'s `update_local_gravity_field` + `PointMassGravity`
 //!   (the `GravityModel` impl), which import these types from here.
@@ -62,8 +62,9 @@ pub const EARTH_SURFACE_GRAVITY: f64 = 9.80665;
 
 /// Global gravity configuration — replaces `avian3d::prelude::Gravity`.
 ///
-/// Set this once during app setup. The gravity system runs in `FixedUpdate`
-/// and automatically applies forces to all `RigidBody` entities.
+/// Set this once during app setup. The environment computes a cached field in
+/// `FixedUpdate` and projects it onto Avian's standard
+/// `ConstantLinearAcceleration` component for `RigidBody` entities.
 ///
 /// A scene may override it (`UsdPhysicsScene`), so the app registers its
 /// start-up value as the baseline that scene teardown restores — otherwise a

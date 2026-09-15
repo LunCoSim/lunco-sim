@@ -1556,9 +1556,10 @@ impl Plugin for LunCoSimCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
 
-        // Dataset discovery and provisioning are shared simulation services.
-        // Install them at the common core boundary so GUI and headless hosts
-        // expose the same DatasetRegistry before terrain projection runs.
+        // Dataset state is part of the shared simulation composition. The USD
+        // terrain projection consumes this registry in GUI and headless hosts;
+        // installing it only in the headless constructor leaves the windowed
+        // production app with a missing-resource panic during its first update.
         app.add_plugins(lunco_assets::datasets::DatasetsPlugin);
 
         // Asset and loaded-stage validation is a shared headless/UI service;

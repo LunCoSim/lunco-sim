@@ -48,6 +48,13 @@ position-hold a wheel joint that has a solved torque boundary. Never add a secon
 damping or drive-force path to "calm" a rover: use the high-speed
 `drivetrain_parity` regression to identify the owner that is unstable.
 
+Passive suspension and tire reactions use Avian's non-waking force contract, so
+settled contact support does not keep an idle vehicle's dynamic island awake.
+An authored drive or brake command uses Avian's regular force accumulator and
+therefore wakes the island on demand. This distinction is part of the physics
+ownership contract; do not make all per-tick tire forces waking just to preserve
+control response.
+
 ## Usage
 
 ```rust

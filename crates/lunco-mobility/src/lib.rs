@@ -1211,7 +1211,13 @@ fn apply_wheel_suspension(
 
                     let force_vec = hit.normal * total_force_mag;
                     if apply_force {
-                        forces.apply_force_at_point(
+                        // Suspension is a persistent contact-support reaction,
+                        // not a wake-up event. The chassis can remain asleep
+                        // while this force balances its persistent gravity;
+                        // Avian will still apply it whenever the island is
+                        // awake. Drive, tire, and actuator forces below keep
+                        // the waking path for actual commanded motion.
+                        forces.non_waking().apply_force_at_point(
                             force_vec,
                             raycast_contact_point(
                                 world_pos.0,
@@ -1384,7 +1390,7 @@ fn apply_wheel_drive(
             if matches!(body, RigidBody::Kinematic) {
                 continue;
             }
-            if q_ports.get(wheel.drive_port).is_ok() {
+            if let Ok(drive_port) = q_ports.get(wheel.drive_port) {
                 let (hub_pos_world, hub_rot_world) = wheel_hub_pose(
                     GridPos(forces.position().0),
                     GridRot(forces.rotation().0),
@@ -1447,7 +1453,22 @@ fn apply_wheel_drive(
                     } else {
                         DVec3::ZERO
                     };
-                    forces.apply_force_at_point(wheel.tire_force + parking_force, contact_point);
+                    // A tire patch is a persistent contact reaction. Reapplying
+                    // that reaction must not wake an otherwise settled chassis;
+                    // Avian will consume it whenever the body is already in an
+                    // active island. A drive or brake command is different: it
+                    // is an authored wake-up event and must use the regular
+                    // accumulator so a parked rover responds immediately.
+                    let commanded =
+                        drive_port.value != 0.0 || inputs.is_some_and(|input| input.brake_active);
+                    let force = wheel.tire_force + parking_force;
+                    if commanded {
+                        forces.apply_force_at_point(force, contact_point);
+                    } else {
+                        forces
+                            .non_waking()
+                            .apply_force_at_point(force, contact_point);
+                    }
                 }
             }
         }

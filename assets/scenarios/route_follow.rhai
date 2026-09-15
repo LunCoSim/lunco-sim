@@ -54,11 +54,24 @@ fn route_children(me) {
     points
 }
 
+// Route topology is authored USD structure, not a per-tick navigation input.
+// Keep one snapshot for the current document generation and refresh it only
+// at that structural boundary.
+fn route_children_for(me, state) {
+    if state.route_points != () { return state.route_points; }
+    let points = route_children(me);
+    state.route_points = points;
+    points
+}
+
 fn route_subject(me) {
     route_subject_state(me).subject
 }
 
 fn route_subject_for(me, state) {
+    if state.subject_id != () && state.subject_id >= 0 {
+        return state.subject_id;
+    }
     let current = route_subject(me);
     if current >= 0 {
         state.subject_id = current;
@@ -101,6 +114,53 @@ fn route_subject_state(me) {
             error: "the route subject has no live projection" };
     }
     #{ subject: subject, retryable: false, error: "" }
+}
+
+fn route_subject_state_for(me, state) {
+    if state.subject_id != () && state.subject_id >= 0 {
+        return #{ subject: state.subject_id, retryable: false, error: "" };
+    }
+    let route = state.route_path;
+    let doc = state.route_document;
+    if route == () || doc == () {
+        return #{ subject: -1, retryable: true,
+            error: "the route document is not synchronized" };
+    }
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: route + ROUTE_PROGRAM,
+        rels: ["inputs:subject"],
+    });
+    if result == () || result.ok == false || result.relationships == () {
+        return #{ subject: -1, retryable: true,
+            error: "the authored inputs:subject relationship is not synchronized" };
+    }
+    let targets = result.relationships["inputs:subject"];
+    if targets == () || targets.len() == 0 {
+        return #{ subject: -1, retryable: false,
+            error: "the authored inputs:subject relationship is unavailable" };
+    }
+    let subject = find_path(targets[0]);
+    if subject < 0 {
+        return #{ subject: -1, retryable: true,
+            error: "the route subject has no live projection" };
+    }
+    state.subject_id = subject;
+    #{ subject: subject, retryable: false, error: "" }
+}
+
+// ReleaseControl is a discrete control transaction. A disabled route must not
+// enqueue the same fence and actuator reset on every fixed tick.
+fn ensure_route_safe_stop(me, state) {
+    if state.safe_stopped == true { return #{ ok: true }; }
+    let subject = route_subject_for(me, state);
+    if subject < 0 {
+        return #{ ok: false, retryable: true,
+            error: "the route subject has no live projection" };
+    }
+    brake(subject);
+    state.safe_stopped = true;
+    #{ ok: true }
 }
 
 fn route_subject_path(me) {
@@ -176,7 +236,7 @@ fn current_point(me, state) {
 }
 
 fn current_point_info(me, state) {
-    let points = route_children(me);
+    let points = route_children_for(me, state);
     // Keep the cursor attached to the USD prim path, not to an ordinal. A
     // delete or insertion before the current point must not silently retarget
     // the rover; if the current point itself disappears, the same ordinal is
@@ -198,7 +258,7 @@ fn current_point_info(me, state) {
 
 fn current_zone(me, state) {
     let point = current_point(me, state);
-    let doc = route_document(me);
+    let doc = state.route_document;
     if point == () || doc == () { return (); }
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
@@ -234,12 +294,11 @@ fn route_start_index(me, state) {
 }
 
 fn drive_current_point(me, state) {
-    let subject_state = route_subject_state(me);
-    let subject = route_subject_for(me, state);
     if !state.enabled {
-        if subject >= 0 { brake(subject); }
-        return;
+        return ensure_route_safe_stop(me, state);
     }
+    let subject_state = route_subject_state_for(me, state);
+    let subject = route_subject_for(me, state);
     if subject < 0 {
         let failure = route_failure(subject_state.error);
         failure.retryable = subject_state.retryable;
@@ -262,31 +321,29 @@ fn drive_current_point(me, state) {
         return route_failure("the subject has no usable navigation surface");
     }
     drive(subject, command.throttle, command.steer);
+    state.safe_stopped = false;
     #{ ok: true }
 }
 
-fn route_revision(me) {
-    let route = route_path(me);
-    let doc = route_document(me);
-    if route == () || doc == () { return (); }
-    // The document generation is the route invalidation clock. Read it from
-    // the document registry instead of QueryUsdPrim: the canonical stage may
-    // be briefly behind after a typed edit, and a generation read must not
-    // depend on that asynchronous projection settling.
-    let result = query("InspectUsdDocument", #{ doc_id: doc });
-    if result == () || result.ok == false || result.generation == () { return (); }
-    result.generation
+fn route_revision_for(state) {
+    if state.route_document == () { return (); }
+    usd_document_generation(state.route_document)
 }
 
 fn refresh_route_view(me, state) {
-    let doc = route_document(me);
-    let revision = route_revision(me);
+    let doc = state.route_document;
+    let revision = route_revision_for(state);
     if doc == () { return route_failure("the route document is unavailable"); }
     if revision == () { return route_failure("the route document generation is unavailable"); }
     if state.route_revision == revision { return #{ ok: true, revision: revision }; }
+    // A document generation may replace children, the subject relationship, or
+    // authored enablement. Drop all derived facts before reading the snapshot.
+    state.route_points = ();
+    state.subject_id = ();
+    state.safe_stopped = false;
     let result = waypoint_editor::ensure_ribbon(#{
         doc_id: doc,
-        route_path: route_path(me),
+        route_path: state.route_path,
     });
     if result == () || result.ok != true {
         return route_view_failure(result, "the route ribbon tool returned no result");
@@ -294,7 +351,9 @@ fn refresh_route_view(me, state) {
     // The ribbon itself is a runtime edit and may advance the document
     // generation. Capture the post-edit revision so the task does not issue
     // the same write again on its next step.
-    let post_revision = route_revision(me);
+    let post_revision = route_revision_for(state);
+    state.route_points = route_children(me);
+    state.subject_id = route_subject(me);
     #{ ok: true, revision: if post_revision == () { revision } else { post_revision } }
 }
 
@@ -392,9 +451,13 @@ fn start_route(me, state) {
 }
 
 fn on_start(me) {
+    this.route_path = route_path(me);
+    this.route_document = route_document(me);
+    this.route_points = ();
     this.route_index = 0;
     this.current_path = ();
-    this.subject_id = route_subject(me);
+    this.subject_id = ();
+    this.safe_stopped = false;
     this.sensor_entered = #{};
     this.enabled = route_enabled_from_usd(me);
     this.selected = route_is_selected(me);
@@ -409,12 +472,13 @@ fn on_start(me) {
     } else {
         this.route_revision = view.revision;
     }
+    ensure_route_safe_stop(me, this);
     // Hot-swapped programs expose their lifecycle boundary on the same typed
     // event bus consumed by the Twin. UI/tests can wait for this authored
     // readiness edge before sending a one-shot command or pointer gesture.
     emit("program.ready", #{
         path: route_path(me),
-        generation: route_revision(me),
+        generation: this.route_revision,
     });
 }
 
@@ -452,6 +516,7 @@ fn on_event(me, evt) {
             let started = start_route(me, this);
             if started.ok == true {
                 this.enabled = true;
+                this.safe_stopped = false;
                 this.route_index = route_start_index(me, this);
                 this.current_path = ();
                 this.sensor_entered = #{};
@@ -463,14 +528,14 @@ fn on_event(me, evt) {
             }
         } else {
             this.enabled = false;
-            let subject = route_subject_for(me, this);
-            if subject >= 0 { brake(subject); }
+            ensure_route_safe_stop(me, this);
             emit("route_stopped");
         }
     } else if transition.kind == "start" {
         let started = start_route(me, this);
         if started.ok == true {
             this.enabled = true;
+            this.safe_stopped = false;
             this.route_index = route_start_index(me, this);
             this.current_path = ();
             this.sensor_entered = #{};
@@ -514,6 +579,11 @@ fn task(me) {
             this.selected = route_is_selected(m);
             if !this.selected { return false; }
         }
+        if !this.enabled {
+            let safe_stop = ensure_route_safe_stop(m, this);
+            if safe_stop.ok != true { return false; }
+            return;
+        }
         let cursor = current_point_info(m, this);
         if cursor.path != () {
             this.current_path = cursor.path;
@@ -533,6 +603,5 @@ fn task(me) {
 }
 
 fn on_stop(me) {
-    let subject = route_subject_for(me, this);
-    if subject >= 0 { brake(subject); }
+    ensure_route_safe_stop(me, this);
 }

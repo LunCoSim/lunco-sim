@@ -108,8 +108,8 @@ impl Default for LocalGravityField {
     }
 }
 
-// Note: Gravity force application moved to `lunco-environment`.
-// See `lunco_environment::apply_gravity_to_rigid_bodies` — it consumes the
+// Note: Gravity realization moved to `lunco-environment`.
+// See `lunco_environment::sync_local_gravity_to_avian` — it projects the
 // per-entity `LocalGravity` component instead of recomputing per tick.
 
 // ─────────────────────────────────────────────────────────────────────────────

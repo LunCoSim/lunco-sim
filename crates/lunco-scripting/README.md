@@ -53,12 +53,17 @@ helpers may be called explicitly from an anonymous closure.
 The host exposes a minimal generic bridge — `cmd` / `query` / `get` / `set` /
 `get_setting` / `set_setting` / `world_pos` / `world_forward` / `find` / `name` /
 `parent` / `children` / `list_entities` / `emit` / `sim_tick` / `dt` /
-`elapsed_seconds`. Reflection and the canonical co-simulation port registry
+`elapsed_seconds` / `usd_document_generation`. Reflection and the canonical co-simulation port registry
 provide the generic state surface; `ScriptingCatalog` reports the live command,
 query, reflection, prelude, hook, and tool contracts. Everything ergonomic
 (navigation, sensing, sequencing, selection) is **policy** authored in
 the hot-reloadable [`prelude/`](../../assets/scripting/prelude) — no Rust rebuild to
 extend it.
+
+For topology-sensitive policy, use `usd_document_generation(doc_id)` as the
+structural invalidation clock and cache the detailed USD snapshot until that
+generation changes. This keeps fixed-tick policy from repeatedly serializing
+`InspectUsdDocument`; live poses and commands remain per-tick reads/writes.
 
 The prelude also provides `usd_path(id)`, which resolves
 `QueryEntity.usd_prim_path` for canonical USD topology addressing. `name(id)`

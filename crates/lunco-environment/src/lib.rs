@@ -8,8 +8,8 @@
 //! Currently implements **gravity only**. Other domains follow the same
 //! pattern — see the README for templates.
 
-use avian3d::prelude::{ComputedMass, Forces, RigidBody, WriteRigidBodyForces};
-use bevy::math::DVec3;
+use avian3d::prelude::{ConstantLinearAcceleration, RigidBody};
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 // All render-FREE: `CascadeShadowConfig` / `GlobalAmbientLight` are `bevy_light`,
@@ -118,12 +118,12 @@ pub use horizon::{
 ///
 /// Ordered chain in [`FixedUpdate`]:
 /// 1. [`Compute`](EnvironmentSet::Compute) — write `Local*` components from providers
-/// 2. [`Apply`](EnvironmentSet::Apply) — consumers like Avian gravity force application
+/// 2. [`Apply`](EnvironmentSet::Apply) — consumers like Avian gravity projection
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EnvironmentSet {
     /// Computes per-entity environment components from body providers.
     Compute,
-    /// Applies environment effects (e.g., gravity force on RigidBodies).
+    /// Applies environment effects (e.g., gravity acceleration on RigidBodies).
     Apply,
 }
 
@@ -142,7 +142,7 @@ pub enum EnvironmentSet {
 /// - **Direction:** `normalize()` gives the gravity unit vector
 ///
 /// Read this instead of querying the [`Gravity`] resource directly — it's
-/// position-dependent and cached. Multiple consumers (Avian force application,
+/// position-dependent and cached. Multiple consumers (Avian acceleration,
 /// cosim input injection, UI display) can read it without recomputation.
 #[derive(Component, Debug, Clone, Copy, Reflect, Default)]
 #[reflect(Component)]
@@ -175,6 +175,68 @@ fn clear_unresolved_local_gravity(
     }
 }
 
+fn update_local_gravity_for_entity(
+    commands: &mut Commands,
+    gravity: &Gravity,
+    frame_rotation: Option<DQuat>,
+    entity: Entity,
+    gravity_body: Option<Ref<GravityBody>>,
+    existing: Option<&LocalGravity>,
+    q_bodies: &Query<&GravityProvider>,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) {
+    let g = match gravity {
+        // A flat field is authored by UsdPhysicsScene in the stage's
+        // physics frame. The scene mount makes that frame the active
+        // Avian frame, so its direction is already expressed in the
+        // coordinate system consumed by the body solver. Converting it
+        // through the active-frame rotation would apply the site pose a
+        // second time and create a spurious horizontal acceleration.
+        Gravity::Flat { g, direction } => *direction * *g,
+        Gravity::Surface => {
+            let Some(body_link) = gravity_body.as_deref() else {
+                clear_unresolved_local_gravity(commands, entity, existing);
+                return;
+            };
+            let Ok(provider) = q_bodies.get(body_link.body_entity) else {
+                clear_unresolved_local_gravity(commands, entity, existing);
+                return;
+            };
+            let Some((entity_world, _)) =
+                lunco_spatial::coords::world_pose(entity, q_parents, q_grids, q_spatial).ok()
+            else {
+                clear_unresolved_local_gravity(commands, entity, existing);
+                return;
+            };
+            let Some((body_world, body_rotation)) = lunco_spatial::coords::world_pose(
+                body_link.body_entity,
+                q_parents,
+                q_grids,
+                q_spatial,
+            )
+            .ok() else {
+                clear_unresolved_local_gravity(commands, entity, existing);
+                return;
+            };
+            let relative_body = body_rotation.0.inverse() * (entity_world - body_world);
+            let acceleration = provider.model.acceleration(relative_body);
+            let g_world = body_rotation.0 * acceleration;
+            // Surface gravity is evaluated in the celestial body's
+            // body-fixed frame and therefore needs the one explicit
+            // conversion into the active Avian frame.
+            frame_rotation.map_or(g_world, |rotation| rotation.inverse() * g_world)
+        }
+    };
+    // Don't re-insert (and re-trigger) when the value is unchanged — e.g. a
+    // global invalidation that recomputes the same field.
+    if existing.is_some_and(|LocalGravity(previous)| *previous == g) {
+        return;
+    }
+    commands.entity(entity).try_insert(LocalGravity(g));
+}
+
 /// Computes [`LocalGravity`] for every entity that has a [`Transform`].
 ///
 /// Sources the gravity vector from:
@@ -185,134 +247,132 @@ pub fn compute_local_gravity(
     mut commands: Commands,
     gravity: Res<Gravity>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
-    q_bodies: Query<Ref<GravityProvider>>,
+    q_bodies: Query<&GravityProvider>,
+    q_changed_providers: Query<(), Changed<GravityProvider>>,
     mut removed_providers: RemovedComponents<GravityProvider>,
     mut removed_body_links: RemovedComponents<GravityBody>,
-    q_entities: Query<(
-        Entity,
-        Ref<Transform>,
-        Option<&CellCoord>,
-        Option<&ChildOf>,
-        Option<&Grid>,
-        Option<Ref<GravityBody>>,
-        Option<&LocalGravity>,
+    mut q_entities: ParamSet<(
+        Query<
+            (Entity, Option<Ref<GravityBody>>, Option<&LocalGravity>),
+            (
+                With<Transform>,
+                Or<(
+                    Changed<Transform>,
+                    Changed<GravityBody>,
+                    Without<LocalGravity>,
+                )>,
+            ),
+        >,
+        Query<(Entity, Option<Ref<GravityBody>>, Option<&LocalGravity>), With<Transform>>,
     )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
 ) {
-    // Recompute an entity's gravity only when something it depends on changed:
-    // the global `Gravity` definition (Flat vector / Flat↔Surface switch) or
-    // this entity's own Transform (Surface gravity is position-dependent; Flat
-    // is not). Entities that don't yet have a `LocalGravity` always run once.
-    // This stops both the per-frame provider lookups and the change-detection
-    // storm caused by blindly re-inserting an identical value every frame.
-    let provider_changed = q_bodies.iter().any(|provider| provider.is_changed())
-        || removed_providers.read().next().is_some();
+    // The field is entity-local, so a quiet frame must visit only entities
+    // whose inputs changed. A provider edit/removal or a global/frame change
+    // invalidates every cached field and deliberately selects the full query.
+    // This is structural change detection, not a timer: transforms, body links,
+    // provider structure, and the authored gravity/frame resources remain the
+    // invalidation owners.
+    let provider_changed =
+        !q_changed_providers.is_empty() || removed_providers.read().next().is_some();
     let body_link_removed = removed_body_links.read().next().is_some();
-    let gravity_changed = gravity.is_changed()
+    let global_invalidation = gravity.is_changed()
         || active_frame.as_ref().is_some_and(Res::is_changed)
         || provider_changed
         || body_link_removed;
-    let frame_rotation = active_frame.as_deref().and_then(|frame| {
-        lunco_spatial::coords::world_pose(frame.0, &q_parents, &q_grids, &q_spatial)
-            .ok()
-            .map(|(_, rotation)| rotation.0)
-    });
-    for (entity, tf, _cell, _child_of, _grid, gravity_body, existing) in &q_entities {
-        let body_link_changed = gravity_body
-            .as_ref()
-            .is_some_and(|body_link| body_link.is_changed());
-        if existing.is_some() && !gravity_changed && !tf.is_changed() && !body_link_changed {
-            continue;
+    let has_work = global_invalidation || !q_entities.p0().is_empty();
+    if !has_work {
+        return;
+    }
+    let frame_rotation = matches!(gravity.as_ref(), Gravity::Surface)
+        .then(|| {
+            active_frame.as_deref().and_then(|frame| {
+                lunco_spatial::coords::world_pose(frame.0, &q_parents, &q_grids, &q_spatial)
+                    .ok()
+                    .map(|(_, rotation)| rotation.0)
+            })
+        })
+        .flatten();
+    if global_invalidation {
+        for (entity, gravity_body, existing) in q_entities.p1().iter() {
+            update_local_gravity_for_entity(
+                &mut commands,
+                gravity.as_ref(),
+                frame_rotation,
+                entity,
+                gravity_body,
+                existing,
+                &q_bodies,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            );
         }
-        let g = match gravity.as_ref() {
-            // A flat field is authored by UsdPhysicsScene in the stage's
-            // physics frame. The scene mount makes that frame the active
-            // Avian frame, so its direction is already expressed in the
-            // coordinate system consumed by the body solver. Converting it
-            // through the active-frame rotation would apply the site pose a
-            // second time and create a spurious horizontal acceleration.
-            Gravity::Flat { g, direction } => *direction * *g,
-            Gravity::Surface => {
-                let Some(body_link) = gravity_body.as_deref() else {
-                    clear_unresolved_local_gravity(&mut commands, entity, existing);
-                    continue;
-                };
-                let Ok(provider) = q_bodies.get(body_link.body_entity) else {
-                    clear_unresolved_local_gravity(&mut commands, entity, existing);
-                    continue;
-                };
-                let Some((entity_world, _)) =
-                    lunco_spatial::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
-                        .ok()
-                else {
-                    clear_unresolved_local_gravity(&mut commands, entity, existing);
-                    continue;
-                };
-                let Some((body_world, body_rotation)) = lunco_spatial::coords::world_pose(
-                    body_link.body_entity,
-                    &q_parents,
-                    &q_grids,
-                    &q_spatial,
-                )
-                .ok() else {
-                    clear_unresolved_local_gravity(&mut commands, entity, existing);
-                    continue;
-                };
-                let relative_body = body_rotation.0.inverse() * (entity_world - body_world);
-                let acceleration = provider.model.acceleration(relative_body);
-                let g_world = body_rotation.0 * acceleration;
-                // Surface gravity is evaluated in the celestial body's
-                // body-fixed frame and therefore needs the one explicit
-                // conversion into the active Avian frame.
-                frame_rotation.map_or(g_world, |rotation| rotation.inverse() * g_world)
-            }
-        };
-        // Don't re-insert (and re-trigger change detection) when the value is
-        // unchanged — e.g. a `gravity_changed` pass that recomputes the same g.
-        if let Some(LocalGravity(prev)) = existing {
-            if *prev == g {
-                continue;
-            }
+    } else {
+        for (entity, gravity_body, existing) in q_entities.p0().iter() {
+            update_local_gravity_for_entity(
+                &mut commands,
+                gravity.as_ref(),
+                frame_rotation,
+                entity,
+                gravity_body,
+                existing,
+                &q_bodies,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            );
         }
-        commands.entity(entity).try_insert(LocalGravity(g));
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Consumer: apply gravity force to Avian RigidBodies
+// Consumer: project gravity into Avian's persistent acceleration contract
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Applies the cached [`LocalGravity`] vector as a force on every entity that
-/// has a [`RigidBody`] and Avian's computed total mass. `ComputedMass` includes
-/// collider-derived mass, authored `Mass`, density, and compound descendants;
-/// using it keeps gravity on the same mass authority as the solver.
+/// Projects the cached [`LocalGravity`] vector onto Avian's standard
+/// [`ConstantLinearAcceleration`] component. The component is consumed by
+/// Avian's own integrator, so gravity is applied in live physics and rollback
+/// alike without force-accumulator bookkeeping or a per-tick wake-up.
 ///
 /// Replaces the recomputing-each-tick `gravity_system` that previously lived
 /// in `lunco-celestial`. Reading `LocalGravity` instead of recomputing means
 /// every consumer (this system, cosim injection, future systems) sees the same
-/// authoritative value with no duplicated work.
-pub fn apply_gravity_to_rigid_bodies(
-    q: Query<(Entity, &LocalGravity, &ComputedMass), With<RigidBody>>,
-    // Force must land only on a body the solver will integrate. A disabled body
-    // (frozen while its program compiles, say) never has its accumulators
-    // cleared, so force applied to it is stored, not spent, and discharges in
-    // full on the step that eventually runs — see `lunco_physics::Integrable`.
-    mut forces: Query<Forces, lunco_physics::Integrable>,
+/// authoritative value with no duplicated work. Updating the standard
+/// component only when the cached field changes lets Avian's native
+/// sleeping/waking rules remain authoritative.
+pub fn sync_local_gravity_to_avian(
+    mut commands: Commands,
+    changed: Query<
+        (Entity, &LocalGravity, Option<&ConstantLinearAcceleration>),
+        (
+            With<RigidBody>,
+            Or<(Changed<LocalGravity>, Changed<RigidBody>)>,
+        ),
+    >,
+    mut removed_gravity: RemovedComponents<LocalGravity>,
+    mut removed_bodies: RemovedComponents<RigidBody>,
 ) {
-    for (entity, gravity, mass) in &q {
-        let force = gravity.0 * mass.value();
-        if let Ok(mut f) = forces.get_mut(entity) {
-            f.apply_force(force);
+    for (entity, gravity, existing) in &changed {
+        let acceleration = ConstantLinearAcceleration(gravity.0);
+        if existing.is_none_or(|current| current.0 != acceleration.0) {
+            commands.entity(entity).try_insert(acceleration);
         }
+    }
+    for entity in removed_gravity.read().chain(removed_bodies.read()) {
+        commands
+            .entity(entity)
+            .try_remove::<ConstantLinearAcceleration>();
     }
 }
 
 // Modelica sensor conversions consume the same `LocalGravity` vector through
-// the environment-probe output ports. Avian's own `Gravity` resource is zero
-// here — gravity is applied as an explicit force — so the environment bridge
-// publishes both magnitude and vector components through ordinary wires.
+// the environment-probe output ports. Avian's own global `Gravity` resource is
+// zero here — the per-body standard acceleration component is the physics
+// realization — so the environment bridge publishes both magnitude and vector
+// components through ordinary wires.
 // ─────────────────────────────────────────────────────────────────────────────
 // Consumer: feed local gravity into the co-simulation graph
 // ─────────────────────────────────────────────────────────────────────────────
@@ -656,7 +716,7 @@ register_commands!(on_set_environment_light);
 ///
 /// Add after [`lunco_celestial_spatial::GravityPlugin`]. Ordering in `FixedUpdate`:
 /// 1. [`EnvironmentSet::Compute`] — writes `LocalGravity` (and future `Local*`)
-/// 2. [`EnvironmentSet::Apply`] — applies gravity forces to Avian RigidBodies
+/// 2. [`EnvironmentSet::Apply`] — projects gravity onto Avian RigidBodies
 pub struct EnvironmentPlugin;
 
 fn clear_environment_sun_state(mut sun: ResMut<SunState>, mut render_sun: ResMut<SunRenderState>) {
@@ -690,37 +750,20 @@ impl Plugin for EnvironmentPlugin {
             (EnvironmentSet::Compute, EnvironmentSet::Apply).chain(),
         );
 
-        // Sim core — render-free. Gravity computation, force application, and
+        // Sim core — render-free. Gravity computation, acceleration projection, and
         // the gravity→cosim bridge.
         //
-        // `apply_gravity_to_rigid_bodies` is gated on `physics_is_live`; nothing
-        // else here is. Gravity is the only system in this set that writes into
-        // avian's FORCE ACCUMULATOR, and that accumulator is cleared by the physics
-        // step — so a tick where the step is skipped leaves the force in place to be
-        // added to again next tick. Ungated, it integrated to ~4 MN across episode
-        // 2's 28 s of frozen shots and fired the rover through the ground at
-        // 224.20 m/s the instant the hold released. The other systems in this set
-        // publish a VALUE (cosim input, IMU field) rather than accumulate one, so
-        // they must keep running while physics is held — a frozen beat still wants a
-        // correct gravity reading.
+        // Gravity is a persistent per-body acceleration. The projection is not
+        // gated on the live clock: Avian owns its lifetime and applies the
+        // current component whenever a physics step actually runs. The other
+        // systems in this set publish a VALUE (cosim input, IMU field) rather
+        // than accumulate into the force buffer, so they also keep running
+        // while physics is held.
         app.add_systems(
             FixedUpdate,
             (
                 compute_local_gravity.in_set(EnvironmentSet::Compute),
-                // Pinned BEFORE `ControlDacSet` (and therefore before the wheel
-                // actuators, which all order `.after` it). Not a data edge —
-                // gravity reads no port — but a SUMMATION-ORDER edge: this and
-                // the suspension/drive systems all `apply_force` into the same
-                // f64 accumulator, and f64 addition is not associative. The
-                // `RollbackReplay` mirror below pins the same edge, so the
-                // replayed tick accumulates its forces in the same order the
-                // live tick did. Left implicit, the two schedules would each
-                // pick their own topological order and the replay would differ
-                // from the host in the last bit of every body's force.
-                apply_gravity_to_rigid_bodies
-                    .in_set(EnvironmentSet::Apply)
-                    .before(lunco_core::ControlDacSet)
-                    .run_if(lunco_physics::physics_is_live),
+                sync_local_gravity_to_avian.in_set(EnvironmentSet::Apply),
                 // Publish gravity into the cosim graph after it's computed and
                 // before cosim copies outputs→inputs, so models read the real
                 // local value the same tick.
@@ -728,36 +771,6 @@ impl Plugin for EnvironmentPlugin {
                     .in_set(EnvironmentSet::Apply)
                     .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
             ),
-        );
-
-        // ── Rollback replay ──────────────────────────────────────────────────
-        // WEIGHT IS PART OF THE REPLAYED TICK. The shipped app sets avian's own
-        // `Gravity::ZERO` (`lunco-luncosim`) — gravity reaches a rigid body ONLY
-        // through this force write. `replay_one_tick` runs `RollbackReplay` and
-        // then steps `PhysicsSchedule`, and the physics step CLEARS the force
-        // accumulator; so without this system in the schedule every replayed
-        // tick solved a WEIGHTLESS rover. Normal force, and with it wheel
-        // traction, then differ from the host's on the one body rollback exists
-        // to keep in sync — the replay diverges hardest exactly when the rover
-        // is doing something (accelerating, cresting, braking).
-        //
-        // No `physics_is_live` gate here, unlike the `FixedUpdate` copy. That
-        // gate exists because a held physics step leaves the accumulator
-        // unconsumed, so an ungated live tick would integrate weight across the
-        // hold and discharge it in one step. Replay has no such hazard: it
-        // ALWAYS pairs this write with its own `PhysicsSchedule` step. Gating it
-        // would instead drop gravity from a replay that still solves — turning
-        // the hold into the divergence.
-        //
-        // `compute_local_gravity` is deliberately NOT mirrored: it is a
-        // change-driven `Commands` writer, and re-deriving `LocalGravity` mid-
-        // replay would move archetypes inside the schedule. The cached value is
-        // the one the host used for these ticks (constant under `Gravity::Flat`,
-        // and varying by well under an ULP across one tick's motion under
-        // `Gravity::Surface`).
-        app.add_systems(
-            lunco_core::RollbackReplay,
-            apply_gravity_to_rigid_bodies.before(lunco_core::ControlDacSet),
         );
 
         // Lighting half — RENDER-FREE. `DirectionalLight` is `bevy_light` and
