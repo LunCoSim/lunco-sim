@@ -1118,7 +1118,7 @@ fn rebase_freeflight_state(
             With<Avatar>,
             With<LocalAvatar>,
             Changed<ChildOf>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
 ) {
@@ -1348,7 +1348,7 @@ fn sync_avatar_easing(
             Has<OrbitCamera>,
             Has<SurfaceCamera>,
             Has<lunco_time::InteractionEased>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -1400,7 +1400,7 @@ fn reset_easing_before_spatial_rebase(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
             Or<(Changed<CellCoord>, Changed<ChildOf>)>,
         ),
     >,
@@ -2158,7 +2158,7 @@ fn spring_arm_system(
             Without<OrbitCamera>,
             Without<FreeFlightCamera>,
             Without<SurfaceCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
@@ -2423,7 +2423,7 @@ fn orbit_system(
             Without<SpringArmCamera>,
             Without<FreeFlightCamera>,
             Without<SurfaceCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
@@ -2694,7 +2694,7 @@ fn freeflight_system(
             Without<OrbitCamera>,
             Without<SpringArmCamera>,
             Without<SurfaceCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
@@ -2741,7 +2741,7 @@ fn freeflight_scroll_transit_system(
             Option<&OrbitViewHistory>,
             Option<&GravityBody>,
             Has<SurfaceRelativeMode>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (
             With<Avatar>,
@@ -2952,7 +2952,7 @@ fn surface_camera_system(
             Without<SpringArmCamera>,
             Without<FreeFlightCamera>,
             Without<OrbitCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_grids: Query<&Grid>,
@@ -3136,7 +3136,7 @@ fn apply_fly(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_grids: Query<&Grid>,
@@ -3344,7 +3344,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     mut q_orbit: Query<
@@ -3352,7 +3352,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     mut q_freeflight: Query<
@@ -3360,7 +3360,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     mut q_surface: Query<
@@ -3368,7 +3368,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     mut q_tf: Query<
@@ -3376,7 +3376,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_grids: Query<&Grid>,
@@ -3901,7 +3901,7 @@ fn on_return_from_orbit(
             Option<&OrbitCamera>,
             Option<&mut OrbitViewHistory>,
             Has<OrbitUserInput>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -3977,7 +3977,7 @@ fn on_release_command(
             Option<&OrbitCamera>,
             Option<&mut OrbitViewHistory>,
             Has<OrbitUserInput>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -4282,7 +4282,7 @@ struct PossessAvatarQueries<'w, 's> {
             &'static Transform,
             &'static ChildOf,
             Option<&'static ControlLink>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -4664,7 +4664,7 @@ fn on_follow_command(
             Entity,
             &ChildOf,
             Option<&SpringArmCamera>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -4822,7 +4822,7 @@ fn on_focus_command(
             Option<&FreeFlightCamera>,
             Option<&GravityBody>,
             Has<SurfaceRelativeMode>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -4992,7 +4992,7 @@ fn on_focus_command(
 /// Inserts `FreeFlightCamera` as the default behavior with the entity's
 /// current transform orientation.
 ///
-/// `Without<CinematicCameraLock>` is load-bearing, not hygiene: a path-driven
+/// `Without<CameraPoseLock>` is load-bearing, not hygiene: a path-driven
 /// camera has no interactive mode, and this initializer must never create one
 /// after the authored path has claimed pose ownership.
 fn avatar_init_system(
@@ -5016,7 +5016,7 @@ fn avatar_init_system(
             // behavior component. Without this guard init would reinsert
             // FreeFlightCamera over it on the next Update tick.
             Without<SurfaceCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_proj: Query<
@@ -5197,7 +5197,7 @@ fn on_surface_teleport_command(
             &Transform,
             &CellCoord,
             &ChildOf,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -5388,7 +5388,7 @@ fn on_leave_surface_command(
         (
             Entity,
             Option<&GravityBody>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -5454,7 +5454,7 @@ fn surface_mode_transition_system(
             With<Avatar>,
             With<LocalAvatar>,
             Without<OrbitCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_bodies: Query<&CelestialBody>,
@@ -7532,7 +7532,7 @@ mod tests {
 
         let avatar = app
             .world_mut()
-            .spawn((Avatar, LocalAvatar, lunco_core::CinematicCameraLock))
+            .spawn((Avatar, LocalAvatar, lunco_core::CameraPoseLock))
             .id();
 
         app.update();
@@ -7551,7 +7551,7 @@ mod tests {
             app.world()
                 .get::<lunco_time::InteractionEased>(avatar)
                 .is_none(),
-            "a cinematic lock must remove stale avatar interpolation history"
+            "a pose lock must remove stale avatar interpolation history"
         );
     }
 

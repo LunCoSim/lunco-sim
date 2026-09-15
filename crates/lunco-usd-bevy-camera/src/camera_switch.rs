@@ -278,46 +278,6 @@ impl ActivateCamera {
     }
 }
 
-pub(crate) fn resolve_camera_names(
-    want: &str,
-    cameras: &[(Entity, String)],
-) -> Result<Entity, String> {
-    let exact: Vec<Entity> = cameras
-        .iter()
-        .filter_map(|(entity, name)| (name == want).then_some(*entity))
-        .collect();
-    match exact.as_slice() {
-        [entity] => return Ok(*entity),
-        [] => {}
-        _ => {
-            return Err(format!(
-                "camera path '{want}' is ambiguous; more than one scene camera has this path"
-            ));
-        }
-    }
-
-    let matches: Vec<(Entity, &str)> = cameras
-        .iter()
-        .filter_map(|(entity, name)| {
-            (name.rsplit('/').next() == Some(want)).then_some((*entity, name.as_str()))
-        })
-        .collect();
-    match matches.as_slice() {
-        [] => Err(format!("camera '{want}' is not present in the scene")),
-        [(entity, _)] => Ok(*entity),
-        _ => {
-            let names = matches
-                .iter()
-                .map(|(_, name)| *name)
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(format!(
-                "camera name '{want}' is ambiguous; use a full USD path ({names})"
-            ))
-        }
-    }
-}
-
 /// Project authored camera identities into concise, deterministic UI labels.
 ///
 /// The returned order matches `names`, while the input strings remain the
@@ -434,6 +394,46 @@ fn labels_equal_count(label: &str, labels: &[String]) -> usize {
         .iter()
         .filter(|other| other.as_str() == label)
         .count()
+}
+
+pub(crate) fn resolve_camera_names(
+    want: &str,
+    cameras: &[(Entity, String)],
+) -> Result<Entity, String> {
+    let exact: Vec<Entity> = cameras
+        .iter()
+        .filter_map(|(entity, name)| (name == want).then_some(*entity))
+        .collect();
+    match exact.as_slice() {
+        [entity] => return Ok(*entity),
+        [] => {}
+        _ => {
+            return Err(format!(
+                "camera path '{want}' is ambiguous; more than one scene camera has this path"
+            ));
+        }
+    }
+
+    let matches: Vec<(Entity, &str)> = cameras
+        .iter()
+        .filter_map(|(entity, name)| {
+            (name.rsplit('/').next() == Some(want)).then_some((*entity, name.as_str()))
+        })
+        .collect();
+    match matches.as_slice() {
+        [] => Err(format!("camera '{want}' is not present in the scene")),
+        [(entity, _)] => Ok(*entity),
+        _ => {
+            let names = matches
+                .iter()
+                .map(|(_, name)| *name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!(
+                "camera name '{want}' is ambiguous; use a full USD path ({names})"
+            ))
+        }
+    }
 }
 
 pub(crate) fn resolve_named_camera(

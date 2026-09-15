@@ -58,12 +58,11 @@ pub struct CatalogEntryId(pub String);
 #[reflect(Component)]
 pub struct UsdPrimKind(pub String);
 
-/// Marker: this camera's **pose is owned by an authored cinematic driver** (a
-/// USD camera path), not by the interactive camera stack.
+/// Marker: this camera's **pose is owned by an explicit pose driver**, not by
+/// the interactive camera stack.
 ///
-/// Inserted by `lunco_usd_bevy_camera::camera_path::resolve_camera_paths` when a
-/// `BasisCurves` path claims a camera, alongside its own `CameraPathDriven`
-/// component. The avatar's camera-mode systems (`freeflight_system`,
+/// Inserted by an authored camera path or a direct camera command alongside its
+/// pose contract. The avatar's camera-mode systems (`freeflight_system`,
 /// `spring_arm_system`, `orbit_system`, …) each write `Transform` on whatever
 /// avatar carries their mode component, and they run in the same `PostUpdate`
 /// as the path driver with no ordering between plugins — whichever happens to
@@ -74,12 +73,12 @@ pub struct UsdPrimKind(pub String);
 ///
 /// Contract: avatar systems must neither write the `Transform` of, nor
 /// (re)insert camera-mode components onto, an entity carrying this marker.
-/// Lives in `lunco-core` so `lunco-avatar` and `lunco-usd-bevy` can agree on
-/// the contract without depending on each other (same pattern as
+/// Lives in `lunco-core` so authored drivers and interactive runtimes share
+/// the contract at the engine boundary (same pattern as
 /// [`HorizonShadowTerrain`]).
 #[derive(Component, Debug, Default, Clone, Copy, Reflect)]
 #[reflect(Component)]
-pub struct CinematicCameraLock;
+pub struct CameraPoseLock;
 
 /// The physics pose was authoritatively changed outside Avian's solver and
 /// must be written back to the cell-local representation before the bridge

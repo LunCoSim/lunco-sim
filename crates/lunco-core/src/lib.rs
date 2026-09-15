@@ -86,7 +86,7 @@ pub use identity::Provenance;
 pub use labels::{entity_display_name, humanize_identifier};
 pub use log::*;
 pub use markers::{
-    CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource,
+    CameraPoseLock, CatalogEntryId, EmbeddedScenarioPath, EmbeddedScenarioSource,
     HorizonShadowTerrain, PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams,
     SunAngularDiameter, TriggerZone, UsdPrimKind, CELESTIAL_COLLISION_LAYER,
     NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG, TRIGGER_COLLISION_LAYER,
@@ -1015,7 +1015,7 @@ impl Plugin for LunCoCorePlugin {
         // plugins.  Load/restart/clear invalidate it synchronously, while the
         // deferred root spawner registers the replacement after creation.
         app.init_resource::<SceneMountState>();
-        app.register_type::<CinematicCameraLock>()
+        app.register_type::<CameraPoseLock>()
             .register_type::<PhysicsPoseAuthoritative>()
             // `telemetry::` — bevy 0.19's prelude exports its own `Severity`
             // (log-level type), which shadows ours in glob-import scopes.

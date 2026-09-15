@@ -93,7 +93,7 @@ resolved inertial frame. Twin teardown and avatar demotion clear this history.
 To provide a natural "human" feel, manual user input always takes precedence
 over automated camera ownership:
 - `Look`, movement, and zoom are consumed only by the currently active camera
-  mode; an authored cinematic lock explicitly owns the pose until released.
+  mode; an explicit pose lock owns the pose until the camera is re-authored.
 - A mode transaction removes the competing behavior components atomically, so
   manual input and an automated camera solver cannot write the same pose.
 
@@ -236,11 +236,12 @@ without growing a Rust state machine for each one:
    input reader.
 
 The current public surface supports authored camera cuts and paths, avatar
-`focus`/`follow` transactions, and generic session control claims. The remaining
-camera extension point is to generalize avatar-only `SetCameraLookAt`/follow
-realization to an explicit camera entity or USD path, so a Rhai-authored rig can
-target any eligible camera. That should extend the existing command and pose
-contracts rather than introduce a parallel camera API.
+`focus`/`follow` transactions, generic session control claims, and
+`SetCameraLookAt` addressed by an explicit camera identity. The command commits
+the pose in the active physics frame and establishes the generic explicit pose
+owner, so a Rhai-authored rig can target any eligible scene camera. Mounted and
+path-driven cameras retain their authored pose owners; a direct command reports
+that ownership conflict instead of creating a second writer.
 
 ### 6.7 Avatar identity and ownership
 

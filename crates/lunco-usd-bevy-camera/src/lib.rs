@@ -43,6 +43,7 @@ impl Plugin for UsdCameraPlugin {
             .init_resource::<camera_switch::CameraContractStatus>()
             .init_resource::<camera_switch::StandalonePresentationState>()
             .init_resource::<camera_switch::StandalonePresentationSettings>()
+            .register_type::<lunco_camera_core::CameraPoseMode>()
             .register_type::<camera_track::CameraTrack>()
             .configure_sets(Update, UsdCameraProjectionSet)
             .add_observer(camera_switch::on_activate_camera)

@@ -1368,12 +1368,12 @@ fn process_usd_sim_prim_read(
             .with_rotation(rotation.as_quat())
             .with_scale(existing_tf.scale);
 
-        // `UsdCameraPose::Avatar` identifies this as an interactive USD
+        // `CameraPoseMode::Interactive` identifies this as an interactive USD
         // camera for the camera mount/selection systems. It does not select
         // behavior or read input; the authored intent is realized by the
         // specialized avatar owner on the next update.
         commands.entity(entity).try_insert((
-            lunco_usd_bevy_camera::camera::UsdCameraPose::Avatar,
+            lunco_camera_core::CameraPoseMode::Interactive,
             lunco_core::Avatar,
             lunco_core::LocalAvatar,
             intent,

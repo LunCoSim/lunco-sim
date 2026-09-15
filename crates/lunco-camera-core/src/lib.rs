@@ -49,6 +49,28 @@ pub enum CameraRigMode {
     SpringArm,
 }
 
+/// Current owner of a camera's spatial pose.
+///
+/// This is the cross-domain ownership contract for camera writers. USD
+/// projection establishes the authored, interactive, mounted, or path-driven
+/// role; a runtime camera command may establish an explicit pose. Pose writers
+/// must only write while their corresponding mode is active.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[reflect(Component)]
+pub enum CameraPoseMode {
+    /// USD transform composition or animation owns the pose.
+    #[default]
+    Authored,
+    /// An interactive camera rig owns the pose.
+    Interactive,
+    /// A mounted camera follower owns the pose.
+    Mounted,
+    /// An authored camera path owns the pose.
+    Path,
+    /// A direct runtime camera command owns the pose.
+    Explicit,
+}
+
 /// Per-avatar mouse-wheel input accumulated between camera systems.
 #[derive(Component, Default)]
 pub struct CameraZoomInput {

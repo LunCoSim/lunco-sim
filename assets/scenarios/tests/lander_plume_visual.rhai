@@ -20,12 +20,14 @@ fn on_start(me) {
             target: this.lander,
             bind_camera: false,
         });
-        if possession.ok {
+        let review_camera = find("/LanderPlumeVisual/VisualCamera");
+        if possession.ok && review_camera >= 0 {
             // Keep the review camera independent from the control handoff,
             // then reassert its authored absolute pose through the public
             // camera command so the offscreen avatar clone has the same view
             // as the interactive review camera.
             let camera = cmd("SetCameraLookAt", #{
+                camera: review_camera,
                 eye: [14.0, 12.0, 20.0],
                 target: [0.0, 8.0, 0.0],
             });

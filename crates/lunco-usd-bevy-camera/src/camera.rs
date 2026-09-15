@@ -34,6 +34,7 @@
 //! follower; ordinary cameras retain their authored USD hierarchy.
 
 use bevy::prelude::*;
+use lunco_camera_core::CameraPoseMode;
 use openusd::schemas::geom::{self, tokens};
 use openusd::sdf::{Path as SdfPath, Value};
 
@@ -48,22 +49,6 @@ const DEFAULT_HORIZONTAL_APERTURE_MM: f32 = 20.955;
 /// introducing an importer-only camera profile.
 const DEFAULT_NEAR: f32 = 1.0;
 const DEFAULT_FAR: f32 = 1.0e6;
-
-/// A USD camera has exactly one writer for its pose. This is projected from
-/// `LunCoAvatarAPI` or `LunCoCameraAPI`; systems dispatch from this explicit
-/// role rather than inferring intent from the prim hierarchy.
-#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UsdCameraPose {
-    /// USD transform composition and animation own the pose.
-    #[default]
-    Authored,
-    /// The avatar rig owns the grid-local pose interactively.
-    Avatar,
-    /// A rigid follower owns the grid-local pose from the authored parent.
-    Mounted,
-    /// A cinematic path owns the grid-local pose.
-    Path,
-}
 
 /// A camera whose rendered output belongs to an instrument rather than the
 /// main window. It deliberately does not carry [`SceneCamera`].
@@ -198,13 +183,13 @@ pub fn instantiate_camera_prim(
     };
     let has_camera_api = reader.has_api_schema(sdf_path, "LunCoCameraAPI");
     let (is_viewport, is_sensor, pose) = if is_avatar {
-        (true, false, UsdCameraPose::Avatar)
+        (true, false, CameraPoseMode::Interactive)
     } else if !has_camera_api {
         warn!(
             "[usd-bevy] {} Camera has no LunCoCameraAPI; it is not a viewport or sensor camera",
             sdf_path.as_str()
         );
-        (false, false, UsdCameraPose::Authored)
+        (false, false, CameraPoseMode::Authored)
     } else {
         let pose = match read_camera_token(
             reader,
@@ -213,8 +198,8 @@ pub fn instantiate_camera_prim(
             "authored",
             &["authored", "mounted"],
         ) {
-            Some(value) if value == "authored" => UsdCameraPose::Authored,
-            Some(value) if value == "mounted" => UsdCameraPose::Mounted,
+            Some(value) if value == "authored" => CameraPoseMode::Authored,
+            Some(value) if value == "mounted" => CameraPoseMode::Mounted,
             None => return true,
             Some(_) => unreachable!("camera token helper validates its allowed values"),
         };
@@ -222,7 +207,7 @@ pub fn instantiate_camera_prim(
         // that same prim would create two pose authors, so reject the invalid
         // combination at projection rather than silently letting a later system
         // overwrite animation every frame.
-        let invalid_mounted_animation = pose == UsdCameraPose::Mounted
+        let invalid_mounted_animation = pose == CameraPoseMode::Mounted
             && reader
                 .attr_names(sdf_path)
                 .iter()

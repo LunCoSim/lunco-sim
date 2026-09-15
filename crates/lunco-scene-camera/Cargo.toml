@@ -16,6 +16,7 @@ lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-feature
 lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-environment = { path = "../lunco-environment" }
+lunco-render = { path = "../lunco-render" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 

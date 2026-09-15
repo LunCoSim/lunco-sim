@@ -421,22 +421,17 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
 #### `SetCameraLookAt`
 
- Aim the free-flight avatar camera: place it at `eye` and look at `target`
- (both absolute world-space). The flexible primitive — the client computes the
- angle (e.g. approach a wheel from its outboard side) and distance.
-
- Authoritative: whatever camera mode the avatar is in (orbit focus on a
- planet, spring-arm follow, surface mode), this strips it and reinstates a
- `FreeFlightCamera` at the requested pose — an API client asking for a
- specific view must always get it. `eye` and `target` speak the semantic
- [`lunco_spatial::ActivePhysicsFrame`]; the concrete grid is resolved from that
- resource so a previous orbit focus or a canonical render-only grid cannot
- put the camera in a different frame.
+Aim a scene camera: place it at `eye` and look at `target` (both
+ absolute world-space). `camera` is the scene-camera entity resolved by the
+ caller. Rhai resolves authored USD paths with `find(...)`; API callers can use
+ an entity returned by the scene query surface. The pose is committed in the
+ active physics frame and becomes the camera's explicit runtime pose owner.
 
 - *defined in:* `crates/lunco-scene-camera/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
+| `camera` | `Entity` | Scene camera entity to pose. |
 | `eye` | `Vec3` |   |
 | `target` | `Vec3` |   |
 
