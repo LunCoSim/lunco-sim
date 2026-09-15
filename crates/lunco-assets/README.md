@@ -105,11 +105,11 @@ output = "textures/moon.png"
 ```toml
 # crates/lunco-modelica-ui/Assets.toml
 
-[msl]
+[library]
 name = "Modelica Standard Library"
 version = "4.1.0"
 url = "https://github.com/modelica/ModelicaStandardLibrary/archive/refs/tags/v4.1.0.tar.gz"
-dest = "msl"
+dest = "library"
 ```
 
 ## Cache Directory
@@ -119,7 +119,7 @@ All worktrees and Twins share the OS-global cache returned by `cache_dir()`:
 ```
 ~/.cache/lunco/            # Linux; OS equivalent on macOS/Windows
 ├── textures/               (downloaded and processed)
-├── msl/                    (extracted library)
+├── library/                (extracted source library)
 └── ephemeris/              (runtime-generated CSVs)
 ```
 
@@ -138,7 +138,7 @@ configured cap. The in-app Data & libraries panel is the settings editor.
    global cache/           global cache/
    earth_source.jpg        textures/earth.png
    moon_source.tif         textures/moon.png
-   msl/4.1.0/
+   library/4.1.0/
 ```
 
 ## Testing

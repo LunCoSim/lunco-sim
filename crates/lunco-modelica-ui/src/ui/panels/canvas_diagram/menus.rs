@@ -494,12 +494,12 @@ pub(super) fn render_empty_menu(
         .map(|s| s.show_icon_only_classes)
         .unwrap_or(false);
     let active_doc = active_doc_from_world_ctx(ctx);
-    palette::render_msl_package_menu(
+    palette::render_library_package_menu(
         ui,
         ctx,
         state,
         active_doc,
-        palette::msl_package_tree(),
+        palette::library_package_tree(),
         click_world,
         editing_class,
         show_icons,
@@ -518,7 +518,7 @@ pub(super) fn render_empty_menu(
         // TODO(menu-height): the height is "so-so" — sometimes
         // collapses to 3 rows. Match how the Modelica
         // "Add component" cascade works (see
-        // `render_msl_package_menu` ~3065): plain
+        // `render_library_package_menu` ~3065): plain
         // `ui.menu_button(..., |ui| ...)` recursively, no explicit
         // `set_min_*`/`set_max_*`. Egui auto-sizes from content
         // there and it Just Works. The current adaptive

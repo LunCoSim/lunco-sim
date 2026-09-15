@@ -301,7 +301,7 @@ pub(super) fn project_scene(
                     // AST-derived causality classification as a short
                     // string (`"input"` / `"output"` / `"acausal"`) —
                     // the canvas renderer's port-shape match reads
-                    // this directly, so MSL naming conventions are
+                    // this directly, so source library naming conventions are
                     // no longer needed to pick the right shape.
                     kind: port_kind_str(p.kind).into(),
                 }
@@ -361,7 +361,7 @@ pub(super) fn project_scene(
                     .map(|p| {
                         (
                             p.name.clone(),
-                            p.msl_path.clone(),
+                            p.library_path.clone(),
                             p.size_x,
                             p.size_y,
                             p.rotation_deg,
@@ -443,7 +443,7 @@ pub(super) fn project_scene(
             .map(|p| p.connector_type.clone())
             .unwrap_or_default();
         // Wire color sourced from the connector class's Icon
-        // (populated by the projector for both local & MSL types).
+        // (populated by the projector for both local & source library types).
         // Falls back to `null` so the edge factory uses the leaf-name
         // palette in `wire_color_for`. The source-level
         // `Line(color={r,g,b})` annotation wins over the
@@ -630,7 +630,7 @@ pub(super) fn project_scene(
 /// comment / blank-line / parameter-default tweak that doesn't
 /// change the projected scene topology — skip the projection task
 /// entirely. Catches the bulk of the typing-latency regressions on
-/// large MSL files.
+/// large source library files.
 ///
 /// Note: false negatives (edits that DO change projection but
 /// produce the same hash) are impossible — the hash domain

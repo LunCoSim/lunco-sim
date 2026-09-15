@@ -42,7 +42,7 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 #[cfg(feature = "api")]
 use lunco_api::executor::DeferredCommandAppExt;
-use lunco_assets_core::{source_library_dir, source_library_root_path};
+use lunco_assets_core::source_library_dir;
 use lunco_modelica_runtime::{
     CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet, SimSampleStream,
 };
@@ -59,7 +59,7 @@ pub const REPOSITORY_URL: &str = env!("LUNCO_REPOSITORY_URL");
 
 /// Typed identity for a Modelica class across the workbench.
 ///
-/// Replaces the former string ID schemes (`msl_path:`, `bundled://…#`,
+/// Replaces the former string ID schemes (`library_path:`, `bundled://…#`,
 /// raw file paths, `mem://`) with a single `ClassRef { library, path }`
 /// value that flows through opening, drill-in, tab dedup, projection
 /// target lookup, and documentation lookup. See module docs for the
@@ -67,7 +67,7 @@ pub const REPOSITORY_URL: &str = env!("LUNCO_REPOSITORY_URL");
 pub mod class_ref;
 
 /// Unified read-side metadata for Modelica classes — folds the
-/// pre-baked palette index ([`visual_diagram::MSLComponentDef`]) and
+/// pre-baked palette index and
 /// the live per-document [`index::ClassEntry`] into one
 /// [`class_metadata::ClassMetadata`] shape so docs view, badges,
 /// and inspector title all read through one path.
@@ -192,7 +192,7 @@ pub mod icon_warmer;
 pub mod lock_ext;
 pub mod source_roots;
 
-const MODEL_LIBRARY_REVISION_VERSION: u32 = 1;
+const SOURCE_SET_REVISION_VERSION: u32 = 1;
 
 /// Hash source content at the source-root admission boundary. The caller has
 /// already read these files to seat them into Rumoca, so cache validation does
@@ -207,7 +207,7 @@ fn source_set_revision(id: &str, files: &[(String, String)]) -> u64 {
     entries.sort_unstable();
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
+    SOURCE_SET_REVISION_VERSION.hash(&mut hasher);
     id.hash(&mut hasher);
     for (uri, source) in entries {
         uri.hash(&mut hasher);
@@ -216,44 +216,21 @@ fn source_set_revision(id: &str, files: &[(String, String)]) -> u64 {
     hasher.finish()
 }
 
-/// Identity for the pre-parsed Modelica Standard Library artifact. The
-/// artifact tag is the producer contract; native metadata distinguishes a
-/// rebuilt bundle without scanning the source tree. Source-root cache keys are
-/// preferred when Rumoca supplies one for a direct source load.
-fn msl_artifact_revision() -> u64 {
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
-    "Modelica".hash(&mut hasher);
-    lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG.hash(&mut hasher);
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let bundle_path = source_library_dir("msl").join("parsed-msl.bin");
-        if let Ok(metadata) = std::fs::metadata(bundle_path) {
-            metadata.len().hash(&mut hasher);
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(elapsed) = modified.duration_since(std::time::UNIX_EPOCH) {
-                    elapsed.as_secs().hash(&mut hasher);
-                    elapsed.subsec_nanos().hash(&mut hasher);
-                }
-            }
-        }
-    }
-    hasher.finish()
-}
-
-fn cache_key_revision(id: &str, cache_key: Option<&str>) -> u64 {
-    use std::hash::{Hash, Hasher};
-
-    let Some(cache_key) = cache_key else {
-        return msl_artifact_revision();
-    };
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
-    id.hash(&mut hasher);
-    cache_key.hash(&mut hasher);
-    hasher.finish()
+fn source_roots_from_parsed_docs(
+    docs: &[(String, rumoca_compile::parsing::ast::StoredDefinition)],
+) -> std::collections::HashSet<String> {
+    docs.iter()
+        .flat_map(|(_, definition)| {
+            let within = definition.within.as_ref().map(ToString::to_string);
+            definition.classes.keys().filter_map(move |class_name| {
+                let qualified = within
+                    .as_deref()
+                    .map(|prefix| format!("{prefix}.{class_name}"))
+                    .unwrap_or_else(|| class_name.clone());
+                qualified.split('.').next().map(str::to_owned)
+            })
+        })
+        .collect()
 }
 
 /// Compile Modelica models through one session-owned source-root admission
@@ -288,7 +265,7 @@ pub struct ModelicaCompiler {
     /// an unresolved reference from loading unrelated embedded packages.
     requested_source_roots: std::collections::HashSet<String>,
     /// URIs of the user documents currently seated as overlays in this
-    /// reused session (NOT the MSL/library source roots). Every compile is
+    /// reused session (NOT the resident source roots). Every compile is
     /// HERMETIC with respect to prior compiles: before seating its own
     /// document set, a compile evicts any previously-seated user doc that is
     /// not part of *this* compile. Without this, a prior compile's primary
@@ -315,9 +292,9 @@ pub struct ModelicaCompiler {
     ///
     /// Leaf-keyed because that is what `SimulationSession::set_input` addresses;
     /// a library class is only ever reached by INSTANTIATION, so the worker
-    /// resolves these against the flattened `<instance>.<leaf>` slots. MSL is
-    /// never in here — it returns before the strip loop (it is instantiated, not
-    /// compiled as a target).
+    /// resolves these against the flattened `<instance>.<leaf>` slots. Root
+    /// source documents are not compiled as user targets, so they are not
+    /// represented in this map.
     library_input_defaults: std::collections::HashMap<String, f64>,
     /// Content revisions of the source roots admitted into this session.
     /// These are computed from bytes already read by the admission boundary;
@@ -334,16 +311,12 @@ impl Default for ModelicaCompiler {
 impl ModelicaCompiler {
     /// Construct an empty compiler session.
     ///
-    /// MSL discovery order for that admission:
-    ///
-    /// 1. The process-wide source from [`lunco_assets_core::library::global_library_sources`]
-    ///    if it's been installed. This is how the wasm runtime feeds the
-    ///    fetched-from-server MSL bundle in.
-    /// 2. Fall back to the configured source-library filesystem root.
-    ///
-    /// If both are absent, a source that references MSL fails visibly at the
-    /// compile owner. A later compile after the source becomes available can
-    /// admit it normally; no failed compile is retried internally.
+    /// Source roots are admitted explicitly through
+    /// [`Self::ensure_source_bundle_installed`],
+    /// [`Self::ensure_source_root_installed`], or one of the source-root load
+    /// methods. This keeps source selection at the caller that owns the
+    /// authored source-root declaration instead of making construction scan
+    /// or select a particular library.
     pub fn new() -> Self {
         Self {
             session: Session::new(SessionConfig::default()),
@@ -355,28 +328,30 @@ impl ModelicaCompiler {
         }
     }
 
-    /// Install MSL into this session once. Returns `true` if its classes are
-    /// resident (just installed, or already were). Idempotent and cheap on
-    /// repeat.
-    ///
-    /// This source-root admission hook reuses the same
-    /// [`Self::preload_from_global`] machinery for the process-wide decoded
-    /// bundle, on-disk `parsed-msl.bin`, and cold parse, so there is exactly
-    /// one install code path. Callers that
-    /// *know* they need the full library up front (the `msl_indexer --warm`
-    /// pass) call this explicitly; source compilation calls it after its
-    /// dependency scan and before Rumoca's DAE pipeline.
-    pub fn ensure_msl_installed(&mut self) -> bool {
-        if self.installed_roots.contains("Modelica") {
-            return true;
+    /// Install the resident parsed source bundle into this session. The bundle
+    /// may contain any number of authored libraries; root identities are
+    /// derived from their `within` declarations rather than selected by name.
+    pub fn ensure_source_bundle_installed(&mut self) -> bool {
+        let Some(parsed) = library_remote::parsed_source_bundle() else {
+            return false;
+        };
+        let docs = (**parsed).clone();
+        let roots = source_roots_from_parsed_docs(&docs);
+        if roots.is_empty() {
+            return false;
         }
-        let t = web_time::Instant::now();
-        if Self::preload_from_global(&mut self.session, t) {
-            self.installed_roots.insert("Modelica".to_string());
-            self.library_revisions
-                .insert("Modelica".to_string(), msl_artifact_revision());
-        }
-        self.installed_roots.contains("Modelica")
+        let inserted = self.session.replace_parsed_source_set(
+            "source-bundle",
+            rumoca_compile::compile::SourceRootKind::DurableExternal,
+            docs,
+            None,
+        );
+        self.installed_roots.extend(roots);
+        self.library_revisions.insert(
+            "source-bundle".to_string(),
+            source_set_revision("source-bundle", &[]),
+        );
+        inserted > 0
     }
 
     /// Seat a shipped Modelica library into this session by its TOP-LEVEL name,
@@ -404,7 +379,7 @@ impl ModelicaCompiler {
     /// the cosim wire into it was rejected, and the model held its declared default
     /// for the whole run. `LunCo.Propulsion.PlumePhotometry` took `throttle` that way,
     /// which is why a descent burn lit no plume.
-    pub fn ensure_root_installed(&mut self, root: &str) -> bool {
+    pub fn ensure_source_root_installed(&mut self, root: &str) -> bool {
         if self.installed_roots.contains(root) {
             return true;
         }
@@ -456,28 +431,8 @@ impl ModelicaCompiler {
             return true;
         }
 
-        // Reuse the package-browser inventory for installed third-party
-        // libraries. USD programs use the same Modelica root contract as the
-        // editor, so a known cache package must be admitted before the DAE
-        // call rather than discovered through a compile failure.
-        if let Some((cache_subdir, _)) = crate::package_tree::scanner::discover_third_party_libs()
-            .into_iter()
-            .find(|(_, name)| name == root)
-        {
-            let root_dir = lunco_assets_core::cache_dir().join(cache_subdir).join(root);
-            let report = self.load_source_root(root, &root_dir);
-            if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
-                return true;
-            }
-            log::error!(
-                "[ModelicaCompiler] third-party source root `{root}` failed: {}",
-                if report.diagnostics.is_empty() {
-                    "no Modelica definitions were inserted".to_string()
-                } else {
-                    report.diagnostics.join("; ")
-                },
-            );
-            return false;
+        if self.ensure_source_bundle_installed() && self.installed_roots.contains(root) {
+            return true;
         }
 
         // The same root-segment contract also covers a flat bundled model
@@ -549,7 +504,7 @@ impl ModelicaCompiler {
     }
 
     /// Seat a whole library's members as documents, each through the
-    /// bound-`input` strip — see [`Self::ensure_root_installed`].
+    /// bound-`input` strip — see [`Self::ensure_source_root_installed`].
     /// The strip itself lives in [`Self::load_source_root_in_memory`],
     /// so every in-memory root shares it.
     fn seat_library_files(
@@ -559,185 +514,6 @@ impl ModelicaCompiler {
         files: Vec<(String, String)>,
     ) -> rumoca_compile::compile::SourceRootLoadReport {
         self.load_source_root_in_memory(id, label, files)
-    }
-
-    /// If a process-wide MSL has been installed, preload it into the
-    /// session. Returns `true` when handled (caller skips the native disk
-    /// source path).
-    ///
-    /// Two web-side fast paths, in priority order:
-    ///
-    /// 1. **Pre-parsed bundle** ([`msl_remote::global_parsed_msl`]).
-    ///    The chunked parse driver finished running, so we already have
-    ///    `Vec<(uri, StoredDefinition)>` in hand — install via
-    ///    `Session::replace_parsed_source_set` (no parsing). This is
-    ///    the steady-state path on web.
-    /// 2. **Source-only bundle** (`MslAssetSource::InMemory`). Bytes
-    ///    are decompressed but the chunked parser hasn't finished yet.
-    ///    Falling through to `load_source_root_in_memory` here would
-    ///    block the main thread for ~60–120 s, so we skip preload and
-    ///    let the caller see an empty session — the auto-retrigger on
-    ///    parse-complete will rebuild the compiler properly.
-    fn preload_from_global(session: &mut Session, t_total: web_time::Instant) -> bool {
-        // 1. Slot hit, shared by native and wasm: the pre-parsed bundle is
-        //    already in memory (wasm chunked-decoder output, or a prior
-        //    native load that populated the process-wide slot). Cheap
-        //    install, no disk. Kept slot-only on purpose so a non-MSL
-        //    caller (sandbox/Balloon) never eagerly
-        //    reads the on-disk bundle here — the native disk read lives in
-        //    branch 3, behind the `Filesystem`-source gate.
-        if let Some(parsed) = msl_remote::global_parsed_msl() {
-            let docs = (**parsed).clone();
-            let pair_count = docs.len();
-            let inserted = session.replace_parsed_source_set(
-                "msl",
-                rumoca_compile::compile::SourceRootKind::DurableExternal,
-                docs,
-                None,
-            );
-            log::info!(
-                "[ModelicaCompiler] installed pre-parsed MSL in {:.2}s: \
-                 {} inserted (of {} docs)",
-                t_total.elapsed().as_secs_f64(),
-                inserted,
-                pair_count,
-            );
-            return true;
-        }
-        if lunco_assets_core::library::has_in_memory_library() {
-            // wasm: the source bytes are resident but the chunked parser
-            // hasn't produced `StoredDefinition`s yet. Report `false`
-            // (nothing installed) so `ensure_msl_installed` does NOT latch —
-            // a later compile retries once the chunked decode lands and
-            // `global_parsed_msl()` fills (branch 1 above).
-            log::info!(
-                "[ModelicaCompiler] MSL bundle present but parse not yet complete — \
-                 session stays empty; install retried when parse finishes"
-            );
-            return false;
-        }
-        if lunco_assets_core::library::primary_filesystem_library_root().is_some()
-            || source_library_root_path("msl", "Modelica").is_some()
-        {
-            // Native: an MSL tree is present (registered as a global source,
-            // OR just materialised on disk — headless tests/indexer/embedders
-            // don't register one). The install paths below read the on-disk
-            // bundle / source tree via the configured library directory, so disk presence
-            // alone is enough. Try the pre-parsed on-disk bundle first via the
-            // shared, memoized
-            // `install_parsed_msl` path — it streams `parsed-msl.bin` and
-            // caches it process-wide, so the next `ModelicaCompiler` hits
-            // branch 1 above with no disk read. This is the exact same
-            // install `load_source_root` uses: one code path, native + wasm.
-            if let Some((total, inserted)) = Self::install_parsed_msl(session, "msl") {
-                log::info!(
-                    "[ModelicaCompiler] loaded pre-parsed MSL bundle in {:.2}s: \
-                     {} inserted (of {} docs)",
-                    t_total.elapsed().as_secs_f64(),
-                    inserted,
-                    total,
-                );
-                return true;
-            }
-
-            // No usable bundle (missing, or rumoca-version-stale and failed
-            // to decode). Cold path: build the bundle the SAME way
-            // `msl_indexer` does — `indexer::parse_native_msl_bundle` walks
-            // every native root (MSL tree + companions + discovered extra
-            // libs) and parses ONE FILE AT A TIME.
-            //
-            // We deliberately do NOT use rumoca's
-            // `parse_source_root_with_cache_in`: it fires a single
-            // all-files rayon batch, which spikes memory (up to `num_cpus`
-            // concurrent ASTs + a full-tree blake3 hash sweep) and bursts
-            // concurrent artifact-cache writes. Fine standalone, but here it
-            // runs on the worker thread *alongside the Bevy render loop*, so
-            // on weak (8 GB) machines the peak swaps and stalls the whole
-            // desktop. Per-file keeps the peak flat — `msl_indexer` has
-            // always parsed this way and finishes in minutes where the batch
-            // path took tens of minutes. DRY: one MSL source→bundle parser
-            // shared by the CLI and the workbench.
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let docs = crate::indexer::parse_native_msl_bundle();
-                if docs.is_empty() {
-                    log::warn!(
-                        "[ModelicaCompiler] no MSL source files found under native \
-                         roots; session starts empty"
-                    );
-                    return false;
-                }
-                let parsed_count = docs.len();
-                // Write the bundle (zstd-compressed) BEFORE moving the docs
-                // into the session so we don't clone ~165 MB of defs, and so
-                // the next launch hits the fast path above (~1s).
-                let bundle_path = source_library_dir("msl").join("parsed-msl.bin");
-                if let Some(parent) = bundle_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                match msl_remote::write_parsed_bundle(&bundle_path, &docs) {
-                    Ok(()) => log::info!(
-                        "[ModelicaCompiler] wrote compressed MSL bundle ({} docs) to `{}` — next launch will be ~1s",
-                        docs.len(),
-                        bundle_path.display()
-                    ),
-                    Err(e) => log::warn!(
-                        "[ModelicaCompiler] failed to write MSL bundle to `{}`: {e}",
-                        bundle_path.display()
-                    ),
-                }
-                let inserted = session.replace_parsed_source_set(
-                    "msl",
-                    rumoca_compile::compile::SourceRootKind::DurableExternal,
-                    docs,
-                    None,
-                );
-                log::info!(
-                    "[ModelicaCompiler] preloaded MSL (cold, per-file) in {:.2}s: \
-                     {} parsed / {} inserted",
-                    t_total.elapsed().as_secs_f64(),
-                    parsed_count,
-                    inserted,
-                );
-                return true;
-            }
-            #[cfg(target_arch = "wasm32")]
-            return false;
-        }
-        false
-    }
-
-    /// Install the process-wide pre-parsed MSL bundle into `session`
-    /// under source-set `id`, if a bundle is available.
-    ///
-    /// **Single shared path for native and wasm.** The bundle is acquired
-    /// through [`msl_remote::parsed_msl_bundle`], the one memoized
-    /// accessor: on native it streams `parsed-msl.bin` off disk on the
-    /// first call and caches it process-wide (so a second
-    /// `ModelicaCompiler`, or a later [`Self::load_source_root`], reuses
-    /// it with no extra read/decode); on wasm it returns the chunked
-    /// decoder's slot. Both [`Self::preload_from_global`] and
-    /// [`Self::load_source_root`] go through here, so a change to how MSL
-    /// is sourced or installed lands on both targets at once.
-    ///
-    /// Returns `Some((total_docs, inserted))`, or `None` when no bundle is
-    /// ready yet (wasm before the chunked parse finishes, or native before
-    /// the indexer has written `parsed-msl.bin`).
-    fn install_parsed_msl(session: &mut Session, id: &str) -> Option<(usize, usize)> {
-        // The three real costs here are: decode `parsed-msl.bin`, deep-clone
-        // the (~165MB) AST set off the Arc, and insert+invalidate in the
-        // session. The clone dominates — see CQ-213 for eliminating it.
-        let parsed = msl_remote::parsed_msl_bundle()?;
-        let docs = (**parsed).clone();
-        let total = docs.len();
-        let inserted = session.replace_parsed_source_set(
-            id,
-            rumoca_compile::compile::SourceRootKind::DurableExternal,
-            docs,
-            None,
-        );
-        log::debug!("[install_parsed_msl] {total} docs, {inserted} inserted");
-        Some((total, inserted))
     }
 
     /// Compile Modelica source string and return DAE result.
@@ -786,7 +562,7 @@ impl ModelicaCompiler {
                 &within,
                 lunco_modelica_ast::ast_extract::short_name(model_name),
             );
-            if !self.ensure_root_installed(&root) {
+            if !self.ensure_source_root_installed(&root) {
                 return Err(format!(
                     "`{qualified}` declares `within {within};`, but no library `{root}` \
                      could be seated (looked for `assets/models/{root}/package.mo`, then \
@@ -836,9 +612,9 @@ impl ModelicaCompiler {
 
     /// Remove every previously-seated user-document overlay whose URI is not
     /// in `keep`, so the reused session holds ONLY the active compile's user
-    /// docs (plus the immutable MSL/library source roots). This is what makes
+    /// docs (plus the immutable source roots). This is what makes
     /// each compile hermetic against prior compiles — see
-    /// [`Self::seated_user_uris`]. MSL roots are installed via
+    /// [`Self::seated_user_uris`]. source library roots are installed via
     /// `replace_parsed_source_set` (not tracked here), so they're untouched.
     fn evict_user_docs_except(&mut self, keep: &std::collections::HashSet<String>) {
         let stale: Vec<String> = self
@@ -922,7 +698,7 @@ impl ModelicaCompiler {
             .and_then(|within| {
                 let root = within.split('.').next().unwrap_or(&within);
                 if !self.installed_roots.contains(root) {
-                    let _ = self.ensure_root_installed(root);
+                    let _ = self.ensure_source_root_installed(root);
                 }
                 let qualified = lunco_modelica_ast::ast_extract::qualify(
                     &within,
@@ -988,12 +764,12 @@ impl ModelicaCompiler {
         self.installed_roots.contains(root) && self.session.class_lookup_query(qualified).is_some()
     }
 
-    /// Compile an MSL class that is already loaded into the session
-    /// (no `update_document` call). Used by the `msl_indexer --warm`
+    /// Compile a source-library class that is already loaded into the session
+    /// (no `update_document` call). Used by the `modelica_library_indexer --warm`
     /// pass to populate rumoca's semantic-summary cache for common
     /// examples — the workbench's first compile of those classes is
     /// then a cache hit instead of paying the full multi-minute walk.
-    pub fn compile_msl_class(
+    pub fn compile_library_class(
         &mut self,
         qualified: &str,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
@@ -1003,7 +779,7 @@ impl ModelicaCompiler {
 
     /// Inner helper: heartbeat + session.compile + final timing log.
     /// Both [`Self::compile_str`] (user-edited source) and
-    /// [`Self::compile_msl_class`] (already-loaded MSL class) flow
+    /// [`Self::compile_library_class`] (already-loaded source library class) flow
     /// through here so the heartbeat behaviour is identical.
     fn compile_loaded(
         &mut self,
@@ -1012,7 +788,7 @@ impl ModelicaCompiler {
         let t_total = web_time::Instant::now();
 
         // Heartbeat: rumoca's compile pipeline is opaque from outside
-        // and can take minutes on cold caches with MSL-heavy models
+        // and can take minutes on cold caches with source library-heavy models
         // (parol Debug::fmt overhead — see ../rumoca/docs/design-notes/
         // perf-parol-trace-overhead.md). Without a periodic log line,
         // the user sees nothing for the entire duration and reasonably
@@ -1085,10 +861,8 @@ impl ModelicaCompiler {
             .collect::<Vec<_>>();
         roots.sort_unstable();
         for root in roots {
-            if root == "Modelica" {
-                let _ = self.ensure_msl_installed();
-            } else if !self.installed_roots.contains(&root) {
-                let _ = self.ensure_root_installed(&root);
+            if !self.installed_roots.contains(&root) {
+                let _ = self.ensure_source_root_installed(&root);
             }
         }
     }
@@ -1107,76 +881,15 @@ impl ModelicaCompiler {
     /// that depends on the library. Idempotent: rumoca dedups by
     /// `id`, so re-issuing for an already-loaded root is cheap.
     ///
-    /// Blocks the worker thread for the duration of the parse:
-    /// MSL warm-bundle ~1–3 s; cold parse 10–60 s. Other queued
+    /// Blocks the worker thread for the duration of the parse. Other queued
     /// commands wait behind it.
     pub fn load_source_root(
         &mut self,
         id: &str,
         root_dir: &std::path::Path,
     ) -> rumoca_compile::compile::SourceRootLoadReport {
-        // MSL fast path: a pre-parsed bundle (`parsed-msl.bin`,
-        // ~316 MB) sits next to the MSL source tree, produced by
-        // `msl_indexer`. Installing it via
-        // `Session::replace_parsed_source_set` takes ~1–3 s vs the
-        // 30+ s cold-parse path of `load_source_root_tolerant` over
-        // 2847 .mo files. The same fast path already runs inside
-        // [`ModelicaCompiler::new`]'s `preload_from_global`; we
-        // duplicate it here so the lazy `LoadSourceRoot` worker
-        // command also benefits when MSL is loaded on-demand
-        // (i.e. after the compiler was created empty for non-MSL
-        // models like Balloon).
-        if id == "Modelica" {
-            // Shared fast path with `preload_from_global`: install the
-            // memoized pre-parsed bundle (native streams `parsed-msl.bin`
-            // once per process; wasm uses the decoder slot) rather than
-            // re-reading + re-deserialising the ~316 MB file here.
-            if let Some((total, inserted)) = Self::install_parsed_msl(&mut self.session, id) {
-                log::info!(
-                    "[ModelicaCompiler] installed pre-parsed MSL bundle \
-                     ({} of {} docs)",
-                    inserted,
-                    total,
-                );
-                self.installed_roots.insert(id.to_string());
-                self.library_revisions
-                    .insert(id.to_string(), msl_artifact_revision());
-                return rumoca_compile::compile::SourceRootLoadReport {
-                    source_set_id: id.to_string(),
-                    source_root_path: source_library_dir("msl")
-                        .join("parsed-msl.bin")
-                        .display()
-                        .to_string(),
-                    parsed_file_count: total,
-                    inserted_file_count: inserted,
-                    cache_status: None,
-                    cache_key: None,
-                    cache_file: None,
-                    diagnostics: Vec::new(),
-                };
-            }
-            // MSL is the one root that stays on the tolerant disk parser:
-            // it is instantiated, not compiled as a top-level target, so
-            // the bound-`input` strip does not apply, and the pre-parsed
-            // bundle path above couldn't strip anyway.
-            let report = self.session.load_source_root_tolerant(
-                id,
-                rumoca_compile::compile::SourceRootKind::DurableExternal,
-                root_dir,
-                None,
-            );
-            if report.diagnostics.is_empty() {
-                self.installed_roots.insert(id.to_string());
-                self.library_revisions.insert(
-                    id.to_string(),
-                    cache_key_revision(id, report.cache_key.as_deref()),
-                );
-            }
-            return report;
-        }
-        // Every other disk root (twin `models/` trees, system libraries)
-        // holds user classes that can be compile *targets*, so each file
-        // must pass the bound-`input` strip. `load_source_root_tolerant`
+        // Every disk root holds classes that can be compile targets, so each
+        // file must pass the bound-`input` strip. `load_source_root_tolerant`
         // parses off disk directly and would skip it (the `within P;`
         // member trap: rumoca demotes a bound input to an algebraic, the
         // model loses its runtime input slots and every wire is dropped),
@@ -1409,7 +1122,7 @@ impl ModelicaCompiler {
         roots.sort_unstable_by(|left, right| left.0.cmp(right.0));
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
+        SOURCE_SET_REVISION_VERSION.hash(&mut hasher);
         for (id, revision) in roots {
             id.hash(&mut hasher);
             revision.hash(&mut hasher);
@@ -1422,7 +1135,7 @@ impl ModelicaCompiler {
 /// panel's [`Diagnostic`](lunco_doc::Diagnostic) form.
 ///
 /// A failure becomes *located* (click-to-source) only when its primary
-/// label points at `user_uri` — diagnostics rooted in MSL / sibling
+/// label points at `user_uri` — diagnostics rooted in source library / sibling
 /// library files keep their message (suffixed with the originating
 /// file name) but no line/column, so clicking never jumps the editor
 /// to a file it isn't showing. Each message is prefixed with rumoca's
@@ -1502,26 +1215,26 @@ fn diagnostics_from_sim_error(
     }
 }
 
+pub mod library_remote;
 /// Bundled Modelica models for web deployment.
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
-pub mod msl_remote;
 /// Profile-aware construction boundary for rumoca simulation sessions.
 pub mod simulation_session;
 
 pub mod experiments_runner;
-/// The MSL **indexer** — a host-side tool, not a runtime component: it walks the
-/// on-disk MSL tree, parses every `.mo`, and emits `msl_index.json` + the
-/// pre-parsed `parsed-msl.bin` bundle. It is `std::fs`-shaped by definition and
+/// The Modelica source-library **indexer** — a host-side tool, not a runtime component: it walks the
+/// on-disk source library tree, parses every `.mo`, and emits `library_index.json` + the
+/// pre-parsed `parsed-library.bin` bundle. It is `std::fs`-shaped by definition and
 /// has no wasm caller — the browser never *builds* an index, it *consumes* the
-/// artifacts this produces (`msl_remote` fetches the bundle over HTTP and
-/// installs it via `install_global_parsed_msl`). It used to be an unconditional
+/// artifacts this produces (`library_remote` fetches the bundle over HTTP and
+/// installs it via `install_global_parsed_source_bundle`). It used to be an unconditional
 /// `pub mod`, so ~1.6k lines of dead directory-walking code shipped in the wasm
-/// bundle and tripped the wasm lint. Native-gated now: the web MSL path is
-/// `msl_remote`, and this is the thing that makes its input.
+/// bundle and tripped the wasm lint. Native-gated now: the web source library path is
+/// `library_remote`, and this is the thing that makes its input.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod indexer;
-pub mod msl_settings;
+pub mod modelica_library_settings;
 pub mod worker;
 
 /// Bevy resource wrapping the singleton [`experiments_runner::ModelicaRunner`].
@@ -1672,10 +1385,10 @@ fn build_modelica_core(app: &mut App) {
     let (tx_cmd, rx_cmd) = unbounded();
     let (tx_res, rx_res) = unbounded();
 
-    // Ensure MSL remote management is present (fetching, settings, status).
-    // The domain is incomplete without MSL access.
-    if !app.is_plugin_added::<msl_remote::MslRemotePlugin>() {
-        app.add_plugins(msl_remote::MslRemotePlugin);
+    // Ensure source library remote management is present (fetching, settings, status).
+    // The domain is incomplete without source library access.
+    if !app.is_plugin_added::<library_remote::LibraryRemotePlugin>() {
+        app.add_plugins(library_remote::LibraryRemotePlugin);
     }
 
     // Register the `.mo` asset loader so domain code can fetch source
@@ -1685,18 +1398,18 @@ fn build_modelica_core(app: &mut App) {
         app.add_plugins(lunco_modelica_runtime::ModelicaSourceAssetPlugin);
     }
 
-    let msl = source_library_dir("msl");
-    if msl.exists() {
-        if let Ok(abs_path) = std::fs::canonicalize(&msl) {
+    let library = source_library_dir("library");
+    if library.exists() {
+        if let Ok(abs_path) = std::fs::canonicalize(&library) {
             std::env::set_var("MODELICAPATH", abs_path.to_string_lossy().to_string());
         }
     }
 
     // Point rumoca at the workspace's shared `.cache/rumoca/`, the
-    // same one `modelica_run` and `msl_indexer` use. Without this
+    // same one `modelica_run` and `modelica_library_indexer` use. Without this
     // alignment, the workbench reads XDG default (`~/.cache/rumoca`)
     // while the CLI tools warm `<workspace>/.cache/rumoca` —
-    // `msl_indexer --warm` then does NOTHING for first workbench
+    // `modelica_library_indexer --warm` then does NOTHING for first workbench
     // compile, which stretches from ~12 s (warm) to 13+ minutes (cold,
     // observed). Honor an externally-set `RUMOCA_CACHE_DIR` if the
     // caller wants a sandboxed location (CI, tests).
@@ -1829,7 +1542,7 @@ fn build_modelica_core(app: &mut App) {
         // existing command/result lifecycle; it is never executed on the UI
         // thread.
         app.add_systems(Update, worker_transport::pump_commands_to_worker);
-        // Re-seed MSL into workers respawned after a crash, deferred so the
+        // Re-seed source library into workers respawned after a crash, deferred so the
         // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
         // stack. Cheap no-op when nothing is pending.
         app.add_systems(Update, |_world: &mut World| {
@@ -1975,30 +1688,10 @@ mod source_root_smoke {
         );
     }
 
-    // ─────────────────────────────────────────────────────────
-    // MSL source-root admission tests
-    // ─────────────────────────────────────────────────────────
-    //
-    // Run with: `scripts/run_rust_tests.sh -p lunco-modelica-core --lib --filter msl -- --nocapture`
-    //
-    // `msl_` tests require the MSL tree at `<cache>/msl/Modelica/`
-    // (populated by our indexer). They skip with a stderr notice if
-    // absent — CI can run the non-MSL subset unconditionally.
-    //
-    // The headline test `msl_compile_pid_controller_example_succeeds`
-    // exercises source-root admission before the DAE call. A known-good MSL
-    // example that used to hang for minutes is the sanity check; we assert
-    // the happy path + print elapsed so regression to "minutes" is obvious
-    // in the log even if the timing isn't asserted strictly.
-
-    fn msl_available() -> bool {
-        source_library_root_path("msl", "Modelica").is_some()
-    }
-
     /// Trivial smoke test — compile a self-contained model with no
-    /// MSL references, verifying the source-root-independent path.
+    /// source library references, verifying the source-root-independent path.
     #[test]
-    fn bare_model_compiles_without_msl() {
+    fn bare_model_compiles_without_library() {
         let src = r#"
             model Bare
               Real x(start=1);
@@ -2009,205 +1702,9 @@ mod source_root_smoke {
         let mut c = ModelicaCompiler::new();
         let r = c
             .compile_str("Bare", src, "Bare.mo")
-            .expect("bare model must compile without MSL");
+            .expect("bare model must compile without source library");
         // Just assert we got a DAE at all — shape details vary
         // by rumoca version.
         let _ = r.dae;
-    }
-
-    /// A generated wrapper uses a qualified class from the shipped structured
-    /// package without naming LunCo in the compiler path. The source-root
-    /// admission pass discovers and seats the package before Rumoca's single
-    /// DAE compile, so the wrapper has one settled compilation path.
-    #[test]
-    fn qualified_bundled_package_is_prepared_before_compile() {
-        let src = r#"
-            model GeneratedBattery
-              LunCo.Electrical.Battery battery;
-            end GeneratedBattery;
-        "#;
-        let mut compiler = ModelicaCompiler::new();
-        compiler
-            .compile_str("GeneratedBattery", src, "GeneratedBattery.mo")
-            .expect("qualified bundled package should load through the root-segment gate");
-        assert!(compiler
-            .session()
-            .class_lookup_query("LunCo.Electrical.Battery")
-            .is_some());
-    }
-
-    #[test]
-    fn compile_dependency_admission_seats_known_roots_before_rumoca() {
-        let src = r#"
-            model GeneratedBattery
-              LunCo.Electrical.Battery battery;
-            end GeneratedBattery;
-        "#;
-        let mut compiler = ModelicaCompiler::new();
-        compiler.requested_source_roots =
-            crate::source_roots::scan_source_root_deps_from_source(src, "GeneratedBattery.mo");
-        compiler.prepare_requested_source_roots();
-
-        assert!(
-            compiler.installed_roots.contains("LunCo"),
-            "known bundled dependencies must be resident before the first DAE compile"
-        );
-    }
-
-    #[test]
-    fn bundled_flat_root_is_admitted_through_the_shared_root_loader() {
-        let mut compiler = ModelicaCompiler::new();
-        assert!(compiler.ensure_root_installed("RC_Circuit"));
-        assert!(compiler.installed_roots.contains("RC_Circuit"));
-    }
-
-    /// Same shape, against the actual PID_Controller example
-    /// extracted from `Blocks/package.mo`. Bigger closure —
-    /// Mechanics.Rotational + Blocks.Continuous + KinematicPTP +
-    /// sensors + Icons.
-    ///
-    /// With MSL admitted before the DAE call this should work without any
-    /// alias-table workaround; rumoca's own §5 resolver walks the `within
-    /// Modelica;` and enclosing package imports against the settled source
-    /// set. Kept as a *diagnostic*
-    /// test: if it fails, the failure is either (a) a genuine
-    /// rumoca MLS gap (PID is NOT in rumoca's 180-supported MSL
-    /// targets list — it may be one of the 15 known-failing), or
-    /// (b) a resolver miss our hook should have handled.
-    #[test]
-    fn msl_compile_pid_controller_example_succeeds() {
-        if !msl_available() {
-            eprintln!("skipping: MSL not available");
-            return;
-        }
-        // Reference by fully-qualified name so rumoca's scope-walker
-        // sees the enclosing `package Blocks` (which carries
-        // `import Modelica.Units.SI;`). The earlier version of this
-        // test sliced PID_Controller out of `Blocks/package.mo` and
-        // fed it as a standalone class, which dropped the enclosing
-        // package's imports — failure was a test-construction flaw
-        // on our side, not a resolver or rumoca gap.
-        let src = r#"
-            model TestPID
-              extends Modelica.Blocks.Examples.PID_Controller;
-            end TestPID;
-        "#;
-        let mut c = ModelicaCompiler::new();
-        let t0 = web_time::Instant::now();
-        let result = c.compile_str("TestPID", src, "TestPID.mo");
-        let elapsed = t0.elapsed();
-        eprintln!(
-            "msl_compile_pid_controller_example_succeeds: elapsed {:.2}s, \
-             result = {}",
-            elapsed.as_secs_f64(),
-            if result.is_ok() {
-                "OK".to_string()
-            } else {
-                format!(
-                    "ERR (first 500 chars): {}",
-                    result
-                        .as_ref()
-                        .err()
-                        .unwrap()
-                        .chars()
-                        .take(500)
-                        .collect::<String>()
-                )
-            }
-        );
-        result.expect("PID_Controller must compile after MSL source-root admission");
-    }
-
-    /// End-to-end test against an MSL target rumoca *officially*
-    /// claims to support (from `msl_simulation_targets_180.json` in
-    /// rumoca-test-msl). This is the real acceptance test for the
-    /// source-root architecture: MSL is admitted before rumoca's §5 scope
-    /// walker compiles the wrapper. If this fails, the loader architecture is
-    /// broken. If it passes but PID_Controller fails, the delta is a rumoca
-    /// MSL gap — not our problem.
-    #[test]
-    fn msl_compile_known_good_rotational_example() {
-        if !msl_available() {
-            eprintln!("skipping: MSL not available");
-            return;
-        }
-        // Minimal wrapper — forces the admitted MSL source set to resolve
-        // Rotational.Examples.First and its entire transitive closure
-        // (Rotational.Components, Interfaces, SI types, Icons, …).
-        // References are fully qualified, which is the scope-friendly form
-        // rumoca resolves cleanly.
-        let src = r#"
-            model TestRotFirst
-              extends Modelica.Mechanics.Rotational.Examples.First;
-            end TestRotFirst;
-        "#;
-        let mut c = ModelicaCompiler::new();
-        let t0 = web_time::Instant::now();
-        let result = c.compile_str("TestRotFirst", src, "TestRotFirst.mo");
-        let elapsed = t0.elapsed();
-        eprintln!(
-            "msl_compile_known_good_rotational_example: elapsed {:.2}s, \
-             result = {}",
-            elapsed.as_secs_f64(),
-            if result.is_ok() {
-                "OK".to_string()
-            } else {
-                format!(
-                    "ERR (first 800 chars): {}",
-                    result
-                        .as_ref()
-                        .err()
-                        .unwrap()
-                        .chars()
-                        .take(800)
-                        .collect::<String>()
-                )
-            }
-        );
-        result.expect("Rotational.Examples.First (known-good MSL target) must compile");
-    }
-
-    /// Purely-qualified-name test. If this passes but
-    /// `msl_compile_known_good_rotational_example` fails, the gap
-    /// is unambiguously in rumoca's short-form scope walking
-    /// (enclosing-package imports aren't reaching nested classes),
-    /// not in our resolver.
-    #[test]
-    fn msl_fully_qualified_time_resolves() {
-        if !msl_available() {
-            eprintln!("skipping: MSL not available");
-            return;
-        }
-        let src = r#"
-            model TestFullyQualifiedSI
-              parameter Modelica.Units.SI.Time Ti = 0.5;
-              Real x(start=1);
-            equation
-              der(x) = -x / Ti;
-            end TestFullyQualifiedSI;
-        "#;
-        let mut c = ModelicaCompiler::new();
-        let t0 = web_time::Instant::now();
-        let result = c.compile_str("TestFullyQualifiedSI", src, "Q.mo");
-        let elapsed = t0.elapsed();
-        eprintln!(
-            "msl_fully_qualified_time_resolves: elapsed {:.2}s, result = {}",
-            elapsed.as_secs_f64(),
-            if result.is_ok() {
-                "OK".into()
-            } else {
-                format!(
-                    "ERR (first 800 chars): {}",
-                    result
-                        .as_ref()
-                        .err()
-                        .unwrap()
-                        .chars()
-                        .take(800)
-                        .collect::<String>()
-                )
-            }
-        );
-        result.expect("fully-qualified SI.Time must compile");
     }
 }

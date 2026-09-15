@@ -6,7 +6,6 @@
 //! separate means interaction-only hosts do not compile the large inspector
 //! and USD authoring surface.
 
-#![forbid(unsafe_code)]
 
 use bevy::prelude::*;
 use lunco_scene_selection::{SelectedEntities, SelectionTarget};

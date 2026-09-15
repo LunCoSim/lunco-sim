@@ -473,7 +473,7 @@ pub struct SchematicTokens {
     // ── Canvas-specific backgrounds ───────────────────────────────
     //
     // Tuned to sit well with Modelica-style blue-heavy icons: cool
-    // blues on the canvas background fight (MSL Blocks use strong
+    // blues on the canvas background fight (source library Blocks use strong
     // blue outlines and blue fills, which blend into a bluish
     // backdrop). These tokens give the schematic editor a slightly
     // **warm neutral** canvas that makes blue icons read cleanly
@@ -484,7 +484,7 @@ pub struct SchematicTokens {
     pub canvas_card: egui::Color32,
     /// The diagram's "paper" — the area the grid dots sit on.
     /// Reads as a subtle warm grey in dark mode and near-white in
-    /// Latte, so MSL components look like they're on a drafting
+    /// Latte, so source library components look like they're on a drafting
     /// sheet rather than a UI surface.
     pub canvas_paper: egui::Color32,
 }
@@ -662,7 +662,7 @@ pub struct Theme {
     /// hardcoded in `lunco-viz`, so plots follow the active theme like everything else.
     pub plot: PlotTokens,
     /// Anchor + invert rules for re-coloring authored Modelica icon
-    /// primitives so MSL (designed for paper-white backgrounds) reads
+    /// primitives so source library (designed for paper-white backgrounds) reads
     /// well under the active theme. Identity in light mode.
     pub modelica_icons: ModelicaIconPalette,
     pub spacing: SpacingScale,
@@ -675,13 +675,13 @@ pub struct Theme {
 
 /// Color-mapping rules for Modelica icon primitives.
 ///
-/// MSL was authored against a paper-white canvas with black outlines
+/// source library was authored against a paper-white canvas with black outlines
 /// and saturated accents. Rendered untouched on a dark theme, the
 /// black outlines vanish into the bg and the bright primary blue/red
 /// scream against the muted UI palette.
 ///
-/// This palette runs every authored MSL `Color` through:
-///   1. **Anchor table** — canonical MSL colors (pure black, pure
+/// This palette runs every authored source library `Color` through:
+///   1. **Anchor table** — canonical source library colors (pure black, pure
 ///      white, primary RGB, the gray ramp) get an explicit theme-
 ///      tuned remap. Match is RGB distance ≤ `anchor_eps`.
 ///   2. **Luminance invert (HSL)** — anything else flips its lightness
@@ -689,12 +689,12 @@ pub struct Theme {
 ///      `[invert_l_min, invert_l_max]` so user-authored colors stay
 ///      readable without losing identity.
 ///
-/// Light theme defaults to identity (no remap) — MSL already looks
+/// Light theme defaults to identity (no remap) — source library already looks
 /// right on a light background.
 #[derive(Clone, Debug)]
 pub struct ModelicaIconPalette {
     pub enabled: bool,
-    /// `(msl_rgb, target)` pairs. First match wins.
+    /// `(library_rgb, target)` pairs. First match wins.
     pub anchors: Vec<(egui::Color32, egui::Color32)>,
     /// L1 RGB distance under which an authored color counts as the
     /// anchor. 8 catches `{0,0,255}` ↔ `{0,0,254}` style near-misses
@@ -716,18 +716,18 @@ impl ModelicaIconPalette {
         }
     }
 
-    /// Dark-theme defaults: re-color the canonical MSL palette so it
+    /// Dark-theme defaults: re-color the canonical source library palette so it
     /// sits naturally on a dark Catppuccin-mocha-ish bg, invert the
     /// rest. Tuned by eye; iterate via theme JSON as needed.
     pub fn dark_default(c: &ColorPalette) -> Self {
-        // Anchor RGBs: the values MSL uses everywhere. We match these
+        // Anchor RGBs: the values source library uses everywhere. We match these
         // ±eps and substitute the theme-mapped equivalent.
         let anchors: Vec<(egui::Color32, egui::Color32)> = vec![
             // Pure black — outlines, default text. Map to high-contrast
             // theme text so outlines read on dark bg.
             (egui::Color32::from_rgb(0, 0, 0), c.text),
             // Pure white — default fillColor (the "page" feel). Map to
-            // a slightly lighter surface than the canvas bg so MSL
+            // a slightly lighter surface than the canvas bg so source library
             // bodies (Inertia rectangle, white-fill rects) feel like
             // they sit on a card, not blend into the background.
             (egui::Color32::from_rgb(255, 255, 255), c.surface2),
@@ -736,7 +736,7 @@ impl ModelicaIconPalette {
             (egui::Color32::from_rgb(0, 0, 255), c.sapphire),
             // Pure red — error markers. Slightly desaturated.
             (egui::Color32::from_rgb(255, 0, 0), c.red),
-            // MSL "warm red" 191,0,0 — heat ports, thermal indicators.
+            // source library "warm red" 191,0,0 — heat ports, thermal indicators.
             (egui::Color32::from_rgb(191, 0, 0), c.maroon),
             // Pure green — sensors, "ok" markers.
             (egui::Color32::from_rgb(0, 255, 0), c.green),

@@ -101,7 +101,7 @@ Target layout on the box:
 ├── luncosim-server        # the release headless server binary
 ├── assets/                 # asset tree (scenes/, shaders/, models cache, …)
 ├── certs/                  # deploy-hook-copied fullchain.pem + privkey.pem
-├── .cache/                 # rumoca/MSL/model cache (service-writable)
+├── .cache/                 # rumoca/source-library/model cache (service-writable)
 ├── lunco-server.env        # config (TLS paths, RUST_LOG)
 └── web/luncosim/           # the wasm bundle nginx serves
 ```

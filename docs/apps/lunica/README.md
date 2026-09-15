@@ -33,12 +33,12 @@ Lunica can be served as a web application:
 
 ## Key Workflows
 
-### 1. MSL Bootstrap
-Lunica needs the Modelica Standard Library (MSL) on hand. On first use (desktop):
-1. **Download MSL**: Ensure MSL sources are in `~/.cache/lunco/msl/`.
-2. **Index MSL**: Run the indexer to produce the pre-parsed cache:
+### 1. Modelica source-library bootstrap
+Lunica needs its configured source libraries on hand. On first use (desktop):
+1. **Download source libraries**: Ensure the configured source-library roots are installed in the LunCo cache.
+2. **Index the source libraries**: Run the indexer to produce the pre-parsed cache:
    ```bash
-   cargo run --release -p lunco-modelica-core --bin msl_indexer
+   cargo run --release -p lunco-modelica-core --bin modelica_library_indexer
    ```
 
 ### 2. Modeling & Simulation

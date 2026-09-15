@@ -46,7 +46,7 @@ pub enum OpeningState {
         /// via [`crate::ui::panels::canvas_diagram::CanvasDiagramState::stash_projection_handoff`].
         busy: lunco_status_core::status_bus::BusyHandle,
     },
-    /// MSL drill-in slim-slice load. Built by
+    /// source library drill-in slim-slice load. Built by
     /// [`crate::ui::panels::canvas_diagram::drill_into_class`].
     DrillIn(DrillInBinding),
     /// `Duplicate to Workspace` bg parse. Built by

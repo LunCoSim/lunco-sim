@@ -52,20 +52,20 @@ base64 = { workspace = true }
 # Required because `std::time::Instant::now()` panics with
 # "time not implemented on this platform" on wasm32-unknown-unknown.
 web-time = { workspace = true }
-# Pre-parsed MSL bundle deserialiser. Same encoding as rumoca's
+# Pre-parsed source bundle deserialiser. Same encoding as rumoca's
 # on-disk artifact cache — the wasm fetcher decodes a Vec of
 # (uri, StoredDefinition) shipped at build time, skipping a ~27-min
 # per-file parse on the page.
 bincode = { workspace = true }
 # Raster decoders used by egui_extras' `all_loaders`. Only the formats
-# actually present in MSL Resources/Images are enabled to keep the
+# actually present in source-library Resources/Images are enabled to keep the
 # compile surface small.
 # LunCoSim/rumoca, `main` (see the workspace Cargo.toml for the pin). It
 # carries the wasm32 `Instant` fix (std::time::Instant panics on
 # wasm32-unknown-unknown), reconstruction of algebraic/output variables via the
 # retained `EliminationResult` (so `state()`/`get()` return every variable, not
 # just solver-vector entries), and `Session::load_source_root_in_memory(...)`,
-# which lets the wasm runtime hand pre-fetched MSL bytes to the compile session
+# which lets the wasm runtime hand pre-fetched source bytes to the compile session
 # with no filesystem.
 # The interactive stepper is `SimulationSession` (rumoca ≥0.9.20; it replaced
 # `SimStepper`). NOTE: it clamps every advance at `SimOptions::t_end`, so build
@@ -106,7 +106,7 @@ lunco-api = { path = "../lunco-api", optional = true }
 # bridge forces the `log` facade's max level to TRACE (so all log records
 # reach `tracing` for filtering). That makes every `log::trace!` CONSTRUCT
 # and format its record before tracing drops it at info-level — the cost is
-# paid millions of times. Measured: a cold MSL parse went from <2 s
+# paid millions of times. Measured: a cold source-library parse went from <2 s
 # (standalone, no logger) to 5+ minutes in-app. Same parser, same machine —
 # the only difference was the installed logger. (Repro: set log max level to
 # TRACE in a standalone bin → identical blow-up.) Per-target filtering can't
@@ -133,7 +133,7 @@ uuid = { workspace = true }
 # (missing `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs).
 # Enable with `cargo run --features tracy --bin lunica` when profiling.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Native-only MSL indexing. The indexer walks the host filesystem and is not
+# Native-only source indexing. The indexer walks the host filesystem and is not
 # part of the wasm runtime; keeping these edges target-gated prevents the web
 # worker from compiling its parallel parser and scanner dependencies.
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
@@ -148,11 +148,11 @@ regex = "1.10"
 # the keyboard path. Already transitively present via bevy_egui's
 # `manage_clipboard` feature — no new compile.
 
-# zstd codec for the native pre-parsed MSL bundle (`.cache/msl/parsed-msl.bin`).
+# zstd codec for the native pre-parsed source bundle (`.cache/library/parsed-library.bin`).
 # The bundle is now zstd-compressed bincode (~10× smaller on disk than the raw
 # bincode it replaced — matters because the cache is large and disk has filled
 # up before). C-backed, but native already links it via
-# `lunco-modelica-assets`'s `build_msl_assets`, and
+# `lunco-modelica-assets`'s `build_modelica_library_assets`, and
 # it's target-gated so wasm keeps using the pure-Rust `ruzstd` decoder below.
 zstd = { workspace = true }
 
@@ -161,7 +161,7 @@ zstd = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The generic Web Worker pool (spawn / boot handshake / byte + Transferable post
 # / crash respawn), shared with the DEM bake worker. `worker_transport` composes
-# it and keeps the Modelica-specific MSL/run state on top.
+# it and keeps the Modelica-specific source-library/run state on top.
 lunco-worker-transport = { path = "../lunco-worker-transport" }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
@@ -170,8 +170,8 @@ wasm-bindgen-futures = { workspace = true }
 # (`wasm_js`) feature must be enabled here too; build_web.sh sets the matching
 # `--cfg getrandom_backend="wasm_js"` (cfg + feature are both required).
 getrandom = { version = "0.3", features = ["wasm_js"] }
-# `Response`, `Request`, `RequestInit`, `Headers` for the MSL fetcher
-# (see `src/msl_remote.rs`); the rest predate this work.
+# `Response`, `Request`, `RequestInit`, `Headers` for the source fetcher
+# (see `src/library_remote.rs`); the rest predate this work.
 web-sys = { workspace = true, features = [
     "console",
     "Document",
@@ -222,11 +222,11 @@ web-sys = { workspace = true, features = [
 ] }
 js-sys = { workspace = true }
 console_error_panic_hook = { workspace = true }
-# Pure-Rust zstd decoder for the MSL bundle. Smaller than the
+# Pure-Rust zstd decoder for the source bundle. Smaller than the
 # `zstd` crate (which uses a C dep) and the encoder side already runs
-# on native (see `lunco-modelica-assets/src/bin/build_msl_assets.rs`).
+# on native (see `lunco-modelica-assets/src/bin/build_modelica_library_assets.rs`).
 ruzstd = "0.7"
-# Tar reader to walk the decompressed MSL bundle. The `tar` crate is
+# Tar reader to walk the decompressed source bundle. The `tar` crate is
 # fs-free if you only call `Archive::entries()`; works on wasm.
 tar = { workspace = true }
 

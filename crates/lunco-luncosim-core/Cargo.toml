@@ -73,7 +73,7 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 mimalloc = "0.1"
 
 [features]
-default = []
+default = ["sysml"]
 server = ["api-transport", "transport-http", "networking"]
 celestial = ["lunco-celestial-spatial/embed-assets"]
 api-transport = [

@@ -139,7 +139,7 @@ domain-neutral `SceneEvent` stream. **Proven by three coexisting domains today**
 Four things are currently hardcoded per-domain as free functions — these become the `DomainDescriptor`'s
 **editor** slot:
 
-1. **Palette source** — `msl_class_library()` → descriptor's part library.
+1. **Palette source** — `library_class_library()` → descriptor's part library.
 2. **Forward projection** `project(model) → Scene` — `project_scene` (Modelica) → descriptor-supplied.
 3. **Reverse bridge** `SceneEvent → Vec<BackendOp>` — `build_ops_from_events` (→ `ModelicaOp`) →
    descriptor-supplied (→ `ModelicaOp` *or* `UsdOp` *or* …).

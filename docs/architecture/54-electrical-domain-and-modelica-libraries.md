@@ -287,7 +287,7 @@ unit shows the native LunCo members and their authored icons. The class cache
 loads a bundled package root through `lunco_assets_core::models::package_files` and
 the shared `ModelicaEngine`; this keeps LunCo visual resolution on the same
 source/AST path as every other Modelica class without making the generated
-policy or UI depend on MSL.
+policy or UI depend on a particular library identity.
 
 The electrical unit presentation is compact for repeated common-pin members.
 The Rhai policy packs source and load banks into deterministic near-square grids,
@@ -356,8 +356,8 @@ library-specific installer or root-name branch.
 
 - **Bundled packages load on first compile admission.** The compiler scans the
   source's qualified roots and seats each known structured package before the
-  DAE call. MSL follows the same admission contract through its shared parsed
-  bundle. The DAE pipeline therefore runs once; an unknown or unavailable root
+  DAE call. Every bundled source library follows the same admission contract
+  through the shared parsed bundle. The DAE pipeline therefore runs once; an unknown or unavailable root
   is a visible compile error rather than an implicit retry. This preserves lazy
   startup without making a particular library a Rust special case.
 - **The editor uses the same root-segment rule.** A cold qualified class requests its
@@ -370,7 +370,7 @@ library-specific installer or root-name branch.
   Modelica owner derives package roots and flat-source directories from the authoritative
   indexed Twin files; there is no hard-coded `<twin>/models` convention. Declared
   `[modelica].externals` add existing relative or absolute library directories, while
-  `@bundled:msl` is already owned by the standard-library inventory. Every admitted root
+  `@bundled:source-bundle` is already owned by the bundled source-library inventory. Every admitted root
   is sent through the existing `LoadSourceRoot { Disk }` worker command, which recursively
   reads standard `package.mo`/`package.order` trees and uses the same input-default
   normalization as other disk roots. **Why in `lunco-modelica-core`, not at the USD twin-mount

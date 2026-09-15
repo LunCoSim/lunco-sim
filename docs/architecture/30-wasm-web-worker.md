@@ -24,7 +24,7 @@ a transport layer that bridges the channels to the worker over
 ┌─────────────────────────────────────────┐         ┌─────────────────────────────┐
 │ Main page (lunica bundle)           │         │ Worker (lunica_worker)      │
 │ ─────────────────────────────────────── │         │ ─────────────────────────── │
-│ Bevy app, egui UI, MSL fetcher          │         │ no Bevy app                 │
+│ Bevy app, egui UI, source fetcher       │         │ no Bevy app                 │
 │ ModelicaChannels (crossbeam)            │         │ ModelicaWorkerState          │
 │   tx_cmd ──┐                            │         │ ModelicaCompiler (lazy)      │
 │   rx_res ◄─┤                            │         │                             │
@@ -53,14 +53,14 @@ a transport layer that bridges the channels to the worker over
 3. **Worker init.** Inside the Worker, `bin/lunica_worker.rs::run()` runs
    under `wasm_bindgen(start)`. It installs `self.onmessage`, posts back
    `WireResult::Log("ready")`, and parks.
-4. **MSL handoff.** The main page's MSL fetcher keeps the downloaded
+4. **Source-library handoff.** The main page's source-library fetcher keeps the downloaded
    `parsed-*.bin.zst` or `sources-*.tar.zst` bytes compressed and gives them to
-   `msl_remote::drain_msl_load_slot`. The transport posts the compressed parsed
-   bundle to the worker as `InstallParsedMslCompressed`; the worker owns
+   `library_remote::drain_library_load_slot`. The transport posts the compressed parsed
+   bundle to the worker as `InstallParsedLibraryCompressed`; the worker owns
    decompression, bincode deserialization, and installation into its own
-   `GLOBAL_PARSED_MSL`. The primary worker transfers raw decoded bincode bytes
+   `GLOBAL_PARSED_SOURCE_BUNDLE`. The primary worker transfers raw decoded bincode bytes
    back only so the page can build its separate resolution/autocomplete index
-   with chunked deserialization; the page never parses the MSL source archive
+   with chunked deserialization; the page never parses the source archive
    as a runtime substitute.
 5. **Compile / Step / etc.** Bevy systems send `ModelicaCommand` via
    `channels.tx` exactly as on native. Each `Update` tick,
@@ -74,11 +74,11 @@ a transport layer that bridges the channels to the worker over
      This is the single wasm command-dispatch path.
      `catch_unwind` wraps the call so a panic surfaces as
      `WireResult::Log("PANIC during {label}: {msg}")` instead of silent death.
-   - `InstallParsedMslCompressed(bytes)` → worker-owned decompress, deserialize,
-     and `msl_remote::install_global_parsed_msl_pub(parsed)`.
-   - `InstallMslIndexFromSource(bytes)` → worker-owned editor-index decode,
+   - `InstallParsedLibraryCompressed(bytes)` → worker-owned decompress, deserialize,
+     and `library_remote::install_global_parsed_source_bundle_pub(parsed)`.
+   - `InstallLibraryIndexFromSource(bytes)` → worker-owned editor-index decode,
      sent back in bounded metadata chunks.
-   - `Ping(tag)` → `WireResult::Log("pong: {tag} (msl={})")`.
+   - `Ping(tag)` → `WireResult::Log("pong: {tag} (source_docs={})")`.
 7. **Result fan-in.** Worker posts each `WireResult` back. Main's
    `onmessage` decodes:
    - `Result(r)` → `tx_res.send(r)` — picked up by the existing
@@ -93,8 +93,8 @@ a transport layer that bridges the channels to the worker over
 ```rust
 pub enum WireMessage {
     Command(ModelicaCommand),
-    InstallParsedMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
-    InstallMslIndexFromSource { bytes: Vec<u8> },
+    InstallParsedLibraryCompressed { bytes: Vec<u8>, provide_to_main: bool },
+    InstallLibraryIndexFromSource { bytes: Vec<u8> },
     ParseDocument { /* document identity, generation, URI, source */ },
     RunFast { /* run identity and simulation inputs */ },
     CancelRun { /* run identity */ },
@@ -102,10 +102,10 @@ pub enum WireMessage {
 }
 pub enum WireResult {
     Result(ModelicaResult),
-    MslReady { docs: usize },
-    MslFailed { error: String },
-    MslIndexChunk { /* bounded metadata */ },
-    MslIndexFailed { error: String },
+    LibraryReady { docs: usize },
+    LibraryFailed { error: String },
+    LibraryIndexChunk { /* bounded metadata */ },
+    LibraryIndexFailed { error: String },
     ParseDocumentDone { /* document identity and AST */ },
     RunUpdate { /* run identity and update */ },
     Log(String),
@@ -141,7 +141,7 @@ target/web/lunica_worker/{lunica_worker.js, lunica_worker_bg.wasm, …}
 dist/lunica/
 ├── index.html             ← imports & calls init('lunica.js')
 ├── lunica.js, …       ← main bundle
-├── msl/                   ← parsed MSL artefacts
+├── library/               ← parsed source-library artefacts
 └── worker/
     ├── lunica_worker.js, …  ← worker bundle (wasm-bindgen output)
     └── worker_bootstrap.js  ← `import init; await init();`  ← REQUIRED
@@ -182,7 +182,7 @@ for trusted events only):
 
 ```js
 // In Console:
-__lc_test_worker_ping('hello')          // → [worker] pong: hello (msl=2670)
+__lc_test_worker_ping('hello')          // → [worker] pong: hello (source_docs=2670)
 __lc_test_dispatch_compile('Osc', src)  // fires ModelicaCommand::Compile
                                         //  with Entity::PLACEHOLDER
 ```
@@ -197,11 +197,11 @@ test loops.
 | Phase                                      | Cost (cold)  | Notes                                              |
 |--------------------------------------------|--------------|----------------------------------------------------|
 | Worker wasm download + instantiate         | ~1–2 s       | parallel with main wasm                            |
-| MSL compressed bundle post                 | ≈0           | compressed bytes are transferred to the worker    |
-| MSL decompress + bincode deserialize worker| ~0.5 s       | off-thread, doesn't block UI                      |
-| MSL chunked deserialize on main            | bounded      | resolution index only; no decompress/untar/parse  |
-| Compile `Osc` (no MSL)                     | 0.07 s       | round-trip including pump + post + decode         |
-| Compile `AnnotatedRocketStage` (full MSL)  | ~3.4 s       | round-trip; native equivalent ~2 s                 |
+| Source bundle post                       | ≈0           | compressed bytes are transferred to the worker    |
+| Source decompress + bincode deserialize worker | ~0.5 s  | off-thread, doesn't block UI                      |
+| Source chunked deserialize on main       | bounded      | resolution index only; no decompress/untar/parse  |
+| Compile `Osc` (no external source)       | 0.07 s       | round-trip including pump + post + decode         |
+| Compile `AnnotatedRocketStage` (source dependencies) | ~3.4 s | round-trip; native equivalent ~2 s                 |
 | Step                                       | ~50 µs RT    | post + structuredClone of small payload           |
 
 Per-Step roundtrip is dominated by JS event-loop scheduling, not
@@ -211,7 +211,7 @@ serde. At 60 Hz that's ~0.3 % main-thread overhead.
 
 Two wasm linear memories share the page. The worker bundle is ~13 MB
 compressed (28 MB wasm, slimmed by `wasm-opt -O2 --strip-debug`). The worker
-owns one installed parsed MSL bundle. The page also receives the worker's
+owns one installed parsed source bundle. The page also receives the worker's
 decoded bincode bytes and incrementally deserializes a separate copy for
 resolution/autocomplete, because wasm memories cannot be shared. Compressed
 source and parsed bundles remain compressed until the worker takes ownership;
@@ -225,7 +225,7 @@ there is no page-thread untar/parse/decompression fallback.
 | `[worker] PANIC during Compile X: ...`      | rumoca panic inside worker                    | Surfaced via `catch_unwind` + `WireResult::Log`                    |
 | `Simulation worker crashed and restarted`   | Result with `Entity::PLACEHOLDER` (test path) | Cosmetic; only fires from `__lc_test_dispatch_compile`              |
 | `[worker_transport] post_message failed`    | Worker died, browser refused message          | Browser DevTools → Application → Service Workers / Workers panel    |
-| UI stutters during MSL install              | Main-side chunked AST deserialization        | `msl_remote::drive_msl_main_decode`; no page-thread parse/decompress |
+| UI stutters during source-library install  | Main-side chunked AST deserialization        | `library_remote::drive_library_main_decode`; no page-thread parse/decompress |
 
 The worker's own `web_sys::console::log_1` lines (e.g. `[lunica_worker]
 starting`) DO appear in the page console in Chrome — Chrome merges
@@ -242,7 +242,7 @@ step runs on the page thread.
 
 ## What's NOT solved
 
-- **Single-page MSL clone.** Worker fetches its own MSL would eliminate
+- **Single-page source clone.** Worker fetches its own source bundle would eliminate
   the main-side serialise + transfer entirely, at the cost of two
   network requests. Worth doing later.
 - **Worker lifecycle on page reload.** Browser disposes the worker on
@@ -252,7 +252,7 @@ step runs on the page thread.
   as native today.
 - **Worker bundle size.** The worker is built from `lunco-modelica-core`, so
   it does not link the workbench UI graph. Further size work should target the
-  core's actual Rumoca/MSL closure rather than recreating a worker-only crate.
+  core's actual Rumoca/source closure rather than recreating a worker-only crate.
 
 ## Prerequisites
 
@@ -329,9 +329,9 @@ dist/<binary>/
   lunica_bg.wasm     # post-wasm-opt binary
   lunica.d.ts        # TypeScript declarations
   index.html         # copy of crates/lunco-web/web/index.html (shared template)
-  msl/
+  library/
     manifest.json    # bundle metadata + content hashes
-    sources-<sha>.tar.zst   # ~2 MB MSL source bundle
+    sources-<sha>.tar.zst   # ~2 MB source bundle
     parsed-<sha>.bin.zst    # ~14 MB pre-parsed StoredDefinitions
   worker/
     lunica_worker.js, lunica_worker_bg.wasm   # separate worker bundle
@@ -374,7 +374,7 @@ Three levers, wired into the build + page:
 
 Still costs time: Bevy plugin construction at boot (auditing `bevy`
 features to drop unused renderers would help but is shared with the
-rover/viz bins), and the ~16 MB MSL fetch (non-blocking; status in the
+rover/viz bins), and the ~16 MB source-library fetch (non-blocking; status in the
 bottom egui bar).
 
 ## Maintaining the rumoca fork
@@ -460,8 +460,8 @@ or remove the `brotli_static on;` line and rely on gzip.
 | `thread::spawn` / `failed to spawn thread`  | raw `std::thread::spawn` on wasm            | `AsyncComputeTaskPool::get().spawn(async {…}).detach()`   |
 | Blank/dark canvas, no UI                    | wasm loaded, Bevy not painted yet           | check console for plugin-build panics; loader hides on first egui frame |
 | 404 on `lunica.js`                          | stale `dist/` after a layout change         | re-run `./scripts/build_web.sh build …`                   |
-| `[MSL] failed: …` in status bar             | `dist/<bin>/msl/manifest.json` missing/corrupt | re-run `cargo run -p lunco-modelica-assets --bin build_msl_assets`          |
-| Model errors `unresolved type reference: Modelica.*` | compile fired before MSL ready     | wait for "MSL · ready" then Compile again                 |
+| `[source library] failed: …` in status bar  | `dist/<bin>/library/manifest.json` missing/corrupt | re-run `cargo run -p lunco-modelica-assets --bin build_modelica_library_assets` |
+| Model errors `unresolved type reference: Modelica.*` | compile fired before source-library ready | wait for the source-library ready state, then compile again |
 | `wasm-opt` step says `not installed`        | binaryen not on PATH                        | see Prerequisites; install or skip                        |
 | Compile spinner forever, no `[worker]` logs | worker bundle didn't init                   | missing/broken `worker_bootstrap.js` (see Bootstrap)      |
 | `br` missing on the wire                    | `libnginx-mod-http-brotli` not loaded       | install it or drop `brotli_static on;`                    |

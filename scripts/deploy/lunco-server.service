@@ -50,7 +50,7 @@ ProtectHome=true
 PrivateTmp=true
 # Writable paths the process actually needs:
 #   - /opt/lunco/certs : the deploy-hook-copied cert the service reads
-#   - /opt/lunco/.cache: rumoca / MSL / model cache the Modelica core writes
+#   - /opt/lunco/.cache: rumoca / source-library / model cache the Modelica core writes
 ReadWritePaths=/opt/lunco/certs /opt/lunco/.cache
 ProtectKernelTunables=true
 ProtectKernelModules=true

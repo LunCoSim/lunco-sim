@@ -15,7 +15,7 @@ use std::path::Path;
 use web_time::Instant;
 
 /// Indexer options. Used by both the CLI binary and the in-process
-/// startup task in `MslRemotePlugin`. Kept tiny on purpose — adding
+/// startup task in `LibraryRemotePlugin`. Kept tiny on purpose — adding
 /// `clap` would pull megabytes of build into a tool whose whole point
 /// is to make the workbench start faster.
 #[derive(Default, Clone, Debug)]
@@ -23,20 +23,20 @@ pub struct Options {
     /// Print per-file scan progress.
     pub verbose: bool,
     /// Run the warm-compile pass after indexing finishes. Heavy; off
-    /// by default. The pass walks a curated subset of MSL classes
-    /// through rumoca's full compile pipeline so the artifact cache
-    /// is populated for the workbench.
+    /// by default. Targets must be supplied explicitly with
+    /// `--warm-only` or `LUNCOSIM_WARM_DIRS`; the indexer never embeds
+    /// a product-specific model list.
     pub warm: bool,
     /// When `Some`, only warm-compile the listed fully-qualified
     /// class names. Implies `warm = true`.
     pub warm_only: Option<Vec<String>>,
-    /// Native source root to index. `None` selects the canonical MSL cache;
-    /// the workbench sets this when a user configured a local MSL root.
+    /// Native source root to index. `None` selects the canonical source library cache;
+    /// the workbench sets this when a user configured a local source library root.
     pub(crate) source_root: Option<std::path::PathBuf>,
 }
 
 impl Options {
-    /// Index the supplied native MSL root while writing generated artifacts
+    /// Index the supplied native source library root while writing generated artifacts
     /// beside that root. The CLI keeps using the canonical cache through
     /// [`Default`].
     pub(crate) fn for_source_root(source_root: std::path::PathBuf) -> Self {
@@ -73,7 +73,7 @@ impl Options {
                             .filter(|s| !s.is_empty())
                             .collect(),
                     );
-                    // Implies --warm so users don't have to pass both.
+                    // An explicit target list also enables the warm pass.
                     opts.warm = true;
                 }
                 other => {
@@ -87,41 +87,24 @@ impl Options {
 }
 
 fn print_help() {
-    println!("msl_indexer — index MSL components and (optionally) warm rumoca compile caches");
+    println!("modelica_library_indexer — index Modelica library components and optionally warm rumoca caches");
     println!();
     println!("USAGE:");
-    println!("  msl_indexer [OPTIONS]");
+    println!("  modelica_library_indexer [OPTIONS]");
     println!();
     println!("OPTIONS:");
     println!("  -v, --verbose         Per-file logging during the scan pass");
-    println!("      --warm            After indexing, full-compile a default list of common");
-    println!("                        MSL examples to warm rumoca's semantic-summary cache.");
-    println!("                        First workbench compile of those examples then becomes");
-    println!("                        a cache hit (ms instead of minutes).");
-    println!("      --warm-only LIST  Comma-separated qualified names to warm instead of the");
-    println!("                        default list. Implies --warm.");
-    println!("                        e.g. --warm-only Modelica.Blocks.Examples.PID_Controller");
+    println!("      --warm            Warm explicitly supplied targets after indexing.");
+    println!("      --warm-only LIST  Comma-separated qualified names or .mo paths to warm.");
     println!("  -h, --help            Show this help");
     println!();
     println!("OUTPUT:");
-    println!("  msl_index.json (next to the MSL source root) — read by the workbench at startup");
+    println!("  library_index.json (next to the source root) — read by the workbench at startup");
     println!("  ~/Documents/luncosim-workspace/.cache/rumoca/parsed-files/ — populated as a side");
-    println!("    effect of the scan pass; --warm additionally populates semantic-summaries/");
+    println!(
+        "    effect of the scan pass; --warm populates semantic-summaries for explicit targets."
+    );
 }
-
-/// Default warm list — the examples users hit most often when they
-/// open the Welcome page. Compiling these once after a cache wipe
-/// makes the first workbench interaction with each one fast.
-/// Add new entries here as we discover other common landings.
-const DEFAULT_WARM_EXAMPLES: &[&str] = &[
-    "Modelica.Blocks.Examples.PID_Controller",
-    "Modelica.Blocks.Examples.Filter",
-    "Modelica.Mechanics.Rotational.Examples.First",
-    "Modelica.Mechanics.Translational.Examples.Damper",
-    "Modelica.Electrical.Analog.Examples.ChuaCircuit",
-    "Modelica.Electrical.Analog.Examples.RLCircuit",
-    "Modelica.Thermal.HeatTransfer.Examples.TwoMasses",
-];
 
 // ---------------------------------------------------------------------------
 // Fallback strategy for ports without a Placement annotation
@@ -137,14 +120,14 @@ const DEFAULT_WARM_EXAMPLES: &[&str] = &[
 /// of the component in the diagram layer."  No default is stated — tools are free
 /// to do whatever they want.
 ///
-/// In practice, every MSL connector declares an explicit Placement, so this
+/// In practice, every source library connector declares an explicit Placement, so this
 /// fallback only fires for:
 ///   - User-defined components that have no graphical layer at all
 ///   - Third-party libraries with incomplete annotations
 ///   - Components whose Placement the rumoca parser cannot yet extract
 ///
 /// # Rationale for `SideByCausality` as the active default
-/// Scanning the MSL reveals an informal but consistent convention:
+/// Scanning the source library reveals an informal but consistent convention:
 ///   - causal `input`  connectors sit at (-100..110, ~0)  → left side
 ///   - causal `output` connectors sit at (+100..110, ~0)  → right side
 ///   - acausal connectors in `extends OnePort` / `TwoPort` follow the same
@@ -167,7 +150,7 @@ fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32
 }
 
 // The indexer emits the canonical [`crate::index::ClassEntry`] and
-// [`crate::visual_diagram::{PortDef, ParamDef}`] directly — `msl_index.json`
+// [`crate::visual_diagram::{PortDef, ParamDef}`] directly — `library_index.json`
 // deserialises straight back into those types at runtime, so there is no
 // indexer-local mirror to keep field-aligned by hand.
 
@@ -184,7 +167,7 @@ fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32
 ///  1. `name == "package"` — files that
 ///     literally named the class `package`.
 ///  2. `is_package_file` AND the leaf segment of `current_path`
-///     matches `name` — the MSL-typical case.
+///     matches `name` — the source library-typical case.
 fn is_top_level_self_ref(name: &str, current_path: &str, is_package_file: bool) -> bool {
     if name == "package" {
         return true;
@@ -197,7 +180,7 @@ fn is_top_level_self_ref(name: &str, current_path: &str, is_package_file: bool) 
     false
 }
 
-struct MSLIndexer {
+struct SourceLibraryIndexer {
     /// Workspace + library engine. Receives every parsed `.mo`
     /// the indexer scans, then `engine.icon_for(name)` resolves
     /// inheritance the same way the runtime workbench does —
@@ -205,9 +188,9 @@ struct MSLIndexer {
     /// scope-walks, no indexer-side resolver heuristic.
     ///
     /// Populated bulk after `scan_dir` finishes via
-    /// `engine.session_mut().replace_parsed_source_set("msl", …)`
+    /// `engine.session_mut().replace_parsed_source_set("source-bundle", …)`
     /// — same code path the web bootstrap uses to install the
-    /// prebuilt MSL bundle. Indexer and runtime then have the
+    /// prebuilt source library bundle. Indexer and runtime then have the
     /// SAME session shape; any `extends` chain that resolves at
     /// runtime resolves here too.
     engine: crate::engine::ModelicaEngine,
@@ -219,7 +202,7 @@ struct MSLIndexer {
     classes: HashMap<String, ClassDef>,
     /// Per-class first-paragraph plain-text from
     /// `annotation(Documentation(info="…"))`. Keyed by the simple
-    /// class name (not fully-qualified) — good enough at MSL scale
+    /// class name (not fully-qualified) — good enough at source library scale
     /// because `Examples.*` class names are unique within a file
     /// and the browser looks it up from the `short_name`. Populated
     /// by `extract_documentation_infos` during `scan_dir` while the
@@ -233,7 +216,7 @@ struct MSLIndexer {
     scan_started: Option<Instant>,
     last_progress_print: Option<Instant>,
     /// Bundle of every parsed `.mo` collected during the scan. Written
-    /// at the end of `main()` to `.cache/msl/parsed-msl.bin` so the
+    /// at the end of `main()` to `.cache/library/parsed-library.bin` so the
     /// workbench can install pre-parsed `StoredDefinition`s in ~1s
     /// via `Session::replace_parsed_source_set` — mirrors the wasm
     /// runtime's `parsed-*.bin.zst` strategy on native.
@@ -261,12 +244,12 @@ struct MSLIndexer {
 /// falling back to a double-newline). Dropping the rest means the
 /// index stays small (~200 examples × < 200 chars each).
 ///
-/// Last-write wins on duplicate short names (different MSL files can
+/// Last-write wins on duplicate short names (different source library files can
 /// define classes with the same simple name; the indexer keys by
 /// short name for the palette tagline lookup, full qualified names
 /// are matched elsewhere).
 fn extract_documentation_infos(source: &str) -> HashMap<String, String> {
-    let Ok(ast) = lunco_modelica_ast::parse_to_ast(source, "msl.mo") else {
+    let Ok(ast) = lunco_modelica_ast::parse_to_ast(source, "library.mo") else {
         return HashMap::new();
     };
     let mut out: HashMap<String, String> = HashMap::new();
@@ -294,7 +277,7 @@ fn collect_documentation(
 
 /// HTML-tag and whitespace-collapse patterns for [`clean_info_text`].
 /// Compiled once (not per class) — `clean_info_text` runs once for each
-/// of the ~2700 MSL classes during an index build, and recompiling these
+/// of the ~2700 source library classes during an index build, and recompiling these
 /// every call dominated that pass.
 static TAG_RE: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"<[^>]*>").expect("tag regex"));
@@ -304,9 +287,9 @@ static WS_RE: std::sync::LazyLock<regex::Regex> =
 /// Turn a raw Modelica `info="…"` string into UI-ready plain text.
 /// Unescapes Modelica string escapes, strips HTML tags and common
 /// entities, collapses whitespace, and keeps only the first
-/// paragraph (so a multi-screen MSL doc fits in a card tagline).
+/// paragraph (so a multi-screen source library doc fits in a card tagline).
 fn clean_info_text(raw: &str) -> String {
-    // Modelica string escapes we actually see in MSL.
+    // Modelica string escapes we actually see in source library.
     let mut s = String::with_capacity(raw.len());
     let mut chars = raw.chars();
     while let Some(c) = chars.next() {
@@ -327,7 +310,7 @@ fn clean_info_text(raw: &str) -> String {
         }
     }
 
-    // First-paragraph boundary: `</p>` is the MSL convention; fall
+    // First-paragraph boundary: `</p>` is the source library convention; fall
     // back to a blank line so prose-only info strings still split.
     let lower = s.to_ascii_lowercase();
     if let Some(idx) = lower.find("</p>") {
@@ -348,20 +331,7 @@ fn clean_info_text(raw: &str) -> String {
     WS_RE.replace_all(&decoded, " ").trim().to_string()
 }
 
-/// Top-level MSL domain for grouping (`Modelica.Electrical.Analog.*`
-/// → `Electrical`). Returns empty string for classes outside the
-/// `Modelica.*` tree, which keeps third-party libraries from
-/// polluting the browser chips.
-fn msl_domain(full_name: &str) -> String {
-    let mut parts = full_name.split('.');
-    if parts.next() == Some("Modelica") {
-        parts.next().unwrap_or("").to_string()
-    } else {
-        String::new()
-    }
-}
-
-impl MSLIndexer {
+impl SourceLibraryIndexer {
     fn new() -> Self {
         Self {
             engine: crate::engine::ModelicaEngine::new(),
@@ -382,7 +352,7 @@ impl MSLIndexer {
     /// like the right call (it's what web bootstrap uses) but
     /// the old annotation walker called
     /// `find_class_def_in_file` which expects `qualified_name` to
-    /// walk through `parsed.classes` directly — and MSL's flat
+    /// walk through `parsed.classes` directly — and source library's flat
     /// per-file `within X; model Y end Y;` shape doesn't have
     /// that structure (the file's `parsed.classes` is just `{Y}`,
     /// not nested under X). `add_document` goes through rumoca's
@@ -403,19 +373,6 @@ impl MSLIndexer {
             "[indexer] installed {count} docs into engine session in {:.1}s",
             started.elapsed().as_secs_f64()
         );
-        // Probe: confirm the session resolves a known-good class and that the
-        // authoritative component-members query can walk its inheritance.
-        let probes = [
-            "Modelica.Mechanics.Rotational.Sensors.SpeedSensor",
-            "Modelica.Mechanics.Rotational.Components.Inertia",
-            "Modelica.Blocks.Continuous.Integrator",
-            "Modelica.Icons.RoundSensor",
-        ];
-        for p in probes {
-            let resolved = self.engine.session_mut().class_lookup_query(p);
-            let n_members = self.engine.inherited_components(p).len();
-            println!("  probe {p}: resolved={resolved:?} inherited_members={n_members}");
-        }
     }
 
     fn scan_dir(&mut self, dir: &Path, package_prefix: &str) {
@@ -510,7 +467,7 @@ impl MSLIndexer {
     }
 
     /// Top-level companion-file shorthand: load a flat `.mo` at the
-    /// MSL cache root with no package prefix. Used for `Complex.mo`
+    /// source library cache root with no package prefix. Used for `Complex.mo`
     /// and similar siblings of the main `Modelica/` tree.
     fn ingest_root_file(&mut self, path: &Path, source: &str) {
         let file_name = path
@@ -563,7 +520,7 @@ impl MSLIndexer {
     /// rather than a hand-rolled parent walk — so index-time `extends`/type
     /// resolution can't drift from the runtime diagram projector that uses
     /// the same generator. This probes the indexer's `self.classes`; the
-    /// projector probes the lazily-loaded MSL/engine index instead.
+    /// projector probes the lazily-loaded source library/engine index instead.
     fn resolve_in_scope(&self, context_class: &str, name: &str) -> Option<String> {
         crate::diagram::scope_chain_candidates(name, Some(context_class))
             .into_iter()
@@ -593,17 +550,12 @@ impl MSLIndexer {
                     .collect::<Vec<String>>()
                     .join(".");
 
-                // Scope-chain resolution; fall back to an absolute /
-                // `Modelica.`-prefixed guess below.
+                // Scope-chain resolution; an unresolved reference remains
+                // unresolved and is reported by the normal compiler path.
                 let mut resolved_base = self.resolve_in_scope(class_name, &base_short_name);
                 if resolved_base.is_none() {
                     if self.classes.contains_key(&base_short_name) {
                         resolved_base = Some(base_short_name);
-                    } else if self
-                        .classes
-                        .contains_key(&format!("Modelica.{}", base_short_name))
-                    {
-                        resolved_base = Some(format!("Modelica.{}", base_short_name));
                     }
                 }
 
@@ -690,7 +642,7 @@ impl MSLIndexer {
                     // TODO: per-instance conditional resolution.
                     // -----------------------------------------------
                     // The current uniform skip is correct for the
-                    // common "default-off MSL conditional" case but
+                    // common "default-off source library conditional" case but
                     // creates a UX gap when a user *enables* the
                     // conditional on a specific instance (e.g.
                     // `Integrator integrator(use_reset=true)`):
@@ -714,7 +666,7 @@ impl MSLIndexer {
                     //      see "this port only exists because the
                     //      parameter is on."
                     //
-                    // Most MSL conditions are plain boolean parameter
+                    // Most source library conditions are plain boolean parameter
                     // refs (`use_reset`, `useSupport`, `useHeatPort`),
                     // so a 90%-coverage implementation is small.
                     if comp.condition.is_some() {
@@ -737,7 +689,7 @@ impl MSLIndexer {
                         // (1) couldn't pull `origin=` when authored
                         // before `extent=`, (2) silently dropped
                         // placements declared in nested-class scopes,
-                        // and (3) was MSL-specific by virtue of being
+                        // and (3) was source library-specific by virtue of being
                         // unable to handle parser variations from
                         // other Modelica libraries. Going through
                         // rumoca means any library rumoca can parse
@@ -766,7 +718,7 @@ impl MSLIndexer {
                         // wire-color resolver) can look the connector
                         // class up directly via `class_cache`. Without
                         // this, `parameter RealInput u` writes
-                        // `msl_path = "RealInput"` and downstream
+                        // `library_path = "RealInput"` and downstream
                         // resolution fails.
                         //
                         // Mirrors the scope-chain walk used above for
@@ -781,7 +733,7 @@ impl MSLIndexer {
                         ports.push(crate::visual_diagram::PortDef {
                             name: comp.name.clone(),
                             connector_type: type_str.clone(),
-                            msl_path: resolved_path,
+                            library_path: resolved_path,
                             is_flow: is_port,
                             x,
                             y,
@@ -846,7 +798,7 @@ impl MSLIndexer {
                 // Rumoca's query would do this end-to-end, but its internal
                 // file lookup
                 // expects `parsed.classes` to contain the full-path
-                // nesting — and MSL's `within X; model Y end Y;`
+                // nesting — and source library's `within X; model Y end Y;`
                 // shape only puts `Y` directly under `parsed.classes`.
                 // Our `self.classes` map sidesteps that — we pre-built
                 // the nested-name keying in `add_stored_definition`.
@@ -868,7 +820,7 @@ impl MSLIndexer {
                 // Diagram annotation — used when a connector instance
                 // is rendered on a parent's diagram (carries the
                 // `%name` Text label and the larger filled triangle
-                // graphic that MSL signal connectors use only in the
+                // graphic that source library signal connectors use only in the
                 // diagram view, not as port markers).
                 let diagram_graphics = crate::annotations::extract_diagram(&class.annotation);
 
@@ -888,8 +840,6 @@ impl MSLIndexer {
                 let short_description =
                     lunco_modelica_ast::ast_extract::description_from_tokens(&class.description);
                 let documentation_info = self.doc_infos.get(&short_name).cloned();
-                let is_example = full_name.contains(".Examples.");
-                let domain = msl_domain(full_name);
                 // `expandable connector` (MLS §9.1.3) is a connector
                 // with the `expandable` keyword — folded into the
                 // typed enum so consumers don't need a separate flag.
@@ -900,7 +850,6 @@ impl MSLIndexer {
                     (t, _) => crate::index::map_class_type(t),
                 };
 
-                let _ = (is_example, domain, short_name);
                 // Emit the canonical `ClassEntry` directly. Per-doc
                 // runtime fields (source_range, extends, children,
                 // equation_count, experiment) stay at their defaults —
@@ -934,58 +883,51 @@ impl MSLIndexer {
 
 /// Library entry point. Same workflow the CLI binary uses; safe to
 /// invoke from inside the workbench (e.g. on a startup task that
-/// follows a successful MSL download). Prints progress to stdout —
+/// follows a successful source library download). Prints progress to stdout —
 /// callers that want structured progress should redirect stdout.
 ///
 /// Non-cancellable; the workbench should call [`run_with_cancel`]
 /// when it wants to be able to interrupt a long indexing pass.
-/// The native MSL source set as `(directory, package_prefix)` package
-/// roots plus standalone companion `.mo` files, gathered across the MSL
-/// tree, its companions, and every discovered third-party library.
+/// The explicitly selected native source set as `(directory, package_prefix)`
+/// package roots plus standalone `.mo` files.
 ///
-/// Single source of truth for "which files make up native MSL", shared by
-/// the CLI indexer ([`run_with_cancel`]) and the workbench's cold-cache
-/// bundle builder ([`parse_native_msl_bundle`]) so both resolve exactly
-/// the same libraries. Roots come from `lunco-assets` (`msl_dir`/
-/// `cache_dir`) + `discover_third_party_libs`.
-pub(crate) fn native_msl_roots(
-    msl_root: &std::path::Path,
+/// This is the single source of truth for the CLI indexer and the workbench's
+/// cold-cache bundle builder. It derives the package inventory from the
+/// selected directory itself; no package name or cache sibling is special.
+pub(crate) fn native_library_roots(
+    library_root: &std::path::Path,
 ) -> (Vec<(std::path::PathBuf, String)>, Vec<std::path::PathBuf>) {
     let mut dirs: Vec<(std::path::PathBuf, String)> = Vec::new();
     let mut files: Vec<std::path::PathBuf> = Vec::new();
 
-    let modelica = msl_root.join("Modelica");
-    if modelica.exists() {
-        dirs.push((modelica, "Modelica".to_string()));
+    if library_root.join("package.mo").is_file() {
+        let prefix = library_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        if !prefix.is_empty() {
+            dirs.push((library_root.to_path_buf(), prefix));
+        }
+        return (dirs, files);
     }
-    // Companion package shipped beside `Modelica/` — device animation,
-    // file IO and event-logger services several MSL examples extend.
-    {
-        let sibling_dir = "ModelicaServices";
-        let p = msl_root.join(sibling_dir);
-        if p.exists() {
-            dirs.push((p, sibling_dir.to_string()));
+
+    let Ok(entries) = fs::read_dir(library_root) else {
+        return (dirs, files);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if path.is_dir() && path.join("package.mo").is_file() {
+            dirs.push((path, name));
+        } else if path.is_file() && path.extension().is_some_and(|ext| ext == "mo") {
+            files.push(path);
         }
     }
-    // Companion flat file: `operator record Complex`, referenced by
-    // Modelica.Fluid media and Modelica.ComplexBlocks.
-    {
-        let sibling_file = "Complex.mo";
-        let p = msl_root.join(sibling_file);
-        if p.exists() {
-            files.push(p);
-        }
-    }
-    // Discovered third-party libs — the same set the runtime resolves
-    // natively and `build_msl_assets --discover-extras` ships to web.
-    for (cache_subdir, package_dir) in crate::package_tree::scanner::discover_third_party_libs() {
-        let lib_path = lunco_assets_core::cache_dir()
-            .join(&cache_subdir)
-            .join(&package_dir);
-        if lib_path.exists() {
-            dirs.push((lib_path, package_dir));
-        }
-    }
+    dirs.sort_by(|left, right| left.1.cmp(&right.1));
+    files.sort();
     (dirs, files)
 }
 
@@ -1004,9 +946,9 @@ fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// Parse every native MSL `.mo` file into `(uri, StoredDefinition)` pairs,
+/// Parse every native source library `.mo` file into `(uri, StoredDefinition)` pairs,
 /// **one file at a time**. The workbench's cold-cache bundle builder and
-/// the in-app MSL bundle builder.
+/// the in-app source library bundle builder.
 ///
 /// **Why not `rumoca_compile::parsing::parse_files_parallel`?** That routes
 /// every file through rumoca_compile's *global* in-memory artifact-cache
@@ -1025,13 +967,13 @@ fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 /// **dedicated, bounded** rayon pool. No shared global pool, no global
 /// mutex → no contention with the render loop; capped threads leave cores
 /// for rendering and bound the memory peak; and we skip rumoca's in-memory
-/// cache duplicate (we persist our own `parsed-msl.bin`, the real cache).
-/// Uses [`native_msl_roots`] (same root set as the CLI) → identical bundle.
+/// cache duplicate (we persist our own `parsed-library.bin`, the real cache).
+/// Uses [`native_library_roots`] (same root set as the CLI) → identical bundle.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn parse_native_msl_bundle() -> Vec<(String, StoredDefinition)> {
+pub fn parse_native_library_bundle() -> Vec<(String, StoredDefinition)> {
     use rayon::prelude::*;
-    let msl_root = lunco_assets_core::source_library_dir("msl");
-    let (root_dirs, companion_files) = native_msl_roots(&msl_root);
+    let library_root = lunco_assets_core::source_library_dir("library");
+    let (root_dirs, companion_files) = native_library_roots(&library_root);
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for (dir, _prefix) in &root_dirs {
         collect_mo_files(dir, &mut paths);
@@ -1040,8 +982,8 @@ pub fn parse_native_msl_bundle() -> Vec<(String, StoredDefinition)> {
 
     // Leave a couple of cores for the render loop; 16 MB stacks for deep
     // nested-class recursion (matches rumoca's own pool sizing).
-    // `LUNCO_MSL_PARSE_THREADS` overrides the count (tuning / weak machines).
-    let threads = std::env::var("LUNCO_MSL_PARSE_THREADS")
+    // `LUNCO_LIBRARY_PARSE_THREADS` overrides the count (tuning / weak machines).
+    let threads = std::env::var("LUNCO_LIBRARY_PARSE_THREADS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -1058,12 +1000,12 @@ pub fn parse_native_msl_bundle() -> Vec<(String, StoredDefinition)> {
     let bundle: Vec<(String, StoredDefinition)> = match pool {
         Ok(pool) => pool.install(|| paths.par_iter().filter_map(|p| parse_one_mo(p)).collect()),
         Err(e) => {
-            log::warn!("[msl-bundle] dedicated pool build failed ({e}); parsing sequentially");
+            log::warn!("[library-bundle] dedicated pool build failed ({e}); parsing sequentially");
             paths.iter().filter_map(|p| parse_one_mo(p)).collect()
         }
     };
     log::info!(
-        "[msl-bundle] parsed {} MSL files (raw parser, {} threads) in {:.1}s",
+        "[library-bundle] parsed {} source library files (raw parser, {} threads) in {:.1}s",
         bundle.len(),
         threads,
         started.elapsed().as_secs_f64()
@@ -1079,7 +1021,10 @@ fn parse_one_mo(path: &std::path::Path) -> Option<(String, StoredDefinition)> {
     match lunco_modelica_ast::parse_to_ast(&src, &path.to_string_lossy()) {
         Ok(ast) => Some((path.to_string_lossy().to_string(), ast)),
         Err(e) => {
-            log::warn!("[msl-bundle] parse failed for `{}`: {e}", path.display());
+            log::warn!(
+                "[library-bundle] parse failed for `{}`: {e}",
+                path.display()
+            );
             None
         }
     }
@@ -1094,7 +1039,7 @@ pub fn run(opts: Options) {
 /// (`scan Modelica`, `scan companions`, `index_all`, `bundle write`),
 /// so a cancel during the long initial scan still waits for the
 /// directory walk to finish. Real per-file cancel would need
-/// instrumenting `MSLIndexer::scan_dir`; phase-level is enough for
+/// instrumenting `LIBRARYIndexer::scan_dir`; phase-level is enough for
 /// the Settings → Assets → Cancel button.
 pub fn run_with_cancel(
     opts: Options,
@@ -1125,34 +1070,33 @@ pub fn run_with_cancel(
         println!("[indexer] using rumoca parse cache at {}", target.display());
     }
 
-    let msl_root = opts
+    let library_root = opts
         .source_root
         .clone()
-        .unwrap_or_else(|| lunco_assets_core::source_library_dir("msl"));
-    let msl_path = msl_root.join("Modelica");
-    if !msl_path.exists() {
-        println!("[indexer] MSL not found at {:?}", msl_path);
+        .unwrap_or_else(|| lunco_assets_core::source_library_dir("library"));
+    if !library_root.is_dir() {
+        println!("[indexer] source root not found at {:?}", library_root);
         return;
     }
 
     let t_total = Instant::now();
     println!(
-        "[indexer] scanning MSL at {:?} (verbose={})",
-        msl_path, opts.verbose
+        "[indexer] scanning source roots at {:?} (verbose={})",
+        library_root, opts.verbose
     );
 
-    let mut indexer = MSLIndexer::new();
+    let mut indexer = SourceLibraryIndexer::new();
     indexer.verbose = opts.verbose;
 
-    // Single source of truth for the native MSL source set (MSL tree +
+    // Single source of truth for the native source set (source tree +
     // companions + discovered third-party libs), shared with the
-    // workbench's cold-cache bundle builder (`parse_native_msl_bundle`) so
-    // both scan exactly the same files. `native_msl_roots` returns folder
+    // workbench's cold-cache bundle builder (`parse_native_library_bundle`) so
+    // both scan exactly the same files. `native_library_roots` returns folder
     // packages as `(dir, prefix)` and standalone companion files (e.g.
     // `Complex.mo`, referenced by Modelica.Fluid / ComplexBlocks)
     // separately, since the indexer keys flat files by declared class name
     // and folder packages by their `package.mo` `within` shape.
-    let (root_dirs, companion_files) = native_msl_roots(&msl_root);
+    let (root_dirs, companion_files) = native_library_roots(&library_root);
     for (dir, prefix) in &root_dirs {
         bail_if_cancelled!();
         println!("[indexer] scanning `{}` at {:?}", prefix, dir);
@@ -1195,7 +1139,7 @@ pub fn run_with_cancel(
     // Bundled examples — small `.mo` files compiled into the workbench
     // binary at runtime via `include_dir!()`. Pre-parse their class
     // hierarchy here so the Package Browser can render them with
-    // proper kind badges and expandable inner classes (matches MSL /
+    // proper kind badges and expandable inner classes (matches source library /
     // workspace docs) without paying any parse cost at startup.
     let bundled_nodes = scan_bundled_examples();
     println!(
@@ -1203,17 +1147,17 @@ pub fn run_with_cancel(
         bundled_nodes.len()
     );
 
-    // Borrowing mirror of `crate::visual_diagram::MslIndex` — same
+    // Borrowing mirror of `crate::visual_diagram::LibraryIndex` — same
     // field shape, but holds slices so we serialise without cloning
-    // `components`/`bundled` into an owned `MslIndex`. Both fields are
+    // `components`/`bundled` into an owned `LibraryIndex`. Both fields are
     // the canonical types the runtime deserialises into directly.
     #[derive(Serialize)]
-    struct LocalMslIndex<'a> {
+    struct LocalLibraryIndex<'a> {
         components: &'a [crate::index::ClassEntry],
         bundled: &'a [crate::package_tree::types::PackageNode],
     }
-    let output_path = lunco_assets_core::source_library_dir("msl").join("msl_index.json");
-    let index = LocalMslIndex {
+    let output_path = library_root.join("library_index.json");
+    let index = LocalLibraryIndex {
         components: &components,
         bundled: &bundled_nodes,
     };
@@ -1232,14 +1176,14 @@ pub fn run_with_cancel(
     // directly via `Session::replace_parsed_source_set`, bypassing
     // every per-file cache key concern.
     bail_if_cancelled!();
-    // Native-only: the `msl_indexer` binary never compiles to wasm, but
+    // Native-only: the `modelica_library_indexer` binary never compiles to wasm, but
     // `mod indexer` does, and `write_parsed_bundle` (zstd encoder) is
     // native-gated — so cfg the write block to keep the wasm build clean.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let bundle_path = lunco_assets_core::source_library_dir("msl").join("parsed-msl.bin");
+        let bundle_path = library_root.join("parsed-library.bin");
         let t_bundle = Instant::now();
-        match crate::msl_remote::write_parsed_bundle(&bundle_path, &indexer.parsed_bundle) {
+        match crate::library_remote::write_parsed_bundle(&bundle_path, &indexer.parsed_bundle) {
             Ok(()) => {
                 let mb = fs::metadata(&bundle_path)
                     .map(|m| m.len() as f64 / (1024.0 * 1024.0))
@@ -1308,7 +1252,7 @@ fn bundled_class_node(
 ) -> crate::package_tree::types::PackageNode {
     use crate::index::ClassKind;
     use crate::package_tree::types::PackageNode;
-    use crate::state::ModelLibrary;
+    use crate::state::ModelSource;
 
     let qualified = lunco_modelica_ast::ast_extract::qualify(parent_path, short_name);
     let kind = crate::index::map_class_type(&class_def.class_type);
@@ -1334,7 +1278,7 @@ fn bundled_class_node(
         PackageNode::Model {
             id,
             name: short_name.to_string(),
-            library: ModelLibrary::Bundled,
+            library: ModelSource::Bundled,
             class_kind: Some(kind),
         }
     }
@@ -1348,27 +1292,26 @@ fn bundled_class_node(
 /// Sources to compile come from three places, in priority order:
 ///   1. `--warm-only NAME[,NAME...]` — explicit qualified names or .mo
 ///      file paths. Anything containing `/`, `\`, or ending in `.mo`
-///      is treated as a path; everything else as an MSL qualified name.
+///      is treated as a path; everything else as a source-library qualified name.
 ///   2. `LUNCOSIM_WARM_DIRS` env var — `:`-separated list of directories
 ///      to scan for `*.mo` files. Every top-level model in each file
 ///      is warmed under its `<file_stem_or_package>.<model_name>`
 ///      qualified path.
-///   3. If neither (1) nor (2) yielded anything: the built-in
-///      [`DEFAULT_WARM_EXAMPLES`] list of common MSL examples.
+///   3. If neither (1) nor (2) yielded anything, no warm work is performed.
 ///
 /// Each compile is gated by [`crate::ModelicaCompiler::compile_loaded`]'s
 /// existing 5-second heartbeat (see lib.rs), so even a multi-minute
-/// MSL-heavy compile prints proof-of-life every 5s.
+/// source library-heavy compile prints proof-of-life every 5s.
 fn warm_compile_pass(opts: &Options) {
     println!("[warm] starting compile pass — populating rumoca semantic-summary cache");
     let t_total = Instant::now();
 
     let mut compiler = crate::ModelicaCompiler::new();
-    // The warm pass compiles MSL classes by name, so it needs the full
-    // library resident up front. `new()` no longer preloads MSL (Layer A:
+    // The warm pass compiles source library classes by name, so it needs the full
+    // library resident up front. `new()` no longer preloads source library (Layer A:
     // source compilation admits roots from source text), so install it
     // explicitly here.
-    compiler.ensure_msl_installed();
+    compiler.ensure_source_bundle_installed();
 
     // Resolve work units. Each entry: (display_label, kind). The
     // `WarmKind` enum is declared at module scope so `push_file_units`
@@ -1381,7 +1324,7 @@ fn warm_compile_pass(opts: &Options) {
             if item.contains('/') || item.contains('\\') || item.ends_with(".mo") {
                 push_file_units(&std::path::PathBuf::from(item), &mut units);
             } else {
-                units.push((item.clone(), WarmKind::MslClass(item.clone())));
+                units.push((item.clone(), WarmKind::QualifiedClass(item.clone())));
             }
         }
     }
@@ -1413,11 +1356,9 @@ fn warm_compile_pass(opts: &Options) {
         }
     }
 
-    // (3) Default fallback — common MSL examples.
     if units.is_empty() {
-        for ex in DEFAULT_WARM_EXAMPLES {
-            units.push((ex.to_string(), WarmKind::MslClass(ex.to_string())));
-        }
+        println!("[warm] no explicit targets; skipping compile pass");
+        return;
     }
 
     println!("[warm] {} units to compile", units.len());
@@ -1434,7 +1375,7 @@ fn warm_compile_pass(opts: &Options) {
         println!("[warm] [{}/{}] compiling {} ...", i + 1, units.len(), label);
         let t = Instant::now();
         let result = match kind {
-            WarmKind::MslClass(qn) => compiler.compile_msl_class(qn),
+            WarmKind::QualifiedClass(qn) => compiler.compile_library_class(qn),
             WarmKind::FileWithSource {
                 qualified,
                 source,
@@ -1545,7 +1486,7 @@ fn push_file_units(path: &std::path::Path, units: &mut Vec<(String, WarmKind)>) 
 }
 
 enum WarmKind {
-    MslClass(String),
+    QualifiedClass(String),
     FileWithSource {
         qualified: String,
         source: String,

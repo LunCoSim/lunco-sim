@@ -20,6 +20,12 @@ Editor lifecycle and [`assembly-quality`](../assembly-quality/SKILL.md) for
 dimensions, frames, collision and visual gates. For a new reusable asset also
 read [`author-usd-component`](../author-usd-component/SKILL.md).
 
+For a mission or operations-facing model, read the tailored
+[mission and engineering quality gates](references/mission-engineering-quality.md)
+before choosing component boundaries or fidelity. It adds ConOps, interface,
+fault, verification/validation, deterministic replay, and configuration
+baseline checks without introducing a vehicle-specific workflow.
+
 ## The mandatory cycle
 
 Keep one production Editor session open for the assembly and use **Editor
@@ -59,6 +65,89 @@ produce its own projection, typed evidence and Rhai verdict. Then run an
 assembly integration gate that checks placement, symmetry, clearances,
 references, joints and cross-component wiring; an isolated component pass does
 not prove its mounting.
+
+## Source and requirements gate before geometry
+
+Before opening an Editor document for a component, perform a short written
+analysis and keep it next to the Twin source. The analysis is part of the
+component contract, not an informal design note. For every component record:
+
+1. the public/reference source (URL, paper, drawing, supplied image, or an
+   explicitly labelled Twin study assumption), access date, and the exact fact
+   extracted from it;
+2. the subcomponents and ownership boundary (for example ramp deck, hinge,
+   actuator, latch; or wheel, hub, knuckle, arm and strut), including which
+   parts remain inside this file and which become detached referenced assets;
+3. the local Y-up/SI-metre frame, mount datum/socket, handedness, envelope and
+   all dimensional parameters needed to build it;
+4. the required USD topology/types, standard schemas, collision and
+   mass/inertia owner, material/purpose policy, and any articulation/limit;
+5. a source-backed SysML requirement for each observable fact, with a
+   `source`, `rationale`, `units`, and `verification` relationship; and
+6. the Rhai checks that will prove the fact from composed USD (including
+   missing-source, wrong-type, wrong-unit, boundary and reference-identity
+   cases).
+
+Use a separate `requirements/<component>_requirements.sysml` and
+`scenarios/tests/<component>_requirements.rhai` for every independently
+reusable or articulated component. The SysML file is the single source of
+truth for names, dimensions, limits and provenance; the Rhai test loads it via
+`sysml_requirements::source()` and must not repeat numeric literals. Keep the
+test fixture and component asset detached from the parent assembly so either
+can be opened and verified independently. The parent assembly gets a separate
+integration requirement file that checks only instance placement, symmetry,
+clearance, joints, and cross-component wiring.
+
+Do not start detailed geometry when the source or datum is unresolved. Record
+the uncertainty as a failing requirement or an explicitly named study
+assumption and stop at that component checkpoint; do not silently invent a
+fallback dimension. This produces an auditable chain:
+
+```text
+source evidence -> SysML requirement -> Rhai composed-stage check
+                 -> detached USD component -> assembly integration check
+```
+
+## Five-phase delivery workflow
+
+Apply this order to every mission, vehicle, habitat, payload, or other model;
+it is not tied to a particular Twin:
+
+1. **Analyse the implementation seam.** Identify what belongs in the Twin's
+   USD files (identity, topology, geometry, references and transforms), what
+   belongs in Rhai (scenario policy, requirement observation and reports), what
+   belongs in Modelica (continuous equations and parameters), and what generic
+   capability is genuinely missing from Rust (typed document operation,
+   projection, physics or solver seam). Do not put Twin names or requirements
+   into simulation-core Rust.
+2. **Split by ownership.** Decompose the root into detached, independently
+   openable components. A component may contain its local subcomponents when
+   they share one datum/body and no independent lifecycle; otherwise give the
+   subcomponent its own USD asset, SysML contract and Rhai gate. The assembly
+   composes references and owns placement, joints and cross-component links.
+3. **Find and record specification.** Gather public drawings, papers, product
+   pages, supplied images or measured study assumptions. For each requirement
+   record source URI/title, access date, extracted fact, rationale for including
+   it, confidence/status (`reference`, `derived`, or `study-assumption`), and
+   the SI-unit conversion. Unresolved facts are visible failing requirements,
+   never silent defaults.
+4. **Build through the existing tools.** Author or edit one component in the
+   headful Editor with `assembly_edit`, `assembly_builder`, component and
+   measurement facades. Use a pure Rhai plan and typed USD operations; let the
+   document owner maintain ordered transforms, schemas and composition. If a
+   needed standard operation is absent, stop with a loud Rust capability-gap
+   report and add only the smallest generic feature.
+5. **Verify and iterate.** Run the component's source-backed Rhai gate, then
+   the parent assembly gate, then the whole mission/vehicle suite. Check
+   topology, dimensions, units, frames, references, joints, collision/mass,
+   limits, determinism and visual evidence. Repeat the one-component cycle for
+   every failing checkpoint until all required verdicts are green; only then
+   save/publish and record the exact evidence.
+
+The required handoff is therefore an auditable set of artifacts, not just a
+final screenshot: an analysis/source record, one SysML contract and Rhai gate
+per detached component, the USD component files, an assembly contract/gate,
+and a whole-system test report.
 
 ## Decompose by ownership
 

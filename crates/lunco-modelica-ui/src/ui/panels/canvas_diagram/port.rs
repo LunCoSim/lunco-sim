@@ -4,7 +4,7 @@
 //! markers, rendering Dashboard-style input-control widgets on top of
 //! component icons, computing fallback port offsets when an authored
 //! `Placement` is missing, and resolving a port's connector-class
-//! `Icon` from the MSL palette / engine.
+//! `Icon` from the source library palette / engine.
 
 use std::collections::HashMap;
 
@@ -304,7 +304,7 @@ pub(super) fn port_fallback_offset_for_size(
 /// so the engine lock is taken once per port (typically 2–8 per
 /// component) at projection time — never during paint.
 ///
-/// Empty `msl_path` (port type not classified yet) → `None`.
+/// Empty `library_path` (port type not classified yet) → `None`.
 /// Qualified path that fails to resolve → walk parent's package
 /// chain trying `<pkg>.Interfaces.<name>` and `<pkg>.<name>` so
 /// older indexes that wrote unqualified types still find their
@@ -313,14 +313,14 @@ pub(super) fn resolve_port_icons(
     parent_qualified: &str,
     ports: &[crate::visual_diagram::PortDef],
 ) -> Vec<Option<crate::annotations::Icon>> {
-    let palette = crate::visual_diagram::msl_class_library();
+    let palette = crate::visual_diagram::library_class_library();
     let palette_lookup: HashMap<&str, &crate::index::ClassEntry> =
         palette.iter().map(|d| (d.name.as_str(), d)).collect();
     let handle = crate::engine_resource::global_engine_handle();
     ports
         .iter()
         .map(|p| {
-            let path = &p.msl_path;
+            let path = &p.library_path;
             let candidates: Vec<String> = if path.contains('.') {
                 vec![path.clone()]
             } else if !path.is_empty() {

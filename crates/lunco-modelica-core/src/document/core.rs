@@ -102,8 +102,8 @@ impl SyntaxCache {
     /// the async worker (via `install_parse_results`) and the synchronous
     /// `refresh_ast_now`. Do NOT add a second editable source→cache path that
     /// parses strictly: that reintroduces the "broken edit empties the whole
-    /// class tree" regression. (Read-only MSL *library* files are the lone
-    /// exception — `load_msl_file` eager-parses them once via rumoca's
+    /// class tree" regression. (Read-only source library *library* files are the lone
+    /// exception — `load_library_file` eager-parses them once via rumoca's
     /// multi-file `parse_files_parallel`; they can't be edited into a broken
     /// state, so recovery doesn't apply.)
     pub fn from_source(source: &str, generation: u64) -> Self {
@@ -225,21 +225,25 @@ impl ModelicaDocument {
         doc
     }
 
-    pub fn load_msl_class(id: DocumentId, path: &Path, qualified: &str) -> Result<Self, String> {
-        // On wasm the MSL source tree is untarred lazily (boot no longer unpacks
+    pub fn load_library_class(
+        id: DocumentId,
+        path: &Path,
+        qualified: &str,
+    ) -> Result<Self, String> {
+        // On wasm the source tree is untarred lazily (boot no longer unpacks
         // it, to avoid a startup freeze). Materialise it before reading source.
         #[cfg(target_arch = "wasm32")]
-        crate::msl_remote::ensure_msl_source_unpacked();
+        crate::library_remote::ensure_library_source_unpacked();
 
         let full_source = if let Some(bytes) = lunco_assets_core::library::library_read(path) {
             String::from_utf8(bytes)
                 .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
         } else {
             {
-                // Native-disk fallback when the bundled MSL source doesn't
+                // Native-disk fallback when the bundled source doesn't
                 // hold this path. Routed through lunco-storage — `std::fs`
                 // is clippy-banned in domain crates and absent on wasm
-                // (where `global_msl_source` is the primary path above).
+                // (where `global_library_source` is the primary path above).
                 use lunco_storage::Storage;
                 let bytes = lunco_storage::FileStorage::new()
                     .read_sync(&lunco_storage::StorageHandle::File(path.to_path_buf()))
@@ -256,32 +260,32 @@ impl ModelicaDocument {
             parts.join(".")
         };
 
-        // Unified MSL-class AST source: prefer the pre-parsed bundle —
-        // `parsed_msl_bundle` lazily materialises it from `parsed-msl.bin`
+        // Unified source library-class AST source: prefer the pre-parsed bundle —
+        // `parsed_source_bundle` lazily materialises it from `parsed-library.bin`
         // on native (one ~1–3 s decode, then every drill-in is an in-memory
         // hit), and the worker transfer fills it on wasm. Keyed by the file
         // path exactly as the indexer wrote it (`indexer::ingest_file`).
         // Native may repair a bundle miss by parsing this one source file;
         // wasm reports the miss and waits for the worker-owned bundle instead.
         let key = path.to_string_lossy().to_string();
-        let bundle_hit = crate::msl_remote::parsed_msl_bundle()
+        let bundle_hit = crate::library_remote::parsed_source_bundle()
             .map(|b| b.iter().any(|(k, _)| *k == key))
             .unwrap_or(false);
         // A native bundle miss can be a slow package-wrapper parse; keep the
         // breadcrumb so a stale or missing generated artifact is diagnosable.
         if !bundle_hit {
             bevy::log::warn!(
-                "[load_msl_class] parsed-bundle MISS for `{key}` ({} bytes) — \
+                "[load_library_class] parsed-bundle MISS for `{key}` ({} bytes) — \
                  native source repair or worker retry required",
                 full_source.len()
             );
         }
-        let bundled_ast = crate::msl_remote::parsed_msl_bundle()
+        let bundled_ast = crate::library_remote::parsed_source_bundle()
             .and_then(|b| b.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone()));
         #[cfg(target_arch = "wasm32")]
         let ast: StoredDefinition = bundled_ast.ok_or_else(|| {
             format!(
-                "parsed MSL AST unavailable for `{key}`; wait for the Web Worker MSL load and retry"
+                "parsed source library AST unavailable for `{key}`; wait for the Web Worker source library load and retry"
             )
         })?;
         #[cfg(not(target_arch = "wasm32"))]
@@ -299,7 +303,7 @@ impl ModelicaDocument {
         let (full_start, full_end) =
             lunco_modelica_ast::ast_extract::class_full_text_span(class_def, &full_source);
         // Defensive: the AST may come from the pre-parsed bundle while
-        // `full_source` was re-read separately (msl_read). If their byte
+        // `full_source` was re-read separately (library_read). If their byte
         // offsets ever disagree (different line endings, a stale bundle, a
         // wrong-file resolution), slicing would panic — and on wasm that
         // panic happens inside the AsyncComputeTaskPool task, which dies
@@ -334,20 +338,20 @@ impl ModelicaDocument {
         Ok(Self::with_origin(id, source, origin))
     }
 
-    pub fn load_msl_file(id: DocumentId, path: &Path) -> Result<Self, String> {
-        // Lazily untar the MSL source tree on first drill-in (see load_msl_class).
+    pub fn load_library_file(id: DocumentId, path: &Path) -> Result<Self, String> {
+        // Lazily untar the source tree on first drill-in (see load_library_class).
         #[cfg(target_arch = "wasm32")]
-        crate::msl_remote::ensure_msl_source_unpacked();
+        crate::library_remote::ensure_library_source_unpacked();
 
         let source = if let Some(bytes) = lunco_assets_core::library::library_read(path) {
             String::from_utf8(bytes)
                 .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
         } else {
             {
-                // Native-disk fallback when the bundled MSL source doesn't
+                // Native-disk fallback when the bundled source doesn't
                 // hold this path. Routed through lunco-storage — `std::fs`
                 // is clippy-banned in domain crates and absent on wasm
-                // (where `global_msl_source` is the primary path above).
+                // (where `global_library_source` is the primary path above).
                 use lunco_storage::Storage;
                 let bytes = lunco_storage::FileStorage::new()
                     .read_sync(&lunco_storage::StorageHandle::File(path.to_path_buf()))
@@ -357,33 +361,34 @@ impl ModelicaDocument {
             }
         };
 
-        let parsed: Result<Arc<StoredDefinition>, String> =
-            if std::env::var_os("LUNCO_NO_PARSE").is_some() {
-                Err("LUNCO_NO_PARSE diagnostic — parse skipped".into())
-            } else {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    let key = path.to_string_lossy().to_string();
-                    crate::msl_remote::global_parsed_msl()
-                        .and_then(|b| {
-                            b.iter()
-                                .find(|(k, _)| k == &key)
-                                .map(|(_, a)| Arc::new(a.clone()))
-                        })
-                        .ok_or_else(|| format!("load_msl_file: pre-parsed AST missing for `{key}`"))
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    match rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()]) {
-                        Ok(mut pairs) if !pairs.is_empty() => {
-                            let (_, stored) = pairs.remove(0);
-                            Ok(Arc::new(stored))
-                        }
-                        Ok(_) => Err("rumoca returned no parse result".into()),
-                        Err(e) => Err(e.to_string()),
+        let parsed: Result<Arc<StoredDefinition>, String> = if std::env::var_os("LUNCO_NO_PARSE")
+            .is_some()
+        {
+            Err("LUNCO_NO_PARSE diagnostic — parse skipped".into())
+        } else {
+            #[cfg(target_arch = "wasm32")]
+            {
+                let key = path.to_string_lossy().to_string();
+                crate::library_remote::global_parsed_source_bundle()
+                    .and_then(|b| {
+                        b.iter()
+                            .find(|(k, _)| k == &key)
+                            .map(|(_, a)| Arc::new(a.clone()))
+                    })
+                    .ok_or_else(|| format!("load_library_file: pre-parsed AST missing for `{key}`"))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                match rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()]) {
+                    Ok(mut pairs) if !pairs.is_empty() => {
+                        let (_, stored) = pairs.remove(0);
+                        Ok(Arc::new(stored))
                     }
+                    Ok(_) => Err("rumoca returned no parse result".into()),
+                    Err(e) => Err(e.to_string()),
                 }
-            };
+            }
+        };
 
         let syntax = Arc::new(match parsed {
             Ok(strict) => SyntaxCache {
@@ -668,12 +673,12 @@ impl ModelicaDocument {
         // strict `parse_to_ast` that returned an empty AST on any error,
         // silently emptying the class tree (browser/index) while the async
         // worker path (`from_source` → `install_parse_results`) kept it. The
-        // only shortcut is a pre-parsed MSL bundle AST for file-backed docs,
+        // only shortcut is a pre-parsed source library bundle AST for file-backed docs,
         // which is trusted and needs no reparse.
         let bundle_ast: Option<Arc<StoredDefinition>> = match &self.origin {
             DocumentOrigin::File { path, .. } => {
                 let key = path.to_string_lossy().to_string();
-                crate::msl_remote::global_parsed_msl().and_then(|b| {
+                crate::library_remote::global_parsed_source_bundle().and_then(|b| {
                     b.iter()
                         .find(|(k, _)| k == &key)
                         .map(|(_, ast)| Arc::new(ast.clone()))

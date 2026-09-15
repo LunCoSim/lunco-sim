@@ -5,8 +5,6 @@
 //! as a browser section. The host still chooses separately whether to install
 //! the native provisioning runtime.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use bevy::prelude::*;
 

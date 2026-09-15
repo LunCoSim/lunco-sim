@@ -83,7 +83,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `ListTwin` | `{"offset": u64, "limit": u64}` | List files in the currently active Twin folder. |
 | `ListSpawnCatalog` | `{}` | List authored spawnable USD entries, including their standard `doc` description, provenance, and spawn source. |
 | `ListUsdAssetMetadata` | `{}` | List the scanned USD metadata projection used by the Scenarios menu and scripts; `ready` distinguishes an incomplete asynchronous scan from an empty result. |
-| `ListMsl` | `{"cursor": string, "limit": u64, "filter": {...}}` | Search and list the Modelica Standard Library (MSL). |
+| `ListLibrary` | `{"cursor": string, "limit": u64, "filter": {...}}` | Search and list classes from admitted Modelica source libraries. |
 | `ListCompileCandidates` | `{"doc_id": u64}` | List all non-package classes in a document that can be compiled. |
 | `QueryExperimentBounds` | `{"doc_id": u64, "class": string?}` | Resolve simulation bounds (start, end, dt) for a class. |
 | `CompileStatus` | `{"doc_id": u64}` | Get the current compilation and run state of a document. |
@@ -93,7 +93,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `GetDocumentSource` | `{"doc_id": u64}` | Get the raw source code of a document (Modelica only). |
 | `DescribeModel` | `{"doc_id": u64, "class": string?}` | Get structural info (components, pins, parameters) of a class. |
 | `SnapshotVariables` | `{"doc_id": u64, "names": string[]?}` | Get the current values of simulation variables/inputs. |
-| `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, Twin, MSL, and open docs. Bundled results remain available in hosts without an active Workspace session; Twin/open-document matches are included when `WorkspacePlugin` is present. |
+| `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, Twin, admitted source libraries, and open docs. Bundled results remain available in hosts without an active Workspace session; Twin/open-document matches are included when `WorkspacePlugin` is present. |
 | `GetShareLink` | `{"doc_id": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
 | `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |
@@ -609,7 +609,7 @@ the command result or the result of a read-only provider:
    `{"data":{"accepted":true}}`.
 
 2. **Query providers** — return structured data.
-   `ListBundled`, `ListTwin`, `ListMsl`, `MslStatus`,
+   `ListBundled`, `ListTwin`, `ListLibrary`,
    `ListOpenDocuments` (and future entries from spec 033). Domain
    crates register implementations of `ApiQueryProvider` against the
    `ApiQueryRegistry`; the executor checks the reflected command namespace

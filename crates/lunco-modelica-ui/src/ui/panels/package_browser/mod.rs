@@ -43,7 +43,7 @@ pub(crate) fn on_open_package_class_requested(
 // Modelica UI plugin because the cache must be seeded via
 // `PackageTreeCache::new()` (native filesystem roots), not `Default`.
 
-/// Fill in library roots that only become known after the MSL bundle loads
+/// Fill in library roots that only become known after the source library bundle loads
 /// (web: third-party libs carried in the parsed bundle). Native is already
 /// complete at `PackageTreeCache::new()`, so this flips the flag on first
 /// ready and does nothing further. Cheap no-op every frame until ready.
@@ -63,27 +63,27 @@ pub fn reconcile_library_roots_on_ready(
     cache.reconcile_library_roots();
 }
 
-/// Observer fired exactly once per session by [`crate::engine_resource::MslBecameReady`]
-/// (emitted from `drive_msl_bootstrap` the frame MSL is installed into the engine).
+/// Observer fired exactly once per session by [`crate::engine_resource::SourceBundleBecameReady`]
+/// (emitted from `drive_source_bundle_bootstrap` the frame source library is installed into the engine).
 ///
 /// Does three things on that single frame:
 ///
 /// 1. **Re-projects** all open canvas tabs so standard-library component icons
-///    — shown as blank boxes when projected before MSL was available — resolve
-///    correctly. Gated on the *engine install* event (not `MslLoadState::Ready`)
+///    — shown as blank boxes when projected before source library was available — resolve
+///    correctly. Gated on the *engine install* event (not `LibraryLoadState::Ready`)
 ///    because `icon_for` reads the engine session.
 ///
 /// 2. **Rebuilds the bundled examples tree** if it was empty at boot. On web the
-///    `msl_index.json` isn't available when `PackageTreeCache::new()` runs (the
-///    bundle hasn't been fetched yet), so `msl_bundled_nodes()` returns an empty
+///    `library_index.json` isn't available when `PackageTreeCache::new()` runs (the
+///    bundle hasn't been fetched yet), so `library_bundled_nodes()` returns an empty
 ///    slice and the 📦 LunCo Examples root shows nothing. Once the bundle lands
 ///    and the engine is bootstrapped, we replace the children of `bundled_root`
 ///    with the now-available node tree.
 ///
 /// 3. **Reconciles library roots** so any third-party libs carried inside the
 ///    parsed bundle (web only) appear in the tree at the same time.
-pub fn on_msl_became_ready(
-    _trigger: On<crate::engine_resource::MslBecameReady>,
+pub fn on_source_bundle_became_ready(
+    _trigger: On<crate::engine_resource::SourceBundleBecameReady>,
     canvas: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
     mut cache: ResMut<PackageTreeCache>,
 ) {
@@ -91,20 +91,20 @@ pub fn on_msl_became_ready(
     if let Some(mut canvas) = canvas {
         canvas.request_reproject_all();
         bevy::log::info!(
-            "[PackageBrowser] MslBecameReady: triggered reproject_all for open canvas tabs"
+            "[PackageBrowser] SourceBundleBecameReady: triggered reproject_all for open canvas tabs"
         );
     } else {
         bevy::log::debug!(
-            "[PackageBrowser] MslBecameReady: no canvas state yet — skipping force_reproject"
+            "[PackageBrowser] SourceBundleBecameReady: no canvas state yet — skipping force_reproject"
         );
     }
 
     // ── 2. Rebuild bundled examples tree ──────────────────────────────
-    // On web the source bundle (and therefore `msl_index.json`, which backs
-    // `msl_bundled_nodes`) isn't resident when `PackageTreeCache::new()` runs,
+    // On web the source bundle (and therefore `library_index.json`, which backs
+    // `library_bundled_nodes`) isn't resident when `PackageTreeCache::new()` runs,
     // so the 📦 LunCo Examples root is empty at boot. Now that the engine
     // bootstrap has made the index resident, fill it in.
-    refresh_bundled_tree(&mut cache, "MslBecameReady");
+    refresh_bundled_tree(&mut cache, "SourceBundleBecameReady");
 
     // ── 3. Reconcile library roots ────────────────────────────────────
     cache.reconcile_library_roots();
@@ -113,18 +113,18 @@ pub fn on_msl_became_ready(
 /// Refresh the bundled examples tree once the generated editor index arrives.
 /// The embedded model inventory is already available at boot, so this update
 /// only replaces its flat presentation with the richer authored tree.
-pub fn on_msl_editor_index_became_ready(
-    _trigger: On<crate::visual_diagram::MslEditorIndexBecameReady>,
+pub fn on_library_editor_index_became_ready(
+    _trigger: On<crate::visual_diagram::LibraryEditorIndexBecameReady>,
     mut cache: ResMut<PackageTreeCache>,
 ) {
-    refresh_bundled_tree(&mut cache, "MslEditorIndexBecameReady");
+    refresh_bundled_tree(&mut cache, "LibraryEditorIndexBecameReady");
 }
 
 fn refresh_bundled_tree(cache: &mut PackageTreeCache, source: &str) {
     if cache.bundled_tree_indexed {
         return;
     }
-    let fresh = crate::visual_diagram::msl_bundled_nodes();
+    let fresh = crate::visual_diagram::library_bundled_nodes();
     if fresh.is_empty() {
         return;
     }
@@ -144,9 +144,9 @@ fn refresh_bundled_tree(cache: &mut PackageTreeCache, source: &str) {
 }
 
 /// Re-project open diagrams after any bundled source root lands in the shared
-/// engine. Generated LunCo classes and MSL use the same resolver path.
-pub fn on_modelica_library_became_ready(
-    trigger: On<crate::engine_resource::ModelicaLibraryBecameReady>,
+/// engine. Generated LunCo classes and source library use the same resolver path.
+pub fn on_source_root_became_ready(
+    trigger: On<crate::engine_resource::SourceRootBecameReady>,
     canvas: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
 ) {
     if let Some(mut canvas) = canvas {
@@ -338,8 +338,8 @@ pub fn render_root_subtree(
             tree_id: id,
             pinned,
         });
-    } else if let Some(render::PackageAction::DragStart { msl_path }) = action {
-        if let Some(def) = crate::visual_diagram::msl_class_by_path(&msl_path) {
+    } else if let Some(render::PackageAction::DragStart { library_path }) = action {
+        if let Some(def) = crate::visual_diagram::library_class_by_path(&library_path) {
             let _ = ctx.resource_scope::<crate::ui::panels::palette::ComponentDragPayload, _>(
                 |_, payload| payload.def = Some(def),
             );
@@ -414,7 +414,7 @@ fn find_category_scan_target<'a>(
 /// about how a given `ClassRef` should load, dedupe, or drill in.
 ///
 /// Loading strategy by library:
-/// - [`Library::Msl`] / [`Library::ThirdParty`]: slim-slice load via
+/// - [`Library::Source`]: slim-slice load via
 ///   [`drill_into_class`]. Extracts the target class (~5–10 KB)
 ///   instead of parsing the wrapper package file (often 100+ KB),
 ///   so the canvas paints in well under a second.
@@ -429,7 +429,7 @@ fn find_category_scan_target<'a>(
 pub(crate) fn open_class(world: &mut World, class: ClassRef, pinned: bool) {
     let _ = pinned; // VS Code preview/pin semantics — wired through later.
     match &class.library {
-        Library::Msl | Library::ThirdParty { .. } => {
+        Library::Source { .. } => {
             // The slim-slice drill-in path is exactly what we need
             // for system libraries: it owns the file lookup, the
             // class-slice extraction, the tab plumbing, and the

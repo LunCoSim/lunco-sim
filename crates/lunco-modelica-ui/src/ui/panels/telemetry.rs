@@ -871,7 +871,7 @@ impl FlatParam {
 /// Type / base resolution: try the name verbatim against
 /// `index.classes`, then qualified by `index.within_path` if any.
 /// Names that don't resolve in this document's index are silently
-/// skipped — typically MSL or other-doc types. Those rows are absent
+/// skipped — typically source library or other-doc types. Those rows are absent
 /// rather than misleadingly empty; user can drill into the component
 /// via the canvas to see its params.
 ///
@@ -1102,7 +1102,7 @@ fn flatten_class_parameters(index: &crate::index::ModelicaIndex, class: &str) ->
                     // the next level is THIS class, since modifications
                     // live on the parent's declaration.
                     let Some(child_type) = resolve_class(index, type_path, &comp.type_name) else {
-                        // Unresolvable type (MSL / cross-doc) — skip.
+                        // Unresolvable type (source library / cross-doc) — skip.
                         continue;
                     };
                     chain.push(comp.name.clone());

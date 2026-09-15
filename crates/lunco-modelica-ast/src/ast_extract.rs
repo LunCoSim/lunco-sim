@@ -194,7 +194,7 @@ pub fn extract_model_name(source: &str) -> Option<String> {
 /// AST-based variant. Callers that already have a parsed
 /// `StoredDefinition` (the document registry caches one per doc)
 /// MUST use this path — calling [`extract_model_name`] from the
-/// main thread on a 184 KB MSL source means a fresh uncached
+/// main thread on a 184 KB source-library source means a fresh uncached
 /// rumoca parse that runs for tens of seconds in debug builds and
 /// visibly freezes the app.
 ///
@@ -465,7 +465,7 @@ pub fn extract_parameters(source: &str) -> HashMap<String, f64> {
 /// AST-based variant — call this from any hot path that already
 /// holds a parsed `StoredDefinition`. The `_source` variants above
 /// re-parse on every call, which is catastrophic (~minutes) on
-/// 150 KB MSL package files; hot paths like `on_compile_model`
+/// 150 KB source library package files; hot paths like `on_compile_model`
 /// MUST use these.
 ///
 /// Leaf-name collisions between nested classes are resolved by depth (see
@@ -915,7 +915,7 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
 // list of leaf identifiers that collide across components.
 //
 // Stops recursing when a component's declared type isn't an AST
-// class in this `StoredDefinition` (i.e. resolves to an MSL or
+// class in this `StoredDefinition` (i.e. resolves to a source library or
 // user library that we'd need rumoca's resolver to walk). Those
 // components are emitted as leaves under their qualified path —
 // good enough for the common authored-domain models where Tank /
@@ -958,7 +958,7 @@ pub fn numeric_of(expr: &Expression) -> Option<f64> {
 
 /// Find a class by short name, walking nested classes too.
 ///
-/// Many MSL packages and user-authored multi-class files (e.g.
+/// Many source library packages and user-authored multi-class files (e.g.
 /// `AnnotatedRocketStage` which wraps `RocketStage`/`Tank`/`Valve`/…
 /// inside a `package AnnotatedRocketStage`) expose simulatable classes
 /// only inside a wrapper package. A top-level-only lookup misses them
@@ -1211,7 +1211,7 @@ fn expression_to_string(expr: &Expression) -> String {
 ///
 /// This is deliberately a display projection, not a source serializer: values
 /// that cannot be rendered without misleading truncation return an empty
-/// string. Keeping it here makes the MSL indexer and diagram projection use the
+/// string. Keeping it here makes the source library indexer and diagram projection use the
 /// same representation for literals, references, arithmetic, and arrays.
 pub fn format_expression_for_display(expr: &Expression) -> String {
     match expr {
@@ -1329,7 +1329,7 @@ pub fn extract_typed_outputs_for_class(class: &ClassDef) -> Vec<TypedComponent> 
     })
 }
 
-/// Whether `type_name` looks like an MSL "RealInput / IntegerInput /
+/// Whether `type_name` looks like a source-library "RealInput / IntegerInput /
 /// BooleanInput / StringInput" connector class (cf. MLS Annex E.3 +
 /// `Modelica.Blocks.Interfaces`). Components declared with these
 /// types behave as **inputs** at the API surface even though the

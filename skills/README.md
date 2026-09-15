@@ -69,7 +69,7 @@ parse check into runtime evidence.
 | [**use-asset-library**](use-asset-library/SKILL.md) | Add a component, shader, Modelica model, or event-driven Rhai policy to `assets/` and have the engine find it |
 | [**luncosim-architecture**](luncosim-architecture/SKILL.md) | Design or review a reusable feature across USD, Modelica, Avian, Rust, and Rhai; adopt standard USD schemas and remove legacy paths |
 | [**coordinate-frames**](coordinate-frames/SKILL.md) | Diagnose or implement BigSpace, reference-frame, camera, terrain, trajectory, or physics pose changes without raw-f32 or repair logic |
-| [**sysml-requirements**](sysml-requirements/SKILL.md) | Author, validate, and run Twin-owned SysML v2 requirements and verification cases; understand the opt-in subset and Rhai bridge |
+| [**sysml-requirements**](sysml-requirements/SKILL.md) | Author, validate, and run Twin-owned SysML v2 requirements and verification cases; understand the supported subset and Rhai bridge |
 
 ## Author the world & its behaviour
 

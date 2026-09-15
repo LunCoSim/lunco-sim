@@ -935,8 +935,8 @@ struct LunCoSimBootState {
 /// wasm-only `Update` system that reads `window.location.search` and:
 ///   - activates the perspective named by `?workspace=…` (once, on
 ///     first run);
-///   - triggers an `OpenClass` for `?open=…` once `MslLoadState`
-///     reaches `Ready`. Without that gate the trigger races MSL
+///   - triggers an `OpenClass` for `?open=…` once `LibraryLoadState`
+///     reaches `Ready`. Without that gate the trigger races source library
 ///     install and the workbench can't find the class.
 ///
 /// Self-disables after both are applied. Useful for headless test
@@ -979,7 +979,7 @@ fn luncosim_boot_from_url(
         state.parsed = true;
     }
 
-    // ── Per-frame poll: dispatch OpenClass once MSL is ready ─────
+    // ── Per-frame poll: dispatch OpenClass once source library is ready ─────
     if let Some(qual) = state.open_class.clone() {
         let ready = matches!(
             library.as_deref(),
@@ -992,7 +992,9 @@ fn luncosim_boot_from_url(
             qualified: qual.clone(),
             ..Default::default()
         });
-        bevy::log::info!("[luncosim_boot_from_url] OpenClass({qual}) triggered (MSL ready)");
+        bevy::log::info!(
+            "[luncosim_boot_from_url] OpenClass({qual}) triggered (source library ready)"
+        );
     }
     state.done = true;
 }
@@ -1051,7 +1053,7 @@ fn install_window_icon(
 /// The app never reaches the network on its own: every fetchable dataset is
 /// DECLARED in an `Assets.toml` (a crate's, or an open Twin's) and downloaded
 /// only from a click here. This panel knows nothing about ephemerides, terrain
-/// or MSL — it renders whatever the registry reports, so a new dataset needs a
+/// or source library — it renders whatever the registry reports, so a new dataset needs a
 /// manifest entry and no UI change at all.
 fn register_downloadable_assets_settings(world: &mut World) {
     use bevy_egui::egui;
@@ -1106,7 +1108,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
                 .max(settings.retry_initial_delay_secs);
             ui.label(
                 egui::RichText::new(
-                    "The same bounded policy is used for assets, MSL, scenario HTTP, and app updates. Attempts include the first request; delays grow exponentially and stop at the configured maximum.",
+                    "The same bounded policy is used for assets, source library, scenario HTTP, and app updates. Attempts include the first request; delays grow exponentially and stop at the configured maximum.",
                 )
                 .weak()
                 .small(),

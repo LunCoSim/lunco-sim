@@ -23,7 +23,7 @@ state, not user prefs.)
 - `Settings` — the raw merged document (`raw(key)` / `iter()`).
 - `ProfileSettings` — built-in profile section.
 - `DownloadSettingsPlugin` / `ensure_download_settings` / `DownloadSettings` — the shared network policy
-  used by asset provisioning, browser fetches, scenario HTTP, MSL, and desktop
+  used by asset provisioning, browser fetches, scenario HTTP, source libraries, and desktop
   updates. `max_attempts` includes the first request; retry delays are
   exponential and capped.
 - `settings_path()` / `load_section_from_disk::<S>()` — helpers.

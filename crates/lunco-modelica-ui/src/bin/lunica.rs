@@ -25,7 +25,7 @@
 //! `#[wasm_bindgen(start)]` entry point.
 //!
 //! Everything the workbench *is* (panels, clipboard, autosave, worker,
-//! MSL) lives in [`ModelicaWorkbenchPlugin`]; this file is just the thin
+//! source library) lives in [`ModelicaWorkbenchPlugin`]; this file is just the thin
 //! app shell (window + frame pacing + native `--api`).
 
 use bevy::prelude::*;
@@ -52,14 +52,14 @@ fn main() {
     // renderer's pipelined extract — every Add/Move edit froze the UI
     // for 1.5–2.5 s. After the SyntaxCache refactor those run on Bevy's
     // `AsyncComputeTaskPool`; the only remaining global-pool caller is
-    // rumoca (`parse_files_parallel` / `Session`, short bursts at MSL
+    // rumoca (`parse_files_parallel` / `Session`, short bursts at source library
     // preload / file load). Our indexer runs on its own bounded pool and
     // is unaffected either way.
     //
     // We USED to win the pool by racing rumoca to `build_global()`. That
     // was fragile (lose the race and the cap was silently lost) and it
     // handed the parse threads rayon's default 2 MB stacks — rumoca sizes
-    // them at 16 MB for deep MSL class hierarchies. Since 0.9.20 rumoca
+    // them at 16 MB for deep source library class hierarchies. Since 0.9.20 rumoca
     // takes the thread count directly and builds the pool itself, so we
     // just state the policy: leave 2 cores for Bevy (renderer + main),
     // give the rest to rumoca. On ≤4-core machines cap at 2 — the original
@@ -459,7 +459,7 @@ fn setup_web_workbench(
     workbench_state.selected_entity = Some(entity);
 
     // No automatic compile on boot: the user clicks Compile when ready.
-    // Avoids racing the MSL fetch (lands seconds later on web).
+    // Avoids racing the source library fetch (lands seconds later on web).
     let _ = (entity, model_name, source, channels);
 }
 

@@ -19,7 +19,7 @@
 #   lunica   - Modelica Workbench IDE
 #   luncosim  - Simulation Sandbox (ground physics)
 #   luncosim - Full lunar-mission simulator (celestial + orbital). No Modelica
-#              worker / MSL bundle (not a Modelica IDE). Textures load over HTTP
+#              worker / source-library bundle (not a Modelica IDE). Textures load over HTTP
 #              (built without `celestial` embed-assets).
 # ============================================================================
 
@@ -263,7 +263,7 @@ should_rebuild_worker() {
     # ~/.cargo/git). That's how the worker silently shipped stale rumoca: its
     # `StoredDefinition`/`WireMessage` bincode layout diverged from the freshly
     # rebuilt main bundle, so every postMessage mis-decoded (`UUID expected 16
-    # found 9`, MSL "33 docs" instead of 2670). Gating on Cargo.lock catches the
+    # found 9`, source bundle "33 docs" instead of 2670). Gating on Cargo.lock catches the
     # whole class of dep bumps the source-mtime scan can't.
     if [ -f "$PROJECT_DIR/Cargo.lock" ] && [ "$PROJECT_DIR/Cargo.lock" -nt "$worker_wasm" ]; then
         return 0
@@ -526,7 +526,7 @@ generate_bindings() {
     mkdir -p "$dist_dir"
     # Recursive: wasm-bindgen emits a `snippets/` subdir (JS interop shims that
     # the generated loader imports at runtime). A non-recursive `cp` errors on
-    # it under `set -e` and aborts the build before index.html / worker / msl
+    # it under `set -e` and aborts the build before index.html / worker / library
     # are staged — leaving a half-populated dist that serves a blank page.
     cp -r "$bindgen_out_dir"/. "$dist_dir/"
     if [ -n "$stashed_worker" ]; then
@@ -592,7 +592,7 @@ generate_bindings() {
     # luncosim loads scene files via the bevy AssetServer over HTTP
     # (`assets/scenes/luncosim/sandbox_scene.usda` and friends). Copy the
     # workspace `assets/` tree next to the wasm so they're same-origin.
-    # lunica doesn't need this — its models live in the MSL bundle.
+    # lunica doesn't need this — its models live in the source-library bundle.
     if [ "$binary" = "luncosim" ] && [ -d "$PROJECT_DIR/assets" ]; then
         info "Copying assets/ → $dist_dir/assets/"
         # `.lunco/` (runtime overlay) and `history/` (edit journal) are per-session
@@ -843,12 +843,10 @@ generate_bindings() {
     fi
 }
 
-# Pack MSL into a versioned, compressed bundle and place it next to the
-# wasm under `dist/<bin>/msl/`. Same-origin so the runtime fetcher doesn't
-# need CORS configuration. Both wasm bundles ship MSL — lunica because
-# the workbench *is* the MSL editor, luncosim because its Design
-# workspace embeds the same Modelica panels and they'd be empty without
-# the standard library.
+# Pack the source library into a versioned, compressed bundle and place it
+# next to the wasm under `dist/<bin>/library/`. Same-origin so the runtime fetcher doesn't
+# need CORS configuration. Both wasm bundles may ship the same authored source
+# set because both applications expose the Modelica workbench.
 # Content-hash the worker wasm in dist so a rebuilt worker is never served
 # stale from the browser cache. Idempotent: hashes a bare `${bin}_bg.wasm`
 # (rename + repoint the generated loader) and no-ops once already hashed. Runs
@@ -902,109 +900,88 @@ hash_worker_wasm() {
     info "Worker wasm content-hashed → $hashed"
 }
 
-# Regenerate `msl_index.json` (the palette's component metadata: icons, ports,
-# params) so it covers the third-party libs we're about to bundle. The indexer
-# auto-discovers extras under `cache_dir()` and writes the index next to the MSL
-# source tree, where `build_msl_assets` then packs it.
+# Regenerate `library_index.json` (the palette's component metadata: icons,
+# ports, params) for the explicitly selected source set. The indexer writes
+# the index next to the source tree, where the packer then includes it.
 #
-# Slow (~30 s: it full-parses MSL + extras), so it only runs when extras are
-# actually requested (`MSL_EXTRA_LIBS`) or explicitly forced (`MSL_REINDEX=force`).
-# Default builds skip it and pack whatever index is already on disk.
-build_msl_index() {
+# Slow (~30 s: it full-parses the selected source set), so it only runs when
+# extra roots are requested (`SOURCE_LIBRARY_ROOTS`) or explicitly forced
+# (`SOURCE_LIBRARY_REINDEX=force`). Default builds reuse the existing index.
+build_source_library_index() {
     local binary="$1"
     case "$binary" in
         lunica|luncosim) ;;
         *) return 0 ;;
     esac
-    if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ "${MSL_REINDEX:-}" != "force" ]; then
+    if [ -z "${SOURCE_LIBRARY_ROOTS:-}" ] && [ "${SOURCE_LIBRARY_REINDEX:-}" != "force" ]; then
         return 0
     fi
-    info "Reindexing MSL + extras → msl_index.json (set MSL_REINDEX=force to always run)..."
-    cargo run --release -q -p lunco-modelica-core --bin msl_indexer -- -v
+    info "Reindexing source library → library_index.json (set SOURCE_LIBRARY_REINDEX=force to always run)..."
+    cargo run --release -q -p lunco-modelica-core --bin modelica_library_indexer -- -v
     if [ $? -ne 0 ]; then
-        error "MSL indexing failed"
+        error "Source-library indexing failed"
         exit 1
     fi
-    success "MSL index regenerated (covers discovered third-party libs)"
+    success "Source-library index regenerated"
 }
 
-build_msl_bundle() {
+build_source_library_bundle() {
     local binary="$1"
     case "$binary" in
         lunica|luncosim) ;;
         *) return 0 ;;
     esac
     # Refresh the palette index first so bundled extras carry icons/ports.
-    build_msl_index "$binary"
+    build_source_library_index "$binary"
     local dist_dir="$PROJECT_DIR/dist/$binary"
-    local msl_dir="$dist_dir/msl"
+    local library_dir="$dist_dir/library"
 
     # Skip the rumoca pre-parse + tar+zstd pass when nothing under
-    # `.cache/msl/` is newer than the existing `manifest.json`. Pack
+    # the selected source root is newer than the existing `manifest.json`. Pack
     # is content-addressed (`parsed-<sha>.bin.zst`), so a no-op rerun
     # produces byte-identical output anyway — the only thing the
     # script saves is ~2 s of parse + compress work.
     #
-    # Override with `MSL_REBUILD=force` for a guaranteed re-pack.
+    # Override with `SOURCE_LIBRARY_REBUILD=force` for a guaranteed re-pack.
     #
-    # Bust the skip on three inputs, not just `.cache/msl` mtimes:
-    #   1. `.cache/msl/*.mo` newer than the manifest — the sources changed.
-    #   2. The bundler's OWN source newer than the manifest — its packing
-    #      logic changed (e.g. a new `--exclude` filter or serialisation
-    #      format). Tracking this makes the old `MSL_REBUILD=force`-after-a-
-    #      bundler-edit ritual automatic; a stale bundle is silent corruption.
-    #   3. `MSL_EXTRA_LIBS`/`MSL_EXCLUDE_LIBS` requested — the set of packed
-    #      libraries is config-driven and not captured by mtimes, so always
+    # Bust the skip on the source root and the bundler implementation:
+    #   1. source files newer than the manifest — the sources changed.
+    #   2. the bundler's own source newer than the manifest — its packing
+    #      logic or serialization format changed.
+    #   3. explicit source/exclusion configuration requested — the selected
+    #      set is config-driven and not captured by mtimes, so always
     #      repack to honour the current config.
-    if [ -z "${MSL_EXTRA_LIBS:-}" ] && [ -z "${MSL_EXCLUDE_LIBS:-}" ] \
-        && [ "${MSL_REBUILD:-}" != "force" ] && [ -f "$msl_dir/manifest.json" ]; then
-        local msl_src
-        msl_src="$(resolve_cache_dir)/msl"
-        if [ -n "$msl_src" ]; then
+    if [ -z "${SOURCE_LIBRARY_ROOTS:-}" ] && [ -z "${SOURCE_LIBRARY_EXCLUDE:-}" ] \
+        && [ "${SOURCE_LIBRARY_REBUILD:-}" != "force" ] && [ -f "$library_dir/manifest.json" ]; then
+        local source_root
+        source_root="$(resolve_cache_dir)/library"
+        if [ -n "$source_root" ]; then
             local newer newer_bundler
-            newer=$(find "$msl_src" -name '*.mo' -newer "$msl_dir/manifest.json" -print -quit 2>/dev/null)
-            newer_bundler=$(find "$PROJECT_DIR/crates/lunco-assets/src" -name '*.rs' \
-                -newer "$msl_dir/manifest.json" -print -quit 2>/dev/null)
+            newer=$(find "$source_root" -name '*.mo' -newer "$library_dir/manifest.json" -print -quit 2>/dev/null)
+            newer_bundler=$(find "$PROJECT_DIR/crates/lunco-modelica-assets/src" -name '*.rs' \
+                -newer "$library_dir/manifest.json" -print -quit 2>/dev/null)
             if [ -z "$newer" ] && [ -z "$newer_bundler" ]; then
-                info "MSL bundle up-to-date ($msl_src) — skipping pack (set MSL_REBUILD=force to override)"
+                info "Source-library bundle up-to-date ($source_root) — skipping pack (set SOURCE_LIBRARY_REBUILD=force to override)"
                 return 0
             fi
         fi
     fi
 
-    info "Packing MSL bundle for $binary..."
+    info "Packing source-library bundle for $binary..."
 
-    # The bundler walks `lunco_assets::msl_source_root_path()` on the host,
-    # which lives at the global cache's `msl/` directory. If MSL isn't
-    # materialised, the binary will exit non-zero with a clear message and
-    # we surface that as a build error so we never ship without MSL.
-    # Third-party libraries ship in the SAME bundle as MSL (one combined tar +
-    # parsed set; each root keeps its own top-level package namespace). Opt in
-    # via `MSL_EXTRA_LIBS`:
-    #   MSL_EXTRA_LIBS=discover        → bundle every lib found under cache_dir()
-    #   MSL_EXTRA_LIBS=/path/a:/path/b → bundle these explicit roots
-    # Default (unset) → MSL only, reproducible across machines.
+    # The packer receives explicit source roots. When none are supplied it
+    # resolves the engine's authored source bundle from the asset cache.
     local extra_args=()
-    if [ -n "${MSL_EXTRA_LIBS:-}" ]; then
-        if [ "$MSL_EXTRA_LIBS" = "discover" ]; then
-            extra_args+=(--discover-extras)
-            info "Bundling discovered third-party libraries from cache_dir()"
-        else
-            local IFS=':'
-            for root in $MSL_EXTRA_LIBS; do
-                [ -n "$root" ] && extra_args+=(--extra-root "$root")
-            done
-            info "Bundling extra library roots: $MSL_EXTRA_LIBS"
-        fi
+    if [ -n "${SOURCE_LIBRARY_ROOTS:-}" ]; then
+        local IFS=':'
+        for root in $SOURCE_LIBRARY_ROOTS; do
+            [ -n "$root" ] && extra_args+=(--source-root "$root")
+        done
+        info "Bundling explicit source roots: $SOURCE_LIBRARY_ROOTS"
     fi
 
-    # The Modelica Association ships its own regression/conversion test suites
-    # (ModelicaTest, ModelicaTestConversion4, ModelicaTestOverdetermined) INSIDE
-    # the MSL source tree. They are not part of the library you import, and
-    # Dymola/OMEdit don't load them by default — so we keep them out of the web
-    # bundle. Override the list (colon-separated; `*` = prefix match) via
-    # `MSL_EXCLUDE_LIBS`, or set it empty to ship everything.
-    local exclude_libs="${MSL_EXCLUDE_LIBS-ModelicaTest*}"
+    # Exclusions are authored by the caller, never assumed by the packer.
+    local exclude_libs="${SOURCE_LIBRARY_EXCLUDE-}"
     if [ -n "$exclude_libs" ]; then
         local IFS=':'
         for name in $exclude_libs; do
@@ -1013,16 +990,16 @@ build_msl_bundle() {
         info "Excluding top-level packages: $exclude_libs"
     fi
 
-    rm -rf "$msl_dir"
-    mkdir -p "$msl_dir"
-    cargo run --release -q -p lunco-modelica-assets --bin build_msl_assets -- \
-        --out "$msl_dir" "${extra_args[@]}"
+    rm -rf "$library_dir"
+    mkdir -p "$library_dir"
+    cargo run --release -q -p lunco-modelica-assets --bin build_modelica_library_assets -- \
+        --out "$library_dir" "${extra_args[@]}"
 
     if [ $? -ne 0 ]; then
-        error "MSL bundling failed"
+        error "Source-library bundling failed"
         exit 1
     fi
-    success "MSL bundle written to $msl_dir"
+    success "Source-library bundle written to $library_dir"
 }
 
 # Serve the web application from its dist bundle.
@@ -1191,7 +1168,7 @@ main() {
             local crate=$(get_binary_config "$binary")
             build_wasm "$binary" "$crate"
             generate_bindings "$binary" "$crate"
-            build_msl_bundle "$binary"
+            build_source_library_bundle "$binary"
             success "Build complete! Run '$0 serve $binary' to start the server"
             ;;
         serve)
@@ -1222,7 +1199,7 @@ main() {
             fi
             build_wasm "$binary" "$crate"
             generate_bindings "$binary" "$crate"
-            build_msl_bundle "$binary"
+            build_source_library_bundle "$binary"
             serve_web "$binary" "$crate" "${port:-$default_port}"
             ;;
         clean)

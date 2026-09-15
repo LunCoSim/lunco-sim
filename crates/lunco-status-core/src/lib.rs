@@ -6,8 +6,6 @@
 //! workbench-shell dependency. The status bar is one consumer of this crate,
 //! not its owner.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod status_bus;
 pub mod tracked_task;

@@ -1,7 +1,7 @@
 //! UI-reactive observers of CORE state.
 //!
 //! These systems are the *reactive UI layer built on top of the core*: they
-//! read core domain state (e.g. [`crate::msl_remote::MslLoadState`]) and
+//! read core domain state (e.g. [`crate::library_remote::LibraryLoadState`]) and
 //! project it into UI surfaces (the workbench status bus, console, plots).
 //! The core never references these surfaces — it just owns the observable
 //! state. All of this is `ui`-feature only; a headless build has no observers
@@ -15,7 +15,7 @@ use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
 
 use lunco_assets_core::library::{LibraryLoadPhase, LibraryLoadState};
 
-const MSL_SOURCE: &str = "MSL";
+const SOURCE_LIBRARY_STATUS: &str = "source-library";
 
 /// Watch [`LibraryLoadState`] and translate transitions / progress ticks into
 /// [`StatusBus`] events. Phase changes become discrete `Info` entries
@@ -24,7 +24,7 @@ const MSL_SOURCE: &str = "MSL";
 ///
 /// This is a pure state mirror, not a task owner — `LibraryLoadState` itself is the
 /// lifetime authority, so it uses the status bus's global state-projection API.
-pub fn mirror_msl_state_to_status_bus(
+pub fn mirror_library_state_to_status_bus(
     state: Res<LibraryLoadState>,
     bus: Option<ResMut<StatusBus>>,
     mut last: Local<Option<MirrorMemo>>,
@@ -45,27 +45,27 @@ pub fn mirror_msl_state_to_status_bus(
             let label = library_phase_label(*phase);
             // Phase transition → discrete history entry.
             if prior_phase_label != Some(label) {
-                bus.push(MSL_SOURCE, StatusLevel::Info, label);
+                bus.push(SOURCE_LIBRARY_STATUS, StatusLevel::Info, label);
             }
             // Progress tick (in-place; doesn't accumulate in history).
             let detail = format_progress_detail(*phase, *bytes_done, *bytes_total);
-            bus.set_progress(MSL_SOURCE, detail, *bytes_done, *bytes_total);
+            bus.set_progress(SOURCE_LIBRARY_STATUS, detail, *bytes_done, *bytes_total);
         }
         LibraryLoadState::Ready { file_count, .. } => {
             // Only fire once per Ready transition (re-renders shouldn't spam).
             if !matches!(last.as_ref(), Some(MirrorMemo { ready: true, .. })) {
                 bus.push(
-                    MSL_SOURCE,
+                    SOURCE_LIBRARY_STATUS,
                     StatusLevel::Info,
                     format!("ready — {file_count} files"),
                 );
-                bus.remove_progress(MSL_SOURCE);
+                bus.remove_progress(SOURCE_LIBRARY_STATUS);
             }
         }
         LibraryLoadState::Failed(msg) => {
             if !matches!(last.as_ref(), Some(MirrorMemo { failed: true, .. })) {
-                bus.push(MSL_SOURCE, StatusLevel::Error, msg.clone());
-                bus.remove_progress(MSL_SOURCE);
+                bus.push(SOURCE_LIBRARY_STATUS, StatusLevel::Error, msg.clone());
+                bus.remove_progress(SOURCE_LIBRARY_STATUS);
             }
         }
     }

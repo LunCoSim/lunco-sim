@@ -18,7 +18,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use std::collections::HashMap;
 
-use crate::visual_diagram::{msl_class_library, VisualDiagram};
+use crate::visual_diagram::{library_class_library, VisualDiagram};
 
 fn resolved_engine_class_entry(
     qualified: &str,
@@ -56,7 +56,7 @@ fn resolved_engine_class_entry(
         resolution_message: None,
     };
 
-    // The indexed MSL catalogue is not the source of truth for native or
+    // The indexed source library catalogue is not the source of truth for native or
     // user-provided libraries. When the shared source-aware engine resolves a
     // class, project the same AST semantics the local-class path uses: class
     // kind, inherited connector members, ports, and Diagram graphics. An
@@ -168,7 +168,7 @@ fn canonical_edge_key(
 }
 
 /// Default cap for the "don't project absurdly huge models" guard.
-/// Catches obvious mistakes (importing a whole MSL subpackage into
+/// Catches obvious mistakes (importing a whole source library subpackage into
 /// a diagram viewer) without getting in the way of real engineering
 /// models, which typically have a few dozen components and rarely
 /// cross a couple hundred.
@@ -200,7 +200,7 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// users editing deeply composed models can raise it in Settings.
 /// True when the AST's top-level class is a `package` (or contains
 /// many nested classes). Heuristic for the package-projection guard:
-/// projecting an MSL package wrapper without a `target_class` walks
+/// projecting a source-library package wrapper without a `target_class` walks
 /// every nested class synchronously — 60 s of frozen UI on
 /// `Modelica/Blocks/Continuous.mo`. The tree browser already shows the
 /// package as a folder; drill-in into a class lands here with
@@ -212,7 +212,7 @@ fn ast_looks_like_package(ast: &rumoca_compile::parsing::ast::StoredDefinition) 
             return true;
         }
         // Even if not declared a package, a class with many nested
-        // classes is the package-shaped MSL pattern (e.g. some files
+        // classes is the package-shaped source library pattern (e.g. some files
         // declare `model X` containing `model Sub1 ... model Sub30`).
         if class.classes.len() > 5 {
             return true;
@@ -230,7 +230,7 @@ pub fn import_model_to_diagram_from_ast(
 ) -> Result<VisualDiagram, String> {
     use crate::diagram::ModelicaComponentBuilder;
     // `Arc::clone` here is a pointer bump, NOT a tree clone.
-    // MSL package ASTs are megabytes; a naïve clone would push the
+    // source library package ASTs are megabytes; a naïve clone would push the
     // process into swap on drill-in into anything under
     // `Modelica/Blocks/package.mo` etc.
     //
@@ -241,7 +241,7 @@ pub fn import_model_to_diagram_from_ast(
     // Frankenstein diagram. With it, we get only the drilled-in
     // class's components and connect equations.
     // **Package-file guard.** Opening `Modelica/Blocks/Continuous.mo`
-    // (or any single-file MSL package) with no `target_class` lands
+    // (or any single-file source library package) with no `target_class` lands
     // here with an AST holding 30+ sibling classes. The builder walks
     // every class synchronously — no yield points — and locks the
     // wasm main thread for 60 s before the projection deadline trips.
@@ -332,17 +332,17 @@ pub fn import_model_to_diagram_from_ast(
     // references we build a per-class import map from the parsed AST
     // below.
     //
-    // Short-name-tail heuristics (e.g. `Integrator` → first MSL entry
-    // whose path ends in `.Integrator`) are *not* applied — MSL has
+    // Short-name-tail heuristics (e.g. `Integrator` → first source library entry
+    // whose path ends in `.Integrator`) are *not* applied — source library has
     // multiple classes sharing short names (for example,
     // `Modelica.Blocks.Continuous.Integrator` vs.
     // `Modelica.Blocks.Continuous.Integrator` nested variants), and
     // matching by suffix would silently pick the wrong one. If a
     // reference doesn't resolve via scope or path, we surface it as
     // unresolved (skipped) rather than guess.
-    let msl_lib = msl_class_library();
+    let library_lib = library_class_library();
     let indexed_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
-        msl_lib.iter().map(|c| (c.name.as_str(), c)).collect();
+        library_lib.iter().map(|c| (c.name.as_str(), c)).collect();
 
     // Build the active class's import map so we can resolve
     // short-name type references the way OpenModelica's frontend
@@ -354,7 +354,7 @@ pub fn import_model_to_diagram_from_ast(
     // Covers `Qualified` (C → A.B.C), `Renamed` (D = A.B.C → D → A.B.C),
     // and `Selective` (import A.B.{C,D} → C → A.B.C, D → A.B.D).
     // `Unqualified` (A.B.*) is not expanded here because it would
-    // require a second pass against the whole MSL index; that's a
+    // require a second pass against the whole source library index; that's a
     // separate follow-up.
     let mut imports_by_short: HashMap<String, String> = HashMap::new();
     // Reuse the `ast` argument instead of re-parsing the source.
@@ -395,7 +395,7 @@ pub fn import_model_to_diagram_from_ast(
     //
     // Modelica scope rules (MLS §5.3) make sibling classes inside a
     // package directly visible to one another without an `import`. The
-    // MSL palette only knows about MSL paths, so user classes defined
+    // source library palette only knows about source library paths, so user classes defined
     // alongside the model (e.g. `Engine`/`Tank` inside an
     // `AnnotatedRocketStage` package) would otherwise resolve as
     // unknown and disappear from the diagram. We synthesise a
@@ -409,8 +409,8 @@ pub fn import_model_to_diagram_from_ast(
     let mut local_classes_by_short: HashMap<String, crate::index::ClassEntry> = HashMap::new();
     // Scope the local-class registration based on what we're projecting:
     //
-    //  - **Drill-in into an MSL class** (`target_class = "Modelica.…"`):
-    //    skip entirely. MSL classes use fully-qualified component
+    //  - **Drill-in into a source-library class** (`target_class = "Package.…"`):
+    //    skip entirely. source library classes use fully-qualified component
     //    types, so short-name resolution adds nothing — and walking
     //    `extract_icon_inherited` on the target spawns a chain of
     //    rumoca parses (e.g. PID → Interfaces.SISO triggers
@@ -418,7 +418,7 @@ pub fn import_model_to_diagram_from_ast(
     //    projector with no user-visible benefit.
     //
     //  - **Drill-in into a user class** (`target_class = "MyClass"`,
-    //    no MSL prefix): scope to just the target + its nested
+    //    no source library prefix): scope to just the target + its nested
     //    classes — the original full sweep would walk every sibling
     //    in the file, which on a package-aggregated source like
     //    `Continuous.mo` (20+ blocks) takes ~60 s.
@@ -426,11 +426,11 @@ pub fn import_model_to_diagram_from_ast(
     //  - **No target** (the whole document is the scene): full
     //    sweep, since user authoring can reference any sibling class
     //    by short name.
-    let is_msl_drill_in = target_class
-        .map(|t| t.starts_with("Modelica."))
-        .unwrap_or(false);
-    if is_msl_drill_in {
-        // No-op: MSL classes are self-sufficient on qualified paths.
+    let is_source_drill_in = target_class
+        .and_then(crate::library_fs::locate_library_file)
+        .is_some();
+    if is_source_drill_in {
+        // External source classes are self-sufficient on qualified paths.
     } else if let Some(target) = target_class {
         if let Some(target_class_def) = crate::diagram::find_class_by_qualified_name(&ast, target) {
             // Register two scopes for short-name lookup:
@@ -496,7 +496,7 @@ pub fn import_model_to_diagram_from_ast(
         // Whole-document projection: register every class so sibling
         // user models see each other via short names. When there's a
         // single top-level class (the common Untitled-doc shape,
-        // including Duplicate-to-Workspace copies of MSL examples),
+        // including Duplicate-to-Workspace copies of source library examples),
         // that class IS the projection target — skip registering it
         // to dodge the 30 s+ cross-file `extends` walk that serves
         // no consumer here.
@@ -533,7 +533,7 @@ pub fn import_model_to_diagram_from_ast(
     // package P isn't in the engine session either, so every component
     // remains unresolved. Parse the bundled package and register its classes
     // so their authored `Icon` graphics render.
-    // Mirrors the compile path's `extra_sources` seeding. No-op for MSL
+    // Mirrors the compile path's `extra_sources` seeding. No-op for source library
     // `within` packages (not bundled → `bundled_source_for` returns None)
     // and for top-level scratch docs (no `within`). `register_local_class`
     // skips names already registered above, so the doc's own siblings win.
@@ -592,7 +592,7 @@ pub fn import_model_to_diagram_from_ast(
         let mut map: HashMap<&str, &rumoca_compile::parsing::ast::Component> = HashMap::new();
         if let Some(target) = target_class {
             // Scope to the named class. Use the qualified-name walker
-            // so dotted MSL targets (e.g.
+            // so dotted source library targets (e.g.
             // `Modelica.Blocks.Continuous.PID`) descend through the
             // file's `within` clause and any package layers — the
             // earlier direct-name match handled only single-segment
@@ -663,7 +663,7 @@ pub fn import_model_to_diagram_from_ast(
             .and_then(|p| indexed_lookup_by_path.get(p).map(|d| (*d).clone()))
             .or_else(|| local_classes_by_short.get(type_name).cloned());
         // Bundled/native classes are indexed in the shared source-aware engine,
-        // not in the MSL palette. A fully qualified reference must therefore
+        // not in the source library palette. A fully qualified reference must therefore
         // consult that same engine before it becomes a diagnostic node; the
         // async root loader will cause this projection to run again once the
         // definition arrives.
@@ -683,7 +683,7 @@ pub fn import_model_to_diagram_from_ast(
         // Scope-chain fallback (MLS §5.3): when the type couldn't be
         // resolved as-given, try prepending each enclosing package
         // of the file's `within` clause + each segment of the
-        // drill-in target. Handles the common MSL pattern where a
+        // drill-in target. Handles the common source library pattern where a
         // package-aggregated source uses within-relative type
         // references (e.g. inside `Modelica/Blocks/Continuous.mo`,
         // PID's components reference `Blocks.Math.Gain` rather than
@@ -696,7 +696,7 @@ pub fn import_model_to_diagram_from_ast(
             // `Modelica.Blocks.Examples.Sources.Sinc`,
             // `Modelica.Blocks.Sources.Sinc` (hits — Sources lives next
             // to Examples), `Modelica.Sources.Sinc`. Without this, every
-            // short-form ref in an MSL example silently dropped at
+            // short-form ref in a source-library example silently dropped at
             // conversion (e.g. CompareSincExpSine projecting 0 nodes).
             if let Some(target) = target_class {
                 let mut parts: Vec<&str> = target.split('.').collect();
@@ -752,7 +752,7 @@ pub fn import_model_to_diagram_from_ast(
         //      and every member of `SIunits` / `Units.SI`): scalar
         //      variables aliased to a unit-decorated Real. Detected
         //      via `class_kind == "type"` on the resolved component
-        //      def, with a path-pattern fallback for cold MSL paths
+        //      def, with a path-pattern fallback for cold source library paths
         //      that the indexer hasn't reached yet.
         let is_builtin_scalar = matches!(
             type_name,
@@ -822,12 +822,12 @@ pub fn import_model_to_diagram_from_ast(
 
         // Re-extract the icon at runtime via the unified workspace
         // engine. The pre-baked `crate::index::ClassEntry.icon_graphics` from
-        // `msl_index.json` drops primitives whose `extends` base sits
+        // `library_index.json` drops primitives whose `extends` base sits
         // in a sibling package the indexer's resolver doesn't reach
         // (SpeedSensor extends PartialAbsoluteSensor extends
         // Icons.RoundSensor — only the last hop survives the index
         // in some cases). The workspace engine walks the chain
-        // through rumoca's session, including MSL bases, so both
+        // through rumoca's session, including source library bases, so both
         // views render the same primitives without per-base
         // resolver-lambda plumbing.
         if let Some(def) = component_def.as_mut() {
@@ -1115,7 +1115,7 @@ pub fn import_model_to_diagram_from_ast(
 
 /// Add a synthesised palette entry for a class found in the open
 /// document. Used for short-name resolution of sibling classes that
-/// the MSL palette doesn't know about. Skips classes that don't carry
+/// the source library palette doesn't know about. Skips classes that don't carry
 /// any of the data we'd render — i.e. no decoded `Icon` annotation.
 fn register_local_class(
     out: &mut HashMap<String, crate::index::ClassEntry>,
@@ -1147,8 +1147,8 @@ fn register_local_class(
     };
     // Inheritance-merged Icon via the unified workspace engine.
     // The engine session sees both the active doc (synced via
-    // `drive_engine_sync`) and MSL libraries (bulk-installed by
-    // `drive_msl_bootstrap`), so `extends`-chain walks like
+    // `drive_engine_sync`) and source library libraries (bulk-installed by
+    // `drive_source_bundle_bootstrap`), so `extends`-chain walks like
     // `SpeedSensor → Modelica.Mechanics.Rotational.Icons.RelativeSensor`
     // resolve in one query without panel-side resolver lambdas.
     //
@@ -1161,16 +1161,16 @@ fn register_local_class(
     // skips registration; the next projection (after the sync system
     // catches up) picks it up.
     // Two-tier resolution so the canvas can render local-class icons
-    // even before MSL has been ingested into the workspace engine
+    // even before source library has been ingested into the workspace engine
     // (web boot: ~22 s gap between page load and `EngineBootstrap`).
     //
-    // 1. Engine-merged icon: full `extends` chain walked, MSL bases
+    // 1. Engine-merged icon: full `extends` chain walked, source library bases
     //    resolved. Best output when available.
     // 2. Direct AST extract on this class's own `annotation`: no
     //    inheritance, but ALL primitives the user authored on the
     //    class itself render immediately. The Engine class drawn at
     //    the top of `AnnotatedRocketStage` is exactly this path —
-    //    its `Icon(graphics={...})` is local; no MSL lookup needed.
+    //    its `Icon(graphics={...})` is local; no source library lookup needed.
     //
     // Skip the node only if BOTH resolvers come up empty. Even an
     // icon with zero graphics is preferable to a missing component
@@ -1181,7 +1181,7 @@ fn register_local_class(
     let icon = match (engine_icon, local_icon) {
         // Prefer engine result only when it actually has graphics —
         // otherwise the local AST may carry primitives the engine
-        // walk dropped (typical when MSL bases haven't been ingested
+        // walk dropped (typical when source library bases haven't been ingested
         // yet). Empty engine icons are explicit "no inheritance
         // contribution"; the local annotation fills the gap.
         (Some(eng), _local) if !eng.graphics.is_empty() => Some(eng),
@@ -1239,7 +1239,7 @@ fn register_local_class(
 /// Without this, classes the projector synthesises for the open doc
 /// (Tank/Engine/Airframe and friends) carry an empty ports list, so
 /// `connect()` wires can't find an anchor and disappear from the
-/// canvas. MSL types skip this path — their ports come pre-extracted
+/// canvas. source library types skip this path — their ports come pre-extracted
 /// from the indexer.
 fn extract_local_class_ports(
     class_def: &rumoca_compile::parsing::ast::ClassDef,
@@ -1258,7 +1258,7 @@ fn extract_local_class_ports(
                 ast,
                 // Off-thread projection MUST be cache-only — see
                 // `collect_inherited_components_with` contract.
-                // Synchronous MSL parses inside the projection task
+                // Synchronous source library parses inside the projection task
                 // stall the AsyncCompute pool for tens of seconds.
                 // Misses fall back to defaults; an async warmer
                 // upgrades visuals on the next projection.
@@ -1270,7 +1270,7 @@ fn extract_local_class_ports(
         // Read Placement on the connector declaration to anchor the
         // port at a fixed (x,y) on the icon boundary. Centroid of
         // the placement extent maps to Modelica's (-100..100) per-axis
-        // grid — the same convention used by MSL ports.
+        // grid — the same convention used by source library ports.
         let (px, py) = crate::annotations::extract_placement(&sub.annotation)
             .map(|p| {
                 let cx = (p.transformation.extent.p1.x + p.transformation.extent.p2.x) * 0.5;
@@ -1305,7 +1305,7 @@ fn extract_local_class_ports(
         out.push(crate::visual_diagram::PortDef {
             name: sub_name.clone(),
             connector_type: sub_type.clone(),
-            msl_path: sub_type,
+            library_path: sub_type,
             is_flow: !flow_vars.is_empty(),
             x: px,
             y: py,
@@ -1441,7 +1441,7 @@ fn connector_icon_color(class: &rumoca_compile::parsing::ast::ClassDef) -> Optio
 }
 
 /// Evaluate a Boolean component-condition expression against the
-/// parent class's component defaults. Handles the shapes MSL uses
+/// parent class's component defaults. Handles the shapes source library uses
 /// for `Component X if <cond>` declarations:
 ///   - `Terminal{Bool, "true"|"false"}`            → literal
 ///   - `ComponentReference(<param>)`               → resolve `param`
@@ -1545,7 +1545,7 @@ end CompositeFixture;
     #[test]
     fn composite_slim_slice_projects_component_nodes() {
         let full = COMPOSITE_SOURCE;
-        // Reproduce load_msl_class's slice: within + RocketStage body.
+        // Reproduce load_library_class's slice: within + RocketStage body.
         let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
         let class =
             lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")

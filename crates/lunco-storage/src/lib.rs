@@ -30,8 +30,6 @@
 //! - Stub variants on [`StorageHandle`] for the future backends so
 //!   callers can pattern-match exhaustively when we add them.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use std::path::{Path, PathBuf};
 
@@ -77,7 +75,7 @@ pub enum StorageError {
     #[error("not found")]
     NotFound,
 
-    /// Handle is read-only (MSL libraries, remote snapshots, etc.).
+    /// Handle is read-only (source library libraries, remote snapshots, etc.).
     #[error("handle is read-only")]
     ReadOnly,
 
@@ -466,7 +464,7 @@ pub trait Storage: Send + Sync {
     /// error rather than making a round-trip.
     async fn exists(&self, handle: &StorageHandle) -> bool;
 
-    /// Whether this handle would reject a write (MSL library file,
+    /// Whether this handle would reject a write (source-library file,
     /// read-only FS mount, remote snapshot). Pure advisory — a final
     /// `write` is the ground truth.
     async fn is_writable(&self, handle: &StorageHandle) -> bool;

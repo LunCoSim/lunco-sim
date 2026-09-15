@@ -70,7 +70,7 @@ pub struct CanvasOps<'a> {
     /// no drag-to-connect, no delete-on-key. Pan/zoom/selection
     /// stay fine (those mutate `viewport` / `selection`, not the
     /// authored scene). Surfaced as a [`crate::Canvas::read_only`] field
-    /// that the embedding app flips per tab (e.g. MSL library tabs).
+    /// that the embedding app flips per tab (e.g. source-library tabs).
     pub read_only: bool,
     /// Optional drag-to-grid snap. When `Some`, the default tool
     /// quantises in-flight drag translations to multiples of `step`

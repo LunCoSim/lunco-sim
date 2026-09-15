@@ -11,7 +11,7 @@
 //!
 //! | String form | `ClassRef` form |
 //! |---|---|
-//! | `msl_path:Modelica.Blocks.Examples.PID_Controller` | `ClassRef::msl(["Blocks","Examples","PID_Controller"])` |
+//! | `library_path:Modelica.Blocks.Examples.PID_Controller` | `ClassRef::source("Modelica", ["Blocks","Examples","PID_Controller"])` |
 //! | `bundled://AnnotatedRocketStage.mo#AnnotatedRocketStage.RocketStage` | `ClassRef::bundled(["AnnotatedRocketStage","RocketStage"])` |
 //! | `/abs/path/to/MyModel.mo` | `ClassRef::user_file("/abs/path/to/MyModel.mo", [])` |
 //! | `mem://Untitled1` | `ClassRef::untitled(doc_id, ["Untitled1"])` (needs doc id) |
@@ -20,8 +20,8 @@
 //! walk vs. in-memory map vs. user document registry). The
 //! [`ClassRef::path`] field is the qualified name **within that
 //! library's root** — so `Modelica` is *not* part of the path for an
-//! MSL class. [`ClassRef::qualified`] joins them when callers need
-//! the absolute MSL-style name (e.g. drill-in target for projection,
+//! source library class. [`ClassRef::qualified`] joins them when callers need
+//! the absolute source library-style name (e.g. drill-in target for projection,
 //! display in error messages).
 
 use lunco_doc::DocumentId;
@@ -31,19 +31,17 @@ use std::path::PathBuf;
 /// strategy in the resolver.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Library {
-    /// Modelica Standard Library — `<cache>/msl/Modelica/...` on disk,
-    /// supplemented by the pre-baked `msl_index.json` component
-    /// catalogue.
-    Msl,
+    /// A named source library. The root is the authored top-level package
+    /// name. Storage and cache ownership are resolved by the source-root
+    /// registry and are not part of class identity.
+    Source {
+        /// Top-level Modelica package name.
+        root: String,
+    },
     /// Bundled LunCoSim example shipped in the binary. Source lookup
     /// goes through [`crate::models::get_model`]; metadata comes from
-    /// the same `msl_index.json` (under its `bundled` section).
+    /// the same `library_index.json` (under its `bundled` section).
     Bundled,
-    /// Third-party Modelica library cached on disk by
-    /// `lunco-assets`. `cache_subdir` is the `Assets.toml` `dest`
-    /// (e.g. `"thermofluidstream"`), `root` is the top-level
-    /// package directory inside it (e.g. `"ThermofluidStream"`).
-    ThirdParty { cache_subdir: String, root: String },
     /// A user-opened file on disk (Open File dialog, drag-drop, Twin
     /// folder file). `path` is the canonical filesystem path; the
     /// class identity is `(path, ClassRef::path)`.
@@ -65,8 +63,7 @@ impl Library {
     /// qualified name starts from [`ClassRef::path`] directly.
     pub fn root_name(&self) -> &str {
         match self {
-            Library::Msl => "Modelica",
-            Library::ThirdParty { root, .. } => root,
+            Library::Source { root, .. } => root,
             Library::Bundled | Library::UserFile { .. } | Library::Untitled(_) => "",
         }
     }
@@ -93,12 +90,15 @@ impl ClassRef {
         Self { library, path }
     }
 
-    pub fn msl<I, S>(path: I) -> Self
+    pub fn source<I, S>(root: impl Into<String>, path: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        Self::new(Library::Msl, path.into_iter().map(Into::into).collect())
+        Self::new(
+            Library::Source { root: root.into() },
+            path.into_iter().map(Into::into).collect(),
+        )
     }
 
     pub fn bundled<I, S>(path: I) -> Self
@@ -107,24 +107,6 @@ impl ClassRef {
         S: Into<String>,
     {
         Self::new(Library::Bundled, path.into_iter().map(Into::into).collect())
-    }
-
-    pub fn third_party<I, S>(
-        cache_subdir: impl Into<String>,
-        root: impl Into<String>,
-        path: I,
-    ) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        Self::new(
-            Library::ThirdParty {
-                cache_subdir: cache_subdir.into(),
-                root: root.into(),
-            },
-            path.into_iter().map(Into::into).collect(),
-        )
     }
 
     pub fn user_file<I, S>(path_on_disk: impl Into<PathBuf>, qualified: I) -> Self
@@ -153,11 +135,10 @@ impl ClassRef {
 
     /// Absolute qualified name with the library root prepended.
     ///
-    /// - `ClassRef::msl(["Blocks","Examples","PID_Controller"])` →
+    /// - `ClassRef::source("Modelica", ["Blocks","Examples","PID_Controller"])` →
     ///   `"Modelica.Blocks.Examples.PID_Controller"`.
-    /// - `ClassRef::third_party("thermofluidstream", "ThermofluidStream",
-    ///   ["Boundaries","CreateState"])` →
-    ///   `"ThermofluidStream.Boundaries.CreateState"`.
+    /// - `ClassRef::source("ExternalLibrary", ["Boundaries","CreateState"])` →
+    ///   `"ExternalLibrary.Boundaries.CreateState"`.
     /// - Libraries with empty `root_name()` (`Bundled`, `UserFile`,
     ///   `Untitled`) start the qualified name from `path` directly.
     pub fn qualified(&self) -> String {
@@ -195,14 +176,14 @@ impl ClassRef {
     /// need the in-memory cache to resolve a `DocumentId`).
     ///
     /// Recognised schemes:
-    /// - `msl_path:<qualified>` → MSL or third-party (based on the
-    ///   first qualified segment).
+    /// - `library_path:<qualified>` → a named source library identified by the
+    ///   first qualified segment.
     /// - `bundled://<file>` and `bundled://<file>#<qualified>` →
     ///   [`Library::Bundled`].
     /// - `file:///<abs>` and any absolute `.mo` path → [`Library::UserFile`].
     pub fn parse_tree_id(s: &str) -> Option<Self> {
-        if let Some(qualified) = s.strip_prefix("msl_path:") {
-            return parse_msl_qualified(qualified);
+        if let Some(qualified) = s.strip_prefix("library_path:") {
+            return parse_library_qualified(qualified);
         }
         if let Some(tail) = s.strip_prefix("bundled://") {
             return Some(parse_bundled(tail));
@@ -234,28 +215,14 @@ impl ClassRef {
     }
 }
 
-fn parse_msl_qualified(qualified: &str) -> Option<ClassRef> {
+fn parse_library_qualified(qualified: &str) -> Option<ClassRef> {
     if qualified.is_empty() {
         return None;
     }
     let mut parts = qualified.split('.').map(String::from);
     let head = parts.next()?;
     let tail: Vec<String> = parts.collect();
-    match head.as_str() {
-        "Modelica" => Some(ClassRef::new(Library::Msl, tail)),
-        // Third-party libraries: we don't know the on-disk
-        // `cache_subdir` from the qualified name alone — the
-        // discovery scan owns that mapping. Default to a lowercase
-        // guess; the resolver can override when it has the
-        // authoritative pairing.
-        other => Some(ClassRef::new(
-            Library::ThirdParty {
-                cache_subdir: other.to_lowercase(),
-                root: other.to_string(),
-            },
-            tail,
-        )),
-    }
+    Some(ClassRef::source(head, tail))
 }
 
 fn parse_bundled(tail: &str) -> ClassRef {
@@ -285,10 +252,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn msl_qualified_round_trip() {
-        let c =
-            ClassRef::parse_tree_id("msl_path:Modelica.Blocks.Examples.PID_Controller").unwrap();
-        assert_eq!(c.library, Library::Msl);
+    fn library_qualified_round_trip() {
+        let c = ClassRef::parse_tree_id("library_path:Modelica.Blocks.Examples.PID_Controller")
+            .unwrap();
+        assert_eq!(
+            c.library,
+            Library::Source {
+                root: "Modelica".into()
+            }
+        );
         assert_eq!(c.path, vec!["Blocks", "Examples", "PID_Controller"]);
         assert_eq!(c.qualified(), "Modelica.Blocks.Examples.PID_Controller");
         assert_eq!(c.short_name(), "PID_Controller");
@@ -296,18 +268,17 @@ mod tests {
     }
 
     #[test]
-    fn third_party_msl_path_routes_to_third_party_variant() {
+    fn source_library_path_preserves_root_identity() {
         let c =
-            ClassRef::parse_tree_id("msl_path:ThermofluidStream.Boundaries.CreateState").unwrap();
+            ClassRef::parse_tree_id("library_path:ExternalLibrary.Boundaries.CreateState").unwrap();
         match &c.library {
-            Library::ThirdParty { cache_subdir, root } => {
-                assert_eq!(cache_subdir, "thermofluidstream");
-                assert_eq!(root, "ThermofluidStream");
+            Library::Source { root } => {
+                assert_eq!(root, "ExternalLibrary");
             }
-            other => panic!("expected ThirdParty, got {other:?}"),
+            other => panic!("expected source library, got {other:?}"),
         }
         assert_eq!(c.path, vec!["Boundaries", "CreateState"]);
-        assert_eq!(c.qualified(), "ThermofluidStream.Boundaries.CreateState");
+        assert_eq!(c.qualified(), "ExternalLibrary.Boundaries.CreateState");
     }
 
     #[test]
@@ -379,7 +350,12 @@ mod tests {
 
     #[test]
     fn library_root_short_name_falls_back_to_library() {
-        let c = ClassRef::new(Library::Msl, Vec::new());
+        let c = ClassRef::new(
+            Library::Source {
+                root: "Modelica".into(),
+            },
+            Vec::new(),
+        );
         assert!(c.is_library_root());
         assert_eq!(c.short_name(), "Modelica");
         assert_eq!(c.qualified(), "Modelica");
@@ -401,24 +377,20 @@ mod tests {
 
     #[test]
     fn third_party_qualified_includes_library_root() {
-        let c = ClassRef::third_party(
-            "thermofluidstream",
-            "ThermofluidStream",
-            ["Utilities", "DropOfCommons"],
-        );
-        assert_eq!(c.qualified(), "ThermofluidStream.Utilities.DropOfCommons");
+        let c = ClassRef::source("ExternalLibrary", ["Utilities", "DropOfCommons"]);
+        assert_eq!(c.qualified(), "ExternalLibrary.Utilities.DropOfCommons");
         assert_eq!(c.short_name(), "DropOfCommons");
     }
 
     #[test]
     fn equality_includes_full_library_state() {
-        let a = ClassRef::third_party("foo", "Foo", ["X"]);
-        let b = ClassRef::third_party("foo", "Foo", ["X"]);
-        let c = ClassRef::third_party("bar", "Foo", ["X"]);
+        let a = ClassRef::source("Foo", ["X"]);
+        let b = ClassRef::source("Foo", ["X"]);
+        let c = ClassRef::source("Bar", ["X"]);
         assert_eq!(a, b);
         assert_ne!(
             a, c,
-            "ThirdParty libraries with different cache subdirs must not compare equal"
+            "source libraries with different roots must not compare equal"
         );
     }
 }

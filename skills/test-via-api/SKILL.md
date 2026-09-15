@@ -419,12 +419,12 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
   1. `InspectActiveDoc` → are the components really there in the AST?
      If not, parse failed.
   2. If components exist: their TYPES probably aren't in
-     `local_classes_by_short` or the MSL palette. The diagram-builder
+     `local_classes_by_short` or the source-library palette. The diagram-builder
      registers the target's nested + sibling classes (sibling-pass in
      `panels/canvas_projection.rs`, the `local_classes_by_short`
      registration); connector types need to be in
-     `msl_index.json` (regenerate via
-     `cargo run -p lunco-modelica-core --bin msl_indexer`).
+     `library_index.json` (regenerate via
+     `cargo run -p lunco-modelica-core --bin modelica_library_indexer`).
 - **"Command 'X' not found or not API-accessible"**: the Event isn't
   reflect-registered. Put a shared Modelica-facing payload in
   `lunco-modelica-ui-core`; keep its observer in the owning UI package, give

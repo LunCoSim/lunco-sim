@@ -84,8 +84,8 @@ These tools are always available:
 | `list_bundled` | List embedded `assets/models/*.mo` example models with `bundled://` URIs |
 | `list_open_documents` | List every open document (Modelica / USD / SysML / future kinds) with origin + active flag |
 | `list_twin` | List files in the open Twin folder, paginated, classified by kind |
-| `list_msl` | Paginated, filterable enumeration of Modelica Standard Library classes |
-| `open_uri` | Unified scheme-aware open (`bundled://`, `mem://`, qualified MSL name, fs path) |
+| `list_library` | Paginated, filterable enumeration of admitted Modelica source-library classes |
+| `open_uri` | Unified scheme-aware open (`bundled://`, `mem://`, qualified source-library class, fs path) |
 | `compile_model` | Compile an open document, optionally targeting a specific class (bypasses GUI picker). **Compile-only & idempotent** — never starts a live sim, and skips the build if the model is already compiled & clean (pass `force` to override) |
 | `compile_status` | Read per-doc compile state without triggering compile. Now also reports live run-state: `is_compiled`, `is_compiling`, `paused`, `running`, `stale`, `current_time` |
 | `list_compile_candidates` | List the non-package classes a multi-class doc would let you compile |
@@ -95,7 +95,7 @@ These tools are always available:
 | `GetExperimentResult` | Read a completed **FastRun/RunExperiment** trajectory programmatically: returns `times` + `series` (var → values). Target by `experiment_id`, or `doc` for that doc's latest run. Optional `variables` filter and `max_points` strided downsample (last sample always kept). The programmatic counterpart to the UI's CSV export — call via `execute_command` |
 | `ListRuns` | List experiments (optionally `doc`-filtered), newest first. Each row is self-describing: `experiment_id`, `name`, `state`, `has_result`, plus **`overrides`** (`{name:value}`) and **`bounds`** (`t_start/t_end/dt/tolerance/solver`) so a sweep's runs map back to their inputs. Call via `execute_command` |
 | `set_input` | Push a runtime input value into a compiled model. Returns `{ok}` or structured error listing known input names |
-| `find_model` | Fuzzy search across bundled / Twin / MSL / open docs. Returns ranked URIs with relevance scores |
+| `find_model` | Fuzzy search across bundled / Twin / source libraries / open docs. Returns ranked URIs with relevance scores |
 | `cosim_status` | Snapshot every USD-driven cosim entity (`UsdSourcedCosim`): position, velocity, Modelica state, propagated `force_y`. Probe-the-running-sim alternative to log polling |
 | `load_scene` | Reload (or replace) the active USD scene at runtime. Despawns existing USD prims + cosim wires, force-reads the file from disk, spawns a fresh root. Use after editing a `.usda` to pick up changes without restarting |
 | `possess_vessel` | Take direct control of a vessel — chase camera + keyboard input bound to the target |
@@ -125,7 +125,7 @@ Every op flows through the same `ModelicaOp` undo/redo pipeline the
 canvas drag-and-drop uses, so mutations are undoable and journaled
 identically to UI-driven edits.
 
-The listing tools (`list_*`, `msl_status`) are introduced in spec
+The listing tools (`list_*`) are introduced in spec
 [`032-model-source-listing`](../specs/032-model-source-listing/spec.md).
 They use a generic `ApiQueryProvider` extension point in `lunco-api`, so
 domain crates register their own listings without `lunco-api` taking a
@@ -185,7 +185,7 @@ Commands discovered from the simulation's schema are exposed as typed tools:
 - `teleport_to_surface` - Teleport to surface (target, body_entity)
 - `leave_surface` - Return to orbit (target)
 - `spawn_entity` - Spawn from catalog (target, entry_id, position)
-- `open_example` - Open MSL class (qualified)
+- `open_example` - Open a qualified class from an admitted Modelica source library
 - `auto_arrange_diagram` - Layout diagram (doc)
 - `set_view_mode` - Switch view mode (doc, mode)
 - `set_zoom` - Set zoom level (doc, zoom)

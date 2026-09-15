@@ -8383,6 +8383,7 @@ dependencies = [
  "lunco-tools",
  "lunco-twin",
  "lunco-usd-authoring",
+ "lunco-usd-avian",
  "lunco-usd-avian-lint",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -8502,10 +8503,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "lunco-assets-core",
+ "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-sysml-ast",
  "lunco-twin-journal",
+ "lunco-workspace",
  "serde",
 ]
 
@@ -8514,6 +8518,7 @@ name = "lunco-sysml-ast"
 version = "0.1.0"
 dependencies = [
  "lunco-hash",
+ "lunco-hooks",
  "serde",
  "sysmlv2-semantics",
  "sysmlv2-stdlib",

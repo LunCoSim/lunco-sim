@@ -1,4 +1,4 @@
-//! Component Palette — search-first flat list of instantiable MSL components.
+//! Component Palette — search-first flat list of instantiable source library components.
 //!
 //! Solves the research-flagged pain with the Libraries browser: users
 //! don't want to navigate `Modelica > Electrical > Analog > Basic >
@@ -7,13 +7,13 @@
 //! asset-browser style.
 //!
 //! **What's in the palette**: every *leaf* component from
-//! [`crate::visual_diagram::msl_class_library`] — interfaces and
+//! [`crate::visual_diagram::library_class_library`] — interfaces and
 //! package nodes are excluded. One row per component. Click a row to
 //! instantiate on the active Diagram tab (placement cycles through a
 //! 3-column grid to avoid overlap).
 //!
 //! **Search**: case-insensitive substring match against the component's
-//! display name, full MSL path, category, and description. Top-100
+//! display name, full source library path, category, and description. Top-100
 //! matches rendered; typing narrows quickly. No fuzzy-matching
 //! library is pulled in yet — substring + simple scoring is enough
 //! for ~1-5k components.
@@ -23,7 +23,7 @@ use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::visual_diagram::msl_class_library;
+use crate::visual_diagram::library_class_library;
 
 /// Panel id — registered as a singleton panel, slotted RightInspector.
 pub const PALETTE_PANEL_ID: PanelId = PanelId("modelica_component_palette");
@@ -74,14 +74,15 @@ pub(crate) fn on_place_component_requested(
 /// active category filter chip.
 ///
 /// Everything else (the component catalog) is static, owned by
-/// `msl_class_library()`; we just filter over its slice.
+/// `library_class_library()`; we just filter over its slice.
 #[derive(Resource, Default)]
 pub struct PaletteState {
     /// Current search query — normalized on compare (lowercase).
     pub query: String,
     /// Selected top-level category chip (`None` = "All"). Derived
-    /// from the MSL path's first segment after `Modelica.` — e.g.
-    /// `Modelica.Electrical.…` → `Some("Electrical")`.
+    /// from the qualified source path's second segment — e.g.
+    /// `Modelica.Electrical.…` → `Some("Electrical")` and
+    /// `External.Media.…` → `Some("Media")`.
     pub category: Option<&'static str>,
 }
 
@@ -89,7 +90,7 @@ pub struct PaletteState {
 /// Derived from Modelica's top-level packages; anything that doesn't
 /// match one of these falls under `"Other"`.
 ///
-/// The MSL top-level packages we surface as category chips, in
+/// The source library top-level packages we surface as category chips, in
 /// display order. Chip colours come from the schematic-token set in
 /// `lunco-theme` (see [`category_color`]) — this file no longer
 /// hardcodes palette picks. If you need a new category, add its
@@ -137,7 +138,7 @@ fn category_color(name: &str, theme: &lunco_theme::Theme) -> egui::Color32 {
 /// Should this entry be shown in the instantiable palette?
 ///
 /// Two formal exclusions, both grounded in the Modelica language
-/// (not in MSL folder-naming conventions):
+/// (not in source library folder-naming conventions):
 ///
 /// - **Connectors** are ports, not standalone components — dragging
 ///   one onto a canvas is a category error.
@@ -146,7 +147,7 @@ fn category_color(name: &str, theme: &lunco_theme::Theme) -> egui::Color32 {
 ///   replaces the old `.Interfaces.` path heuristic.
 ///
 /// `.Internal.` (library-private convention) is not filtered — it's
-/// MSL author lore with no formal language marker, and users with a
+/// source library author lore with no formal language marker, and users with a
 /// search box don't typically hit them by accident.
 pub(crate) fn is_instantiable(c: &crate::index::ClassEntry) -> bool {
     if c.partial {
@@ -158,9 +159,9 @@ pub(crate) fn is_instantiable(c: &crate::index::ClassEntry) -> bool {
     )
 }
 
-/// Memoized, instantiable subset of the MSL library plus the
-/// no-query per-category tally. The MSL library is immutable once
-/// loaded ([`msl_class_library`] is a `&'static` cache), so the
+/// Memoized, instantiable subset of the source-library index plus the
+/// no-query per-category tally. The source-library index is immutable once
+/// loaded ([`library_class_library`] is a `&'static` cache), so the
 /// instantiable filter + the default chip counts — previously rebuilt
 /// **every frame** over the whole ~700-class library just to render the
 /// palette header and chips (CQ-208) — run once and are read thereafter.
@@ -188,10 +189,10 @@ fn palette_catalog() -> &'static PaletteCatalog {
     if let Some(c) = CACHE.get() {
         return c;
     }
-    let lib_all = msl_class_library();
+    let lib_all = library_class_library();
     if lib_all.is_empty() {
-        // MSL not loaded yet — return the shared empty catalog and retry
-        // next call (mirrors `msl_class_library`'s own load retry).
+        // source library not loaded yet — return the shared empty catalog and retry
+        // next call (mirrors `library_class_library`'s own load retry).
         return empty();
     }
     let lib: Vec<&'static crate::index::ClassEntry> =
@@ -210,13 +211,12 @@ fn palette_catalog() -> &'static PaletteCatalog {
     CACHE.get().unwrap_or_else(|| empty())
 }
 
-/// Match a component's MSL path to one of our display categories.
-fn category_of(msl_path: &str) -> &'static str {
-    // Strip "Modelica." prefix if present, then take the first
-    // segment before the next dot. Non-Modelica libraries land in
-    // "Other" for now.
-    let after_modelica = msl_path.strip_prefix("Modelica.").unwrap_or(msl_path);
-    let first = after_modelica.split('.').next().unwrap_or("Other");
+/// Match a component's source library path to one of our display categories.
+fn category_of(qualified_path: &str) -> &'static str {
+    // The first segment is the source-root identity. Category labels are
+    // derived from the next segment for every source root; no library name
+    // is treated as the canonical one.
+    let first = qualified_path.split('.').nth(1).unwrap_or("Other");
     for &c in CATEGORIES {
         if c == first {
             return c;
@@ -291,7 +291,7 @@ impl Panel for ComponentPalettePanel {
         // before any scoring or counting so they don't pollute totals,
         // chip counts, or the search results.
         // Instantiable base list + default chip counts come from the
-        // memoized catalog (immutable MSL — built once, not per frame).
+        // memoized catalog (immutable source library — built once, not per frame).
         let catalog = palette_catalog();
         let lib = &catalog.lib;
         let pre_filter_total = catalog.total;

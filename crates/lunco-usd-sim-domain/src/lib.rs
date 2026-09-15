@@ -407,7 +407,7 @@ impl SynthesizerRegistry {
 /// The house split, applied to synthesis: **facts in Rust, rules in rhai.** The
 /// composed graph is read here — membership, connectors, causal edges, the
 /// boundary, the class each member's file declares — and handed to a hook as a
-/// map. What that graph becomes in Modelica is the hook's business: which MSL
+/// map. What that graph becomes in Modelica is the hook's business: which source library
 /// class stands in for a part, whether a fuse is inserted, whether a low-fidelity
 /// variant omits parasitic resistance. None of that is a Rust concern, and none
 /// of it should require a rebuild to change.
@@ -2637,7 +2637,7 @@ pub fn sync_generated_network_documents(
                     .map(str::to_string),
             );
             for root in roots {
-                let _ = handle.ensure_library_root_async(&root);
+                let _ = handle.ensure_source_root_async(&root);
             }
         }
         let document =

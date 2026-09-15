@@ -84,7 +84,7 @@ pub struct ModelDefaults {
 ///
 /// Native: `available_parallelism() - 1`. Wasm: `hardwareConcurrency - 1`,
 /// clamped tighter because each pooled worker is a full second wasm instance
-/// carrying its own copy of the (large) MSL bundle — so concurrency there
+/// carrying its own copy of the (large) source library bundle — so concurrency there
 /// trades real memory, not just CPU. `hardwareConcurrency` is logical cores
 /// (or 0/absent when the browser hides it → fall back to 1).
 fn default_max_parallel() -> usize {
@@ -188,7 +188,7 @@ struct RunnerState {
     /// source edit yields a fresh key; the stored [`ModelIdent`] lets
     /// `set_model_source` evict only the edited model's entries.
     dae_cache: HashMap<u64, (ModelIdent, Arc<Dae>)>,
-    /// Persistent compiler reused across runs, so MSL installs **once** for
+    /// Persistent compiler reused across runs, so source library installs **once** for
     /// the runner (on first source-root admission via `ModelicaCompiler`) instead of
     /// rebuilding a fresh session per run. Behind its **own** lock, not the
     /// `state` mutex: a compile can take seconds, and holding `state` across
@@ -213,8 +213,8 @@ impl Default for RunnerState {
             in_flight: HashSet::new(),
             pending: VecDeque::new(),
             dae_cache: HashMap::new(),
-            // Cheap: `new()` builds an empty session and installs no MSL
-            // (Layer A). MSL lands on the first run that actually needs it.
+            // Cheap: `new()` builds an empty session and installs no source library
+            // (Layer A). source library lands on the first run that actually needs it.
             #[cfg(not(target_arch = "wasm32"))]
             compiler: Arc::new(Mutex::new(crate::ModelicaCompiler::new())),
         }
@@ -732,7 +732,7 @@ fn run_inner(
     // Persistent runner compiler: clone the handle out of `state` (brief
     // lock), then compile under the compiler's OWN lock so the multi-second
     // compile never holds `state` and stall the scheduler / parallel runs.
-    // MSL installs once into this session (lazily) instead of per run.
+    // source library installs once into this session (lazily) instead of per run.
     let compiler_handle = match state.lock() {
         Ok(s) => s.compiler.clone(),
         Err(_) => {
@@ -1746,147 +1746,6 @@ pub fn drain_pending_handles(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Native memory probe (ignored — run explicitly):
-    /// ```text
-    /// cargo test -p lunco-modelica-core mem_probe_rover -- --ignored --nocapture
-    /// ```
-    /// Compiles `RoverThermalModular` and steps `RoverThermalSystem` at its
-    /// full `Tolerance=1e-6 / StopTime=5.1e6 s` annotation, sampling peak RSS
-    /// (`/proc/self/status`). This isolates the *solver's* native memory (no
-    /// Bevy/render/MSL-in-worker) so we can compare it against the wasm 4 GiB
-    /// linear-memory ceiling that traps the same run in-browser. A background
-    /// sampler hard-exits after a wall cap so a never-returning giant
-    /// `step()` can't hang the test; `VmHWM` (kernel peak RSS) is the headline
-    /// number.
-    #[test]
-    #[ignore]
-    fn mem_probe_rover_full() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-        use std::time::{Duration, Instant};
-
-        fn read_kb(key: &str) -> u64 {
-            std::fs::read_to_string("/proc/self/status")
-                .ok()
-                .and_then(|s| {
-                    s.lines()
-                        .find(|l| l.starts_with(key))
-                        .and_then(|l| l.split_whitespace().nth(1))
-                        .and_then(|n| n.parse::<u64>().ok())
-                })
-                .unwrap_or(0)
-        }
-        let mb = |kb: u64| kb as f64 / 1024.0;
-
-        if lunco_assets_core::source_library_root_path("msl", "Modelica").is_none() {
-            eprintln!("[memprobe] SKIP: MSL source root not available locally");
-            return;
-        }
-        let Some(path) = std::env::var_os("LUNCO_MODELICA_MEM_PROBE_MODEL") else {
-            eprintln!("[memprobe] SKIP: set LUNCO_MODELICA_MEM_PROBE_MODEL to the model source");
-            return;
-        };
-        let path = std::path::PathBuf::from(path);
-        let bytes = lunco_storage::read_file_sync(&path).expect("read model source");
-        let src = String::from_utf8(bytes).expect("model source is UTF-8");
-        let t0 = Instant::now();
-        // Eagerly install the FULL pre-parsed MSL bundle (the worker's path),
-        // so connector types like `HeatPort_a`/`RealOutput` resolve as real
-        // connectors — the lazy on-demand hook returns stubs that `connect()`
-        // rejects for this connector-heavy model.
-        let mut compiler = crate::ModelicaCompiler::new();
-        let report = compiler.load_source_root(
-            "Modelica",
-            &lunco_assets_core::source_library_dir("msl"),
-        );
-        println!(
-            "[memprobe] MSL installed: {} docs from {}",
-            report.inserted_file_count, report.source_root_path
-        );
-        // `name` is the CLASS to instantiate (the file is a `package
-        // LunarRover` holding it).
-        let compiled = compiler
-            .compile_str_multi(
-                "LunarRover.RoverThermalSystem",
-                &src,
-                "RoverThermalModular.mo",
-                &[],
-            )
-            .expect("compile LunarRover.RoverThermalSystem");
-        println!(
-            "[memprobe] compiled in {:.1}s; VmRSS={:.0}MB VmHWM={:.0}MB",
-            t0.elapsed().as_secs_f64(),
-            mb(read_kb("VmRSS:")),
-            mb(read_kb("VmHWM:"))
-        );
-
-        let bounds = RunBounds {
-            t_start: 0.0,
-            t_end: 5_102_784.0,
-            dt: None,
-            n_intervals: None,
-            tolerance: Some(1e-6),
-            solver: None,
-            h0: None,
-            runtime: lunco_experiments::RuntimeMode::Batch,
-        };
-        let opts = stepper_options_from_bounds(&bounds).expect("solver resolves for this model");
-        let mut stepper =
-            crate::simulation_session::interactive(&compiled.dae, opts).expect("build stepper");
-        let step_dt =
-            crate::sim_target::resolve_step_dt(0.0, bounds.t_end, bounds.dt, bounds.n_intervals);
-        println!(
-            "[memprobe] stepper ready; step_dt={step_dt:.1}s; VmRSS={:.0}MB",
-            mb(read_kb("VmRSS:"))
-        );
-
-        let stop = Arc::new(AtomicBool::new(false));
-        let s2 = stop.clone();
-        let start = Instant::now();
-        let sampler = std::thread::spawn(move || {
-            let cap = Duration::from_secs(90);
-            loop {
-                std::thread::sleep(Duration::from_millis(1000));
-                println!(
-                    "[memprobe] t_wall={:4.0}s VmRSS={:6.0}MB VmHWM(peak)={:6.0}MB",
-                    start.elapsed().as_secs_f64(),
-                    mb(read_kb("VmRSS:")),
-                    mb(read_kb("VmHWM:"))
-                );
-                if s2.load(Ordering::SeqCst) || start.elapsed() > cap {
-                    println!(
-                        "[memprobe] === PEAK VmHWM={:.0}MB (stop={} cap_hit={}) ===",
-                        mb(read_kb("VmHWM:")),
-                        s2.load(Ordering::SeqCst),
-                        start.elapsed() > cap
-                    );
-                    std::process::exit(0);
-                }
-            }
-        });
-
-        while stepper.time() < bounds.t_end {
-            if let Err(e) = stepper.step(step_dt) {
-                println!("[memprobe] step err at sim_t={:.0}: {e:?}", stepper.time());
-                break;
-            }
-            println!(
-                "[memprobe] sim_t={:.0}/{:.0} VmRSS={:.0}MB",
-                stepper.time(),
-                bounds.t_end,
-                mb(read_kb("VmRSS:"))
-            );
-        }
-        stop.store(true, Ordering::SeqCst);
-        println!(
-            "[memprobe] FINAL sim_t={:.0} VmRSS={:.0}MB VmHWM(peak)={:.0}MB",
-            stepper.time(),
-            mb(read_kb("VmRSS:")),
-            mb(read_kb("VmHWM:"))
-        );
-        let _ = sampler.join();
-    }
 
     // ── Step 2: settings / cap resolution ──
 

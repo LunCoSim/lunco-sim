@@ -5,8 +5,6 @@
 //! does not depend on `bevy_egui`, `egui_dock`, a renderer, a window, storage,
 //! or application services.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 mod menu;
 mod panel;

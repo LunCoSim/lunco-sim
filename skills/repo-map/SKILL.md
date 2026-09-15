@@ -53,7 +53,7 @@ verified” or “externally blocked”.
 |---|---|---|
 | Ground physics / rovers / USD scenes / Modelica / visual evidence | **`luncosim`** | The production scene/runtime binary; use it for scene tests, screenshots, and visual acceptance. |
 | Numeric headless simulation / CI automation | **`luncosim-server`** | The same simulation through `run_headless()`, with no GUI evidence; use it for numeric/API automation. |
-| Author / compile / simulate Modelica models, browse MSL | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
+| Author / compile / simulate Modelica models, browse source libraries | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
 | Download / verify / process external assets | **`lunco-assets` + `lunco-assets-{transport,download,processing}`** | `-- download\|list\|process`; explicit workers/CLI compose shared transport, atomic installation, and native processors. |
 
 Launch the installed production executable, or explicitly select a checkout
@@ -83,9 +83,9 @@ export LUNICA_BIN="${LUNICA_BIN:-lunica}"
 ```
 
 **Utility / dev bins** (all in `lunco-modelica-core` unless noted): `modelica_run`
-(headless Modelica CLI → CSV), `msl_indexer` (rebuild the MSL search index — re-run
-after an MSL change), `lunica_worker` (wasm compile worker, bundled not run),
-`build_msl_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`, transport smoke
+(headless Modelica CLI → CSV), `modelica_library_indexer` (rebuild the Modelica-library search index — re-run
+after a source-library change), `lunica_worker` (wasm compile worker, bundled not run),
+`build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`, transport smoke
 test). Authored luncosim behavior tests run through `luncosim test` plus their Rhai scenarios.
 Details:
 [`docs/apps/README.md`](../../docs/apps/README.md).

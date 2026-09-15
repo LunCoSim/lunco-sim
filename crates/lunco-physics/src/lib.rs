@@ -68,9 +68,9 @@ pub use spatial::{GridSpatialQuery, GridSpatialQueryState};
 pub use support::{
     evaluate_initialization_policy, PhysicsInitializationExternalValidator,
     PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
-    PhysicsInitializationSubject, PhysicsJointDetachSet, PhysicsJointLink, PhysicsJointPending,
-    PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupportSet,
-    PHYSICS_INITIALIZATION_HOOK_PREFIX, STRICT_AUTHORED_INITIALIZATION_POLICY,
+    PhysicsInitializationSubject, PhysicsJointDetachRequested, PhysicsJointDetachSet,
+    PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact, PhysicsSupportFootprint,
+    PhysicsSupportSet, PHYSICS_INITIALIZATION_HOOK_PREFIX, STRICT_AUTHORED_INITIALIZATION_POLICY,
 };
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.

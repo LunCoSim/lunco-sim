@@ -354,10 +354,10 @@ pub struct CanvasDocState {
     /// instead of running fit-to-content, so a reopened diagram looks
     /// exactly as it did at exit. `None` for normally-opened docs.
     pub pending_view: Option<lunco_canvas::Viewport>,
-    /// One-shot re-projection request. Set on every open tab when the MSL
+    /// One-shot re-projection request. Set on every open tab when the source library
     /// standard library finishes loading (web fetches + decodes it
     /// asynchronously a few seconds after boot). A diagram projected *before*
-    /// MSL was resident draws its standard-library components — `FixedHeatFlow`,
+    /// source library was resident draws its standard-library components — `FixedHeatFlow`,
     /// `Gain`, … — as blank placeholder boxes, because neither icon source
     /// (pre-baked index / engine session) had the class yet. This flag forces
     /// one in-place re-projection so those icons resolve, **without** resetting
@@ -483,7 +483,7 @@ impl CanvasDiagramState {
     }
 
     /// Mark every document-bound tab for a one-shot
-    /// re-projection. Called when the MSL standard library becomes resident so
+    /// re-projection. Called when the source library standard library becomes resident so
     /// diagrams projected before its icons were available re-resolve them
     /// (otherwise standard-library components stay as blank boxes until the
     /// source is next edited). Re-projects in place — no camera reset.
@@ -844,7 +844,7 @@ pub enum ContextMenuTarget {
 
 // ─── Panel ─────────────────────────────────────────────────────────
 
-// ─── MSL package tree (for nested add-component menu) ──────────────
+// ─── source library package tree (for nested add-component menu) ──────────────
 
 // ─── Context-menu renderers ────────────────────────────────────────
 
@@ -909,17 +909,17 @@ pub(super) fn render_target_ctx(
 // ─── Drill-in loading overlay ──────────────────────────────────────
 
 /// SI unit suffix for the most common `Modelica.Units.SI.*` types used
-/// by MSL Mechanics / Electrical / Blocks. Returned string is appended
+/// by source library Mechanics / Electrical / Blocks. Returned string is appended
 /// to `%paramName` substitutions so the canvas matches OMEdit's
 /// "value + unit" presentation (`J=2 kg.m2`, `c=1e4 N.m/rad`, …).
 ///
 /// TODO: replace with proper type resolution. The authoritative source
 /// is the type's declaration — `type Torque = Real(unit="N.m")` — not a
-/// hand-maintained table. Plumb `unit` through `msl_indexer` (resolve
+/// hand-maintained table. Plumb `unit` through `modelica_library_indexer` (resolve
 /// `comp.type_name` via scope chain + `class_cache`, walk the
 /// `extends Real(unit=...)` modification) so `ParamDef.unit` is
 /// populated from source. Once that lands, drop this fn and read
-/// `p.unit` directly. Stopgap covers the high-frequency MSL types so
+/// `p.unit` directly. Stopgap covers the high-frequency source library types so
 /// the PID example matches OMEdit; user-defined SI types (e.g.
 /// `type Pressure = Real(unit="Pa")` in user models) fall through to
 /// the bare value until the proper resolver is in.
@@ -962,9 +962,9 @@ pub(super) fn si_unit_suffix(param_type: &str) -> Option<&'static str> {
 /// Step is in Modelica world units (not screen pixels) so the visible
 /// grid spacing stays constant across zooms. Typical choices for the
 /// standard `{{-100,-100},{100,100}}` diagram coord system:
-///   * `2` — fine (matches common MSL placement granularity)
+///   * `2` — fine (matches common source library placement granularity)
 ///   * `5` — medium
-///   * `10` — coarse (matches typical integer placements in MSL)
+///   * `10` — coarse (matches typical integer placements in source library)
 #[derive(bevy::prelude::Resource)]
 pub struct CanvasSnapSettings {
     pub enabled: bool,
@@ -974,7 +974,7 @@ pub struct CanvasSnapSettings {
 impl Default for CanvasSnapSettings {
     fn default() -> Self {
         // On by default. Step = 5 Modelica units — the OMEdit
-        // default and the value most MSL example placements are
+        // default and the value most source library example placements are
         // authored to (common placement extents are multiples of 5
         // or 10). Fine enough to reach typical target positions,
         // coarse enough that every drag produces a visibly

@@ -28,7 +28,7 @@ SubscribeTelemetry           │ "stream values to me"     │ already exists
 
 Today an AI agent can compile, pause, resume, and reset a Modelica model, and subscribe to a telemetry stream — but it has no way to ask the model "what inputs do you accept?", no way to push a runtime value into one of those inputs, and no way to take a one-shot snapshot of current variable values without committing to a streaming subscription. The information exists internally — `ast_extract::collect_inputs_with_defaults_from_classes` walks every input declaration, the simulation worker accepts input updates between steps, the stepper carries the current state vector — but none of it is reachable through the API. The agent therefore cannot run the loop the workbench is built for: tweak a knob, observe the effect, decide the next action.
 
-There is also no fuzzy-search across model sources — the agent has to call `list_bundled`, `list_twin`, and `list_msl` and grep client-side to translate "Annotated Rocket Engine" (a human description) into `bundled://AnnotatedRocketStage.mo` (an opener). For a single discovery step at the start of every workflow this is wasteful and error-prone.
+There is also no fuzzy-search across model sources — the agent has to call `list_bundled`, `list_twin`, and `list_library` and grep client-side to translate "Annotated Rocket Engine" (a human description) into `bundled://AnnotatedRocketStage.mo` (an opener). For a single discovery step at the start of every workflow this is wasteful and error-prone.
 
 ## User Scenarios & Testing
 
@@ -46,7 +46,7 @@ So that I can resolve "Annotated Rocket Engine" to `bundled://AnnotatedRocketSta
 
 1. **Given** the bundled examples include `RocketEngine.mo` and `AnnotatedRocketStage.mo`, **When** I call `find_model("rocket")`, **Then** both appear in the response with their `bundled://` URIs and a relevance score.
 2. **Given** a Twin is open containing `models/rover.mo`, **When** I call `find_model("rover")`, **Then** the file appears with its absolute path as URI and a `source: "twin"` tag.
-3. **Given** I call `find_model("PID")`, **When** the MSL library is loaded, **Then** results include `Modelica.Blocks.Continuous.PID` and any examples named `*.PID*` from MSL.
+3. **Given** I call `find_model("PID")`, **When** a source library containing it is loaded, **Then** results include `Modelica.Blocks.Continuous.PID` and any examples named `*.PID*` from that source library.
 4. **Given** an empty query, **When** I call `find_model("")`, **Then** I receive an `ApiResponse::Error` (do not return the entire universe).
 
 ---
@@ -184,7 +184,7 @@ So that I can write the workflow as a script and run it under CI without the UI 
 
 ### Functional Requirements
 
-- **FR-001**: `find_model(query: String)` MUST search across bundled, twin, MSL, and currently-open documents in a single call, returning ranked hits with a stable URI per hit and a numeric relevance score. The API MUST reject empty queries.
+- **FR-001**: `find_model(query: String)` MUST search across bundled, twin, admitted source libraries, and currently-open documents in a single call, returning ranked hits with a stable URI per hit and a numeric relevance score. The API MUST reject empty queries.
 - **FR-002**: `describe_model(doc_id)` MUST return `{inputs, parameters, outputs}`, each entry carrying at minimum `name`, `type`, `default` (when present), `bounds` (when declared in the source), and `description` (when annotated). Data MUST come from the AST, not the running stepper, so it is available before compile.
 - **FR-003**: `set_input(doc_id, name, value)` MUST forward to the existing simulation worker's input-update path, with last-writer-wins squashing per name. It MUST return `EntityNotFound` for unknown `doc_id`, and a named error for unknown `name` or out-of-bounds `value`.
 - **FR-004**: `snapshot_variables(doc_id, names?)` MUST return current values for the requested names (or all published variables when `names` is omitted), plus the simulation time `t` of the last completed step. Unknown names MUST be silently omitted.
@@ -193,7 +193,7 @@ So that I can write the workflow as a script and run it under CI without the UI 
 
 ### Key Entities
 
-- **`FindModelProvider` (new)**: An `ApiQueryProvider` that aggregates the four sources, applies fuzzy-match scoring, and emits a unified ranked list. Implementation should live in `lunco-modelica-core` initially (reuses the bundled + MSL indexes) but extension points allow other domains (USD, SysML) to contribute search results in the future.
+- **`FindModelProvider` (new)**: An `ApiQueryProvider` that aggregates the four sources, applies fuzzy-match scoring, and emits a unified ranked list. Implementation should live in `lunco-modelica-core` initially (reuses the bundled + source-library indexes) but extension points allow other domains (USD, SysML) to contribute search results in the future.
 - **`DescribeModelProvider` (new)**: An `ApiQueryProvider` that takes a `doc_id`, looks up the `ModelicaDocument`, runs the AST extractors that already exist (`collect_inputs_with_defaults_from_classes`, `collect_parameter_bounds_from_classes`, `collect_descriptions_from_classes`), and projects the result to JSON.
 - **`SetInputCommand` (new Reflect Event)**: A fire-and-forget command in the existing typed-command style. Forwards to the simulation worker's `UpdateInputs` channel, reusing the squashing logic the worker already implements for live parameter updates.
 - **`SnapshotVariablesProvider` (new `ApiQueryProvider`)**: Reads the current state vector held by the worker thread for `doc_id`, projects the requested names to JSON. Returns an empty payload (with `t: null`) if the doc has no compiled stepper yet.
@@ -203,7 +203,7 @@ So that I can write the workflow as a script and run it under CI without the UI 
 ## Success Criteria
 
 - **SC-001**: The User Story 5 transcript runs to completion in `<5 s` against a warmed-up workbench (build + first compile excluded).
-- **SC-002**: `find_model` returns in `<200 ms` even with the full MSL index (~2500 classes) loaded — fuzzy match must scale.
+- **SC-002**: `find_model` returns in `<200 ms` with a large source-library index loaded — fuzzy match must scale.
 - **SC-003**: `describe_model` returns valid data for every bundled model (`AnnotatedRocketStage`, `RC_Circuit`, `BouncyBall`, …) without compile.
 - **SC-004**: `set_input` followed by `snapshot_variables` reflects the new value within `≤2 sim steps`.
 - **SC-005**: The workflow is reproducible without UI — no test step depends on a render frame.
@@ -221,7 +221,7 @@ So that I can write the workflow as a script and run it under CI without the UI 
 
 - The simulation worker already supports between-step input updates (verified — `UpdateParameters` exists in `crates/lunco-modelica-core/src/lib.rs` and the worker squashes them).
 - AST input/parameter extraction already returns enough metadata (verified — `ast_extract::collect_*` functions return name, default, bounds, description).
-- MSL search is acceptable as a substring match initially; better ranking (token-overlap, classname-prefix preference) is an iteration on `FindModelProvider`, not a re-architecture.
+- Source-library search is acceptable as a substring match initially; better ranking (token-overlap, classname-prefix preference) is an iteration on `FindModelProvider`, not a re-architecture.
 
 ## Implementation Phases
 

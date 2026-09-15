@@ -6,8 +6,7 @@
 //! projections rather than owning the upstream model directly, so UI, tests,
 //! and Rhai can share one stable read-side contract.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
+pub mod lint_facts;
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -664,32 +663,50 @@ fn parse_block_fields(block: &str) -> BlockFields {
             if !text.is_empty() {
                 fields.documentation.push(text.to_owned());
             }
-        } else if let Some(rest) = line.strip_prefix("subject ") {
-            let rest = rest.trim().trim_end_matches(';').trim();
-            let (name, type_name) = rest
-                .split_once(':')
-                .map(|(name, ty)| (name.trim(), Some(ty.trim().to_owned())))
-                .unwrap_or((rest, None));
-            if !name.is_empty() {
-                fields.subjects.push(SysmlSubject {
-                    name: name.to_owned(),
-                    type_name,
-                });
-            }
-        } else if let Some(rest) = line.strip_prefix("verify ") {
-            let target = rest.trim().trim_end_matches(';').trim();
-            if !target.is_empty() {
-                fields.verifies.push(target.to_owned());
-            }
-        } else if let Some(rest) = line.strip_prefix("satisfy ") {
-            let target = rest.trim().trim_end_matches(';').trim();
-            if !target.is_empty() {
-                fields.satisfies.push(target.to_owned());
-            }
-        } else if let Some(rest) = line.strip_prefix("realize ") {
-            let target = rest.trim().trim_end_matches(';').trim();
-            if !target.is_empty() {
-                fields.realizations.push(target.to_owned());
+            continue;
+        }
+
+        // SysML permits short usages such as
+        // `requirement r : R { subject vehicle : Rover; }`.  The old
+        // line-prefix parser only saw a field when the author put it on its
+        // own line, which made the semantic report look clean while dropping
+        // the subject/verify links. Split statements at their semicolon and
+        // discard the declaration prefix before interpreting the field.
+        for statement in line.split(';') {
+            let statement = statement
+                .split_once('{')
+                .map(|(_, tail)| tail)
+                .unwrap_or(statement)
+                .trim()
+                .trim_end_matches('}')
+                .trim();
+            if let Some(rest) = statement.strip_prefix("subject ") {
+                let rest = rest.trim();
+                let (name, type_name) = rest
+                    .split_once(':')
+                    .map(|(name, ty)| (name.trim(), Some(ty.trim().to_owned())))
+                    .unwrap_or((rest, None));
+                if !name.is_empty() {
+                    fields.subjects.push(SysmlSubject {
+                        name: name.to_owned(),
+                        type_name,
+                    });
+                }
+            } else if let Some(rest) = statement.strip_prefix("verify ") {
+                let target = rest.trim();
+                if !target.is_empty() {
+                    fields.verifies.push(target.to_owned());
+                }
+            } else if let Some(rest) = statement.strip_prefix("satisfy ") {
+                let target = rest.trim();
+                if !target.is_empty() {
+                    fields.satisfies.push(target.to_owned());
+                }
+            } else if let Some(rest) = statement.strip_prefix("realize ") {
+                let target = rest.trim();
+                if !target.is_empty() {
+                    fields.realizations.push(target.to_owned());
+                }
             }
         }
     }
@@ -744,6 +761,28 @@ mod tests {
     fn source_revision_is_preserved() {
         let analysis = SysmlAnalysis::build([("a.sysml", "part def A {}")], false, 42);
         assert_eq!(analysis.source_revision(), 42);
+    }
+
+    #[test]
+    fn inline_requirement_usage_fields_are_projected() {
+        let analysis = SysmlAnalysis::from_files([(
+            "inline.sysml",
+            "package Example { requirement def R {} requirement r : R { subject vehicle : Rover; } verification def V { subject vehicle : Rover; verify r; } }",
+        )]);
+        let usage = analysis
+            .requirements()
+            .iter()
+            .find(|record| record.element.qualified_name.ends_with("::r"))
+            .expect("inline requirement usage");
+        assert_eq!(usage.subjects.len(), 1);
+        assert_eq!(usage.subjects[0].name, "vehicle");
+        let verification = analysis
+            .verifications()
+            .iter()
+            .find(|record| record.element.qualified_name.ends_with("::V"))
+            .expect("inline verification case");
+        assert_eq!(verification.subjects.len(), 1);
+        assert_eq!(verification.verifies, ["r"]);
     }
 
     #[test]

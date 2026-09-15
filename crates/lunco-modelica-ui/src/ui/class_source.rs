@@ -1,13 +1,13 @@
 //! Unified "qualified class name → source text" resolver.
 //!
 //! Single source-of-truth for *where a class's source lives*, across
-//! every backend the workbench knows: the MSL / third-party index, the
+//! every backend the workbench knows: the source library / third-party index, the
 //! filesystem library roots, already-open documents, and the embedded
 //! bundled examples.
 //!
 //! Before this, each consumer that needed a class's source *by name*
 //! reimplemented its own subset of those backends. The duplicate path
-//! knew only the MSL index, so duplicating a bundled composite
+//! knew only the source library index, so duplicating a bundled composite
 //! (`AnnotatedRocketStage.RocketStage`) produced a "could not locate"
 //! comment document that rendered as "(no classes yet)". Routing every
 //! by-name source lookup through here means a new backend (or a fix
@@ -29,7 +29,7 @@ pub(crate) struct ResolvedClassSource {
     /// Full source of the file / document that contains the class.
     pub source: String,
     /// On-disk path the source was read from, when it came from a file
-    /// backend (MSL, third-party, filesystem library). `None` for
+    /// backend (source library, third-party, filesystem library). `None` for
     /// in-memory backends (open documents, bundled examples). Lets
     /// callers reuse the content-hash span cache via
     /// [`crate::ui::duplicate::extract_class_spans_via_path`] and
@@ -67,11 +67,11 @@ pub(crate) fn bundled_source_for(qualified: &str) -> Option<&'static str> {
 
 /// Resolve `qualified` to its source text across all backends, in the
 /// same priority order the drill-in path uses for *paths*:
-/// indexed MSL/third-party → filesystem library roots → open documents
+/// indexed source library/third-party → filesystem library roots → open documents
 /// → bundled examples. Returns `None` only when no backend knows the
 /// class.
 pub(crate) fn resolve_class_source(world: &World, qualified: &str) -> Option<ResolvedClassSource> {
-    // 1) MSL / third-party. The prebuilt palette index is the fast path;
+    // 1) source library / third-party. The prebuilt palette index is the fast path;
     //    `locate_library_file` covers extra libraries not in that index.
     if let Some(path) = crate::library_fs::resolve_class_path_indexed(qualified)
         .or_else(|| crate::library_fs::locate_library_file(qualified))

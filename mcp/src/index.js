@@ -159,8 +159,8 @@ const STATIC_TOOLS = [
     },
   },
   {
-    name: 'list_msl',
-    description: 'List MSL classes with cursor-based pagination and filters. The MSL has ~2500 entries — use filters to narrow. Returns `{items, count, total_matched, next_cursor}`. Pass `next_cursor` back as `cursor` for the next page.',
+    name: 'list_library',
+    description: 'List classes from the admitted Modelica source libraries with cursor-based pagination and filters. Use a qualified-name prefix to narrow the result. Returns `{items, count, total_matched, next_cursor}`. Pass `next_cursor` back as `cursor` for the next page.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -181,7 +181,7 @@ const STATIC_TOOLS = [
   // ── Live model interaction (spec 033 P1 + P2 + P3) ────────────────────
   {
     name: 'find_model',
-    description: "Fuzzy search across bundled examples, the active Twin's files, the Modelica Standard Library, and currently-open documents. Returns ranked hits with canonical URIs you can pass to `open_uri`. Scoring: 1.0 exact label, 0.9 prefix, 0.7 token-boundary, 0.5 substring, 0.3 description-only. Empty `query` is rejected.",
+    description: "Fuzzy search across bundled examples, admitted Modelica source libraries, the active Twin's files, and currently-open documents. Returns ranked hits with canonical URIs you can pass to `open_uri`. Scoring: 1.0 exact label, 0.9 prefix, 0.7 token-boundary, 0.5 substring, 0.3 description-only. Empty `query` is rejected.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -280,7 +280,7 @@ const STATIC_TOOLS = [
   },
   {
     name: 'open_uri',
-    description: 'Unified open command — dispatches on the URI scheme. Accepts `bundled://Filename.mo` (embedded example), `mem://Name` (re-focus existing Untitled tab), a dot-separated qualified Modelica name (`Modelica.Blocks.Examples.PID_Controller`, opened as MSL example), or a filesystem path. Use this in preference to `OpenFile`/`OpenClass`.',
+    description: 'Unified open command — dispatches on the URI scheme. Accepts `bundled://Filename.mo` (embedded example), `mem://Name` (re-focus existing Untitled tab), a dot-separated qualified Modelica class name from an admitted source library, or a filesystem path. Use this in preference to `OpenFile`/`OpenClass`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -813,7 +813,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'list_bundled':
       case 'list_open_documents':
       case 'list_twin':
-      case 'list_msl':
+      case 'list_library':
       case 'list_compile_candidates':
       case 'compile_status':
       case 'get_document_source':
@@ -830,7 +830,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           list_bundled: 'ListBundled',
           list_open_documents: 'ListOpenDocuments',
           list_twin: 'ListTwin',
-          list_msl: 'ListMsl',
+          list_library: 'ListLibrary',
           list_compile_candidates: 'ListCompileCandidates',
           compile_status: 'CompileStatus',
           get_document_source: 'GetDocumentSource',

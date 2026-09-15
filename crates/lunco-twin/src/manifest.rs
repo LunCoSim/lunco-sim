@@ -212,8 +212,8 @@ pub struct ModelicaManifest {
     pub paths: Vec<PathBuf>,
 
     /// Additional Modelica libraries. Relative paths are resolved from the
-    /// Twin root; `@bundled:msl` names the application's bundled MSL and is
-    /// already owned by the standard-library source-root pipeline.
+    /// Twin root; `@bundled:source-bundle` names the application's packaged
+    /// source bundle and is already owned by the generic source-root pipeline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub externals: Vec<ModelicaExternal>,
 }
@@ -239,7 +239,7 @@ pub struct ModelicaExternal {
     pub name: String,
 
     /// Absolute path, Twin-relative path, or a supported bundled-library
-    /// identifier such as `@bundled:msl`.
+    /// identifier such as `@bundled:source-bundle`.
     pub path: PathBuf,
 }
 
@@ -616,8 +616,8 @@ mod tests {
             modelica: Some(ModelicaManifest {
                 paths: vec![".".into()],
                 externals: vec![ModelicaExternal {
-                    name: "MSL".into(),
-                    path: "@bundled:msl".into(),
+                    name: "source library".into(),
+                    path: "@bundled:source-bundle".into(),
                 }],
             }),
             journal: Some(JournalManifest { persist: true }),

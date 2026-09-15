@@ -65,6 +65,7 @@ pub(crate) fn usd_physics_facts_with_control_info(
     let (bindings, info) = control_binding_facts(view);
     if let H::Map(entries) = &mut facts {
         entries.push(("runtime_connections".to_string(), H::Array(Vec::new())));
+        entries.push(("runtime_joints".to_string(), H::Array(Vec::new())));
         entries.push(("control_bindings".to_string(), H::Array(bindings)));
     }
     (facts, info)
@@ -298,6 +299,37 @@ fn live_runtime_connection_facts(
     facts
 }
 
+/// Validate the projected joint lifecycle against the one generic detach
+/// marker. The Avian bridge owns the evidence; this layer only converts it to
+/// the shared Rhai fact shape so the authored policy decides severity/wording.
+fn live_runtime_joint_facts(
+    world: &World,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+) -> Vec<H> {
+    lunco_usd_avian::runtime_joint_facts(world, stage_id)
+        .into_iter()
+        .map(|joint| {
+            H::map([
+                ("entity_bits", H::Int(joint.entity_bits as i64)),
+                (
+                    "subject",
+                    H::str(
+                        joint
+                            .path
+                            .unwrap_or_else(|| format!("entity:{}", joint.entity_bits)),
+                    ),
+                ),
+                ("linked", H::Bool(joint.linked)),
+                ("pending", H::Bool(joint.pending)),
+                ("native", H::Bool(joint.native)),
+                ("graph", H::Bool(joint.graph)),
+                ("graph_available", H::Bool(joint.graph_available)),
+                ("detach_requested", H::Bool(joint.detach_requested)),
+            ])
+        })
+        .collect()
+}
+
 /// Run the USD policy over authored facts plus the live runtime facts.
 ///
 /// Rust supplies evidence; Rhai owns finding policy and user-facing wording.
@@ -317,6 +349,10 @@ fn lint_stage_with_runtime(
         } else {
             entries.push(("runtime_connections".to_string(), runtime));
         }
+        entries.push((
+            "runtime_joints".to_string(),
+            H::Array(live_runtime_joint_facts(world, stage_id)),
+        ));
     }
     lunco_lint::run_lint(lunco_usd_avian_lint::USD_LINT_DOMAIN, facts)
 }

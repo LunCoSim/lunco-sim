@@ -316,7 +316,7 @@ Purpose: study and tune an individual subsystem model. This is the
 | Slot | Default content |
 |------|-----------------|
 | Activity | Subsystems (active) |
-| Side browser | Twin panel (Modelica section: MSL + Bundled Examples + Workspace), Files panel |
+| Side browser | Twin panel (Modelica section: source libraries + Bundled Examples + Workspace), Files panel |
 | Right | Modelica Inspector (params, variables), Component Palette |
 | Bottom | Plots (time series), Console, Diagnostics |
 | Center overlay (optional) | Diagram / Code editor (when a model is open) |

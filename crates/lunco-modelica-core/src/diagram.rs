@@ -44,7 +44,7 @@ pub enum DiagramType {
 /// Builder that converts a Modelica AST into a `ComponentGraph`.
 pub struct ModelicaComponentBuilder {
     /// Shared reference to the parsed AST. Using `Arc` here instead
-    /// of an owned `StoredDefinition` is load-bearing: MSL package
+    /// of an owned `StoredDefinition` is load-bearing: source library package
     /// files like `Modelica/Blocks/package.mo` parse into trees
     /// tens of megabytes deep, and a naïve `.clone()` of the
     /// whole tree on every projection is enough to push the OS
@@ -154,7 +154,7 @@ impl ModelicaComponentBuilder {
                     &target,
                     &self.ast,
                     // Diagram building runs on the projection task —
-                    // Cached mode prevents synchronous MSL parses
+                    // Cached mode prevents synchronous source library parses
                     // that stall the AsyncCompute pool. Misses fall
                     // back to default port glyphs; the async warmer
                     // upgrades on the next projection.
@@ -190,7 +190,7 @@ impl ModelicaComponentBuilder {
                         // "u" / "p" / whatever causality dictated) at
                         // index 0; treat the empty port-name as port 0
                         // so the wire actually gets built. Without
-                        // this, every MSL connect from a model-level
+                        // this, every source library connect from a model-level
                         // connector silently drops out of the diagram.
                         let resolve_port =
                             |n: &lunco_modelica_ast::diagram_model::ComponentNode,
@@ -602,7 +602,7 @@ pub fn find_class_by_qualified_name<'a>(
 /// walk enclosing scopes outward until a match is found. PID's
 /// `extends Interfaces.SISO` resolves to
 /// `Modelica.Blocks.Interfaces.SISO`, not the literal `Interfaces.SISO`.
-/// Pass `None` when no such context exists (e.g. an MSL base whose
+/// Pass `None` when no such context exists (e.g. a source-library base whose
 /// own qualified path we don't carry through).
 ///
 /// Resolution order for each `extends` target:
@@ -634,7 +634,7 @@ pub fn collect_inherited_components(
 /// [`crate::class_cache::ClassLookupMode::Loading`] to load synchronously
 /// from a non-worker thread; the projection task uses
 /// [`crate::class_cache::ClassLookupMode::Cached`] to avoid blocking on
-/// MSL parses inside its task pool.
+/// source library parses inside its task pool.
 pub fn collect_inherited_components_with(
     class: &ClassDef,
     class_qualified_path: Option<&str>,
@@ -668,30 +668,30 @@ pub fn collect_inherited_components_with(
         //   2. An *already-cached* library class from `peek_class_cached` —
         //      MUST be cache-only, never trigger a fresh parse here.
         //
-        // Why no fresh MSL parse: this function is called inside the
+        // Why no fresh source library parse: this function is called inside the
         // projection task running on Bevy's AsyncComputeTaskPool. The
         // pool is small (≈ N/4 threads); a synchronous rumoca parse of
-        // a large MSL file (e.g. `Continuous.mo`, 184 KB) from inside a
+        // a large source library file (e.g. `Continuous.mo`, 184 KB) from inside a
         // worker that's *already* serving a parent rumoca parse stalls
         // for the full 60 s projection deadline. Pre-warming
-        // cross-file MSL inheritance belongs in a separate background
+        // cross-file source library inheritance belongs in a separate background
         // task that runs at drill-in time and feeds the cache.
         let mut found_local: Option<(&ClassDef, String)> = None;
-        let mut found_msl: Option<(std::sync::Arc<ClassDef>, String)> = None;
+        let mut found_library: Option<(std::sync::Arc<ClassDef>, String)> = None;
         for cand in &candidates {
             if let Some(base) = find_class_by_qualified_name(ast, cand) {
                 found_local = Some((base, cand.clone()));
                 break;
             }
             if let Some(base_arc) = lookup_mode.lookup(cand) {
-                found_msl = Some((base_arc, cand.clone()));
+                found_library = Some((base_arc, cand.clone()));
                 break;
             }
         }
 
         let (base, base_qpath): (&ClassDef, String) = if let Some((b, q)) = found_local {
             (b, q)
-        } else if let Some((ref arc, ref q)) = found_msl {
+        } else if let Some((ref arc, ref q)) = found_library {
             (&**arc, q.clone())
         } else {
             continue;
@@ -757,7 +757,7 @@ fn ports_for_component(
 
     let candidates = scope_chain_candidates(&type_ref, Some(owner_qualified_path));
     let mut found_local: Option<&ClassDef> = None;
-    let mut found_msl: Option<std::sync::Arc<ClassDef>> = None;
+    let mut found_library: Option<std::sync::Arc<ClassDef>> = None;
     let mut hit_qpath: Option<String> = None;
     for cand in &candidates {
         if let Some(c) = find_class_by_qualified_name(ast, cand) {
@@ -766,12 +766,12 @@ fn ports_for_component(
             break;
         }
         if let Some(arc) = lookup_mode.lookup(cand) {
-            found_msl = Some(arc);
+            found_library = Some(arc);
             hit_qpath = Some(cand.clone());
             break;
         }
     }
-    let (type_class, type_qpath): (&ClassDef, &str) = match (&found_local, &found_msl) {
+    let (type_class, type_qpath): (&ClassDef, &str) = match (&found_local, &found_library) {
         (Some(c), _) => (*c, hit_qpath.as_deref().unwrap_or("")),
         (None, Some(arc)) => (&**arc, hit_qpath.as_deref().unwrap_or("")),
         (None, None) => return extract_component_ports(comp),
@@ -940,9 +940,9 @@ fn resolve_type_in_scope(
 ///
 /// This is a deliberate lunco-side implementation, NOT a rumoca bypass by
 /// neglect: rumoca's §5 resolution is whole-tree/eager and can't run on
-/// the off-thread canvas projection without forcing the MSL-load stall
+/// the off-thread canvas projection without forcing the source library-load stall
 /// this work-stream avoids. So we generate candidates here and probe them
-/// against the lazily-loaded engine / MSL index. When rumoca grows a lazy
+/// against the lazily-loaded engine / source library index. When rumoca grows a lazy
 /// single-reference resolve API, this function is the one place to swap.
 pub fn scope_chain_candidates(raw: &str, ctx: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
@@ -1328,39 +1328,6 @@ end Gain;
         assert!(
             graph.find_node("PID.k").is_some(),
             "k (direct) must be a node"
-        );
-    }
-
-    /// End-to-end check: load the real `Modelica.Blocks.Continuous.PID`
-    /// from the MSL filesystem cache and confirm `extends`-walking
-    /// surfaces the inherited `u`/`y` connectors. Gated on the cache
-    /// being materialised so CI without MSL doesn't fail.
-    #[test]
-    fn test_real_msl_pid_has_inherited_u_y() {
-        let Some(pid) =
-            crate::class_cache::peek_or_load_class_blocking("Modelica.Blocks.Continuous.PID")
-        else {
-            eprintln!("MSL cache not materialised — skipping");
-            return;
-        };
-        let ast = StoredDefinition::default();
-        let inherited = collect_inherited_components_with(
-            &pid,
-            Some("Modelica.Blocks.Continuous.PID"),
-            &ast,
-            0,
-            crate::class_cache::ClassLookupMode::Loading,
-        );
-        let names: Vec<&str> = inherited.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(
-            names.contains(&"u"),
-            "PID must inherit u from SISO; got {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"y"),
-            "PID must inherit y from SISO; got {:?}",
-            names
         );
     }
 

@@ -290,7 +290,7 @@ pub(crate) fn trigger_projection_if_needed(
         if ast_stale {
             ui.ctx().request_repaint();
         }
-        // One-shot re-projection requested when MSL became resident — forces a
+        // One-shot re-projection requested when source library became resident — forces a
         // re-project so standard-library icons resolve, independent of gen/target.
         let forced = docstate.force_reproject;
 
@@ -343,7 +343,7 @@ fn spawn_projection_task(
             // the SAME generation (parse install doesn't bump it), so
             // `gen_advanced` is false and the diagram never re-projects —
             // leaving the model stuck on the "no diagram" card (the
-            // RocketStage-opened-after-MSL-ready bug). Treating a stale AST as
+            // RocketStage-opened-after-source library-ready bug). Treating a stale AST as
             // "not ready" routes us into the early-return below, which leaves
             // `last_seen_gen` untouched so the real parse triggers a proper
             // re-projection.
@@ -366,12 +366,12 @@ fn spawn_projection_task(
             // lifecycle falls through to Empty and re-projects once the AST
             // lands (the parse bumps the document generation → gen_advanced).
             state.complete_projection_handoff(doc_id);
-            // Consume the one-shot MSL-ready reprojection request too. If we
+            // Consume the one-shot source library-ready reprojection request too. If we
             // leave `force_reproject` set, `trigger_projection_if_needed`
             // re-enters every frame (forced=true) and we spin here until the
             // AST lands — wasted work each frame. Safe to drop: when the
             // async parse completes it bumps the generation, and
-            // first_render/gen_advanced re-spawns the projection with MSL now
+            // first_render/gen_advanced re-spawns the projection with source library now
             // resident, so standard-library icons still resolve.
             let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
             docstate.force_reproject = false;
@@ -488,7 +488,7 @@ fn spawn_projection_task(
     state.complete_projection_handoff(doc_id);
     let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
 
-    // Consume the one-shot MSL-ready re-projection request (if any) — this
+    // Consume the one-shot source library-ready re-projection request (if any) — this
     // spawn satisfies it.
     docstate.force_reproject = false;
     docstate.projection_task = Some(ProjectionTask {

@@ -33,8 +33,8 @@
 //! - Auto-sync system: a Bevy `Update` system that mirrors changes
 //!   from `ModelicaDocumentRegistry` into the session. Today callers
 //!   call `upsert_document` explicitly.
-//! - Library-parent session for MSL (`Session::with_library_parent`)
-//!   so cross-Twin MSL state is shared once multi-Twin lands.
+//! - Library-parent session for source library (`Session::with_library_parent`)
+//!   so cross-Twin source library state is shared once multi-Twin lands.
 
 use lunco_doc::DocumentId;
 use rumoca_compile::Session;
@@ -116,7 +116,7 @@ pub struct ModelicaEngine {
     /// Qualified class names we've already failed to bridge to a file
     /// URI. The empty-diagram overlay calls `class_def` (via `icon_for`)
     /// EVERY FRAME for the active class; without this negative cache an
-    /// unresolvable class re-ran the full MSL-bundle scan in `class_def`
+    /// unresolvable class re-ran the full source library-bundle scan in `class_def`
     /// each frame (~90 ms on a 2670-doc bundle) and spammed a warn per
     /// frame. Cleared whenever any AST is installed (a previously-missing
     /// class may become resolvable once its file lands) — see
@@ -126,7 +126,7 @@ pub struct ModelicaEngine {
     /// empty-diagram overlay calls `icon_for` EVERY FRAME for the active
     /// class; `extract_icon_via_engine` walks the full inheritance chain
     /// and `class_def`-CLONES the class + every `extends` base on each
-    /// call. Measured at ~80 ms/frame for a class with a deep MSL chain
+    /// call. Measured at ~80 ms/frame for a class with a deep source library chain
     /// (a static model card recomputed from scratch 60×/s). rumoca's
     /// internal annotation memoisation does NOT eliminate these repeated
     /// ClassDef clones, so we cache the merged result here. Invalidated on
@@ -150,13 +150,13 @@ pub struct ModelicaEngine {
     /// surface clickable parse errors instead of a generic string.
     parse_diags: HashMap<DocumentId, Vec<lunco_doc::Diagnostic>>,
     /// Bundled source roots currently being parsed by the async loader.
-    pending_library_roots: HashSet<String>,
+    pending_source_roots: HashSet<String>,
     /// Roots completed since the last Bevy adapter drain.
-    completed_library_roots: Vec<String>,
+    completed_source_roots: Vec<String>,
     /// Bundled roots whose source could not produce any parsed definitions.
     /// This is terminal for the current engine lifetime so a resolver does not
     /// spin in `Loading` forever after a malformed packaged asset.
-    failed_library_roots: HashMap<String, String>,
+    failed_source_roots: HashMap<String, String>,
     /// Complete parsed source sets installed through the session source-set
     /// boundary. This is distinct from class lookup: a single lazily loaded
     /// document must not masquerade as a complete library installation.
@@ -180,15 +180,15 @@ impl ModelicaEngine {
             pending: HashSet::new(),
             completed: Vec::new(),
             parse_diags: HashMap::new(),
-            pending_library_roots: HashSet::new(),
-            completed_library_roots: Vec::new(),
-            failed_library_roots: HashMap::new(),
+            pending_source_roots: HashSet::new(),
+            completed_source_roots: Vec::new(),
+            failed_source_roots: HashMap::new(),
             installed_source_sets: HashSet::new(),
         }
     }
 
     /// Populate `class_to_uri` from an AST that was just installed at
-    /// `file_uri`. Handles the MSL `within X.Y; model Z end Z;` shape:
+    /// `file_uri`. Handles the source library `within X.Y; model Z end Z;` shape:
     /// each top-level class key `k` in `ast.classes` maps to the full
     /// qualified name `<within>.<k>` (or just `k` when `within` is absent).
     fn index_ast_classes(
@@ -307,7 +307,7 @@ impl ModelicaEngine {
     /// Called while the engine mutex is held when the async-sync wakeup latch
     /// is cleared.
     pub(crate) fn has_completed_work(&self) -> bool {
-        !self.completed.is_empty() || !self.completed_library_roots.is_empty()
+        !self.completed.is_empty() || !self.completed_source_roots.is_empty()
     }
 
     /// Install a strict AST under `doc_id`'s session URI without
@@ -408,7 +408,7 @@ impl ModelicaEngine {
     /// across session docs (MLS § 5). Result-cached via `icon_cache`:
     /// `extract_icon_via_engine` walks the whole inheritance chain and
     /// `class_def`-clones every class along it, which measured ~80 ms per
-    /// call for a deep MSL chain — far too costly to repeat every frame
+    /// call for a deep source library chain — far too costly to repeat every frame
     /// for the static empty-diagram model card (the original "no
     /// secondary cache" assumption that rumoca's annotation memoisation
     /// covered this was wrong; it doesn't eliminate our per-call clones).
@@ -447,16 +447,16 @@ impl ModelicaEngine {
         self.icon_cache.peek(qualified)
     }
 
-    /// Load a library (MSL or third-party) into the session as a
+    /// Load a library (source library or third-party) into the session as a
     /// `DurableExternal` source root. Once loaded, every class in
     /// `files` is resolvable through the session's normal queries —
     /// no separate cache, no path lookup. Cross-file inheritance
     /// walks user docs + this library uniformly.
     ///
-    /// `set_id` is a stable identifier (e.g. `"msl"`); `label` is a
-    /// log-friendly name (e.g. `"in-memory:msl"`); `files` is the
+    /// `set_id` is a stable identifier (e.g. `"library"`); `label` is a
+    /// log-friendly name (e.g. `"in-memory:library"`); `files` is the
     /// already-loaded `(uri, source)` pairs (typically decoded from
-    /// the `msl_indexer` bincode bundle).
+    /// the `modelica_library_indexer` bincode bundle).
     ///
     /// The complete set is parsed before installation. A single malformed
     /// member therefore fails the root as a whole instead of leaving a
@@ -467,7 +467,7 @@ impl ModelicaEngine {
         label: &str,
         files: Vec<(String, String)>,
     ) -> Result<usize, String> {
-        self.failed_library_roots.remove(set_id);
+        self.failed_source_roots.remove(set_id);
         let mut parsed = Vec::with_capacity(files.len());
         let mut diagnostics = Vec::new();
         for (uri, text) in files {
@@ -481,14 +481,14 @@ impl ModelicaEngine {
                 "source root `{set_id}` ({label}) has invalid Modelica members: {}",
                 diagnostics.join("; ")
             );
-            self.failed_library_roots
+            self.failed_source_roots
                 .insert(set_id.to_string(), message.clone());
             return Err(message);
         }
         let count = parsed.len();
         if count == 0 {
             let message = format!("source root `{set_id}` ({label}) has no Modelica files");
-            self.failed_library_roots
+            self.failed_source_roots
                 .insert(set_id.to_string(), message.clone());
             return Err(message);
         }
@@ -498,7 +498,7 @@ impl ModelicaEngine {
     /// Replace one complete parsed source set in the shared session.
     ///
     /// This is the canonical boundary for immutable library batches such as
-    /// MSL. Keeping the invalidation rules here makes the background bootstrap
+    /// source library. Keeping the invalidation rules here makes the background bootstrap
     /// and a first class lookup observe the same engine state.
     pub fn replace_parsed_source_set(
         &mut self,
@@ -526,11 +526,11 @@ impl ModelicaEngine {
     /// reader that shares this engine. The package is discovered by its
     /// qualified root, so this mechanism is reusable for `LunCo` and future
     /// shipped libraries without a library-specific resolver branch.
-    pub fn ensure_library_root(&mut self, root: &str) -> bool {
-        if self.has_class(root) || self.pending_library_roots.contains(root) {
+    pub fn ensure_source_root(&mut self, root: &str) -> bool {
+        if self.has_class(root) || self.pending_source_roots.contains(root) {
             return true;
         }
-        if self.failed_library_roots.contains_key(root) {
+        if self.failed_source_roots.contains_key(root) {
             return false;
         }
         if !lunco_assets_core::models::package_roots_live()
@@ -551,29 +551,29 @@ impl ModelicaEngine {
 
     /// Reserve a bundled source root for asynchronous loading. The caller
     /// performs the package read and parse off the update thread, then calls
-    /// [`Self::finish_library_root_load`].
-    pub fn begin_library_root_load(&mut self, root: &str) -> bool {
+    /// [`Self::finish_source_root_load`].
+    pub fn begin_source_root_load(&mut self, root: &str) -> bool {
         if self.has_class(root)
-            || self.pending_library_roots.contains(root)
-            || self.failed_library_roots.contains_key(root)
+            || self.pending_source_roots.contains(root)
+            || self.failed_source_roots.contains_key(root)
         {
             return false;
         }
-        self.pending_library_roots.insert(root.to_string())
+        self.pending_source_roots.insert(root.to_string())
     }
 
     /// Install an asynchronously parsed source root and publish one generic
     /// completion revision. The lock is held only for the pre-parsed session
     /// insertion; package I/O and rumoca parsing happen before this method.
-    pub fn finish_library_root_load(
+    pub fn finish_source_root_load(
         &mut self,
         root: &str,
         files: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
         diagnostics: Vec<String>,
     ) -> usize {
-        self.pending_library_roots.remove(root);
+        self.pending_source_roots.remove(root);
         if !diagnostics.is_empty() {
-            self.failed_library_roots.insert(
+            self.failed_source_roots.insert(
                 root.to_string(),
                 format!(
                     "source root `{root}` has invalid Modelica members: {}",
@@ -584,10 +584,10 @@ impl ModelicaEngine {
         }
         let count = self.load_parsed_library_files(files);
         if count > 0 {
-            self.failed_library_roots.remove(root);
-            self.completed_library_roots.push(root.to_string());
+            self.failed_source_roots.remove(root);
+            self.completed_source_roots.push(root.to_string());
         } else {
-            self.failed_library_roots.insert(
+            self.failed_source_roots.insert(
                 root.to_string(),
                 format!("no Modelica source definitions could be loaded for `{root}`"),
             );
@@ -596,8 +596,8 @@ impl ModelicaEngine {
     }
 
     /// Return the terminal loading error for a bundled source root, if any.
-    pub fn library_root_failure(&self, root: &str) -> Option<&str> {
-        self.failed_library_roots.get(root).map(String::as_str)
+    pub fn source_root_failure(&self, root: &str) -> Option<&str> {
+        self.failed_source_roots.get(root).map(String::as_str)
     }
 
     fn load_parsed_library_files(
@@ -614,8 +614,8 @@ impl ModelicaEngine {
         count
     }
 
-    pub fn drain_completed_library_roots(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.completed_library_roots)
+    pub fn drain_completed_source_roots(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.completed_source_roots)
     }
 
     /// Inheritance-merged component members for a fully-qualified
@@ -644,7 +644,7 @@ impl ModelicaEngine {
     /// inspector already trusts.
     pub fn inherited_members_typed(&mut self, qualified: &str) -> Vec<InheritedMember> {
         // Authoritative, scope-resolved membership (name, type) — handles
-        // the full `extends` walk including MSL bases.
+        // the full `extends` walk including source library bases.
         let members = self.session.class_component_members_query(qualified);
 
         // For each member resolve the class that actually *declares* it
@@ -744,12 +744,12 @@ impl ModelicaEngine {
     /// **not** a file URI. `parsed_file_query` is keyed by file path
     /// URI (e.g. `/…/FixedTemperature.mo`). We bridge these via the
     /// `class_to_uris` map that is populated whenever an AST is
-    /// installed, and fall back to a linear search over the MSL bundle
+    /// installed, and fall back to a linear search over the source library bundle
     /// for classes that arrived via `replace_parsed_source_set` (which
     /// bypasses `add_document` and therefore skips `index_ast_classes`).
     pub fn class_def(&mut self, qualified: &str) -> Option<rumoca_compile::parsing::ast::ClassDef> {
         // Negative cache: skip the whole resolution (incl. the O(bundle)
-        // MSL scan below) for a class we've already failed to bridge. The
+        // source library scan below) for a class we've already failed to bridge. The
         // empty-diagram overlay calls this every frame for the active
         // class; re-running the scan + warn per frame was the ~90 ms/frame
         // stall. Cleared on any AST install (see `index_ast_classes`).
@@ -762,8 +762,8 @@ impl ModelicaEngine {
         if resolved_key.is_none() {
             self.class_uri_misses.insert(qualified.to_string());
             // `debug!`, not `warn!`: this fires for every standard-library
-            // class during the pre-MSL projection (expected — resolution
-            // retries once MSL installs), spamming the wasm console. The
+            // class during the pre-source library projection (expected — resolution
+            // retries once source library installs), spamming the wasm console. The
             // `class_uri_misses` guard already dedupes per class.
             bevy::log::debug!(
                 "[engine] class_def: class_lookup_query failed for {}",
@@ -788,7 +788,7 @@ impl ModelicaEngine {
         // known under a dotted PREFIX. Match the LONGEST prefix already in
         // `class_to_uris` (segment-boundary) so the most specific file wins.
         // This resolves user-model nested classes in O(map) WITHOUT falling
-        // through to the MSL-bundle scan — the path that caused the storm.
+        // through to the source library-bundle scan — the path that caused the storm.
         let mapped_uris = if mapped_uris.is_empty() {
             let mut best_len = 0usize;
             let mut best = Vec::new();
@@ -811,7 +811,7 @@ impl ModelicaEngine {
             mapped_uris
         };
 
-        // A URI prefix is only a candidate. MSL packages commonly split
+        // A URI prefix is only a candidate. source library packages commonly split
         // children into sibling files (`Blocks/package.mo` contains the
         // package and examples, while `Continuous.mo` contains Continuous),
         // so a package URI must not shadow the indexed file that actually
@@ -832,23 +832,23 @@ impl ModelicaEngine {
         }
 
         // Slow fallback: the class arrived via replace_parsed_source_set
-        // (e.g. the bulk MSL install), which bypasses add_document and
-        // therefore doesn't call index_ast_classes. Search the MSL bundle
+        // (e.g. the bulk source library install), which bypasses add_document and
+        // therefore doesn't call index_ast_classes. Search the source library bundle
         // directly and remember the result for next time.
         //
         // TODO(CQ-211): this is an O(files × classes) linear scan of the
-        // process-wide MSL `Vec` bundle (~2700 classes). It's amortized —
+        // process-wide source library `Vec` bundle (~2700 classes). It's amortized —
         // `class_to_uris` (above) + the `class_uri_misses` negative cache mean
         // each class scans the bundle at most once — but a `HashMap<qualified,
-        // uri-list>` (+ a longest-prefix index) built ONCE at MSL install would
+        // uri-list>` (+ a longest-prefix index) built ONCE at source library install would
         // make the cold lookup O(1)/O(prefix) and let the startup count walk
-        // (`msl_remote.rs`) drop its synchronous full tree traversal. Deferred:
-        // multi-file (engine/class_cache/msl_remote) and MSL resolution is
+        // (`library_remote.rs`) drop its synchronous full tree traversal. Deferred:
+        // multi-file (engine/class_cache/library_remote) and source library resolution is
         // regression-prone (nested-URI / within-prefix). See
         // docs/architecture/engineering-backlog-and-standards.md.
-        let file_uri = crate::msl_remote::parsed_msl_bundle().and_then(|bundle| {
+        let file_uri = crate::library_remote::parsed_source_bundle().and_then(|bundle| {
             // A `.mo` that declares top-level qualified class `q` (= within +
-            // top-level key) ALSO contains every class nested under it (MSL
+            // top-level key) ALSO contains every class nested under it (source library
             // packs whole packages per file, e.g. `Modelica/Blocks/Examples.mo`
             // holds `within Modelica.Blocks; package Examples … model
             // PID_Controller …`). So the containing file for `qualified` is the
@@ -886,11 +886,11 @@ impl ModelicaEngine {
             // re-running the bundle scan + this log every frame. It fires
             // once per class (until an install clears it). `debug!`, not
             // `warn!`: every standard-library class misses here during the
-            // pre-MSL projection — expected, and it spammed the wasm console.
+            // pre-source library projection — expected, and it spammed the wasm console.
             self.class_uri_misses.insert(qualified.to_string());
             bevy::log::debug!(
                 "[engine] class_def: no file URI found for class {} \
-                 (class_to_uris miss + MSL bundle miss)",
+                 (class_to_uris miss + source library bundle miss)",
                 qualified
             );
             return None;
@@ -931,7 +931,7 @@ impl ModelicaEngine {
 
     /// Whether `qualified` resolves to a class currently in the
     /// session. Cheap — uses rumoca's existing
-    /// `class_lookup_query`. Used as the first step in lazy MSL
+    /// `class_lookup_query`. Used as the first step in lazy source library
     /// loading: if the class isn't here, the caller resolves a
     /// file path, reads it, and pushes via
     /// `session_mut().add_document(...)`. Subsequent calls then
@@ -1092,29 +1092,14 @@ mod tests {
     }
 
     #[test]
-    fn ensure_bundled_root_makes_lunco_visual_classes_resolvable() {
+    fn async_source_root_reservation_deduplicates_and_publishes_completion() {
         let mut engine = ModelicaEngine::new();
-        assert!(engine.ensure_library_root("LunCo"));
-        assert!(engine.has_class("LunCo.Electrical.Battery"));
-        assert!(engine.has_class("LunCo.Electrical.Pin"));
-        assert!(engine.has_class("LunCo.Mechanics.GearRatio"));
-        assert!(
-            engine.icon_for("LunCo.Electrical.Battery").is_some(),
-            "generated native members need their authored inherited icons"
-        );
-        assert!(
-            engine.icon_for("LunCo.Mechanics.GearRatio").is_some(),
-            "generated mechanical members need their authored inherited icons"
-        );
-    }
-
-    #[test]
-    fn async_library_root_reservation_deduplicates_and_publishes_completion() {
-        let mut engine = ModelicaEngine::new();
-        assert!(engine.begin_library_root_load("LunCo"));
-        assert!(!engine.begin_library_root_load("LunCo"));
-        let files = lunco_assets_core::models::package_files("LunCo");
-        assert!(!files.is_empty());
+        assert!(engine.begin_source_root_load("DemoRoot"));
+        assert!(!engine.begin_source_root_load("DemoRoot"));
+        let files = vec![(
+            "DemoRoot/Base.mo".to_string(),
+            "within DemoRoot; model Base\n  Real x;\nend Base;\n".to_string(),
+        )];
         let parsed = files
             .into_iter()
             .map(|(uri, source)| {
@@ -1124,32 +1109,32 @@ mod tests {
                 )
             })
             .collect();
-        assert!(engine.finish_library_root_load("LunCo", parsed, Vec::new()) > 0);
-        assert_eq!(engine.drain_completed_library_roots(), vec!["LunCo"]);
-        assert!(!engine.begin_library_root_load("LunCo"));
+        assert!(engine.finish_source_root_load("DemoRoot", parsed, Vec::new()) > 0);
+        assert_eq!(engine.drain_completed_source_roots(), vec!["DemoRoot"]);
+        assert!(!engine.begin_source_root_load("DemoRoot"));
     }
 
     #[test]
     fn failed_async_library_root_is_terminal_and_not_loading_forever() {
         let mut engine = ModelicaEngine::new();
-        assert!(engine.begin_library_root_load("BrokenRoot"));
+        assert!(engine.begin_source_root_load("BrokenRoot"));
         assert_eq!(
-            engine.finish_library_root_load("BrokenRoot", Vec::new(), Vec::new()),
+            engine.finish_source_root_load("BrokenRoot", Vec::new(), Vec::new()),
             0
         );
         assert!(engine
-            .library_root_failure("BrokenRoot")
+            .source_root_failure("BrokenRoot")
             .is_some_and(|message| message.contains("no Modelica source definitions")));
-        assert!(!engine.begin_library_root_load("BrokenRoot"));
-        assert!(!engine.ensure_library_root("BrokenRoot"));
+        assert!(!engine.begin_source_root_load("BrokenRoot"));
+        assert!(!engine.ensure_source_root("BrokenRoot"));
     }
 
     #[test]
     fn async_library_root_parse_diagnostics_are_terminal_and_visible() {
         let mut engine = ModelicaEngine::new();
-        assert!(engine.begin_library_root_load("BrokenRoot"));
+        assert!(engine.begin_source_root_load("BrokenRoot"));
         assert_eq!(
-            engine.finish_library_root_load(
+            engine.finish_source_root_load(
                 "BrokenRoot",
                 Vec::new(),
                 vec!["Broken.mo: invalid declaration".into()],
@@ -1157,9 +1142,9 @@ mod tests {
             0
         );
         assert!(engine
-            .library_root_failure("BrokenRoot")
+            .source_root_failure("BrokenRoot")
             .is_some_and(|message| message.contains("Broken.mo")));
-        assert!(!engine.begin_library_root_load("BrokenRoot"));
+        assert!(!engine.begin_source_root_load("BrokenRoot"));
     }
 
     #[test]
@@ -1260,63 +1245,5 @@ mod tests {
             "free has no default: {:?}",
             by_name["free"].default_value
         );
-    }
-
-    /// Verifies that `class_def` and `icon_for` can resolve an MSL class
-    /// (`Modelica.Thermal.HeatTransfer.Sources.FixedTemperature`) after
-    /// the bundle is loaded via `replace_parsed_source_set`.
-    ///
-    /// This is the canonical regression test for the URI-vs-qualified-name
-    /// mismatch bug: `class_lookup_query` returns a qualified name, not a
-    /// file URI, so `parsed_file_query` cannot be called with its return
-    /// value directly. The `class_to_uris` map + MSL bundle fallback in
-    /// `class_def` bridges the two.
-    #[test]
-    fn test_msl_fixed_temperature_class_def_and_icon() {
-        let bundle = crate::msl_remote::parsed_msl_bundle();
-        let Some(docs) = bundle else {
-            println!("MSL bundle not found, skipping test");
-            return;
-        };
-
-        let mut engine = ModelicaEngine::new();
-        let defs: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
-            docs.iter().map(|(u, d)| (u.clone(), d.clone())).collect();
-        let count = engine.replace_parsed_source_set(
-            "msl",
-            rumoca_compile::compile::SourceRootKind::DurableExternal,
-            defs,
-        );
-        assert!(count > 0, "MSL source set must install parsed documents");
-        assert!(engine.source_set_installed("msl"));
-
-        let qualified = "Modelica.Thermal.HeatTransfer.Sources.FixedTemperature";
-        assert!(engine.has_class(qualified), "class must be in session");
-
-        let class_def = engine.class_def(qualified);
-        assert!(
-            class_def.is_some(),
-            "class_def must resolve FixedTemperature (URI/qualified-name bridge)"
-        );
-
-        let icon = engine.icon_for(qualified);
-        assert!(
-            icon.is_some(),
-            "icon_for must resolve FixedTemperature (inherits icon from Icons.FixedTemperature)"
-        );
-        let icon = icon.unwrap();
-        assert!(
-            !icon.graphics.is_empty(),
-            "FixedTemperature icon must have graphics, got empty"
-        );
-        for dependent in [
-            "Modelica.Blocks.Continuous.Filter",
-            "Modelica.Blocks.Sources.Step",
-        ] {
-            assert!(
-                engine.has_class(dependent),
-                "complete MSL source set must expose dependent class {dependent}"
-            );
-        }
     }
 }

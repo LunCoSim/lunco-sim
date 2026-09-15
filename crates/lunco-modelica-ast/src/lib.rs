@@ -5,8 +5,6 @@
 //! metadata, and lint facts. A validator, source editor, or co-simulation
 //! projection can use the same authoritative Modelica representation.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod ast_extract;
 pub mod ast_mut;

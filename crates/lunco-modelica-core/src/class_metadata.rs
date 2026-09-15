@@ -1,7 +1,7 @@
 //! Unified read-side view of "what does the workbench know about
 //! this class?".
 //!
-//! Both the pre-baked MSL palette index ([`crate::index::ClassEntry`]) and
+//! Both the pre-baked source library palette index ([`crate::index::ClassEntry`]) and
 //! the live per-document index ([`ClassEntry`]) carry the same
 //! conceptual fields — kind, description, documentation, icon —
 //! shaped differently because one is a serialised palette payload
@@ -12,7 +12,7 @@
 //!
 //! [`ClassMetadata`] is the common shape, [`resolve_metadata`] is
 //! the single lookup function. Dispatch is on [`Library`]: system
-//! libraries (MSL, third-party, bundled) consult the pre-baked
+//! libraries (source library, third-party, bundled) consult the pre-baked
 //! palette index first; workspace docs (user files, untitled) read
 //! the per-doc [`ModelicaIndex`]. The within-prefix mismatch that
 //! caused the historical "(no documentation)" bug becomes
@@ -63,15 +63,15 @@ impl From<&ClassEntry> for ClassMetadata {
 
 /// Resolve metadata for `class` from whichever backend owns it.
 /// Returns `None` only when no backend has heard of the class yet
-/// (e.g. an MSL drill before the indexer ran, or a workspace doc
+/// (e.g. a source-library drill before the indexer ran, or a workspace doc
 /// whose async parse hasn't landed).
 pub fn resolve_metadata(world: &World, class: &ClassRef) -> Option<ClassMetadata> {
     match &class.library {
-        Library::Msl | Library::ThirdParty { .. } | Library::Bundled => {
-            // 1. Pre-baked palette index — `msl_index.json` covers
+        Library::Source { .. } | Library::Bundled => {
+            // 1. Pre-baked palette index — `library_index.json` covers
             //    every indexed class with absolute qualified names.
             let qualified = class.qualified();
-            if let Some(def) = crate::visual_diagram::msl_class_by_path(&qualified) {
+            if let Some(def) = crate::visual_diagram::library_class_by_path(&qualified) {
                 return Some(ClassMetadata::from(&def));
             }
             // 2. Fallback: if the user has the owning doc open
@@ -89,7 +89,7 @@ pub fn resolve_metadata(world: &World, class: &ClassRef) -> Option<ClassMetadata
 /// to the first non-package class declared in the document.
 ///
 /// This is the lookup path the docs panel uses — its drilled string
-/// may be an absolute MSL-rooted name (`"Modelica.Blocks.Examples.PID_Controller"`)
+/// may be an absolute source library-rooted name (`"Modelica.Blocks.Examples.PID_Controller"`)
 /// while the doc's index keys are within-relative
 /// (`"Blocks.Examples.PID_Controller"`). The implementation tries
 /// the verbatim key first, then progressively strips leading

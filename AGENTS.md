@@ -63,6 +63,15 @@ package checks after changing skill metadata or packaging.
   refactor only when it is necessary and the outcome is materially better.
 - Use the current authoritative contract. Invalid state must fail visibly at its
   owner.
+- Never hide invalid or missing state behind a fabricated zero, empty value,
+  guessed identity, retry loop, compatibility branch, or silent fallback. A
+  user-command rejection should be a terminal command result plus a concise
+  warning; malformed authored topology should be reported by the owning lint
+  rule. If continuing could corrupt the simulation, the owner must emit a
+  structured error and hold/stop the affected operation (or fault the app
+  through the runtime-fault mechanism). It must not panic or crash the process
+  on user-authored data. Tests must cover the diagnostic and the non-crashing
+  boundary.
 - Keep one owner and one reader path. Review every change for DRY violations,
   unnecessary hardcoding, writes without readers, misplaced policy, and APIs that
   preserve an obsolete contract. Policy and tutorial-specific assertions belong

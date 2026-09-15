@@ -46,17 +46,17 @@ Modelica application, use the `lunica` target in the table below.
 |---|---|---|---|
 | `luncosim` | `lunco-luncosim` | `cargo build -p lunco-luncosim --bin luncosim`, then `target/debug/luncosim` | **Ground-physics simulator.** USD scenes, Avian physics, rover/mobility tools, and the embedded Modelica workbench. Windowed or headless (`--no-ui`). See [luncosim](luncosim/README.md). |
 | `luncosim-server` | `lunco-luncosim-server` | `cargo build -p lunco-luncosim-server --bin luncosim-server`, then `target/debug/luncosim-server` | **Headless server.** Runs `lunco-luncosim-core::run_headless()` directly, so the GUI stack (winit/egui) is never linked — for multiplayer hosting and automation. Deploy guide: [luncosim/OPS.md](luncosim/OPS.md). |
-| `lunica` | `lunco-modelica-ui` | `cargo build -p lunco-modelica-ui --bin lunica`, then `target/debug/lunica` | **Modelica engineering workbench.** Author, compile (rumoca), and simulate Modelica models; MSL browser. Windowed, headless (`--no-ui`), or web. See [lunica](lunica/README.md). |
-| `lunco-assets` | `lunco-assets` | `cargo run -p lunco-assets --bin lunco-assets -- <download\|list\|process>` | **Assets Manager.** Download / verify (SHA-256) / process external assets (textures, MSL, models). See [assets-manager](assets-manager/README.md). |
+| `lunica` | `lunco-modelica-ui` | `cargo build -p lunco-modelica-ui --bin lunica`, then `target/debug/lunica` | **Modelica engineering workbench.** Author, compile (rumoca), and simulate Modelica models; source-library browser. Windowed, headless (`--no-ui`), or web. See [lunica](lunica/README.md). |
+| `lunco-assets` | `lunco-assets` | `cargo run -p lunco-assets --bin lunco-assets -- <download\|list\|process>` | **Assets Manager.** Download / verify (SHA-256) / process external assets (textures, source libraries, models). See [assets-manager](assets-manager/README.md). |
 
 ## Utility & dev binaries
 
 | Binary | Crate | Launch | What it is |
 |---|---|---|---|
 | `modelica_run` | `lunco-modelica-core` | `cargo run -p lunco-modelica-core --bin modelica_run` | Headless Modelica CLI — compile a model, step it for a fixed duration, optionally dump per-step variables to CSV. |
-| `msl_indexer` | `lunco-modelica-core` | `cargo run -p lunco-modelica-core --bin msl_indexer` | Builds the Modelica Standard Library search index. Same entry the workbench drives in-process. Re-run after an MSL rebuild. |
+| `modelica_library_indexer` | `lunco-modelica-core` | `cargo run -p lunco-modelica-core --bin modelica_library_indexer` | Builds the Modelica-library search index. Same entry the workbench drives in-process. Re-run after a source-library rebuild. |
 | `lunica_worker` | `lunco-modelica-core` | (wasm only) | Off-thread rumoca compile worker for the web build. Not run directly — bundled by `scripts/build_web.sh`. |
-| `build_msl_assets` | `lunco-modelica-assets` | `cargo run -p lunco-modelica-assets --bin build_msl_assets` | Bundles the MSL into shippable assets. |
+| `build_modelica_library_assets` | `lunco-modelica-assets` | `cargo run -p lunco-modelica-assets --bin build_modelica_library_assets` | Bundles Modelica-library artifacts into shippable assets. |
 | `net_smoke` | `lunco-networking` | `scripts/net_smoke.sh` | Networking transport smoke test. |
 
 `lunco-modelica-core` also carries the headless tester and parse benchmark
@@ -98,7 +98,7 @@ the MCP server for AI agents.
   self-register; enumerate the live surface with `DiscoverSchema` (HTTP) or the
   `discover_schema` MCP tool. Read providers include `ListPorts`, `ReadPorts`,
   `ReadExposures`, `GetReadiness`, and `GetBrokenConnections`, plus domain
-  extensions such as `ListBundled`, `ListOpenDocuments`, `ListTwin`, and `ListMsl`.
+  extensions such as `ListBundled`, `ListOpenDocuments`, `ListTwin`, and `ListLibrary`.
 - **Full API reference:** [`architecture/12-api.md`](../architecture/12-api.md)
   and [`crates/lunco-api/README.md`](../../crates/lunco-api/README.md).
 - **MCP server:** [`mcp/README.md`](../../mcp/README.md) — wraps the HTTP API as

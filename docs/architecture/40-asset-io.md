@@ -138,7 +138,7 @@ Three classes of crate legitimately bypass `AssetServer`:
   backend where the same logical operation exists.
 - **Build scripts.** `*-build.rs` runs on the host at compile time.
 - **Native-only binaries.** Worker subprocesses like `lunco-modelica-assets`'s
-  `build_msl_assets`
+  `build_modelica_library_assets`
   that never compile to wasm32.
 
 To bypass the lint, the crate's `lib.rs` (or binary's `main.rs`) carries
@@ -186,8 +186,8 @@ trail.
 > **Do not move these entries back into the root `clippy.toml`.**
 
 **Known debt, counted rather than hidden:** `lunco-modelica-core` has ~16 `std::fs`
-calls that *are* reachable on wasm (the MSL indexer, the package browser, the icon
-loader) — the long-standing "MSL missing on the web" symptom. They are **not**
+calls that *are* reachable on wasm (the Modelica library indexer, the package
+browser, the icon loader) — the long-standing source-library-on-web gap. They are **not**
 `#[allow]`ed: a non-fatal CI step prints the count and the sites every run, and it
 must trend to zero. An `#[allow]` would hide the debt *and* blind the gate to new
 wasm bugs in those same files.
@@ -206,7 +206,7 @@ no manual hunt.
 | `lunco-usd-sim-cosim/src/lib.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
 | `lunco-usd-ui/src/ui/browser_dispatch.rs` twin browser open | ✅ routed through the shared `OpenFile` USD document command |
 | `lunco-usd/src/commands.rs` usd document load | ✅ reads through the storage abstraction |
-| `lunco-modelica-core/msl_remote.rs` bundled MSL fetch | ⚠️ uses bespoke `web_sys::fetch`; folding into `EmbeddedAssetSource` / `HttpAssetSource` is a follow-up |
+| `lunco-modelica-core/library_remote.rs` source-library fetch | ⚠️ uses the generic browser fetch primitives but remains coupled to Modelica's parsed-bundle protocol; move the protocol boundary to the asset/source package when the web worker contract is next revised |
 | `lunco-modelica-core::models::bundled_models()` `include_str!` | ⚠️ candidate for `EmbeddedAssetSource` registration so it looks like every other asset path |
 
 ## Related foot-guns (same rule applies)

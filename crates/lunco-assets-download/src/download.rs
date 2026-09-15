@@ -8,11 +8,11 @@
 //! ## Assets.toml Format
 //!
 //! ```toml
-//! [msl]
-//! name = "Modelica Standard Library"
+//! [library]
+//! name = "Example Modelica Source Library"
 //! version = "4.1.0"
 //! url = "https://github.com/modelica/ModelicaStandardLibrary/archive/refs/tags/v4.1.0.tar.gz"
-//! dest = "msl"
+//! dest = "library"
 //! # sha256 = ""  # fill after first download
 //! ```
 //!
@@ -20,7 +20,7 @@
 //!
 //! | Asset | Strategy | Example |
 //! |-------|----------|---------|
-//! | Libraries (MSL) | `version` (semver) | `"4.1.0"` → `msl/4.1.0/` |
+//! | Libraries (source library) | `version` (semver) | `"4.1.0"` → `library/4.1.0/` |
 //! | Textures | `sha256` (content hash) | `"abc123..."` |
 //! | Ephemeris | date in filename | `target_-1024_2026-04-02.csv` |
 
@@ -99,7 +99,7 @@ pub fn download_asset_with_control(
         .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?;
 
     // Cache-hit check #1 — versioned install (used by libraries like
-    // the MSL tarball where `version = "4.1.0"` pins an upstream
+    // the source library tarball where `version = "4.1.0"` pins an upstream
     // release). Matches on `.version` marker sibling.
     if installed_destination_present(entry, &dest) {
         let detail = entry
@@ -1137,7 +1137,7 @@ mod tests {
     fn staged_install_replaces_a_directory_and_version_as_one_commit() {
         let root = tempfile::tempdir().expect("temporary install root");
         let staged = root.path().join(".download-stage");
-        let destination = root.path().join("msl");
+        let destination = root.path().join("library");
         std::fs::create_dir(&staged).expect("create staging directory");
         std::fs::write(staged.join("package.mo"), "new").expect("write staged payload");
         std::fs::create_dir(&destination).expect("create old destination");

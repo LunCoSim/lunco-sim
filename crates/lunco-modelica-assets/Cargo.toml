@@ -6,8 +6,8 @@ license.workspace = true
 description = "Native Modelica asset packaging tools for LunCoSim"
 
 [[bin]]
-name = "build_msl_assets"
-path = "src/bin/build_msl_assets.rs"
+name = "build_modelica_library_assets"
+path = "src/bin/build_modelica_library_assets.rs"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # This package is a native build tool. Its wasm target is an intentionally

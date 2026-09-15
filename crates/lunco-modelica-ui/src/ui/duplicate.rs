@@ -33,7 +33,7 @@ pub(crate) struct DuplicateExtract {
 /// parsed AST. Walks `ast.classes` recursively (top-level packages
 /// often contain the class we're after as a nested entry, e.g.
 /// `Modelica.Blocks.Continuous` → `LimPID`). The match is by short
-/// name — first hit wins, which is fine in practice since MSL keeps
+/// name — first hit wins, which is fine in practice since source library keeps
 /// short names unique within a package.
 ///
 /// Replaces an earlier regex-on-text approach that mis-extracted when
@@ -52,7 +52,7 @@ pub(crate) fn extract_class_spans_via_path(
     // under `std::env::temp_dir()`, which on wasm32-unknown-unknown
     // panics with "no filesystem on this platform" — `temp_dir()`'s
     // libstd stub is fatal there. On wasm we already have the source
-    // bytes in memory (caller fetched them from the in-memory MSL
+    // bytes in memory (caller fetched them from the in-memory source library
     // bundle), so the cache buys us nothing; parse the in-memory
     // source directly via `parse_to_ast`, same `StoredDefinition`,
     // no fs touch.
@@ -93,7 +93,7 @@ pub(crate) fn spans_from_ast(
     // rumoca's `ClassDef.location` spans only NAME → `end <Name>`, omitting
     // the prefix keyword and the trailing `;`. `class_full_text_span` widens
     // it to the real declaration bounds (the canonical helper, shared with
-    // `load_msl_class`). `rewrite_inject_in_one_pass` re-anchors these
+    // `load_library_class`). `rewrite_inject_in_one_pass` re-anchors these
     // absolute spans by `full_start`, so the caller must pass the matching
     // `source[full_start..full_end]` slice.
     let (full_start, full_end) =
@@ -127,14 +127,14 @@ pub(crate) fn spans_from_ast(
 /// imports in outer-to-inner order, deduplicated while preserving
 /// first-seen position.
 ///
-/// Covers the SI/unit shortcuts that break duplication of MSL
+/// Covers the SI/unit shortcuts that break duplication of source library
 /// examples: e.g. `Modelica/Blocks/package.mo` declares
 /// `import Modelica.Units.SI;` which is why `SI.Angle` resolves
 /// inside `Modelica.Blocks.Examples.PID_Controller` but not in a
 /// naïvely extracted copy.
 pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String> {
-    // Wasm has no filesystem, and the MSL bundle is pre-parsed and
-    // already in `GLOBAL_PARSED_MSL` with all its imports. The
+    // Wasm has no filesystem, and the source library bundle is pre-parsed and
+    // already in `GLOBAL_PARSED_SOURCE_BUNDLE` with all its imports. The
     // parent-walk + `read_to_string(<relative>)` chain panics on
     // wasm32-unknown-unknown ("no filesystem on this platform")
     // because libstd resolves relative paths through `current_dir()`.
@@ -160,7 +160,7 @@ pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String
             // imports leak into duplicated children, matching the prior
             // regex's "first opener through second opener" boundary.
             // `parse_files_parallel` hits rumoca's content-hash artifact
-            // cache, so walking up a deep MSL hierarchy is cheap on
+            // cache, so walking up a deep source library hierarchy is cheap on
             // repeat duplications.
             let pairs = if std::env::var_os("LUNCO_NO_PARSE").is_some() {
                 None
@@ -228,7 +228,7 @@ pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String
 /// single span splice over the original source. Replaces the prior
 /// `rewrite_duplicated_source` + `inject_class_imports` pair, each of
 /// which re-parsed the same bytes — measured at ~370ms each in dev
-/// builds for a 7.9 KB extracted MSL class. This single pass parses
+/// builds for a 7.9 KB extracted source library class. This single pass parses
 /// once and emits final text.
 ///
 /// Returns `None` if the parse fails so the caller can fall back to
@@ -372,7 +372,7 @@ pub(crate) fn build_duplicate_source(
         None => source.to_string(),
     };
     // Keep the `within` clause: it gives the copied body the origin package's
-    // lexical scope (e.g. the `SI` unit alias the MSL examples rely on), which
+    // lexical scope (e.g. the `SI` unit alias the source library examples rely on), which
     // a top-level lift would lose — `unresolved type reference: 'SI.Angle'`.
     // The cost is that the copy's real class name is `<origin_pkg>.<new_name>`,
     // so the run/compile path must dispatch that QUALIFIED name (see

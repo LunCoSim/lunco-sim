@@ -1020,23 +1020,23 @@ impl ExperimentsPanel {
             .unwrap_or((0, 0, 1));
         let any_in_flight = running_now > 0;
 
-        // On web the MSL bundle is still decoding for the first ~tens of
+        // On web the source library bundle is still decoding for the first ~tens of
         // seconds. A Fast Run dispatched in that window compiles fine for
-        // MSL-free models but, for a model that depends on the standard
-        // library, the worker queues it and runs it once MSL is resident
-        // (see worker_transport.rs `MslReady` flush). Gate a user-facing
-        // notice on `MslLoadState::is_pending()` (false at boot on native,
+        // source library-free models but, for a model that depends on the standard
+        // library, the worker queues it and runs it once source library is resident
+        // (see worker_transport.rs `LibraryReady` flush). Gate a user-facing
+        // notice on `LibraryLoadState::is_pending()` (false at boot on native,
         // false post-decode on web) so the run doesn't look stuck.
-        let msl_pending = ctx
+        let library_pending = ctx
             .resource::<lunco_assets_core::library::LibraryLoadState>()
             .map(|s| s.is_pending())
             .unwrap_or(true);
-        // If the MSL load *failed*, a run that depends on the standard
-        // library can never complete (the worker never gets MSL resident, so
-        // the queued command is never flushed). `msl_pending` is false in
+        // If the source library load *failed*, a run that depends on the standard
+        // library can never complete (the worker never gets source library resident, so
+        // the queued command is never flushed). `library_pending` is false in
         // that state, so without this the panel would just show a normal
         // "▶ running" chip on a permanently-stuck run with no explanation.
-        let msl_error = match ctx.resource::<lunco_assets_core::library::LibraryLoadState>() {
+        let library_error = match ctx.resource::<lunco_assets_core::library::LibraryLoadState>() {
             Some(lunco_assets_core::library::LibraryLoadState::Failed(msg)) => Some(msg.clone()),
             _ => None,
         };
@@ -1162,29 +1162,29 @@ impl ExperimentsPanel {
             );
         }
 
-        // While MSL is still loading, tell the user a Run won't be lost —
+        // While source library is still loading, tell the user a Run won't be lost —
         // it starts once the standard library is ready. Shown when a run is
         // pending (just clicked, queued, or in-flight and likely blocked on
-        // MSL) so the "nothing happened" gap reads as "waiting on MSL".
-        if msl_pending && (run_clicked || any_in_flight || queued_now > 0) {
+        // source library) so the "nothing happened" gap reads as "waiting on source library".
+        if library_pending && (run_clicked || any_in_flight || queued_now > 0) {
             ui.label(
                 egui::RichText::new(
-                    "Modelica Standard Library still loading — this run \
-                     will start automatically once MSL is ready.",
+                    "Source library still loading — this run \
+                     will start automatically once source library is ready.",
                 )
                 .color(col_accent)
                 .size(11.0),
             );
-            // Coarse poll, not a per-frame spin — MSL readiness flips on a
+            // Coarse poll, not a per-frame spin — source library readiness flips on a
             // background task; a ~250ms re-check clears the notice promptly.
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(250));
-        } else if let Some(err) = &msl_error {
+        } else if let Some(err) = &library_error {
             if any_in_flight || queued_now > 0 {
                 ui.label(
                     egui::RichText::new(format!(
-                        "Modelica Standard Library failed to load — a run that \
-                         needs MSL can't complete. Reinstall MSL, then run again. \
+                        "Source library failed to load — a run that \
+                         needs source library can't complete. Reinstall source library, then run again. \
                          ({err})"
                     ))
                     .color(col_error)

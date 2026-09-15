@@ -161,7 +161,7 @@ The headless tools are binaries of `lunco-modelica-core`:
 | Binary | Target | Description |
 |--------|--------|-------------|
 | `modelica_tester` | CLI | Standalone tester for Modelica compilation |
-| `msl_indexer` | CLI | Build `msl_index.json`; with `--warm` also full-compiles a list of models so rumoca's semantic-summary cache is hot before the workbench opens |
+| `modelica_library_indexer` | CLI | Build `library_index.json`; with `--warm` also full-compiles explicitly selected classes so rumoca's semantic-summary cache is hot before the workbench opens |
 | `modelica_run` | CLI | Headless: compile a `.mo`, step it for a fixed duration, optionally dump per-step CSV |
 
 ### CLI workflow — warm cache, then run headless
@@ -170,10 +170,10 @@ The two CLI binaries compose:
 
 ```bash
 # 1. (one-time per cache wipe) Warm the rumoca semantic-summary cache for
-#    every bundled asset model + a default list of common MSL examples.
+#    every bundled asset model + any explicitly requested source classes.
 #    Takes ~7 min cold, ~30s if the parse cache from a prior run is intact.
 LUNCOSIM_WARM_DIRS="$(pwd)/assets/models" \
-  cargo run --release -p lunco-modelica-core --bin msl_indexer -- --warm
+  cargo run --release -p lunco-modelica-core --bin modelica_library_indexer -- --warm
 
 # 2. Run AnnotatedRocketStage.RocketStage for 10s, dump per-step telemetry
 #    to CSV. After the warm pass above, compile is ~ms instead of minutes.
@@ -191,9 +191,9 @@ warm cache benefits all three. `modelica_run` prints 1-second progress
 ticks (sim-time, RTF, ETA) and a 5-second compile heartbeat — there's
 no silent stall regardless of model size.
 
-`msl_indexer` flags:
-- `--warm` — full-compile a default list of common MSL examples after indexing
-- `--warm-only NAME[,NAME…]` — explicit list (mix of MSL qualified names and `.mo` paths)
+`modelica_library_indexer` flags:
+- `--warm` — full-compile the explicitly configured warm targets after indexing
+- `--warm-only NAME[,NAME…]` — explicit list of qualified names and `.mo` paths
 - `LUNCOSIM_WARM_DIRS=path1:path2` — env var, scans each dir for `.mo` files and warms every top-level model
 - `-v, --verbose` — per-file scan logging
 

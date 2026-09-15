@@ -8,22 +8,22 @@
 //!
 //! ## Why one engine
 //!
-//! Earlier the MSL class cache lived in a separate process-wide
+//! Earlier the source library class cache lived in a separate process-wide
 //! `Session` (a `Mutex<ModelicaEngine>` here in `class_cache.rs`)
 //! disjoint from the workspace engine that holds user docs. That
-//! split made inheritance queries for a user class that extends an MSL
+//! split made inheritance queries for a user class that extends a source library
 //! base return empty — the workspace engine couldn't see the base.
 //! Routing both into one session resolves cross-tier inheritance walks
 //! naturally.
 //!
 //! ## Bootstrap timing
 //!
-//! Web: `engine_resource::drive_msl_bootstrap` calls
-//! `replace_parsed_source_set("msl", DurableExternal, …)` once the parsed
-//! bundle is resident. After that point every MSL class is resolvable without
+//! Web: `engine_resource::drive_source_bundle_bootstrap` calls
+//! `replace_parsed_source_set("source-bundle", DurableExternal, …)` once the parsed
+//! bundle is resident. After that point every source library class is resolvable without
 //! per-class disk I/O.
 //!
-//! Native: bootstrap stays lazy until the first MSL class lookup. That lookup
+//! Native: bootstrap stays lazy until the first source library class lookup. That lookup
 //! seats the complete parsed source set through the same engine boundary as
 //! the web bootstrap, so dependent classes observe one shared namespace.
 
@@ -74,13 +74,13 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
             // normal in-flight state, never a reason to wait behind parsing
             // or source-root installation.
             if is_bundled_root {
-                let _ = handle.ensure_library_root_async(root);
+                let _ = handle.ensure_source_root_async(root);
             }
             return ClassAvailability::Loading;
         };
         let has_class = engine.has_class(qualified);
         let has_root = engine.has_class(root);
-        let root_failed = engine.library_root_failure(root).is_some();
+        let root_failed = engine.source_root_failure(root).is_some();
         (has_class, has_root, root_failed)
     };
     if has_class {
@@ -94,7 +94,7 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
         // metadata or a library-specific prewarm branch to make a class
         // visible in the editor.
         if !root_failed && !has_root {
-            let _ = handle.ensure_library_root_async(root);
+            let _ = handle.ensure_source_root_async(root);
         }
         return if root_failed || has_root {
             ClassAvailability::Missing
@@ -116,7 +116,7 @@ pub fn class_resolution_message(qualified: &str) -> Option<String> {
     let root = qualified.split('.').next().unwrap_or(qualified);
     let engine = handle.try_lock()?;
     engine
-        .library_root_failure(root)
+        .source_root_failure(root)
         .map(|error| format!("source root `{root}` failed: {error}"))
 }
 
@@ -131,7 +131,7 @@ impl ClassLookupMode {
 }
 
 /// Read library source bytes for a relative path, going through the
-/// process-wide [`lunco_assets_core::msl::MslAssetSource`]. Returns
+/// process-wide [`lunco_assets_core::library::LibraryAssetSource`]. Returns
 /// `None` if the source hasn't been installed yet (web boot before
 /// fetch completes) or the path isn't present.
 fn read_source_bytes(path: &std::path::Path) -> Option<String> {
@@ -144,10 +144,10 @@ fn read_source_bytes(path: &std::path::Path) -> Option<String> {
 /// package or library file on first miss; cheap (HashMap hit) on
 /// every subsequent call once warm.
 ///
-/// Bundled package roots are resolved before the MSL filesystem index.
-/// This is the important no-MSL path for generated `LunCo.*` documents:
+/// Bundled package roots are resolved before the source library filesystem index.
+/// This is the important no-source library path for generated `LunCo.*` documents:
 /// the normal Modelica source/diagram pipeline can load the native package
-/// and then use the same icon, connector, and inheritance queries as MSL.
+/// and then use the same icon, connector, and inheritance queries as source library.
 ///
 pub fn peek_or_load_class_blocking(
     qualified: &str,
@@ -172,7 +172,7 @@ pub fn peek_or_load_class_blocking(
             .any(|candidate| candidate == root)
         {
             let mut engine = handle.lock();
-            if engine.ensure_library_root(root) {
+            if engine.ensure_source_root(root) {
                 return engine.class_def(qualified).map(Arc::new);
             }
             return None;
@@ -181,7 +181,7 @@ pub fn peek_or_load_class_blocking(
 
     // Phase 2: locate + parse OUTSIDE the lock. This is the slow
     // step (file I/O + rumoca parse + extends-chain resolution can
-    // take seconds for MSL classes with deep inheritance). Holding
+    // take seconds for source library classes with deep inheritance). Holding
     // the engine mutex across this step froze the UI: every
     // main-thread system that touches the engine
     // (`drive_engine_sync`, icon lookups, inspector queries) would
@@ -189,29 +189,29 @@ pub fn peek_or_load_class_blocking(
     let path = resolve_class_path_indexed(qualified).or_else(|| locate_library_file(qualified))?;
     let uri = lunco_assets_core::asset_path::slashed(&path);
 
-    // A pre-parsed MSL document is part of an immutable source set, not an
+    // A pre-parsed source library document is part of an immutable source set, not an
     // independent workspace document. Seat the complete bundle through the
     // shared engine boundary before returning the requested class. Installing
     // one target AST here leaves sibling types (for example
     // `Continuous.Filter` and `Sources.Step`) absent from the session, which
     // makes diagram projection report permanent Loading placeholders.
-    let msl_bundle = crate::msl_remote::parsed_msl_bundle().and_then(|bundle| {
+    let library_bundle = crate::library_remote::parsed_source_bundle().and_then(|bundle| {
         bundle
             .iter()
             .any(|(candidate, _)| candidate == &uri)
             .then_some(bundle)
     });
-    if let Some(bundle) = msl_bundle {
+    if let Some(bundle) = library_bundle {
         let mut engine = handle.lock();
-        if !engine.source_set_installed("msl") {
+        if !engine.source_set_installed("source-bundle") {
             let docs = (**bundle).clone();
             let count = engine.replace_parsed_source_set(
-                "msl",
+                "source-bundle",
                 rumoca_compile::compile::SourceRootKind::DurableExternal,
                 docs,
             );
             bevy::log::info!(
-                "[class_cache] installed complete MSL source set into workspace engine: {count} parsed docs"
+                "[class_cache] installed complete source bundle into workspace engine: {count} parsed docs"
             );
         }
         return engine.class_def(qualified).map(Arc::new);
@@ -221,7 +221,7 @@ pub fn peek_or_load_class_blocking(
         #[cfg(target_arch = "wasm32")]
         {
             bevy::log::warn!(
-                "[class_cache] MSL cache miss for {qualified} (uri={uri}); \
+                "[class_cache] source library cache miss for {qualified} (uri={uri}); \
                      wasm refuses sync parse — class remains unresolved until worker fills"
             );
             return None;
@@ -269,7 +269,7 @@ pub fn peek_or_load_class_blocking(
 ///
 /// Use this from hot paths that must not block on rumoca parse —
 /// notably the projection task running on Bevy's AsyncComputeTaskPool,
-/// where a sync MSL parse from inside a worker that's already serving
+/// where a sync source library parse from inside a worker that's already serving
 /// a parent rumoca parse stalls for the projection deadline.
 pub fn peek_class_cached(qualified: &str) -> Option<Arc<rumoca_compile::parsing::ast::ClassDef>> {
     let handle = crate::engine_resource::global_engine_handle()?;

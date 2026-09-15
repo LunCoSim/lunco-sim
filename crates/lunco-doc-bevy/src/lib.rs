@@ -52,8 +52,6 @@
 //! domains?" — useful for replay, audit, debugging, the journal panel,
 //! and future cross-doc transactions / multi-user sync.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod diagnostics;
 pub mod rename;
@@ -258,7 +256,7 @@ pub struct RedoDocument {
 /// canonical path, writes the source, and fires [`DocumentSaved`] on
 /// success. No-ops if the document has no canonical path (Save-As
 /// needed — separate command, not defined yet) or if the backing
-/// library is read-only (MSL, Bundled in Modelica's case).
+/// library is read-only (source library, Bundled in Modelica's case).
 ///
 /// Dirty state (generation vs. last-saved generation) is a per-document
 /// concern; the owning domain updates its internal tracker in the

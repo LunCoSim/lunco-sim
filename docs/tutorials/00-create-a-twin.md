@@ -35,7 +35,9 @@ The formats keep their normal responsibilities:
 Python is an optional integration feature and is not used by the normal
 workflow. Use Rhai for scenario and verification policy and Modelica for
 continuous models; see [`sysml-requirements`](../../skills/sysml-requirements/SKILL.md)
-for the opt-in requirements boundary.
+for the Twin-owned requirements boundary. SysML runtime support is enabled by
+default in the production app; use `--no-default-features` only for a
+deliberately lean build.
 
 ## 1. Create the Twin
 

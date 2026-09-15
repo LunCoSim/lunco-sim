@@ -1,10 +1,10 @@
 //! Generic browser fetch + Cache-Storage primitives (`target_arch = "wasm32"`).
 //!
-//! Extracted from lunco-modelica-core's MSL fetcher so **every** bundle distributor
+//! Extracted from lunco-modelica-core's source library fetcher so **every** bundle distributor
 //! shares one implementation of "download a content-hashed blob over HTTP, cache
 //! it in the browser's Cache Storage, and unpack it". Consumers today:
 //!
-//! - **MSL** (`lunco-modelica-core`) — the Modelica Standard Library bundle.
+//! - **source library** (`lunco-modelica-core`) — a downloaded Modelica source bundle.
 //! - **Twin terrain assets** (`lunco-terrain-surface`) — the server serves its
 //!   `twins/` directory over HTTP (staged under `assets/twins/…` next to the
 //!   wasm) and the browser client fetches the DEM heightmap/metadata from it —
@@ -13,8 +13,8 @@
 //!   uses the same retry and body-resume path as every other browser asset.
 //!
 //! Everything here is **content-agnostic**: the caller passes the Cache-Storage
-//! *bucket name* (e.g. `"lunco-msl-v1"`, `"lunco-twin-v1"`) so each distributor
-//! keeps its own namespace, and the keep-set for pruning. No MSL/twin schema
+//! *bucket name* (e.g. `"lunco-library-v1"`, `"lunco-twin-v1"`) so each distributor
+//! keeps its own namespace, and the keep-set for pruning. No source library/twin schema
 //! leaks in.
 //!
 //! ## Caching strategy (why three fetch entry points)
