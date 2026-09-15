@@ -30,11 +30,13 @@ lunco-theme = { path = "../lunco-theme" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-file-dialog = { path = "../lunco-workbench-file-dialog" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workspace = { path = "../lunco-workspace" }
 openusd = { workspace = true }

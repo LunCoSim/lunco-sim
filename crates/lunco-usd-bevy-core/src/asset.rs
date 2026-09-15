@@ -23,7 +23,7 @@ use crate::UsdStageProjectionPlan;
 pub struct UsdStageAsset {
     /// The send-safe layer closure shared by initial projection and the live
     /// canonical stage. It is absent for an externally composed stage.
-    pub recipe: Option<lunco_usd_core::StageRecipe>,
+    pub recipe: Option<lunco_usd_document::recipe::StageRecipe>,
     /// Structural hierarchy and default-time facts captured from the composed
     /// stage before the asset crosses the async boundary.
     pub projection_plan: Arc<UsdStageProjectionPlan>,
@@ -32,7 +32,7 @@ pub struct UsdStageAsset {
 impl UsdStageAsset {
     /// Build an asset with the same prepared projection contract as the async
     /// loader.
-    pub fn from_recipe(recipe: lunco_usd_core::StageRecipe) -> Result<Self> {
+    pub fn from_recipe(recipe: lunco_usd_document::recipe::StageRecipe) -> Result<Self> {
         let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
         projection_plan.validate()?;
         Ok(Self {

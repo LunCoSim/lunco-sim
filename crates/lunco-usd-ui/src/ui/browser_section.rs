@@ -17,13 +17,13 @@ use openusd::sdf;
 // The layer browser walks the AUTHORED specs of a layer, deliberately without
 // composition — so it reads through `UsdDataExt` (the authored-layer accessor),
 // not `UsdRead` (which is now the composed-stage contract, one impl: `StageView`).
-use lunco_usd_core::UsdData;
-use lunco_usd_core::UsdDataExt;
 use lunco_usd_core::{
     commands::{CommitUsdProposal, ReviewUsdProposal, UsdProposalReviewAction},
     edit_session::{UsdProposalId, UsdProposalState, UsdProposalSummary},
-    LayerId,
 };
+use lunco_usd_document::document::LayerId;
+use lunco_usd_document::usd_data::UsdData;
+use lunco_usd_document::usd_data::UsdDataExt;
 
 use crate::loaded_stages::{UsdBrowserView, UsdStageRow};
 use crate::USD_CONNECTION_CANVAS_PANEL_ID;

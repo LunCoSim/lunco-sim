@@ -118,21 +118,6 @@ fn route_subject_path(me) {
     targets[0]
 }
 
-fn runtime_selected_program(me) {
-    let route = route_path(me);
-    let doc = route_document(me);
-    if route == () || doc == () { return (); }
-    let parts = route.split("/");
-    if parts.len() < 2 { return (); }
-    let state = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: "/" + parts[1] + "/__LunCoRuntime/ProgramSelection",
-        attrs: ["selectedPath"],
-    });
-    if state == () || state.ok == false || state.attrs == () { return (); }
-    state.attrs["selectedPath"]
-}
-
 fn route_is_selected(me) {
     let route = route_path(me);
     let subject = route_subject_path(me);
@@ -146,9 +131,10 @@ fn route_is_selected(me) {
         let selected_path = usd_path(selection.primary);
         if selected_path == route + ROUTE_PROGRAM { return true; }
     }
-    let selected = runtime_selected_program(me);
-    if selected != () && selected != "" {
-        return selected == route + ROUTE_PROGRAM;
+    if selection != () && selection.ok != false && selection.paths != () {
+        for selected_path in selection.paths {
+            if selected_path == route + ROUTE_PROGRAM { return true; }
+        }
     }
     let result = query("QueryUsdPrim", #{
         doc_id: doc,

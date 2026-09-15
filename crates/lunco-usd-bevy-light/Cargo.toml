@@ -11,7 +11,7 @@ half = "2"
 lunco-core = { path = "../lunco-core" }
 lunco-render = { path = "../lunco-render" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
-lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-document = { path = "../lunco-usd-document" }
 openusd = { workspace = true }
 wgpu-types = "29"
 

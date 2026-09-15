@@ -7,7 +7,7 @@
 
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_usd_bevy_core::{canonical::CanonicalStage, UsdRead};
-use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
+use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
 use openusd::sdf::Path as SdfPath;
 
 fn probe(label: &str, source: &str, tmp: &std::path::Path) {

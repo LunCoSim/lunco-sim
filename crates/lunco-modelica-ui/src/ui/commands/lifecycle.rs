@@ -792,7 +792,7 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
         // name. Pull it back and feed the same result channel.
         #[cfg(target_arch = "wasm32")]
         {
-            let read_result = match lunco_workbench::picker::take_picked_content(&path) {
+            let read_result = match lunco_workbench_file_dialog::take_picked_content(&path) {
                 Some(content) => Ok(content),
                 None => Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,

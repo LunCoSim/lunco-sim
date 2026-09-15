@@ -10,7 +10,7 @@
 > is converted **once, at the importer**. Internal code never branches on
 > convention.
 
-## As built — the USD spoke (`lunco-usd-core/src/units.rs`)
+## As built — the USD spoke (`lunco-usd-document/src/units.rs`)
 
 The mandate above is **honoured for USD geometry and transforms**. Two types:
 
@@ -370,7 +370,7 @@ correct thing was built first; the full machinery is promoted only when it earns
 its keep (YAGNI).
 
 1. **Identity seam — DONE.** `StageMetrics` + `ConventionTransform` in
-   `lunco-usd-core/src/units.rs`, with a small `lunco-usd-bevy` reader adapter,
+   `lunco-usd-document/src/units.rs`, with a small `lunco-usd-bevy` reader adapter,
    applied inside the shared decoders (not at a
    root entity). Zero behavioural change on canonical content; a Z-up/cm stage
    now imports correctly instead of rotated 90° and 100× too small.

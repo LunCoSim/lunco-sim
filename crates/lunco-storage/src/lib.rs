@@ -472,7 +472,7 @@ pub trait Storage: Send + Sync {
     async fn is_writable(&self, handle: &StorageHandle) -> bool;
 
     // NOTE: file-OPEN/SAVE/FOLDER pickers are a UI concern and live in the
-    // workbench (`lunco_workbench::picker`, native `rfd` + future wasm FSA), NOT
+    // workbench file-dialog capability (`lunco_workbench_file_dialog`, native `rfd` + wasm), NOT
     // on this I/O trait. Keeping `rfd` out of `lunco-storage` keeps the crate (and
     // the 8 crates that depend on it, incl. the headless server) free of the
     // native file-dialog → wayland/winit pull.

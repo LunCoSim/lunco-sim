@@ -26,7 +26,7 @@
 //! `Stage` is `!Send` (`Rc`-backed), so it never escapes a synchronous call; the
 //! `sdf::Data` in and out is the Send-safe handoff the rest of the stack uses.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use lunco_usd_compose::parse_usda;
 use openusd::ar::{self, ResolvedPath};
 use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecData, Value};
@@ -108,7 +108,10 @@ pub fn open_doc_stage(data: &sdf::Data) -> Result<Stage> {
 
 /// Compose current authored opinions with an already-loaded dependency closure.
 /// The resolver owns dependency interpretation; only the root layer is replaced.
-pub fn open_doc_stage_with_recipe(data: &sdf::Data, recipe: &crate::StageRecipe) -> Result<Stage> {
+pub fn open_doc_stage_with_recipe(
+    data: &sdf::Data,
+    recipe: &crate::recipe::StageRecipe,
+) -> Result<Stage> {
     let stage = Stage::builder()
         .resolver(lunco_usd_compose::LuncoUsdResolver::new(
             recipe.bytes.clone(),
@@ -644,7 +647,7 @@ mod tests {
     #[test]
     fn compose_layers_overlays_runtime_onto_base() {
         let base = usda_to_data(SCENE).unwrap(); // /World/Box(radius=1)/Inner(radius=9)
-                                                 // Runtime: override Box.radius and add a new sibling prim under /World.
+        // Runtime: override Box.radius and add a new sibling prim under /World.
         let runtime = usda_to_data(
             "#usda 1.0\nover \"World\"\n{\n    over \"Box\"\n    {\n        double radius = 7\n    }\n    def Sphere \"Obstacle\"\n    {\n    }\n}\n",
         )
@@ -875,9 +878,10 @@ mod tests {
         let out = extract_root_layer_data(&stage).unwrap();
 
         assert!(out.spec(&SdfPath::new("/World/Box").unwrap()).is_none());
-        assert!(out
-            .spec(&SdfPath::new("/World/Box/Inner").unwrap())
-            .is_none());
+        assert!(
+            out.spec(&SdfPath::new("/World/Box/Inner").unwrap())
+                .is_none()
+        );
         assert_eq!(
             out.prim_type_name(&SdfPath::new("/World").unwrap())
                 .as_deref(),

@@ -86,6 +86,7 @@ Apps (luncosim, luncosim-server, lunica)
    ├── Framework layer
    │     lunco-workbench-core ← renderer-independent UI contracts and state
    │     lunco-workbench-widgets ← shell-independent reusable egui controls
+   │     lunco-workbench-guided-ui ← optional authored guided HUD/coach presentation
    │     lunco-workbench  ← canonical UI scaffold, docking, perspectives, File menu
    │     lunco-workbench-browser ← optional Twin/Files navigation feature (shell-free)
    │     lunco-doc        ← Authority, diagnostics substrate, CRUD foundation

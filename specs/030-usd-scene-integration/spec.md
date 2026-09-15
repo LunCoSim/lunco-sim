@@ -28,13 +28,13 @@ As a simulation specialist, I want to use standard `PhysX` and `USDPhysics` sche
 As a developer, I want to add new simulation-specific mapping logic (e.g., for a new sensor type) without modifying the core USD loader.
 **Acceptance Criteria:**
 - New "adapters" can be registered as plugins.
-- Core `lunco-usd-core` parser remains agnostic of specific physics or rendering engines.
+- Core `lunco-usd-document` parser remains agnostic of specific physics or rendering engines.
 - **Independent Test**: Register a custom `UsdAdapter` that logs whenever it sees a specific metadata tag.
 
 ## Requirements
 
 ### Functional Requirements
-- **FR-001**: **Pure-Rust USDA Parser**: MUST implement/integrate a Rust-native parser (`lunco-usd-core`) capable of reading `.usda` and resolving `references`.
+- **FR-001**: **Pure-Rust USDA Parser**: MUST implement/integrate a Rust-native parser (`lunco-usd-document`) capable of reading `.usda` and resolving `references`.
 - **FR-002**: **Extensible Adapter Architecture**: MUST define a `UsdAdapter` trait to allow pluggable mapping of USD Prims to ECS components.
 - **FR-003**: **PhysX/Isaac Sim Mapping**: MUST provide a mapping layer (`lunco-usd-physx`) for standard `USDPhysics` and NVIDIA PhysX schemas (as used in Isaac Sim).
 - **FR-004**: **Physic Adapter Plugin (Avian3D)**: MUST provide an optional adapter plugin (`lunco-usd-avian`) that implements the physics mapping for `Avian3D`.
@@ -46,10 +46,10 @@ As a developer, I want to add new simulation-specific mapping logic (e.g., for a
 
 | Planned (spec) | Implemented | Notes |
 |---|---|---|
-| `lunco-usd-core` | `lunco-usd-core` | Core parser, document, authoring, operation, schema, and unit substrate |
+| `lunco-usd-core` | `lunco-usd-document` + `lunco-usd-core` | Document/layer parser and authoring substrate; typed operation and edit contracts |
 | `lunco-usd-physx` | (folded into `lunco-usd`) | PhysX-specific USD attrs handled inline |
 | `lunco-usd-avian` | `lunco-usd-avian` | Avian3D physics implementation — as planned |
-| `lunco-usd-mapping` | (folded into `lunco-usd-core` / runtime owners) | `lunco:` schema and pure mapping facts live in the core; runtime projection stays with its owning bridge |
+| `lunco-usd-mapping` | (folded into `lunco-usd-document` / runtime owners) | `lunco:` schema and authored mapping facts live in the document package; runtime projection stays with its owning bridge |
 | `lunco-usd-bevy` | `lunco-usd-bevy` | Bevy `AssetLoader` and entity spawning — as planned |
 | — | `lunco-usd-sim` | Simulation-specific USD integration (cosim wiring) |
 | — | `lunco-materials` | PBR material parameter projection |
@@ -68,4 +68,4 @@ As a developer, I want to add new simulation-specific mapping logic (e.g., for a
 ## Assumptions
 - **Assumption 1**: Focus on ASCII (`.usda`) initially; binary support is out of scope.
 - **Assumption 2**: Standard `PhysX` vehicle schemas are the primary target for rover compatibility.
-- **Assumption 3**: Coordinate system (`upAxis`) and unit (`metersPerUnit`) handling is **baked into the shared decoders** (`lunco-usd-core/src/units.rs` — `StageMetrics` → `ConventionTransform`; `lunco-usd-bevy` supplies only the live-stage reader adapter), **not applied at the root entity level**. A root-only rotation/scale is explicitly rejected: avian colliders, `big_space`, and the f64 frame tree all assume canonical SI Y-up, so a non-SI value must never flow downstream — it would *look* right in the viewport and be wrong everywhere else. Each prim's local transform is **conjugated** (`L' = S·L·S⁻¹`) and the leaf geometry converted (`p' = S·p`); both, not either. See [`docs/architecture/41-axes-and-units.md`](../../docs/architecture/41-axes-and-units.md).
+- **Assumption 3**: Coordinate system (`upAxis`) and unit (`metersPerUnit`) handling is **baked into the shared decoders** (`lunco-usd-document/src/units.rs` — `StageMetrics` → `ConventionTransform`; `lunco-usd-bevy` supplies only the live-stage reader adapter), **not applied at the root entity level**. A root-only rotation/scale is explicitly rejected: avian colliders, `big_space`, and the f64 frame tree all assume canonical SI Y-up, so a non-SI value must never flow downstream — it would *look* right in the viewport and be wrong everywhere else. Each prim's local transform is **conjugated** (`L' = S·L·S⁻¹`) and the leaf geometry converted (`p' = S·p`); both, not either. See [`docs/architecture/41-axes-and-units.md`](../../docs/architecture/41-axes-and-units.md).

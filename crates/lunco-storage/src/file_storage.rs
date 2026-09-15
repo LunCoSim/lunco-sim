@@ -3,7 +3,7 @@
 //! Reads / writes via `std::fs`. Only handles [`StorageHandle::File`] and
 //! [`StorageHandle::Memory`] variants — other variants return
 //! [`StorageError::Unsupported`]. (File-open/save pickers are a UI concern and
-//! live in `lunco_workbench::picker`, not on the `Storage` trait.)
+//! live in `lunco_workbench_file_dialog`, not on the `Storage` trait.)
 //!
 //! `Memory` is included here so unit / integration tests don't need a
 //! real temp dir. A single in-process map stores the blobs; different

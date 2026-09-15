@@ -155,12 +155,13 @@ depend on `lunco-usd` without compiling the interactive browser and viewport.
 
 ## Document model
 
-The headless USD document model lives in `lunco-usd-core::document`
-(`UsdDocument`, `UsdOp`, `UsdChange`, `LayerId`) together with the shared
-`DocumentRegistry<UsdDocument>`. Pure authoring helpers and schema metadata
-also live in `lunco-usd-core`; runtime document commands and projections remain
+The headless USD document model lives in `lunco-usd-document::document`
+(`UsdDocument`, `UsdChange`, `LayerId`) together with the shared
+`DocumentRegistry<UsdDocument>`. Typed operation contracts remain in
+`lunco-usd-core`; pure authoring helpers, schema metadata, and layer recipes
+live in `lunco-usd-document`; runtime document commands and projections remain
 in this crate. Edits author through OpenUSD's `Stage` by SDF path
-(`lunco_usd_core::author`).
+(`lunco_usd_document::author`).
 
 ## Engineering metadata
 

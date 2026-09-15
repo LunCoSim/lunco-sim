@@ -21,6 +21,7 @@ pub mod uri;
 pub mod viewport;
 
 pub mod commands;
+pub mod presentation;
 
 pub use menu::{
     CustomMenu, MenuCallback, MenuCtx, MenuIntents, SettingsSubmenu, UndoProbe, UndoProbeCtx,

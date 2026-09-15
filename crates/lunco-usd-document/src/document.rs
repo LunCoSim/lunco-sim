@@ -3517,59 +3517,6 @@ mod tests {
     }
 
     #[test]
-    fn attach_component_sequence_applies_end_to_end() {
-        // The attach lowering's op *shape* is unit-tested in `crate::attach`; this
-        // proves the whole sequence actually APPLIES in order onto a real document —
-        // the joint prim is defined before its relationships target it, the point3f
-        // anchors author, and the result composes into a jointed assembly.
-        use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
-
-        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
-        let mut doc = UsdDocument::with_origin(
-            DocumentId::new(50),
-            scene,
-            DocumentOrigin::writable_file("/tmp/attach.usda"),
-        );
-
-        let spec = AttachSpec::new(
-            LayerId::root(),
-            "/Rig/Chassis",
-            "Wheel",
-            "constraint_47",
-            "components/mobility/wheel.usda",
-            [0.5, -0.3, 1.2],
-            AttachJoint::Revolute { axis: Axis::X },
-        );
-        for op in attach_component_ops(&spec) {
-            doc.apply(op).expect("each attach op applies in sequence");
-        }
-
-        // The part and the joint are both authored…
-        assert!(
-            prim_exists(&doc, "/Rig/Chassis/Wheel"),
-            "part referenced in"
-        );
-        assert_eq!(
-            prim_type(&doc, "/Rig/Chassis/constraint_47").as_deref(),
-            Some("PhysicsRevoluteJoint"),
-            "joint prim defined with the requested type"
-        );
-        // …and the joint relates the two bodies, with the anchor derived from the
-        // placement (localPos0) — the whole point of the lowering.
-        let src = doc.source();
-        assert!(
-            src.contains("physics:body0") && src.contains("/Rig/Chassis"),
-            "body0 → host"
-        );
-        assert!(
-            src.contains("physics:body1") && src.contains("/Rig/Chassis/Wheel"),
-            "body1 → part"
-        );
-        assert!(src.contains("physics:localPos0"), "anchor authored");
-        assert!(src.contains("physics:axis"), "revolute axis authored");
-    }
-
-    #[test]
     fn set_attribute_string_round_trips_realistic_rhai_verbatim() {
         // `SetAttribute` with type `string` authors the value RAW: a rhai scenario's
         // source must survive serialize→reparse byte-for-byte without the caller
@@ -3754,18 +3701,23 @@ mod tests {
             reference_prim_path: None,
         })
         .unwrap();
-        assert!(left
-            .runtime_data()
-            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-            .is_some());
-        assert!(right
-            .runtime_data()
-            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-            .is_none());
-        assert!(source
-            .runtime_data()
-            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-            .is_none());
+        assert!(
+            left.runtime_data()
+                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+                .is_some()
+        );
+        assert!(
+            right
+                .runtime_data()
+                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+                .is_none()
+        );
+        assert!(
+            source
+                .runtime_data()
+                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+                .is_none()
+        );
 
         left.mark_saved();
         assert!(!left.is_dirty());
@@ -5248,14 +5200,15 @@ def Xform \"World\" (\n\
             value: "(0, 0, 0)".into(),
         })
         .unwrap();
-        assert!(doc
-            .apply(UsdOp::RemoveTimeSample {
+        assert!(
+            doc.apply(UsdOp::RemoveTimeSample {
                 edit_target: LayerId::root(),
                 path: "/Mover".into(),
                 name: "xformOp:translate".into(),
                 time: 99.0,
             })
-            .is_err());
+            .is_err()
+        );
         // Removing the right time succeeds and clears the curve.
         doc.apply(UsdOp::RemoveTimeSample {
             edit_target: LayerId::root(),

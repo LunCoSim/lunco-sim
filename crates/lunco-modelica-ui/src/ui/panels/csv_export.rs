@@ -40,12 +40,15 @@ pub fn save_csv_via_dialog(
     use lunco_storage::Storage as _;
 
     let storage = lunco_storage::FileStorage::new();
-    let hint = lunco_workbench::picker::SaveHint {
+    let hint = lunco_workbench_file_dialog::SaveHint {
         suggested_name: Some(suggested_name.to_string()),
         start_dir: None,
-        filters: vec![lunco_workbench::picker::OpenFilter::new("CSV", &["csv"])],
+        filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
+            "CSV",
+            &["csv"],
+        )],
     };
-    let handle = lunco_workbench::picker::pick_save_blocking(&hint)?; // user cancelled
+    let handle = lunco_workbench_file_dialog::pick_save_blocking(&hint)?; // user cancelled
 
     match futures_lite::future::block_on(storage.write(&handle, bytes)) {
         Ok(()) => Some(handle),

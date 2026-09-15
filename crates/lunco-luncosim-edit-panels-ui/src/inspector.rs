@@ -39,8 +39,8 @@ use lunco_usd_core::commands::{
     ApplyUsdOps, AttachComponent, CommitUsdProposal, CreateUsdProposal, DetachComponent,
     ReviewUsdProposal, UsdProposalReviewAction,
 };
-use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{UsdEditScope, UsdProposalId, UsdProposalState};
+use lunco_usd_document::document::{LayerId, UsdOp};
 
 fn report_inspector_error(world: &mut World, message: impl Into<String>) {
     let message = message.into();
@@ -441,8 +441,8 @@ fn mount_attachment_edit_target(
     component_path: &str,
     joint_path: &str,
 ) -> Option<LayerId> {
-    let registry =
-        world.resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>();
+    let registry = world
+        .resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>();
     let document = registry.host(doc)?.document();
     let paths = [
         openusd::sdf::Path::new(component_path).ok()?,
@@ -1284,7 +1284,7 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         return;
     };
     let document_state = ctx
-        .resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>()
+        .resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>()
         .and_then(|registry| registry.host(doc))
         .map(|host| {
             let document = host.document();
@@ -2250,7 +2250,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
 /// The ⎇ Variants section — one row per variant set the selected prim ships,
 /// from the [`UsdVariantView`](crate::usd_variants::UsdVariantView)
 /// view-model. Picking an option dispatches
-/// [`UsdOp::SetVariantSelection`](lunco_usd_core::document::UsdOp), so it journals,
+/// [`UsdOp::SetVariantSelection`](lunco_usd_document::document::UsdOp), so it journals,
 /// replicates and undoes like every other authoring edit.
 ///
 /// This is how a scenario scene switches which real lunar site it composes

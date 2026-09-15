@@ -216,7 +216,6 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
 pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
     let mut app = App::new();
     lunco_assets_core::register_lunco_asset_sources(&mut app);
-    app.add_plugins(lunco_assets::datasets::DatasetsPlugin);
 
     let mut plugins = default_plugins();
     let compute = if let Some(threads) = compute_threads {
@@ -414,7 +413,9 @@ fn replay_scenario_journal(
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
     local_scenario: Option<Res<lunco_networking::scenario::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    mut registry: ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>,
+    mut registry: ResMut<
+        lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
+    >,
     // Entry ids already projected onto the scene (once-per-entry guard).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
     // The host's replay base, latched the first frame its manifest exists.
@@ -1348,7 +1349,7 @@ fn on_set_rhai_policy(
     mut commands: Commands,
 ) {
     use lunco_usd_core::commands::ApplyUsdOp;
-    use lunco_usd_core::{LayerId, UsdOp};
+    use lunco_usd_document::document::{LayerId, UsdOp};
     let cmd = trigger.event();
     let roots: Vec<_> = roots.iter().collect();
     let [root] = roots.as_slice() else {
@@ -1554,6 +1555,11 @@ mod big_space_propagation_gate_tests {
 impl Plugin for LunCoSimCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
+
+        // Dataset discovery and provisioning are shared simulation services.
+        // Install them at the common core boundary so GUI and headless hosts
+        // expose the same DatasetRegistry before terrain projection runs.
+        app.add_plugins(lunco_assets::datasets::DatasetsPlugin);
 
         // Asset and loaded-stage validation is a shared headless/UI service;
         // install it once with the simulator core rather than coupling it to

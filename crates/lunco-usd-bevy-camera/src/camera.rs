@@ -37,7 +37,7 @@ use bevy::prelude::*;
 use openusd::schemas::geom::{self, tokens};
 use openusd::sdf::{Path as SdfPath, Value};
 
-use lunco_usd_bevy_core::units::StageMetrics;
+use lunco_usd_document::units::StageMetrics;
 
 /// `UsdGeomCamera` spec defaults (Pixar), so an unauthored attribute matches a
 /// standard ~50 mm full-frame camera rather than Bevy's 45° default FOV.
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn authored_clipping_range_converts_from_stage_units_to_metres() {
-        let recipe = lunco_usd_core::StageRecipe::from_source(
+        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (10, 1000)\n}\n",
         );
@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn omitted_clipping_range_uses_usd_defaults_in_stage_units() {
-        let recipe = lunco_usd_core::StageRecipe::from_source(
+        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{}\n",
         );
@@ -670,7 +670,7 @@ mod tests {
 
     #[test]
     fn invalid_authored_clipping_range_is_rejected() {
-        let recipe = lunco_usd_core::StageRecipe::from_source(
+        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (0, 100)\n}\n",
         );
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn invalid_authored_focal_length_is_rejected_instead_of_using_a_heuristic_fov() {
-        let recipe = lunco_usd_core::StageRecipe::from_source(
+        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float focalLength = 0\n}\n",
         );
@@ -699,7 +699,8 @@ mod tests {
             "uniform token projection = \"fisheye\"",
         ] {
             let source = format!("#usda 1.0\ndef Camera \"Camera\"\n{{\n    {projection}\n}}\n");
-            let recipe = lunco_usd_core::StageRecipe::from_source("camera.usda", &source);
+            let recipe =
+                lunco_usd_document::recipe::StageRecipe::from_source("camera.usda", &source);
             let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
                 .expect("build camera");
             let path = SdfPath::new("/Camera").unwrap();
@@ -709,7 +710,7 @@ mod tests {
 
     #[test]
     fn omitted_camera_exposure_uses_scene_calibration() {
-        let recipe = lunco_usd_core::StageRecipe::from_source(
+        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n}\n",
         );
@@ -721,7 +722,7 @@ mod tests {
 
     #[test]
     fn authored_camera_exposure_converts_once_from_usd_fields() {
-        let recipe = lunco_usd_core::StageRecipe::from_source(
+        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 200\n    float exposure = 1\n}\n",
         );
@@ -736,7 +737,7 @@ mod tests {
 
     #[test]
     fn invalid_authored_camera_exposure_is_rejected() {
-        let recipe = lunco_usd_core::StageRecipe::from_source(
+        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 0\n}\n",
         );
@@ -751,7 +752,7 @@ mod tests {
 
     #[test]
     fn authored_camera_exposure_with_wrong_type_is_rejected() {
-        let recipe = lunco_usd_core::StageRecipe::from_source(
+        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    string exposure:iso = \"film\"\n}\n",
         );

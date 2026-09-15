@@ -42,7 +42,7 @@ use lunco_doc::DocumentId;
 use lunco_modelica_ui_core::FocusDocumentByName;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_core::document::{LayerId, UsdOp};
+use lunco_usd_document::document::{LayerId, UsdOp};
 use lunco_usd_viewport_ui::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 
 use projection::{

@@ -26,8 +26,8 @@
 //! That keeps the geometry unit-testable with no world, no composition, and no
 //! I/O while keeping attach undo atomic.
 
-use crate::document::{LayerId, UsdOp};
 use bevy::prelude::Reflect;
+use lunco_usd_document::document::{LayerId, UsdOp};
 
 /// The joint that fixes the attached part to its host.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize)]

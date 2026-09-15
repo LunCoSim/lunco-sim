@@ -485,7 +485,7 @@ fn render_unified_toolbar(
             .on_hover_text("Docs — view the model's documentation");
         if r_docs.clicked() { new_view_mode = ModelViewMode::Docs; }
         let toggles_rect = r_text.rect.union(r_docs.rect).union(r_canvas.rect).union(r_icon.rect);
-        ctx.resource_scope::<lunco_workbench::HelpAnchors, _>(|_ctx, a| {
+        ctx.resource_scope::<lunco_workbench_core::presentation::HelpAnchors, _>(|_ctx, a| {
             a.set("model_view.view_toggles", toggles_rect);
         });
         ui.separator();
@@ -635,7 +635,7 @@ fn render_unified_toolbar(
         // (🔨 Compile, ▶ Run, ⏩ Fast Run) so the help tour can spotlight
         // where simulation is launched.
         let compile_buttons_rect = r_compile.rect.union(r_run.rect).union(r_fast.rect);
-        ctx.resource_scope::<lunco_workbench::HelpAnchors, _>(|_ctx, a| {
+        ctx.resource_scope::<lunco_workbench_core::presentation::HelpAnchors, _>(|_ctx, a| {
             a.set("model_view.compile_buttons", compile_buttons_rect);
         });
 

@@ -20,8 +20,8 @@ use lunco_scene_catalog::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, S
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
-use lunco_usd_core::document::UsdDocument;
-use lunco_usd_core::document::{LayerId, UsdOp};
+use lunco_usd_document::document::UsdDocument;
+use lunco_usd_document::document::{LayerId, UsdOp};
 use openusd::schemas::lux::tokens as ltok;
 
 /// Select one live scene entity through the render-free shared selection
@@ -45,6 +45,7 @@ pub fn on_select_scene_entity(
     trigger: On<SelectSceneEntity>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     selected: Option<ResMut<SelectedEntities>>,
+    q_paths: Query<&UsdPrimPath>,
 ) {
     let Some(mut selected) = selected else {
         return;
@@ -52,28 +53,82 @@ pub fn on_select_scene_entity(
     let command = trigger.event();
     if command.entity_id == 0 {
         selected.entities.clear();
+        selected.stable_paths.clear();
         return;
     }
     let Some(target) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(command.entity_id))
     else {
         return;
     };
+    let path = q_paths.get(target).ok().map(|prim| prim.path.clone());
     if command.remove_only {
         selected.entities.retain(|entity| *entity != target);
+        if let Some(path) = path {
+            selected.stable_paths.retain(|selected| selected != &path);
+        }
     } else if command.toggle {
         if selected.entities.contains(&target) {
             selected.entities.retain(|entity| *entity != target);
+            if let Some(path) = path {
+                selected.stable_paths.retain(|selected| selected != &path);
+            }
         } else {
             selected.entities.push(target);
+            if let Some(path) = path {
+                if !selected
+                    .stable_paths
+                    .iter()
+                    .any(|selected| selected == &path)
+                {
+                    selected.stable_paths.push(path);
+                }
+            }
         }
     } else if command.extend {
         if !selected.entities.contains(&target) {
             selected.entities.push(target);
         }
+        if let Some(path) = path {
+            if !selected
+                .stable_paths
+                .iter()
+                .any(|selected| selected == &path)
+            {
+                selected.stable_paths.push(path);
+            }
+        }
     } else {
         selected.entities.clear();
         selected.entities.push(target);
+        selected.stable_paths.clear();
+        if let Some(path) = path {
+            selected.stable_paths.push(path);
+        }
     }
+}
+
+/// Re-resolve stable scene selection paths after USD replaces their ECS
+/// projections. The selection command owns the requested paths; this generic
+/// bridge owns only the disposable entity realization.
+fn reconcile_stable_scene_selection(
+    mut selected: ResMut<SelectedEntities>,
+    stage_revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
+    q_paths: Query<(Entity, &UsdPrimPath)>,
+) {
+    if !selected.is_changed() && !stage_revision.is_changed() {
+        return;
+    }
+    let requested = selected.stable_paths.clone();
+    if requested.is_empty() {
+        return;
+    }
+    let mut resolved = Vec::with_capacity(requested.len());
+    for path in requested {
+        if let Some((entity, _)) = q_paths.iter().find(|(_, prim)| prim.path == path) {
+            resolved.push(entity);
+        }
+    }
+    selected.entities = resolved;
 }
 
 /// Detach a joint by despawning it.
@@ -1370,7 +1425,7 @@ fn is_mount_component(
     };
     registry.host(doc).is_some_and(|host| {
         let composed = host.document().composed();
-        lunco_usd_core::usd_data::has_authored_api_schema(
+        lunco_usd_document::usd_data::has_authored_api_schema(
             &composed,
             &path,
             "LunCoMountAttachmentAPI",
@@ -1432,9 +1487,13 @@ pub fn on_delete_entity(
             }
         }
     }
+    let deleted_path = q_prim.get(cmd.target).ok().map(|prim| prim.path.clone());
     commands.entity(cmd.target).try_despawn();
     if let Some(mut selected) = selected {
         selected.entities.retain(|e| *e != cmd.target);
+        if let Some(path) = deleted_path {
+            selected.stable_paths.retain(|selected| selected != &path);
+        }
     }
 }
 
@@ -2017,6 +2076,7 @@ impl Plugin for SpawnCommandPlugin {
         // verb is available consistently through the HTTP API, Rhai, and
         // `discover_schema`.
         register_all_commands(app);
+        app.add_systems(Update, reconcile_stable_scene_selection);
         // The read-only scene surface is a separate production package, so query
         // changes do not rebuild this much larger mutation layer.
         app.add_plugins(lunco_scene_queries::SceneQueryPlugin);

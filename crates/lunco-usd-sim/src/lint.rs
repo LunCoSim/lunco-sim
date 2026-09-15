@@ -206,7 +206,7 @@ fn gear_drive_facts(reader: &StageView<'_>) -> Vec<H> {
 mod tests {
     use super::*;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_core::StageRecipe;
+    use lunco_usd_document::recipe::StageRecipe;
 
     #[test]
     fn network_facts_use_the_runtime_role_classifier() {

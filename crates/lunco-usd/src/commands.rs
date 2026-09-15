@@ -26,7 +26,7 @@
 //! so File menus, picker dialogs, and `twin.toml` parsers see USD
 //! without any central edit.
 
-use lunco_usd_core::document::UsdDocument;
+use lunco_usd_document::document::UsdDocument;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -53,11 +53,11 @@ use lunco_usd_core::commands::{
     CommitUsdProposal, CreateUsdProposal, DetachComponent, EmptyViewportReason, ReviewUsdProposal,
     UsdDocumentReady, UsdProposalReviewAction, USD_DOCUMENT_KIND,
 };
-use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{
     validate_proposal, UsdEditSessions, UsdProposalId, UsdProposalState,
 };
-use lunco_usd_core::UsdDataExt;
+use lunco_usd_document::document::{LayerId, UsdOp};
+use lunco_usd_document::usd_data::UsdDataExt;
 use lunco_usd_sim_cosim::{
     clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
     ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
@@ -1595,7 +1595,7 @@ fn proposal_diagnostics(diagnostics: &[String]) -> String {
 /// recipe root with its current opinions for each synchronous operation.
 fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
     let recipe = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc).map(|stage| {
-        lunco_usd_core::StageRecipe {
+        lunco_usd_document::recipe::StageRecipe {
             root_id: stage.scene_layer.clone(),
             bytes: stage.layer_bytes_snapshot(),
         }
@@ -2687,7 +2687,7 @@ fn validate_detach_component(
     if composed.spec(&joint).is_none() {
         return Err(format!("joint {} does not exist", spec.joint_path));
     }
-    if !lunco_usd_core::usd_data::has_authored_api_schema(
+    if !lunco_usd_document::usd_data::has_authored_api_schema(
         &composed,
         &component,
         "LunCoMountAttachmentAPI",
@@ -2716,7 +2716,7 @@ fn validate_detach_component(
             host_path.as_str()
         ));
     }
-    if !lunco_usd_core::usd_data::has_authored_api_schema(
+    if !lunco_usd_document::usd_data::has_authored_api_schema(
         &composed,
         &host_path,
         "PhysicsRigidBodyAPI",
@@ -2744,7 +2744,7 @@ fn validate_detach_component(
                 host_path, socket_target
             )
         })?;
-        if !lunco_usd_core::usd_data::has_authored_api_schema(
+        if !lunco_usd_document::usd_data::has_authored_api_schema(
             &composed,
             &socket,
             "LunCoMountSocketAPI",
@@ -2857,7 +2857,7 @@ fn validate_attach_component(
     if composed.spec(&host_path).is_none() {
         return Err(format!("host body {} does not exist", spec.host_path));
     }
-    if !lunco_usd_core::usd_data::has_authored_api_schema(
+    if !lunco_usd_document::usd_data::has_authored_api_schema(
         &composed,
         &host_path,
         "PhysicsRigidBodyAPI",
@@ -2893,7 +2893,7 @@ fn validate_attach_component(
     let Some(socket_path) = spec.socket_path.as_deref() else {
         return Ok(());
     };
-    if !lunco_usd_core::usd_data::has_authored_api_schema(
+    if !lunco_usd_document::usd_data::has_authored_api_schema(
         &composed,
         &host_path,
         "LunCoMountHostAPI",
@@ -2917,8 +2917,11 @@ fn validate_attach_component(
             "socket {socket_path} does not exist in document {doc}"
         ));
     }
-    if !lunco_usd_core::usd_data::has_authored_api_schema(&composed, &socket, "LunCoMountSocketAPI")
-    {
+    if !lunco_usd_document::usd_data::has_authored_api_schema(
+        &composed,
+        &socket,
+        "LunCoMountSocketAPI",
+    ) {
         return Err(format!(
             "socket {socket_path} does not apply LunCoMountSocketAPI"
         ));
@@ -3384,7 +3387,7 @@ mod change_set_tests {
     use lunco_doc_bevy::JournalResource;
     use lunco_twin_journal::{AuthorTag, UndoManager, UndoScope};
     use lunco_usd_core::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
-    use lunco_usd_core::document::LayerId;
+    use lunco_usd_document::document::LayerId;
 
     const RIG: &str =
         "#usda 1.0\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";

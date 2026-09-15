@@ -22,7 +22,7 @@ command does not open a layer itself:
 it submits a `SceneTransitionIntent`, USD composes the requested scene, and the
 generic scenario driver starts after the scene/readiness lifecycle completes.
 
-The shared `lunco-workbench::guided_overlay` and Rhai prelude provide hints,
+The shared `lunco-workbench-guided-ui` package and Rhai prelude provide hints,
 spotlights, coach cards, and objectives. They are reusable presentation and
 scenario mechanisms, not tutorial ownership. Native asset loading rereads
 authored files where supported, so Rhai and catalog edits can be replayed

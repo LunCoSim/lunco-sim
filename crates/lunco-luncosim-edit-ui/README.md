@@ -34,9 +34,11 @@ document. Build owns the mounted Twin's general composition tools; a USD
 compound rigid-body root is one selectable assembly element there, while its
 internal parts are edited in Editor.
 
-The live selection is also readable through the public `InspectSelection` query:
-it returns stable API ids in selection order and the current primary id. This is
-the readback used by headful/API acceptance after issuing `SelectEntity`.
+The live selection is also readable through the shared public
+`InspectSelection` query. It returns stable API ids in selection order, the
+current primary id, stable USD paths, and the current stale-entry count. The
+query is available to both headful and headless hosts; this UI crate only
+adapts viewport gestures to the shared selection resource.
 
 ## Gizmo System
 

@@ -138,20 +138,6 @@ fn route_edit_path(context) {
         }
     }
 
-    let scene_root = context["scene_root_path"];
-    if scene_root != () && scene_root != "" {
-        let state = query("QueryUsdPrim", #{
-            doc_id: doc,
-            path: scene_root + "/__LunCoRuntime/ProgramSelection",
-            attrs: ["selectedPath"],
-        });
-        if state != () && state.ok != false && state.attrs != () {
-            let selected_program = state.attrs["selectedPath"];
-            let route = route_for_path(doc, selected_program, subject);
-            if route != () { return route; }
-        }
-    }
-
     // Twin-authored bindings may expose one or more programs from the subject
     // through the standard relationship used by this policy. One binding is
     // enough for an unattended/one-route workflow; more than one requires the

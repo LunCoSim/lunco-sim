@@ -14,8 +14,8 @@ use lunco_doc::DocumentId;
 use lunco_time::{AnimationPreview, Playback};
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_core::author::normalize_value_literal;
-use lunco_usd_core::document::{LayerId, UsdOp};
+use lunco_usd_document::author::normalize_value_literal;
+use lunco_usd_document::document::{LayerId, UsdOp};
 use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 use openusd::sdf::Path as SdfPath;
 

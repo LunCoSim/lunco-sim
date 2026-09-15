@@ -94,12 +94,14 @@ lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-guided-ui = { path = "../lunco-workbench-guided-ui" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }

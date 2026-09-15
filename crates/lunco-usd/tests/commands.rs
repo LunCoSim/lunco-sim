@@ -16,8 +16,8 @@ use lunco_usd_core::commands::{
     ApplyUsdOp, CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal, UsdProposalReviewAction,
     USD_DOCUMENT_KIND,
 };
-use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
 use lunco_usd_core::edit_session::{UsdEditScope, UsdEditSessions, UsdProposalState};
+use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
 
 fn install_command_result_resources(app: &mut App) {
     app.init_resource::<CommandResults>()
@@ -486,7 +486,7 @@ fn open_file_for_non_usd_path_is_noop() {
 #[test]
 fn apply_usd_op_builds_a_rover_through_typed_command_bus() {
     use lunco_doc::Document;
-    use lunco_usd_core::document::{LayerId, UsdOp};
+    use lunco_usd_document::document::{LayerId, UsdOp};
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -550,7 +550,7 @@ fn apply_usd_op_builds_a_rover_through_typed_command_bus() {
     // One more tick to flush any final queued world commands.
     app.update();
 
-    use lunco_usd_core::UsdDataExt;
+    use lunco_usd_document::usd_data::UsdDataExt;
     use openusd::sdf::Path as SdfPath;
     let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
     let host = reg.host(doc_id).expect("doc still alive");
@@ -592,7 +592,7 @@ fn apply_usd_op_builds_a_rover_through_typed_command_bus() {
 #[test]
 fn apply_usd_op_records_lossless_journal_entries() {
     use lunco_twin_journal::{DomainKind, EntryKind};
-    use lunco_usd_core::document::{LayerId, UsdOp};
+    use lunco_usd_document::document::{LayerId, UsdOp};
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);

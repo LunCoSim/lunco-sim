@@ -600,7 +600,7 @@ fn scene_base_uri(prim_path: &UsdPrimPath, asset_server: &AssetServer) -> Option
 mod tests {
     use super::*;
     use lunco_usd_bevy_core::canonical::CanonicalStages;
-    use lunco_usd_core::StageRecipe;
+    use lunco_usd_document::recipe::StageRecipe;
 
     /// A gprim that binds a WGSL material AND carries simulation wires — the shape
     /// every instrumented part in a scene has.

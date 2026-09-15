@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use lunco_usd_core::StageRecipe;
+use lunco_usd_document::recipe::StageRecipe;
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
@@ -1010,7 +1010,7 @@ impl CanonicalStages {
     pub fn rebuild(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
-        recipe: &lunco_usd_core::StageRecipe,
+        recipe: &lunco_usd_document::recipe::StageRecipe,
     ) -> bool {
         match CanonicalStage::from_recipe(recipe) {
             Ok(mut cs) => {
@@ -1033,7 +1033,7 @@ impl CanonicalStages {
     pub fn get_or_build(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
-        recipe: &lunco_usd_core::StageRecipe,
+        recipe: &lunco_usd_document::recipe::StageRecipe,
     ) -> Option<&CanonicalStage> {
         if let std::collections::hash_map::Entry::Vacant(entry) = self.by_asset.entry(asset) {
             match CanonicalStage::from_recipe(recipe) {
@@ -1365,7 +1365,7 @@ mod authoring_tests {
         let _ = cs.drain_changes();
 
         let rover = SdfPath::new("/World/Rover").unwrap();
-        let v = lunco_usd_core::author::parse_attribute_value("double3", "(1, 2, 3)").unwrap();
+        let v = lunco_usd_document::author::parse_attribute_value("double3", "(1, 2, 3)").unwrap();
         cs.author_time_sample(&rover, "xformOp:translate", "double3", 12.0, v)
             .expect("author keyframe");
         assert!(
@@ -1612,5 +1612,5 @@ mod authoring_tests {
     // `LunCoProgramAPI` metadata case). Active-state authoring and structural
     // reconciliation are covered by the generic canonical-stage and projection
     // tests above; document-level authoring + inverse remain in
-    // `lunco_usd_core::document::tests`.
+    // `lunco_usd_document::document::tests`.
 }

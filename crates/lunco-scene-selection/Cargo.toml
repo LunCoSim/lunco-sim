@@ -9,6 +9,8 @@ description = "Render-free scene selection state shared by runtime hosts and UI 
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-signal = { path = "../lunco-signal" }
+lunco-api = { path = "../lunco-api" }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

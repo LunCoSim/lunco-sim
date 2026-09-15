@@ -16,7 +16,7 @@
 // pipeline, and the twin-scene resolver. The browser and viewport presentation
 // lives in `lunco-usd-ui`; `document` is the USD document model and the shared
 // `DocumentRegistry<UsdDocument>` owns document identity. Edits author through
-// OpenUSD's Stage by SDF path (`lunco_usd_core::author`).
+// OpenUSD's Stage by SDF path (`lunco_usd_document::author`).
 pub mod commands;
 pub mod live_consume;
 pub(crate) mod program_runtime;

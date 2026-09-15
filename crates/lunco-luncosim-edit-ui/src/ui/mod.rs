@@ -538,10 +538,6 @@ impl Plugin for SceneEditUiPlugin {
             .init_resource::<lunco_core::ArmedScriptTool>()
             .init_resource::<crate::script_tools::ScenePointerDispatch>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
-        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
-        app.world_mut()
-            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
-            .register(crate::selection::InspectSelectionProvider);
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(crate::diagnostic_visuals::DiagnosticVisualsQueryProvider);

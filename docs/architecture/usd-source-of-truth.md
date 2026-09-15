@@ -73,7 +73,7 @@ document ownership available to the asset differs.
 - Editable **`UsdDocument`** held in **`UsdDocumentRegistry`**, with **base + runtime
   layers** (`LayerId::root()` / `LayerId::runtime()`), a **`generation`** counter, and a
   **journal** (undo/redo).
-- `UsdOp::SetAttribute` (`lunco-usd-core/src/document.rs`) mutates the in-memory layer
+- `UsdOp::SetAttribute` (`lunco-usd-document/src/document.rs`) mutates the in-memory layer
   `sdf::Data`, `commit`s (bumps `generation`), and **returns an inverse op** → undo for
   free.
 - Projected into ECS by the state contract in `lunco-usd-bevy-twin` and the
@@ -149,7 +149,7 @@ namespace.
   (`lunco-usd-bevy-scene`) is the per-entity link back to its prim.
 - Reverse lookup (prim path → entity) exists only as an **ad-hoc, per-call HashMap**
   (`lunco-usd-sim-cosim/src/lib.rs`), not a maintained index.
-- Reading composed attrs: `UsdDataExt` (`lunco-usd-core/src/usd_data.rs`) —
+- Reading composed attrs: `UsdDataExt` (`lunco-usd-document/src/usd_data.rs`) —
   `prim_children`, `prim_attribute_value::<T>`, `field`, `prim_type_name`.
 - Shader projection reads authored `inputs:*` from the composed bound Shader;
   connected inputs remain graph-owned and are not treated as local parameter
@@ -294,13 +294,13 @@ prim→entity.
 
 - `lunco-scene-authoring/src/properties.rs` — `SetObjectProperty` struct and observers
 - `lunco-scene-authoring/src/properties.rs` — `on_set_object_property`
-- `lunco-usd-core/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
+- `lunco-usd-document/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
 - `lunco-usd-bevy-twin/src/lib.rs` — document-backed Twin identity, leases, document-to-mounted-stage lookup, and stage ownership state
 - `lunco-usd/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
 - `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
 - `lunco-usd/src/commands.rs` — scene command admission and document registration
 - `lunco-usd-bevy-core/src/asset.rs` — `UsdStageAsset`; `lunco-usd-bevy-scene/src/lib.rs` — `UsdPrimPath`
-- `lunco-usd-core/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
+- `lunco-usd-document/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
 - `lunco-usd-sim-cosim/src/lib.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
 - `lunco-usd-terrain/src/lib.rs` — `refresh_layered_terrain_layers` (the
   per-domain projection-on-`Modified` precedent)

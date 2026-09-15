@@ -263,7 +263,7 @@ pub fn on_save_as_document(
             };
             (name, document.source().to_string())
         };
-        lunco_workbench::picker::download_file(&name, &source);
+        lunco_workbench_file_dialog::download_file(&name, &source);
         registry.mark_document_saved(doc);
         let msg = format!("Downloaded {} ({} bytes)", name, source.len());
         info!("[SaveAs] {msg}");
@@ -291,18 +291,18 @@ pub fn on_save_as_document(
                 .active_twin
                 .and_then(|id| workspace.twin(id))
                 .map(|t| lunco_storage::StorageHandle::File(t.root.clone()));
-            commands.trigger(lunco_workbench::picker::PickHandle {
-                mode: lunco_workbench::picker::PickMode::SaveFile(
-                    lunco_workbench::picker::SaveHint {
+            commands.trigger(lunco_workbench_file_dialog::PickHandle {
+                mode: lunco_workbench_file_dialog::PickMode::SaveFile(
+                    lunco_workbench_file_dialog::SaveHint {
                         suggested_name: Some(suggested_name),
                         start_dir,
-                        filters: vec![lunco_workbench::picker::OpenFilter::new(
+                        filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
                             "Modelica models",
                             &["mo"],
                         )],
                     },
                 ),
-                on_resolved: lunco_workbench::picker::PickFollowUp::SaveAs(doc),
+                on_resolved: lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
             });
             return;
         }
