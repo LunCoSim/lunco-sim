@@ -99,6 +99,9 @@ impl Plugin for ModelicaWorkbenchPlugin {
         if !app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>() {
             app.add_plugins(lunco_workbench::WorkbenchPlugin);
         }
+        if !app.is_plugin_added::<lunco_workbench_guided_ui::GuidedOverlayPlugin>() {
+            app.add_plugins(lunco_workbench_guided_ui::GuidedOverlayPlugin);
+        }
         if !app.is_plugin_added::<lunco_workbench_browser::TwinBrowserPlugin>() {
             app.add_plugins(lunco_workbench_browser::TwinBrowserPlugin);
         }

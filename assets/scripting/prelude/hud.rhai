@@ -3,7 +3,8 @@
 // Unlike notify() toasts (which fade after a few seconds), these stay on screen
 // until changed or cleared — so a tutorial can hold a hint up while the user
 // acts, show a live objectives checklist, and point at a workbench widget.
-// Rendered by lunco-workbench's guided_overlay (sandbox + lunica both load it).
+// Rendered by the optional lunco-workbench-guided-ui adapter (sandbox + lunica
+// both load it).
 
 /// Set the persistent one-line hint at the top of the HUD.
 fn hint(msg)                   { cmd("SetHint", #{ text: msg }) }

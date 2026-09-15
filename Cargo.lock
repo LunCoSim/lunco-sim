@@ -7791,6 +7791,7 @@ dependencies = [
  "lunco-workbench",
  "lunco-workbench-browser",
  "lunco-workbench-core",
+ "lunco-workbench-guided-ui",
  "lunco-workbench-widgets",
  "lunco-workspace",
  "resvg",
@@ -8015,6 +8016,7 @@ dependencies = [
  "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workbench-datasets-ui",
+ "lunco-workbench-guided-ui",
  "lunco-workbench-widgets",
  "lunco-workspace",
  "lunco-workspace-api",
@@ -9357,6 +9359,18 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-workbench-browser",
  "lunco-workspace",
+]
+
+[[package]]
+name = "lunco-workbench-guided-ui"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-core",
+ "lunco-theme",
+ "lunco-workbench-core",
+ "lunco-workbench-widgets",
 ]
 
 [[package]]

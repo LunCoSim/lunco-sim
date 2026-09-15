@@ -47,7 +47,9 @@ publishes `WorkbenchSnapshot` for consumers that need current layout facts.
 The Twin and Files browser is a separate reusable feature package,
 `lunco-workbench-browser`, which consumes the core/widget contracts without
 linking this shell; hosts compose both explicitly when they need those
-navigation surfaces.
+navigation surfaces. Guided HUDs and coach-mark tours are likewise an optional
+host-level feature in `lunco-workbench-guided-ui`; the base shell publishes the
+generic anchor and render-set contracts but does not install guided behavior.
 
 | Type | Role |
 |------|------|
@@ -119,6 +121,9 @@ App::new()
     .add_plugins(WorkbenchPlugin)
     .add_plugins(TwinBrowserPlugin);
 ```
+
+Hosts that render authored guided scenarios also add
+`lunco_workbench_guided_ui::GuidedOverlayPlugin` after `WorkbenchPlugin`.
 
 The workbench is embedded by the apps that use it — run one of them to see it live:
 

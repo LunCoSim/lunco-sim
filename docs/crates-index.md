@@ -137,6 +137,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, tab/source-view commands, scene display state, pending close state, panel registration, perspective layout plans, menu contributions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
 | **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel-host consumption, persistence, viewport integration, and shell-owned command observers. It consumes `lunco-workbench-core` and `lunco-workbench-widgets`; headless adapters use the core contract without linking this shell. |
+| **`lunco-workbench-guided-ui`** | Optional application-level guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
 | **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
 | **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets-datasets`' shared registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
@@ -593,6 +594,14 @@ live in the independent `lunco-render-recovery` crate; the workbench only
 composes its banner and recovery systems. Hosts that need Twin and Files
 navigation add the separate `lunco-workbench-browser` feature package, which
 does not link this shell.
+
+**`lunco-workbench-guided-ui`**
+Optional application presentation for authored guided scenarios. It owns the
+Rhai-facing HUD, spotlight, coach-mark, and recovery surfaces and is installed
+explicitly by a host after `lunco-workbench`. The generic `HelpAnchors` and
+`ViewportPlaceholder` resources remain in `lunco-workbench-core`, so the shell
+and domain panels can publish/read presentation facts without depending on a
+tutorial implementation.
 
 **`lunco-workbench-browser`**
 Reusable navigation feature for a rendered host. It owns the Twin and Files

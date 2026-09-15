@@ -24,8 +24,8 @@ use lunco_doc_bevy::{
 };
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_workbench::ViewportPlaceholder;
 use lunco_workbench_browser::{BrowserSectionRegistry, TwinBrowserPlugin};
+use lunco_workbench_core::presentation::ViewportPlaceholder;
 use lunco_workbench_core::PanelId;
 
 use lunco_usd_bevy_twin::UsdDocumentUserOwned;

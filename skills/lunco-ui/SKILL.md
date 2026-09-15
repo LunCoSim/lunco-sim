@@ -32,12 +32,15 @@ and design decisions. This skill is a quick-reference summary.
 3. **Panels are `Panel` impls** (the contract lives in `lunco_workbench_core`) — registered via `lunco_workbench_core::WorkbenchPanelAppExt::register_panel()`. The concrete shell drains that registration into its docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
-The workbench is deliberately three layers. `lunco-workbench-core` contains
+The workbench is deliberately split into contracts, reusable presentation,
+optional guided presentation, and the concrete shell. `lunco-workbench-core` contains
 the stable `Panel`/`PanelCtx`, `InstancePanel`, `PerspectiveLayoutPlan`, menu
 registry, `WorkbenchSnapshot`, scheduling labels, and perspective command
 payloads. It is safe for domain UI crates that need panel behavior or published
-layout facts and does not pull the renderer or `egui_dock`. `lunco-workbench`
-is the concrete shell: it owns
+layout facts and does not pull the renderer or `egui_dock`. `lunco-workbench-guided-ui`
+owns optional Rhai-driven HUDs, spotlights, coach-mark tours, and guided-recovery
+surfaces; hosts add it explicitly after the shell. `lunco-workbench` is the
+concrete shell: it owns
 docking, egui/bevy integration, persistence, source editing, and shell-only
 widgets such as icons and tree renderers. `lunco-workbench-widgets` owns the
 shell-independent icon, text-editor, and tree helpers. `lunco-workbench-browser` is the
@@ -94,7 +97,7 @@ coalesces consecutive identical discrete snapshots before this shared reader;
 do not hide producer floods in a renderer-specific filter.
 
 Tutorial HUDs, rings, coach/recovery cards, and completion prompts use
-`lunco_workbench::guided_overlay::GUIDED_OVERLAY_ORDER` (`egui::Order::Middle`);
+`lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER` (`egui::Order::Middle`);
 their scrims use the shared `GUIDED_SCRIM_ORDER` (`egui::Order::Background`).
 Workbench menus and window controls are egui `Foreground` surfaces and therefore
 remain above both tutorial layers visually and for input. The workbench measures

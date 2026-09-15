@@ -83,6 +83,7 @@ use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 use lunco_controller::InputBindingsSettings;
 use lunco_core::{SceneViewport, UserIntent};
 use lunco_render::SceneCamera;
+use lunco_workbench_core::presentation::ViewportPlaceholder;
 use lunco_workbench_core::scene_pick::{EguiPointerState, ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::{PanelRect, PanelRects, VIEWPORT_PANEL_ID};
 
@@ -101,23 +102,6 @@ pub struct WorkbenchEguiHost;
 struct ViewportPanelMeasured {
     rect: PanelRect,
     over_scene: bool,
-}
-
-/// Empty-state text drawn centered over the 3D viewport region.
-///
-/// When `message` is `Some`, the workbench paints it centered over the
-/// viewport — in **both** the full-window "View" perspective (empty
-/// layout) and the docked "Build" perspective (where [`ViewportPanel`]
-/// holds the centre). When `None`, nothing is drawn.
-///
-/// The workbench owns the *rendering* (so it shows regardless of
-/// perspective) but is domain-agnostic about *when* to show it: a
-/// domain crate that knows what "empty" means — e.g. `lunco-usd`,
-/// "no USD scene loaded" — sets `message`. See `render_layout`.
-#[derive(Resource, Default)]
-pub struct ViewportPlaceholder {
-    /// Text to show, or `None` to draw nothing.
-    pub message: Option<String>,
 }
 
 /// Workbench-central panel that reserves a rect for the 3D viewport.
