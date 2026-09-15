@@ -17,7 +17,7 @@ default = ["api", "transport-http", "ui", "scripting"]
 ui = [
     # Workbench API queries are UI-only, and NOT on `lunco-api` (a server build enables that).
     "lunco-workbench/api",
-    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-browser", "dep:lunco-workbench-datasets-ui", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
+    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-browser", "dep:lunco-workbench-datasets-ui", "dep:lunco-workbench-core", "dep:lunco-workbench-widgets", "dep:lunco-status-core", "dep:lunco-ui",
     "dep:lunco-viz", "dep:lunco-canvas",
     "lunco-doc-bevy/ui",
     "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:arboard",
@@ -104,6 +104,7 @@ lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-workbench-browser = { path = "../lunco-workbench-browser", optional = true }
 lunco-workbench-datasets-ui = { path = "../lunco-workbench-datasets-ui", optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
+lunco-workbench-widgets = { path = "../lunco-workbench-widgets", optional = true }
 lunco-status-core = { path = "../lunco-status-core", optional = true }
 lunco-web = { workspace = true }
 lunco-ui = { path = "../lunco-ui", optional = true }

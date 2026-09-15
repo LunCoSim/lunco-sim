@@ -19,7 +19,8 @@
 > `lunco-status-core` owns renderer-independent lifecycle, progress, and status
 > data. The workbench status bar is one consumer of that contract, alongside
 > busy widgets and headless diagnostics. `lunco-workbench-core` is the stable
-> workbench contract crate, `lunco-workbench` is the concrete shell, and
+> workbench contract crate, `lunco-workbench-widgets` owns shell-independent
+> egui controls, `lunco-workbench` is the concrete shell, and
 > `lunco-workbench-browser` is the optional navigation feature. Together they
 > are depended on by ~10 crates
 > (luncosim, lunco-luncosim, lunco-luncosim-edit-core, lunco-luncosim-edit-ui,
@@ -51,7 +52,9 @@ the 3D world. The `lunco-workbench-core` crate defines the stable panel,
 perspective, menu, read-model, scheduling-label, and command-payload
 contracts. The `lunco-workbench` crate owns
 the concrete `egui_dock`/`bevy_egui` shell that materializes those contracts,
-including persistence and viewport integration. The optional
+including persistence and viewport integration. The
+`lunco-workbench-widgets` crate owns reusable icons, text-editor builders, and
+hierarchy-row presentation without depending on the shell. The optional
 `lunco-workbench-browser` crate builds the reusable Twin and Files navigation
 panels on top of that shell. GPU health, adapter capability admission, and
 presentation recovery are owned by the independent
@@ -89,8 +92,10 @@ It revealed architectural mismatches for a 3D-canvas engineering app:
 `lunco-workbench` is built around a **SidePanel + CentralPanel** root layout
 (the standard egui pattern for CAD/IDE apps), with `egui_dock` used by the
 concrete shell for tabbed dock trees. Domain crates depend on
-`lunco-workbench-core` for contracts and do not need to link the shell merely
-to implement a panel or perspective.
+`lunco-workbench-core` for contracts and `lunco-workbench-widgets` for common
+egui controls; they do not need to link the shell merely to implement a panel
+or perspective. The shell drains the core panel-registration queue into its
+private dock layout.
 
 ## 3. The standard layout
 
@@ -499,7 +504,7 @@ navigation actions.
 
 ### 5c. Shared hierarchy presentation
 
-`lunco-workbench::tree::{branch, leaf}` is the single presentation owner for
+`lunco-workbench-widgets::tree::{branch, leaf}` is the single presentation owner for
 hierarchy rows rendered by workbench panels. It provides the common disclosure
 control, full-width row allocation, persistent expansion identity, and
 indented child body. USD prim/stage browsers, entity trees, telemetry trees,
@@ -860,7 +865,7 @@ simulation default.
    │         ├── lunco-ui busy widgets
    │         └── headless/API diagnostics
    │
-   ├── lunco-workbench-core  (stable contracts)
+   ├── lunco-workbench-core  (stable contracts + panel registration)
    │     - Panel / InstancePanel + PanelCtx
    │     - Perspective + PerspectiveLayoutPlan
    │     - Menu registry + WorkbenchSnapshot
@@ -869,6 +874,10 @@ simulation default.
    ├── lunco-render-recovery  (GPU health and presentation gate)
    │     - wgpu error handling and adapter capability admission
    │     - bounded recovery ladder and scene-teardown reset
+   │         │
+   │         ▼
+   ├── lunco-workbench-widgets  (shell-independent egui controls)
+   │     - semantic vector icons, text editors, hierarchy rows
    │         │
    │         ▼
    ├── lunco-workbench  (concrete app shell — this document)
@@ -898,6 +907,8 @@ simulation default.
   perspective plans, menu contributions, and published layout facts.
 - `lunco-render-recovery` is the concrete presentation-resilience boundary —
   adapter admission, GPU error handling, and the terminal presentation gate.
+- `lunco-workbench-widgets` owns shell-independent icons, text-editor builders,
+  and hierarchy-row presentation so reusable panels do not depend on docking.
 - `lunco-workbench` is the concrete app framework — layout, persistence,
   workspace integration, viewport composition, source editing, and panel host.
 - `lunco-workbench-browser` is the optional navigation feature — Twin/Files
@@ -908,8 +919,8 @@ simulation default.
 - `lunco-viz` owns live and multi-series trajectory rendering; domain crates
   provide the series data and keep experiment policy local.
 - Domain crates contribute **Panel** implementations that use `lunco-ui`
-  widgets and `lunco-workbench-core`'s Panel trait. They use
-  `lunco-workbench` only for shell-owned widgets, commands, or other concrete
+  widgets, `lunco-workbench-widgets`, and `lunco-workbench-core`'s Panel trait.
+  They use `lunco-workbench` only for shell-owned commands or other concrete
   presentation integration. Browser consumers use `lunco-workbench-browser`
   for Twin/Files state, panels, and section registration.
 

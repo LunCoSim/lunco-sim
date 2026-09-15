@@ -127,7 +127,7 @@ impl VizKindCatalog {
 }
 
 /// `App` extension for registering viz kinds, mirroring
-/// `lunco_workbench::WorkbenchAppExt::register_panel`.
+/// `lunco_workbench_core::WorkbenchPanelAppExt::register_panel`.
 pub trait AppVizExt {
     fn register_visualization<V: Visualization + Default>(&mut self) -> &mut Self;
 }

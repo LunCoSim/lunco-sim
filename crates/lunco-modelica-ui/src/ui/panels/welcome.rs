@@ -681,13 +681,15 @@ impl Panel for WelcomePanel {
                         ui.label("Search");
                         let _ = ui.add_sized(
                             [560.0, 26.0],
-                            lunco_workbench::text_editor::singleline(&mut wstate.browse_query)
-                                .hint_text("search…"),
+                            lunco_workbench_widgets::text_editor::singleline(
+                                &mut wstate.browse_query,
+                            )
+                            .hint_text("search…"),
                         );
                         if !wstate.browse_query.is_empty()
-                            && lunco_workbench::icon_button(
+                            && lunco_workbench_widgets::icon_button(
                                 ui,
-                                lunco_workbench::UiIcon::Close,
+                                lunco_workbench_widgets::UiIcon::Close,
                                 "Clear search",
                             )
                             .clicked()

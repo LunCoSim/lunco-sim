@@ -108,7 +108,7 @@ fn render_source(ui: &mut egui::Ui, source: &str) {
             // mutating the buffer locally has no effect on the doc.
             let mut buf = source.to_string();
             ui.add(
-                lunco_workbench::text_editor::code(&mut buf)
+                lunco_workbench_widgets::text_editor::code(&mut buf)
                     .desired_width(f32::INFINITY)
                     .desired_rows(20)
                     .interactive(true), // selectable but not editable due to clone

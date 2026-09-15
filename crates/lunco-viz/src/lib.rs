@@ -62,7 +62,7 @@ use bevy::prelude::*;
 #[cfg(feature = "ui")]
 use lunco_settings::AppSettingsExt;
 #[cfg(feature = "ui")]
-use lunco_workbench::WorkbenchAppExt;
+use lunco_workbench_core::WorkbenchPanelAppExt;
 #[cfg(feature = "ui")]
 use std::collections::HashMap;
 

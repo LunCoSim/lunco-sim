@@ -635,9 +635,9 @@ fn register_update_settings_menu(world: &mut World) {
         ) && state.ready.is_none();
         ui.horizontal(|ui| {
             if can_check
-                && lunco_workbench::icon_text_button(
+                && lunco_workbench_widgets::icon_text_button(
                     ui,
-                    lunco_workbench::UiIcon::Refresh,
+                    lunco_workbench_widgets::UiIcon::Refresh,
                     "Check now",
                     "Check GitHub for a newer LunCoSim release",
                 )
@@ -651,12 +651,12 @@ fn register_update_settings_menu(world: &mut World) {
                 "Download update"
             };
             let download_icon = if state.error.is_some() {
-                lunco_workbench::UiIcon::Refresh
+                lunco_workbench_widgets::UiIcon::Refresh
             } else {
-                lunco_workbench::UiIcon::Download
+                lunco_workbench_widgets::UiIcon::Download
             };
             if state.status == UpdateStatus::Available
-                && lunco_workbench::icon_text_button(
+                && lunco_workbench_widgets::icon_text_button(
                     ui,
                     download_icon,
                     download_label,
@@ -667,9 +667,9 @@ fn register_update_settings_menu(world: &mut World) {
                 actions.download_requested = true;
             }
             if state.ready.is_some()
-                && lunco_workbench::icon_text_button(
+                && lunco_workbench_widgets::icon_text_button(
                     ui,
-                    lunco_workbench::UiIcon::Play,
+                    lunco_workbench_widgets::UiIcon::Play,
                     "Restart to install",
                     "Install the downloaded LunCoSim update",
                 )

@@ -2394,9 +2394,9 @@ fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                                 {
                                     let resp = ui
                                         .add_enabled_ui(!item.aligned, |ui| {
-                                            lunco_workbench::icon_text_button(
+                                            lunco_workbench_widgets::icon_text_button(
                                                 ui,
-                                                lunco_workbench::UiIcon::Refresh,
+                                                lunco_workbench_widgets::UiIcon::Refresh,
                                                 &format!("Snap {leaf}"),
                                                 "Align this part to its socket",
                                             )
@@ -2633,26 +2633,26 @@ fn animation_transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.horizontal(|ui| {
         let (icon, label, tooltip) = if playing {
             (
-                lunco_workbench::UiIcon::Pause,
+                lunco_workbench_widgets::UiIcon::Pause,
                 "Pause",
                 "Pause the animation preview",
             )
         } else {
             (
-                lunco_workbench::UiIcon::Play,
+                lunco_workbench_widgets::UiIcon::Play,
                 "Play",
                 "Play the animation preview",
             )
         };
-        if lunco_workbench::icon_text_button(ui, icon, label, tooltip).clicked() {
+        if lunco_workbench_widgets::icon_text_button(ui, icon, label, tooltip).clicked() {
             ctx.trigger(ControlAnimation {
                 playing: Some(!playing),
                 ..Default::default()
             });
         }
-        if lunco_workbench::icon_text_button(
+        if lunco_workbench_widgets::icon_text_button(
             ui,
-            lunco_workbench::UiIcon::Back,
+            lunco_workbench_widgets::UiIcon::Back,
             "Rewind",
             "Rewind the animation preview",
         )
@@ -3406,7 +3406,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
             ui.label("New shader from template:");
             ui.horizontal(|ui| {
                 ui.add(
-                    lunco_workbench::text_editor::singleline(&mut st.name)
+                    lunco_workbench_widgets::text_editor::singleline(&mut st.name)
                         .hint_text("name")
                         .desired_width(110.0),
                 );
@@ -3447,7 +3447,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
             // ── Import from disk ──
             ui.label("Import .wgsl from disk:");
             ui.add(
-                lunco_workbench::text_editor::singleline(&mut st.import)
+                lunco_workbench_widgets::text_editor::singleline(&mut st.import)
                     .hint_text("/path/to/shader.wgsl")
                     .desired_width(220.0),
             );

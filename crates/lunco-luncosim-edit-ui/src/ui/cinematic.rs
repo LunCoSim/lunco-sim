@@ -453,9 +453,9 @@ fn transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // literal 0.0: `step_playhead` clamps to [start, end], so on a clip that
         // starts late a hardcoded 0 lands outside the range and snaps forward on
         // the next step.
-        if lunco_workbench::icon_button(
+        if lunco_workbench_widgets::icon_button(
             ui,
-            lunco_workbench::UiIcon::Back,
+            lunco_workbench_widgets::UiIcon::Back,
             "Restart the camera move from the beginning",
         )
         .clicked()
@@ -468,11 +468,11 @@ fn transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             });
         }
         let (icon, hint) = if playing {
-            (lunco_workbench::UiIcon::Pause, "Pause")
+            (lunco_workbench_widgets::UiIcon::Pause, "Pause")
         } else {
-            (lunco_workbench::UiIcon::Play, "Play")
+            (lunco_workbench_widgets::UiIcon::Play, "Play")
         };
-        if lunco_workbench::icon_button(ui, icon, hint).clicked() {
+        if lunco_workbench_widgets::icon_button(ui, icon, hint).clicked() {
             ctx.trigger(ControlAnimation {
                 target,
                 playing: Some(!playing),

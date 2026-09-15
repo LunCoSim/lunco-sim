@@ -32,8 +32,8 @@ use lunco_scene_selection::SelectedEntities;
 use lunco_scripting::commands::RunScenario;
 use lunco_scripting::doc::ScriptedModel;
 use lunco_scripting::{ScenarioReloadPolicy, ScriptRegistry};
-use lunco_workbench::UiIcon;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_widgets::UiIcon;
 
 use crate::SaveScenario;
 
@@ -174,7 +174,7 @@ impl Panel for RhaiEditorPanel {
                         egui::vec2(18.0, 18.0),
                         egui::Sense::hover(),
                     );
-                    lunco_workbench::paint_icon(ui.painter(), icon, rect, col);
+                    lunco_workbench_widgets::paint_icon(ui.painter(), icon, rect, col);
                     ui.label(egui::RichText::new(txt).color(col));
                 });
                 if vm.dirty {
@@ -191,7 +191,7 @@ impl Panel for RhaiEditorPanel {
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
                     ui.add(
-                        lunco_workbench::text_editor::code(&mut vm.buffer)
+                        lunco_workbench_widgets::text_editor::code(&mut vm.buffer)
                             .id(text_id)
                             .desired_width(f32::INFINITY)
                             .desired_rows(20),
@@ -222,7 +222,7 @@ impl Panel for RhaiEditorPanel {
                                 egui::vec2(18.0, 18.0),
                                 egui::Sense::hover(),
                             );
-                            lunco_workbench::paint_icon(
+                            lunco_workbench_widgets::paint_icon(
                                 ui.painter(),
                                 severity_icon(d.severity),
                                 rect,

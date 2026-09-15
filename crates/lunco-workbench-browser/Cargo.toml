@@ -14,6 +14,7 @@ lunco-theme = { path = "../lunco-theme" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workspace = { path = "../lunco-workspace" }
 
 [lints]

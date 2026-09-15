@@ -88,14 +88,14 @@ pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Find").strong());
         ui.add(
-            lunco_workbench::text_editor::singleline(&mut query.text)
+            lunco_workbench_widgets::text_editor::singleline(&mut query.text)
                 .hint_text("names, paths, or types")
                 .desired_width(160.0),
         );
         if !query.text.trim().is_empty()
-            && lunco_workbench::icon_button(
+            && lunco_workbench_widgets::icon_button(
                 ui,
-                lunco_workbench::UiIcon::Close,
+                lunco_workbench_widgets::UiIcon::Close,
                 "Clear browser filter",
             )
             .clicked()
@@ -493,7 +493,8 @@ pub trait BrowserSection: Send + Sync + 'static {
 
 /// The Twin Browser singleton panel. Renders every section in the
 /// registry inside its own collapsing section. Hierarchy rows inside sections
-/// use [`crate::tree`] so every browser has the same disclosure and row layout.
+/// use [`lunco_workbench_widgets::tree`] so every browser has the same
+/// disclosure and row layout.
 #[derive(Default)]
 pub struct TwinBrowserPanel;
 

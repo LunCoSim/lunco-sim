@@ -26,6 +26,7 @@ use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_core::{on_command, register_commands, Command};
+use lunco_workbench_widgets::{icon_text_button, paint_icon, UiIcon};
 
 /// Shared layer for guided presentation. Workbench menus and window controls
 /// use egui's `Foreground` order, so guided HUDs, rings, coach cards, and
@@ -403,9 +404,9 @@ fn draw_guided_recovery(
                             egui::vec2(28.0, 28.0),
                             egui::Sense::hover(),
                         );
-                        crate::paint_icon(
+                        paint_icon(
                             ui.painter(),
-                            crate::UiIcon::Warning,
+                            UiIcon::Warning,
                             icon_rect,
                             theme.tokens.warning,
                         );
@@ -433,9 +434,9 @@ fn draw_guided_recovery(
                     );
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
-                        if crate::icon_text_button(
+                        if icon_text_button(
                             ui,
-                            crate::UiIcon::Forward,
+                            UiIcon::Forward,
                             "Continue",
                             "Continue the lesson without this view",
                         )
@@ -443,9 +444,9 @@ fn draw_guided_recovery(
                         {
                             continue_lesson = true;
                         }
-                        if crate::icon_text_button(
+                        if icon_text_button(
                             ui,
-                            crate::UiIcon::Refresh,
+                            UiIcon::Refresh,
                             "Retry",
                             "Try resolving the authored view again",
                         )
@@ -453,9 +454,9 @@ fn draw_guided_recovery(
                         {
                             retry = true;
                         }
-                        if crate::icon_text_button(
+                        if icon_text_button(
                             ui,
-                            crate::UiIcon::Stop,
+                            UiIcon::Stop,
                             "Stop",
                             "Stop the guided and clear its owned scene",
                         )
@@ -1043,9 +1044,9 @@ fn draw_tour(
                             ui.horizontal(|ui| {
                                 if ui
                                     .add_enabled_ui(step.index > 0, |ui| {
-                                        crate::icon_text_button(
+                                        icon_text_button(
                                             ui,
-                                            crate::UiIcon::Back,
+                                            UiIcon::Back,
                                             "Back",
                                             "Go to the previous step",
                                         )
@@ -1073,13 +1074,11 @@ fn draw_tour(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         let (icon, label, tooltip) = if last {
-                                            (crate::UiIcon::Check, "Done", "Finish the guided")
+                                            (UiIcon::Check, "Done", "Finish the guided")
                                         } else {
-                                            (crate::UiIcon::Forward, "Next", "Go to the next step")
+                                            (UiIcon::Forward, "Next", "Go to the next step")
                                         };
-                                        if crate::icon_text_button(ui, icon, label, tooltip)
-                                            .clicked()
-                                        {
+                                        if icon_text_button(ui, icon, label, tooltip).clicked() {
                                             next = true;
                                         }
                                     },

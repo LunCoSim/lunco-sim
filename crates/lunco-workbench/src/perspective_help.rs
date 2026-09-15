@@ -15,6 +15,7 @@ pub(crate) use crate::WorkbenchLayout;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_workbench_core::{PerspectiveId, WorkbenchMenuRegistry};
+use lunco_workbench_widgets::{icon_button, paint_icon, UiIcon};
 use std::collections::HashMap;
 
 /// A single keyboard shortcut entry.
@@ -233,8 +234,7 @@ fn render_help_popup(
                     ui.horizontal(|ui| {
                         ui.heading(egui::RichText::new(title.as_str()).color(text));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if crate::icon_button(ui, crate::UiIcon::Close, "Close (Esc)").clicked()
-                            {
+                            if icon_button(ui, UiIcon::Close, "Close (Esc)").clicked() {
                                 close = true;
                             }
                         });
@@ -253,12 +253,7 @@ fn render_help_popup(
                                         egui::vec2(18.0, 18.0),
                                         egui::Sense::hover(),
                                     );
-                                    crate::paint_icon(
-                                        ui.painter(),
-                                        crate::UiIcon::Keyboard,
-                                        rect,
-                                        text,
-                                    );
+                                    paint_icon(ui.painter(), UiIcon::Keyboard, rect, text);
                                     ui.strong("Keyboard Shortcuts");
                                 });
                                 ui.add_space(6.0);

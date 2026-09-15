@@ -76,7 +76,7 @@ Apps (luncosim, luncosim-server, lunica)
    │          │
    │          ▼
    ├── UI adapters
-   │     lunco-ui         ← thin adapter on top of lunco-workbench: mission-control
+   │     lunco-ui         ← reusable UI adapter over workbench contracts/widgets
    │                        widgets, telemetry, diagrams; also depends on Domain
    │                        crates (lunco-avatar, lunco-celestial, lunco-mobility)
    │     lunco-avatar-ui  ← optional egui presentation for the headless-safe

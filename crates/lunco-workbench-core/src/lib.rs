@@ -11,6 +11,7 @@
 mod menu;
 mod panel;
 mod perspective;
+mod registration;
 mod snapshot;
 
 pub mod commands;
@@ -26,6 +27,7 @@ pub use panel::{
 pub use perspective::{
     Perspective, PerspectiveId, PerspectiveInstanceTab, PerspectiveLayoutPlan, PerspectiveSlotPlan,
 };
+pub use registration::{WorkbenchPanelAppExt, WorkbenchPanelRegistry};
 pub use snapshot::WorkbenchSnapshot;
 
 /// System set occupied by the concrete workbench egui pass.

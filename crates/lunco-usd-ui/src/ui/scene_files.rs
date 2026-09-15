@@ -335,9 +335,9 @@ impl BrowserSection for SceneFilesSection {
         let unresolved = view.unresolved;
         let no_roots = view.roots.is_empty();
 
-        if lunco_workbench::icon_button(
+        if lunco_workbench_widgets::icon_button(
             ui,
-            lunco_workbench::UiIcon::Refresh,
+            lunco_workbench_widgets::UiIcon::Refresh,
             "Re-walk the scene's references",
         )
         .clicked()
@@ -392,9 +392,9 @@ impl BrowserSection for SceneFilesSection {
                                         egui::vec2(18.0, 18.0),
                                         egui::Sense::hover(),
                                     );
-                                    lunco_workbench::paint_icon(
+                                    lunco_workbench_widgets::paint_icon(
                                         ui.painter(),
-                                        lunco_workbench::UiIcon::Warning,
+                                        lunco_workbench_widgets::UiIcon::Warning,
                                         icon_rect,
                                         ui.visuals().error_fg_color,
                                     );

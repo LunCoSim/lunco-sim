@@ -188,9 +188,9 @@ impl Panel for TelemetryPanel {
             let mut reset_clicked = false;
             ui.horizontal(|ui| {
                 if is_paused {
-                    if lunco_workbench::icon_text_button(
+                    if lunco_workbench_widgets::icon_text_button(
                         ui,
-                        lunco_workbench::UiIcon::Play,
+                        lunco_workbench_widgets::UiIcon::Play,
                         "Play",
                         "Resume the model",
                     )
@@ -198,9 +198,9 @@ impl Panel for TelemetryPanel {
                     {
                         run_clicked = true;
                     }
-                } else if lunco_workbench::icon_text_button(
+                } else if lunco_workbench_widgets::icon_text_button(
                     ui,
-                    lunco_workbench::UiIcon::Pause,
+                    lunco_workbench_widgets::UiIcon::Pause,
                     "Pause",
                     "Pause the model",
                 )
@@ -211,9 +211,9 @@ impl Panel for TelemetryPanel {
                 ui.label(format!("Time: {current_time:.4} s"));
 
                 ui.add_space(ui.available_width() - 70.0);
-                if lunco_workbench::icon_text_button(
+                if lunco_workbench_widgets::icon_text_button(
                     ui,
-                    lunco_workbench::UiIcon::Refresh,
+                    lunco_workbench_widgets::UiIcon::Refresh,
                     "Reset",
                     "Reset the model",
                 )
@@ -339,15 +339,19 @@ impl Panel for TelemetryPanel {
         ui.horizontal(|ui| {
             ui.label("🔍");
             let resp = ui.add(
-                lunco_workbench::text_editor::singleline(&mut filter_text)
+                lunco_workbench_widgets::text_editor::singleline(&mut filter_text)
                     .hint_text("filter…")
                     .desired_width(160.0),
             );
             if resp.changed() {
                 filter_changed = true;
             }
-            if lunco_workbench::icon_button(ui, lunco_workbench::UiIcon::Close, "Clear filter")
-                .clicked()
+            if lunco_workbench_widgets::icon_button(
+                ui,
+                lunco_workbench_widgets::UiIcon::Close,
+                "Clear filter",
+            )
+            .clicked()
             {
                 filter_text.clear();
                 filter_changed = true;
@@ -774,7 +778,7 @@ fn render_selected_components_inspector(
                                 name_resp.on_hover_text(d);
                             }
                             let resp = ui.add(
-                                lunco_workbench::text_editor::singleline(&mut buf)
+                                lunco_workbench_widgets::text_editor::singleline(&mut buf)
                                     .desired_width(120.0),
                             );
                             if let Some(d) = desc {
@@ -1283,7 +1287,7 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
                             .clone()
                             .unwrap_or_else(|| display_value.clone());
                         let resp = ui.add(
-                            lunco_workbench::text_editor::singleline(&mut buf)
+                            lunco_workbench_widgets::text_editor::singleline(&mut buf)
                                 .id(edit_id)
                                 .desired_width(120.0),
                         );

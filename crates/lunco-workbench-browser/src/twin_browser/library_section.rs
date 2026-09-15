@@ -152,7 +152,7 @@ fn render_dir(
         }
         visible = true;
         let id = ui.make_persistent_id(("library_dir", &rel));
-        lunco_workbench::tree::branch(
+        lunco_workbench_widgets::tree::branch(
             ui,
             id,
             false,
@@ -191,7 +191,7 @@ fn render_dir(
                     .split_whitespace()
                     .next()
                     .is_some_and(|first| first == asset.stem));
-        let response = lunco_workbench::tree::leaf(ui, |ui| {
+        let response = lunco_workbench_widgets::tree::leaf(ui, |ui| {
             if is_loaded {
                 ui.selectable_label(false, format!("● {}", asset.file_name))
             } else {

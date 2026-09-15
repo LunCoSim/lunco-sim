@@ -18,6 +18,7 @@ use lunco_workbench::{
 use lunco_workbench_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench_core::{
     PanelId, PanelSlot, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
+    WorkbenchPanelAppExt,
 };
 
 pub mod asset_visibility;

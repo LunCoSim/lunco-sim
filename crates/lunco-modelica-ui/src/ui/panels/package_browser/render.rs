@@ -51,7 +51,7 @@ pub(crate) fn render_node_single_ro(
                 return None;
             }
             let branch_id = ui.make_persistent_id(("modelica_package", id));
-            lunco_workbench::tree::branch(
+            lunco_workbench_widgets::tree::branch(
                 ui,
                 branch_id,
                 false,
@@ -103,7 +103,7 @@ pub(crate) fn render_node_single_ro(
                 return None;
             }
             let is_active = active_path == Some(name.as_str());
-            let row = lunco_workbench::tree::leaf(ui, |ui| {
+            let row = lunco_workbench_widgets::tree::leaf(ui, |ui| {
                 if let Some(kind) = *class_kind {
                     let badge = crate::ui::browser_section::type_badge_for_kind(kind, theme);
                     crate::ui::browser_section::paint_badge(ui, badge, theme);

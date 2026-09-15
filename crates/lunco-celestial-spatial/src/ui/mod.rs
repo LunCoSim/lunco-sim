@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{icon_text_button, UiIcon, WorkbenchAppExt};
-use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt};
+use lunco_workbench_widgets::{icon_text_button, UiIcon};
 
 use crate::commands::TeleportToSurface;
 use lunco_core::CelestialBody;

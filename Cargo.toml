@@ -105,6 +105,7 @@ members = [
     "crates/lunco-workbench-browser",
     "crates/lunco-workbench-datasets-ui",
     "crates/lunco-workbench-core",
+    "crates/lunco-workbench-widgets",
     "crates/lunco-capture",
     "crates/lunco-status-core",
     "crates/lunco-web",

@@ -279,7 +279,7 @@ impl Plugin for LunCoSimUiPlugin {
             // second one panics ("plugin already added"). So all app-level panel
             // registration goes here.
             .add_plugins(|app: &mut App| {
-                use lunco_workbench::WorkbenchAppExt;
+                use lunco_workbench_core::WorkbenchPanelAppExt;
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_dismiss_terrain_overlay)
                     .add_observer(dataset_provisioning::on_set_missing_asset_prompt_suppressed);
@@ -987,9 +987,9 @@ fn register_downloadable_assets_settings(world: &mut World) {
                                         egui::vec2(18.0, 18.0),
                                         egui::Sense::hover(),
                                     );
-                                    lunco_workbench::paint_icon(
+                                    lunco_workbench_widgets::paint_icon(
                                         ui.painter(),
-                                        lunco_workbench::UiIcon::Check,
+                                        lunco_workbench_widgets::UiIcon::Check,
                                         icon_rect,
                                         ui.visuals().weak_text_color(),
                                     );
@@ -1008,9 +1008,9 @@ fn register_downloadable_assets_settings(world: &mut World) {
                                             *bytes_total as f64 / 1_048_576.0
                                         ));
                                     }
-                                    if lunco_workbench::icon_text_button(
+                                    if lunco_workbench_widgets::icon_text_button(
                                         ui,
-                                        lunco_workbench::UiIcon::Stop,
+                                        lunco_workbench_widgets::UiIcon::Stop,
                                         "Cancel",
                                         "Cancel dataset download",
                                     )
@@ -1027,9 +1027,9 @@ fn register_downloadable_assets_settings(world: &mut World) {
                                 }
                                 DatasetState::Cancelled => {
                                     ui.label(egui::RichText::new("Cancelled").weak());
-                                    if lunco_workbench::icon_text_button(
+                                    if lunco_workbench_widgets::icon_text_button(
                                         ui,
-                                        lunco_workbench::UiIcon::Refresh,
+                                        lunco_workbench_widgets::UiIcon::Refresh,
                                         "Retry",
                                         "Retry dataset download",
                                     )
@@ -1040,9 +1040,9 @@ fn register_downloadable_assets_settings(world: &mut World) {
                                 }
                                 DatasetState::Missing => {
                                     ui.label(egui::RichText::new("not installed").weak());
-                                    if lunco_workbench::icon_text_button(
+                                    if lunco_workbench_widgets::icon_text_button(
                                         ui,
-                                        lunco_workbench::UiIcon::Download,
+                                        lunco_workbench_widgets::UiIcon::Download,
                                         "Download",
                                         "Download this dataset",
                                     )
@@ -1053,9 +1053,9 @@ fn register_downloadable_assets_settings(world: &mut World) {
                                 }
                                 DatasetState::Failed(error) => {
                                     ui.colored_label(egui::Color32::LIGHT_RED, error);
-                                    if lunco_workbench::icon_text_button(
+                                    if lunco_workbench_widgets::icon_text_button(
                                         ui,
-                                        lunco_workbench::UiIcon::Refresh,
+                                        lunco_workbench_widgets::UiIcon::Refresh,
                                         "Retry",
                                         "Retry dataset download",
                                     )

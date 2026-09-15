@@ -18,7 +18,7 @@ pub(crate) use render::{on_fast_run_setup_requested, on_sync_model_tab_requested
 use crate::model_tabs::ModelTabs;
 use crate::model_tabs_types::TabRenderContext;
 use bevy::prelude::*;
-use lunco_workbench::WorkbenchAppExt;
+use lunco_workbench_core::WorkbenchPanelAppExt;
 
 pub struct ModelViewPlugin;
 

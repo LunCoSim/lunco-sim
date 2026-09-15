@@ -180,7 +180,7 @@ impl BrowserSection for UsdSceneSection {
             let mut body_clicked = false;
             // Clicking the label both shows the stage in the viewport
             // *and* folds/unfolds the row — same as the triangle.
-            lunco_workbench::tree::branch(
+            lunco_workbench_widgets::tree::branch(
                 ui,
                 header_id,
                 default_open,
@@ -444,7 +444,7 @@ fn render_prim(
     let header_id = ui.make_persistent_id((salt, path.to_string()));
 
     if children.is_empty() {
-        let resp = lunco_workbench::tree::leaf(ui, |ui| {
+        let resp = lunco_workbench_widgets::tree::leaf(ui, |ui| {
             ui.add(egui::Label::new(&label).sense(egui::Sense::click()))
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
         })
@@ -458,7 +458,7 @@ fn render_prim(
         // The click flag goes through a local so the header closure
         // doesn't fight the body closure over `clicked`.
         let mut row_clicked = false;
-        lunco_workbench::tree::branch(
+        lunco_workbench_widgets::tree::branch(
             ui,
             header_id,
             false,

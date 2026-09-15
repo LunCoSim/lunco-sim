@@ -7,6 +7,7 @@ use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy_egui::egui;
 use lunco_core::on_command;
 use lunco_doc_bevy::OpenFile;
+use lunco_workbench_widgets::text_editor;
 
 use crate::{
     CloseTab, EditorTabId, EditorTabs, InstancePanel, OpenEphemeralSource, OpenSourceView, OpenTab,
@@ -137,10 +138,7 @@ impl InstancePanel for SourceEditorPanel {
                     let response = egui::ScrollArea::both()
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
-                            ui.add(
-                                crate::text_editor::code(&mut source.text)
-                                    .desired_width(f32::INFINITY),
-                            )
+                            ui.add(text_editor::code(&mut source.text).desired_width(f32::INFINITY))
                         })
                         .inner;
                     source.dirty |= response.changed();
@@ -149,7 +147,7 @@ impl InstancePanel for SourceEditorPanel {
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
                             ui.add(
-                                crate::text_editor::code(&mut source.text.as_str())
+                                text_editor::code(&mut source.text.as_str())
                                     .desired_width(f32::INFINITY)
                                     .interactive(false),
                             );

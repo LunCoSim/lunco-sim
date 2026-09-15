@@ -62,7 +62,7 @@ use lunco_ui::log::{LogBuffer, LogLevel};
 use lunco_workbench::WorkbenchAppExt;
 use lunco_workbench_core::{
     MenuCtx, PanelId, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
-    UndoProbeCtx, WorkbenchMenuRegistry,
+    UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchPanelAppExt,
 };
 // Core document/library/compile state moved out of `ui` into `crate::state`.
 use crate::state::ModelicaDocumentRegistry;
@@ -1126,7 +1126,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         ui.label("Local root");
         if ui
             .add(
-                lunco_workbench::text_editor::singleline(&mut local)
+                lunco_workbench_widgets::text_editor::singleline(&mut local)
                     .desired_width(360.0)
                     .hint_text("/path/to/msl (parent of Modelica/)"),
             )

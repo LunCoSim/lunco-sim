@@ -28,6 +28,7 @@ use bevy_egui::{egui, EguiContexts};
 
 use lunco_core::GlobalEntityId;
 use lunco_core_session::ControlPathRegistry;
+use lunco_workbench_widgets::{paint_icon, UiIcon};
 
 /// Draws the control-blackout badge described in the module docs.
 ///
@@ -101,7 +102,7 @@ fn draw_control_blackout(
                         ui.horizontal(|ui| {
                             let (rect, _) = ui
                                 .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                            crate::paint_icon(ui.painter(), crate::UiIcon::Warning, rect, alert);
+                            paint_icon(ui.painter(), UiIcon::Warning, rect, alert);
                             ui.label(
                                 egui::RichText::new("NO LINK")
                                     .color(alert)

@@ -318,7 +318,7 @@ impl Panel for InspectorPanel {
                         // so the user clearly sees they can't edit.
                         let resp = ui.add_enabled(
                             !read_only,
-                            lunco_workbench::text_editor::singleline(&mut buf),
+                            lunco_workbench_widgets::text_editor::singleline(&mut buf),
                         );
                         if let Some(d) = param_desc.get(k) {
                             resp.clone().on_hover_text(d);
@@ -419,7 +419,7 @@ fn render_plot_node_editor(
             .memory(|m| m.data.get_temp::<String>(buf_id))
             .unwrap_or_else(|| current.title.clone());
         let resp = ui.add(
-            lunco_workbench::text_editor::singleline(&mut buf)
+            lunco_workbench_widgets::text_editor::singleline(&mut buf)
                 .hint_text(&current.signal_path)
                 .desired_width(f32::INFINITY),
         );
@@ -721,7 +721,7 @@ fn render_text_node_editor(
         .memory(|m| m.data.get_temp::<String>(buf_id))
         .unwrap_or_else(|| current_text.clone());
     let resp = ui.add(
-        lunco_workbench::text_editor::multiline(&mut buf)
+        lunco_workbench_widgets::text_editor::multiline(&mut buf)
             .desired_rows(2)
             .desired_width(f32::INFINITY),
     );

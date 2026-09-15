@@ -393,7 +393,7 @@ pub(crate) fn render_fast_run_setup(
                             ui.label(&inp.type_name);
                             ui.label(&inp.name);
                             ui.add(
-                                lunco_workbench::text_editor::singleline(&mut inp.value_text)
+                                lunco_workbench_widgets::text_editor::singleline(&mut inp.value_text)
                                     .desired_width(100.0),
                             )
                             .on_hover_text(
@@ -426,9 +426,9 @@ pub(crate) fn render_fast_run_setup(
             ui.horizontal(|ui| {
                 let run = ui
                     .add_enabled_ui(valid, |ui| {
-                        lunco_workbench::icon_text_button(
+                        lunco_workbench_widgets::icon_text_button(
                             ui,
-                            lunco_workbench::UiIcon::Play,
+                            lunco_workbench_widgets::UiIcon::Play,
                             "Run",
                             "Run with these bounds",
                         )

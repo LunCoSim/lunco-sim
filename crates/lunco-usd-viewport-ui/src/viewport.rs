@@ -80,10 +80,10 @@ use lunco_usd_bevy_scene::{
 };
 use lunco_workbench::{
     CloseTab, OpenTab, PanelRect, PanelRects, PendingTabCloses, ScenePickGate, SceneTarget,
-    WorkbenchAppExt,
 };
 use lunco_workbench_core::{
-    InstancePanel, Panel, PanelCtx, PanelId, PanelRenderTarget, PanelScrollPolicy, PanelSlot, TabId,
+    InstancePanel, Panel, PanelCtx, PanelId, PanelRenderTarget, PanelScrollPolicy, PanelSlot,
+    TabId, WorkbenchPanelAppExt,
 };
 use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
 use openusd::sdf::Path as SdfPath;
@@ -4481,7 +4481,7 @@ fn render_preview_text(
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 ui.add(
-                    lunco_workbench::text_editor::code(&mut text)
+                    lunco_workbench_widgets::text_editor::code(&mut text)
                         .desired_width(f32::INFINITY)
                         .interactive(false),
                 );

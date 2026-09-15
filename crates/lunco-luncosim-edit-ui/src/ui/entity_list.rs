@@ -835,7 +835,7 @@ fn render_node(
 
     match view.kids.get(&entity) {
         None => {
-            let _ = lunco_workbench::tree::leaf(ui, |ui| {
+            let _ = lunco_workbench_widgets::tree::leaf(ui, |ui| {
                 select_label(
                     ui,
                     entity,
@@ -851,7 +851,7 @@ fn render_node(
             let id = ui.make_persistent_id(("entity_tree", entity));
             let mut header_select = None;
             let mut header_focus = None;
-            lunco_workbench::tree::branch(
+            lunco_workbench_widgets::tree::branch(
                 ui,
                 id,
                 false,

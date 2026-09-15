@@ -1,0 +1,12 @@
+[package]
+name = "lunco-workbench-widgets"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Reusable egui widgets shared by LunCoSim domain UI crates"
+
+[dependencies]
+bevy_egui = { workspace = true }
+
+[lints]
+workspace = true

@@ -205,7 +205,7 @@ impl BrowserSection for FilesSection {
                         .as_mut()
                         .expect("in_rename ⇒ rename_doc Some");
                     let resp = ui.add(
-                        lunco_workbench::text_editor::singleline(&mut state.buffer)
+                        lunco_workbench_widgets::text_editor::singleline(&mut state.buffer)
                             .desired_width(f32::INFINITY),
                     );
                     if state.needs_focus {
@@ -254,9 +254,9 @@ impl BrowserSection for FilesSection {
                     // delete path from the UI and resurrects on every
                     // reload. Right-aligned so it doesn't crowd names.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close = lunco_workbench::icon_button(
+                        let close = lunco_workbench_widgets::icon_button(
                             ui,
-                            lunco_workbench::UiIcon::Close,
+                            lunco_workbench_widgets::UiIcon::Close,
                             "Close document",
                         )
                         .on_hover_text(
@@ -395,7 +395,7 @@ impl BrowserSection for FilesSection {
             let salt = twin.root.to_string_lossy().into_owned();
             let twin_root = twin.root.clone();
             let id = ui.make_persistent_id(("twin_browser_folder", salt.clone()));
-            lunco_workbench::tree::branch(
+            lunco_workbench_widgets::tree::branch(
                 ui,
                 id,
                 true,
@@ -564,7 +564,7 @@ fn render_dir(
         } else {
             let id = ui.make_persistent_id(("twin_browser_dir", abs.to_string_lossy()));
             let mut header_begin_rename = None;
-            lunco_workbench::tree::branch(
+            lunco_workbench_widgets::tree::branch(
                 ui,
                 id,
                 false,
@@ -637,7 +637,9 @@ fn render_dir(
                 Some(m) => format!("{m}{leaf}"),
                 None => leaf.clone(),
             };
-            let r = lunco_workbench::tree::leaf(ui, |ui| ui.selectable_label(false, &label)).inner;
+            let r =
+                lunco_workbench_widgets::tree::leaf(ui, |ui| ui.selectable_label(false, &label))
+                    .inner;
             if r.double_clicked() {
                 state
                     .clicks
@@ -692,7 +694,8 @@ fn render_inline_rename(
         return;
     }
     let resp = ui.add(
-        lunco_workbench::text_editor::singleline(&mut state.buffer).desired_width(f32::INFINITY),
+        lunco_workbench_widgets::text_editor::singleline(&mut state.buffer)
+            .desired_width(f32::INFINITY),
     );
     if state.needs_focus {
         resp.request_focus();

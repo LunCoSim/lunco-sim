@@ -274,7 +274,7 @@ impl Panel for ComponentPalettePanel {
         ui.horizontal(|ui| {
             ui.label("Search");
             let response = ui.add(
-                lunco_workbench::text_editor::singleline(&mut new_query)
+                lunco_workbench_widgets::text_editor::singleline(&mut new_query)
                     .hint_text("Search components…")
                     .desired_width(f32::INFINITY),
             );
@@ -367,9 +367,9 @@ impl Panel for ComponentPalettePanel {
                 .color(muted_text),
             );
             if (!query_lc.is_empty() || selected_category.is_some())
-                && lunco_workbench::icon_text_button(
+                && lunco_workbench_widgets::icon_text_button(
                     ui,
-                    lunco_workbench::UiIcon::Close,
+                    lunco_workbench_widgets::UiIcon::Close,
                     "Clear",
                     "Clear the palette filter",
                 )

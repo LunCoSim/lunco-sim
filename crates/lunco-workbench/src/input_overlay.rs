@@ -9,6 +9,7 @@ use bevy_egui::{egui, EguiContexts};
 use lunco_controller::{key_label, InputBindingsSettings};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
+use lunco_workbench_widgets::{paint_icon, UiIcon};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -239,9 +240,9 @@ pub fn draw_input_overlay(
 
                         let (rect, _) =
                             ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                        crate::paint_icon(
+                        paint_icon(
                             ui.painter(),
-                            crate::UiIcon::Keyboard,
+                            UiIcon::Keyboard,
                             rect,
                             ui.visuals().weak_text_color(),
                         );

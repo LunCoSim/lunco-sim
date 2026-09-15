@@ -54,7 +54,7 @@ navigation surfaces.
 | `WorkbenchSnapshot` | Published shell-independent view of active perspective, tabs, docked panels, and each dock leaf's active visible tab |
 | `WorkbenchLayout` | Private shell resource tracking the concrete `egui_dock` tree |
 | [`WorkbenchPlugin`] | Installs the frame renderer + WorkspacePlugin into a Bevy app |
-| [`WorkbenchAppExt::register_panel`] | Ergonomic `app.register_panel(MyPanel)` extension |
+| [`lunco_workbench_core::WorkbenchPanelAppExt::register_panel`] | Ergonomic `app.register_panel(MyPanel)` contract registration |
 | `lunco_workbench_core::Perspective` | Trait for a named slot-assignment preset (Build, Simulate, …) |
 | `lunco_workbench_core::PerspectiveId` | Stable perspective identifier |
 | [`WorkbenchAppExt::register_perspective`] | `app.register_perspective(MyPerspective)` |

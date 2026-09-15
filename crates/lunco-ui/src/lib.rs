@@ -1,11 +1,12 @@
 //! # LunCoSim UI Foundation
 //!
-//! A thin adapter layer on top of `lunco-workbench` that provides:
+//! A thin reusable UI layer that provides:
 //! - **WidgetSystem** — O(1) cached widget pattern for 1,000s of graph/diagram widgets
 //! - **Typed command integration** — all UI interactions flow through typed command events
 //! - **3D World-Space UI** — in-cockpit panels, floating labels over celestial bodies
 //!
-//! Docking, theming, layout — provided by `lunco-workbench`.
+//! Docking and layout are provided by the concrete workbench shell; this
+//! package only depends on renderer-neutral contracts and reusable widgets.
 //!
 //! ## Architecture: Entity Viewers
 //!
@@ -67,7 +68,8 @@ pub mod prelude {
 }
 
 /// Minimal plugin that initializes LunCoSim-specific UI resources.
-/// The heavy lifting (docking, themes, layout) is done by `lunco-workbench`.
+/// The concrete workbench shell owns docking and layout; this plugin only
+/// initializes LunCoSim-specific UI resources.
 #[derive(Default)]
 pub struct LuncoUiPlugin;
 

@@ -148,9 +148,9 @@ impl LoadingIndicator {
                 theme.tokens.surface_raised
             };
             painter.rect_filled(btn_rect, 4.0, bg);
-            lunco_workbench::paint_icon(
+            lunco_workbench_widgets::paint_icon(
                 &painter,
-                lunco_workbench::UiIcon::Close,
+                lunco_workbench_widgets::UiIcon::Close,
                 btn_rect.shrink(2.0),
                 theme.tokens.text_subdued,
             );

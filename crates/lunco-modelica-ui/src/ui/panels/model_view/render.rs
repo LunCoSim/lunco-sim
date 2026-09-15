@@ -542,7 +542,7 @@ fn render_unified_toolbar(
             ui.separator();
             undo_clicked = ui
                 .add_enabled_ui(can_undo, |ui| {
-                    lunco_workbench::icon_button(ui, lunco_workbench::UiIcon::Back, "Undo")
+                    lunco_workbench_widgets::icon_button(ui, lunco_workbench_widgets::UiIcon::Back, "Undo")
                 })
                 .inner
                 .on_hover_text(format!("Undo ({undo_n})"))
@@ -550,7 +550,7 @@ fn render_unified_toolbar(
                 .clicked();
             redo_clicked = ui
                 .add_enabled_ui(can_redo, |ui| {
-                    lunco_workbench::icon_button(ui, lunco_workbench::UiIcon::Forward, "Redo")
+                    lunco_workbench_widgets::icon_button(ui, lunco_workbench_widgets::UiIcon::Forward, "Redo")
                 })
                 .inner
                 .on_hover_text(format!("Redo ({redo_n})"))
@@ -585,12 +585,12 @@ fn render_unified_toolbar(
             .add_enabled_ui(
                 !matches!(compile_state, CompileState::Compiling),
                 |ui| {
-                    lunco_workbench::icon_button(
+                    lunco_workbench_widgets::icon_button(
                         ui,
                         if realtime_running {
-                            lunco_workbench::UiIcon::Pause
+                            lunco_workbench_widgets::UiIcon::Pause
                         } else {
-                            lunco_workbench::UiIcon::Play
+                            lunco_workbench_widgets::UiIcon::Play
                         },
                         if realtime_running {
                             "Pause live run"
@@ -617,9 +617,9 @@ fn render_unified_toolbar(
             .add_enabled_ui(
                 !matches!(compile_state, CompileState::Compiling),
                 |ui| {
-                    lunco_workbench::icon_text_button(
+                    lunco_workbench_widgets::icon_text_button(
                         ui,
-                        lunco_workbench::UiIcon::Forward,
+                        lunco_workbench_widgets::UiIcon::Forward,
                         "Fast Run",
                         "Run to completion and collect plots",
                     )
@@ -645,15 +645,15 @@ fn render_unified_toolbar(
         // (rewind-only vs rewind-and-run) stays explicit.
         if let Some((_paused, t_now)) = sim_state {
             ui.separator();
-            reset_clicked = lunco_workbench::icon_button(
+            reset_clicked = lunco_workbench_widgets::icon_button(
                 ui,
-                lunco_workbench::UiIcon::Refresh,
+                lunco_workbench_widgets::UiIcon::Refresh,
                 "Reset — stop and rewind to t=0 (stays paused).",
             )
             .clicked();
-            restart_clicked = lunco_workbench::icon_button(
+            restart_clicked = lunco_workbench_widgets::icon_button(
                 ui,
-                lunco_workbench::UiIcon::Play,
+                lunco_workbench_widgets::UiIcon::Play,
                 "Restart — rewind to t=0 and run again immediately.",
             )
             .clicked();

@@ -750,7 +750,7 @@ impl Panel for CodeEditorPanel {
                 let inner_width = content_width;
                 ui.add_sized(
                     [inner_width, editor_height],
-                    lunco_workbench::text_editor::code(text)
+                    lunco_workbench_widgets::text_editor::code(text)
                         .id(text_edit_id)
                         .desired_width(inner_width)
                         .desired_rows(((editor_height / 16.0) as usize).max(10))

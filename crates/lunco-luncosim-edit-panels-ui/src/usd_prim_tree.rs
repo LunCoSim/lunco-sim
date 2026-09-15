@@ -397,7 +397,7 @@ fn render_prim_node(
     let label = prim_label(node);
 
     if node.children.is_empty() {
-        let _ = lunco_workbench::tree::leaf(ui, |ui| {
+        let _ = lunco_workbench_widgets::tree::leaf(ui, |ui| {
             prim_select_label(
                 ui,
                 node,
@@ -418,7 +418,7 @@ fn render_prim_node(
     let id = ui.make_persistent_id(("usd_prim_tree", key));
     let open = reveal_path.is_some_and(|path| is_path_or_descendant(path, key));
     let mut header_select = None;
-    lunco_workbench::tree::branch(
+    lunco_workbench_widgets::tree::branch(
         ui,
         id,
         default_open,

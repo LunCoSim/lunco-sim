@@ -824,7 +824,7 @@ fn render_tree_node(
         return;
     }
     let id = ui.make_persistent_id(("tb_entity", &node.id));
-    lunco_workbench::tree::branch(
+    lunco_workbench_widgets::tree::branch(
         ui,
         id,
         depth < 2,
@@ -1226,7 +1226,7 @@ impl Panel for TelemetryBrowserPanel {
 
         // ── Filter box ───────────────────────────────────────────
         ui.add(
-            lunco_workbench::text_editor::singleline(&mut self.filter)
+            lunco_workbench_widgets::text_editor::singleline(&mut self.filter)
                 .hint_text("Filter channels…")
                 .desired_width(f32::INFINITY),
         );

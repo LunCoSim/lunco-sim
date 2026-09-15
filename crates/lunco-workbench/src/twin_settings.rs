@@ -8,6 +8,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_twin::TwinSettingValue;
+use lunco_workbench_widgets::{icon_button, text_editor, UiIcon};
 use lunco_workspace::{
     ResetTwinSetting, SetTwinSetting, TwinClosed, TwinId, TwinSettingInput, WorkspaceResource,
 };
@@ -112,13 +113,12 @@ impl Panel for TwinSettingsPanel {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Find").strong());
                 ui.add(
-                    crate::text_editor::singleline(&mut self.query)
+                    text_editor::singleline(&mut self.query)
                         .hint_text("key or namespace")
                         .desired_width(150.0),
                 );
                 if !self.query.trim().is_empty()
-                    && crate::icon_button(ui, crate::UiIcon::Close, "Clear settings filter")
-                        .clicked()
+                    && icon_button(ui, UiIcon::Close, "Clear settings filter").clicked()
                 {
                     self.query.clear();
                 }
@@ -190,7 +190,7 @@ fn render_setting_row(ui: &mut egui::Ui, ctx: &mut PanelCtx, row: &TwinSettingRo
             TwinSettingValue::Text(current) => {
                 let mut value = current.clone();
                 if ui
-                    .add(crate::text_editor::singleline(&mut value).desired_width(150.0))
+                    .add(text_editor::singleline(&mut value).desired_width(150.0))
                     .changed()
                 {
                     changed = Some(TwinSettingInput::Text(value));

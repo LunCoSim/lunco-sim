@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use lunco_luncosim_edit_ui::ui::{usd_selection_view_changed, ViewModelAppExt};
-use lunco_workbench::WorkbenchAppExt;
+use lunco_workbench_core::WorkbenchPanelAppExt;
 
 pub mod inspector;
 pub mod usd_animation;

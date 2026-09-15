@@ -10,7 +10,7 @@
 #![warn(missing_docs)]
 
 use bevy::prelude::*;
-use lunco_workbench::WorkbenchAppExt;
+use lunco_workbench_core::WorkbenchPanelAppExt;
 
 mod files_panel;
 pub mod twin_browser;

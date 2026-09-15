@@ -29,7 +29,7 @@ and design decisions. This skill is a quick-reference summary.
 
 1. **UI lives in `src/ui/`** — domain crates have `src/ui/mod.rs` exporting a `*UiPlugin`. UI code never lives outside `ui/` directories.
 2. **UI never mutates state** — all interactions emit typed command events (the `#[Command]` structs, triggered via `ctx.trigger(...)`) that observers handle. This makes the UI AI-native: AI observes the same command stream as humans and can emit identical commands.
-3. **Panels are `Panel` impls** (the contract lives in `lunco_workbench_core`) — registered via `lunco_workbench::WorkbenchAppExt::register_panel()` with the concrete shell's docking system.
+3. **Panels are `Panel` impls** (the contract lives in `lunco_workbench_core`) — registered via `lunco_workbench_core::WorkbenchPanelAppExt::register_panel()`. The concrete shell drains that registration into its docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
 The workbench is deliberately three layers. `lunco-workbench-core` contains
@@ -39,7 +39,8 @@ payloads. It is safe for domain UI crates that need panel behavior or published
 layout facts and does not pull the renderer or `egui_dock`. `lunco-workbench`
 is the concrete shell: it owns
 docking, egui/bevy integration, persistence, source editing, and shell-only
-widgets such as icons and tree renderers. `lunco-workbench-browser` is the
+widgets such as icons and tree renderers. `lunco-workbench-widgets` owns the
+shell-independent icon, text-editor, and tree helpers. `lunco-workbench-browser` is the
 optional reusable Twin/Files feature: it owns browser state, standard panels,
 and filesystem/library sections, including the asset-provisioning dependency.
 Domain crates must not read the shell's private `WorkbenchLayout`; use
@@ -121,7 +122,7 @@ human-readable names/paths, retain matching ancestors, and emit the existing
 typed navigation actions. Do not add a per-domain search resource or make the
 browser search generated ids.
 
-For hierarchy rows, use `lunco_workbench::tree::{branch, leaf}`. The shared
+For hierarchy rows, use `lunco_workbench_widgets::tree::{branch, leaf}`. The shared
 renderer owns the disclosure control, full-width row geometry, persistent
 expansion identity, and indentation. Domain panels own only their view-model
 filtering, stable `egui::Id`, selection/loading state, and typed actions. Do

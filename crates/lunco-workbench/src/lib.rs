@@ -60,19 +60,16 @@ use egui_dock::{
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
+use lunco_workbench_core::WorkbenchPanelAppExt;
 use lunco_workbench_core::{
     ApplicationOverlayRenderSet, InstancePanel, MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup,
     PanelRenderTarget, PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, Perspective, PerspectiveId,
-    PerspectiveLayoutPlan, TabId, UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchRenderSet,
-    WorkbenchSnapshot,
+    PerspectiveLayoutPlan, TabId, UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchPanelRegistry,
+    WorkbenchRenderSet, WorkbenchSnapshot,
 };
+use lunco_workbench_widgets::{icon_button_sized, text_editor, UiIcon};
 use std::collections::HashMap;
 use std::sync::Arc;
-
-pub mod icons;
-pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, UiIcon};
-pub mod text_editor;
-pub mod tree;
 
 mod editor_tabs;
 mod perspective;
@@ -1018,6 +1015,7 @@ impl Plugin for WorkbenchPlugin {
                 // the layout first so the tab lands in the requested
                 // perspective, not the outgoing one.
                 (
+                    drain_registered_panels,
                     drain_pending_layout_requests,
                     drain_pending_tab_requests,
                     sync_workbench_snapshot,
@@ -1043,6 +1041,7 @@ impl Plugin for WorkbenchPlugin {
         source_viewer::__register_on_save_source_text(app);
         app.register_instance_panel(source_viewer::SourceEditorPanel);
         app.register_panel(twin_settings::TwinSettingsPanel::default());
+        drain_registered_panels(app.world_mut());
         app.add_systems(
             EguiPrimaryContextPass,
             render_workbench.in_set(WorkbenchRenderSet),
@@ -1216,7 +1215,12 @@ impl WorkbenchLayout {
     /// panel to the active layout. A perspective that wants a late-registered
     /// panel declares its id through its `PerspectiveLayoutPlan`, and the
     /// rebuild below then realizes that declaration.
+    #[cfg(test)]
     pub(crate) fn register<P: Panel + 'static>(&mut self, panel: P) {
+        self.register_boxed(Box::new(panel));
+    }
+
+    pub(crate) fn register_boxed(&mut self, panel: Box<dyn Panel>) {
         let id = panel.id();
         let slot = panel.default_slot();
         // A perspective may declare a panel before the domain plugin registers
@@ -1254,7 +1258,7 @@ impl WorkbenchLayout {
                 PanelSlot::Hidden => { /* registered, intentionally not docked */ }
             }
         }
-        self.panels.insert(id, Box::new(panel));
+        self.panels.insert(id, panel);
         self.rebuild_dock();
     }
 
@@ -1264,8 +1268,13 @@ impl WorkbenchLayout {
     ///
     /// A given kind should only be registered once per App; re-registering
     /// replaces the previous renderer.
+    #[cfg(test)]
     pub(crate) fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) {
-        self.instance_panels.insert(panel.kind(), Box::new(panel));
+        self.register_instance_panel_boxed(Box::new(panel));
+    }
+
+    pub(crate) fn register_instance_panel_boxed(&mut self, panel: Box<dyn InstancePanel>) {
+        self.instance_panels.insert(panel.kind(), panel);
     }
 
     /// Open (or focus, if already open) a multi-instance tab of `kind`
@@ -2553,15 +2562,31 @@ impl WorkbenchLayout {
     }
 }
 
+/// Transfer renderer-neutral registrations into the concrete shell once its
+/// layout exists. Registrations made before the shell are retained by the
+/// contract registry until this boundary; registrations made after the shell
+/// are picked up on the next update.
+fn drain_registered_panels(world: &mut World) {
+    if !world.contains_resource::<WorkbenchLayout>() {
+        return;
+    }
+    let (panels, instance_panels) = {
+        let Some(mut registry) = world.get_resource_mut::<WorkbenchPanelRegistry>() else {
+            return;
+        };
+        (registry.take_panels(), registry.take_instance_panels())
+    };
+    let mut layout = world.resource_mut::<WorkbenchLayout>();
+    for panel in panels {
+        layout.register_boxed(panel);
+    }
+    for panel in instance_panels {
+        layout.register_instance_panel_boxed(panel);
+    }
+}
+
 /// Extension trait on [`App`] for ergonomic panel + perspective registration.
 pub trait WorkbenchAppExt {
-    /// Register a panel with the default workbench layout.
-    fn register_panel<P: Panel + 'static>(&mut self, panel: P) -> &mut Self;
-
-    /// Register a multi-instance panel kind (e.g. model tabs). Instances are
-    /// opened at runtime via the [`OpenTab`] command.
-    fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) -> &mut Self;
-
     /// Register a perspective. The first perspective registered becomes
     /// active and its layout plan seeds the initial slot assignments.
     fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) -> &mut Self;
@@ -2571,30 +2596,11 @@ pub trait WorkbenchAppExt {
 }
 
 impl WorkbenchAppExt for App {
-    fn register_panel<P: Panel + 'static>(&mut self, panel: P) -> &mut Self {
-        if !self.world().contains_resource::<WorkbenchLayout>() {
-            self.init_resource::<WorkbenchLayout>();
-        }
-        self.world_mut()
-            .resource_mut::<WorkbenchLayout>()
-            .register(panel);
-        self
-    }
-
-    fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) -> &mut Self {
-        if !self.world().contains_resource::<WorkbenchLayout>() {
-            self.init_resource::<WorkbenchLayout>();
-        }
-        self.world_mut()
-            .resource_mut::<WorkbenchLayout>()
-            .register_instance_panel(panel);
-        self
-    }
-
     fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) -> &mut Self {
         if !self.world().contains_resource::<WorkbenchLayout>() {
             self.init_resource::<WorkbenchLayout>();
         }
+        drain_registered_panels(self.world_mut());
         let id = perspective.id();
         self.world_mut()
             .resource_mut::<WorkbenchLayout>()
@@ -3435,8 +3441,7 @@ fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
             ui.horizontal(|ui| {
                 ui.label("Cert digest:");
                 ui.add(
-                    crate::text_editor::singleline(&mut digest)
-                        .hint_text("optional — self-signed host"),
+                    text_editor::singleline(&mut digest).hint_text("optional — self-signed host"),
                 );
             });
             let enabled = !address.trim().is_empty();

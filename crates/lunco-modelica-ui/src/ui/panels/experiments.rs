@@ -21,8 +21,8 @@ use lunco_viz::multi_series_plot::{
     MultiSeriesStyle,
 };
 use lunco_viz::viz::VizId;
-use lunco_workbench::{icon_button, UiIcon};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_widgets::{icon_button, UiIcon};
 
 pub const EXPERIMENTS_PANEL_ID: PanelId = PanelId("modelica_experiments");
 
@@ -639,7 +639,7 @@ impl Panel for ExperimentsPanel {
                                 None => row.name.clone(),
                             };
                             let resp = ui.add(
-                                lunco_workbench::text_editor::singleline(&mut buf)
+                                lunco_workbench_widgets::text_editor::singleline(&mut buf)
                                     .desired_width(140.0),
                             );
                             resp.request_focus();
@@ -677,9 +677,9 @@ impl Panel for ExperimentsPanel {
                                     load_into_draft = Some(row.id);
                                 }
                                 name_resp.context_menu(|ui| {
-                                        if lunco_workbench::icon_text_button(
+                                        if lunco_workbench_widgets::icon_text_button(
                                             ui,
-                                            lunco_workbench::UiIcon::Edit,
+                                            lunco_workbench_widgets::UiIcon::Edit,
                                             "Rename",
                                             "Give this run a new name",
                                         )
@@ -690,9 +690,9 @@ impl Panel for ExperimentsPanel {
                                     }
                                     ui.separator();
                                     if row.is_terminal {
-                                        if lunco_workbench::icon_text_button(
+                                        if lunco_workbench_widgets::icon_text_button(
                                             ui,
-                                            lunco_workbench::UiIcon::Play,
+                                            lunco_workbench_widgets::UiIcon::Play,
                                             "Re-run with same setup",
                                             "Run again with identical bounds and parameter overrides",
                                         )
@@ -718,9 +718,9 @@ impl Panel for ExperimentsPanel {
                                             ui.close();
                                         }
                                         ui.separator();
-                                        if lunco_workbench::icon_text_button(
+                                        if lunco_workbench_widgets::icon_text_button(
                                             ui,
-                                            lunco_workbench::UiIcon::Delete,
+                                            lunco_workbench_widgets::UiIcon::Delete,
                                             "Delete",
                                             "Remove this run from the list",
                                         )
@@ -729,9 +729,9 @@ impl Panel for ExperimentsPanel {
                                             delete = Some(row.id);
                                             ui.close();
                                         }
-                                    } else if lunco_workbench::icon_text_button(
+                                    } else if lunco_workbench_widgets::icon_text_button(
                                         ui,
-                                        lunco_workbench::UiIcon::Stop,
+                                        lunco_workbench_widgets::UiIcon::Stop,
                                         "Cancel run",
                                         "Stop this in-progress run",
                                     )
@@ -793,9 +793,9 @@ impl Panel for ExperimentsPanel {
                             ));
                         }
                         if row.is_terminal {
-                            if lunco_workbench::icon_button(
+                            if lunco_workbench_widgets::icon_button(
                                 ui,
-                                lunco_workbench::UiIcon::Delete,
+                                lunco_workbench_widgets::UiIcon::Delete,
                                 "Delete",
                             )
                             .clicked()
@@ -803,9 +803,9 @@ impl Panel for ExperimentsPanel {
                                 delete = Some(row.id);
                             }
                         } else if !row.id.is_live()
-                            && lunco_workbench::icon_button(
+                            && lunco_workbench_widgets::icon_button(
                                 ui,
-                                lunco_workbench::UiIcon::Stop,
+                                lunco_workbench_widgets::UiIcon::Stop,
                                 "Cancel run",
                             )
                             .clicked()
@@ -1087,9 +1087,9 @@ impl ExperimentsPanel {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if any_in_flight
-                    && lunco_workbench::icon_text_button(
+                    && lunco_workbench_widgets::icon_text_button(
                         ui,
-                        lunco_workbench::UiIcon::Stop,
+                        lunco_workbench_widgets::UiIcon::Stop,
                         "Cancel",
                         "Cancel the most recently started run.",
                     )
@@ -1103,9 +1103,9 @@ impl ExperimentsPanel {
                 // disable it.
                 let btn = ui
                     .add_enabled_ui(valid, |ui| {
-                        lunco_workbench::icon_text_button(
+                        lunco_workbench_widgets::icon_text_button(
                             ui,
-                            lunco_workbench::UiIcon::Play,
+                            lunco_workbench_widgets::UiIcon::Play,
                             "Run",
                             "Run this experiment",
                         )
@@ -1347,8 +1347,10 @@ impl ExperimentsPanel {
                                         }
                                     };
                                     let mut edit =
-                                        lunco_workbench::text_editor::singleline(value_text)
-                                            .desired_width(70.0);
+                                        lunco_workbench_widgets::text_editor::singleline(
+                                            value_text,
+                                        )
+                                        .desired_width(70.0);
                                     if !parses {
                                         edit = edit.text_color(col_error);
                                     }
@@ -1537,8 +1539,10 @@ impl ExperimentsPanel {
                         if !p.supportable {
                             ui.add_enabled(
                                 false,
-                                lunco_workbench::text_editor::singleline(&mut String::from("—"))
-                                    .desired_width(80.0),
+                                lunco_workbench_widgets::text_editor::singleline(
+                                    &mut String::from("—"),
+                                )
+                                .desired_width(80.0),
                             )
                             .on_hover_text(
                                 p.reason.clone().unwrap_or_else(|| "unsupported".into()),
@@ -1605,7 +1609,7 @@ impl ExperimentsPanel {
                                 ui.data_mut(|d| d.get_temp::<String>(cell_id));
                             let mut text = latched.clone().unwrap_or_else(|| committed.clone());
                             let resp = ui.add(
-                                lunco_workbench::text_editor::singleline(&mut text)
+                                lunco_workbench_widgets::text_editor::singleline(&mut text)
                                     .id(cell_id)
                                     .desired_width(80.0),
                             );
@@ -2129,14 +2133,14 @@ fn render_experiments_plot_inner(
                         ui.horizontal(|ui| {
                             ui.label("Search");
                             ui.add(
-                                lunco_workbench::text_editor::singleline(&mut var_filter)
+                                lunco_workbench_widgets::text_editor::singleline(&mut var_filter)
                                     .hint_text("filter…")
                                     .desired_width(150.0),
                             );
                             if !var_filter.is_empty()
-                                && lunco_workbench::icon_button(
+                                && lunco_workbench_widgets::icon_button(
                                     ui,
-                                    lunco_workbench::UiIcon::Close,
+                                    lunco_workbench_widgets::UiIcon::Close,
                                     "Clear filter",
                                 )
                                 .clicked()
@@ -2279,9 +2283,9 @@ fn render_experiments_plot_inner(
                     log_y_toggle = Some(!log_y_now);
                 }
                 if scrub_time.is_some() {
-                    if lunco_workbench::icon_button(
+                    if lunco_workbench_widgets::icon_button(
                         ui,
-                        lunco_workbench::UiIcon::Close,
+                        lunco_workbench_widgets::UiIcon::Close,
                         "Drop scrub cursor",
                     )
                     .clicked()

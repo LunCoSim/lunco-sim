@@ -115,7 +115,7 @@ impl BrowserSection for ModelicaSection {
             // they care about. Keeps the browser scannable on startup.
             let label = format!("[read-only]  {root_name}");
             let id = ui.make_persistent_id(("twin.modelica.library", root_id));
-            lunco_workbench::tree::branch(
+            lunco_workbench_widgets::tree::branch(
                 ui,
                 id,
                 false,
@@ -543,8 +543,9 @@ fn render_workspace_doc_row(
         let mut buf = draft;
         ui.horizontal(|ui| {
             ui.label("Draft");
-            let resp =
-                ui.add(lunco_workbench::text_editor::singleline(&mut buf).desired_width(180.0));
+            let resp = ui.add(
+                lunco_workbench_widgets::text_editor::singleline(&mut buf).desired_width(180.0),
+            );
             // One-shot focus grab: only on the first frame after the
             // rename began. Calling `request_focus()` every frame
             // re-steals focus and prevents click-away from working.
@@ -590,7 +591,7 @@ fn render_workspace_doc_row(
                 }
             })
             .unwrap_or("File");
-        lunco_workbench::tree::branch(
+        lunco_workbench_widgets::tree::branch(
             ui,
             id,
             true,
@@ -616,9 +617,9 @@ fn render_workspace_doc_row(
                     start_rename = Some(doc_name.to_string());
                 }
                 resp.context_menu(|ui| {
-                    if lunco_workbench::icon_text_button(
+                    if lunco_workbench_widgets::icon_text_button(
                         ui,
-                        lunco_workbench::UiIcon::Edit,
+                        lunco_workbench_widgets::UiIcon::Edit,
                         "Rename",
                         "Rename this document",
                     )
@@ -627,8 +628,12 @@ fn render_workspace_doc_row(
                         start_rename = Some(doc_name.to_string());
                         ui.close();
                     }
-                    if lunco_workbench::icon_button(ui, lunco_workbench::UiIcon::Close, "Close")
-                        .clicked()
+                    if lunco_workbench_widgets::icon_button(
+                        ui,
+                        lunco_workbench_widgets::UiIcon::Close,
+                        "Close",
+                    )
+                    .clicked()
                     {
                         close_doc = true;
                         ui.close();
@@ -1007,7 +1012,7 @@ fn render_class_row(
         Some(doc_id) == active_doc && active_qualified == Some(class.qualified_path.as_str());
 
     if class.children.is_empty() {
-        let resp = lunco_workbench::tree::leaf(ui, |ui| {
+        let resp = lunco_workbench_widgets::tree::leaf(ui, |ui| {
             paint_badge(ui, badge, theme);
             let label = if is_active {
                 egui::RichText::new(&class.short_name).strong()
@@ -1063,7 +1068,7 @@ fn render_class_row(
         let muted = theme.text_muted();
         let id = ui.make_persistent_id(("modelica_class", &class.qualified_path));
         let mut header_clicked = false;
-        lunco_workbench::tree::branch(
+        lunco_workbench_widgets::tree::branch(
             ui,
             id,
             true,

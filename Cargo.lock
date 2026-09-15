@@ -7282,8 +7282,8 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",
- "lunco-workbench",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "serde",
  "serde_json",
 ]
@@ -7620,6 +7620,7 @@ dependencies = [
  "lunco-usd-viewport-ui",
  "lunco-workbench",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "openusd",
 ]
 
@@ -7670,6 +7671,7 @@ dependencies = [
  "lunco-workbench",
  "lunco-workbench-browser",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
  "serde",
@@ -7774,6 +7776,7 @@ dependencies = [
  "lunco-workbench",
  "lunco-workbench-browser",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "lunco-workspace",
  "resvg",
  "serde",
@@ -7998,6 +8001,7 @@ dependencies = [
  "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workbench-datasets-ui",
+ "lunco-workbench-widgets",
  "lunco-workspace",
  "lunco-workspace-api",
  "regex",
@@ -8630,8 +8634,8 @@ dependencies = [
  "lunco-status-core",
  "lunco-theme",
  "lunco-time",
- "lunco-workbench",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "web-time",
 ]
 
@@ -9177,6 +9181,7 @@ dependencies = [
  "lunco-workbench",
  "lunco-workbench-browser",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
  "serde_json",
@@ -9204,6 +9209,7 @@ dependencies = [
  "lunco-usd-core",
  "lunco-workbench",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
  "serde",
@@ -9226,6 +9232,7 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-workbench",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "serde",
  "serde_json",
 ]
@@ -9266,6 +9273,7 @@ dependencies = [
  "lunco-time",
  "lunco-twin",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "lunco-workspace",
  "lunco-workspace-api",
  "rfd",
@@ -9288,6 +9296,7 @@ dependencies = [
  "lunco-twin",
  "lunco-workbench",
  "lunco-workbench-core",
+ "lunco-workbench-widgets",
  "lunco-workspace",
 ]
 
@@ -9311,6 +9320,13 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-workbench-browser",
  "lunco-workspace",
+]
+
+[[package]]
+name = "lunco-workbench-widgets"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy_egui",
 ]
 
 [[package]]
