@@ -18,7 +18,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 use openusd::sdf::Path as SdfPath;
@@ -216,7 +216,7 @@ pub fn produce_usd_param_view(
             // the shared fallback for standard LunCo properties.
             let Some(hint) = stage_view
                 .attr_ui_hint(&sdf, &attr)
-                .or_else(|| lunco_usd_document::schema::ui_hint_of(&attr))
+                .or_else(|| lunco_usd_authoring::schema::ui_hint_of(&attr))
             else {
                 continue;
             };
@@ -232,7 +232,7 @@ pub fn produce_usd_param_view(
             let type_name = hint
                 .type_name
                 .or_else(|| {
-                    lunco_usd_document::schema::SchemaRegistry::global()
+                    lunco_usd_authoring::schema::SchemaRegistry::global()
                         .read()
                         .ok()
                         .and_then(|r| r.property(&attr).map(|p| p.type_name.clone()))

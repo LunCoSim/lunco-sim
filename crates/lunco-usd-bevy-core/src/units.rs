@@ -1,10 +1,10 @@
 //! Runtime adapter for the authored USD document's stage-convention types.
 //!
-//! The data model and conversion math live in `lunco-usd-document`. This
-//! module only adapts the composed Bevy reader to that document seam.
+//! The data model and conversion math live in `lunco-usd-data`. This module
+//! only adapts the composed Bevy reader to that data seam.
 
 use crate::read::UsdReadObject;
-use lunco_usd_document::units::{
+use lunco_usd_data::units::{
     ConventionTransform, StageMetadataReader, StageMetrics, StageMetricsError,
 };
 

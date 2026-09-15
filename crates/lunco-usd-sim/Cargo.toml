@@ -59,5 +59,4 @@ workspace = true
 [dev-dependencies]
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-usd-core = { path = "../lunco-usd-core" }
-lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }

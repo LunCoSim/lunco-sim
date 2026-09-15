@@ -55,6 +55,8 @@ members = [
     "crates/lunco-usd-core",
     "crates/lunco-usd-document",
     "crates/lunco-usd-compose",
+    "crates/lunco-usd-data",
+    "crates/lunco-usd-authoring",
     "crates/lunco-usd-geometry",
     "crates/lunco-usd-sim",
     "crates/lunco-usd-sim-core",

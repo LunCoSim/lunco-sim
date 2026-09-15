@@ -7,13 +7,16 @@ description = "Headless authored OpenUSD document and layer substrate for LunCoS
 
 [dependencies]
 bevy = { workspace = true }
-anyhow = { workspace = true }
 openusd = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-usd-authoring = { path = "../lunco-usd-authoring" }
+lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 serde = { workspace = true }
+
+[dev-dependencies]
 serde_json = { workspace = true }
 
 [lints]

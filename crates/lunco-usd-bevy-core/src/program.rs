@@ -698,7 +698,7 @@ mod tests {
     }
 
     fn program_stage(source: &str) -> TestStage {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source("programs.usda", source);
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source("programs.usda", source);
         let stage = crate::compose::build_stage_with_resolver(&recipe)
             .expect("build program stage")
             .0;

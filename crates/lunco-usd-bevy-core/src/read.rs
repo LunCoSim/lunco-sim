@@ -5,7 +5,7 @@
 //! This is the **composed-read plane**: every read resolves through PCP, so an
 //! extractor sees the values usdview would. Its counterpart is the *authoring*
 //! plane — the Document's authored `sdf::Data` layers, read through
-//! [`UsdDataExt`](lunco_usd_document::usd_data::UsdDataExt), deliberately pre-composition
+//! [`UsdDataExt`](lunco_usd_data::usd_data::UsdDataExt), deliberately pre-composition
 //! because "which layer holds this opinion" is a question only it can answer.
 //! Two planes, two traits; do not conflate them.
 //!
@@ -23,7 +23,7 @@ use openusd::usd::Stage;
 use std::collections::HashSet;
 
 use crate::view::StageView;
-use lunco_usd_document::metadata::AttrUiHint;
+use lunco_usd_data::metadata::AttrUiHint;
 
 /// Read binary asset arcs from one authored prim spec in the live stage.
 ///
@@ -525,7 +525,7 @@ pub trait UsdRead {
 
     /// The composed pseudo-root metadata value for `name`, or `None` when the
     /// metadata is unauthored. Stage convention metadata is interpreted in one
-    /// place by [`StageMetrics::from_reader`](lunco_usd_document::units::StageMetrics::from_reader),
+    /// place by [`StageMetrics::from_reader`](lunco_usd_data::units::StageMetrics::from_reader),
     /// which must distinguish an omitted USD default from an authored value of
     /// the wrong type.
     fn stage_metadata_value(&self, name: &str) -> Option<Value>;

@@ -34,8 +34,8 @@ use openusd::usd::Stage;
 
 use lunco_assets_core::asset_path::canonicalize_root;
 
+use lunco_usd_compose::recipe::StageRecipe;
 use lunco_usd_compose::{child_layer_ids, LuncoUsdResolver, SharedLayerBytes};
-use lunco_usd_document::recipe::StageRecipe;
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
 /// in-memory, `Send` [`StageRecipe`]. The loader composes this recipe and builds

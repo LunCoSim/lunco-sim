@@ -170,7 +170,7 @@ pub(crate) fn restore_doc_runtime(
     };
     let data = match String::from_utf8(bytes)
         .ok()
-        .and_then(|text| lunco_usd_document::author::usda_to_data(&text).ok())
+        .and_then(|text| lunco_usd_authoring::author::usda_to_data(&text).ok())
     {
         Some(data) => data,
         None => {
@@ -247,7 +247,7 @@ pub(crate) fn on_doc_changed_save_runtime(
     if !runtime_has_content(runtime) {
         return; // no spawns / moves — don't litter `.lunco` with empty overlays
     }
-    let text = match lunco_usd_document::author::data_to_usda(runtime) {
+    let text = match lunco_usd_authoring::author::data_to_usda(runtime) {
         Ok(text) => text,
         Err(e) => {
             warn!("[usd-runtime] serialize of runtime layer failed: {e}");
@@ -368,7 +368,7 @@ mod tests {
                 reference_prim_path: None,
             })
             .unwrap();
-        let text = lunco_usd_document::author::data_to_usda(source.runtime_data()).unwrap();
+        let text = lunco_usd_authoring::author::data_to_usda(source.runtime_data()).unwrap();
         write_bytes(
             &dir.path().join(".lunco/runtime/scene.usda"),
             text.as_bytes(),
@@ -423,7 +423,7 @@ mod tests {
         assert!(runtime_has_content(src.runtime_data()));
 
         // 2. Persist the runtime layer to its `.lunco` file.
-        let text = lunco_usd_document::author::data_to_usda(src.runtime_data()).unwrap();
+        let text = lunco_usd_authoring::author::data_to_usda(src.runtime_data()).unwrap();
         write_bytes(&rt_file, text.as_bytes()).unwrap();
         assert!(rt_file.exists());
 
@@ -440,7 +440,7 @@ mod tests {
 
         let bytes = read_bytes(&rt_file).expect("overlay present");
         let data =
-            lunco_usd_document::author::usda_to_data(&String::from_utf8(bytes).unwrap()).unwrap();
+            lunco_usd_authoring::author::usda_to_data(&String::from_utf8(bytes).unwrap()).unwrap();
         reopened.restore_runtime(data);
 
         // The spawn is back in the runtime layer + composed view, base still clean.
@@ -497,7 +497,7 @@ mod tests {
             reference_prim_path: None,
         })
         .unwrap();
-        let text = lunco_usd_document::author::data_to_usda(src.runtime_data()).unwrap();
+        let text = lunco_usd_authoring::author::data_to_usda(src.runtime_data()).unwrap();
         write_bytes(
             &dir.path().join(".lunco/runtime/scene.usda"),
             text.as_bytes(),

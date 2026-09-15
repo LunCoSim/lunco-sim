@@ -934,7 +934,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>();
         let stage = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
-            UsdStageAsset::from_recipe(lunco_usd_document::recipe::StageRecipe::from_source(
+            UsdStageAsset::from_recipe(lunco_usd_compose::recipe::StageRecipe::from_source(
                 "preview-hit.usda",
                 MINIMAL_USD,
             ))
@@ -1056,14 +1056,14 @@ mod tests {
             .init_asset::<UsdStageAsset>();
 
         let stage_a = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
-            UsdStageAsset::from_recipe(lunco_usd_document::recipe::StageRecipe::from_source(
+            UsdStageAsset::from_recipe(lunco_usd_compose::recipe::StageRecipe::from_source(
                 "preview-a.usda",
                 MINIMAL_USD,
             ))
             .expect("preview A stage asset"),
         );
         let stage_b = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
-            UsdStageAsset::from_recipe(lunco_usd_document::recipe::StageRecipe::from_source(
+            UsdStageAsset::from_recipe(lunco_usd_compose::recipe::StageRecipe::from_source(
                 "preview-b.usda",
                 MINIMAL_USD,
             ))

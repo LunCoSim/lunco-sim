@@ -1,0 +1,16 @@
+[package]
+name = "lunco-usd-authoring"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "OpenUSD authored-data helpers and schema registry for LunCoSim"
+
+[dependencies]
+anyhow = { workspace = true }
+bevy = { workspace = true }
+openusd = { workspace = true }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
+lunco-usd-data = { path = "../lunco-usd-data" }
+
+[lints]
+workspace = true

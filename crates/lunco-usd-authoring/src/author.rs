@@ -110,7 +110,7 @@ pub fn open_doc_stage(data: &sdf::Data) -> Result<Stage> {
 /// The resolver owns dependency interpretation; only the root layer is replaced.
 pub fn open_doc_stage_with_recipe(
     data: &sdf::Data,
-    recipe: &crate::recipe::StageRecipe,
+    recipe: &lunco_usd_compose::recipe::StageRecipe,
 ) -> Result<Stage> {
     let stage = Stage::builder()
         .resolver(lunco_usd_compose::LuncoUsdResolver::new(
@@ -485,7 +485,7 @@ fn union_token_list(bspec: &mut SpecData, key: &str, rval: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usd_data::UsdDataExt;
+    use lunco_usd_data::usd_data::UsdDataExt;
 
     const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\"\n{\n    def Sphere \"Box\"\n    {\n        double radius = 1\n        def Sphere \"Inner\"\n        {\n            double radius = 9\n        }\n    }\n}\n";
 
