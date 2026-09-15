@@ -10,7 +10,7 @@
 //! `lunco-twin`, which violates the four-layer plugin architecture
 //! (Layer 2 domain crates aren't supposed to round-trip through
 //! foundation-layer edits to ship). Mirrors the same plugin-driven
-//! pattern as [`UriRegistry`](../../lunco_workbench/uri/struct.UriRegistry.html)
+//! pattern as [`UriRegistry`](lunco_workbench_core::uri::UriRegistry)
 //! and the [`BackendRegistry`](https://docs.rs/lunco-cosim) for cosim.
 //!
 use std::collections::HashMap;
@@ -73,7 +73,7 @@ pub struct DocumentKindMeta {
     pub default_filename: Option<&'static str>,
 
     /// URI scheme this kind contributes to
-    /// [`UriRegistry`](../../lunco_workbench/uri/struct.UriRegistry.html)
+    /// [`UriRegistry`](lunco_workbench_core::uri::UriRegistry)
     /// (e.g. `"modelica"` for `modelica://Modelica.Blocks.Examples.PID`).
     /// Informational here — the actual handler is registered separately
     /// by the same domain plugin.

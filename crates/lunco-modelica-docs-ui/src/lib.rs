@@ -61,8 +61,8 @@ pub fn render_html_as_markdown(
             .show(ui, &mut guard, &md);
     }
 
-    let intercepts: Vec<(usize, String, lunco_workbench::UriResolution)> = {
-        let registry = ctx.resource::<lunco_workbench::UriRegistry>();
+    let intercepts: Vec<(usize, String, lunco_workbench_core::uri::UriResolution)> = {
+        let registry = ctx.resource::<lunco_workbench_core::uri::UriRegistry>();
         ui.ctx().output_mut(|output| {
             output
                 .commands
@@ -72,8 +72,11 @@ pub fn render_html_as_markdown(
                     if let egui::OutputCommand::OpenUrl(open) = command {
                         let resolution = registry
                             .map(|registry| registry.dispatch(&open.url))
-                            .unwrap_or(lunco_workbench::UriResolution::NotHandled);
-                        if !matches!(resolution, lunco_workbench::UriResolution::NotHandled) {
+                            .unwrap_or(lunco_workbench_core::uri::UriResolution::NotHandled);
+                        if !matches!(
+                            resolution,
+                            lunco_workbench_core::uri::UriResolution::NotHandled
+                        ) {
                             return Some((index, open.url.clone(), resolution));
                         }
                     }
@@ -91,7 +94,7 @@ pub fn render_html_as_markdown(
         }
     });
     for (_, url, resolution) in intercepts {
-        ctx.trigger(lunco_workbench::UriClicked {
+        ctx.trigger(lunco_workbench_core::uri::UriClicked {
             uri: url,
             resolution,
         });

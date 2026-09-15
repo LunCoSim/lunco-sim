@@ -78,7 +78,8 @@ use lunco_usd_bevy_scene::{
     UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
     UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision,
 };
-use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};
+use lunco_workbench::{ScenePickGate, SceneTarget};
+use lunco_workbench_core::viewport::{PanelRect, PanelRects};
 use lunco_workbench_core::{
     commands::{CloseTab, OpenTab},
     source::OpenTwinSource,

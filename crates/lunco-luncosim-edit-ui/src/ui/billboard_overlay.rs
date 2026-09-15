@@ -41,7 +41,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::world_vector;
 use lunco_usd_sim::billboard::{render_billboard, BillboardFacts, BillboardIndex, UsdBillboard};
-use lunco_workbench::{PanelRects, VIEWPORT_PANEL_ID};
+use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 
 const BILLBOARD_FONT_SIZE: f32 = 13.0;
 const BILLBOARD_MAX_WIDTH: f32 = 220.0;

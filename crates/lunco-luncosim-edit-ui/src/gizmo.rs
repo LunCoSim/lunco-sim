@@ -31,7 +31,8 @@ use lunco_usd_core::document::LayerId;
 use lunco_usd_viewport_ui::{
     UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
-use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};
+use lunco_workbench::{ScenePickGate, SceneTarget};
+use lunco_workbench_core::viewport::{PanelRect, PanelRects};
 use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
 };

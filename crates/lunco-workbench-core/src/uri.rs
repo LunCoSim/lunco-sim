@@ -5,7 +5,7 @@
 //! SysML v2 element refs (`sysml://package::Element`) all want the same
 //! UX: a clickable link in a document that lands the user on the right
 //! place. Rather than each domain wiring its own regex + `<a href>`
-//! rewriting into every HTML renderer, the workbench owns a registry
+//! rewriting into every HTML renderer, the workbench contract crate owns a registry
 //! of scheme handlers and a single dispatch entry point.
 //!
 //! ## Shape
@@ -114,8 +114,8 @@ pub trait UriHandler: Send + Sync + 'static {
     fn resolve(&self, uri: &str) -> UriResolution;
 }
 
-/// Registry of scheme handlers. One per app, inserted by
-/// [`WorkbenchPlugin`](crate::WorkbenchPlugin).
+/// Registry of scheme handlers. One per app, installed by a concrete
+/// workbench host.
 ///
 /// Domain crates register from their own plugin's `build`:
 ///

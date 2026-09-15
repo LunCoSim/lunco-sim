@@ -63,6 +63,8 @@ use lunco_theme::ColorAlpha;
 use lunco_workbench_core::commands::{CloseTab, FocusPanel, OpenTab, OpenTabPreserveFocus};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
 use lunco_workbench_core::tabs::{EditorTabs, PendingTabCloses};
+use lunco_workbench_core::uri::UriRegistry;
+use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 use lunco_workbench_core::WorkbenchPanelAppExt;
 use lunco_workbench_core::{
     ApplicationOverlayRenderSet, InstancePanel, MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup,
@@ -89,7 +91,6 @@ pub mod perf_hud;
 pub mod perspective_command;
 pub mod picker;
 pub mod theme_command;
-pub mod uri;
 pub mod window_command;
 pub mod window_persistence;
 pub mod window_placement;
@@ -228,8 +229,6 @@ impl HelpAnchors {
         self.rects.clear();
     }
 }
-pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
-
 /// Name of the binary actually running, for the Help menu's build line.
 ///
 /// This crate is a LIBRARY shared by every workbench app (`luncosim`, `lunica`,
@@ -574,8 +573,8 @@ register_commands!(on_focus_panel,);
 // `session` here is just the workbench-side recents persistence.
 use lunco_workspace::WorkspaceResource;
 pub use viewport::{
-    EguiPointerState, PanelRect, PanelRects, ScenePickGate, SceneTarget, ViewportPanel,
-    ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
+    EguiPointerState, ScenePickGate, SceneTarget, ViewportPanel, ViewportPlaceholder,
+    WorkbenchEguiHost, WorkbenchViewportPlugin,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -2635,7 +2634,7 @@ fn render_workbench(world: &mut World) {
     // rect. Cleared HERE rather than in `First` because the consumers run in
     // `Update` — i.e. before this pass — and would otherwise always see an empty
     // map.
-    if let Some(mut rects) = world.get_resource_mut::<viewport::PanelRects>() {
+    if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
         rects.clear();
     }
 
@@ -2841,7 +2840,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         // render so even early-returning panels still register an
         // anchor for the current frame.
         let panel_rect = ui.max_rect();
-        let measured_panel_rect = viewport::PanelRects::panel_rect_from_ui(ui);
+        let measured_panel_rect = PanelRects::panel_rect_from_ui(ui);
         let panel_id = match *tab {
             TabId::Singleton(id) => id,
             TabId::Instance { kind, .. } => kind,
@@ -2851,7 +2850,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         // Publish the active tab's authoritative screen rect before rendering
         // its contents. Camera/image panels and runtime-authored surfaces both
         // consume this same geometry; neither needs to infer dock positions.
-        if let Some(mut rects) = self.world.get_resource_mut::<viewport::PanelRects>() {
+        if let Some(mut rects) = self.world.get_resource_mut::<PanelRects>() {
             match *tab {
                 TabId::Singleton(_) => rects.record(panel_id, measured_panel_rect),
                 TabId::Instance { instance, .. } => {
@@ -3047,7 +3046,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         // header fully invisible: transparent background, outline, and
         // text. The bar still occupies its 24-px row because
         // egui_dock 0.18 has no per-leaf hide-bar option.
-        if *tab == TabId::Singleton(viewport::VIEWPORT_PANEL_ID) {
+        if *tab == TabId::Singleton(VIEWPORT_PANEL_ID) {
             let mut style = global_style.clone();
             let invisible = egui::Color32::TRANSPARENT;
             for s in [
@@ -3582,7 +3581,7 @@ fn needs_full_backdrop(
     let scene_backed_perspective = layout.active_perspective_scene_visible_when_docked();
     (!scene_backed_perspective
         && !viewport::layout_is_empty(layout)
-        && !viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID))
+        && !viewport::layout_contains_panel(layout, VIEWPORT_PANEL_ID))
         || viewport_empty
         || no_active_scene_camera
 }
@@ -4786,7 +4785,7 @@ fn render_layout(
         .and_then(|p| p.message.clone());
     if let Some(msg) = placeholder {
         let viewport_visible = viewport::layout_is_empty(layout)
-            || viewport::layout_contains_panel(layout, viewport::VIEWPORT_PANEL_ID);
+            || viewport::layout_contains_panel(layout, VIEWPORT_PANEL_ID);
         if viewport_visible {
             egui::Area::new(egui::Id::new("lunco_viewport_empty_placeholder"))
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)

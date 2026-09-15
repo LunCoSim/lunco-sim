@@ -7191,7 +7191,6 @@ dependencies = [
  "lunco-core",
  "lunco-core-session",
  "lunco-theme",
- "lunco-workbench",
  "lunco-workbench-core",
  "lunco-workspace",
 ]
@@ -7921,7 +7920,6 @@ dependencies = [
  "bevy_egui",
  "egui_commonmark",
  "htmd",
- "lunco-workbench",
  "lunco-workbench-core",
 ]
 

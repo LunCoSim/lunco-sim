@@ -1,4 +1,4 @@
-//! Modelica scheme handler for [`UriRegistry`](lunco_workbench::UriRegistry).
+//! Modelica scheme handler for [`UriRegistry`](lunco_workbench_core::uri::UriRegistry).
 //!
 //! Handles both flavours of `modelica://` URI defined in MLS Annex D:
 //!
@@ -23,7 +23,7 @@
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use lunco_workbench::{UriClicked, UriHandler, UriResolution};
+use lunco_workbench_core::uri::{UriClicked, UriHandler, UriResolution};
 
 /// Handler for `modelica://` URIs.
 pub struct ModelicaUriHandler;

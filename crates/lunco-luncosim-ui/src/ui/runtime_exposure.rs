@@ -23,7 +23,8 @@ use lunco_core::exposure::EngineExposures;
 use lunco_core::SceneViewport;
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
-use lunco_workbench::{PanelRects, RuntimeSurfaceLayout, RuntimeSurfaceLayouts, ScenePickGate};
+use lunco_workbench::{RuntimeSurfaceLayout, RuntimeSurfaceLayouts, ScenePickGate};
+use lunco_workbench_core::viewport::PanelRects;
 use lunco_workbench_core::{PanelId, WorkbenchSnapshot};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -2832,7 +2833,7 @@ mod tests {
         let panel = PanelId("right_inspector");
         rects.record(
             panel,
-            lunco_workbench::PanelRect {
+            lunco_workbench_core::viewport::PanelRect {
                 origin: UVec2::new(800, 100),
                 size: UVec2::new(400, 600),
             },

@@ -70,8 +70,6 @@
 //!   `PanelRects` and reserves the space; the 3D camera does the
 //!   actual painting.
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 // `bevy::camera::*` re-exports work on *both* native and
 // `--no-default-features` wasm builds. `bevy::render::camera::*` only
@@ -85,10 +83,7 @@ use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 use lunco_controller::InputBindingsSettings;
 use lunco_core::{SceneViewport, UserIntent};
 use lunco_render::SceneCamera;
-
-/// Stable id for [`ViewportPanel`]. Use this in `Workspace::apply` to
-/// place the viewport in a slot without instantiating the panel.
-pub const VIEWPORT_PANEL_ID: PanelId = PanelId("workbench::viewport");
+use lunco_workbench_core::viewport::{PanelRect, PanelRects, VIEWPORT_PANEL_ID};
 
 /// Marker component on the egui-owning camera for one window.
 ///
@@ -115,27 +110,6 @@ pub enum SceneTarget {
     /// `egui::Image` (e.g. the USD preview). It owns its own drag/scroll input;
     /// the main scene must not also react to it.
     Offscreen(PanelId),
-}
-
-/// Per-panel screen-space rect, in *physical* pixels.
-///
-/// Populated by the active dock tab while it renders. Scene panels use these
-/// rects for camera/image sizing, and runtime-authored UI uses them to anchor
-/// a surface to an egui-dock panel without rebuilding the dock layout.
-///
-/// Cleared at the top of every egui pass (`render_workbench`) and refilled by the
-/// panels that actually render, so a panel that left the layout (perspective
-/// switch, closed tab) does NOT leak a stale rect to its consumers. Consumers run
-/// in `Update` and therefore read the *previous* egui pass's rects — one frame of
-/// lag, which is what the offscreen-image resize already tolerates.
-///
-/// This resource holds *only* persistent physical-pixel rects. The per-frame
-/// pick-gate inputs live in [`ScenePickGate`], which has a different reset
-/// lifetime and a different coordinate space (egui points).
-#[derive(Resource, Default, Debug)]
-pub struct PanelRects {
-    rects: HashMap<PanelId, PanelRect>,
-    instance_rects: HashMap<(PanelId, u64), PanelRect>,
 }
 
 /// Per-frame inputs and resolved output of the scene-vs-chrome pick gate.
@@ -195,36 +169,6 @@ pub struct ScenePickGate {
     latched: bool,
 }
 
-/// One panel's footprint inside the window, in *physical* pixels.
-#[derive(Debug, Clone, Copy)]
-pub struct PanelRect {
-    /// Top-left of the panel rect inside the window framebuffer.
-    pub origin: UVec2,
-    /// Width × height of the rect (min 1×1 — never zero, so callers
-    /// can safely set `Camera::viewport` without guard checks).
-    pub size: UVec2,
-}
-
-impl PanelRect {
-    /// Convert this physical-pixel panel footprint to the egui point space used
-    /// by screen-space overlays.
-    ///
-    /// Bevy's camera viewport is expressed in physical pixels while egui's
-    /// painters and clip rectangles use logical points. Keeping this conversion
-    /// next to the measured rectangle prevents each world-overlay producer from
-    /// inventing its own DPI/rounding rules.
-    pub fn to_egui_rect(self, ctx: &egui::Context) -> egui::Rect {
-        let ppp = ctx.pixels_per_point().max(f32::EPSILON);
-        egui::Rect::from_min_max(
-            egui::pos2(self.origin.x as f32 / ppp, self.origin.y as f32 / ppp),
-            egui::pos2(
-                self.origin.x.saturating_add(self.size.x) as f32 / ppp,
-                self.origin.y.saturating_add(self.size.y) as f32 / ppp,
-            ),
-        )
-    }
-}
-
 /// Measurement emitted by the transparent viewport panel after it has read
 /// its egui geometry. The panel cannot mutate either view-model directly;
 /// this typed event keeps the write on the workbench side of the boundary.
@@ -232,74 +176,6 @@ impl PanelRect {
 struct ViewportPanelMeasured {
     rect: PanelRect,
     over_scene: bool,
-}
-
-impl PanelRects {
-    /// Drop every recorded rect. Called at the top of each egui pass
-    /// (`render_workbench`), before any panel renders; the panels in the active
-    /// layout refill it as they paint. Without this a panel that left the layout
-    /// (closed tab, perspective switch) would leak its last rect forever and keep
-    /// driving its consumer — e.g. `lunco-usd`'s `resize_viewport_image` sizing
-    /// the offscreen image to a panel that is no longer shown.
-    pub fn clear(&mut self) {
-        self.rects.clear();
-        self.instance_rects.clear();
-    }
-
-    /// Compute a [`PanelRect`] (physical pixels) from an egui `Ui`,
-    /// without touching the world. Lets a panel measure its rect during
-    /// the read-only paint and emit a typed measurement intent.
-    ///
-    /// Uses **floor on the origin** and **ceil on the far edge** so the
-    /// physical-pixel rect fully covers the panel even at non-integer DPRs
-    /// (1.5, 1.25, …); round-half-away-from-zero could leave a 1-px gap between
-    /// the camera viewport and the panel edge.
-    pub fn panel_rect_from_ui(ui: &egui::Ui) -> PanelRect {
-        let rect = ui.available_rect_before_wrap();
-        let ppp = ui.ctx().pixels_per_point();
-        let origin = UVec2::new(
-            (rect.min.x.max(0.0) * ppp).floor() as u32,
-            (rect.min.y.max(0.0) * ppp).floor() as u32,
-        );
-        let end = UVec2::new(
-            (rect.max.x.max(0.0) * ppp).ceil() as u32,
-            (rect.max.y.max(0.0) * ppp).ceil() as u32,
-        );
-        let size = UVec2::new(
-            end.x.saturating_sub(origin.x).max(1),
-            end.y.saturating_sub(origin.y).max(1),
-        );
-        PanelRect { origin, size }
-    }
-
-    /// Record a precomputed panel rect. Pairs with
-    /// [`panel_rect_from_ui`](Self::panel_rect_from_ui) for the
-    /// measure-then-defer pattern.
-    pub fn record(&mut self, panel: PanelId, rect: PanelRect) {
-        self.rects.insert(panel, rect);
-    }
-
-    /// Record the rect of one multi-instance panel tab. Instance identity is
-    /// part of the key so two visible tabs backed by the same renderer cannot
-    /// resize or present one another's render target.
-    pub fn record_instance(&mut self, panel: PanelId, instance: u64, rect: PanelRect) {
-        self.instance_rects.insert((panel, instance), rect);
-    }
-
-    /// Look up a panel's most-recently-recorded rect.
-    pub fn get(&self, panel: PanelId) -> Option<PanelRect> {
-        self.rects.get(&panel).copied()
-    }
-
-    /// Look up one multi-instance panel tab's most-recently-recorded rect.
-    pub fn get_instance(&self, panel: PanelId, instance: u64) -> Option<PanelRect> {
-        self.instance_rects.get(&(panel, instance)).copied()
-    }
-
-    /// Look up a panel footprint directly in egui's logical point space.
-    pub fn egui_rect(&self, panel: PanelId, ctx: &egui::Context) -> Option<egui::Rect> {
-        self.get(panel).map(|rect| rect.to_egui_rect(ctx))
-    }
 }
 
 /// The egui-geometry half of the gate's per-frame inputs — everything that has to
@@ -1204,49 +1080,6 @@ mod tests {
                 clear_color: ClearColorConfig::Default,
             }
         ));
-    }
-
-    #[test]
-    fn instance_panel_rects_are_isolated_from_singletons_and_each_other() {
-        let mut rects = PanelRects::default();
-        let singleton = PanelRect {
-            origin: UVec2::new(1, 2),
-            size: UVec2::new(3, 4),
-        };
-        let first = PanelRect {
-            origin: UVec2::new(5, 6),
-            size: UVec2::new(7, 8),
-        };
-        let second = PanelRect {
-            origin: UVec2::new(9, 10),
-            size: UVec2::new(11, 12),
-        };
-
-        rects.record(USD_PREVIEW, singleton);
-        rects.record_instance(USD_PREVIEW, 1, first);
-        rects.record_instance(USD_PREVIEW, 2, second);
-
-        assert_eq!(
-            rects.get(USD_PREVIEW).map(|rect| (rect.origin, rect.size)),
-            Some((singleton.origin, singleton.size))
-        );
-        assert_eq!(
-            rects
-                .get_instance(USD_PREVIEW, 1)
-                .map(|rect| (rect.origin, rect.size)),
-            Some((first.origin, first.size))
-        );
-        assert_eq!(
-            rects
-                .get_instance(USD_PREVIEW, 2)
-                .map(|rect| (rect.origin, rect.size)),
-            Some((second.origin, second.size))
-        );
-        assert!(rects.get_instance(USD_PREVIEW, 3).is_none());
-
-        rects.clear();
-        assert!(rects.get(USD_PREVIEW).is_none());
-        assert!(rects.get_instance(USD_PREVIEW, 1).is_none());
     }
 
     fn rect(min: (f32, f32), max: (f32, f32)) -> Rect {

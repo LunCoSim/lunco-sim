@@ -16,6 +16,8 @@ pub mod scene;
 mod snapshot;
 pub mod source;
 pub mod tabs;
+pub mod uri;
+pub mod viewport;
 
 pub mod commands;
 

@@ -149,7 +149,7 @@ pub(super) fn approx_screen_rect() -> lunco_canvas::Rect {
     )
 }
 
-fn register_modelica_uri_handler(mut registry: ResMut<lunco_workbench::UriRegistry>) {
+fn register_modelica_uri_handler(mut registry: ResMut<lunco_workbench_core::uri::UriRegistry>) {
     registry.register(std::sync::Arc::new(
         crate::ui::uri_handler::ModelicaUriHandler,
     ));

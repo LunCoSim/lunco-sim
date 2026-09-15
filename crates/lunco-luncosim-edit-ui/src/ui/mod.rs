@@ -13,9 +13,10 @@ use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp, ViewportPanel,
-    WorkbenchAppExt, VIEWPORT_PANEL_ID,
+    WorkbenchAppExt,
 };
 use lunco_workbench_browser::TWIN_BROWSER_PANEL_ID;
+use lunco_workbench_core::viewport::VIEWPORT_PANEL_ID;
 use lunco_workbench_core::{
     PanelId, PanelSlot, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
     WorkbenchPanelAppExt,

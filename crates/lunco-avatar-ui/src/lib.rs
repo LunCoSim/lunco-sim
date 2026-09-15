@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-use lunco_workbench::{PanelRects, VIEWPORT_PANEL_ID};
+use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt};
 
 use lunco_avatar::RoverNameTagSettings;
