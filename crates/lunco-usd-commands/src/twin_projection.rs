@@ -54,7 +54,9 @@ use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets_core::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
-use lunco_usd_bevy_core::{source::UsdSourceText, UsdInstanceProjection, UsdStageAsset};
+use lunco_usd_bevy_core::{
+    source::UsdSourceText, UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan,
+};
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued, UsdSceneRoot,
 };
@@ -549,6 +551,13 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         let (name, rel) = lunco_assets_core::split_twin_rel(&rel)?;
         world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
     });
+    // A preview may edit a referenced component document while another preview
+    // is already showing an assembly that contains it.  Keep those two views
+    // live as one graph: the component's `twin://` bytes are patched into every
+    // loaded dependent recipe and its canonical stage is rebuilt in place.  The
+    // viewport state (including orbit camera) is deliberately not touched.
+    let mut changed_sources: Vec<(DocumentId, AssetId<UsdStageAsset>, String, String)> = Vec::new();
+
     for (doc, name, rel, applied, overlay_synced) in entries {
         let preview_owned = world
             .resource::<DocBackedTwinScenes>()
@@ -688,11 +697,88 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         world
             .resource_mut::<DocBackedTwinScenes>()
             .mark_applied(doc, scene_id, cur_gen);
+        let composed_source = world
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .map(|host| host.document().composed_source());
+        if let Some(source) = composed_source {
+            changed_sources.push((doc, scene_id, twin_path, source));
+        }
         if applied.is_some() && Some(cur_gen) != overlay_synced {
             world.write_message(TwinProjectionSettle {
                 doc,
                 generation: cur_gen,
             });
+        }
+    }
+
+    for (doc, scene_id, twin_path, source) in changed_sources {
+        refresh_dependent_stage_assets(world, doc, scene_id, &twin_path, &source);
+    }
+}
+
+/// Propagate an edited component layer into already-loaded assembly stages.
+///
+/// `UsdStageAsset` recipes are intentionally immutable snapshots at the async
+/// loader boundary.  That is the right property for deterministic loading, but
+/// it means a separately opened component document cannot otherwise be observed
+/// by an assembly whose resolver already captured the old bytes.  This bridge is
+/// the single live-edit seam: patch the changed layer in each dependent recipe,
+/// rebuild its existing canonical stage, and reinstantiate its stage-owned
+/// entities.  Preview cameras and document sessions remain untouched.
+fn refresh_dependent_stage_assets(
+    world: &mut World,
+    changed_doc: DocumentId,
+    changed_scene: AssetId<UsdStageAsset>,
+    layer_id: &str,
+    source: &str,
+) {
+    let source_bytes = source.as_bytes().to_vec();
+    let candidates: Vec<(AssetId<UsdStageAsset>, lunco_usd_compose::recipe::StageRecipe)> = {
+        let assets = world.resource::<Assets<UsdStageAsset>>();
+        assets
+            .iter()
+            .filter_map(|(id, asset)| {
+                if id == changed_scene {
+                    return None;
+                }
+                let recipe = asset.recipe.as_ref()?;
+                recipe.bytes.contains_key(layer_id).then(|| (id, recipe.clone()))
+            })
+            .collect()
+    };
+
+    for (stage_id, mut recipe) in candidates {
+        if recipe.bytes.get(layer_id) == Some(&source_bytes) {
+            continue;
+        }
+        recipe.bytes.insert(layer_id.to_string(), source_bytes.clone());
+        let projection_plan = match UsdStageProjectionPlan::from_recipe(&recipe) {
+            Ok(plan) => plan,
+            Err(error) => {
+                warn!(
+                    "[usd-e1b] component edit from document {changed_doc} could not rebuild dependent stage {stage_id:?}: {error}"
+                );
+                continue;
+            }
+        };
+
+        // Keep the async asset cache and the live canonical stage on the same
+        // closure.  Future previews opened against this asset therefore see the
+        // same component bytes without a process restart or stale fallback.
+        if let Some(asset) = world.resource_mut::<Assets<UsdStageAsset>>().get_mut(stage_id) {
+            asset.recipe = Some(recipe.clone());
+            asset.projection_plan = Arc::new(projection_plan);
+        }
+
+        let rebuilt = world
+            .get_non_send_mut::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+            .is_some_and(|mut stages| stages.rebuild(stage_id, &recipe));
+        if rebuilt {
+            // This stage-scoped refresh retires only projected USD entities.  A
+            // detached preview camera is owned by `UsdViewportState` and stays
+            // exactly where the user left it.
+            refresh_scene_visuals(world, stage_id);
         }
     }
 }
