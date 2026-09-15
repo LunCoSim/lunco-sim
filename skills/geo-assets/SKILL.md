@@ -95,7 +95,7 @@ vertical datum, or record the native-tool gap as blocked work.
 | `albedo` | illumination-bearing grayscale orthophoto | stable linear material-albedo PNG at `output` (a FILE) |
 | `normalmap` | DTM | DEM-local ENU normal PNG (`RGB = n*0.5+0.5`, decoded by the shared terrain-surface shader kernel) |
 | `texture` | any image | resized PNG (non-geo default) |
-| `gltf` | .glb | Bevy-clean .glb (needs npx) |
+| `gltf` | .glb | Draco-normalized .glb; WebP extension conversion pending |
 
 The built-in processors are registered through
 `lunco-assets-processing::process::ProcessorRegistry`. A domain-specific

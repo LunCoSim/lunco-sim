@@ -38,7 +38,7 @@ Use the smaller packages directly when the owner is narrower:
 - `lunco-assets-processing` for native decode, raster math, and baking. Its
   `ProcessorRegistry` is the extension seam for new heavy processors.
 
-This dependency direction keeps HTTP/archive/raster/glTF tool dependencies out
+This dependency direction keeps HTTP/archive/raster/glTF baking dependencies out
 of ordinary runtime readers and makes changes to worker policy, transport, or
 manifest state recompile only the affected layer.
 
@@ -53,6 +53,8 @@ processors register a `ProcessorSpec` with the explicit sidecars they publish;
 they do not add another central `match`, cache key, or commit path.
 
 Built-in kinds are `texture`, `gltf`, `dem`, `map`, `albedo`, and `normalmap`.
+The Rust GLB processor decodes Draco geometry; it rejects `EXT_texture_webp`
+until a lossless image conversion path can preserve its authored semantics.
 The reusable Rhai policy library is `assets::scripting::tools::assets` and
 provides dataset listing, selection, request, cancellation, and recommended
 dataset orchestration. It does not perform I/O or duplicate registry state.

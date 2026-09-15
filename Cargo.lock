@@ -3878,6 +3878,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "draco-core"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f9e8f56143603262e53bf96c8146a06c118af98e4ac9b1718d1ebc028ba54ca"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "draco-gltf"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b29be0b3d5afd091cf351674099b86f7b6620994ba30d50f9b5471b46c6caab"
+dependencies = [
+ "draco-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5474,15 +5493,6 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
-
-[[package]]
-name = "home"
-version = "0.5.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
-dependencies = [
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "htmd"
@@ -7157,8 +7167,8 @@ dependencies = [
 name = "lunco-assets-processing"
 version = "0.1.0-dev"
 dependencies = [
+ "draco-gltf",
  "image",
- "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-core",
  "lunco-geotiff",
@@ -7168,7 +7178,6 @@ dependencies = [
  "tiny-skia 0.12.0",
  "toml 1.1.2+spec-1.1.0",
  "usvg",
- "which",
 ]
 
 [[package]]
@@ -15454,18 +15463,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "which"
-version = "6.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ee928febd44d98f2f459a4a79bd4d928591333a494a10a868418ac1b39cf1f"
-dependencies = [
- "either",
- "home",
- "rustix 0.38.44",
- "winsafe",
-]
-
-[[package]]
 name = "wide"
 version = "0.7.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15989,12 +15986,6 @@ dependencies = [
  "toml 1.1.2+spec-1.1.0",
  "version_check",
 ]
-
-[[package]]
-name = "winsafe"
-version = "0.0.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wit-bindgen"

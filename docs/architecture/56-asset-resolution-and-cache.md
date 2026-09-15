@@ -16,6 +16,12 @@ baking, and `lunco-assets` composes those workers for the explicit application
 boundary and CLI. Runtime readers depend on the core/contract packages;
 ordinary readers do not inherit the native baking graph.
 
+The GLB processor uses the pure-Rust `draco-gltf` reader/writer to materialize
+`KHR_draco_mesh_compression` into ordinary accessors. It preserves authored
+`EXT_texture_webp` semantics and rejects such input until a Rust-owned WebP
+conversion can update the image bytes, MIME types, and references together;
+discarding only the extension is not a valid normalization.
+
 ## The rule
 
 **Authored content names logical identities; only the resolver knows locations.**

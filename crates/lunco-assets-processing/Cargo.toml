@@ -6,18 +6,17 @@ license.workspace = true
 description = "Native offline image, DEM, map, albedo, normal-map, and glTF asset processing"
 
 [dependencies]
-lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-core = { path = "../lunco-core" }
 lunco-geotiff = { path = "../lunco-geotiff" }
 image = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+draco-gltf = { workspace = true }
 resvg = { workspace = true }
 tiff = { workspace = true }
 tiny-skia = { workspace = true }
 usvg = { workspace = true }
-which = "6"
 
 [dev-dependencies]
 tempfile = { workspace = true }
