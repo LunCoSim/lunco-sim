@@ -520,7 +520,7 @@ pub(crate) fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
 pub fn usd_document_generation(doc_id: u64) -> Option<u64> {
     with_world(|world| {
         let registry = world.get_resource::<
-            lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>,
+            lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
         >()?;
         registry
             .host(lunco_doc::DocumentId::new(doc_id))
