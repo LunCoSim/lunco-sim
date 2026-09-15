@@ -35,7 +35,7 @@ pub struct IconNodeData {
     /// Decoded `Icon(graphics={...})` annotation merged across the
     /// `extends` chain. `None` only when the class has literally no
     /// Icon in inheritance — then the visual falls back to a label box.
-    pub icon_graphics: Option<crate::annotations::Icon>,
+    pub icon_graphics: Option<lunco_modelica_ast::annotations::Icon>,
     /// Shared resolver state. Missing/loading classes render a diagnostic
     /// card rather than an indistinguishable generic component.
     pub resolution: crate::index::ClassResolutionState,
@@ -46,7 +46,7 @@ pub struct IconNodeData {
     /// (RealInput, RealOutput, …) put the `%name` text label and
     /// the larger filled triangle in their Diagram annotation, while
     /// keeping a stripped-down Icon for use as a port marker.
-    pub diagram_graphics: Option<crate::annotations::Diagram>,
+    pub diagram_graphics: Option<lunco_modelica_ast::annotations::Diagram>,
     /// Per-instance rotation (degrees CCW, Modelica convention).
     pub rotation_deg: f32,
     /// Mirror flags applied before rotation (MLS Annex D order).
@@ -71,7 +71,7 @@ pub struct IconNodeData {
     /// inline resolution previously locked 30+ times per frame on
     /// PID-class diagrams. `None` when the connector class has no
     /// Icon in its inheritance chain or hasn't been indexed yet.
-    pub port_connector_icons: Vec<Option<crate::annotations::Icon>>,
+    pub port_connector_icons: Vec<Option<lunco_modelica_ast::annotations::Icon>>,
     /// Conditional component (`Component X if <cond>`). Renderer
     /// halves opacity so users can see it's design-time visible but
     /// runtime-conditional — matches OMEdit/Dymola convention.
@@ -109,7 +109,7 @@ pub(super) struct IconNodeVisual {
     /// present, takes precedence over the SVG icon path so user
     /// classes show their authored graphics instead of falling back
     /// to a generic placeholder.
-    pub(super) icon_graphics: Option<crate::annotations::Icon>,
+    pub(super) icon_graphics: Option<lunco_modelica_ast::annotations::Icon>,
     pub(super) resolution: crate::index::ClassResolutionState,
     pub(super) resolution_message: Option<String>,
     /// Conditional component flag — render dimmed.
@@ -144,7 +144,7 @@ pub(super) struct IconNodeVisual {
     /// Pre-resolved connector-class `Icon` for each port, indexed
     /// parallel to `port_connector_paths`. See [`IconNodeData`] for
     /// the rationale (off-thread resolution to keep paint lock-free).
-    pub(super) port_connector_icons: Vec<Option<crate::annotations::Icon>>,
+    pub(super) port_connector_icons: Vec<Option<lunco_modelica_ast::annotations::Icon>>,
 }
 
 fn painter_rect_diagnostic(
@@ -308,7 +308,7 @@ impl NodeVisual for IconNodeVisual {
             // graphics.
             let coord_system_for_paint = icon
                 .graphics_bbox()
-                .map(|e| crate::annotations::CoordinateSystem { extent: e })
+                .map(|e| lunco_modelica_ast::annotations::CoordinateSystem { extent: e })
                 .unwrap_or(icon.coordinate_system);
             lunco_modelica_icon_ui::paint_graphics_themed(
                 painter,
@@ -435,7 +435,7 @@ impl NodeVisual for IconNodeVisual {
             // input/output triangle / acausal flange dot — drawing
             // it at the port location is what gives the diagram
             // its OMEdit-parity arrowheads, not a wire-end marker.
-            let resolved_icon: Option<crate::annotations::Icon> = self
+            let resolved_icon: Option<lunco_modelica_ast::annotations::Icon> = self
                 .port_connector_paths
                 .iter()
                 .position(|(name, _, _, _, _)| name == port.id.as_str())

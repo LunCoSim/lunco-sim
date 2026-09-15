@@ -1661,7 +1661,7 @@ fn dispatch_experiment(
             // sole/ambiguous fallback (`candidates[0]`) could pick a leaf model
             // over the annotated system.
             let candidates: Vec<String> = index.simulation_candidates();
-            let mut experiment_map: HashMap<String, crate::annotations::Experiment> =
+            let mut experiment_map: HashMap<String, lunco_modelica_ast::annotations::Experiment> =
                 HashMap::new();
             for c in index.classes.values() {
                 if let Some(exp) = &c.experiment {

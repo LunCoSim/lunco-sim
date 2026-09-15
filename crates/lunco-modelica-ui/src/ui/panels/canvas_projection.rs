@@ -70,7 +70,8 @@ fn resolved_engine_class_entry(
     };
     entry.kind = class_kind;
     entry.partial = class_def.partial;
-    entry.diagram_graphics = crate::annotations::extract_diagram(&class_def.annotation);
+    entry.diagram_graphics =
+        lunco_modelica_ast::annotations::extract_diagram(&class_def.annotation);
 
     // Port discovery must see inherited members (for example a connector
     // declared by a base class). Merge those members into an owned AST
@@ -146,9 +147,11 @@ pub(crate) fn scan_connect_annotations(
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
     source: &str,
     target_class: Option<&str>,
-) -> std::collections::HashMap<((String, String), (String, String)), crate::annotations::LineRoute>
-{
-    crate::annotations::connect_line_routes(ast, source, target_class)
+) -> std::collections::HashMap<
+    ((String, String), (String, String)),
+    lunco_modelica_ast::annotations::LineRoute,
+> {
+    lunco_modelica_core::annotation_source::connect_line_routes(ast, source, target_class)
 }
 
 fn canonical_edge_key(
@@ -855,7 +858,8 @@ pub fn import_model_to_diagram_from_ast(
             // Build the full icon-local → canvas affine in one place.
             // Falls back to a default transform centred on the grid
             // position below when no Placement is authored.
-            let mut icon_transform: Option<crate::icon_transform::IconTransform> = None;
+            let mut icon_transform: Option<lunco_modelica_ast::icon_transform::IconTransform> =
+                None;
 
             // Read placement from rumoca's typed annotation tree
             // instead of pattern-matching source text. Robust against
@@ -863,7 +867,9 @@ pub fn import_model_to_diagram_from_ast(
             // origin/rotation correctly. Falls through to the grid
             // fallback below when no Placement is authored.
             if let Some(comp) = comp_by_short.get(short_name) {
-                if let Some(placement) = crate::annotations::extract_placement(&comp.annotation) {
+                if let Some(placement) =
+                    lunco_modelica_ast::annotations::extract_placement(&comp.annotation)
+                {
                     let extent = placement.transformation.extent;
                     let cx = ((extent.p1.x + extent.p2.x) * 0.5) as f32;
                     let cy = ((extent.p1.y + extent.p2.y) * 0.5) as f32;
@@ -876,7 +882,7 @@ pub fn import_model_to_diagram_from_ast(
                         (extent.p2.y - extent.p1.y).abs() as f32,
                     );
                     let rotation_deg = placement.transformation.rotation as f32;
-                    let xform = crate::icon_transform::IconTransform::from_placement(
+                    let xform = lunco_modelica_ast::icon_transform::IconTransform::from_placement(
                         (cx, cy),
                         size,
                         mirror_x,
@@ -1177,7 +1183,7 @@ fn register_local_class(
     // (the canvas's default rectangle still names the component).
     let engine_icon = crate::engine_resource::global_engine_handle()
         .and_then(|handle| handle.try_cached_icon_for(&class_context));
-    let local_icon = crate::annotations::extract_icon(&class_def.annotation);
+    let local_icon = lunco_modelica_ast::annotations::extract_icon(&class_def.annotation);
     let icon = match (engine_icon, local_icon) {
         // Prefer engine result only when it actually has graphics —
         // otherwise the local AST may carry primitives the engine
@@ -1221,7 +1227,9 @@ fn register_local_class(
             experiment: None,
             ports,
             parameters: Vec::new(),
-            diagram_graphics: crate::annotations::extract_diagram(&class_def.annotation),
+            diagram_graphics: lunco_modelica_ast::annotations::extract_diagram(
+                &class_def.annotation,
+            ),
             icon_text: None,
             category: "Local".to_string(),
             resolution: crate::index::ClassResolutionState::Resolved,
@@ -1271,7 +1279,7 @@ fn extract_local_class_ports(
         // port at a fixed (x,y) on the icon boundary. Centroid of
         // the placement extent maps to Modelica's (-100..100) per-axis
         // grid — the same convention used by source library ports.
-        let (px, py) = crate::annotations::extract_placement(&sub.annotation)
+        let (px, py) = lunco_modelica_ast::annotations::extract_placement(&sub.annotation)
             .map(|p| {
                 let cx = (p.transformation.extent.p1.x + p.transformation.extent.p2.x) * 0.5;
                 let cy = (p.transformation.extent.p1.y + p.transformation.extent.p2.y) * 0.5;
@@ -1423,7 +1431,7 @@ fn classify_connector(
 // single resolve-class site.
 
 fn connector_icon_color(class: &rumoca_compile::parsing::ast::ClassDef) -> Option<[u8; 3]> {
-    use crate::annotations::{extract_icon, GraphicItem};
+    use lunco_modelica_ast::annotations::{extract_icon, GraphicItem};
     let icon = extract_icon(&class.annotation)?;
     for g in &icon.graphics {
         let (line, fill) = match g {

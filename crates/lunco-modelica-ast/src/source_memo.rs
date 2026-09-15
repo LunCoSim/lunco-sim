@@ -1,7 +1,7 @@
 //! One invalidation signal for every memo derived from Modelica source.
 //!
 //! Icon extraction is expensive enough that several layers memoise it — the
-//! engine's merged-icon result (`extract_icon_via_engine` walks the whole
+//! engine's merged-icon result (the engine adapter walks the whole
 //! inheritance chain and clones every `ClassDef` along it: ~80 ms for a deep source library
 //! chain), and the paint side's decoded `Bitmap` textures. Each memo is keyed by a
 //! class name or filename, and each caches its **misses** too — a missing asset must

@@ -267,7 +267,7 @@ worker lifecycle, output collection, and the runtime contract together.
 Diagram connection routing can't be *read back* from a parsed model.
 
 **Read-side projection.** Rumoca still does not expose the annotation on
-`Equation::Connect`, so `annotations::source` locates the authored connect
+`Equation::Connect`, so `annotation_source` locates the authored connect
 statement from the equation span, parses its standard annotation expression
 through the normal Modelica parser, and sends the typed `LineRoute` to both
 `ModelicaIndex` and the canvas projection. The source remains authoritative and

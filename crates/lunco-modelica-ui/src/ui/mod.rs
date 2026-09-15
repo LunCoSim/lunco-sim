@@ -130,9 +130,10 @@ use lunco_modelica_runtime::ModelicaModel;
 /// Costs one atomic increment; the memos drop themselves lazily on next access, so
 /// a change nobody paints after is free. This used to clear a paint-side port-icon
 /// cache that was, in fact, dead — while the bitmap textures it *should* have been
-/// clearing were never invalidated at all. See [`crate::icon_memo`].
+/// clearing were never invalidated at all. See
+/// [`lunco_modelica_ast::source_memo`].
 fn invalidate_source_memos_on_doc_changed(_trigger: On<lunco_doc_bevy::DocumentChanged>) {
-    crate::icon_memo::invalidate_source_memos();
+    lunco_modelica_ast::source_memo::invalidate_source_memos();
 }
 
 /// Per-doc generation watermark for the

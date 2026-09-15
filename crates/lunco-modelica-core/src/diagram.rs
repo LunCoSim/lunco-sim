@@ -24,6 +24,7 @@
 use lunco_modelica_ast::diagram_model::{
     ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind,
 };
+use lunco_modelica_ast::scope_chain_candidates;
 use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, StoredDefinition};
 use rumoca_compile::parsing::{Causality, ClassType, Variability};
 use std::collections::HashMap;
@@ -921,41 +922,6 @@ fn resolve_type_in_scope(
         }
     }
     None
-}
-
-/// **The single canonical MLS §5.3 scope-chain resolver** for the
-/// workbench. Generates candidate fully-qualified names for a short-form
-/// reference, walking outward from the most-specific enclosing scope.
-/// For raw `"Interfaces.SISO"` referenced from
-/// `"Modelica.Blocks.Continuous.PID"`, yields:
-///   1. `"Modelica.Blocks.Continuous.Interfaces.SISO"` (sibling scope)
-///   2. `"Modelica.Blocks.Interfaces.SISO"` (parent scope) ← matches
-///   3. `"Modelica.Interfaces.SISO"`
-///   4. `"Interfaces.SISO"` (root)
-///
-/// Every §5.3-style short-name resolution in the crate routes through
-/// this — diagram type / `extends` / connector resolution, and port-icon
-/// resolution (`canvas_diagram::port`) — so the lookup rules can't drift
-/// between call sites.
-///
-/// This is a deliberate lunco-side implementation, NOT a rumoca bypass by
-/// neglect: rumoca's §5 resolution is whole-tree/eager and can't run on
-/// the off-thread canvas projection without forcing the source library-load stall
-/// this work-stream avoids. So we generate candidates here and probe them
-/// against the lazily-loaded engine / source library index. When rumoca grows a lazy
-/// single-reference resolve API, this function is the one place to swap.
-pub fn scope_chain_candidates(raw: &str, ctx: Option<&str>) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Some(ctx) = ctx {
-        let parts: Vec<&str> = ctx.split('.').collect();
-        // Drop the leaf class itself, then walk up its parents.
-        for i in (0..parts.len().saturating_sub(1)).rev() {
-            let prefix = parts[..=i].join(".");
-            out.push(format!("{}.{}", prefix, raw));
-        }
-    }
-    out.push(raw.to_string());
-    out
 }
 
 /// Information about a connector instance in a Modelica model.

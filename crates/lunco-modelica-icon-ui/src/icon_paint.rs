@@ -9,7 +9,7 @@
 //! - the source [`CoordinateSystem`] (Modelica diagram extent, +Y up,
 //!   typically `{{-100,-100},{100,100}}`),
 //! - the slice of [`GraphicItem`]s from
-//!   [`lunco_modelica_core::annotations::Icon::graphics`] /
+//!   [`lunco_modelica_ast::annotations::Icon::graphics`] /
 //!   `Diagram::graphics`.
 //!
 //! The painter maps source → destination with a uniform-scale fit
@@ -21,7 +21,7 @@
 
 use bevy_egui::egui;
 
-use lunco_modelica_core::annotations::{
+use lunco_modelica_ast::annotations::{
     Arrow, Bitmap, Color, CoordinateSystem, Ellipse, EllipseClosure, Extent, FillPattern,
     GraphicItem, Line, LinePattern, Point, Polygon, Rectangle, Text,
 };
@@ -1015,7 +1015,7 @@ fn paint_bitmap(painter: &egui::Painter, xf: &CoordXform, b: &Bitmap) {
 /// string so `modelica://Pkg/icon.png` and a plain `icon.png` hit
 /// different slots (they resolve differently).
 fn texture_for_bitmap(ctx: &egui::Context, filename: &str) -> Option<egui::TextureHandle> {
-    use lunco_modelica_core::icon_memo::SourceMemo;
+    use lunco_modelica_ast::source_memo::SourceMemo;
     use std::sync::{Mutex, OnceLock};
     // The memo stores `Option<TextureHandle>` so a failed load is remembered and not
     // retried every frame (failure is usually a missing asset, not a transient

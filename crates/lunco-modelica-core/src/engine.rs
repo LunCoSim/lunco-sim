@@ -124,17 +124,17 @@ pub struct ModelicaEngine {
     class_uri_misses: HashSet<String>,
     /// Resolved-Icon cache, keyed by qualified class name. The
     /// empty-diagram overlay calls `icon_for` EVERY FRAME for the active
-    /// class; `extract_icon_via_engine` walks the full inheritance chain
+    /// class; the engine adapter walks the full inheritance chain
     /// and `class_def`-CLONES the class + every `extends` base on each
     /// call. Measured at ~80 ms/frame for a class with a deep source library chain
     /// (a static model card recomputed from scratch 60×/s). rumoca's
     /// internal annotation memoisation does NOT eliminate these repeated
     /// ClassDef clones, so we cache the merged result here. Invalidated on
     /// any AST install (icon graphics can change with the source) — via
-    /// [`crate::icon_memo::invalidate_source_memos`], which reaches the
+    /// [`lunco_modelica_ast::source_memo::invalidate_source_memos`], which reaches the
     /// paint-side bitmap-texture memo too. This field must NOT be cleared
     /// directly: clearing it alone is what left those textures stale.
-    icon_cache: crate::icon_memo::SourceMemo<crate::annotations::Icon>,
+    icon_cache: lunco_modelica_ast::source_memo::SourceMemo<lunco_modelica_ast::annotations::Icon>,
     /// Documents whose async parse is currently in flight. Prevents
     /// double-spawning the same parse while a worker is mid-flight.
     /// Inserted by `mark_pending`; cleared by the worker on completion.
@@ -176,7 +176,7 @@ impl ModelicaEngine {
             uri_for_doc: HashMap::new(),
             class_to_uris: HashMap::new(),
             class_uri_misses: HashSet::new(),
-            icon_cache: crate::icon_memo::SourceMemo::default(),
+            icon_cache: lunco_modelica_ast::source_memo::SourceMemo::default(),
             pending: HashSet::new(),
             completed: Vec::new(),
             parse_diags: HashMap::new(),
@@ -202,8 +202,8 @@ impl ModelicaEngine {
         self.class_uri_misses.clear();
         // Icon graphics — and the bitmap files they reference — can change with the
         // source. ONE signal invalidates every derived memo, here and on the paint
-        // side; see `crate::icon_memo`.
-        crate::icon_memo::invalidate_source_memos();
+        // side; see `lunco_modelica_ast::source_memo`.
+        lunco_modelica_ast::source_memo::invalidate_source_memos();
         let prefix = ast
             .within
             .as_ref()
@@ -336,7 +336,7 @@ impl ModelicaEngine {
             .or_insert_with(|| uri.clone());
         self.remove_class_uri_mappings(&uri);
         self.class_uri_misses.clear();
-        crate::icon_memo::invalidate_source_memos();
+        lunco_modelica_ast::source_memo::invalidate_source_memos();
         if self.session.add_document(&uri, source).is_ok() {
             if let Some(ast) = self.session.parsed_file_query(&uri) {
                 let ast = ast.clone();
@@ -395,18 +395,17 @@ impl ModelicaEngine {
             self.remove_class_uri_mappings(&uri);
             self.session.remove_document(&uri);
             self.class_uri_misses.clear();
-            crate::icon_memo::invalidate_source_memos();
+            lunco_modelica_ast::source_memo::invalidate_source_memos();
         }
     }
 
     /// Resolved + merged Icon for `qualified`.
     ///
     /// **Single AST-aware entry point for icon resolution.** Panels
-    /// must use this — never call [`crate::annotations::extract_icon`]
-    /// or [`crate::annotations::extract_icon_via_engine`] directly.
+    /// must use this — never start a second inheritance walk from a panel.
     /// rumoca's `class_lookup_query` resolves bare names by suffix-match
     /// across session docs (MLS § 5). Result-cached via `icon_cache`:
-    /// `extract_icon_via_engine` walks the whole inheritance chain and
+    /// the engine adapter walks the whole inheritance chain and
     /// `class_def`-clones every class along it, which measured ~80 ms per
     /// call for a deep source library chain — far too costly to repeat every frame
     /// for the static empty-diagram model card (the original "no
@@ -422,15 +421,34 @@ impl ModelicaEngine {
     ///
     /// AST-as-source-of-truth: the session IS the AST store;
     /// consulting it is consulting the AST.
-    pub fn icon_for(&mut self, qualified: &str) -> Option<crate::annotations::Icon> {
+    pub fn icon_for(&mut self, qualified: &str) -> Option<lunco_modelica_ast::annotations::Icon> {
         // Result cache — see `icon_cache`. The inheritance-walk +
-        // per-base ClassDef clones in `extract_icon_via_engine` are far
+        // per-base ClassDef clones in the engine adapter are far
         // too costly to repeat every frame for a static class. Cleared
         // on AST install so edits still reflect.
         if let Some(hit) = self.icon_cache.peek(qualified) {
             return hit;
         }
-        let icon = crate::annotations::extract_icon_via_engine(qualified, self);
+        let falsy_params: HashSet<String> = self
+            .inherited_members_typed(qualified)
+            .into_iter()
+            .filter(|member| matches!(member.variability, InheritedVariability::Parameter))
+            .filter(|member| member.default_value.as_deref() == Some("false"))
+            .map(|member| member.name)
+            .collect();
+        let top = self.class_def(qualified)?;
+        let mut resolver =
+            |name: &str| -> Option<std::sync::Arc<rumoca_compile::parsing::ast::ClassDef>> {
+                self.class_def(name).map(std::sync::Arc::new)
+            };
+        let mut visited = HashSet::new();
+        let icon = lunco_modelica_ast::annotations::extract_icon_inherited_with_falsy_params(
+            qualified,
+            &top,
+            &mut resolver,
+            &falsy_params,
+            &mut visited,
+        );
         self.icon_cache.insert(qualified, icon.clone());
         icon
     }
@@ -443,7 +461,10 @@ impl ModelicaEngine {
     /// cached negative or that the background resolver has not published a
     /// result yet; callers may use an icon authored directly on their local
     /// AST while waiting for the next projection.
-    pub fn cached_icon_for(&mut self, qualified: &str) -> Option<Option<crate::annotations::Icon>> {
+    pub fn cached_icon_for(
+        &mut self,
+        qualified: &str,
+    ) -> Option<Option<lunco_modelica_ast::annotations::Icon>> {
         self.icon_cache.peek(qualified)
     }
 
@@ -512,7 +533,7 @@ impl ModelicaEngine {
         if count > 0 {
             self.installed_source_sets.insert(set_id.to_string());
             self.class_uri_misses.clear();
-            crate::icon_memo::invalidate_source_memos();
+            lunco_modelica_ast::source_memo::invalidate_source_memos();
         }
         count
     }
@@ -610,7 +631,7 @@ impl ModelicaEngine {
         }
         self.session.add_parsed_batch(files);
         self.class_uri_misses.clear();
-        crate::icon_memo::invalidate_source_memos();
+        lunco_modelica_ast::source_memo::invalidate_source_memos();
         count
     }
 

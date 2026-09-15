@@ -7910,6 +7910,7 @@ dependencies = [
  "rumoca-ir-ast",
  "rumoca-phase-parse",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7984,7 +7985,7 @@ dependencies = [
  "egui_extras",
  "image",
  "lunco-assets-core",
- "lunco-modelica-core",
+ "lunco-modelica-ast",
  "lunco-theme",
  "lyon_geom",
  "lyon_path",

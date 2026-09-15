@@ -22,10 +22,10 @@
 
 use bevy::prelude::World;
 
-use crate::annotations::Icon;
 use crate::class_ref::{ClassRef, Library};
 use crate::index::{ClassEntry, ClassKind};
 use crate::sim_default::ResourceRead;
+use lunco_modelica_ast::annotations::Icon;
 
 /// Read-side metadata for a class, regardless of where the source
 /// of truth lives. Keep this minimal — it should *not* grow into

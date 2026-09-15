@@ -199,7 +199,9 @@ pub fn resolve_requested_class(
 /// Map a model's `experiment(...)` annotation to [`RunBounds`]. `None` when
 /// the annotation has no `StopTime` — a `StopTime` is what makes the
 /// annotation usable as a run horizon.
-pub fn bounds_from_experiment(exp: &crate::annotations::Experiment) -> Option<RunBounds> {
+pub fn bounds_from_experiment(
+    exp: &lunco_modelica_ast::annotations::Experiment,
+) -> Option<RunBounds> {
     let t_end = exp.stop_time?;
     let dt = interval_to_dt(exp.interval);
     Some(RunBounds {
@@ -358,7 +360,7 @@ mod tests {
 
     #[test]
     fn bounds_from_experiment_needs_stop_time_and_drops_zero_interval() {
-        let mut exp = crate::annotations::Experiment::default();
+        let mut exp = lunco_modelica_ast::annotations::Experiment::default();
         assert!(bounds_from_experiment(&exp).is_none()); // no stop_time
         exp.stop_time = Some(5.0);
         exp.interval = Some(0.0); // sentinel → dt None

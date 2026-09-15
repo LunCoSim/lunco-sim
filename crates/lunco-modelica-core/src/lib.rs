@@ -93,25 +93,9 @@ pub mod library_fs;
 /// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
 pub mod diagram;
 
-/// Typed extractors for graphical annotations (Placement, Icon, Diagram,
-/// and the common `graphics={...}` primitives). Walks the raw
-/// `Vec<Expression>` that rumoca preserves on each class/component and
-/// produces structs ready for the canvas renderer.
-pub mod annotations;
-
-/// One invalidation signal for every memo derived from Modelica source — the
-/// engine's merged icons and the paint side's decoded bitmap textures. Before it,
-/// three memos were invalidated by three unrelated mechanisms and the bitmap cache
-/// by none, so a missing asset was remembered as missing for the life of the
-/// process.
-pub mod icon_memo;
-
-/// Single 2×3 affine transform per node from Modelica icon-local
-/// coords to canvas world coords. Replaces the scattered
-/// position/extent_size/rotation/mirror fields with one matrix that
-/// every consumer (port placement, edge stub direction, icon body
-/// painting, AABB) shares.
-pub mod icon_transform;
+/// Source-span readers for annotation data that Rumoca does not retain in the
+/// parsed AST, such as `Line(...)` routes on `connect()` equations.
+pub mod annotation_source;
 
 /// Visual diagram editor — drag-and-drop component composition.
 pub mod visual_diagram;

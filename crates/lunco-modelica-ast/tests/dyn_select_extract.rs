@@ -4,8 +4,8 @@
 //! inline so editing shipped assets does not invalidate this Rust test target;
 //! shipped icon behavior is covered at the authored scenario boundary.
 
-use lunco_modelica_core::annotations::{extract_icon, DynExpr, DynValue, GraphicItem};
-use rumoca_compile::parsing::ast::Expression;
+use lunco_modelica_ast::annotations::{extract_icon, DynExpr, DynValue, GraphicItem};
+use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression};
 
 const SOURCE: &str = r#"
 package IconFixture
@@ -30,10 +30,7 @@ end IconFixture;
 "#;
 
 fn class_annotations(
-    classes: &rumoca_compile::parsing::ast::AstIndexMap<
-        String,
-        rumoca_compile::parsing::ast::ClassDef,
-    >,
+    classes: &AstIndexMap<String, ClassDef>,
     name: &str,
 ) -> Option<Vec<Expression>> {
     for (cname, class) in classes {
@@ -134,7 +131,7 @@ fn dyn_expr_survives_json_roundtrip() {
     let icon = extract_icon(&ann).expect("Tank Icon");
 
     let json = serde_json::to_value(&icon).expect("serialize");
-    let restored: lunco_modelica_core::annotations::Icon =
+    let restored: lunco_modelica_ast::annotations::Icon =
         serde_json::from_value(json).expect("deserialize");
     let mass = restored
         .graphics

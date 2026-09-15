@@ -4801,7 +4801,7 @@ def Scope "Rig"
         let class =
             lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, "AttitudeActuation")
                 .expect("generated actuator model");
-        assert!(lunco_modelica_core::annotations::extract_icon(&class.annotation).is_some());
-        assert!(lunco_modelica_core::annotations::extract_diagram(&class.annotation).is_some());
+        assert!(lunco_modelica_ast::annotations::extract_icon(&class.annotation).is_some());
+        assert!(lunco_modelica_ast::annotations::extract_diagram(&class.annotation).is_some());
     }
 }
