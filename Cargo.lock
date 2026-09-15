@@ -8297,8 +8297,10 @@ name = "lunco-scene-selection"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-api",
  "lunco-core",
  "lunco-signal",
+ "serde_json",
 ]
 
 [[package]]

@@ -126,10 +126,13 @@ selected, a parse error is reported and startup does not silently switch to
 stale embedded policy.
 NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
 
-The editor registers `InspectSelection` as a read-only query provider. It
-reports selected entity IDs, the primary selection, and stale-entry count, so
-GUI acceptance checks read the same selection resource used by the viewport
-and inspector instead of maintaining a second state.
+The shared scene-selection package registers `InspectSelection` as a read-only
+query provider for both GUI and headless hosts. It reports selected entity IDs,
+the primary selection, stable USD paths, and stale-entry count, so Rhai tools
+and GUI acceptance checks read the same selection resource instead of
+maintaining a second state. Command-owned selection retains its USD paths
+while ECS projections are rebuilt and reconciles them after the next stage
+revision; selection is not authored into a transient USD prim.
 
 ### Events / pub-sub
 

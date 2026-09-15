@@ -25,49 +25,6 @@ use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 #[derive(Component)]
 pub struct Selected;
 
-/// Read-only public view of the live editor selection.
-///
-/// The selection itself remains owned by `SelectedEntities`; this provider only
-/// translates the established Entity-keyed state back to stable API ids for
-/// authored scenarios and external clients.
-pub(crate) struct InspectSelectionProvider;
-
-impl lunco_api::queries::ApiQueryProvider for InspectSelectionProvider {
-    fn name(&self) -> &'static str {
-        "InspectSelection"
-    }
-
-    fn execute(
-        &self,
-        world: &World,
-        _params: &serde_json::Value,
-    ) -> lunco_api::schema::ApiResponse {
-        let Some(selected) = world.get_resource::<SelectedEntities>() else {
-            return lunco_api::schema::ApiResponse::error(
-                lunco_api::schema::ApiErrorCode::InternalError,
-                "InspectSelection: SelectedEntities resource is not present",
-            );
-        };
-        let Some(registry) = world.get_resource::<lunco_api::registry::ApiEntityRegistry>() else {
-            return lunco_api::schema::ApiResponse::error(
-                lunco_api::schema::ApiErrorCode::InternalError,
-                "InspectSelection: ApiEntityRegistry resource is not present",
-            );
-        };
-
-        let selected_ids: Vec<u64> = selected
-            .entities
-            .iter()
-            .filter_map(|entity| registry.api_id_for(*entity).map(|id| id.get()))
-            .collect();
-        lunco_api::schema::ApiResponse::ok(serde_json::json!({
-            "selected": selected_ids,
-            "primary": selected_ids.last().copied(),
-            "stale_count": selected.entities.len() - selected_ids.len(),
-        }))
-    }
-}
-
 /// The semantic operation represented by one editor selection gesture.
 ///
 /// Modifier decoding belongs at the pointer boundary; selection mutation then
@@ -331,6 +288,9 @@ pub(crate) fn apply_selection(
     target: Entity,
     intent: SelectionIntent,
 ) {
+    // A direct editor gesture supersedes a command-owned stable path request.
+    // The live entity selection remains the single UI focus after this point.
+    selected.stable_paths.clear();
     if intent == SelectionIntent::Replace {
         for e in old_selected {
             if e != target {
@@ -404,6 +364,7 @@ pub(crate) fn clear_selection(
     selected: &mut SelectedEntities,
     old_selected: impl IntoIterator<Item = Entity>,
 ) {
+    selected.stable_paths.clear();
     for e in old_selected {
         commands
             .entity(e)
