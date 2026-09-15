@@ -1,4 +1,4 @@
-//! `UsdCommandsPlugin` — typed-command surface for USD documents.
+//! `UsdCommandsPlugin` — typed-command surface for USD documents and authoring.
 //!
 //! Plumbs USD into the shared workbench command bus described in
 //! `AGENTS.md` §4.2:
@@ -46,42 +46,27 @@ use lunco_doc_bevy::{
 };
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-use lunco_usd_bevy_core::{source::UsdSourceText, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::commands::{
     is_usd_path, ApplyUsdOp, ApplyUsdOps, ApplyUsdTransientOps, AttachComponent, AttachProgram,
-    CommitUsdProposal, CreateUsdProposal, DetachComponent, EmptyViewportReason, ReviewUsdProposal,
-    UsdDocumentReady, UsdProposalReviewAction, USD_DOCUMENT_KIND,
+    CommitUsdProposal, CreateUsdProposal, DetachComponent, ReviewUsdProposal, UsdDocumentReady,
+    UsdProposalReviewAction, USD_DOCUMENT_KIND,
 };
 use lunco_usd_core::edit_session::{
     validate_proposal, UsdEditSessions, UsdProposalId, UsdProposalState,
 };
 use lunco_usd_data::usd_data::UsdDataExt;
 use lunco_usd_document::document::{LayerId, UsdOp};
-use lunco_usd_sim_cosim::{
-    clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
-    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
-};
-use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 use openusd::schemas::lux::tokens as ltok;
-
-mod live_consume;
-mod program_runtime;
-mod runtime_persistence;
-mod twin_projection;
-
-/// Telemetry mnemonic for a default Twin scene whose authoritative source did
-/// not become available. This is a scene-load failure, not a simulation fault:
-/// the viewport remains empty and a later Twin replacement is still admitted.
-pub(crate) const TWIN_SCENE_LOAD_FAILED: &str = "TWIN_SCENE_LOAD_FAILED";
 
 /// Plugin that registers the USD document kind, the typed-command
 /// observers, and the pending-event drain system.
 ///
-/// **Layer 2 (domain).** No UI, no Bevy renderer touches — added by
-/// the application-level USD runtime bundle so any binary that pulls in USD
-/// gets the document surface, even headless bins.
+/// **Layer 2 (domain).** No UI, scene admission, or Bevy renderer touches —
+/// added by the application-level USD runtime bundle so any binary that pulls
+/// in USD gets the document surface, even headless bins.
 pub struct UsdCommandsPlugin;
 
 /// Promote an authored document when the live twin projection is installed.
@@ -239,24 +224,6 @@ fn forget_backed_document_on_closed(
     }
 }
 
-/// Workspace replacement owns the scene boundary. Closing the old Twin must
-/// clear its mounted USD scene immediately, even when the replacement Twin's
-/// asynchronous folder scan later fails or takes a long time.
-fn clear_scene_on_twin_closed(
-    trigger: On<TwinClosed>,
-    mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
-    mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
-    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
-    mut commands: Commands,
-) {
-    let root = trigger.event().root.clone();
-    pending_twin.release_root(&root);
-    for doc in backed.release_root(&root) {
-        registry.remove(doc);
-    }
-    commands.trigger(ClearScene {});
-}
-
 impl Plugin for UsdCommandsPlugin {
     fn build(&self, app: &mut App) {
         // Twin authority registration belongs to the asset boundary and is
@@ -275,12 +242,6 @@ impl Plugin for UsdCommandsPlugin {
         query_registry.register(lunco_usd_queries::InspectUsdEditSessionProvider);
         query_registry.register(lunco_usd_queries::ResolveUsdTargetProvider);
         query_registry.register(lunco_usd_queries::SyncUsdDocumentProvider);
-        app.init_resource::<lunco_core::SceneTransitionCoordinator>();
-        app.add_observer(clear_scene_on_twin_closed);
-        app.add_systems(
-            lunco_core::SceneTeardown,
-            crate::twin_projection::reset_scene_projection_state,
-        );
 
         // Self-register with the workbench's plugin-driven document
         // kind registry. `init_resource` defends against the case where
@@ -335,420 +296,16 @@ impl Plugin for UsdCommandsPlugin {
             Update,
             wire_usd_journal_handle.run_if(resource_added::<lunco_doc_bevy::JournalResource>),
         );
-        // Carries the *reason* a scene is empty through to the placeholder.
-        // Always present (headless too) so the open path can record one without
-        // a UI feature gate.
-        app.init_resource::<EmptyViewportReason>();
-        app.add_observer(open_usd_docs_on_twin_asset_mounted);
-        app.add_observer(execute_admitted_load_scene);
-        // Restart document refresh belongs to the admitted transaction, not the
-        // raw request. A restart queued behind a load must refresh the document
-        // that is active when that load reaches its terminal edge.
-        app.add_observer(on_restart_scene_refresh_active_document);
-        // A mount that died on a missing/unreadable stage leaves the same empty
-        // viewport as a deliberate clear. `on_load_scene` cleared the reason on
-        // the way in (a load was committed), so without this the placeholder
-        // says nothing and the tester sees a blank window with the explanation
-        // only in the log. The typed transition failure carries the cause.
-        app.add_observer(
-            |trigger: On<lunco_core::SceneTransitionFailed>,
-             mut empty_reason: ResMut<EmptyViewportReason>| {
-                let (lunco_core::SceneTransition::Load { path, .. }
-                | lunco_core::SceneTransition::Restart { path, .. }) = &trigger.event().transition
-                else {
-                    return;
-                };
-                empty_reason.0 = Some(format!(
-                    "`{path}` could not be loaded: {}",
-                    trigger.event().error
-                ));
-            },
-        );
-        // C5-A: persist the runtime overlay (C4b spawns + moves) to
-        // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal. Loading
-        // it is a separate opt-in setting, so corrupt `.lunco` state cannot block
-        // authored scene loading.
-        app.add_observer(crate::runtime_persistence::on_doc_opened_load_runtime);
-        app.add_observer(crate::runtime_persistence::on_doc_changed_save_runtime);
-        // E1b: make the default twin scene doc-backed by serving its composed
-        // source as a `twin://` byte-overlay (web-ready via the async loader).
-        app.init_resource::<crate::twin_projection::PendingTwinDocs>();
+        // Document projection claims are part of the document lifecycle. The
+        // scene runtime consumes the same resource when it mounts a Twin.
         app.init_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
-        app.init_resource::<lunco_usd_bevy_twin::TwinProjectionWake>();
-        app.add_message::<crate::twin_projection::TwinProjectionSettle>();
-        app.add_observer(crate::twin_projection::wake_twin_projection_on_document_changed);
         app.add_observer(claim_user_document_on_opened);
         app.add_observer(forget_backed_document_on_closed);
-        app.init_resource::<crate::live_consume::LiveTransformEditHints>();
-        // Referenced spawns whose asset closure is still loading (fetched once,
-        // then authored onto the live stage — no whole-scene reload).
-        app.init_resource::<crate::twin_projection::PendingRefSpawns>();
-        app.init_resource::<crate::twin_projection::PendingInstanceProjections>();
-        // Gated on the asset pipeline: these need `AssetServer` (to fetch a
-        // referenced asset's closure) and the `Assets<UsdSourceText>` store
-        // (UsdVisualPlugin's `init_asset`). Both are absent in headless
-        // `MinimalPlugins` test apps — and a partial setup can have one without
-        // the other — so require both. Chained before `project_stage_changes`
-        // (below) so a spawn authored this frame projects the same frame.
-        // `PreUpdate`, NOT `Update` — and this is structural, not a preference.
-        //
-        // `project_stage_changes` DESPAWNS and rebuilds the subtree of any prim
-        // whose attributes changed. In `Update` it raced every system that queues
-        // commands against those entities: the render binder reacts to
-        // `Changed<PbrLook>` and queues `insert(MeshMaterial3d(..))`, the projector
-        // then despawns the entity, and the buffered insert panics on apply
-        // ("Entity despawned … its index now has generation 1"). Opening the
-        // moonbase twin — which replays a runtime overlay, changing looks AND
-        // rebuilding subtrees in one frame — hit exactly this.
-        //
-        // Ordering the projector before that ONE binder would have fixed that ONE
-        // panic. But seven crates bind looks and several despawn USD entities, so a
-        // per-binder `.before(..)` rule is a rule each of them must remember — i.e.
-        // one that gets forgotten by the next system anyone adds. Running the
-        // projector a schedule EARLIER makes the hazard unrepresentable instead:
-        // every `Update` system, present and future, observes a world the projector
-        // has already settled, and none of them can hold a command queued against
-        // an entity it is about to despawn.
-        //
-        // Cost: an op authored during `Update` projects on the next frame's
-        // `PreUpdate` rather than the same frame. That is one frame of latency on a
-        // path that is already asynchronous (the gizmo writes `Transform`
-        // optimistically; nothing reads back the projection within the frame).
-        app.add_systems(
-            PreUpdate,
-            (
-                crate::twin_projection::settle_twin_overlays,
-                crate::twin_projection::mark_pending_twin_docs,
-                crate::twin_projection::drain_pending_twin_docs
-                    .run_if(crate::twin_projection::pending_twin_docs_ready),
-                crate::twin_projection::wake_twin_projection_on_stage_event,
-                // Author doc deltas (translate / spawn / remove) onto the live
-                // stage; queue referenced spawns needing a closure fetch.
-                crate::twin_projection::sync_twin_overlays
-                    .run_if(crate::twin_projection::twin_projection_ready),
-                crate::twin_projection::mark_pending_ref_spawns,
-                // Complete referenced spawns whose closure has now loaded.
-                crate::twin_projection::drain_ref_spawns
-                    .run_if(crate::twin_projection::pending_ref_spawns_ready),
-                crate::live_consume::project_stage_changes,
-            )
-                .chain()
-                .run_if(resource_exists::<AssetServer>)
-                .run_if(resource_exists::<Assets<UsdSourceText>>),
-        );
         register_all_commands(app);
     }
 }
 
-/// Route the dependency-light in-process scene intent to the typed USD command
-/// that owns path resolution and scene mounting. This is the single adapter
-/// between higher-level domains and the USD command surface; it carries typed
-/// data all the way through and never parses a command name or JSON payload.
-/// Once the asset boundary has mounted a Twin authority, make the viewport
-/// **reflect the opened Twin/folder**.
-/// — clear-and-replace, so a previously loaded scene never lingers:
-///
-/// - **Has `[usd] default_scene`** → construct its `twin://` address and
-///   [`LoadScene`] it. `LoadScene` clears the old scene, then mounts this
-///   one as the single active stage; [`UsdSimCosimPlugin`](lunco_usd_sim_cosim::UsdSimCosimPlugin)
-///   derives its native `connectionPaths` wiring from the composed prims.
-/// - **No starting scene** (Twin without `default_scene`, or a plain
-///   folder with no manifest — including one with **no `.usda` at all**)
-///   → [`ClearScene`]: empty viewport. The folder's files are still
-///   indexed and shown in the browser; the user picks a scene from there.
-///
-/// The Twin's other `.usda` files are an **asset library** — indexed but
-/// not auto-loaded; composed into the active stage on demand via
-/// `AddReference`. Full resolution rule in
-/// `docs/architecture/21-domain-usd.md` § "Which stage opens".
-///
-/// Skips child Twins — they raise their own `TwinAdded` when the
-/// workspace eagerly opens them, each resolving its own starting scene.
-fn open_usd_docs_on_twin_asset_mounted(
-    trigger: On<lunco_assets_core::TwinAssetMounted>,
-    workspace: Res<WorkspaceResource>,
-    // Optional because a document-only host may not install the asset pipeline.
-    // The authoritative doc-backed mount below is the only scene-loading path;
-    // without it, report the missing production prerequisite visibly.
-    asset_server: Option<Res<AssetServer>>,
-    usd_sources: Option<Res<Assets<UsdSourceText>>>,
-    mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
-    mut empty_reason: ResMut<EmptyViewportReason>,
-    mut commands: Commands,
-) {
-    let twin_id = trigger.event().twin;
-    let Some(twin) = workspace.twin(twin_id) else {
-        return;
-    };
-    let default_scene = twin
-        .manifest
-        .as_ref()
-        .and_then(|m| m.usd.as_ref())
-        .and_then(|u| u.default_scene.as_deref());
-    // The asset boundary emitted this event only after registering the root.
-    // Use the exact assigned authority from the event; do not rediscover it
-    // through a second lookup whose timing could reintroduce the mount race.
-    let twin_name = trigger.event().name.clone();
-    match default_scene {
-        Some(scene) => {
-            let scene_uri = lunco_assets_core::twin_uri(&twin_name, scene);
-            // Load the scene THROUGH the `twin://` source registered above —
-            // never a bare absolute path. Works identically on native (fs) and
-            // web (http), and keeps the scene's co-located relative refs
-            // (terrain glb) resolving under `twin://`.
-            //
-            // E1b: open the scene as a document FIRST — the mount comes from
-            // `drain_pending_twin_docs` once the document exists and its composed
-            // (base ⊕ runtime) source is published as the twin overlay, so the
-            // one and only stage build already carries persisted runtime
-            // spawns/moves. Mounting eagerly here and doc-backing afterwards
-            // built the stage from the raw base, then the open-time
-            // `restore_runtime` forced a whole-scene rebuild ~70 ms later —
-            // every prim (rovers included) spawned twice. Read the base text
-            // THROUGH the twin source (web-ready) rather than `std::fs`.
-            if let (Some(asset_server), Some(_)) = (&asset_server, &usd_sources) {
-                info!(
-                    "[twin] doc-backing starting scene `twin://{}/{}` (twin `{}`) — mount follows",
-                    twin_name,
-                    scene,
-                    twin.root.display()
-                );
-                let handle = asset_server.load::<UsdSourceText>(scene_uri.clone());
-                let source_ready = usd_sources
-                    .as_ref()
-                    .is_some_and(|sources| sources.get(handle.id()).is_some());
-                let source_failed = asset_server
-                    .get_load_state(handle.id())
-                    .is_some_and(|state| state.is_failed());
-                let source_id = handle.id();
-                pending_twin.push(
-                    handle,
-                    source_ready,
-                    twin_name.clone(),
-                    scene.to_string(),
-                    twin.root.join(scene),
-                    twin.root.clone(),
-                );
-                if source_failed {
-                    pending_twin.mark_failed(
-                        source_id,
-                        "the source asset had already failed to load".into(),
-                    );
-                }
-            }
-            if asset_server.is_none() || usd_sources.is_none() {
-                let detail = format!(
-                    "cannot load `{}`: the USD asset pipeline is not installed",
-                    scene_uri
-                );
-                warn!("[twin] {detail}");
-                empty_reason.0 = Some(detail.clone());
-                lunco_core::trigger_error(&mut commands, TWIN_SCENE_LOAD_FAILED, detail);
-            }
-        }
-        None => {
-            // A folder with a `twin.toml` that names no `default_scene` is rare;
-            // the usual cause of reaching here is that the folder has NO
-            // `twin.toml` at all (opened as a plain folder), which most often
-            // means the user opened the WRONG DIRECTORY — e.g. the wrapper that
-            // *contains* the twin rather than the twin itself. Distinguish the
-            // two so the placeholder can tell the user which it is, instead of
-            // a generic "nothing to show".
-            let has_manifest = twin.manifest.is_some();
-            let reason = if has_manifest {
-                format!(
-                    "`{}` has a twin.toml but declares no default scene — nothing to load.",
-                    twin.root.display()
-                )
-            } else {
-                format!(
-                    "`{}` has no twin.toml, so there is no scene to load. \
-                     You may have opened the wrong folder — check that you opened the Twin \
-                     root itself (the one containing twin.toml), not a folder above or beside it.",
-                    twin.root.display()
-                )
-            };
-            info!(
-                "[twin] `{}` declares no starting scene — clearing viewport ({})",
-                twin.root.display(),
-                if has_manifest {
-                    "manifest present, no default_scene"
-                } else {
-                    "no twin.toml"
-                }
-            );
-            empty_reason.0 = Some(reason);
-            commands.trigger(ClearScene {});
-        }
-    }
-}
-
-/// Mount a scene, resolving the requested path to its **document** first.
-///
-/// A scene that is backed by a registry document must mount that document's
-/// composed `base ⊕ runtime` — the runtime layer carries placed waypoints,
-/// runtime spawns and moved transforms, and it is published as the overlay on the
-/// scene's `twin://` source. Mounting the raw file instead re-reads the base
-/// `.usda` from disk and silently drops all of it, so a second `LoadScene` for an
-/// already-open scene would wipe every
-/// live edit. Asking the registry (rather than pattern-matching the path against
-/// twin roots) makes that an authoritative answer: the mount diverts exactly when
-/// a document exists to divert to.
-///
-/// The observer lives HERE, not in `lunco-usd-sim`, because
-/// [`DocumentRegistry`] does — `lunco-usd-sim` sits one layer below and owns the
-/// mount mechanics this drives ([`validate_scene_address`], [`resolve_root_prim`],
-/// [`clear_scene_entities`], [`spawn_scene_root_world`]).
-#[on_command(LoadScene)]
-fn on_load_scene(
-    trigger: On<LoadScene>,
-    // Optional: this observer is registered by `UsdCommandsPlugin`, which is
-    // headless-safe and lands in apps that never build an asset pipeline (the
-    // document-surface tests below are exactly that). Mounting a scene is
-    // meaningless without one, so a missing asset pipeline is a no-op, not a
-    // panic — a required `Res` here aborts the whole `Main` schedule.
-    asset_server: Option<Res<AssetServer>>,
-    stages: Option<Res<Assets<UsdStageAsset>>>,
-    mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
-) {
-    let (Some(_asset_server), Some(_stages)) = (asset_server, stages) else {
-        return;
-    };
-    let Some(path) = validate_scene_address(&cmd.path) else {
-        return;
-    };
-    let root_prim = resolve_root_prim(&path, &cmd.root_prim);
-
-    let request = lunco_core::SceneTransitionRequest::load(path.clone(), root_prim);
-    match coordinator.admit(request) {
-        lunco_core::SceneTransitionAdmission::AlreadyActive => {
-            info!("[load-scene] `{}` is already mounting — no-op", path);
-        }
-        lunco_core::SceneTransitionAdmission::Queued => {
-            info!(
-                "[load-scene] queued `{}` behind the active scene transaction",
-                path
-            );
-        }
-        lunco_core::SceneTransitionAdmission::Admitted => {
-            info!(
-                "[load-scene] admitted `{}` for the next scene lifecycle phase",
-                path
-            );
-        }
-    }
-}
-
-/// Execute the load request that won admission at the scene lifecycle boundary.
-/// Public command observers never mutate scene state directly.
-fn execute_admitted_load_scene(
-    trigger: On<lunco_core::SceneTransitionAdmitted>,
-    asset_server: Res<AssetServer>,
-    mut commands: Commands,
-    q_usd: Query<(Entity, &UsdPrimPath, Has<UsdSceneRoot>)>,
-    scene: SceneEntities,
-    mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
-    // A real scene is mounting — clear any empty-viewport reason recorded by a
-    // prior clear/folder-open, so it can't haunt the placeholder once this load
-    // despawns/resolves. Done HERE (not in the UI placeholder updater) so a
-    // freshly-set reason is not wiped on the same frame by stale `UsdPrimPath`
-    // entities from the scene being cleared (their despawn is deferred, so the
-    // query would still read non-empty and clobber the reason mid-open).
-    mut empty_reason: ResMut<EmptyViewportReason>,
-    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
-) {
-    let lunco_core::SceneTransitionRequest::Load { path, root_prim } = &trigger.event().request
-    else {
-        return;
-    };
-    let path = path.clone();
-    let root_prim = root_prim.clone();
-
-    let transition = lunco_core::SceneTransition::load(path.clone(), root_prim.clone());
-    coordinator.start(transition.clone());
-    // Admission is the commit point. Only now does this request own scene state;
-    // a request queued behind another transaction must not mutate the active
-    // transaction's diagnostics or viewport reason.
-    commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
-    empty_reason.0 = None;
-
-    // Blender-style no-op: same stage, same root prim, already mounted.
-    //
-    // The identity is the PAIR `(stage asset, root prim)`, but the two halves of
-    // the root prim are asked differently because an empty `root_prim` is
-    // `resolve_root_prim`'s deferred sentinel, NOT a path:
-    //
-    // - sentinel (the ordinary load) means "mount the stage's `defaultPrim`". It
-    //   cannot be compared as a string: `instantiate_usd_prim` resolves it and
-    //   writes the concrete path back onto the scene root, so the mounted root
-    //   represents the sentinel semantically rather than as an empty string.
-    //   What the sentinel denotes is the stage's default mount, and that mount is
-    //   exactly the `UsdSceneRoot`, so ask for that instead.
-    // - an explicit override names a real prim path, so compare it as one.
-    //
-    // Deliberately NOT "any prim from this stage": the active simulation owns
-    // one scene root. The editor preview, when present, uses `UsdPreviewOnly`
-    // and is outside this simulation mount identity.
-    let new_id = asset_server.load::<UsdStageAsset>(&path).id();
-    let stage_already_loaded = asset_server.load_state(new_id).is_loaded();
-    if q_usd.iter().any(|(entity, upp, is_scene_root)| {
-        let current_mount_is_live = mount_state.as_deref().is_none_or(|state| {
-            // A replacement invalidates the old root synchronously, while its
-            // deferred despawn is still visible to this query. Never let that
-            // stale entity satisfy the idempotent-load guard.
-            state.contains_root(entity)
-        });
-        upp.stage_handle.id() == new_id
-            && current_mount_is_live
-            && if root_prim.is_empty() {
-                is_scene_root
-            } else {
-                upp.path == root_prim
-            }
-    }) {
-        info!(
-            "[load-scene] `{}` @ `{}` already loaded — no-op",
-            path, root_prim
-        );
-        commands.trigger(lunco_core::SceneTransitionCompleted { transition });
-        return;
-    }
-
-    info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
-
-    // Invalidate outgoing roots NOW, before Bevy applies the deferred
-    // despawns below.  The visual sync system may still query those entities
-    // during this boundary frame; the mount state is its authoritative
-    // ownership fence.
-    if let Some(state) = mount_state.as_deref_mut() {
-        state.begin_replacement();
-    }
-
-    commands.insert_resource(SceneLoadInFlight {
-        path: path.clone(),
-        stage_id: new_id,
-    });
-    commands.trigger(lunco_core::SceneTransitionStarted { transition });
-
-    // Despawn the old scene + free worker-side state (shared with `ClearScene`).
-    clear_scene_entities(&mut commands, &scene);
-
-    // Spawn via shared helper, deferred so despawns flush first.
-    commands.queue(move |world: &mut World| {
-        spawn_scene_root_world(world, &path, &root_prim);
-        world
-            .resource_mut::<lunco_usd_bevy_twin::TwinProjectionWake>()
-            .wake();
-        if stage_already_loaded {
-            world.write_message(lunco_usd_sim_cosim::SceneStageAssetOutcome::Loaded {
-                stage_id: new_id,
-            });
-        }
-    });
-}
-
 register_commands!(
-    on_load_scene,
     on_apply_usd_op,
     on_apply_usd_ops,
     on_apply_usd_transient_ops,
@@ -767,224 +324,20 @@ register_commands!(
     on_attach_program,
     on_set_dome_light,
     on_new_document,
-    on_open_file,
     on_open_file_for_usd,
     on_save_document,
     on_save_as_document,
 );
 
-/// Refresh the active doc-backed Twin from its source file before the shared
-/// [`RestartScene`] lifecycle handler reloads its asset. The lower simulation
-/// layer deliberately does not know documents; it queues its asset reload, which
-/// gives this observer one synchronous place to update the composed Twin overlay.
-///
-/// A normal restart retains dirty documents; a full reset is a separately
-/// confirmed intent which discards both their authored and runtime layers. The
-/// document registry owns both policies so every file-backed domain keeps the
-/// same identity and history invariants.
-fn on_restart_scene_refresh_active_document(
-    trigger: On<lunco_core::SceneTransitionStarted>,
-    asset_server: Option<Res<AssetServer>>,
-    q_usd: Query<(&UsdPrimPath, Has<UsdSceneRoot>)>,
-    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
-    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    twins: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
-    role: Option<Res<lunco_core_session::NetworkRole>>,
-) {
-    let lunco_core::SceneTransition::Restart { reset_document, .. } = &trigger.event().transition
-    else {
-        return;
-    };
-    // The authoritative host/standalone process owns the source file. Clients
-    // restart the currently replicated asset and must not invent a local base.
-    if role.as_deref().is_some_and(|role| !role.is_authoritative()) {
-        return;
-    }
-    let (Some(asset_server), Some(backed), Some(twins)) = (asset_server, backed.as_deref(), twins)
-    else {
-        return;
-    };
-    let Some(stage_path) = q_usd
-        .iter()
-        .find(|(_, is_root)| *is_root)
-        .and_then(|(prim, _)| asset_server.get_path(prim.stage_handle.id()))
-        .map(|path| path.to_string())
-    else {
-        return;
-    };
-
-    let active = registry.ids().find_map(|doc| {
-        let (name, rel) = backed.coords_of(doc)?;
-        (lunco_assets_core::twin_uri(&name, &rel) == stage_path).then_some((doc, name, rel))
-    });
-    let Some((doc, name, rel)) = active else {
-        return;
-    };
-    let Some(path) = registry
-        .host(doc)
-        .and_then(|host| host.document().origin().canonical_path())
-        .map(std::path::Path::to_owned)
-    else {
-        return;
-    };
-    let Ok(bytes) = lunco_storage::read_file_sync(&path) else {
-        warn!(
-            "[restart-scene] cannot reread `{}`; keeping the mounted source",
-            path.display()
-        );
-        return;
-    };
-    let Ok(source) = String::from_utf8(bytes) else {
-        warn!(
-            "[restart-scene] `{}` is not UTF-8 USDA; keeping the mounted source",
-            path.display()
-        );
-        return;
-    };
-    let (_, outcome) = if *reset_document {
-        registry.reset_file(path, source)
-    } else {
-        registry.open_file(path, source)
-    };
-    match outcome {
-        OpenOutcome::Refreshed => {
-            if *reset_document {
-                info!("[restart-scene] fully reset active Twin from disk before remount")
-            } else {
-                info!("[restart-scene] refreshed active Twin source before remount")
-            }
-        }
-        OpenOutcome::KeptDirty => {
-            warn!(
-                "[restart-scene] active Twin has unsaved edits; retaining them instead of overwriting from disk"
-            );
-        }
-        OpenOutcome::KeptUnparsable => {
-            warn!("[restart-scene] source did not parse as USDA; retaining the mounted document")
-        }
-        OpenOutcome::Allocated => {}
-    }
-    let Some(composed) = registry
-        .host(doc)
-        .map(|host| host.document().composed_source())
-    else {
-        return;
-    };
-    if let Err(error) = twins.set_overlay(&name, &rel, std::sync::Arc::new(composed.into_bytes())) {
-        warn!("[restart-scene] could not publish the refreshed Twin source: {error}");
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// OpenFile — gated on USD extensions
-// ─────────────────────────────────────────────────────────────────────
-
-// `OpenFile` for a USD path drives two independent halves, each its own
-// observer so headless bins get both without the UI:
-//
-//   1. `on_open_file_for_usd` — document **registration**: async read via
-//      `lunco-storage`, idempotent allocate into `DocumentRegistry<UsdDocument>`.
-//   2. `on_open_file` (this one) — scene-root selection: external files open
-//      their owning Twin and enter the doc-first mount; files inside the active
-//      Twin remain document-only.
-//
-// Only the admitted typed `LoadScene` observer calls `spawn_scene_root_world`,
-// so no OpenFile path can create a second raw stage beside the Twin mount.
-#[on_command(OpenFile)]
-fn on_open_file(
-    trigger: On<OpenFile>,
-    workspace: Option<Res<WorkspaceResource>>,
-    mut pending: Option<ResMut<PendingTwinOpens>>,
-    mut commands: Commands,
-) {
-    let raw_path = trigger.event().path.clone();
-    let path = raw_path
-        .strip_prefix("file://")
-        .unwrap_or(&raw_path)
-        .to_string();
-    if !is_usd_path(&path) {
-        return;
-    }
-
-    // A scheme already names its root. Send it through the typed scene
-    // transition so it gets the same admission, teardown, and readiness path
-    // as startup, tutorials, and Twin default scenes.
-    if lunco_assets_core::has_scheme(&path) {
-        commands.trigger(LoadScene {
-            path,
-            root_prim: String::new(),
-        });
-        return;
-    }
-
-    let Some(workspace) = workspace else {
-        warn!(
-            "[OpenFile] cannot open USD filesystem scene `{path}`: WorkspacePlugin is not installed"
-        );
-        return;
-    };
-    let abs = match lunco_storage::canonicalize_file_path(Path::new(&path)) {
-        Ok(abs) => abs,
-        Err(error) => {
-            warn!("[OpenFile] cannot resolve USD filesystem scene `{path}`: {error}");
-            return;
-        }
-    };
-    // A USD file already inside the active Twin is an additive document open;
-    // the Twin browser uses this to inspect reusable layers without replacing
-    // the running world. External scenes replace the workspace at the root.
-    if workspace
-        .twins()
-        .any(|(_, twin)| abs.starts_with(&twin.root))
-    {
-        return;
-    }
-    let Some(pending) = pending.as_deref_mut() else {
-        warn!(
-            "[OpenFile] cannot open USD filesystem scene `{path}`: WorkspacePlugin is not installed"
-        );
-        return;
-    };
-    spawn_twin_from_scene(&abs, pending, "OpenFile");
-}
-
-/// Open the root that owns `scene` and select that scene.
-///
-/// This root-relative scan is owned by the USD scene domain so GUI and headless
-/// `OpenFile` requests cannot mount one file through competing paths.
-fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: &str) {
-    let abs = match lunco_storage::canonicalize_file_path(scene) {
-        Ok(abs) => abs,
-        Err(error) => {
-            warn!(
-                "[{log_tag}] cannot resolve USD filesystem scene `{}`: {error}",
-                scene.display()
-            );
-            return;
-        }
-    };
-    let root = lunco_twin::root_for_file(&abs);
-    let rel = abs
-        .strip_prefix(&root)
-        .map(lunco_assets_core::asset_path::slashed)
-        .unwrap_or_else(|_| {
-            abs.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
-    spawn_twin_scan(&root, pending, log_tag, Some(rel), TwinOpenMode::Replace);
-}
-
 // ─────────────────────────────────────────────────────────────────────
 // USD document open/load pipeline (domain layer)
 //
-// Moved here from `ui/browser_dispatch.rs` (2026-06-02): file I/O and the
-// `OpenFile` command observer are document-lifecycle concerns, not UI.
-// Living in `UsdCommandsPlugin` means HTTP API / MCP / `Open`-URI dispatch
-// register USD documents even in headless / sandbox bins that never add
-// `UsdUiPlugin`. The UI's `browser_dispatch` keeps only the browser-panel
-// `BrowserAction` → `OpenFile` translation.
+// Moved here from `ui/browser_dispatch.rs`: file I/O and the `OpenFile`
+// document observer are document-lifecycle concerns, not UI. Living in
+// `UsdCommandsPlugin` means HTTP API / MCP / `Open`-URI dispatch register USD
+// documents even in headless bins that never add `UsdUiPlugin`. The UI's
+// `browser_dispatch` keeps only the browser-panel `BrowserAction` → `OpenFile`
+// translation.
 // ─────────────────────────────────────────────────────────────────────
 
 /// Pending file-read kicked off by [`spawn_usd_load`]. Polled by

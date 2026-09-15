@@ -558,11 +558,9 @@ mod tests {
     #[test]
     fn native_constructors_reject_non_finite_and_degenerate_values() {
         assert!(engine().eval::<Dynamic>("vec3(0.0/0.0, 0.0, 0.0)").is_err());
-        assert!(
-            engine()
-                .eval::<Dynamic>("quat(0.0, 0.0, 0.0, 0.0)")
-                .is_err()
-        );
+        assert!(engine()
+            .eval::<Dynamic>("quat(0.0, 0.0, 0.0, 0.0)")
+            .is_err());
         assert!(engine().eval::<Dynamic>("vnorm(vec3_zero())").is_err());
     }
 
@@ -581,7 +579,9 @@ mod tests {
 
     #[test]
     fn standard_scalar_math_remains_rhai_owned_and_rust_backed() {
-        let d = eval("[sin(PI() / 2.0), cos(0.0), exp(0.0), sqrt(9.0), atan(1.0, 1.0), hypot(3.0, 4.0)]");
+        let d = eval(
+            "[sin(PI() / 2.0), cos(0.0), exp(0.0), sqrt(9.0), atan(1.0, 1.0), hypot(3.0, 4.0)]",
+        );
         let values = d.into_array().expect("standard math returns an array");
         let expected = [1.0, 1.0, 1.0, 3.0, std::f64::consts::FRAC_PI_4, 5.0];
         for (value, expected) in values.iter().zip(expected) {

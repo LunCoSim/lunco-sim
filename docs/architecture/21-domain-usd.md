@@ -20,11 +20,13 @@ contains path-addressed authored-layer operations, USDA conversion, reference
 helpers, and the schema registry; `lunco-usd-compose` contains send-safe stage
 recipes and dependency interpretation; `lunco-usd-core` contains pure operation
 lowerings, assembly, edit-session, and shared USD command/event contracts;
-`lunco-usd-commands` contains UI-free runtime orchestration
-and the observers that execute those contracts; `lunco-usd-queries` owns the
+`lunco-usd-commands` contains the UI-free document lifecycle and authoring
+observers that execute those contracts; `lunco-usd-queries` owns the
 UI-free public query providers for document inspection, edit sessions,
 document synchronization, and explicit assembly-target resolution;
-`lunco-usd-bevy-runtime` owns the complete application plugin bundle;
+`lunco-usd-bevy-runtime` owns scene admission, Twin-backed stage loading,
+runtime persistence, live document projection, and the complete application
+plugin bundle;
 `lunco-usd-geometry`
 owns the reusable render-free BasisCurves evaluator, NURBS, trim, and
 curve-sweep substrate;
@@ -38,8 +40,9 @@ owning a second curve implementation;
 `lunco-usd-bevy-twin` owns the render-free document-to-`twin://` identity map,
 workspace and preview leases, projection cursors, user-ownership events, and
 the event-driven wake signal and document-to-mounted-stage lookup;
-`lunco-usd-bevy-core` owns canonical-stage storage, while `lunco-usd-commands` owns
-stage loading and the live ECS projection systems that consume that state;
+`lunco-usd-bevy-core` owns canonical-stage storage, while
+`lunco-usd-bevy-runtime` owns scene admission, stage loading, and the live ECS
+projection systems that consume that state;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
 projection; `lunco-usd-bevy-mesh` owns built-in, native-mesh, curve, and
 NurbsPatch visual mesh projection plus quality invalidation;
@@ -66,12 +69,13 @@ discovery, wiring, readiness, and scene lifecycle; and
 bundle installs the implementation plugins explicitly, so vehicle changes do
 not make the vehicle package depend on the 6.5k-line cosim implementation.
 
-Public command and document-lifecycle coverage for the runtime boundary lives
+Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
 recompile the command library's normal target. Private pending-load and
 grouped-edit seams remain beside their owning implementation because they
-cannot be observed through the public contract. Shared contract helpers are
-tested in `lunco-usd-core/tests/`.
+cannot be observed through the public contract. Scene projection seams remain
+beside `lunco-usd-bevy-runtime`; shared contract helpers are tested in
+`lunco-usd-core/tests/`.
 
 The public query contracts live beside their owning package in
 `crates/lunco-usd-queries/tests/query_api.rs`; they do not require the larger
@@ -192,7 +196,7 @@ by re-flattening the scene per edit:
 UsdOp ─apply→ UsdDocument (base⊕runtime, op_log, generation++)
         │
         ├─ journal records op + inverse (undo / sync)
-        └─ sync_twin_overlays replays op → CanonicalStage.author_*  (lunco-usd-commands/twin_projection.rs)
+        └─ sync_twin_overlays replays op → CanonicalStage.author_*  (lunco-usd-bevy-runtime/twin_projection.rs)
                     │  fires openusd change sink
                     └─ project_stage_changes drains sink → reconcile ECS  (live_consume.rs)
                          · InfoOnly xformOp:translate → cheap pose update
@@ -309,7 +313,7 @@ scene loads as a **single root** (the typed `SceneTransitionIntent` →
 Loading another scene re-points that single active stage; it never stacks.
 
 On `TwinAssetMounted` (`open_usd_docs_on_twin_asset_mounted`,
-`lunco-usd-commands/src/lib.rs`), exactly **one** stage resolves per the table above,
+`lunco-usd-bevy-runtime/src/scene_runtime.rs`), exactly **one** stage resolves per the table above,
 after the asset boundary has registered the exact `twin://` authority, and the mount is
 **doc-first**: the scene's document opens first (its base read through the
 `twin://` source, web-ready). Generated runtime spawns and moves are restored
@@ -341,10 +345,10 @@ section.
 | User intent | Operation | Surface |
 |---|---|---|
 | **Open a Twin** | Open a folder → designated stage becomes active → Grid renders it | existing `OpenFolder`/`OpenTwin` + folder picker |
-| **Open a loose scene** | Open a `.usda` → owning-folder scan → folder Twin → doc-first `twin://…` scene becomes active → Grid | `OpenFile` (USD owns root resolution, document open, and the typed scene transition) |
+| **Open a loose scene** | Open a `.usda` → owning-folder scan → folder Twin → doc-first `twin://…` scene becomes active → Grid | `OpenFile` document observer plus `UsdSceneRuntimePlugin` scene transition |
 | **Built-in demo** | implicit Twin opened at startup | startup |
 | **Add object / import** | author into the explicit document: `ApplyUsdOp { doc_id, parent_gen, op: AddPrim { reference: Some(...) } }` (primitives use `reference: None`); recompose into Grid; save with `SaveDocument` | existing `ApplyUsdOp` |
-| **Attach a simulation program** | `AttachProgram { doc_id, spec }`; author a `LunCoProgramAPI` child, declared scalar ports, defaults, and USD connections as one change set | `lunco-usd-commands::program_runtime` + normal USD projection |
+| **Attach a simulation program** | `AttachProgram { doc_id, spec }`; author a `LunCoProgramAPI` child, declared scalar ports, defaults, and USD connections as one change set | `lunco-usd-bevy-runtime::program_runtime` + normal USD projection |
 | **Promote loose → Twin** | `SaveAsTwin` | existing |
 | **Run / server** | `TwinCommand`s | existing `--api` surface (spec 14 "Headless + remote") |
 

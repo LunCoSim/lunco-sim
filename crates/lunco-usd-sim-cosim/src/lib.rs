@@ -3427,7 +3427,7 @@ pub struct LoadScene {
     pub root_prim: String,
 }
 
-// The `LoadScene` OBSERVER lives in `lunco-usd-commands`
+// The `LoadScene` OBSERVER lives in `lunco-usd-bevy-runtime`
 // (`commands.rs::on_load_scene`), not here: mounting a scene has to resolve the
 // requested path to its DOCUMENT first (a doc-backed scene must mount its
 // composed `base ⊕ runtime`, never the base file), and the document registry
@@ -3680,10 +3680,10 @@ fn on_scene_transition_failed(
 /// owners may have already reclaimed a target in the same transaction.
 /// The scene-owned entities a teardown touches, bundled as one `SystemParam`.
 ///
-/// Every scene-lifecycle observer — `LoadScene` (in `lunco-usd-commands`), `ClearScene`,
+/// Every scene-lifecycle observer — `LoadScene` (in `lunco-usd-bevy-runtime`), `ClearScene`,
 /// `RestartScene` — needs exactly this set. Bundling keeps the mount API honest:
 /// a caller drives a teardown without naming `WorldGrid`, `OriginAnchor` or the
-/// cosim `SimConnection` wire type, so `lunco-usd-commands` needs no dependency on
+/// cosim `SimConnection` wire type, so `lunco-usd-bevy-runtime` needs no dependency on
 /// `lunco-cosim` to orchestrate a scene swap.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct SceneEntities<'w, 's> {
@@ -3980,7 +3980,7 @@ pub fn spawn_scene_root_world(
 ///
 /// The handle-supplying sibling of [`spawn_scene_root_world`]: instead of
 /// loading the stage from disk via the `AssetServer`, the caller hands in a
-/// `Handle<UsdStageAsset>` it built itself. This is the seam E1 uses — lunco-usd-commands
+/// `Handle<UsdStageAsset>` it built itself. This is the seam E1 uses — lunco-usd-bevy-runtime
 /// passes a handle holding a [`UsdDocument`](lunco_usd_document::document::UsdDocument)'s
 /// *composed* (`base ⊕ runtime`) stage, so the live world projects the editable
 /// document (with its persisted runtime spawns/moves) rather than the raw file.

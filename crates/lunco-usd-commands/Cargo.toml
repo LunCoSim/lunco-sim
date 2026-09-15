@@ -3,24 +3,20 @@ name = "lunco-usd-commands"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "Headless USD document and scene command surface"
+description = "Headless USD document and authoring command surface"
 
 [dependencies]
 bevy = { workspace = true, features = ["bevy_asset"] }
-big_space = { workspace = true }
 openusd = { workspace = true }
 serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
-lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
-lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
-lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
@@ -28,17 +24,10 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-queries = { path = "../lunco-usd-queries" }
-lunco-usd-sim = { path = "../lunco-usd-sim" }
-lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
-lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
-lunco-render = { path = "../lunco-render" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-workspace = { path = "../lunco-workspace" }
 
 [dev-dependencies]
-avian3d = { workspace = true }
-lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 tempfile = { workspace = true }
 
 [lints]

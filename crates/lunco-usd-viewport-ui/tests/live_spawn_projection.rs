@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_bevy::UsdVisualPlugin;
 use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_bevy_runtime::UsdSceneRuntimePlugin;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_commands::UsdCommandsPlugin;
 use lunco_usd_core::commands::ApplyUsdOp;
@@ -57,6 +58,7 @@ fn boot_app() -> App {
     app.init_asset::<Image>();
     app.add_plugins(UsdVisualPlugin);
     app.add_plugins(UsdCommandsPlugin);
+    app.add_plugins(UsdSceneRuntimePlugin);
     app.init_resource::<lunco_core::CommandResults>()
         .init_resource::<lunco_core::ActiveCommandId>();
     app.add_plugins(UsdViewportPlugin);

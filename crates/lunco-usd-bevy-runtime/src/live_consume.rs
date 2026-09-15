@@ -160,7 +160,7 @@ impl LiveTransformEditHints {
 
 /// Record a successful typed transform authoring operation. The resource
 /// is optional for small headless projection tests that construct only the sink
-/// bridge; production installs it with `UsdCommandsPlugin`.
+/// bridge; production installs it with `UsdSceneRuntimePlugin`.
 pub(crate) fn mark_live_transform(
     world: &mut World,
     stage: AssetId<UsdStageAsset>,

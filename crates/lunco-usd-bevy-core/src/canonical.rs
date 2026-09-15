@@ -155,7 +155,7 @@ impl CanonicalStage {
 
     /// Author `xformOp:translate = value` onto the composed prim at `path` (root
     /// edit target) — this fires the change sink, so the projection bridge
-    /// (`project_stage_changes` in `lunco-usd-commands`) reconciles the move in place.
+    /// (`project_stage_changes` in `lunco-usd-bevy-runtime`) reconciles the move in place.
     /// Inserts `xformOp:translate`
     /// into `xformOpOrder` at its canonical slot when not already listed, so an
     /// existing xform stack is extended, never clobbered.
@@ -636,7 +636,7 @@ impl CanonicalStage {
     /// live-stage counterpart of the document's `SetActive` op. A hide or
     /// reactivation reaches the live world without a whole-scene reload: the
     /// projection bridge applies the sink's structural change to the affected
-    /// subtree. Firing the sink lets `project_stage_changes` in `lunco-usd-commands`
+    /// subtree. Firing the sink lets `project_stage_changes` in `lunco-usd-bevy-runtime`
     /// reconcile ECS.
     ///
     /// The shared structural reconciler observes the active flag and reconciles
@@ -742,7 +742,7 @@ impl CanonicalStage {
 /// via [`CanonicalStage::projector`].
 ///
 /// Contract ("author once, replay everywhere"): every mutation of the document
-/// flows through `ApplyUsdOp`; `lunco-usd-commands`' twin-projection replayer then
+/// flows through `ApplyUsdOp`; `lunco-usd-bevy-runtime`'s twin-projection replayer then
 /// mirrors the already-applied op onto the live stage through *this* wrapper —
 /// and through nothing else. The surface below is exactly the set of ops the
 /// replayer mirrors incrementally (everything else takes the rebuild path).

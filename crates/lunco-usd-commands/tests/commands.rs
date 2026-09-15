@@ -414,9 +414,9 @@ fn open_file_for_usd_path_creates_document() {
     let tmp_path = tmp_dir.join("lunco_usd_open_file_test.usda");
     std::fs::write(&tmp_path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
 
-    // `UsdCommandsPlugin` now owns the whole open pipeline (observer +
-    // PendingUsdLoads + drain) — no UI plugin needed. `MinimalPlugins`
-    // supplies the `AsyncComputeTaskPool` the read runs on.
+    // `UsdCommandsPlugin` owns the document-open pipeline (observer +
+    // PendingUsdLoads + drain); scene admission is a separate runtime concern.
+    // `MinimalPlugins` supplies the `AsyncComputeTaskPool` the read runs on.
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(UsdCommandsPlugin);

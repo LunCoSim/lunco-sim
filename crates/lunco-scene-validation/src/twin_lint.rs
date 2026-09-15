@@ -491,16 +491,10 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary Twin root");
         lunco_storage::ensure_directory_sync(&temp.path().join("other"))
             .expect("nested source root");
-        lunco_storage::write_file_sync(
-            &temp.path().join("a.mo"),
-            b"model Drive end Drive;",
-        )
-        .expect("first Modelica source");
-        lunco_storage::write_file_sync(
-            &temp.path().join("b.mo"),
-            b"model Drive end Drive;",
-        )
-        .expect("second Modelica source");
+        lunco_storage::write_file_sync(&temp.path().join("a.mo"), b"model Drive end Drive;")
+            .expect("first Modelica source");
+        lunco_storage::write_file_sync(&temp.path().join("b.mo"), b"model Drive end Drive;")
+            .expect("second Modelica source");
         lunco_storage::write_file_sync(
             &temp.path().join("other/Drive.mo"),
             b"model Drive end Drive;",

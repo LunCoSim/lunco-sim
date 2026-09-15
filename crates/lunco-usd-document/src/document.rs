@@ -46,8 +46,8 @@
 //!   `Rc`-backed and therefore `!Send`: a main-thread `NonSend` resource. It is
 //!   the projection engine — authoring onto it fires the openusd change sink that
 //!   reconciles the ECS (see the runtime projector in
-//!   `lunco-usd-commands/src/twin_projection.rs` and
-//!   `lunco-usd-commands/src/live_consume.rs`).
+//!   `lunco-usd-bevy-runtime/src/twin_projection.rs` and
+//!   `lunco-usd-bevy-runtime/src/live_consume.rs`).
 //!
 //! This split is **not** a Rust/`Send` workaround — it is USD's own data model.
 //! Pixar's USD draws the same line between `SdfLayer` (flat authored opinions you
@@ -3706,23 +3706,18 @@ mod tests {
             reference_prim_path: None,
         })
         .unwrap();
-        assert!(
-            left.runtime_data()
-                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-                .is_some()
-        );
-        assert!(
-            right
-                .runtime_data()
-                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-                .is_none()
-        );
-        assert!(
-            source
-                .runtime_data()
-                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-                .is_none()
-        );
+        assert!(left
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_some());
+        assert!(right
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_none());
+        assert!(source
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_none());
 
         left.mark_saved();
         assert!(!left.is_dirty());
@@ -5205,15 +5200,14 @@ def Xform \"World\" (\n\
             value: "(0, 0, 0)".into(),
         })
         .unwrap();
-        assert!(
-            doc.apply(UsdOp::RemoveTimeSample {
+        assert!(doc
+            .apply(UsdOp::RemoveTimeSample {
                 edit_target: LayerId::root(),
                 path: "/Mover".into(),
                 name: "xformOp:translate".into(),
                 time: 99.0,
             })
-            .is_err()
-        );
+            .is_err());
         // Removing the right time succeeds and clears the curve.
         doc.apply(UsdOp::RemoveTimeSample {
             edit_target: LayerId::root(),

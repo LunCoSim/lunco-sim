@@ -101,7 +101,7 @@ fn overlay_key(name: &str, rel: &str) -> PathBuf {
 ///
 /// The second map — [`overlays`](TwinRoots::set_overlay) — lets a caller serve
 /// **in-memory bytes** for a specific `twin://<name>/<rel>` path instead of the
-/// on-disk file. This is the E1b seam: lunco-usd-commands registers a scene document's
+/// on-disk file. This is the E1b seam: lunco-usd-bevy-runtime registers a scene document's
 /// *composed* (`base ⊕ runtime`) source as the overlay, so the async `UsdLoader`
 /// composes the live world from the editable document — anchored at the same
 /// `twin://` identity, so co-located refs (terrain `.glb`) still resolve, on

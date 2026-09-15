@@ -117,15 +117,11 @@ pub fn register_builtins() {
     for (name, src) in tools {
         lunco_tools_rhai::register_rhai_tool(&name, &src);
     }
-    lunco_tools_rhai::register_native_tool(
-        "mathx",
-        vec!["lerp/3".into()],
-        |_engine| {
-            let mut m = rhai::Module::new();
-            m.set_native_fn("lerp", |a: f64, b: f64, t: f64| Ok(a + (b - a) * t));
-            Ok(m)
-        },
-    );
+    lunco_tools_rhai::register_native_tool("mathx", vec!["lerp/3".into()], |_engine| {
+        let mut m = rhai::Module::new();
+        m.set_native_fn("lerp", |a: f64, b: f64, t: f64| Ok(a + (b - a) * t));
+        Ok(m)
+    });
 }
 
 /// Register / hot-replace a rhai-source tool library (the `RegisterToolLibrary`

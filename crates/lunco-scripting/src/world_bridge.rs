@@ -1507,9 +1507,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // converge on one owner. The value is scalar by the command contract.
     engine.register_fn(
         "set_twin_setting",
-        |key: ImmutableString,
-         value: Dynamic|
-         -> Result<bool, Box<rhai::EvalAltResult>> {
+        |key: ImmutableString, value: Dynamic| -> Result<bool, Box<rhai::EvalAltResult>> {
             let mut params = Map::new();
             params.insert("key".into(), key.into());
             params.insert("value".into(), value);
@@ -3024,8 +3022,8 @@ mod tests {
     //! `compile` checks syntax (unresolved function
     //! calls resolve at runtime, so calling prelude verbs here is fine).
 
-    use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
     use bevy::math::DVec3;
+    use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
     use rhai::{Dynamic, Map};
 
     /// **H6** — a re-entrant call into the bridge must not take down the app.
