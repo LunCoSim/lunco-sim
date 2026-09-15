@@ -17,6 +17,13 @@ fn route_ribbon_sample_spacing() { 3.0 }
 // spacing adaptively while every authored waypoint remains an endpoint.
 fn route_ribbon_max_samples() { 768 }
 
+// Marker appearance is a generic route-tool policy. The asset carries the
+// pending colour in standard gprim displayColor; the route program applies the
+// achieved colour through the transient USD view path when its generic sensor
+// event advances the route.
+fn pending_marker_color() { [1.0, 0.35, 0.02] }
+fn achieved_marker_color() { [0.10, 0.95, 0.22] }
+
 fn ui_label() { "Route point" }
 fn ui_hint() { "Use the configured add-point gesture on terrain to append a point to the active route" }
 
@@ -102,6 +109,75 @@ fn apply_view_ops(doc, label, ops) {
         return failure(if result == () { "USD view edit returned no result" } else { result.error });
     }
     #{ ok: true, changed: true }
+}
+
+fn set_marker_state(doc, point, achieved) {
+    if doc == () || point == () || point == "" {
+        return #{ ok: false, error: "route-point state has no document or point path" };
+    }
+    let dome = point + "/Dome";
+    let current = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: dome,
+        attrs: ["primvars:displayColor"],
+    });
+    if current == () || current.ok == false || current.attrs == ()
+        || current.attrs["primvars:displayColor"] == () {
+        return #{ ok: false, retryable: true,
+            error: "route-point marker display state is not synchronized" };
+    }
+    let color = if achieved { achieved_marker_color() } else { pending_marker_color() };
+    let current_color = current.attrs["primvars:displayColor"];
+    if current_color.len() == 1 && vector_equal(current_color[0], color) {
+        return #{ ok: true, changed: false };
+    }
+    apply_view_ops(doc, "Update route-point state", [#{ SetAttribute: #{
+        edit_target: "@runtime@",
+        path: dome,
+        name: "primvars:displayColor",
+        type_name: "color3f[]",
+        value: "[" + point_literal(color) + "]",
+    }}])
+}
+
+fn reset_marker_states(doc, route) {
+    let points = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: route,
+        children: true,
+    });
+    if points == () || points.ok == false || points.children == () {
+        return #{ ok: false, retryable: true,
+            error: "route-point state cannot read the route children" };
+    }
+    let ops = [];
+    let color = pending_marker_color();
+    for point in points.children {
+        let parts = point.split("/");
+        let leaf = parts[parts.len() - 1];
+        if leaf == "Program" || leaf == "RouteRibbon" { continue; }
+        let marker = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: point + "/Dome",
+            attrs: ["primvars:displayColor"],
+        });
+        if marker == () || marker.ok == false || marker.attrs == ()
+            || marker.attrs["primvars:displayColor"] == () {
+            return #{ ok: false, retryable: true,
+            error: "route-point marker display state is not synchronized" };
+        }
+        let current_color = marker.attrs["primvars:displayColor"];
+        if current_color.len() != 1 || !vector_equal(current_color[0], color) {
+            ops.push(#{ SetAttribute: #{
+                edit_target: "@runtime@",
+                path: point + "/Dome",
+                name: "primvars:displayColor",
+                type_name: "color3f[]",
+                value: "[" + point_literal(color) + "]",
+            }});
+        }
+    }
+    apply_view_ops(doc, "Reset route-point states", ops)
 }
 
 fn route_edit_path(context) {

@@ -1678,6 +1678,9 @@ class "LunCoSurfaceAPI" (
     what core USD's opacity primvars cannot say."""
 )
 {
+    bool lunco:surface:unlit = false (
+        doc = "Render the bound surface without lighting, normals, or shadows."
+    )
     bool lunco:surface:additive = false (
         doc = """Render this surface with ADDITIVE blending — a glow (engine
         plume or other authored gprim) that brightens without occluding. Distinct from

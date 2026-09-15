@@ -113,9 +113,10 @@ canonical path is used for selection and menu dispatch.
 The generic sensor emits `enter:<zone>` and `exit:<zone>` events. The route
 program accepts an enter event when its payload is the current subject or a
 registered descendant collider in that subject's generic parent chain, and the
-zone is the current point. It then emits the authored route-level
-`route_point_reached` event for mission policy and advances its local route
-cursor. Physics reports the sensor event; it does not publish a route-specific
+zone is the current point. It then changes the point's reusable marker to its
+achieved colour through the generic transient USD view tool, emits the authored
+route-level `route_point_reached` event for mission policy, and advances its
+local route cursor. Physics reports the sensor event; it does not publish a route-specific
 “target reached” fact and it does not decide mission progression.
 
 The route task remains live while the scene is running. Editing point placement,
@@ -153,8 +154,11 @@ editor-specific Rust branch.
 
 ## Presentation
 
-The marker's dome is emissive, translucent, and shadowless. Its trigger is
-invisible and has its own authored radius. Billboard text and placement are
+The marker's dome is opaque, unlit, and shadowless. Its authored pending colour
+is bright amber; the route program changes the dome's standard
+`primvars:displayColor` to bright green when the generic sensor event reaches it. The unlit
+surface bypasses light, normal, and shadow processing, and emits no light. Its
+trigger is invisible and has its own authored radius. Billboard text and placement are
 read by the generic billboard renderer. The ribbon is a separate, lightweight
 world-space annotation: the route tool densifies long legs with the shared
 `TerrainHeight` query, authors the sampled support normals, and standard
@@ -168,9 +172,8 @@ millimetre positions and 0.1 mm normals, and increases spacing only for
 unusually long routes. Every authored waypoint remains an endpoint without
 allowing the Rhai/USD string transport to overflow. This work is not performed
 in the per-frame route-control task. It does not participate in physics or
-route control. Route execution does not recolor or rebuild marker geometry; a
-scenario may react to `route_point_reached` to update mission state or the HUD
-through its own policy.
+route control. The marker and route tool own this shared presentation contract;
+individual Twins do not duplicate it.
 
 The visual contract is covered by
 [`assets/scenes/tests/waypoint_visual.usda`](../../assets/scenes/tests/waypoint_visual.usda)

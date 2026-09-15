@@ -116,6 +116,27 @@ fn point_position(doc, path) {
     result.attrs["xformOp:translate"]
 }
 
+fn marker_color(doc, path) {
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: path + "/Dome",
+        attrs: ["primvars:displayColor"],
+    });
+    if result == () || result.ok == false || result.attrs == () {
+        return ();
+    }
+    let colors = result.attrs["primvars:displayColor"];
+    if colors == () || colors.len() != 1 { return (); }
+    colors[0]
+}
+
+fn color_matches(actual, expected) {
+    actual != () && expected != () && actual.len() == 3 && expected.len() == 3
+        && (actual[0] - expected[0]).abs() < 0.000001
+        && (actual[1] - expected[1]).abs() < 0.000001
+        && (actual[2] - expected[2]).abs() < 0.000001
+}
+
 fn context(doc, path, position) {
     #{
         button: "primary",
@@ -190,6 +211,7 @@ fn on_start(me) {
     this.program_switch_complete = false;
     this.route_ready = false;
     this.program_switch_subject = -1;
+    this.reached_point_path = ();
 }
 
 fn on_event(me, evt) {
@@ -660,6 +682,7 @@ fn on_tick(me) {
         });
         if zone == () || zone.ok == false || zone.attrs == ()
             || zone.attrs["lunco:triggerZone"] == () { return; }
+        this.reached_point_path = points[0];
         emit("enter:" + zone.attrs["lunco:triggerZone"], this.subject);
         this.phase = 11;
         return;
@@ -667,6 +690,15 @@ fn on_tick(me) {
 
     if this.phase == 11 {
         if this.reached == 0 { return; }
+        let reached_color = marker_color(this.doc, this.reached_point_path);
+        let points = direct_points(this.doc);
+        if reached_color == () || points.len() < 2 { return; }
+        let pending_path = if points[0] == this.reached_point_path { points[1] } else { points[0] };
+        let pending_color = marker_color(this.doc, pending_path);
+        if !color_matches(reached_color, [0.10, 0.95, 0.22])
+            || !color_matches(pending_color, [1.0, 0.35, 0.02]) { return; }
+        this.checks.push(t_true(true,
+            "reached route points turn green while pending points stay amber"));
         this.checks.push(t_true(this.reached_index == 0,
             "the sensor event advances the stable current route point"));
         intent_pulse(this.subject, "action");
