@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_time::{AnimationPreview, Playback};
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_document::author::normalize_value_literal;
 use lunco_usd_document::document::{LayerId, UsdOp};
@@ -101,7 +101,7 @@ fn type_for_channel<R: UsdRead>(stage: &R, path: &SdfPath, name: &str) -> Option
 /// Rebuild keyable channels for the selected prim in every open Editor preview.
 pub fn produce_usd_animation_view(
     selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
-    target: Option<Res<lunco_luncosim_edit_ui::InspectorTarget>>,
+    target: Option<Res<lunco_scene_selection::SelectionTarget>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -135,10 +135,12 @@ pub fn produce_usd_animation_view(
             continue;
         }
 
-        let Some(entity) = lunco_luncosim_edit_ui::ui::selected_entity_in_preview(
+        let Some(entity) = lunco_usd_viewport_ui::selected_entity_in_preview(
             session,
-            selected.as_deref(),
-            target.as_deref(),
+            selected
+                .as_deref()
+                .and_then(lunco_scene_selection::SelectedEntities::primary),
+            target.as_deref().and_then(|value| value.part),
             &q,
             &q_parents,
         ) else {

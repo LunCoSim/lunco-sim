@@ -268,7 +268,8 @@ impl Plugin for LunCoSimUiPlugin {
             .add_plugins(lunco_usd_ui::UsdUiPlugin)
             .add_plugins(lunco_luncosim_edit_core::SceneEditPlugin)
             .add_plugins(lunco_luncosim_edit_ui::ui::SceneEditUiPlugin)
-            .add_plugins(lunco_luncosim_edit_panels_ui::SceneEditPanelsUiPlugin)
+            .add_plugins(lunco_luncosim_edit_inspector_ui::SceneEditInspectorUiPlugin)
+            .add_plugins(lunco_usd_prim_tree_ui::UsdPrimTreeUiPlugin)
             // NOTE: `ShaderMaterialPlugin` (the dynamic `ShaderMaterial` render
             // pipeline) used to be added here. It now lives inside
             // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name

@@ -147,7 +147,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
 | **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, transform-gizmo and selection adapters, and physics diagnostics. |
-| **`lunco-luncosim-edit-panels-ui`** | Inspector and authored USD panels: composed-USD prim tree, standard USD joint/animation/mount/variant/parameter view models, and environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
+| **`lunco-luncosim-edit-inspector-ui`** | Domain-heavy Inspector and authored USD panels: standard USD joint/animation/mount/variant/parameter view models plus environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
+| **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
 | **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
@@ -657,6 +658,17 @@ Rendered scene-editing presentation. Implements the egui/workbench panels,
 selection and transform-gizmo adapters, USD preview interaction, and physics
 diagnostic visualization. It depends on `lunco-luncosim-edit-core`; the core
 package does not depend back on this UI package.
+
+**`lunco-luncosim-edit-inspector-ui`**
+Domain-heavy Inspector and authored USD panels. It owns USD parameter, variant,
+mount, joint, and animation view models plus environment and component
+authoring surfaces. It consumes shared selection and viewport contracts without
+depending on the broader scene-editing interaction package.
+
+**`lunco-usd-prim-tree-ui`**
+Reusable composed-USD prim hierarchy panel and change-driven view model. It
+owns no editor interaction implementation and can be installed by any
+workbench host that provides the shared viewport and selection contracts.
 
 **`lunco-render`**
 Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.

@@ -7598,7 +7598,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-luncosim-edit-panels-ui"
+name = "lunco-luncosim-edit-inspector-ui"
 version = "0.1.0"
 dependencies = [
  "avian3d",
@@ -7614,7 +7614,6 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
- "lunco-luncosim-edit-ui",
  "lunco-materials",
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
@@ -7757,7 +7756,7 @@ dependencies = [
  "lunco-environment",
  "lunco-hooks",
  "lunco-luncosim-edit-core",
- "lunco-luncosim-edit-panels-ui",
+ "lunco-luncosim-edit-inspector-ui",
  "lunco-luncosim-edit-ui",
  "lunco-modelica-core",
  "lunco-modelica-runtime",
@@ -7785,6 +7784,7 @@ dependencies = [
  "lunco-usd-bevy-twin",
  "lunco-usd-core",
  "lunco-usd-document",
+ "lunco-usd-prim-tree-ui",
  "lunco-usd-sim-cosim",
  "lunco-usd-ui",
  "lunco-usd-viewport-ui",
@@ -8973,6 +8973,24 @@ dependencies = [
  "bevy_mesh",
  "spade",
  "truck-geometry",
+]
+
+[[package]]
+name = "lunco-usd-prim-tree-ui"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-core",
+ "lunco-render",
+ "lunco-scene-selection",
+ "lunco-usd-bevy-camera",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-viewport-ui",
+ "lunco-workbench-core",
+ "lunco-workbench-widgets",
+ "openusd",
 ]
 
 [[package]]

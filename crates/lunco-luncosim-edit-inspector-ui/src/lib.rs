@@ -9,28 +9,41 @@
 #![forbid(unsafe_code)]
 
 use bevy::prelude::*;
-use lunco_luncosim_edit_ui::ui::{usd_selection_view_changed, ViewModelAppExt};
+use lunco_scene_selection::{SelectedEntities, SelectionTarget};
+use lunco_usd_viewport_ui::UsdViewportState;
 use lunco_workbench_core::WorkbenchPanelAppExt;
+use lunco_workbench_core::view_model::ViewModelAppExt;
 
 pub mod inspector;
 pub mod usd_animation;
 pub mod usd_joint;
 pub mod usd_mount;
 pub mod usd_params;
-pub mod usd_prim_tree;
 pub mod usd_variants;
+
+/// Gate for view models that read the selected prim from a composed preview.
+fn usd_selection_view_changed(
+    selection: Res<SelectedEntities>,
+    target: Res<SelectionTarget>,
+    revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
+    viewport: Option<Res<UsdViewportState>>,
+) -> bool {
+    selection.is_changed()
+        || target.is_changed()
+        || revision.is_changed()
+        || viewport.is_some_and(|state| state.is_changed())
+}
 
 /// Installs the Inspector and authored USD panels used by the Editor
 /// perspective.
-pub struct SceneEditPanelsUiPlugin;
+pub struct SceneEditInspectorUiPlugin;
 
-impl Plugin for SceneEditPanelsUiPlugin {
+impl Plugin for SceneEditInspectorUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<lunco_luncosim_edit_ui::InspectorTarget>();
+        app.init_resource::<SelectionTarget>();
 
         app.register_panel(inspector::Inspector)
-            .register_panel(inspector::EnvironmentPanel)
-            .register_panel(usd_prim_tree::UsdPrimTreePanel);
+            .register_panel(inspector::EnvironmentPanel);
 
         app.init_resource::<inspector::InspectorView>()
             .init_resource::<inspector::ShaderSchemaCache>();
@@ -51,12 +64,6 @@ impl Plugin for SceneEditPanelsUiPlugin {
         app.add_view_model(
             inspector::populate_inspector_view,
             inspector::inspector_inputs_changed,
-        );
-
-        app.init_resource::<usd_prim_tree::UsdPrimTreeView>();
-        app.add_view_model(
-            usd_prim_tree::produce_usd_prim_tree,
-            usd_prim_tree::editor_prim_tree_changed,
         );
 
         app.init_resource::<usd_params::UsdParamView>()

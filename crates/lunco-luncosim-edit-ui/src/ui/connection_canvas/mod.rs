@@ -242,7 +242,7 @@ fn produce_usd_canvas_session(
     state.generation = session.projected_generation();
 
     let is_preview_entity =
-        |entity: Entity| crate::ui::is_editor_preview_entity(entity, preview_root, q_parents);
+        |entity: Entity| lunco_usd_viewport_ui::is_preview_entity(entity, preview_root, q_parents);
     if canonical.get(stage_id).is_none() {
         if let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) {
             canonical.get_or_build(stage_id, &recipe);

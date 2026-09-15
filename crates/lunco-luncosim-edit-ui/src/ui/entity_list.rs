@@ -19,6 +19,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
+use lunco_scene_selection::{SelectEntityTarget, SelectionIntent};
 use lunco_settings::SettingsSection;
 use lunco_usd_bevy_camera::camera_switch::camera_display_labels;
 use lunco_usd_core::runtime::{runtime_persistence_for_twin, RUNTIME_PERSISTENCE_SETTING};
@@ -972,12 +973,12 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     // round-trips select the wrong instance). Explorer Shift-click retains its
     // established toggle behavior; viewport Shift-click uses Extend.
     if let Some((entity, shift_held)) = to_select {
-        ctx.trigger(crate::selection::SelectEntityTarget {
+        ctx.trigger(SelectEntityTarget {
             target: entity,
             intent: if shift_held {
-                crate::selection::SelectionIntent::Toggle
+                SelectionIntent::Toggle
             } else {
-                crate::selection::SelectionIntent::Replace
+                SelectionIntent::Replace
             },
         });
     }

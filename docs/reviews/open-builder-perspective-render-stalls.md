@@ -255,7 +255,7 @@ viewport binding does not rerun the producer after its initial build.
 
 The final Tracy build/capture and clean Builder/View comparison are complete:
 
-- `cargo test -p lunco-luncosim-edit-ui --lib ui::inspector::tests -j 4`
+- `cargo test -p lunco-luncosim-edit-inspector-ui --lib inspector::tests -j 4`
   passed, including the unchanged-binding gate regression.
 - `target/luncosim-builder-view-20260912-final.tracy` captured 30.35 s / 1,910
   frames on the corrected Tracy build. BigSpace low precision measured 69.092

@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 use openusd::sdf::Path as SdfPath;
@@ -115,9 +115,11 @@ pub fn produce_usd_variant_view(
             continue;
         }
 
-        let Some(entity) = lunco_luncosim_edit_ui::ui::selected_entity_in_preview(
+        let Some(entity) = lunco_usd_viewport_ui::selected_entity_in_preview(
             session,
-            selected.as_deref(),
+            selected
+                .as_deref()
+                .and_then(lunco_scene_selection::SelectedEntities::primary),
             None,
             &q,
             &q_parents,

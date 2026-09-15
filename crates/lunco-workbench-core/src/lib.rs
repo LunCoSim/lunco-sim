@@ -18,6 +18,7 @@ mod snapshot;
 pub mod source;
 pub mod tabs;
 pub mod uri;
+pub mod view_model;
 pub mod viewport;
 
 pub mod commands;

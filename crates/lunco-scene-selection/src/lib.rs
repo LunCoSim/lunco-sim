@@ -72,6 +72,35 @@ impl SelectedEntities {
     }
 }
 
+/// Entity-keyed sub-selection used by editor panels and gizmos.
+#[derive(Resource, Default)]
+pub struct SelectionTarget {
+    /// The targeted sub-part, or `None` for the complete selected object.
+    pub part: Option<Entity>,
+}
+
+/// Semantic selection operation shared by viewport and panel input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionIntent {
+    /// Replace the current selection with the target.
+    Replace,
+    /// Add the target while retaining the current selection.
+    Extend,
+    /// Toggle the target in the current selection.
+    Toggle,
+    /// Remove the target from the current selection.
+    Remove,
+}
+
+/// Entity-keyed selection intent emitted by editor panels.
+#[derive(Event, Clone, Copy)]
+pub struct SelectEntityTarget {
+    /// Entity selected by the editor gesture.
+    pub target: Entity,
+    /// Semantic selection operation to apply.
+    pub intent: SelectionIntent,
+}
+
 /// Mirrors selection into the render-free telemetry focus consumed by runtime
 /// exposure and telemetry surfaces.
 fn mirror_selection_to_telemetry_focus(

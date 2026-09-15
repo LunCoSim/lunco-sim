@@ -16,6 +16,7 @@ use lunco_workbench::{
     WorkbenchAppExt,
 };
 use lunco_workbench_browser::TWIN_BROWSER_PANEL_ID;
+use lunco_workbench_core::view_model::{ViewModelAppExt, ViewModelSet};
 use lunco_workbench_core::viewport::VIEWPORT_PANEL_ID;
 use lunco_workbench_core::{
     PanelId, PanelSlot, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
@@ -54,158 +55,6 @@ pub mod terrain_tools;
 /// Bounded, terrain-conforming motion trails for topology-derived vehicles.
 pub mod trail;
 pub use trail::VehicleTrailPlugin;
-/// Schedule slot (in `Update`) for the UI *view-model* producers — the
-/// change-driven systems that derive render-ready state into resources for the
-/// egui panels to read (WP-8). `Update` runs before `EguiPrimaryContextPass`, so
-/// resources written here are visible to the panels the same frame.
-///
-/// The private field is the enforcement: the set cannot be named at a call site,
-/// so the only way into it is [`ViewModelAppExt::add_view_model`], which demands
-/// a gate. A label plus a doc line asking for one was the arrangement that cost
-/// 12 ms a frame.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ViewModelSet(());
-
-/// Register a view-model producer, **gate required**.
-///
-/// `ViewModelSet` used to be a label plus a doc line ("gate each with its own
-/// `run_if`"), which is advice a registration can silently ignore — and two
-/// did, for 12 ms a frame. Here the gate is an argument: you cannot register a
-/// producer without stating when it runs.
-///
-/// A producer that genuinely must run every frame registers through
-/// [`ViewModelAppExt::add_view_model_every_frame`], which puts the claim at the
-/// call site where review can see it, next to the reason.
-///
-/// See `docs/architecture/42-ui-frame-discipline.md` §6.
-pub trait ViewModelAppExt {
-    /// Add `producer` to [`ViewModelSet`] in `Update`, gated on `gate`.
-    fn add_view_model<P, M, C, CM>(&mut self, producer: P, gate: C) -> &mut Self
-    where
-        P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
-        C: SystemCondition<CM> + Send + 'static;
-
-    /// Add a producer that runs **every frame, on purpose** — an O(1) live
-    /// readout with nothing to gate on.
-    ///
-    /// Separate from [`add_view_model`](Self::add_view_model) so the
-    /// effectiveness tracker keeps meaning what it says. Registering these with
-    /// an always-true gate makes the tracker report them as "this run condition
-    /// is not gating" on every launch. Declaring the intent in the CALL makes
-    /// the log's remaining entries actionable.
-    fn add_view_model_every_frame<P, M>(&mut self, producer: P) -> &mut Self
-    where
-        P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>;
-}
-
-impl ViewModelAppExt for App {
-    fn add_view_model<P, M, C, CM>(&mut self, producer: P, gate: C) -> &mut Self
-    where
-        P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
-        C: SystemCondition<CM> + Send + 'static,
-    {
-        // Every view-model gate is tracked HERE rather than at each call site:
-        // a gate that silently degrades to always-true costs exactly what it was
-        // added to save, and nothing catches that at compile time (effectiveness
-        // is a runtime property). Wrapping at the one registration point means a
-        // new view model cannot be added without its gate being measured — no
-        // per-site discipline required, and no way to forget.
-        //
-        // Named after the PRODUCER, not the condition. Naming it after the
-        // condition reported `fn() -> bool` for every gate built by a factory
-        // (`every_frame()` and friends return a fn pointer, so the item type —
-        // and with it the path — is gone). The producer is a plain fn item whose
-        // `type_name` is its full path, and "which view model is rebuilding" is
-        // the more useful thing to read in a log line anyway.
-        self.add_systems(
-            Update,
-            producer
-                .in_set(ViewModelSet(()))
-                .run_if(lunco_core::gate::tracked(std::any::type_name::<P>(), gate)),
-        )
-    }
-
-    fn add_view_model_every_frame<P, M>(&mut self, producer: P) -> &mut Self
-    where
-        P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>,
-    {
-        // No gate and no tracker — there is nothing to measure. The claim being
-        // made is "this producer is O(1) and has no input worth watching", and
-        // the place to check that claim is review of the call, not a runtime
-        // report that can only ever say "it ran every frame" (it will).
-        self.add_systems(Update, producer.in_set(ViewModelSet(())))
-    }
-}
-
-/// Gate for the producers that read the **selected prim out of the composed
-/// stage** (`usd_params`, `usd_variants`, `usd_mount`).
-///
-/// Their inputs are exactly three: what is selected, what is drilled into, and
-/// the USD projection itself. All three are change-detected, and the stage walk
-/// they do on a miss is the expensive part — the same `CanonicalStages` lookups
-/// that made `produce_usd_canvas` 11 ms a frame. Nothing here early-returns
-/// cheaply, so nothing here may run ungated.
-pub fn usd_selection_view_changed(
-    selection: Res<lunco_scene_selection::SelectedEntities>,
-    target: Res<crate::InspectorTarget>,
-    revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
-    viewport: Option<Res<lunco_usd_viewport_ui::UsdViewportState>>,
-) -> bool {
-    selection.is_changed()
-        || target.is_changed()
-        || revision.is_changed()
-        || viewport.is_some_and(|state| state.is_changed())
-}
-
-/// Return whether an entity belongs to the focused Editor preview subtree.
-/// The preview root itself is part of that scope; all other entities must be
-/// descendants through Bevy's authoritative hierarchy.
-pub fn is_editor_preview_entity(entity: Entity, root: Entity, parents: &Query<&ChildOf>) -> bool {
-    if entity == root {
-        return true;
-    }
-    let mut current = entity;
-    while let Ok(parent) = parents.get(current) {
-        current = parent.parent();
-        if current == root {
-            return true;
-        }
-    }
-    false
-}
-
-/// Resolve a USD editor selection against one explicit preview lease.
-///
-/// `SelectedEntities` is shared with the live scene because it is the generic
-/// entity-selection projection. USD panels must not treat it as a document
-/// identity, however: the same path can exist in several isolated previews
-/// and a live entity can be selected while a preview is focused. This helper
-/// applies the existing lease root and stage handle before a panel derives any
-/// authored view-model.
-pub fn selected_entity_in_preview(
-    session: &lunco_usd_viewport_ui::UsdPreviewSession,
-    selected: Option<&lunco_scene_selection::SelectedEntities>,
-    target: Option<&crate::InspectorTarget>,
-    q_paths: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
-    q_parents: &Query<&ChildOf>,
-) -> Option<Entity> {
-    let belongs = |entity: Entity| {
-        q_paths.get(entity).is_ok_and(|path| {
-            path.stage_handle.id() == session.stage_handle().id()
-                && is_editor_preview_entity(entity, session.scene_root(), q_parents)
-        })
-    };
-
-    target
-        .and_then(|value| value.part)
-        .filter(|entity| belongs(*entity))
-        .or_else(|| {
-            selected
-                .and_then(lunco_scene_selection::SelectedEntities::primary)
-                .filter(|entity| belongs(*entity))
-        })
-}
-
 #[derive(Clone, Default)]
 pub(crate) struct EditorSessionSelection {
     /// Canonical composed prim paths. Bevy entities are only a live projection
@@ -240,7 +89,7 @@ fn preview_path_for_entity(
 ) -> Option<String> {
     q_paths.get(entity).ok().and_then(|(_, path)| {
         (path.stage_handle.id() == preview.stage_handle().id()
-            && is_editor_preview_entity(entity, preview.scene_root(), q_parents))
+            && lunco_usd_viewport_ui::is_preview_entity(entity, preview.scene_root(), q_parents))
         .then(|| path.path.clone())
     })
 }
@@ -254,7 +103,7 @@ fn preview_entity_for_path(
     let mut matches = q_paths.iter().filter_map(|(entity, prim)| {
         (prim.stage_handle.id() == preview.stage_handle().id()
             && prim.path == path
-            && is_editor_preview_entity(entity, preview.scene_root(), q_parents))
+            && lunco_usd_viewport_ui::is_preview_entity(entity, preview.scene_root(), q_parents))
         .then_some(entity)
     });
     let entity = matches.next()?;
@@ -265,12 +114,12 @@ fn preview_entity_for_path(
 /// Without this boundary, focusing a second preview leaves the first preview's
 /// entity in the Inspector even though every USD view-model has switched
 /// documents. The session map is the UI state; `SelectedEntities` and
-/// `InspectorTarget` are synchronized projections used by existing panels and
+/// `SelectionTarget` are synchronized projections used by existing panels and
 /// gizmo systems.
 fn sync_editor_session_selection(
     viewport: Option<Res<lunco_usd_viewport_ui::UsdViewportState>>,
     mut selected: ResMut<lunco_scene_selection::SelectedEntities>,
-    mut inspector_target: ResMut<crate::InspectorTarget>,
+    mut inspector_target: ResMut<lunco_scene_selection::SelectionTarget>,
     q_paths: Query<(Entity, &UsdPrimPath)>,
     q_parents: Query<&ChildOf>,
     q_selected: Query<Entity, With<crate::selection::Selected>>,
@@ -649,16 +498,13 @@ impl Plugin for SceneEditUiPlugin {
         // panics — the producers' own `Option<Res<_>>` tolerance does not cover
         // the gate.
         app.init_resource::<lunco_scene_selection::SelectedEntities>();
-        app.init_resource::<crate::InspectorTarget>();
+        app.init_resource::<lunco_scene_selection::SelectionTarget>();
         app.init_resource::<EditorSessionSelections>();
         app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(selection_context::InspectUsdSelectionProvider);
-        app.add_systems(
-            Update,
-            sync_editor_session_selection.before(ViewModelSet(())),
-        );
+        app.add_systems(Update, sync_editor_session_selection.before(ViewModelSet));
 
         app.init_resource::<cinematic::CinematicViz>();
         app.init_resource::<cinematic::CinematicTarget>();

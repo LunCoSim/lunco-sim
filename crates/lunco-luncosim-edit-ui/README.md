@@ -2,8 +2,11 @@
 
 Rendered in-scene editing UI for LunCoSim. The headless ECS mechanisms live
 in [`lunco-luncosim-edit-core`](../lunco-luncosim-edit-core); this package
-owns the egui/workbench panels, transform-gizmo adapter, selection bridge, and
-debug visualization layers.
+owns the egui/workbench interaction panels, transform-gizmo adapter, selection
+bridge, and debug visualization layers. The reusable USD prim tree lives in
+[`lunco-usd-prim-tree-ui`](../lunco-usd-prim-tree-ui), while the domain-heavy
+Inspector and authored USD panels live in
+[`lunco-luncosim-edit-inspector-ui`](../lunco-luncosim-edit-inspector-ui).
 
 ## Features
 
@@ -11,10 +14,10 @@ debug visualization layers.
 - **Entity Selection** — Left-click replaces, Shift+Left-click extends, and Ctrl+Left-click removes from the selection; each uses the transform gizmo selection owner
 - **USD Preview Picking** — clicks in the isolated Editor image map through its focused offscreen camera and select the nearest authored prim-backed part
 - **Script-authored click tools** — Rhai tool libraries exposing `on_click(context)` appear in the Tools palette and receive the canonical scene click context
-- **Prims Navigation** — a newly selected prim opens its ancestors and scrolls into view; unchanged selections leave manual tree scrolling alone
+- **Prims Navigation** — provided by `lunco-usd-prim-tree-ui`; a newly selected prim opens its ancestors and scrolls into view while unchanged selections leave manual tree scrolling alone
 - **Authoring inspection** — the Rhai `authoring_inspection` library composes path-based candidate diffs, structured diagnostic groups, exact selection/reveal/frame navigation, and visual/collision/joint/frame/material/provenance evidence
 - **Transform Gizmo** — translate/rotate via `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
-- **Inspector Panel** — schema-hinted USD fields with units and authored/inherited provenance; component edits are prepared as explicit, reviewable USD proposals
+- **Inspector Panel** — provided by `lunco-luncosim-edit-inspector-ui`; schema-hinted USD fields with units and authored/inherited provenance are prepared as explicit, reviewable USD proposals
 - **Undo** — Ctrl+Z to revert spawns and transform changes
 
 The Assembly Editor is document-scoped. Its native USD tree, connection graph,
@@ -171,12 +174,15 @@ This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggreg
 
 | File | Purpose |
 |------|---------|
-| `lib.rs` | UI package modules and `InspectorTarget` |
-| `ui/mod.rs` | `SceneEditUiPlugin` and panel registration |
+| `lib.rs` | Interactive UI adapters and shared selection bridge |
+| `ui/mod.rs` | `SceneEditUiPlugin` and interaction-panel registration |
 | `selection.rs` | Semantic click selection, `GizmoTarget` management |
 | `gizmo.rs` | Kinematic-drive lifecycle and proxy editing |
-| `inspector.rs` | EGUI parameter panel |
 | `entity_list.rs` | Clickable list of scene entities |
 | `ui/spawn_palette.rs` | Spawn palette UI |
 | `diagnostic_visuals.rs` | Camera/collider debug leases, generic inspection-layer leases, and visualization commands |
 | `physics_viz.rs`, `physics_gizmo.rs`, `joint_viz.rs` | Rendered physics diagnostics |
+
+The USD-specific panels and prim tree are separate production packages so
+hosts that only need scene interaction do not compile the full authored USD
+Inspector surface.
