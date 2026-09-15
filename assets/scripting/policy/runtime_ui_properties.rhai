@@ -49,27 +49,30 @@ fn participant_text(values) {
 fn camera_ui_properties(facts) {
     let result = #{};
     result.active_label = facts.active_label;
+    // The HTML surface and the generic dropdown renderer consume the same
+    // authored dimensions. A Twin can replace these values in its policy.
+    result.dropdown_width = "280px";
+    result.dropdown_max_height = "240px";
     let items = [];
-    for index in 0..facts.cameras.len() {
-        let camera = facts.cameras[index];
+    for camera in facts.cameras {
         items.push(#{
             key: camera.name,
             label: camera.label,
-            select_action: "camera.select." + index.to_string(),
+            action: "camera.select.path." + camera.name,
         });
     }
     if facts.avatar_available {
         items.push(#{
             key: "__avatar__",
             label: "Observe avatar",
-            select_action: "camera.observe.avatar",
+            action: "camera.observe.avatar",
         });
     }
     if facts.director_available {
         items.push(#{
             key: "__director__",
             label: "Resume authored director",
-            select_action: "camera.resume.director",
+            action: "camera.resume.director",
         });
     }
     result.camera_items = items;
@@ -94,6 +97,23 @@ fn runtime_ui_properties(facts) {
     let programs = if facts.programs == () { [] } else { facts.programs };
     result.program_count = programs.len().to_string() + " PROGRAMS";
     result.program_empty_display = programs.len() == 0;
+    let program_active = programs.len() > 0
+        && facts.control_claimed == true
+        && facts.control_owner != "local";
+    result.program_label = if programs.len() == 0 {
+        "PROGRAM UNAVAILABLE"
+    } else if program_active {
+        "AUTOPILOT ON"
+    } else {
+        "AUTOPILOT OFF"
+    };
+    result.program_color = if programs.len() == 0 {
+        "var(--muted-color)"
+    } else if program_active {
+        "var(--ok-color)"
+    } else {
+        "var(--accent-color)"
+    };
     let items = [];
     for index in 0..programs.len() {
         let program = programs[index];

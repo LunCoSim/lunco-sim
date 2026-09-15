@@ -114,7 +114,7 @@ The generic sensor emits `enter:<zone>` and `exit:<zone>` events. The route
 program accepts an enter event when its payload is the current subject or a
 registered descendant collider in that subject's generic parent chain, and the
 zone is the current point. It then changes the point's reusable marker to its
-achieved colour through the generic transient USD view tool, emits the authored
+visited colour through the generic transient USD view tool, emits the authored
 route-level `route_point_reached` event for mission policy, and advances its
 local route cursor. Physics reports the sensor event; it does not publish a route-specific
 “target reached” fact and it does not decide mission progression.
@@ -154,9 +154,9 @@ editor-specific Rust branch.
 
 ## Presentation
 
-The marker's dome is opaque, unlit, and shadowless. Its authored pending colour
-is bright amber; the route program changes the dome's standard
-`primvars:displayColor` to bright green when the generic sensor event reaches it. The unlit
+The marker's dome is translucent, unlit, and shadowless. Its authored unvisited colour
+is green; the route program changes the dome's standard
+`primvars:displayColor` to gray when the generic sensor event reaches it. The unlit
 surface bypasses light, normal, and shadow processing, and emits no light. Its
 trigger is invisible and has its own authored radius. Billboard text and placement are
 read by the generic billboard renderer. The ribbon is a separate, lightweight
@@ -165,6 +165,9 @@ world-space annotation: the route tool densifies long legs with the shared
 `normals` make its authored 0.12 m width a narrow readable flat strip rather
 than a tube. Each sampled vertex is offset 0.03 m along its support normal, so
 the annotation stays above slopes without applying a global vertical offset.
+The curve is authored with standard `wrap = "nonperiodic"` topology, so only
+adjacent ordered points are connected; the last point never connects back to
+the first.
 Long legs use a 3 m base sampling interval during ribbon rebuilds to avoid
 cutting through streamed terrain relief. The route tool caps the transient
 payload at 768 samples, quantizes only the transient text representation to

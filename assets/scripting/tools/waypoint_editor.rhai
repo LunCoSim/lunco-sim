@@ -18,11 +18,11 @@ fn route_ribbon_sample_spacing() { 3.0 }
 fn route_ribbon_max_samples() { 768 }
 
 // Marker appearance is a generic route-tool policy. The asset carries the
-// pending colour in standard gprim displayColor; the route program applies the
-// achieved colour through the transient USD view path when its generic sensor
-// event advances the route.
-fn pending_marker_color() { [1.0, 0.35, 0.02] }
-fn achieved_marker_color() { [0.10, 0.95, 0.22] }
+// unvisited colour in standard gprim displayColor; the route program applies
+// the visited colour through the transient USD view path when its generic
+// sensor event advances the route.
+fn unvisited_marker_color() { [0.10, 0.95, 0.22] }
+fn visited_marker_color() { [0.55, 0.55, 0.55] }
 
 fn ui_label() { "Route point" }
 fn ui_hint() { "Use the configured add-point gesture on terrain to append a point to the active route" }
@@ -111,7 +111,7 @@ fn apply_view_ops(doc, label, ops) {
     #{ ok: true, changed: true }
 }
 
-fn set_marker_state(doc, point, achieved) {
+fn set_marker_state(doc, point, visited) {
     if doc == () || point == () || point == "" {
         return #{ ok: false, error: "route-point state has no document or point path" };
     }
@@ -126,7 +126,7 @@ fn set_marker_state(doc, point, achieved) {
         return #{ ok: false, retryable: true,
             error: "route-point marker display state is not synchronized" };
     }
-    let color = if achieved { achieved_marker_color() } else { pending_marker_color() };
+    let color = if visited { visited_marker_color() } else { unvisited_marker_color() };
     let current_color = current.attrs["primvars:displayColor"];
     if current_color.len() == 1 && vector_equal(current_color[0], color) {
         return #{ ok: true, changed: false };
@@ -151,7 +151,7 @@ fn reset_marker_states(doc, route) {
             error: "route-point state cannot read the route children" };
     }
     let ops = [];
-    let color = pending_marker_color();
+    let color = unvisited_marker_color();
     for point in points.children {
         let parts = point.split("/");
         let leaf = parts[parts.len() - 1];
@@ -187,7 +187,7 @@ fn route_edit_path(context) {
     }
     let doc = context["doc_id"];
     let subject = subject_path(context);
-    if doc == () || subject == () { return (); }
+    if doc == () { return (); }
 
     // A selected program is the unambiguous route identity. This is also how
     // the dynamic program HUD selects between several programs controlling the
@@ -200,29 +200,21 @@ fn route_edit_path(context) {
     for path in selected {
         let route = route_for_path(doc, path, subject);
         if route != () { return route; }
-        // A HUD selection is already the canonical USD program identity. The
-        // document projection can be one generation behind immediately after
-        // the selection transaction, so retain that explicit choice by its
-        // stable parent path instead of guessing a scene-root route. Pointer
-        // hit paths still require the composed-program validation above.
-        let selected_path = context["selected_path"];
-        if selected_path != () && path == selected_path && path.ends_with("/Program") {
-            return route_parent_path(path);
-        }
     }
 
     // Twin-authored bindings may expose one or more programs from the subject
-    // through the standard relationship used by this policy. One binding is
-    // enough for an unattended/one-route workflow; more than one requires the
-    // generic selected program entity so an edit cannot silently land in the
-    // wrong route.
-    let linked = linked_routes(doc, subject);
+    // through the standard relationship used by this policy. When no subject
+    // is selected, the same program-side inputs:subject bindings are discovered
+    // under the supplied scene root. One binding is enough for an
+    // unattended/one-route workflow; more than one requires the generic
+    // selected program entity so an edit cannot silently land in the wrong
+    // route.
+    let linked = linked_routes(doc, subject, context["scene_root_path"]);
     if linked.len() == 1 { return linked[0]; }
     if linked.len() > 1 { return (); }
 
-    // There is no implicit scene-root route. A Twin must bind its programs to
-    // the subject, and a multi-program subject must first select one of those
-    // program prims through the generic scene selection surface.
+    // A multi-program subject must first select one of those program prims
+    // through the generic scene selection surface.
     ()
 }
 
@@ -241,8 +233,6 @@ fn route_parent_path(path) {
 
 fn is_route_program(doc, path, subject) {
     if path == () || path == "" { return false; }
-    let parts = path.split("/");
-    if parts[parts.len() - 1] != "Program" { return false; }
     let record = query("QueryUsdPrim", #{
         doc_id: doc,
         path: path,
@@ -258,7 +248,8 @@ fn is_route_program(doc, path, subject) {
     }
     if !program || record.relationships == () { return false; }
     let targets = record.relationships["inputs:subject"];
-    targets != () && targets.len() == 1 && targets[0] == subject
+    targets != () && targets.len() == 1
+        && (subject == () || targets[0] == subject)
 }
 
 fn route_for_path(doc, path, subject) {
@@ -275,16 +266,51 @@ fn route_for_path(doc, path, subject) {
     ()
 }
 
-fn linked_routes(doc, subject) {
+fn discover_subject_programs(doc, scope, subject, depth) {
+    let programs = [];
+    if scope == () || scope == "" || depth > 32 { return programs; }
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: scope,
+        children: true,
+    });
+    if result == () || result.ok == false || result.children == () {
+        return programs;
+    }
+    for child in result.children {
+        if is_route_program(doc, child, subject) {
+            programs.push(child);
+        }
+        let nested = discover_subject_programs(doc, child, subject, depth + 1);
+        for program in nested {
+            if !programs.contains(program) { programs.push(program); }
+        }
+    }
+    programs
+}
+
+fn linked_routes(doc, subject, scene_root) {
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
         path: subject,
         rels: ["programs"],
     });
     let routes = [];
-    if result == () || result.ok == false || result.relationships == () { return routes; }
-    let programs = result.relationships["programs"];
-    if programs == () { return routes; }
+    let programs = [];
+    if result != () && result.ok != false && result.relationships != () {
+        let linked = result.relationships["programs"];
+        if linked != () {
+            for program in linked { programs.push(program); }
+        }
+    }
+    // The standard subject-side relationship is authoritative when present.
+    // A composed stage can briefly expose the program prim before that reverse
+    // relationship has projected; inspect the authored program bindings in the
+    // supplied scene scope for that one pointer transaction instead of making
+    // the user select a program or inventing a route path.
+    if programs.len() == 0 {
+        programs = discover_subject_programs(doc, scene_root, subject, 0);
+    }
     for program in programs {
         let route = route_for_path(doc, program, subject);
         if route != () && !routes.contains(route) { routes.push(route); }
@@ -774,8 +800,6 @@ fn on_click(context) {
     if context == () || context.doc_id == () || context.scene_root_path == () {
         return failure("click has no active document or scene root");
     }
-    let subject = subject_path(context);
-    if subject == () { return failure("select or possess the object that owns this route"); }
     let pointer = pointer_point(context);
     if pointer.ok != true { return failure(pointer.error); }
     let route = route_edit_path(context);

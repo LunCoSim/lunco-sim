@@ -40,8 +40,10 @@ def Xform "RoutePoint" (
         }
     }
 
-    # Visual-only dome. It is an opaque, unlit annotation and is excluded from
-    # shadow maps, so its colour does not enter the lighting or shadow passes.
+    # Visual-only dome. It is a translucent, unlit annotation and is excluded
+    # from shadow maps, so its colour does not enter the lighting or shadow
+    # passes. displayOpacity is the standard USD gprim presentation control;
+    # the marker does not emit light.
     def Sphere "Dome" (
         prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"]
     )
@@ -52,7 +54,8 @@ def Xform "RoutePoint" (
         double3 xformOp:translate = (0, 1.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </RoutePoint/Looks/Dome_Mat>
-        color3f[] primvars:displayColor = [(1.0, 0.35, 0.02)]
+        color3f[] primvars:displayColor = [(0.10, 0.95, 0.22)]
+        float[] primvars:displayOpacity = [0.42]
         bool lunco:surface:unlit = true
         bool primvars:doNotCastShadows = true
     }

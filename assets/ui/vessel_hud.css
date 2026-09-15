@@ -18,6 +18,7 @@
   --ui-comms-display: none;
   --ui-comms-los-display: none;
   --ui-telemetry-display: none;
+  --ui-program-color: var(--muted-color);
 }
 
 #vessel-hud-root {
@@ -79,6 +80,23 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+#vessel-hud-program {
+  display: flex;
+  align-items: center;
+  min-width: 0px;
+  padding: 3px 6px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 4px;
+  background-color: transparent;
+}
+
+#vessel-hud-program-label {
+  color: var(--ui-program-color);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 #vessel-hud-nav-details {
