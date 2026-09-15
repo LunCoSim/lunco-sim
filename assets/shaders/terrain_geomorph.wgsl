@@ -31,7 +31,7 @@
 }
 #import lunco::pbr_lit::lit_n_occluded
 #import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
-#import lunco::lunar::{orthophoto_factor, regolith_factor}
+#import lunco::lunar::regolith_factor
 
 //!@ui      albedo            color  "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -66,7 +66,7 @@
 //!@default authored_surface_on 0
 //!@default authored_normal_on  0
 //!@default terrain_half_extent 1.0
-//!@ui      weight_albedo     0 1    "Authored albedo (orthophoto) weight"
+//!@ui      weight_albedo     0 1    "Authored material albedo weight"
 //!@default weight_albedo     0
 //!@ui      weight_mineral    0 1     "Overlay drape weight (unlit)"
 //!@default weight_mineral    0
@@ -118,7 +118,7 @@ struct Material {
     fine_bump:         f32,
     rough_mix:         f32,
     mottle:            f32,
-    weight_albedo:     f32,  // AUTHORED albedo raster (orthophoto) over the procedural regolith
+    weight_albedo:     f32,  // AUTHORED linear material-albedo raster over procedural regolith
     weight_mineral:    f32,  // AUTHORED mineral/classification overlay weight
     weight_rough:      f32,  // AUTHORED surface roughness weight
     weight_ao:         f32,  // AUTHORED surface AO weight
@@ -367,22 +367,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let map_ao = terrain_surface_occlusion(
         map_s, weight_ao, mat.authored_surface_on);
 
-    // AUTHORED albedo (the site's real orthophoto). Applied HERE — after every
-    // procedural tone layer, before photometry — so the mosaic is what the sun
-    // then lights, and so the micro-grain above still modulates it instead of
-    // being erased by it.
-    //
-    // MODULATES rather than replaces, and the formula must stay character-for-
-    // character the one in `terrain_layered.wgsl`. Both paths must agree on what
-    // a given `weight_albedo` MEANS, or the same authored scene reads differently
-    // depending on whether its site streams.
-    //
-    // The authored PNG is a percentile-stretched contrast map, not linear
-    // reflectance. Use the shared bounded transfer so its extrema cannot turn
-    // the streamed terrain into near-black mud or washed-out patches. This is
-    // the same transfer used by `terrain_layered.wgsl`.
+    // AUTHORED material albedo. The asset pipeline owns conversion from a
+    // measured orthophoto to a stable linear material colour; the shader only
+    // samples that sRGB-authored texture (decoded to linear by the binder).
+    // Lighting, relief and shadows remain entirely in the renderer path.
     if (authored_albedo_weight > 0.0) {
-        albedo = mix(albedo, albedo * orthophoto_factor(map_a), authored_albedo_weight);
+        albedo = mix(albedo, map_a, authored_albedo_weight);
     }
 
     // --- Lunar photometry: the actual realism lever -----------------------

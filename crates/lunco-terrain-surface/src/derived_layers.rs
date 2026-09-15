@@ -118,7 +118,9 @@ pub struct TerrainDerivedMaps {
 /// fixed texture roles; it is derived from the look rather than parsed again.
 #[derive(Component, Clone, Default, PartialEq)]
 pub struct TerrainAuthoredMaps {
-    /// `inputs:albedo_map` — the site's real colour mosaic.
+    /// `inputs:albedo_map` — the site's authored material albedo. For an
+    /// illumination-bearing grayscale orthophoto, the `kind = "albedo"`
+    /// asset pipeline must produce this stable map before it is bound here.
     pub albedo: Option<Handle<Image>>,
     /// `inputs:mineral_map` — a classification/analysis drape, composited
     /// UNLIT so it stays readable in shadow (doc 18 §4).

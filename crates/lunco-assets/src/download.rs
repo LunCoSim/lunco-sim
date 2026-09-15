@@ -1254,6 +1254,7 @@ fn install_staged_path(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    use lunco_assets_core::{cache_dir, twin_cache_dir};
 
     #[test]
     fn scratch_name_is_opaque_and_cross_platform() {
@@ -1483,7 +1484,7 @@ mod tests {
     /// write owner. Both locations remain readable through the Twin URI.
     #[test]
     fn a_twins_download_lands_in_that_twins_cache_unless_it_opts_into_the_shared_pool() {
-        let twin_cache = crate::twin_cache_dir(std::path::Path::new("/tmp/twin"));
+        let twin_cache = twin_cache_dir(std::path::Path::new("/tmp/twin"));
         let mut entry = AssetEntry {
             name: "dtm".into(),
             version: None,
