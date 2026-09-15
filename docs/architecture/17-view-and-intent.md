@@ -235,12 +235,12 @@ without growing a Rust state machine for each one:
    adapter can consume it. Modelica does not become a second camera selector or
    input reader.
 
-The current public surface already supports authored camera cuts and paths plus
-avatar `focus`/`follow` transactions. The remaining extension point is to
-generalize avatar-only `SetCameraLookAt`/follow realization to an explicit
-camera entity or USD path, so a Rhai-authored rig can target any eligible
-camera. That should extend the existing command and pose contracts rather than
-introduce a parallel camera API.
+The current public surface supports authored camera cuts and paths, avatar
+`focus`/`follow` transactions, and generic session control claims. The remaining
+camera extension point is to generalize avatar-only `SetCameraLookAt`/follow
+realization to an explicit camera entity or USD path, so a Rhai-authored rig can
+target any eligible camera. That should extend the existing command and pose
+contracts rather than introduce a parallel camera API.
 
 ### 6.7 Avatar identity and ownership
 
@@ -287,7 +287,11 @@ Control authority has two independent layers. The generic session layer's
 backend-neutral `lunco_cosim_core::ControlLink` answers *which local producer
 projects semantic input onto which entity*. Neither layer knows what a vessel,
 avatar, or camera is. A producer can therefore be an avatar, an autopilot, a
-remote-control adapter, or another specialized controller.
+remote-control adapter, or another specialized controller. `ClaimControl` and
+`ReleaseControlClaim` expose the session transition directly for those
+headless/authored producers; each accepted transition emits
+`ControlAuthorityChanged`, and the co-simulation backend applies safe-stop
+handling to every released endpoint.
 
 `PossessVessel` is the avatar-level composition of those primitives: its command
 validates the target's writable input surface, asks the session authority to
@@ -296,9 +300,8 @@ camera transaction. `FocusTarget` and `FollowTarget` are likewise reachable
 high-level avatar camera commands; Rhai selects when and which target to request,
 while Rust enforces the local-avatar boundary and the BigSpace-safe pose update.
 The generic command/value surface remains `SetPorts` for a controller that does
-not need an avatar camera. A future generic claim command must reuse the same
-`SessionRegistry` transaction and emit the same release/hard-stop transition;
-it must not become a second ownership table.
+not need an avatar camera. `PossessVessel` uses the same `SessionRegistry`
+transaction rather than maintaining a parallel ownership path.
 
 A possession handoff releases all prior claims for the session except the selected
 target, hard-stops every released vessel, and then commits the new link. Release

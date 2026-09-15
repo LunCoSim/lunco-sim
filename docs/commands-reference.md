@@ -37,6 +37,10 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-modelica-core`](#lunco-modelica-core) (8 commands)
 
+**Session & authority**
+
+- [`lunco-core-session`](#lunco-core-session) (2 commands)
+
 **Co-simulation**
 
 - [`lunco-cosim`](#lunco-cosim) (3 commands)
@@ -1132,6 +1136,36 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 | `doc_id` | `DocumentId` |  Document id; zero selects the documented active-document default. |
 | `name` | `String` |  Declared Modelica input name. |
 | `value` | `f64` |  Runtime input value. |
+
+## Session & authority
+
+### `lunco-core-session` <a id="lunco-core-session"></a>
+
+#### `ClaimControl`
+
+Claim the stable control authority for an endpoint on behalf of the
+originating session. This command is the generic headless/autopilot boundary;
+avatar camera binding remains the responsibility of `PossessVessel`. The
+session transition uses the `SessionRegistry` and emits
+`ControlAuthorityChanged` so the endpoint backend can apply its safe-stop
+transaction to any released targets.
+
+- *defined in:* `crates/lunco-core-session/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` | Endpoint whose `GlobalEntityId` is claimed. |
+
+#### `ReleaseControlClaim`
+
+Release one endpoint's session authority without changing its local producer
+binding. The endpoint must currently be owned by the originating session.
+
+- *defined in:* `crates/lunco-core-session/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` | Endpoint whose `GlobalEntityId` is released. |
 
 ## Co-simulation
 

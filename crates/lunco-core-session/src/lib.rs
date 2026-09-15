@@ -1,17 +1,18 @@
 //! Always-on session and authority substrate for LunCoSim.
 //!
-//! This crate is the runtime owner of session state, possession/RBAC policy,
-//! prediction markers, and the identity-admission systems that depend on the
-//! current network role. It depends on the lower-level [`lunco_core`] types;
-//! the core crate remains independent of this session layer.
+//! This crate is the runtime owner of session state, generic control-authority
+//! transitions, possession/RBAC policy, prediction markers, and the
+//! identity-admission systems that depend on the current network role.
 
 extern crate self as lunco_core_session;
 
 use bevy::prelude::*;
 
+pub mod authority;
 pub mod commands;
 pub mod session;
 
+pub use authority::*;
 pub use session::*;
 
 /// Installs the always-on session substrate and the systems that connect it to
@@ -36,6 +37,7 @@ impl Plugin for LunCoCoreSessionPlugin {
             .add_systems(lunco_core::SceneTeardown, reset_session_scene_state)
             .add_systems(PostUpdate, assign_global_entity_ids)
             .add_systems(FixedFirst, sync_applied_seq_owners);
+        commands::register_all_commands(app);
     }
 }
 

@@ -258,6 +258,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | Domain | Command | Description |
 |---|---|---|
 | **Control** | `SetPorts` | Write a vessel's named input ports (`throttle`/`steer`/`brake` for a rover; any FSW/Modelica/hardware port for other vessels) — the one generic control command. |
+| **Control** | `ClaimControl` / `ReleaseControlClaim` | Claim or release a stable endpoint for the originating session without binding an avatar camera. |
 | **Control** | `SimulateIntentEdge` | Emit one target-scoped semantic `pressed`, `released`, or `pulse` edge for a shared intent; the consuming Rhai/Modelica policy decides its meaning. |
 | **Avatar** | `PossessVessel` | Attach camera and control to a vessel. |
 | | `FollowTarget` | Chase-camera a target. |
@@ -427,6 +428,11 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 curl -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"FocusTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
 ```
+
+Headless controllers can use `ClaimControl` before writing ports and
+`ReleaseControlClaim` when the session relinquishes the endpoint. `PossessVessel`
+combines the same authority transition with the local avatar's `ControlLink`
+and camera binding.
 
 ### Example: Live cosim status
 

@@ -1019,6 +1019,19 @@ camera along without taking control via `follow(entity)`.
 > The claim keys on `target`, **not on an avatar**, so this works headless — an unattended
 > or server-side run needs no avatar to hold authority.
 
+For a controller that does not need avatar presentation, use the generic
+authority commands directly:
+
+```rhai
+claim_control(me);
+drive(me, 0.5, 0.0);
+release_control_claim(me);
+```
+
+`ClaimControl` and `ReleaseControlClaim` update the session authority table;
+`PossessVessel` composes the same transition with an avatar `ControlLink` and
+optional camera binding.
+
 ## H. Task programs and the reusable kernel
 
 Layer-1 tasks and Layer-2 timelines are authored in Rhai. Complex reactive

@@ -766,18 +766,6 @@ fn trigger_vessel_hard_stop(commands: &mut Commands, vessel_entity: Entity) {
     });
 }
 
-fn stop_released_vessels(
-    commands: &mut Commands,
-    released: &[u64],
-    q_vessels: &Query<(Entity, &lunco_core::GlobalEntityId)>,
-) {
-    for (entity, gid) in q_vessels.iter() {
-        if released.contains(&gid.get()) {
-            trigger_vessel_hard_stop(commands, entity);
-        }
-    }
-}
-
 fn stop_previous_vessel(
     commands: &mut Commands,
     previous: Option<Entity>,
@@ -793,8 +781,9 @@ fn stop_previous_vessel(
 }
 
 /// Commit one possession to the authoritative registry after the command has
-/// validated its endpoint and any requested local binding. The same command
-/// observer owns both this table and the local `ControlLink` transaction.
+/// validated its endpoint and any requested local binding. The generic session
+/// transition owns the authority table; this observer owns the avatar link and
+/// camera transaction that compose it.
 fn commit_possession_authority(
     commands: &mut Commands,
     authority: &mut PossessionAuthority,
@@ -802,44 +791,31 @@ fn commit_possession_authority(
 ) -> Option<Vec<u64>> {
     let origin = authority.guard.0.unwrap_or(authority.session.0);
     let target_gid = authority.q_owned.get(target).ok().map(|gid| gid.get());
-    if let Some(gid) = target_gid {
-        if !lunco_core_session::may_control(&authority.registry, &authority.rbac, origin, gid) {
-            info!("[possess] vessel {gid} owned by another session — refused (policy)");
-            return None;
-        }
-    }
-
     // Clients keep the host's table as the authority and only use the shared
-    // predicate above for optimistic local binding.
+    // table as the authority and only use the shared predicate for optimistic
+    // local binding.
     if matches!(*authority.role, lunco_core_session::NetworkRole::Client) {
         return Some(Vec::new());
     }
 
-    let mut released = if let Some(gid) = target_gid {
-        if let Some(current) = authority.registry.owner_of(gid) {
-            if current != origin {
-                let taken = authority.registry.release_session(current);
-                info!("[auth] session {origin} took control of entity {gid} from {current}");
-                taken
-            } else {
-                Vec::new()
+    let change = if let Some(gid) = target_gid {
+        match lunco_core_session::claim_control(
+            &mut authority.registry,
+            &authority.rbac,
+            origin,
+            gid,
+        ) {
+            Ok(change) => change,
+            Err(error) => {
+                warn!("[auth] session {origin} claim for entity {gid} refused: {error}");
+                return None;
             }
-        } else {
-            Vec::new()
         }
     } else {
-        Vec::new()
+        lunco_core_session::release_control(&mut authority.registry, origin)
     };
-    if let Some(gid) = target_gid {
-        released.extend(authority.registry.release_session_except(origin, gid));
-        if authority.registry.claim(origin, gid).is_err() {
-            warn!("[auth] entity {gid} possession changed during commit; refused");
-            return None;
-        }
-    } else {
-        released.extend(authority.registry.release_session(origin));
-    }
-    stop_released_vessels(commands, &released, &authority.q_vessels);
+    let released = change.released.clone();
+    commands.trigger(change);
     Some(released)
 }
 
@@ -4010,7 +3986,6 @@ fn on_release_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    q_vessels: Query<(Entity, &lunco_core::GlobalEntityId)>,
     q_owned: Query<&lunco_core::GlobalEntityId>,
     q_bodies: Query<&CelestialBody>,
     gravity: Res<LocalGravityField>,
@@ -4026,8 +4001,9 @@ fn on_release_command(
     if guard.is_from_sync() {
         if !matches!(*role, lunco_core_session::NetworkRole::Client) {
             let origin = guard.0.unwrap_or(local.0);
-            let released = registry.release_session(origin);
-            stop_released_vessels(&mut commands, &released, &q_vessels);
+            let change = lunco_core_session::release_control(&mut registry, origin);
+            let released = change.released.clone();
+            commands.trigger(change);
             if !released.is_empty() {
                 info!(
                     "[auth] session {origin} released {} vessel(s)",
@@ -4047,8 +4023,9 @@ fn on_release_command(
     let released = if matches!(*role, lunco_core_session::NetworkRole::Client) {
         Vec::new()
     } else {
-        let freed = registry.release_session(local.0);
-        stop_released_vessels(&mut commands, &freed, &q_vessels);
+        let change = lunco_core_session::release_control(&mut registry, local.0);
+        let freed = change.released.clone();
+        commands.trigger(change);
         if !freed.is_empty() {
             info!(
                 "[auth] session {} released {} vessel(s)",
@@ -4320,7 +4297,6 @@ struct PossessionAuthority<'w, 's> {
     registry: ResMut<'w, lunco_core_session::SessionRegistry>,
     rbac: Res<'w, lunco_core_session::SessionRbac>,
     session: Res<'w, lunco_core_session::LocalSession>,
-    q_vessels: Query<'w, 's, (Entity, &'static lunco_core::GlobalEntityId)>,
     q_owned: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
 }
 

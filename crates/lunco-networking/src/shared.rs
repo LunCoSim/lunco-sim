@@ -292,6 +292,10 @@ fn add_protocol(app: &mut App) {
     // reliable bus.
     app.declare_channel::<lunco_cosim_core::commands::SetPorts>(SyncChannel::ControlStream);
     app.declare_channel::<lunco_cosim_core::commands::ReleaseControl>(SyncChannel::CommandBus);
+    app.declare_channel::<lunco_core_session::commands::ClaimControl>(SyncChannel::CommandBus);
+    app.declare_channel::<lunco_core_session::commands::ReleaseControlClaim>(
+        SyncChannel::CommandBus,
+    );
     app.declare_channel::<lunco_avatar_core::commands::PossessVessel>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_avatar_core::commands::ReleaseVessel>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_core_session::commands::UpdateProfile>(SyncChannel::CommandBus);
