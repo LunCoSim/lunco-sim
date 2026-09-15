@@ -1,11 +1,12 @@
-//! Default terrain material with ray-marched heightfield sun shadows.
+//! Explicit non-authored terrain material with ray-marched heightfield sun shadows.
 //!
-//! Applied automatically by `lunco-environment`'s horizon system to a
-//! `HorizonShadowTerrain` that authors no custom shader: plain albedo
-//! (`color_a`, taken from the prim's `displayColor`) under full scene PBR
-//! lighting, multiplied by per-pixel ray-marched sun visibility from the
-//! terrain heightfield (see `horizon_march.wgsl` for the algorithm; the
-//! engine writes the heightfield + sun uniforms).
+//! A Rhai/tool policy may author it for a `HorizonShadowTerrain` that has no
+//! custom shader: plain albedo (`color_a`, taken from the prim's `displayColor`)
+//! under full scene PBR lighting, multiplied by per-pixel ray-marched sun
+//! visibility from the terrain heightfield (see `horizon_march.wgsl` for the
+//! algorithm; the engine writes the heightfield + sun uniforms). The Rust
+//! renderer never installs this material to recover from a missing or invalid
+//! authored shader.
 //!
 //! Near/far split: within the sun's cascade range the terrain both casts and
 //! receives the CSM (mesh-accurate self-shadow and dynamic-object shadows via

@@ -32,6 +32,7 @@ pub mod engine_params;
 pub mod image_mips;
 pub mod look;
 pub mod naming;
+pub mod shader_stage;
 pub mod vertex;
 
 pub use catalog::{
@@ -44,6 +45,7 @@ pub use look::{
     ProceduralSkybox, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, TextureLayer,
 };
 pub use naming::to_snake_case;
+pub use shader_stage::{validate_shader_stage, ShaderStage, ShaderStageError};
 pub use vertex::{
     ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };

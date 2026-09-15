@@ -1,14 +1,9 @@
-//! An authored lesson driver must be gated on the AUDIENCE, never on the build profile.
-//!
-//! Every tutorial that can play itself (`first_drive`, `build_base`,
-//! `lander_mission`, …) carries a `task` behaviour guarded by one condition. The
-//! build profile does not answer it: `cfg!(debug_assertions)` is true for every
-//! `cargo run`, so gating on it makes a lesson spawn its own base, drive its own
-//! rover and chain to its successor while a student watches.
+//! An authored scenario driver must be gated on the AUDIENCE, never on the
+//! build profile.
 //!
 //! The fact that answers "should this drive itself?" is whether anything can
-//! receive a click, i.e. whether a window exists. These tests pin that
-//! resolution and the fail-safe default.
+//! receive input, i.e. whether a window exists. These tests pin that generic
+//! resolution and its fail-safe default.
 
 use bevy::prelude::*;
 use lunco_scripting::scenario::{resolve_scenario_audience, ScenarioAudience};
@@ -62,37 +57,4 @@ fn no_window_means_nobody_is_watching() {
 fn the_default_is_unattended() {
     assert_eq!(ScenarioAudience::default(), ScenarioAudience::Unattended);
     assert!(ScenarioAudience::default().is_unattended());
-}
-
-/// No shipped lesson may reason about the build profile. `is_debug()` is gone
-/// from the bridge, and rhai resolves verbs at CALL time — a lesson still calling
-/// it would compile, ship, and fail at runtime only when its driver fires,
-/// which is exactly the silent-lesson-failure mode. Catch it here instead.
-#[test]
-fn no_lesson_gates_on_the_build_profile() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/tutorials")
-        .canonicalize()
-        .expect("assets/tutorials");
-    let mut offenders = Vec::new();
-    let mut stack = vec![root.clone()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).expect("readable").flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().is_some_and(|e| e == "rhai")
-                && std::fs::read_to_string(&path)
-                    .is_ok_and(|src| src.contains("is_debug(") || src.contains("debug_assertions"))
-            {
-                offenders.push(path.strip_prefix(&root).unwrap().to_path_buf());
-            }
-        }
-    }
-    assert!(
-        offenders.is_empty(),
-        "these lessons gate behaviour on the build profile — use is_unattended(): {offenders:?}"
-    );
 }

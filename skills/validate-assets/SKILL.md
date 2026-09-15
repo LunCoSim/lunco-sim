@@ -40,6 +40,22 @@ The flag is intercepted in `crates/lunco-luncosim/src/bin/luncosim.rs`
 **before** the Bevy `App` is built, and the process `exit`s — nothing is
 rendered, no window opens, no port is bound. Run it anywhere, any time.
 
+For a WGSL file, this pre-flight validates the file's standalone source/schema
+contract. It cannot decide whether the file is a fragment or vertex stage when
+it is not referenced by a USD material. That role is authored by the USD
+`Shader` prim (`info:wgsl:sourceAsset` and optional
+`info:wgsl:vertexAsset`) and is checked by the production USD/render boundary.
+Use an authored USD + Rhai scene test for that contract; do not add a Rust test
+that reads a repository shader path to simulate it.
+
+This ownership rule applies to every asset type: if a test names a shipped or
+Twin asset, author the fixture and assertion beside the asset as USD/Rhai and
+observe it through `ValidateAsset` or the live API. Calling
+`lunco-assets-core`/`lunco-storage` from a Rust test is the correct access path
+for an asset-owning mechanism, but it does not turn an authored asset contract
+into a Rust mechanism test. Rust fixtures should be inline or temporary and
+should test only the generic parser, resolver, or storage behavior.
+
 | Exit code | Meaning |
 |---|---|
 | **0** | every report `ok` |

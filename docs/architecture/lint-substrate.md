@@ -45,6 +45,12 @@ domain "sysml"    → hook `lint.sysml`    → assets/scripting/policy/lint_sysm
 domain "twin"     → hook `lint.twin`     → assets/scripting/policy/lint_twin.rhai
 ```
 
+The authored `lint.rhai` policy rejects behavior that branches on the Rust
+build profile (`is_debug()` or `debug_assertions`). Runtime behavior must use
+the authored audience contract (`is_unattended()`), so this rule is replaceable
+Rhai policy rather than a tutorial-specific Rust scan. The negative fixture and
+`rhai_lint_policy` scene test exercise it through `ValidateAsset`.
+
 A domain is just a name: `lunco_lint::run_lint(domain, facts)` invokes
 `lint.<domain>` and parses the findings. **No policy registered ⇒ no findings**,
 so an app built without scripting behaves exactly as before. The USD domain is

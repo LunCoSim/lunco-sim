@@ -69,7 +69,7 @@ use std::sync::{Arc, OnceLock};
 use lunco_materials::dyn_params::{self, ParamSchema, ParamValue};
 use lunco_materials::{
     to_snake_case, ShaderCatalog, ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE,
-    ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
+    validate_shader_stage, ShaderStage, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };
 
 /// A general custom-shader material whose parameters are **dynamic**: each
@@ -92,12 +92,12 @@ pub struct ShaderMaterial {
     /// Terrain heightfield (R32Float world heights) for ray-marched sun
     /// shadows, written by `lunco-environment`'s horizon system. Sampled
     /// with `textureLoad` — R32Float is non-filterable in core WebGPU.
-    /// `None` binds Bevy's fallback image; shaders that don't declare the
+    /// `None` binds Bevy's neutral image binding; shaders that don't declare the
     /// binding are unaffected.
     #[texture(1, sample_type = "float", filterable = false)]
     pub height_map: Option<Handle<Image>>,
     /// **Layer maps** (terrain layered pipeline, `terrain_layered.wgsl`). All
-    /// `Option` + filterable float; `None` binds Bevy's fallback image, and a
+    /// `Option` + filterable float; `None` binds Bevy's neutral image binding, and a
     /// shader that doesn't declare the binding is unaffected (same contract as
     /// `height_map`). Sampled by planar UV (`in.uv`), `has_*`-guarded so a
     /// missing map falls back to the procedural look rather than erroring.
@@ -131,7 +131,7 @@ pub struct ShaderMaterial {
     /// `horizon_march.wgsl::sun_visibility`, computed once per sun-direction
     /// change instead of per pixel. The terrain fragment shader does a single
     /// `textureSampleLevel` of this (guarded by the `shadow_cache_on` uniform)
-    /// instead of the configured march loop. `None` binds Bevy's fallback image;
+    /// instead of the configured march loop. `None` binds Bevy's neutral image binding;
     /// shaders that don't declare the binding are unaffected (same contract as
     /// `height_map` / the layer maps). Sampled by planar UV (`in.uv`).
     #[texture(10)]
@@ -655,6 +655,14 @@ pub fn reflect_shader_schemas(
     for e in ev.read() {
         if let AssetEvent::Added { id } | AssetEvent::Modified { id } = e {
             if let Some(src) = shaders.get(*id).and_then(wgsl_source) {
+                // Reflection is a fragment-material operation. A vertex-only
+                // companion is a valid Shader asset, but it must not populate
+                // the fragment schema cache or be submitted as a material.
+                if validate_shader_stage(src, ShaderStage::Fragment).is_err() {
+                    cache.map.remove(id);
+                    cache_changed = true;
+                    continue;
+                }
                 match ParamSchema::parse(src) {
                     Some(s) => {
                         // Every `//!@engine` field must name a registered

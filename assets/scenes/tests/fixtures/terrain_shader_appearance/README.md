@@ -14,4 +14,5 @@ Heights remain absolute for the DEM contract (approximately -1999 to -1909 m);
 the scene camera is authored near that datum rather than at elevation zero.
 
 The scene uses the normal USD material binding and the production
-`terrain_geomorph.wgsl` path. No Rust-only selector or test renderer is involved.
+`terrain_layered.wgsl` fragment with the optional `terrain_geomorph.wgsl`
+vertex stage. No Rust-only selector or test renderer is involved.

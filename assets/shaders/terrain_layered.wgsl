@@ -85,9 +85,8 @@
 //!@default authored_normal_on  0
 // --- lunar photometry (lunco::lunar) ---------------------------------------
 // Fitted lunar values (Chrono/UW-Madison, arxiv 2410.04371 Table 1), not taste.
-// MUST match `terrain_geomorph.wgsl`: the same site renders through whichever of
-// these shaders its terrain happens to use, so a divergence here is a divergence
-// in how the Moon looks depending on streaming.
+// `terrain_geomorph.wgsl` is only the optional vertex stage for this fragment;
+// it must share this Material ABI but does not define another appearance path.
 //!@ui      surge_amp         0 3         "Opposition surge amplitude (Hapke Bs0)"
 //!@default surge_amp         1.80
 //!@ui      surge_width       0.01 0.3    "Opposition surge width, rad (Hapke hs)"

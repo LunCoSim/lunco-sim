@@ -78,7 +78,10 @@ pub fn apply_usd_shader_materials(
     // server — the same authority rule as the sandbox layer binder (the scene
     // the material came from decides the root, never a guessed twin).
     asset_server: Res<AssetServer>,
+    diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
+    let mut evaluated = false;
+    let mut findings = Vec::new();
     for (entity, prim_path, visual_target, procedural_skybox, instance_projection) in q.iter() {
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
@@ -86,11 +89,12 @@ pub fn apply_usd_shader_materials(
         };
         let (reader, _generation) =
             canonical.reader_for_entity(id, stage_asset, instance_projection);
+        evaluated = true;
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             commands.entity(entity).try_insert(UsdShaderResolved);
             continue;
         };
-        apply_usd_shader_material_read(
+        if let Some(finding) = apply_usd_shader_material_read(
             &reader,
             entity,
             prim_path,
@@ -99,7 +103,14 @@ pub fn apply_usd_shader_materials(
             &asset_server,
             visual_target.map(|target| target.0),
             procedural_skybox,
-        );
+        ) {
+            findings.push(finding);
+        }
+    }
+    if evaluated {
+        if let Some(mut diagnostics) = diagnostics {
+            diagnostics.replace_producer("usd-shader", findings);
+        }
     }
 }
 
@@ -117,7 +128,7 @@ fn apply_usd_shader_material_read(
     asset_server: &AssetServer,
     visual_target: Option<Entity>,
     procedural_skybox: bool,
-) {
+) -> Option<lunco_core::RuntimeDiagnostic> {
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
 
@@ -129,7 +140,7 @@ fn apply_usd_shader_material_read(
     if reader.text(sdf_path, "lunco:assetMode").is_some()
         && !reader.has_api_schema(sdf_path, "LunCoTerrainAPI")
     {
-        return;
+        return None;
     }
 
     // A shader is bound the way USD binds shaders: `rel material:binding` → a
@@ -140,35 +151,26 @@ fn apply_usd_shader_material_read(
     // where a material is, and a prim bound to a `UsdPreviewSurface` instead keeps its
     // `PbrLook` — it has no `wgsl` source, and that is the whole test.
     let Some(shader_prim) = lunco_usd_bevy_core::resolve_bound_shader(reader, sdf_path) else {
-        return;
+        return None;
     };
     let Some(raw_shader_path) = reader.asset(&shader_prim, "info:wgsl:sourceAsset") else {
-        return;
+        return None;
     };
+    if reader.text(&shader_prim, "info:implementationSource").as_deref() != Some("sourceAsset") {
+        return Some(reject_shader_material(
+            commands,
+            entity,
+            visual_target,
+            prim_path,
+            "implementation-source",
+            "WGSL source is authored but info:implementationSource is not `sourceAsset`",
+        ));
+    }
     // Normalise to the engine-library-relative form (strip a `lunco://` scheme) so an
     // authored `@lunco://shaders/x.wgsl@` and a bare `@shaders/x.wgsl@` behave
-    // identically downstream: the string comparisons below, the `@fragment` pre-check,
-    // and `engine_asset_uri` re-adding the scheme for the loader. A `twin://` custom
-    // shader is left schemed and passes through untouched.
+    // identically downstream. A `twin://` custom shader is left schemed and is
+    // validated by the render asset owner when it loads.
     let shader_path = lunco_assets_core::engine_asset_rel(&raw_shader_path).to_string();
-
-    // ROBUSTNESS: refuse a shader that isn't a usable material shader. A pure
-    // library (`#define_import_path`, meant to be `#import`ed — e.g.
-    // pbr_lit.wgsl) has no `@fragment` entry, so binding a ShaderMaterial to it
-    // builds an INVALID render pipeline that wgpu rejects on EVERY frame (the
-    // `opaque_mesh_pipeline` validation storm → dropped frames / viewport
-    // blink, and it poisons the pipeline cache until the app restarts). Keep
-    // the `PbrLook` (displayColor) instead so the app renders normally.
-    if !shader_has_fragment_entry(&shader_path) {
-        warn!(
-            "[shader] prim {} → '{}' has no `@fragment` entry point (it looks \
-             like a shader LIBRARY, not a material shader). The authored Shader \
-             network is not projected; bind a whole shader through \
-             `info:wgsl:sourceAsset` (one with `@fragment fn …`).",
-            prim_path.path, shader_path
-        );
-        return;
-    }
 
     // The shader's parameters are the Shader prim's `inputs:` — typed, declared, and
     // belonging to the shader that consumes them.
@@ -177,18 +179,21 @@ fn apply_usd_shader_material_read(
     // (`primvars:displayColor` → `display_color`). Authored `inputs:` already in
     // the map WIN — see `fill_prim_engine_params`.
     if let Err(attribute) = fill_prim_engine_params(reader, sdf_path, &mut values) {
-        error!(
-            "[shader] prim {} has malformed authored material attribute `{attribute}`; keeping its PbrLook",
-            prim_path.path
-        );
-        return;
+        return Some(reject_shader_material(
+            commands,
+            entity,
+            visual_target,
+            prim_path,
+            "material-attribute",
+            format!("malformed authored material attribute `{attribute}`"),
+        ));
     }
     // `asset`-typed inputs are TEXTURE layers (doc 18 §3.1): `inputs:albedo_map =
     // @terrain/site/…/ortho.png@` fills the material slot of the same reflected
-    // name. Root-relative paths resolve against the SCENE's source root (the
-    // `twin://<name>` the stage itself was loaded from); already-schemed paths
-    // pass through. A scene from Bevy's default source has no root to resolve
-    // against — those inputs warn and skip rather than guess.
+    // name. Root-relative paths resolve through the SCENE's registered source
+    // root; already-schemed paths pass through. The default Bevy source is
+    // promoted to `lunco://` by the asset-path owner, so it cannot accidentally
+    // resolve beside a guessed working directory.
     //
     // The role also owns the image transfer contract. Albedo and mineral maps
     // are color data and must be decoded from sRGB to linear before WGSL uses
@@ -196,19 +201,18 @@ fn apply_usd_shader_material_read(
     // those PNGs as sRGB changes their values before the shader decodes them
     // (notably turning a neutral encoded normal into a downward-facing one).
     let mut textures: BTreeMap<TextureLayer, Handle<Image>> = BTreeMap::new();
+    let mut texture_error = None;
     for (layer, authored) in read_shader_texture_inputs(reader, &shader_prim) {
         let uri = if authored.contains("://") {
             authored
         } else {
-            let Some(base) = scene_base_uri(prim_path, asset_server) else {
-                warn!(
-                    "[shader] prim {}: texture input `{authored}` is root-relative but \
-                     the scene carries no source root to resolve it against — skipped",
-                    prim_path.path
-                );
-                continue;
+            let Some(uri) = scene_asset_uri(prim_path, asset_server, &authored) else {
+                texture_error = Some(format!(
+                    "root-relative texture input `{authored}` has no authored scene source root"
+                ));
+                break;
             };
-            format!("{base}/{authored}")
+            uri
         };
         let is_srgb = texture_layer_is_srgb(layer);
         textures.insert(
@@ -218,8 +222,18 @@ fn apply_usd_shader_material_read(
                 .with_settings(move |settings: &mut bevy::image::ImageLoaderSettings| {
                     settings.is_srgb = is_srgb;
                 })
-                .load::<Image>(uri),
+            .load::<Image>(uri),
         );
+    }
+    if let Some(detail) = texture_error {
+        return Some(reject_shader_material(
+            commands,
+            entity,
+            visual_target,
+            prim_path,
+            "texture-source",
+            detail,
+        ));
     }
     // No platform swap: the terrain shaders are one file per family now. What used
     // to justify a `_web` twin — 2D vs 3D noise and a halved octave budget — lives
@@ -252,11 +266,14 @@ fn apply_usd_shader_material_read(
     ) {
         Ok(value) => value.unwrap_or(false),
         Err(_) => {
-            error!(
-                "[shader] prim {} has malformed authored material attribute `primvars:doNotCastShadows`; keeping its PbrLook",
-                prim_path.path
-            );
-            return;
+            return Some(reject_shader_material(
+                commands,
+                entity,
+                visual_target,
+                prim_path,
+                "material-attribute",
+                "malformed authored material attribute `primvars:doNotCastShadows`",
+            ));
         }
     };
     // `doubleSided` — the standard `UsdGeomGprim` attribute, read on the GPRIM like
@@ -267,11 +284,14 @@ fn apply_usd_shader_material_read(
     let double_sided = match read_authored_bool_strict(reader, sdf_path, "doubleSided") {
         Ok(value) => value.unwrap_or(false),
         Err(_) => {
-            error!(
-                "[shader] prim {} has malformed authored material attribute `doubleSided`; keeping its PbrLook",
-                prim_path.path
-            );
-            return;
+            return Some(reject_shader_material(
+                commands,
+                entity,
+                visual_target,
+                prim_path,
+                "material-attribute",
+                "malformed authored material attribute `doubleSided`",
+            ));
         }
     };
     // Read on the gprim for the same reason as `no_shadow_cast` above: a driven value
@@ -303,11 +323,14 @@ fn apply_usd_shader_material_read(
     let additive = match read_authored_bool_strict(reader, sdf_path, "lunco:surface:additive") {
         Ok(value) => value.unwrap_or(false),
         Err(_) => {
-            error!(
-                "[shader] prim {} has malformed authored material attribute `lunco:surface:additive`; keeping its PbrLook",
-                prim_path.path
-            );
-            return;
+            return Some(reject_shader_material(
+                commands,
+                entity,
+                visual_target,
+                prim_path,
+                "material-attribute",
+                "malformed authored material attribute `lunco:surface:additive`",
+            ));
         }
     };
     let display_opacity = match read_primvar_f32_strict(reader, sdf_path, "primvars:displayOpacity")
@@ -315,11 +338,14 @@ fn apply_usd_shader_material_read(
         Ok(Some(value)) if (0.0..=1.0).contains(&value) => Some(value),
         Ok(None) => None,
         Ok(Some(_)) | Err(_) => {
-            error!(
-                "[shader] prim {} has malformed authored material attribute `primvars:displayOpacity`; keeping its PbrLook",
-                prim_path.path
-            );
-            return;
+            return Some(reject_shader_material(
+                commands,
+                entity,
+                visual_target,
+                prim_path,
+                "material-attribute",
+                "malformed authored material attribute `primvars:displayOpacity`",
+            ));
         }
     };
     let alpha = if additive {
@@ -369,47 +395,38 @@ fn apply_usd_shader_material_read(
         lunco_core::PortSurfaceReady,
         lunco_usd_bevy_scene::UsdVisualShaderBound,
     ));
+    None
 }
 
-/// True if `shader_path` is a usable material shader — i.e. it declares a
-/// fragment entry point (`@fragment`). A pure shader LIBRARY (`#define_import_path`,
-/// meant only to be `#import`ed) has none, and binding a material to it produces
-/// an invalid render pipeline (see the call site).
-///
-/// Best-effort by design: it reads the on-disk source (native) and only VETOES a
-/// shader we can positively prove lacks `@fragment`. If the file can't be read
-/// (wasm, embedded source, or a path the loader resolves elsewhere), it returns
-/// `true` so the normal asset path — and its own error handling — still runs; we
-/// never block a shader we couldn't inspect.
-#[cfg(not(target_arch = "wasm32"))]
-fn shader_has_fragment_entry(shader_path: &str) -> bool {
-    // Resolve through the SAME infra the loader uses (`lunco://` → `<cwd>/assets`),
-    // so a schemed reference is inspected at its real path rather than becoming a
-    // bogus `assets/lunco://…` segment that never exists (→ a wrong veto that would
-    // starve the wheel's `ShaderLook` and deadlock physics on a render-only visual).
-    let Some(full) = lunco_assets_core::engine_asset_local_path(shader_path) else {
-        // Another scheme's root (`twin://…`) — can't inspect it here; don't veto.
-        return true;
-    };
-    match lunco_assets_core::read_asset_file_string(&full) {
-        // Check the CODE portion of each line (before any `//`), so an EXAMPLE
-        // `@fragment` inside a doc comment — as library shaders like pbr_lit.wgsl
-        // carry to show how to import them — isn't mistaken for a real entry point.
-        Ok(src) => src.lines().any(|line| {
-            let code = line.split_once("//").map_or(line, |(c, _)| c);
-            code.contains("@fragment")
-        }),
-        // A missing file can never build a valid pipeline → veto (fall back to the
-        // StandardMaterial). Any OTHER read error (permissions, etc.) is treated as
-        // "can't tell" → don't veto, so the normal asset path still runs.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(_) => true,
+fn reject_shader_material(
+    commands: &mut Commands,
+    entity: Entity,
+    visual_target: Option<Entity>,
+    prim_path: &UsdPrimPath,
+    code_suffix: &str,
+    detail: impl Into<String>,
+) -> lunco_core::RuntimeDiagnostic {
+    let material_entity = visual_target.unwrap_or(entity);
+    commands
+        .entity(material_entity)
+        .remove::<PbrLook>()
+        .remove::<ShaderLook>()
+        .remove::<lunco_materials::ShaderLookBound>()
+        .remove::<lunco_materials::ShaderLookReady>()
+        .remove::<lunco_core::PortSurfaceReady>()
+        .remove::<lunco_usd_bevy_scene::UsdVisualShaderBound>();
+    let detail = detail.into();
+    error!(
+        "[shader] prim {} rejected authored shader material: {}",
+        prim_path.path, detail
+    );
+    lunco_core::RuntimeDiagnostic {
+        code: format!("usd-shader-{code_suffix}"),
+        severity: lunco_core::DiagnosticSeverity::Error,
+        producer: "usd-shader".to_string(),
+        subject: prim_path.path.clone(),
+        message: detail,
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn shader_has_fragment_entry(_shader_path: &str) -> bool {
-    true
 }
 
 /// Fills the engine-provided parameters (`lunco_materials::engine_params`) whose
@@ -577,23 +594,16 @@ fn read_shader_texture_inputs(
     out
 }
 
-/// The `source://root` base URI of the scene a prim was loaded from — the root
-/// its root-relative texture inputs resolve against. Same derivation as the
-/// sandbox layer binder: the stage asset's own path is the only authority
-/// (`twin://<name>/sim/scenes/x.usda` → `twin://<name>`). `None` for a stage
-/// from Bevy's default source (no root to resolve against — caller warns).
-fn scene_base_uri(prim_path: &UsdPrimPath, asset_server: &AssetServer) -> Option<String> {
+/// Resolve a root-relative texture through the stage asset's registered source.
+/// The path algebra is owned by `lunco-assets-core`; this crate only supplies
+/// the stage identity and requests the resulting image handle from Bevy.
+fn scene_asset_uri(
+    prim_path: &UsdPrimPath,
+    asset_server: &AssetServer,
+    relative: &str,
+) -> Option<String> {
     let asset_path = asset_server.get_path(prim_path.stage_handle.id())?;
-    let source = match asset_path.source() {
-        bevy::asset::io::AssetSourceId::Name(n) => n.to_string(),
-        bevy::asset::io::AssetSourceId::Default => return None,
-    };
-    let root = asset_path
-        .path()
-        .components()
-        .next()
-        .and_then(|c| c.as_os_str().to_str())?;
-    Some(format!("{source}://{root}"))
+    lunco_assets_core::asset_path::source_relative_uri(&asset_path, relative)
 }
 
 #[cfg(test)]
@@ -621,6 +631,7 @@ def Xform "World"
             token outputs:surface.connect = </World/Looks/StrutMat/StrutShader.outputs:surface>
             def Shader "StrutShader"
             {
+                uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @shaders/strut.wgsl@
                 float inputs:load_frac = 0.0
                 token outputs:surface

@@ -2185,7 +2185,7 @@ mod tests {
     /// This is the shape of the shipped Apollo-15 `ortho.png` bug: the nodata
     /// margin reached the 1–99 percentile stretch as a finite `-3.4e38`, became
     /// the 1st percentile, and flattened every real sample to pure white while
-    /// the margin itself went pure black. `terrain_geomorph.wgsl` multiplies
+    /// the margin itself went pure black. `terrain_layered.wgsl` multiplies
     /// that map into the albedo, so the margin rendered as an unlit void.
     #[test]
     fn map_gray_stretch_ignores_nodata_and_bakes_it_neutral() {

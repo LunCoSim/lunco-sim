@@ -107,18 +107,7 @@ pub fn classify_rhai_source(source: &str) -> Result<SceneTestKind, String> {
 /// Multiple test observers must agree on their domain so the runner never has
 /// to guess which half of a scene it should execute.
 pub fn discover_scene_tests(scenes_dir: &Path) -> Result<Vec<SceneTest>, String> {
-    let entries = std::fs::read_dir(scenes_dir)
-        .map_err(|error| format!("cannot read {}: {error}", scenes_dir.display()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("cannot enumerate {}: {error}", scenes_dir.display()))?;
-    let mut scenes = entries
-        .into_iter()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "usda")
-        })
-        .collect::<Vec<_>>();
+    let mut scenes = scene_paths(scenes_dir)?;
     scenes.sort();
 
     let mut discovered = Vec::with_capacity(scenes.len());
@@ -126,6 +115,38 @@ pub fn discover_scene_tests(scenes_dir: &Path) -> Result<Vec<SceneTest>, String>
         discovered.push(discover_scene_test(&scene_path)?);
     }
     Ok(discovered)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn scene_paths(scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    match lunco_storage::entry_kind_file_sync(scenes_dir) {
+        Ok(lunco_storage::StorageEntryKind::Directory) => {}
+        Ok(lunco_storage::StorageEntryKind::File) => {
+            return Err(format!(
+                "scene-test root is a file, not a directory: {}",
+                scenes_dir.display()
+            ));
+        }
+        Err(error) => {
+            return Err(format!(
+                "cannot read scene-test directory {}: {error}",
+                scenes_dir.display()
+            ));
+        }
+    }
+    Ok(lunco_assets_core::discovery::scan_library(scenes_dir)
+        .into_iter()
+        // Preserve the public contract of this function: discover the scene
+        // files directly under the supplied test directory, not nested asset
+        // libraries mounted below it.
+        .filter(|relative| !relative.contains('/') && relative.ends_with(".usda"))
+        .map(|relative| scenes_dir.join(relative))
+        .collect())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn scene_paths(_scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    Err("scene-test discovery requires the native asset catalog".to_string())
 }
 
 fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
