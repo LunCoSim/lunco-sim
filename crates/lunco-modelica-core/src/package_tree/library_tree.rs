@@ -112,7 +112,7 @@ fn fs_root_for(package_path: &str) -> std::path::PathBuf {
     if MSL_OWNED.contains(&top) {
         // `msl_dir()` is the parent of `Modelica/`, so joining the full
         // qualified path (which starts with `Modelica`) lands correctly.
-        return lunco_assets_core::msl_dir().join(&rel);
+        return lunco_assets_core::source_library_dir("msl").join(&rel);
     }
     // Third-party lib: its cache subdir is the parent of `<Pkg>/`, so join the
     // full qualified path (which starts with `<Pkg>`) onto it.
@@ -123,7 +123,7 @@ fn fs_root_for(package_path: &str) -> std::path::PathBuf {
     }
     // Unknown top-level — fall back under the MSL dir (scan returns empty if
     // absent, matching the old missing-fs_path behaviour).
-    lunco_assets_core::msl_dir().join(&rel)
+    lunco_assets_core::source_library_dir("msl").join(&rel)
 }
 
 /// Build a palette root [`PackageNode::Category`] for a top-level library,

@@ -1023,10 +1023,10 @@ fn register_settings_submenu(world: &mut World) {
 /// Native dataset download actions live in the generic Data & libraries panel.
 fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     use bevy_egui::egui;
-    use lunco_assets_core::msl::{MslLoadPhase, MslLoadState};
+    use lunco_assets_core::library::{LibraryLoadPhase, LibraryLoadState};
 
     // Current state line.
-    let state = ctx.resource::<MslLoadState>().cloned();
+    let state = ctx.resource::<LibraryLoadState>().cloned();
 
     // If the Modelica UI is active, the MslSettings resource MUST exist
     // by architectural design (ModelicaPlugin adds ModelicaCorePlugin adds MslRemotePlugin).
@@ -1038,7 +1038,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     ui.label(egui::RichText::new("Assets — MSL").weak().small());
 
     match state.as_ref() {
-        Some(MslLoadState::Ready {
+        Some(LibraryLoadState::Ready {
             file_count,
             uncompressed_bytes,
             ..
@@ -1048,24 +1048,24 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                 *uncompressed_bytes as f64 / 1_048_576.0,
             ));
         }
-        Some(MslLoadState::Loading {
+        Some(LibraryLoadState::Loading {
             phase,
             bytes_done,
             bytes_total,
         }) => {
             let phase_label = match phase {
-                MslLoadPhase::FetchingManifest => "fetching manifest",
-                MslLoadPhase::FetchingBundle => "downloading",
-                MslLoadPhase::LoadingCache => "loading from cache",
-                MslLoadPhase::Decompressing => "extracting",
-                MslLoadPhase::Parsing => "loading",
+                LibraryLoadPhase::FetchingManifest => "fetching manifest",
+                LibraryLoadPhase::FetchingBundle => "downloading",
+                LibraryLoadPhase::LoadingCache => "loading from cache",
+                LibraryLoadPhase::Decompressing => "extracting",
+                LibraryLoadPhase::Parsing => "loading",
             };
             // The `Parsing` phase carries file counts in `bytes_done`/`bytes_total`;
             // every other phase carries bytes. Rendering the count as MB showed a
             // frozen "0.0 / 0.0 MB", so branch on the phase.
             if *bytes_total == 0 {
                 ui.label(format!("Status: {phase_label}"));
-            } else if matches!(phase, MslLoadPhase::Parsing) {
+            } else if matches!(phase, LibraryLoadPhase::Parsing) {
                 ui.label(format!(
                     "Status: {phase_label} · {bytes_done} / {bytes_total} files",
                 ));
@@ -1077,17 +1077,17 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                 ));
             }
         }
-        Some(MslLoadState::Failed(msg)) => {
+        Some(LibraryLoadState::Failed(msg)) => {
             ui.colored_label(egui::Color32::LIGHT_RED, format!("Status: failed — {msg}"));
         }
-        Some(MslLoadState::NotStarted) | None => {
+        Some(LibraryLoadState::NotStarted) | None => {
             ui.label("Status: not started");
         }
     }
 
     // Resolved on-disk path. May be the explicit-install destination, the
     // workspace `.cache/msl/`, or a user-supplied override.
-    let root = lunco_assets_core::msl_source_root_path();
+    let root = lunco_assets_core::source_library_root_path("msl", "Modelica");
     match root.as_ref() {
         Some(p) => {
             ui.horizontal(|ui| {
@@ -1102,7 +1102,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
 
     #[cfg(not(target_arch = "wasm32"))]
     if root.is_some()
-        && matches!(state, Some(MslLoadState::Failed(_)))
+        && matches!(state, Some(LibraryLoadState::Failed(_)))
         && ui
             .button("Rebuild editor index")
             .on_hover_text(
@@ -1159,19 +1159,19 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         // Web MSL is a host-served bundle rather than a native dataset, so its
         // platform-specific fetch controls remain here.
         let load_state = ctx
-            .resource::<lunco_assets_core::msl::MslLoadState>()
+            .resource::<lunco_assets_core::library::LibraryLoadState>()
             .cloned();
         let install_running = matches!(
             load_state,
-            Some(lunco_assets_core::msl::MslLoadState::Loading { .. })
+            Some(lunco_assets_core::library::LibraryLoadState::Loading { .. })
         );
         let install_failed = matches!(
             load_state,
-            Some(lunco_assets_core::msl::MslLoadState::Failed(_))
+            Some(lunco_assets_core::library::LibraryLoadState::Failed(_))
         );
         let install_ready = matches!(
             load_state,
-            Some(lunco_assets_core::msl::MslLoadState::Ready { .. })
+            Some(lunco_assets_core::library::LibraryLoadState::Ready { .. })
         );
         ui.horizontal(|ui| {
             // While an install is in flight, show Cancel. Before the first
@@ -1180,7 +1180,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                 ui.label("MSL bundle loading…");
             } else if matches!(
                 load_state,
-                Some(lunco_assets_core::msl::MslLoadState::NotStarted) | None
+                Some(lunco_assets_core::library::LibraryLoadState::NotStarted) | None
             ) {
                 if ui
                     .button("Install MSL")

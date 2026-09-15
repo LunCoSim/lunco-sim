@@ -112,7 +112,9 @@ pub fn drive_duplicate_loads(
         let t_poll = web_time::Instant::now();
         let polled: Option<crate::document::ModelicaDocument> =
             if let Some(OpeningState::Duplicate(b)) = openings.get_mut(doc_id) {
-                futures_lite::future::block_on(futures_lite::future::poll_once(&mut b.task))
+                bevy::tasks::futures_lite::future::block_on(
+                    bevy::tasks::futures_lite::future::poll_once(&mut b.task),
+                )
             } else {
                 None
             };
@@ -240,7 +242,9 @@ pub fn drive_drill_in_loads(
     for doc_id in doc_ids {
         let polled: Option<Result<crate::document::ModelicaDocument, String>> =
             if let Some(OpeningState::DrillIn(b)) = openings.get_mut(doc_id) {
-                futures_lite::future::block_on(futures_lite::future::poll_once(&mut b.task))
+                bevy::tasks::futures_lite::future::block_on(
+                    bevy::tasks::futures_lite::future::poll_once(&mut b.task),
+                )
             } else {
                 None
             };

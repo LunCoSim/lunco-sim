@@ -437,7 +437,7 @@ pub fn install_msl_index(index: MslIndex) -> bool {
 /// must run it on the native asset/index task, never from a render system.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_msl_index_from_assets() -> Result<MslIndex, String> {
-    let bytes = lunco_assets_core::msl::msl_read(std::path::Path::new("msl_index.json"))
+    let bytes = lunco_assets_core::library::library_read(std::path::Path::new("msl_index.json"))
         .ok_or_else(|| "MSL editor index is not present".to_string())?;
     decode_msl_index(&bytes)
 }

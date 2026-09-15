@@ -87,7 +87,7 @@ impl UriHandler for ModelicaUriHandler {
 /// a follow-up once the Twin / user-library path map is available
 /// from the workbench crate.
 fn resolve_resource(class_dotted: &str, subpath: &str) -> UriResolution {
-    let msl_root = lunco_assets_core::msl_dir();
+    let msl_root = lunco_assets_core::source_library_dir("msl");
     let mut path: PathBuf = msl_root;
     for segment in class_dotted.split('.') {
         if segment.is_empty() {

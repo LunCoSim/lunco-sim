@@ -34,7 +34,7 @@ fn is_persistable_snapshot(snapshot: &DocumentSnapshot) -> bool {
 fn restore_origin(origin: &lunco_doc::DocumentOrigin) -> lunco_doc::DocumentOrigin {
     match origin {
         lunco_doc::DocumentOrigin::File { path, .. }
-            if lunco_assets_core::msl::owns_filesystem_path(path) =>
+            if lunco_assets_core::library::owns_filesystem_path(path) =>
         {
             lunco_doc::DocumentOrigin::File {
                 path: path.clone(),

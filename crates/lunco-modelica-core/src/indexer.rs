@@ -1030,7 +1030,7 @@ fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn parse_native_msl_bundle() -> Vec<(String, StoredDefinition)> {
     use rayon::prelude::*;
-    let msl_root = lunco_assets_core::msl_dir();
+    let msl_root = lunco_assets_core::source_library_dir("msl");
     let (root_dirs, companion_files) = native_msl_roots(&msl_root);
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for (dir, _prefix) in &root_dirs {
@@ -1128,7 +1128,7 @@ pub fn run_with_cancel(
     let msl_root = opts
         .source_root
         .clone()
-        .unwrap_or_else(lunco_assets_core::msl_dir);
+        .unwrap_or_else(|| lunco_assets_core::source_library_dir("msl"));
     let msl_path = msl_root.join("Modelica");
     if !msl_path.exists() {
         println!("[indexer] MSL not found at {:?}", msl_path);
@@ -1212,7 +1212,7 @@ pub fn run_with_cancel(
         components: &'a [crate::index::ClassEntry],
         bundled: &'a [crate::package_tree::types::PackageNode],
     }
-    let output_path = lunco_assets_core::msl_dir().join("msl_index.json");
+    let output_path = lunco_assets_core::source_library_dir("msl").join("msl_index.json");
     let index = LocalMslIndex {
         components: &components,
         bundled: &bundled_nodes,
@@ -1237,7 +1237,7 @@ pub fn run_with_cancel(
     // native-gated — so cfg the write block to keep the wasm build clean.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let bundle_path = lunco_assets_core::msl_dir().join("parsed-msl.bin");
+        let bundle_path = lunco_assets_core::source_library_dir("msl").join("parsed-msl.bin");
         let t_bundle = Instant::now();
         match crate::msl_remote::write_parsed_bundle(&bundle_path, &indexer.parsed_bundle) {
             Ok(()) => {

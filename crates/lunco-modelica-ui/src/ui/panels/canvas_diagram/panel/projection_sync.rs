@@ -453,7 +453,7 @@ fn spawn_projection_task(
                         target_unit_instance: None,
                     });
                 }
-                futures_lite::future::yield_now().await;
+                bevy::tasks::futures_lite::future::yield_now().await;
                 let ast_for_recover = std::sync::Arc::clone(&ast_arc);
                 let mut diagram =
                     crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
@@ -463,9 +463,9 @@ fn spawn_projection_task(
                         target_for_log.as_deref(),
                         &layout,
                     )?;
-                futures_lite::future::yield_now().await;
+                bevy::tasks::futures_lite::future::yield_now().await;
                 recover_edges_from_ast(&ast_for_recover, &mut diagram);
-                futures_lite::future::yield_now().await;
+                bevy::tasks::futures_lite::future::yield_now().await;
                 let (scene, _) = project_scene(&diagram);
                 Ok(ProjectedScene {
                     scene,

@@ -1779,7 +1779,7 @@ mod tests {
         }
         let mb = |kb: u64| kb as f64 / 1024.0;
 
-        if lunco_assets_core::msl_source_root_path().is_none() {
+        if lunco_assets_core::source_library_root_path("msl", "Modelica").is_none() {
             eprintln!("[memprobe] SKIP: MSL source root not available locally");
             return;
         }
@@ -1796,7 +1796,10 @@ mod tests {
         // connectors — the lazy on-demand hook returns stubs that `connect()`
         // rejects for this connector-heavy model.
         let mut compiler = crate::ModelicaCompiler::new();
-        let report = compiler.load_source_root("Modelica", &lunco_assets_core::msl_dir());
+        let report = compiler.load_source_root(
+            "Modelica",
+            &lunco_assets_core::source_library_dir("msl"),
+        );
         println!(
             "[memprobe] MSL installed: {} docs from {}",
             report.inserted_file_count, report.source_root_path

@@ -50,7 +50,7 @@ pub fn save_csv_via_dialog(
     };
     let handle = lunco_workbench_file_dialog::pick_save_blocking(&hint)?; // user cancelled
 
-    match futures_lite::future::block_on(storage.write(&handle, bytes)) {
+    match bevy::tasks::futures_lite::future::block_on(storage.write(&handle, bytes)) {
         Ok(()) => Some(handle),
         Err(e) => {
             if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {

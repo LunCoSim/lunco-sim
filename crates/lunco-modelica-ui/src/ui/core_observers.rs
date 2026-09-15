@@ -13,19 +13,19 @@ use lunco_telemetry::TelemetrySettings;
 use lunco_ui::log::LogBuffer;
 use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
 
-use lunco_assets_core::msl::{MslLoadPhase, MslLoadState};
+use lunco_assets_core::library::{LibraryLoadPhase, LibraryLoadState};
 
 const MSL_SOURCE: &str = "MSL";
 
-/// Watch [`MslLoadState`] and translate transitions / progress ticks into
+/// Watch [`LibraryLoadState`] and translate transitions / progress ticks into
 /// [`StatusBus`] events. Phase changes become discrete `Info` entries
 /// (preserved in history); byte/file counts within a phase become `Progress`
 /// ticks (updated in place).
 ///
-/// This is a pure state mirror, not a task owner — `MslLoadState` itself is the
+/// This is a pure state mirror, not a task owner — `LibraryLoadState` itself is the
 /// lifetime authority, so it uses the status bus's global state-projection API.
 pub fn mirror_msl_state_to_status_bus(
-    state: Res<MslLoadState>,
+    state: Res<LibraryLoadState>,
     bus: Option<ResMut<StatusBus>>,
     mut last: Local<Option<MirrorMemo>>,
 ) {
@@ -36,13 +36,13 @@ pub fn mirror_msl_state_to_status_bus(
     let prior_phase_label = last.as_ref().and_then(|m| m.phase_label);
 
     match &*state {
-        MslLoadState::NotStarted => {}
-        MslLoadState::Loading {
+        LibraryLoadState::NotStarted => {}
+        LibraryLoadState::Loading {
             phase,
             bytes_done,
             bytes_total,
         } => {
-            let label = msl_phase_label(*phase);
+            let label = library_phase_label(*phase);
             // Phase transition → discrete history entry.
             if prior_phase_label != Some(label) {
                 bus.push(MSL_SOURCE, StatusLevel::Info, label);
@@ -51,7 +51,7 @@ pub fn mirror_msl_state_to_status_bus(
             let detail = format_progress_detail(*phase, *bytes_done, *bytes_total);
             bus.set_progress(MSL_SOURCE, detail, *bytes_done, *bytes_total);
         }
-        MslLoadState::Ready { file_count, .. } => {
+        LibraryLoadState::Ready { file_count, .. } => {
             // Only fire once per Ready transition (re-renders shouldn't spam).
             if !matches!(last.as_ref(), Some(MirrorMemo { ready: true, .. })) {
                 bus.push(
@@ -62,7 +62,7 @@ pub fn mirror_msl_state_to_status_bus(
                 bus.remove_progress(MSL_SOURCE);
             }
         }
-        MslLoadState::Failed(msg) => {
+        LibraryLoadState::Failed(msg) => {
             if !matches!(last.as_ref(), Some(MirrorMemo { failed: true, .. })) {
                 bus.push(MSL_SOURCE, StatusLevel::Error, msg.clone());
                 bus.remove_progress(MSL_SOURCE);
@@ -73,20 +73,20 @@ pub fn mirror_msl_state_to_status_bus(
     *last = Some(now_summary);
 }
 
-fn msl_phase_label(p: MslLoadPhase) -> &'static str {
+fn library_phase_label(p: LibraryLoadPhase) -> &'static str {
     match p {
-        MslLoadPhase::FetchingManifest => "fetching manifest",
-        MslLoadPhase::FetchingBundle => "downloading",
-        MslLoadPhase::LoadingCache => "loading from cache",
-        MslLoadPhase::Decompressing => "decompressing",
-        MslLoadPhase::Parsing => "loading",
+        LibraryLoadPhase::FetchingManifest => "fetching manifest",
+        LibraryLoadPhase::FetchingBundle => "downloading",
+        LibraryLoadPhase::LoadingCache => "loading from cache",
+        LibraryLoadPhase::Decompressing => "decompressing",
+        LibraryLoadPhase::Parsing => "loading",
     }
 }
 
-fn format_progress_detail(phase: MslLoadPhase, done: u64, total: u64) -> String {
-    let label = msl_phase_label(phase);
+fn format_progress_detail(phase: LibraryLoadPhase, done: u64, total: u64) -> String {
+    let label = library_phase_label(phase);
     match phase {
-        MslLoadPhase::Parsing if total > 0 => format!("{label} {done} / {total}"),
+        LibraryLoadPhase::Parsing if total > 0 => format!("{label} {done} / {total}"),
         _ if total > 0 => format!(
             "{label} — {:.1} / {:.1} MB",
             done as f64 / 1_048_576.0,
@@ -105,19 +105,19 @@ pub struct MirrorMemo {
     failed: bool,
 }
 
-impl From<&MslLoadState> for MirrorMemo {
-    fn from(s: &MslLoadState) -> Self {
+impl From<&LibraryLoadState> for MirrorMemo {
+    fn from(s: &LibraryLoadState) -> Self {
         match s {
-            MslLoadState::NotStarted => Self::default(),
-            MslLoadState::Loading { phase, .. } => Self {
-                phase_label: Some(msl_phase_label(*phase)),
+            LibraryLoadState::NotStarted => Self::default(),
+            LibraryLoadState::Loading { phase, .. } => Self {
+                phase_label: Some(library_phase_label(*phase)),
                 ..Self::default()
             },
-            MslLoadState::Ready { .. } => Self {
+            LibraryLoadState::Ready { .. } => Self {
                 ready: true,
                 ..Self::default()
             },
-            MslLoadState::Failed(_) => Self {
+            LibraryLoadState::Failed(_) => Self {
                 failed: true,
                 ..Self::default()
             },

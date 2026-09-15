@@ -208,7 +208,7 @@ pub fn on_save_document(
         let (path, source) = to_save;
         let storage = lunco_storage::FileStorage::new();
         let handle = lunco_storage::StorageHandle::File(path.clone());
-        if let Err(e) = futures_lite::future::block_on(
+        if let Err(e) = bevy::tasks::futures_lite::future::block_on(
             <lunco_storage::FileStorage as lunco_storage::Storage>::write(
                 &storage,
                 &handle,
@@ -317,7 +317,7 @@ pub fn on_save_as_document(
 
         let storage = lunco_storage::FileStorage::new();
         let handle = lunco_storage::StorageHandle::File(path.clone());
-        if let Err(e) = futures_lite::future::block_on(
+        if let Err(e) = bevy::tasks::futures_lite::future::block_on(
             <lunco_storage::FileStorage as lunco_storage::Storage>::write(
                 &storage,
                 &handle,

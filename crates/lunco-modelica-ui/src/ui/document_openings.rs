@@ -282,7 +282,7 @@ pub fn drive_file_load_openings(
     mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
     mut commands: Commands,
 ) {
-    use futures_lite::future;
+    use bevy::tasks::futures_lite::future;
     let doc_ids = openings.doc_ids();
     for doc_id in doc_ids {
         let ready = match openings.get_mut(doc_id) {

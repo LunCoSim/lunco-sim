@@ -61,7 +61,7 @@ pub mod lunco_source;
 pub mod missions;
 pub mod modelica;
 pub mod models;
-pub mod msl;
+pub mod library;
 /// Scheme → local filesystem root, as an open registry — the read-side mirror of
 /// [`register_lunco_asset_sources`].
 pub mod scheme_registry;
@@ -312,7 +312,7 @@ pub fn temp_dir() -> PathBuf {
 /// - `remote` — HTTP-downloaded assets with integrity hashes
 /// - `processed` — Preprocessed asset output (optimized USD, compressed textures)
 /// - `modelica` — Modelica compilation output (`.cache/modelica/`)
-/// - `msl` — Modelica Standard Library cache (`.cache/msl/`)
+/// Source libraries use their manifest-declared cache directory.
 pub fn cache_subdir(name: &str) -> PathBuf {
     let dir = cache_dir().join(name);
     let _ = std::fs::create_dir_all(&dir);
@@ -360,63 +360,41 @@ pub fn modelica_dir() -> PathBuf {
     cache_subdir("modelica")
 }
 
-/// Returns the `msl` subdirectory within the cache.
-///
-/// Shorthand for `cache_subdir("msl")`. Used for Modelica Standard Library
-/// caching in the library browser.
-pub fn msl_dir() -> PathBuf {
-    cache_subdir("msl")
+/// Return the cache directory assigned to a source library.
+pub fn source_library_dir(name: &str) -> PathBuf {
+    cache_subdir(name)
 }
 
-/// Returns the on-disk filesystem path that should be registered
-/// as a rumoca source root for Modelica Standard Library access,
-/// **if and only if it's materialised as real files on this target**.
+/// Returns a materialised filesystem path for a source library when its marker
+/// exists on this target.
 ///
-/// Narrower than [`msl_dir`] — that returns the cache subdir even
-/// when empty. This returns `None` when the MSL tree isn't
-/// present (first run before index build, or `wasm32` where MSL
-/// is served via HTTP fetch rather than the filesystem).
+/// This is narrower than [`source_library_dir`] because it returns `None` when
+/// the requested source tree is absent or when the target has no filesystem.
 ///
 /// # What's at this path
 ///
-/// This is `<cache>/msl/` itself — **not** `<cache>/msl/Modelica/`.
-/// The difference matters because MSL ships several top-level
-/// entities as siblings of the `Modelica/` directory:
+/// The returned path is the cache container, not the marker's parent. This
+/// allows a library to ship several top-level entities as siblings:
 ///
-/// - `Modelica/` — the core library (≈ 2400 classes).
-/// - `Complex.mo` — the top-level `operator record Complex` used by
-///   `ComplexBlocks`, `ComplexMath`, `Magnetic.FundamentalWave`, etc.
-///   User models that reference `Complex` (or transitively via MSL
-///   types) will fail to resolve unless this file is in scope.
-/// - `ModelicaServices/` — vendor-specific animation / file-IO /
-///   event-logger services MSL calls into.
-/// - `ObsoleteModelica4.mo` — the standard MSL file containing its obsolete
-///   class definitions; it remains part of the source root because MSL models
-///   may reference those definitions.
-///
-/// Pointing rumoca at `<cache>/msl/` picks up all of the above at
-/// the correct namespace rooting.
-///
-/// This is the single chokepoint that integrations like rumoca's
-/// compile session use to register MSL as a source root. When we
-/// move to the async `AssetSource` abstraction for full web
-/// support, this function will return `None` on `wasm32` and the
-/// compile path will instead populate rumoca's source set by
-/// streaming bytes through the asset source. Native unchanged.
-pub fn msl_source_root_path() -> Option<PathBuf> {
-    let root = msl_dir();
-    // Use the presence of `Modelica/` as the marker that the tree
-    // is materialised. `Complex.mo` alone isn't a strong enough
-    // signal — it's a small top-level file and might predate a
-    // botched Modelica tree delete.
-    if !root.join("Modelica").exists() {
+/// Library adapters decide which marker identifies their root and how source
+/// bytes are admitted into their parser.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn source_library_root_path(cache_name: &str, marker: &str) -> Option<PathBuf> {
+    let root = source_library_dir(cache_name);
+    if !root.join(marker).exists() {
         return None;
     }
     // Canonicalize so callers see the same absolute path regardless of CWD.
-    // Rumoca's bincode source-root cache keys on the exact path it receives,
+    // The parser's source-root cache keys on the exact path it receives,
     // so a CWD-dependent relative form would produce different keys per caller
-    // and force full reparses.
+    // and force duplicate reparses.
     std::fs::canonicalize(&root).ok().or(Some(root))
+}
+
+/// wasm has no filesystem-backed source-library root.
+#[cfg(target_arch = "wasm32")]
+pub fn source_library_root_path(_cache_name: &str, _marker: &str) -> Option<PathBuf> {
+    None
 }
 
 // ============================================================================
@@ -521,7 +499,8 @@ pub fn models_package_root_path(package: &str) -> Option<PathBuf> {
     if !root.join("package.mo").is_file() {
         return None;
     }
-    // Canonicalize for the same reason `msl_source_root_path` does: rumoca keys
+    // Canonicalize for the same reason `source_library_root_path` does: the
+    // parser keys
     // its source-root cache on the exact path it is handed, so a CWD-dependent
     // form would produce a different key per caller and force full reparses.
     std::fs::canonicalize(&root).ok().or(Some(root))

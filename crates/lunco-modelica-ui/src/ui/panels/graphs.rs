@@ -456,7 +456,7 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
         return; // user cancelled the save dialog
     };
 
-    if let Err(e) = futures_lite::future::block_on(
+    if let Err(e) = bevy::tasks::futures_lite::future::block_on(
         <lunco_storage::FileStorage as lunco_storage::Storage>::write(
             &storage,
             &handle,

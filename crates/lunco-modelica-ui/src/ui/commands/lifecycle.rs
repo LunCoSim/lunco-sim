@@ -863,7 +863,7 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
     };
     for result in pending {
         let path = result.path;
-        let read_only_library = lunco_assets_core::msl::owns_filesystem_path(&path);
+        let read_only_library = lunco_assets_core::library::owns_filesystem_path(&path);
         let source = match result.read_result {
             Ok(s) => s,
             Err(e) => {

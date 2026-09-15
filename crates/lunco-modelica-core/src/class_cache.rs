@@ -135,7 +135,7 @@ impl ClassLookupMode {
 /// `None` if the source hasn't been installed yet (web boot before
 /// fetch completes) or the path isn't present.
 fn read_source_bytes(path: &std::path::Path) -> Option<String> {
-    let bytes = lunco_assets_core::msl::msl_read(path)?;
+    let bytes = lunco_assets_core::library::library_read(path)?;
     String::from_utf8(bytes).ok()
 }
 

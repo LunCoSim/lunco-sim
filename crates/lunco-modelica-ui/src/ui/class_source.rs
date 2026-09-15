@@ -77,7 +77,7 @@ pub(crate) fn resolve_class_source(world: &World, qualified: &str) -> Option<Res
         .or_else(|| crate::library_fs::locate_library_file(qualified))
     {
         if let Some(source) =
-            lunco_assets_core::msl::msl_read(&path).and_then(|b| String::from_utf8(b).ok())
+            lunco_assets_core::library::library_read(&path).and_then(|b| String::from_utf8(b).ok())
         {
             return Some(ResolvedClassSource {
                 source,

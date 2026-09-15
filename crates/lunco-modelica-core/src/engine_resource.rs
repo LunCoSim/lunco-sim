@@ -1128,7 +1128,9 @@ fn drive_msl_bootstrap(
     // API wakeups while the shared engine is being prepared.
     if let Some(background) = task.0.as_mut() {
         if let Some(count) =
-            futures_lite::future::block_on(futures_lite::future::poll_once(background))
+            bevy::tasks::futures_lite::future::block_on(
+                bevy::tasks::futures_lite::future::poll_once(background),
+            )
         {
             task.0 = None;
             *bootstrap = MslBootstrapState::Done;

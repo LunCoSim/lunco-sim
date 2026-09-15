@@ -159,7 +159,7 @@ fn spawn_warm_task(doc_id: DocumentId, types: Vec<String>) {
                         warmed += 1;
                     }
                 }
-                futures_lite::future::yield_now().await;
+                bevy::tasks::futures_lite::future::yield_now().await;
             }
             bevy::log::info!(
                 "[IconWarmer] doc={} warmed {}/{} types in {:.0}ms (cache-only)",

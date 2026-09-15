@@ -1,6 +1,7 @@
 //! Build-time MSL bundler for the web target.
 //!
-//! Reads the on-disk MSL tree (whatever `lunco_assets_core::msl_source_root_path`
+//! Reads the configured source-library tree (the default Modelica library is
+//! resolved through `lunco_assets_core::source_library_root_path`)
 //! points at on this host), packs every `.mo` source file into a tarball,
 //! zstd-compresses it, hashes the result, and emits both the bundle and a
 //! manifest into the chosen output directory.
@@ -9,7 +10,7 @@
 //!
 //! ```text
 //! <out>/
-//!   manifest.json           # { msl_root_marker, sources_blob, sources_sha256, ... }
+//!   manifest.json           # { source_root_marker, sources, parsed, ... }
 //!   sources-<sha8>.tar.zst  # tar of *.mo files relative to MSL root
 //! ```
 //!
@@ -54,10 +55,12 @@
 //!   test suites (`--exclude 'ModelicaTest*'`) — they ship inside the MSL tree
 //!   but aren't part of the library. Applied only at each root's top level.
 
-#![cfg(not(target_arch = "wasm32"))]
 // Native-only build-time bundler on the documented `clippy.toml`
 // allow-list — owns raw `std::fs` access to the on-disk MSL tree.
 #![allow(clippy::disallowed_methods)]
+
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
 
 use std::fmt::Write as _;
 use std::fs::{self, File};
@@ -67,13 +70,13 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 /// Tag stamped into the manifest's `rumoca_artifact_tag` field. Shared with the
-/// runtime via [`lunco_assets_core::msl::EXPECTED_RUMOCA_ARTIFACT_TAG`] so producer
+/// runtime via [`lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG`] so producer
 /// and consumer can't drift; the runtime refuses a parsed bundle whose tag
 /// doesn't match (the bincode'd `StoredDefinition` layout is rumoca-version
 /// sensitive). Bump the shared const when the rumoca AST shape changes.
-use lunco_assets_core::msl::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
+use lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
 
-fn main() {
+pub(super) fn run() {
     let args: Vec<String> = std::env::args().collect();
     let mut out_dir: Option<PathBuf> = None;
     let mut msl_root_override: Option<PathBuf> = None;
@@ -122,7 +125,7 @@ fn main() {
     };
 
     let msl_root = msl_root_override
-        .or_else(lunco_assets_core::msl_source_root_path)
+        .or_else(|| lunco_assets_core::source_library_root_path("msl", "Modelica"))
         .unwrap_or_else(|| {
             eprintln!(
                 "error: no MSL tree on disk (run `lunco-assets -- download` first \
@@ -251,7 +254,7 @@ fn main() {
             "file_count": parsed_count,
         },
         "rumoca_artifact_tag": RUMOCA_ARTIFACT_TAG,
-        "msl_root_marker": "Modelica/package.mo",
+        "source_root_marker": "Modelica/package.mo",
         // Top-level packages filtered out of this bundle (e.g. `ModelicaTest*`).
         // Recorded so the bundle is self-describing and the build script can
         // tell whether a cached bundle matches the requested exclude config.
@@ -421,7 +424,7 @@ fn pack(entries: &[(PathBuf, PathBuf)], dest: &Path) -> u64 {
 
 /// Bundle key for a file: its path relative to its own library root, with
 /// forward slashes. This is the tar entry name AND the rumoca URI, and is
-/// what the web resolver matches against (`MslInMemory.files` keys).
+/// what the web resolver matches against (`InMemoryLibrary.files` keys).
 fn rel_key(root: &Path, path: &Path) -> String {
     lunco_assets_core::asset_path::slashed(path.strip_prefix(root).expect("entry under its root"))
 }
@@ -481,3 +484,13 @@ fn hex_lower(bytes: &[u8]) -> String {
     }
     s
 }
+
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    native::run();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

@@ -9,7 +9,9 @@ description = "Native Modelica asset packaging tools for LunCoSim"
 name = "build_msl_assets"
 path = "src/bin/build_msl_assets.rs"
 
-[dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# This package is a native build tool. Its wasm target is an intentionally
+# empty bin, so keep the archive/parser toolchain out of web dependency builds.
 lunco-assets-core = { path = "../lunco-assets-core" }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

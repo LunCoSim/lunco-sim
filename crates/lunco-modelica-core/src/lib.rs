@@ -42,7 +42,7 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 #[cfg(feature = "api")]
 use lunco_api::executor::DeferredCommandAppExt;
-use lunco_assets_core::msl_dir;
+use lunco_assets_core::{source_library_dir, source_library_root_path};
 use lunco_modelica_runtime::{
     CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet, SimSampleStream,
 };
@@ -226,10 +226,10 @@ fn msl_artifact_revision() -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
     "Modelica".hash(&mut hasher);
-    lunco_assets_core::msl::EXPECTED_RUMOCA_ARTIFACT_TAG.hash(&mut hasher);
+    lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG.hash(&mut hasher);
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let bundle_path = msl_dir().join("parsed-msl.bin");
+        let bundle_path = source_library_dir("msl").join("parsed-msl.bin");
         if let Ok(metadata) = std::fs::metadata(bundle_path) {
             metadata.len().hash(&mut hasher);
             if let Ok(modified) = metadata.modified() {
@@ -336,10 +336,10 @@ impl ModelicaCompiler {
     ///
     /// MSL discovery order for that admission:
     ///
-    /// 1. The process-wide source from [`lunco_assets_core::msl::global_msl_source`]
+    /// 1. The process-wide source from [`lunco_assets_core::library::global_library_sources`]
     ///    if it's been installed. This is how the wasm runtime feeds the
     ///    fetched-from-server MSL bundle in.
-    /// 2. Fall back to [`lunco_assets_core::msl_source_root_path`] (filesystem).
+    /// 2. Fall back to the configured source-library filesystem root.
     ///
     /// If both are absent, a source that references MSL fails visibly at the
     /// compile owner. A later compile after the source becomes available can
@@ -604,7 +604,7 @@ impl ModelicaCompiler {
             );
             return true;
         }
-        if lunco_assets_core::msl::has_in_memory_source() {
+        if lunco_assets_core::library::has_in_memory_library() {
             // wasm: the source bytes are resident but the chunked parser
             // hasn't produced `StoredDefinition`s yet. Report `false`
             // (nothing installed) so `ensure_msl_installed` does NOT latch —
@@ -616,13 +616,13 @@ impl ModelicaCompiler {
             );
             return false;
         }
-        if lunco_assets_core::msl::primary_filesystem_root().is_some()
-            || lunco_assets_core::msl_source_root_path().is_some()
+        if lunco_assets_core::library::primary_filesystem_library_root().is_some()
+            || source_library_root_path("msl", "Modelica").is_some()
         {
             // Native: an MSL tree is present (registered as a global source,
             // OR just materialised on disk — headless tests/indexer/embedders
             // don't register one). The install paths below read the on-disk
-            // bundle / source tree via `msl_dir()` directly, so disk presence
+            // bundle / source tree via the configured library directory, so disk presence
             // alone is enough. Try the pre-parsed on-disk bundle first via the
             // shared, memoized
             // `install_parsed_msl` path — it streams `parsed-msl.bin` and
@@ -671,7 +671,7 @@ impl ModelicaCompiler {
                 // Write the bundle (zstd-compressed) BEFORE moving the docs
                 // into the session so we don't clone ~165 MB of defs, and so
                 // the next launch hits the fast path above (~1s).
-                let bundle_path = lunco_assets_core::msl_dir().join("parsed-msl.bin");
+                let bundle_path = source_library_dir("msl").join("parsed-msl.bin");
                 if let Some(parent) = bundle_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -1143,7 +1143,7 @@ impl ModelicaCompiler {
                     .insert(id.to_string(), msl_artifact_revision());
                 return rumoca_compile::compile::SourceRootLoadReport {
                     source_set_id: id.to_string(),
-                    source_root_path: lunco_assets_core::msl_dir()
+                    source_root_path: source_library_dir("msl")
                         .join("parsed-msl.bin")
                         .display()
                         .to_string(),
@@ -1685,7 +1685,7 @@ fn build_modelica_core(app: &mut App) {
         app.add_plugins(lunco_modelica_runtime::ModelicaSourceAssetPlugin);
     }
 
-    let msl = msl_dir();
+    let msl = source_library_dir("msl");
     if msl.exists() {
         if let Ok(abs_path) = std::fs::canonicalize(&msl) {
             std::env::set_var("MODELICAPATH", abs_path.to_string_lossy().to_string());
@@ -1992,7 +1992,7 @@ mod source_root_smoke {
     // in the log even if the timing isn't asserted strictly.
 
     fn msl_available() -> bool {
-        lunco_assets_core::msl_source_root_path().is_some()
+        source_library_root_path("msl", "Modelica").is_some()
     }
 
     /// Trivial smoke test — compile a self-contained model with no

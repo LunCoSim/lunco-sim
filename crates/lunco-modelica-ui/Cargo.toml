@@ -133,8 +133,6 @@ rumoca-tool-fmt = { workspace = true, optional = true }
 rumoca-tool-lint = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-regex = "1.10"
-futures-lite = "2.3"
 lunco-api = { path = "../lunco-api", optional = true }
 lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
 # In-app rhai scripting runtime (RunScenario/hot-reload + the `cmd()`/prelude

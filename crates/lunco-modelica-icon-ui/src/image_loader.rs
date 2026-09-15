@@ -119,7 +119,7 @@ impl ModelicaImageLoader {
                     let Some(path) = Self::resolve_uri(uri) else {
                         continue;
                     };
-                    match lunco_assets_core::msl::msl_read(&path) {
+                    match lunco_assets_core::library::library_read(&path) {
                         Some(bytes) => {
                             let arc: Arc<[u8]> = Arc::from(bytes);
                             total_bytes += arc.len();
@@ -256,7 +256,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
             .spawn(async move {
                 // MSL virtual FS: on-disk tree (native) or in-memory bundle (web).
                 let read_result: Result<Arc<[u8]>, String> =
-                    match lunco_assets_core::msl::msl_read(&path) {
+                    match lunco_assets_core::library::library_read(&path) {
                         Some(bytes) => {
                             bevy::log::info!(
                                 "[ModelicaImageLoader] loaded {} → {} ({} bytes)",

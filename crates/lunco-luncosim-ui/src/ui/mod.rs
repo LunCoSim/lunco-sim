@@ -713,7 +713,7 @@ struct LunCoSimBootState {
 #[cfg(target_arch = "wasm32")]
 fn luncosim_boot_from_url(
     mut commands: bevy::prelude::Commands,
-    msl: Option<bevy::prelude::Res<lunco_assets_core::msl::MslLoadState>>,
+    library: Option<bevy::prelude::Res<lunco_assets_core::library::LibraryLoadState>>,
     mut state: bevy::prelude::Local<LunCoSimBootState>,
 ) {
     if state.done {
@@ -750,8 +750,8 @@ fn luncosim_boot_from_url(
     // ── Per-frame poll: dispatch OpenClass once MSL is ready ─────
     if let Some(qual) = state.open_class.clone() {
         let ready = matches!(
-            msl.as_deref(),
-            Some(lunco_assets_core::msl::MslLoadState::Ready { .. })
+            library.as_deref(),
+            Some(lunco_assets_core::library::LibraryLoadState::Ready { .. })
         );
         if !ready {
             return;
