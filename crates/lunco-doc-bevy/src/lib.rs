@@ -274,7 +274,7 @@ pub struct SaveDocument {
 /// `path` semantics mirror [`OpenFile`]:
 ///
 /// - **Empty** → the observer fires
-///   [`lunco_workbench::picker::PickHandle`](../lunco_workbench/picker/struct.PickHandle.html)
+///   [`lunco_workbench_file_dialog::PickHandle`](../lunco_workbench_file_dialog/struct.PickHandle.html)
 ///   with `PickFollowUp::SaveAs(doc)` and returns. The workbench's
 ///   `on_pick_resolved` re-fires this command with the chosen path
 ///   filled in. Cancellation is silent.

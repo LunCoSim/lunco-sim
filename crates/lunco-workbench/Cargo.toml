@@ -33,6 +33,7 @@ bevy_egui = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
+lunco-workbench-file-dialog = { path = "../lunco-workbench-file-dialog" }
 lunco-status-core = { path = "../lunco-status-core" }
 # Screenshot commands and GPU readback live in the production capture capability;
 # keeping this dependency optional preserves the shell-only build.
@@ -60,9 +61,8 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
-# `OpenFilter` / `SaveHint` / `StorageHandle` for the file-picker
-# event API. Storage stays bevy-free; the workbench's picker fires
-# rfd dialogs on native and (eventually) File-System-Access on wasm.
+# Storage remains the workbench's document/session I/O boundary; the separate
+# picker capability owns dialog descriptors and native/wasm dialog backends.
 lunco-storage = { path = "../lunco-storage" }
 # Used for the recents-changed fingerprint in `WorkspacePlugin` —
 # stable serialisation lets us skip writes when nothing changed.
@@ -74,32 +74,5 @@ lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-render = { path = "../lunco-render" }
 crossbeam-channel = { workspace = true }
-# Native file dialogs. The web backend will use `wasm-bindgen`
-# directly against the File-System-Access API behind a `cfg`-gated
-# branch — no separate crate needed.
-rfd = { workspace = true }
-# Web file picker. On wasm32 the picker backend (`src/picker.rs`)
-# raises the browser's open dialog through a hidden `<input
-# type="file">` and reads the chosen file's text browser-side — there
-# is no `rfd` and no filesystem.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
-js-sys = { workspace = true }
-web-sys = { workspace = true, features = [
-    "Window",
-    "Document",
-    "Element",
-    "HtmlElement",
-    "HtmlInputElement",
-    "HtmlAnchorElement",
-    "CssStyleDeclaration",
-    "Node",
-    "File",
-    "FileList",
-    "Blob",
-    "Url",
-] }
-
 [lints]
 workspace = true

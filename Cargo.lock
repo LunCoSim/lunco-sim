@@ -8016,6 +8016,7 @@ dependencies = [
  "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workbench-datasets-ui",
+ "lunco-workbench-file-dialog",
  "lunco-workbench-guided-ui",
  "lunco-workbench-widgets",
  "lunco-workspace",
@@ -9223,6 +9224,7 @@ dependencies = [
  "lunco-workbench",
  "lunco-workbench-browser",
  "lunco-workbench-core",
+ "lunco-workbench-file-dialog",
  "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
@@ -9296,7 +9298,6 @@ dependencies = [
  "bevy_egui",
  "crossbeam-channel",
  "egui_dock",
- "js-sys",
  "leafwing-input-manager",
  "lunco-assets-core",
  "lunco-capture",
@@ -9314,15 +9315,12 @@ dependencies = [
  "lunco-time",
  "lunco-twin",
  "lunco-workbench-core",
+ "lunco-workbench-file-dialog",
  "lunco-workbench-widgets",
  "lunco-workspace",
  "lunco-workspace-api",
- "rfd",
  "serde",
  "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -9361,6 +9359,20 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-workbench-browser",
  "lunco-workspace",
+]
+
+[[package]]
+name = "lunco-workbench-file-dialog"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "js-sys",
+ "lunco-doc",
+ "lunco-storage",
+ "rfd",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

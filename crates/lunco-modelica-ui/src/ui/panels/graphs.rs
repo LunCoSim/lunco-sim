@@ -444,12 +444,15 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
     }
 
     let storage = lunco_storage::FileStorage::new();
-    let hint = lunco_workbench::picker::SaveHint {
+    let hint = lunco_workbench_file_dialog::SaveHint {
         suggested_name: Some(format!("modelica_plot_{}.csv", viz_id.0)),
         start_dir: None,
-        filters: vec![lunco_workbench::picker::OpenFilter::new("CSV", &["csv"])],
+        filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
+            "CSV",
+            &["csv"],
+        )],
     };
-    let Some(handle) = lunco_workbench::picker::pick_save_blocking(&hint) else {
+    let Some(handle) = lunco_workbench_file_dialog::pick_save_blocking(&hint) else {
         return; // user cancelled the save dialog
     };
 

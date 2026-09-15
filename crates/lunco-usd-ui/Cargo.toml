@@ -36,6 +36,7 @@ lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-file-dialog = { path = "../lunco-workbench-file-dialog" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workspace = { path = "../lunco-workspace" }
 openusd = { workspace = true }
