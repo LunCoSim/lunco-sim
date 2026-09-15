@@ -104,6 +104,35 @@ fn place_plan(edit_target, path, translation, rotation, scale) {
             value: scale,
         }});
     }
+    // The canonical transform reader evaluates the authored xform order.  A
+    // scale-before-translate order would scale a part's placement (for
+    // example, turning a 1.5 m rail offset into 0.15 m when its section is
+    // 0.1 m).  Every generated placement therefore owns one deterministic
+    // translate → rotate → scale order, independent of the weaker source
+    // opinion that happened to exist before this edit.
+    let order = "[";
+    let order_count = 0;
+    if translation != () {
+        order += "\"xformOp:translate\"";
+        order_count += 1;
+    }
+    if rotation != () {
+        if order_count > 0 { order += ", "; }
+        order += "\"xformOp:rotateXYZ\"";
+        order_count += 1;
+    }
+    if scale != () {
+        if order_count > 0 { order += ", "; }
+        order += "\"xformOp:scale\"";
+    }
+    order += "]";
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target,
+        path: path,
+        name: "xformOpOrder",
+        type_name: "token[]",
+        value: order,
+    }});
     #{ ok: true, kind: "placement", path: path, ops: ops }
 }
 

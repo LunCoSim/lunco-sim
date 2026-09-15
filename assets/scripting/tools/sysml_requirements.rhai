@@ -28,6 +28,25 @@ fn _numeric(value) {
         || kind == "decimal"
 }
 
+// Compare structured USD values without flattening them into strings.  USD
+// transform orders, colour arrays, and topology lists are all authored values;
+// silently coercing them would let a malformed order pass a requirement gate.
+fn _equal_value(actual, expected) {
+    if actual == () || expected == () { return actual == expected; }
+    if type_of(actual) == "array" || type_of(expected) == "array" {
+        if type_of(actual) != "array" || type_of(expected) != "array"
+            || actual.len() != expected.len() { return false; }
+        for index in 0..actual.len() {
+            if !_equal_value(actual[index], expected[index]) { return false; }
+        }
+        return true;
+    }
+    if type_of(actual) == "string" || type_of(expected) == "string" {
+        return _text(actual) == _text(expected);
+    }
+    actual == expected
+}
+
 fn _query(path, attrs) {
     let request = #{path: path};
     if attrs != () { request.attrs = attrs; }
@@ -383,11 +402,7 @@ fn _check_one(report, check, indexes) {
         // QueryUsdPrim preserves the canonical quoted literal for some
         // authored string opinions.  Compare string content, not the literal
         // delimiters, while keeping numeric/bool equality exact.
-        if type_of(actual) == "string" {
-            actual = _text(actual);
-            expected = _text(expected);
-        }
-        if actual != expected { return _failure(check, "USD attribute does not equal expected value"); }
+        if !_equal_value(actual, expected) { return _failure(check, "USD attribute does not equal expected value"); }
         return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path};
     }
     if check.kind == "relationship" {
