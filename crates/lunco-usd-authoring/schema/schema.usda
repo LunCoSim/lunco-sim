@@ -819,6 +819,22 @@ class "LunCoAvatarAPI" (
         doc = """Initial camera pitch, radians. Overridden by a derived aim when
         `lunco:cameraLookAt` is authored."""
     )
+    float lunco:camera:orbitDistance = 30.0 (
+        doc = "Initial orbit arm length in metres."
+    )
+    float lunco:camera:springArmDistance = 15.0 (
+        doc = "Initial spring-arm length in metres."
+    )
+    float lunco:camera:springArmVerticalOffset = 2.0 (
+        doc = "Initial spring-arm vertical offset in metres."
+    )
+    bool lunco:camera:springArmTrackHeading = true (
+        doc = "Whether the spring arm follows the target heading."
+    )
+    uniform token lunco:camera:springArmAttitude = "heading" (
+        allowedTokens = ["heading", "world_locked", "full_attitude"]
+        doc = "How the spring arm derives the target attitude."
+    )
     float lunco:avatar:flightSpeed = 23.1 (
         doc = "Free-flight speed in metres per second."
     )

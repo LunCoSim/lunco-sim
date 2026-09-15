@@ -6,7 +6,14 @@
 > execution (UserIntent → … → actuation), keeping the camera and intent
 > systems modular and headless-safe.
 
-**Status: partly implemented.** The `ViewPoint` / `CameraDevice` components and the `lunco-camera` crate described in §1–§5 remain the aspirational target ontology; they do not exist in the codebase yet. However, camera **selection** and the **viewport** are now real and follow a single-authority design — see **§6 (Implemented: Scene Viewport & Active Camera)**. Camera *rig behaviors* (spring-arm, orbit, free-flight, surface) still live in `lunco-avatar`; their egui presentation lives in the optional `lunco-avatar-ui` adapter.
+**Status: implemented in layers.** The `ViewPoint` / `CameraDevice` names
+described in §1–§5 remain an aspirational ontology and are not required
+components. The reusable implementation is split across four owners:
+`lunco-usd-bevy-camera` decodes standard USD cameras and camera roles,
+`lunco-avatar-core` carries render-free rig contracts, `lunco-scene-camera`
+exposes script/API camera transactions, and `lunco-avatar` is the specialized
+owner of raw input translation plus fast interactive pose solvers. Camera
+selection and the viewport follow the single-authority design in §6.
 
 This document provides a technical guide to the modular, action-oriented, and headless-safe camera and intent systems in LunCoSim.
 
@@ -17,8 +24,8 @@ LunCoSim decouples human interaction from physical execution using five distinct
 
 | Layer | Name | Responsibility | Logical Flow |
 | :--- | :--- | :--- | :--- |
-| **5** | **UserIntent** | **Semantic Mapping**: Raw inputs (WASD, Mouse) -> Abstract Goals (`MoveForward`, `LookAtTarget`). | Keyboard -> `Leafwing` -> `UserIntent` |
-| **4** | **Controller** | **Translation**: Translates `UserIntent` into specific typed commands (e.g., `SetPorts`) or `Actions` for a target entity. | `UserIntent` -> `Avatar` -> `Typed Command` |
+| **5** | **UserIntent** | **Semantic Mapping**: The specialized input owner translates configured devices into abstract goals (`MoveForward`, `Look`, `Zoom`). | Keyboard/gamepad/mouse -> `lunco-avatar` / `lunco-controller` -> `UserIntent` |
+| **4** | **Controller** | **Translation**: Translates semantic intents into specific typed commands (e.g., `SetPorts`) or actions for a target entity. | `UserIntent` -> `lunco-controller` -> typed command |
 | **3** | **FSW / Subsystem**| **The Brain**: Decentralized observers that execute commands and emit ACK/NACK responses. | `Typed Command` -> `Subsystem Observer` -> `ACK` |
 | **2** | **Logic / Device** | **Hardware Logic**: The individual components responding to state changes. | `Subsystem` -> `Component Field` |
 | **1** | **Plant / Physics**| **Mechanical Truth**: The `f64` spatial state and physical physics interaction. | `Component Field` -> `DVec3` / `Physics Impulse` |
@@ -27,15 +34,14 @@ LunCoSim decouples human interaction from physical execution using five distinct
 
 ## 2. Vision Components: ViewPoint vs. CameraDevice
 
-> ⚠️ **Status note.** The 5-layer control model in §1 is real and implemented.
-> The clean `ViewPoint` / `CameraDevice` component split below is **aspirational
-> ontology — not yet in code.** There is no `ViewPoint` or `CameraDevice` type,
-> and there is no `lunco-camera` crate / `LunCoCameraPlugin`. Today the camera
-> lives in **`lunco-avatar`** (`LunCoAvatarPlugin`) as concrete camera-rig
-> components — `SpringArmCamera`, `OrbitCamera`, `FreeFlightCamera`,
-> `SurfaceCamera` — driving Bevy `Camera3d` while the persistent
-> `OriginAnchor` owns `big_space::FloatingOrigin`
-> directly. Sun / shadow rendering lives in `lunco-render`.
+> **Status note.** The universal `ViewPoint` / `CameraDevice` ontology below is
+> still a design vocabulary, not a reason to add a marker to `lunco-core`.
+> Today the concrete rig components (`SpringArmCamera`, `OrbitCamera`,
+> `FreeFlightCamera`, `SurfaceCamera`) are backend-neutral contracts in
+> `lunco-avatar-core`; `lunco-avatar` supplies their fast solvers. Standard
+> USD projection, mounted cameras, camera paths, and selection live in
+> `lunco-usd-bevy-camera`. `lunco-render-bevy` binds render intent to a
+> `Camera3d`, while `lunco-render` remains render-pipeline-free.
 
 ### **ViewPoint (Logical)** — *planned*
 The universal logical "eye."
@@ -65,7 +71,9 @@ A discrete instruction event.
 - **Self-Describing**: Commands are typed structs (derived with `#[Command]`) and carry their own parameters and documentation, discovered via reflection.
 - **Feedback**: Every command execution triggers an acknowledgment result (`Result<Ack, String>`) for verification.
 
-Camera commands change one exclusive behavior component on the local avatar.
+Avatar camera commands change one exclusive behavior component on the local
+avatar. Generic authored-camera selection and camera-path commands do not need
+an avatar and are handled by `lunco-usd-bevy-camera`.
 `FocusTarget`, `PossessVessel`, `FollowTarget`, `TeleportToSurface`, and
 `ReturnFromOrbit` are explicit mode transactions; the active behavior owns the
 complete BigSpace `(CellCoord, Transform)` pose. The task-tree runtime owns
@@ -91,8 +99,12 @@ over automated camera ownership:
 ---
 
 ## 5. Headless Compatibility
-The simulation core (`lunco-celestial`, `lunco-core`) has NO dependency on the camera rigs or Bevy's rendering systems.
-- **Bots** can "see" and "look at" objects through the same `Action` / intent system (against the planned `ViewPoint`; today against the avatar/camera transform).
+The simulation core (`lunco-celestial`, `lunco-core`) has NO dependency on the
+camera solvers or Bevy's rendering pipeline. It exposes scene facts, spatial
+poses, and typed semantic/control values; it does not read keyboard, mouse, or
+gamepad state.
+- **Bots and Modelica** can produce continuous pose/aim/math values through
+  authored ports or state, while a camera adapter consumes those values.
 - **Server** instances run the full spatial logic without a GPU.
 - **Clients** add **`LunCoAvatarPlugin`** (`lunco-avatar`) to provide the camera rigs and runtime bridge, and add **`AvatarUiPlugin`** (`lunco-avatar-ui`) when they need egui presentation; post-processing / lighting come from `lunco-render`.
 
@@ -120,6 +132,10 @@ and USD standards rather than inventing bespoke types, and follows a strict
   `lunco:cameraRole = "viewport"`, plus the local avatar camera. Instrument
   cameras use `lunco:cameraRole = "sensor"` and are never main-window
   candidates. RTT (`Image`-target) cameras and the egui `Camera2d` are excluded.
+- An avatar may be an `Xform` carrying `LunCoAvatarAPI`. The USD simulation
+  projector publishes its authored camera/movement contract; the avatar owner
+  realizes it on the next update. This keeps the simulation projector free of
+  camera modes, input maps, and raw device dependencies.
 
 ### 6.2 The Viewport is the single source of truth
 
@@ -178,15 +194,53 @@ the persistent origin tracker follow the camera without changing its
 hierarchy. A nested camera with `cameraPose =
 "authored"` remains in ordinary USD composition; hierarchy never infers a mount.
 
-### 6.5 Camera rigs still live in `lunco-avatar`
+### 6.5 Camera rigs and input ownership
 
-The *behavior* of the free/possession cameras — `SpringArmCamera`,
-`OrbitCamera`, `FreeFlightCamera`, `SurfaceCamera` — remains in `lunco-avatar`
-(§2). The viewport reconciler decides *which* camera is shown; the rigs decide
-*how* a given camera moves. They compose: possession changes the avatar camera's
-rig without changing which camera the viewport shows.
+The *behavior contracts* of the free/possession cameras — `SpringArmCamera`,
+`OrbitCamera`, `FreeFlightCamera`, `SurfaceCamera` — live in
+`lunco-avatar-core`; their fast BigSpace-safe solvers and transitions live in
+`lunco-avatar`. The viewport reconciler decides *which* camera is shown; a rig
+decides *how* its pose is solved. They compose: possession changes the avatar
+camera's rig without changing which camera the viewport shows.
 
-### 6.6 Avatar identity and ownership
+`lunco-avatar` is the default raw-input owner. It is the only layer that turns
+the configured keyboard/gamepad/mouse surface into `UserIntent` for the local
+avatar. `lunco-usd-sim`, USD composition, celestial, physics, and generic
+camera projection must not import an input-map or controller crate. An editor
+or networking adapter may read device state only when it is itself the
+specialized owner of that interaction, and it must publish the same typed
+intent/command surface rather than leaking devices downstream.
+
+### 6.6 Scriptable camera composition
+
+The camera architecture is intended to let Rhai compose many camera styles
+without growing a Rust state machine for each one:
+
+1. **USD owns identity and authored facts.** A standard `UsdGeomCamera` owns
+   projection, photographic values, transform, and role. An avatar's
+   `LunCoAvatarAPI` owns its explicit initial rig parameters where standard USD
+   has no vocabulary.
+2. **Rhai owns policy.** Scripts choose cameras, follow/focus targets, start or
+   scrub camera paths, and decide when a camera transaction begins or ends.
+   Those actions use typed commands and authored scene queries, not raw input
+   names or direct ECS mutation.
+3. **Rust owns reusable fast substrate.** BigSpace cell-safe pose commits,
+   collision-aware spring arms, orbit frame conversion, camera projection, and
+   selection reconciliation stay in the specialized runtime crates. They are
+   reusable mechanisms, not scenario policy.
+4. **Modelica may own continuous camera math.** A Modelica participant can
+   publish an authored aim/pose trajectory through generic ports; a camera
+   adapter can consume it. Modelica does not become a second camera selector or
+   input reader.
+
+The current public surface already supports authored camera cuts and paths plus
+avatar `focus`/`follow` transactions. The remaining extension point is to
+generalize avatar-only `SetCameraLookAt`/follow realization to an explicit
+camera entity or USD path, so a Rhai-authored rig can target any eligible
+camera. That should extend the existing command and pose contracts rather than
+introduce a parallel camera API.
+
+### 6.7 Avatar identity and ownership
 
 `Avatar` is an embodiment component, not a user, session, or control authority.
 It identifies an entity that can carry a presentation rig and a controller link.

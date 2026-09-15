@@ -31,9 +31,9 @@ use leafwing_input_manager::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use lunco_avatar_core::camera::{
-    AdaptiveNearPlane, AvatarFlightSettings, CameraZoomInput, CurrentRegionArrival,
-    FollowAttitude, FreeFlightCamera, OrbitCamera, OrbitReturnBehavior, OrbitViewReturn,
-    RadialArrival, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
+    AdaptiveNearPlane, AvatarCameraIntent, AvatarCameraMode, AvatarFlightSettings, CameraZoomInput,
+    CurrentRegionArrival, FollowAttitude, FreeFlightCamera, OrbitCamera, OrbitReturnBehavior,
+    OrbitViewReturn, RadialArrival, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
 use lunco_avatar_core::commands::{
     FocusTarget, FollowTarget, PossessVessel, ReleaseVessel, ReturnFromOrbit, SetCameraInput,
@@ -41,8 +41,8 @@ use lunco_avatar_core::commands::{
 use lunco_avatar_core::lifecycle::AvatarSceneHandoffSet;
 use lunco_controller::{ControllerLink, InputBindingsSettings};
 use lunco_core::{on_command, register_commands, Avatar, CelestialBody, LocalAvatar, Spacecraft};
-use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
 use lunco_core_session::commands::UpdateProfile;
+use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
 /// Capability test for "**accepts commands**": carries an authored intent→port
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
 /// backend (`SimComponent`).
@@ -959,7 +959,9 @@ impl Plugin for LunCoAvatarPlugin {
             .register_type::<SurfaceModeThreshold>()
             .register_type::<CameraInputSettings>()
             .register_type::<AvatarCollisionSettings>()
-            .register_type::<AvatarFlightSettings>();
+            .register_type::<AvatarFlightSettings>()
+            .register_type::<AvatarCameraMode>()
+            .register_type::<AvatarCameraIntent>();
 
         app.register_settings_section::<CameraInputSettings>();
         app.register_settings_section::<ProfileSettings>();
@@ -1535,6 +1537,7 @@ fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands
         FreeFlightCamera,
         OrbitCamera,
         SpringArmCamera,
+        AvatarCameraIntent,
         SurfaceRelativeMode,
         OrbitViewHistory,
         OrbitUserInput,
@@ -5026,7 +5029,14 @@ fn on_focus_command(
 fn avatar_init_system(
     mut commands: Commands,
     q_avatar: Query<
-        (Entity, &Transform, Option<&OrbitViewHistory>),
+        (
+            Entity,
+            &Transform,
+            Option<&OrbitViewHistory>,
+            Option<&AvatarCameraIntent>,
+            Option<&InputMap<UserIntent>>,
+            Option<&ActionState<UserIntent>>,
+        ),
         (
             With<Avatar>,
             With<LocalAvatar>,
@@ -5049,19 +5059,100 @@ fn avatar_init_system(
             With<Projection>,
         ),
     >,
+    bindings: Res<InputBindingsSettings>,
+    active_sun: Option<Res<lunco_environment::LunarSun>>,
 ) {
-    for (entity, tf, history) in q_avatar.iter() {
+    for (entity, tf, history, intent, input_map, action_state) in q_avatar.iter() {
         if history.is_none() {
             commands
                 .entity(entity)
                 .try_insert(OrbitViewHistory::default());
         }
-        let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-        commands.entity(entity).try_insert(FreeFlightCamera {
-            yaw,
-            pitch,
-            damping: None,
+
+        let Some(intent) = intent.copied() else {
+            let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+            commands.entity(entity).try_insert(FreeFlightCamera {
+                yaw,
+                pitch,
+                damping: None,
+            });
+            continue;
+        };
+
+        // USD-authored avatars are the one non-native path that needs the
+        // local input surface assembled here. Raw device bindings stay inside
+        // this specialized avatar owner; simulation projection never imports
+        // the input crate or chooses a device policy.
+        let resolved_input_map = if input_map.is_none() {
+            match bindings.input_map() {
+                Ok(input_map) => Some(input_map),
+                Err(error) => {
+                    error!(
+                        "USD-authored avatar {entity:?} has invalid input bindings; refusing interactive initialization: {error}"
+                    );
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        let ev100 = intent.exposure_ev100.unwrap_or_else(|| {
+            active_sun
+                .as_deref()
+                .copied()
+                .unwrap_or_default()
+                .exposure_ev100
         });
+        let mut avatar = commands.entity(entity);
+        avatar.try_insert((
+            lunco_render::SceneCamera::agx(),
+            lunco_render::GraphicsCameraDefaults,
+            bevy::camera::Exposure { ev100 },
+            AdaptiveNearPlane,
+            IntentAnalogState::default(),
+            intent.flight_settings,
+        ));
+        if let Some(input_map) = resolved_input_map {
+            avatar.try_insert(input_map);
+        }
+        if action_state.is_none() {
+            avatar.try_insert(ActionState::<UserIntent>::default());
+        }
+        match intent.mode {
+            AvatarCameraMode::FreeFlight => {
+                avatar.try_insert(FreeFlightCamera {
+                    yaw: intent.yaw,
+                    pitch: intent.pitch,
+                    damping: None,
+                });
+            }
+            AvatarCameraMode::Orbit => {
+                avatar.try_insert(OrbitCamera {
+                    target: Entity::PLACEHOLDER,
+                    distance: intent.orbit_distance,
+                    yaw: intent.yaw,
+                    pitch: intent.pitch,
+                    damping: None,
+                    vertical_offset: 0.0,
+                });
+            }
+            AvatarCameraMode::SpringArm => {
+                avatar.try_insert((
+                    SpringArmCamera {
+                        target: Entity::PLACEHOLDER,
+                        distance: intent.spring_arm_distance,
+                        yaw: intent.yaw,
+                        pitch: intent.pitch,
+                        damping: None,
+                        vertical_offset: intent.spring_arm_vertical_offset,
+                        track_heading: intent.spring_arm_track_heading,
+                        attitude: intent.spring_arm_attitude,
+                    },
+                    avian3d::prelude::TranslationInterpolation,
+                    avian3d::prelude::RotationInterpolation,
+                ));
+            }
+        }
     }
     for entity in q_proj.iter() {
         commands.entity(entity).try_insert(AdaptiveNearPlane);

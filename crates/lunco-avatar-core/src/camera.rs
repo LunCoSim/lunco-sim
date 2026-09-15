@@ -29,6 +29,22 @@ impl Default for AvatarFlightSettings {
     }
 }
 
+/// Initial camera behavior authored for an avatar in USD.
+///
+/// This is a data contract between the USD projection and the generic avatar
+/// movement runtime. It deliberately contains no scenario policy: Rhai may
+/// select, focus, or replace the active camera through the command surface.
+#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AvatarCameraMode {
+    /// Move independently in the active spatial frame.
+    #[default]
+    FreeFlight,
+    /// Orbit a target in the target body's external frame.
+    Orbit,
+    /// Follow a target with a spring arm.
+    SpringArm,
+}
+
 /// Per-avatar mouse-wheel input accumulated between camera systems.
 #[derive(Component, Default)]
 pub struct CameraZoomInput {
@@ -165,6 +181,54 @@ pub enum FollowAttitude {
     WorldLocked,
     /// Follow the complete target attitude, including roll.
     FullAttitude,
+}
+
+/// USD-authored initial camera and movement contract for a local avatar.
+///
+/// USD owns the initial mode, pose, rig parameters, and flight parameters.
+/// [`lunco-avatar`](https://docs.rs/lunco-avatar) only realizes this contract
+/// into its generic ECS movement components; it does not choose a scene-specific
+/// camera mode or hard-code a vehicle policy.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component)]
+pub struct AvatarCameraIntent {
+    /// Initial interactive camera mode.
+    pub mode: AvatarCameraMode,
+    /// Initial yaw in radians.
+    pub yaw: f32,
+    /// Initial pitch in radians.
+    pub pitch: f32,
+    /// Initial orbital arm length in metres.
+    pub orbit_distance: f64,
+    /// Initial spring-arm length in metres.
+    pub spring_arm_distance: f64,
+    /// Initial spring-arm vertical offset in metres.
+    pub spring_arm_vertical_offset: f32,
+    /// Whether the spring arm follows the target heading.
+    pub spring_arm_track_heading: bool,
+    /// How the spring arm derives its target attitude.
+    pub spring_arm_attitude: FollowAttitude,
+    /// Authored free-flight movement parameters.
+    pub flight_settings: AvatarFlightSettings,
+    /// Authored photographic exposure, if present.
+    pub exposure_ev100: Option<f32>,
+}
+
+impl Default for AvatarCameraIntent {
+    fn default() -> Self {
+        Self {
+            mode: AvatarCameraMode::FreeFlight,
+            yaw: std::f32::consts::PI * 0.8,
+            pitch: -0.3,
+            orbit_distance: 30.0,
+            spring_arm_distance: 15.0,
+            spring_arm_vertical_offset: 2.0,
+            spring_arm_track_heading: true,
+            spring_arm_attitude: FollowAttitude::Heading,
+            flight_settings: AvatarFlightSettings::default(),
+            exposure_ev100: None,
+        }
+    }
 }
 
 /// Chase camera that follows a target with a spring-arm pose.
