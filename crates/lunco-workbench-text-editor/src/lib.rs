@@ -3,18 +3,20 @@
 use std::path::{Component, Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use bevy_egui::egui;
-use lunco_core::on_command;
+use lunco_core::{on_command, register_commands};
 use lunco_doc_bevy::OpenFile;
 use lunco_workbench_widgets::text_editor;
 
 use lunco_workbench_core::commands::{CloseTab, OpenTab, OpenTabPreserveFocus};
 use lunco_workbench_core::source::{
-    is_source_only_text_path, OpenEphemeralSource, OpenSourceView, OpenTwinSource, SaveSourceText,
+    OpenEphemeralSource, OpenSourceView, OpenTwinSource, SaveSourceText, is_source_only_text_path,
 };
 use lunco_workbench_core::tabs::{EditorTabId, EditorTabs, PendingTabCloses};
-use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot, TabId};
+use lunco_workbench_core::{
+    InstancePanel, PanelCtx, PanelId, PanelSlot, TabId, WorkbenchPanelAppExt,
+};
 
 const SOURCE_EDITOR_KIND: PanelId = PanelId("source_editor");
 // Rich editors own `.mo` and USD layers for their native document workflows,
@@ -26,7 +28,7 @@ const SOURCE_EDITOR_KIND: PanelId = PanelId("source_editor");
 /// viewer path even when a host's document registry happens to classify their
 /// extension; otherwise a double-click can be consumed by a domain dispatcher
 /// that has no editor for the file.
-pub(crate) struct SourceEditorPanel;
+struct SourceEditorPanel;
 
 impl InstancePanel for SourceEditorPanel {
     fn kind(&self) -> PanelId {
@@ -147,7 +149,7 @@ impl InstancePanel for SourceEditorPanel {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SourceTabState {
+struct SourceTabState {
     path: PathBuf,
     text: String,
     origin: Option<TwinSourceOrigin>,
@@ -165,7 +167,7 @@ struct TwinSourceOrigin {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct PendingSourceRequests {
+struct PendingSourceRequests {
     opens: Vec<SourceOpenRequest>,
     saves: Vec<SaveSourceText>,
 }
@@ -186,7 +188,7 @@ enum SourceOpenRequest {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct PendingSourceReads {
+struct PendingSourceReads {
     next_request: u64,
     tasks: Vec<PendingSourceRead>,
 }
@@ -201,7 +203,7 @@ struct PendingSourceRead {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct PendingSourceWrites {
+struct PendingSourceWrites {
     tasks: Vec<PendingSourceWrite>,
 }
 
@@ -217,10 +219,7 @@ struct PendingSourceWrite {
 }
 
 #[on_command(OpenFile)]
-pub(crate) fn on_open_file_for_text(
-    trigger: On<OpenFile>,
-    mut pending: ResMut<PendingSourceRequests>,
-) {
+fn on_open_file_for_text(trigger: On<OpenFile>, mut pending: ResMut<PendingSourceRequests>) {
     let path = trigger.event().path.clone();
     // `.usda` remains a supported text view, but its generic OpenFile action
     // belongs to the USD document domain. Source text for USD is requested
@@ -231,17 +230,14 @@ pub(crate) fn on_open_file_for_text(
 }
 
 #[on_command(OpenSourceView)]
-pub(crate) fn on_open_source_view(
-    trigger: On<OpenSourceView>,
-    mut pending: ResMut<PendingSourceRequests>,
-) {
+fn on_open_source_view(trigger: On<OpenSourceView>, mut pending: ResMut<PendingSourceRequests>) {
     pending
         .opens
         .push(SourceOpenRequest::Asset(trigger.event().asset_path.clone()));
 }
 
 #[on_command(OpenEphemeralSource)]
-pub(crate) fn on_open_ephemeral_source(
+fn on_open_ephemeral_source(
     trigger: On<OpenEphemeralSource>,
     mut pending: ResMut<PendingSourceRequests>,
 ) {
@@ -252,10 +248,7 @@ pub(crate) fn on_open_ephemeral_source(
 }
 
 #[on_command(OpenTwinSource)]
-pub(crate) fn on_open_twin_source(
-    trigger: On<OpenTwinSource>,
-    mut pending: ResMut<PendingSourceRequests>,
-) {
+fn on_open_twin_source(trigger: On<OpenTwinSource>, mut pending: ResMut<PendingSourceRequests>) {
     pending.opens.push(SourceOpenRequest::Twin {
         root: PathBuf::from(&trigger.event().twin_root),
         relative: PathBuf::from(&trigger.event().relative_path),
@@ -265,14 +258,11 @@ pub(crate) fn on_open_twin_source(
 }
 
 #[on_command(SaveSourceText)]
-pub(crate) fn on_save_source_text(
-    trigger: On<SaveSourceText>,
-    mut pending: ResMut<PendingSourceRequests>,
-) {
+fn on_save_source_text(trigger: On<SaveSourceText>, mut pending: ResMut<PendingSourceRequests>) {
     pending.saves.push(trigger.event().clone());
 }
 
-pub(crate) fn drain_pending_source_requests(world: &mut World) {
+fn drain_pending_source_requests(world: &mut World) {
     let (opens, saves) = {
         let mut pending = world.resource_mut::<PendingSourceRequests>();
         (
@@ -359,7 +349,7 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
 /// an old file editable and visible as the current document. Dropping the tab
 /// also drops its pending read/write handles, which is the cancellation
 /// boundary for the source viewer.
-pub(crate) fn close_source_state_on_twin_closed(
+fn close_source_state_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     mut tabs: ResMut<EditorTabs<SourceTabState>>,
     mut pending_requests: ResMut<PendingSourceRequests>,
@@ -564,7 +554,7 @@ fn start_read(
     }
 }
 
-pub(crate) fn drain_pending_source_reads(world: &mut World) {
+fn drain_pending_source_reads(world: &mut World) {
     let tasks = std::mem::take(&mut world.resource_mut::<PendingSourceReads>().tasks);
     let mut pending = Vec::new();
     for mut read in tasks {
@@ -652,7 +642,7 @@ fn start_write(world: &mut World, command: SaveSourceText) {
     }
 }
 
-pub(crate) fn drain_pending_source_writes(world: &mut World) {
+fn drain_pending_source_writes(world: &mut World) {
     let tasks = std::mem::take(&mut world.resource_mut::<PendingSourceWrites>().tasks);
     let mut pending = Vec::new();
     for mut write in tasks {
@@ -691,7 +681,7 @@ pub(crate) fn drain_pending_source_writes(world: &mut World) {
 
 /// Claim close requests for source-editor instances and leave every other
 /// editor family's request in the shared workbench queue.
-pub(crate) fn drain_source_tab_closes(world: &mut World) {
+fn drain_source_tab_closes(world: &mut World) {
     let requested = world.resource_mut::<PendingTabCloses>().drain();
     let mut unclaimed = Vec::new();
     for tab in requested {
@@ -749,6 +739,44 @@ fn resolve_twin_file(
         .find(|root| root.as_path() == requested_root)?
         .clone();
     Some((root.clone(), relative.to_path_buf(), root.join(relative)))
+}
+
+// Keep all typed source commands on the same registration path so API/Rhai
+// discovery and the in-process observers cannot drift apart.
+register_commands!(
+    on_open_file_for_text,
+    on_open_source_view,
+    on_open_ephemeral_source,
+    on_open_twin_source,
+    on_save_source_text
+);
+
+/// Registers the generic source editor and its shared source-view commands.
+///
+/// This is a production capability rather than a shell module: any Workbench
+/// host that provides the shared tab and workspace resources can install it.
+pub struct TextEditorPlugin;
+
+impl Plugin for TextEditorPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<EditorTabs<SourceTabState>>()
+            .init_resource::<PendingTabCloses>()
+            .init_resource::<PendingSourceRequests>()
+            .init_resource::<PendingSourceReads>()
+            .init_resource::<PendingSourceWrites>()
+            .add_observer(close_source_state_on_twin_closed)
+            .add_systems(
+                Update,
+                (
+                    drain_pending_source_requests,
+                    drain_pending_source_reads,
+                    drain_pending_source_writes,
+                    drain_source_tab_closes,
+                )
+                    .chain(),
+            );
+        app.register_instance_panel(SourceEditorPanel);
+    }
 }
 
 #[cfg(test)]

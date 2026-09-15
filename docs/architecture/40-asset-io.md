@@ -94,11 +94,12 @@ backend owner separate:
 | Read/write/rename/delete, entry metadata, directory preparation, and backend selection | `lunco-storage` | dispatch a typed command; never call the backend directly |
 | Twin manifest semantics and recursive file index | `lunco-twin` | render the index and send intents |
 | Open-root/session policy and async Twin admission | `lunco-workspace` | provide the picker seam only |
-| Menus, dialogs, keybinds, and command/API adapters | `lunco-workbench` | owns this shell workflow |
+| Picker requests and native/wasm dialog backends | `lunco-workbench-file-dialog` | no storage ownership |
+| Menus, keybinds, and shell command/API adapters | `lunco-workbench` + `lunco-workbench-file-ops` | compose the file workflow |
 | USDA/Modelica serialization and format-specific follow-up edits | the owning domain crate | dispatch the domain command |
 
-Thus `lunco-workbench::file_ops` is intentionally still a module, but it is a
-shell name, not an I/O owner. For example, `RenameTwinEntry` validates the
+Thus `lunco-workbench-file-ops` is a workflow adapter, not an I/O owner. For
+example, `RenameTwinEntry` validates the
 command and updates workspace state; the actual move and entry inspection use
 `lunco-storage`. Screenshot/recording PNGs are encoded in the workbench's
 render-bound code, then their bytes are written through the same storage API.

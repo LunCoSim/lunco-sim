@@ -61,7 +61,7 @@ use lunco_workbench_core::commands::{CloseTab, FocusPanel, OpenTab, OpenTabPrese
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
 use lunco_workbench_core::scene_pick::ScenePickGate;
-use lunco_workbench_core::tabs::{EditorTabs, PendingTabCloses};
+use lunco_workbench_core::tabs::PendingTabCloses;
 use lunco_workbench_core::uri::UriRegistry;
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 use lunco_workbench_core::WorkbenchPanelAppExt;
@@ -78,12 +78,10 @@ use std::sync::Arc;
 mod perspective;
 mod perspective_help;
 mod session;
-mod source_viewer;
 mod twin_settings;
 mod viewport;
 
 pub mod control_status;
-pub mod file_ops;
 pub mod input_overlay;
 pub mod perf_hud;
 pub mod perspective_command;
@@ -784,19 +782,17 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<lunco_twin::DocumentKindRegistryPlugin>() {
             app.add_plugins(lunco_twin::DocumentKindRegistryPlugin);
         }
-        // Native/web file-picker plumbing is a separate production capability.
-        // Domain code fires its typed events without caring which backend is live.
-        if !app.is_plugin_added::<lunco_workbench_file_dialog::PickerPlugin>() {
-            app.add_plugins(lunco_workbench_file_dialog::PickerPlugin);
-        }
         // Shell-level picker/file-workflow commands (`ShowOpenFilePicker`,
         // `OpenFolder`, `OpenTwin`, `SaveAll`, `SaveAsTwin`) + the
         // picker→command routing observer. `OpenFile` is the shared document
         // command; domain crates contribute their own
         // observers for verbs that need domain-specific handling
         // (e.g. modelica's `on_open_file` reads `.mo` content).
-        if !app.is_plugin_added::<file_ops::FileOpsPlugin>() {
-            app.add_plugins(file_ops::FileOpsPlugin);
+        if !app.is_plugin_added::<lunco_workbench_file_ops::FileOpsPlugin>() {
+            app.add_plugins(lunco_workbench_file_ops::FileOpsPlugin);
+        }
+        if !app.is_plugin_added::<lunco_workbench_text_editor::TextEditorPlugin>() {
+            app.add_plugins(lunco_workbench_text_editor::TextEditorPlugin);
         }
         if !app.is_plugin_added::<perspective_help::PerspectiveHelpPlugin>() {
             app.add_plugins(perspective_help::PerspectiveHelpPlugin);
@@ -813,10 +809,6 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<DockSizes>()
             .init_resource::<PendingTabCloses>()
             .init_resource::<twin_settings::TwinSettingsView>()
-            .init_resource::<EditorTabs<source_viewer::SourceTabState>>()
-            .init_resource::<source_viewer::PendingSourceRequests>()
-            .init_resource::<source_viewer::PendingSourceReads>()
-            .init_resource::<source_viewer::PendingSourceWrites>()
             // Cross-domain URI registry. Starts empty; each domain
             // plugin (lunco-modelica-core, a future USD command domain, …) pushes
             // its own handler on build. See `uri.rs` for the trait.
@@ -826,7 +818,6 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_open_tab)
             .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
-            .add_observer(source_viewer::close_source_state_on_twin_closed)
             .add_observer(twin_settings::clear_on_twin_closed)
             .add_systems(
                 Update,
@@ -846,24 +837,8 @@ impl Plugin for WorkbenchPlugin {
                 )
                     .chain(),
             )
-            .add_systems(First, perspective::sync_scene_interaction_mode)
-            .add_systems(
-                Update,
-                (
-                    source_viewer::drain_pending_source_requests,
-                    source_viewer::drain_pending_source_reads,
-                    source_viewer::drain_pending_source_writes,
-                    source_viewer::drain_source_tab_closes,
-                )
-                    .chain(),
-            );
+            .add_systems(First, perspective::sync_scene_interaction_mode);
         register_all_commands(app);
-        source_viewer::__register_on_open_file_for_text(app);
-        source_viewer::__register_on_open_source_view(app);
-        source_viewer::__register_on_open_ephemeral_source(app);
-        source_viewer::__register_on_open_twin_source(app);
-        source_viewer::__register_on_save_source_text(app);
-        app.register_instance_panel(source_viewer::SourceEditorPanel);
         app.register_panel(twin_settings::TwinSettingsPanel::default());
         drain_registered_panels(app.world_mut());
         app.add_systems(
@@ -3872,7 +3847,7 @@ fn render_layout(
 
                 // -- Open ---------------------------------------------
                 if ui.button("Open File…\tCtrl+O").clicked() {
-                    world.trigger(file_ops::ShowOpenFilePicker {});
+                    world.trigger(lunco_workbench_file_ops::ShowOpenFilePicker {});
                     ui.close();
                 }
                 // Open Folder + Recents are native-only for now.
@@ -3896,7 +3871,7 @@ fn render_layout(
                     // explicit Twin semantics, but isn't worth a
                     // separate menu entry.
                     if ui.button("Open Folder/Twin…").clicked() {
-                        world.trigger(file_ops::ShowOpenFolderPicker {});
+                        world.trigger(lunco_workbench_file_ops::ShowOpenFolderPicker {});
                         ui.close();
                     }
 
@@ -3984,11 +3959,11 @@ fn render_layout(
                     ui.close();
                 }
                 if ui.button("Save All").clicked() {
-                    world.trigger(file_ops::SaveAll {});
+                    world.trigger(lunco_workbench_file_ops::SaveAll {});
                     ui.close();
                 }
                 if ui.button("Save as Twin…").clicked() {
-                    world.trigger(file_ops::SaveAsTwin {
+                    world.trigger(lunco_workbench_file_ops::SaveAsTwin {
                         folder: String::new(),
                     });
                     ui.close();
@@ -4016,7 +3991,7 @@ fn render_layout(
                         )
                         .clicked()
                     {
-                        world.trigger(file_ops::CopyShareLink {});
+                        world.trigger(lunco_workbench_file_ops::CopyShareLink {});
                         ui.close();
                     }
                     ui.separator();

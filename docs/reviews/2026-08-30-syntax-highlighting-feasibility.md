@@ -23,7 +23,7 @@ syntax-highlighting change is included in the tutorials commit.
 ## Current editor boundary
 
 The generic source viewer in
-`crates/lunco-workbench/src/source_viewer.rs` currently routes `rhai`,
+`crates/lunco-workbench-text-editor/src/lib.rs` currently routes `rhai`,
 `wgsl`, `usda`, `usd`, and `usdc` to a plain monospace `TextEdit`.
 It does not route `.html` or `.css`, even though HUI uses those extensions.
 The Modelica editor has its own document buffer, selection, debounce, and

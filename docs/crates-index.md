@@ -145,6 +145,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel-host consumption, persistence, viewport integration, and shell-owned command observers. It consumes `lunco-workbench-core` and `lunco-workbench-widgets`; headless adapters use the core contract without linking this shell. |
 | **`lunco-workbench-guided-ui`** | Optional application-level guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
 | **`lunco-workbench-file-dialog`** | Reusable native/wasm file-dialog capability: typed open/save/folder requests, backend resolution events, browser-picked text, and browser downloads. It owns dialog dependencies (`rfd`/wasm DOM) outside storage, document, and shell contracts. |
+| **`lunco-workbench-file-ops`** | Reusable windowed file-workflow adapter: typed picker commands, picker-result routing, Twin/document save and rename coordination. It reuses `lunco-storage`, `lunco-workbench-file-dialog`, `lunco-workspace`, and document contracts without making storage own UI policy. |
+| **`lunco-workbench-text-editor`** | Reusable generic source editor: source-only text paths, asset/Twin/ephemeral source loading, async storage writes, tab lifecycle, and source-editor panel registration. It reuses the core source/tab contracts and shared text-editor widget without depending on the concrete docking shell. |
 | **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
 | **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets-datasets`' shared registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
@@ -629,16 +631,31 @@ Reflection-based data extraction engine. Automatically samples and standardizes 
 
 **`lunco-workbench`**
 The engineering-IDE shell. Handles the docking engine (tabs, splits),
-perspective presets (Build, Simulate), picker/command adapters, and the
-concrete source editor. Shared hierarchy-row and text/icon presentation lives
-in `lunco-workbench-widgets`; shell-neutral tab, source-view, scene-state, and
-pending-close contracts live in `lunco-workbench-core`. It does not own file
-bytes or backend I/O; those go through `lunco-storage`, while Twin discovery
-stays in `lunco-workspace`/`lunco-twin`. GPU health and presentation recovery
-live in the independent `lunco-render-recovery` crate; the workbench only
-composes its banner and recovery systems. Hosts that need Twin and Files
-navigation add the separate `lunco-workbench-browser` feature package, which
-does not link this shell.
+perspective presets (Build, Simulate), concrete docking, persistence, and
+shell menus. File workflow and generic source editing are composed from
+`lunco-workbench-file-ops` and `lunco-workbench-text-editor`. Shared
+hierarchy-row and text/icon presentation lives in `lunco-workbench-widgets`;
+shell-neutral tab, source-view, scene-state, and pending-close contracts live
+in `lunco-workbench-core`. It does not own file bytes or backend I/O; those go
+through `lunco-storage`, while Twin discovery stays in
+`lunco-workspace`/`lunco-twin`. GPU health and presentation recovery live in
+the independent `lunco-render-recovery` crate; the workbench only composes its
+banner and recovery systems. Hosts that need Twin and Files navigation add the
+separate `lunco-workbench-browser` feature package, which does not link this
+shell.
+
+**`lunco-workbench-file-ops`**
+Windowed file-workflow adapters. It owns picker-triggering seams and routes
+resolved picker handles into the existing document and workspace commands.
+Actual reads, writes, entry inspection, and renames use `lunco-storage`;
+folder/Twin admission remains in `lunco-workspace`; domain crates still own
+format-specific loading and serialization.
+
+**`lunco-workbench-text-editor`**
+Generic source-editor capability. It owns the source tab state, async source
+read/write lifecycle, Twin-close cleanup, and the multi-instance panel while
+reusing source commands from `lunco-workbench-core` and the editor builder from
+`lunco-workbench-widgets`. Rich Modelica/USD editors remain domain-owned.
 
 **`lunco-workbench-guided-ui`**
 Optional application presentation for authored guided scenarios. It owns the

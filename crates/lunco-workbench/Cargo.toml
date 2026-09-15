@@ -33,7 +33,8 @@ bevy_egui = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
-lunco-workbench-file-dialog = { path = "../lunco-workbench-file-dialog" }
+lunco-workbench-file-ops = { path = "../lunco-workbench-file-ops" }
+lunco-workbench-text-editor = { path = "../lunco-workbench-text-editor" }
 lunco-status-core = { path = "../lunco-status-core" }
 # Screenshot commands and GPU readback live in the production capture capability;
 # keeping this dependency optional preserves the shell-only build.
@@ -68,11 +69,7 @@ lunco-storage = { path = "../lunco-storage" }
 # stable serialisation lets us skip writes when nothing changed.
 serde_json = { workspace = true }
 serde = { workspace = true }
-# `user_config_dir()` for the cross-platform LunCoSim recents path and the
-# lightweight source-library manifest used by the source viewer.
-lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-render = { path = "../lunco-render" }
-crossbeam-channel = { workspace = true }
 [lints]
 workspace = true

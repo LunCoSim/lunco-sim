@@ -1190,7 +1190,7 @@ actually call, with the fields the deserializer actually accepts. See the
  query separately; it returns the URL in its `data` payload instead of
  touching a clipboard.
 
-- *defined in:* `crates/lunco-workbench/src/file_ops.rs`
+- *defined in:* `crates/lunco-workbench-file-ops/src/lib.rs`
 - *fields:* none — call with `CopyShareLink` (no params)
 
 #### `MaximizeWindow`
@@ -1221,7 +1221,7 @@ actually call, with the fields the deserializer actually accepts. See the
  their workspace title; with no active Twin their domain's normal Save-As
  picker is used.
 
-- *defined in:* `crates/lunco-workbench/src/file_ops.rs`
+- *defined in:* `crates/lunco-workbench-file-ops/src/lib.rs`
 - *fields:* none — call with `SaveAll` (no params)
 
 #### `SaveAsTwin`
@@ -1232,7 +1232,7 @@ actually call, with the fields the deserializer actually accepts. See the
  declares the first open USD document as the default scene. Empty
  `folder` triggers a folder picker.
 
-- *defined in:* `crates/lunco-workbench/src/file_ops.rs`
+- *defined in:* `crates/lunco-workbench-file-ops/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1257,7 +1257,7 @@ actually call, with the fields the deserializer actually accepts. See the
  [`lunco_workbench_file_dialog::PickHandle`]. On success, the file dialog resolves to
  [`OpenFile`] with the chosen path.
 
-- *defined in:* `crates/lunco-workbench/src/file_ops.rs`
+- *defined in:* `crates/lunco-workbench-file-ops/src/lib.rs`
 - *fields:* none — call with `ShowOpenFilePicker` (no params)
 
 #### `ShowOpenFolderPicker`
@@ -1268,7 +1268,7 @@ actually call, with the fields the deserializer actually accepts. See the
  [`lunco_workbench_file_dialog::PickHandle`]. On success, the file dialog resolves to
  [`OpenFolder`] with the chosen path.
 
-- *defined in:* `crates/lunco-workbench/src/file_ops.rs`
+- *defined in:* `crates/lunco-workbench-file-ops/src/lib.rs`
 - *fields:* none — call with `ShowOpenFolderPicker` (no params)
 
 #### `ToggleInputOverlay`

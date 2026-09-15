@@ -43,16 +43,16 @@
 //!   command and serialization to document owners.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
-use lunco_doc_bevy::{rename::RenameOpenDocument, SaveAsDocument};
+use lunco_core::{Command, on_command, register_commands};
+use lunco_doc_bevy::{SaveAsDocument, rename::RenameOpenDocument};
 use lunco_twin::{DocumentKindId, DocumentKindRegistry};
 
 use lunco_workbench_file_dialog::{PickFollowUp, PickHandle, PickMode, PickResolved};
 use lunco_workspace::open::{
-    drain_pending_twin_opens, AddFolderToWorkspace, AddTwin, CreateTwin, OpenFolder, OpenTwin,
-    PendingTwinOpens,
+    AddFolderToWorkspace, AddTwin, CreateTwin, OpenFolder, OpenTwin, PendingTwinOpens,
+    drain_pending_twin_opens,
 };
-use lunco_workspace::{rename::RenameTwinEntry, FileRenamed, WorkspaceResource};
+use lunco_workspace::{FileRenamed, WorkspaceResource, rename::RenameTwinEntry};
 
 /// Request a system "Open File" dialog.
 ///
@@ -749,12 +749,18 @@ register_commands!(
 
 /// Plugin that registers shell-level file-workflow commands.
 ///
-/// Auto-installed by `WorkbenchPlugin`. Headless tests that want
-/// these commands without the full dock shell can add it directly.
+/// Adds the picker backend and registers shell-level file-workflow commands.
+///
+/// Headless hosts can use the workspace and document commands directly; this
+/// plugin is the windowed adapter that turns empty path fields into picker
+/// requests and routes the selected handles back into those commands.
 pub struct FileOpsPlugin;
 
 impl Plugin for FileOpsPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_workbench_file_dialog::PickerPlugin>() {
+            app.add_plugins(lunco_workbench_file_dialog::PickerPlugin);
+        }
         register_all_commands(app);
         // OpenFile is defined by lunco-doc-bevy, but the shell registers its
         // reflected type so a GUI-only host advertises the shared picker
