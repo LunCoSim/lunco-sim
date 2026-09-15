@@ -619,7 +619,7 @@ pub fn on_scene_click_select(
     terrain_tool_active: Res<lunco_core::TerrainToolActive>,
     armed_script_tool: Res<lunco_core::ArmedScriptTool>,
     keys: Res<ButtonInput<KeyCode>>,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     scene_interaction: Res<lunco_core::SceneInteractionMode>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_mobility: Query<Entity, With<lunco_core::MobilityRoot>>,
@@ -715,7 +715,7 @@ pub fn on_scene_click_select(
 /// path because it's keyboard-driven, not a pointer pick. Deselects through the same
 /// `SelectEntity` mutation path.
 ///
-/// Reads [`lunco_core::CancelIntent`] rather than raw `Escape`/`Backspace`: the
+/// Reads [`lunco_control_core::CancelIntent`] rather than raw `Escape`/`Backspace`: the
 /// bindings live in `assets/config/keybindings.json`, so one rebind moves every
 /// "back out" at once, and the intent already stands down while an Inspector field has
 /// keyboard focus (so Backspace there edits text).
@@ -725,7 +725,7 @@ pub fn on_scene_click_select(
 /// that Cancel belongs to the mode — clearing the selection as a side effect would be
 /// two undos for one keypress.
 pub fn handle_deselect_keys(
-    cancel: lunco_core::CancelIntent,
+    cancel: lunco_control_core::CancelIntent,
     cursor_mode: lunco_core::CursorModeActive,
     q_selected_old: Query<Entity, With<Selected>>,
     mut selected: ResMut<SelectedEntities>,

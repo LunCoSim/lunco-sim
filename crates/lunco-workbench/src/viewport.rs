@@ -77,11 +77,12 @@ use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
-use leafwing_input_manager::prelude::{ActionState, InputManagerPlugin};
+use leafwing_input_manager::prelude::ActionState;
 
 use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
+use lunco_control_core::UserIntent;
 use lunco_controller::InputBindingsSettings;
-use lunco_core::{SceneViewport, UserIntent};
+use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
 use lunco_workbench_core::presentation::ViewportPlaceholder;
 use lunco_workbench_core::scene_pick::{EguiPointerState, ScenePickGate, SceneTarget};
@@ -297,7 +298,7 @@ pub(crate) fn ensure_egui_host(
             RenderLayers::none(),
             PrimaryEguiContext,
             WorkbenchEguiHost,
-            lunco_core::LocalIntentSurface,
+            lunco_control_core::LocalIntentSurface,
             ActionState::<UserIntent>::default(),
             input_map,
             Name::new("WorkbenchEguiHost"),
@@ -595,7 +596,7 @@ pub(crate) fn egui_viewport_aware_picking(
     }
 }
 
-/// Relay egui's input-capture flags into the ECS as [`lunco_core::EguiFocus`].
+/// Relay egui's input-capture flags into the ECS as [`lunco_control_core::EguiFocus`].
 ///
 /// egui reads its own copy of the winit events and never removes anything from
 /// Bevy's `ButtonInput`, so raw scene-input systems (keyboard driving, camera
@@ -610,7 +611,7 @@ pub(crate) fn egui_viewport_aware_picking(
 /// the picking backend) so the flags are this-frame-fresh; consumers in `Update`
 /// read them one frame later, which is imperceptible for held input.
 pub(crate) fn track_egui_focus(
-    mut focus: ResMut<lunco_core::EguiFocus>,
+    mut focus: ResMut<lunco_control_core::EguiFocus>,
     mut q: Query<&mut bevy_egui::EguiContext, With<PrimaryEguiContext>>,
     gate: Res<ScenePickGate>,
 ) {
@@ -653,13 +654,10 @@ fn apply_viewport_panel_measurement(
 
 impl Plugin for WorkbenchViewportPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<InputManagerPlugin<UserIntent>>() {
-            app.add_plugins(InputManagerPlugin::<UserIntent>::default());
-        }
+        app.add_plugins(lunco_control_core::LunCoControlPlugin);
         app.init_resource::<PanelRects>()
             .init_resource::<ScenePickGate>()
             .init_resource::<ViewportPlaceholder>()
-            .init_resource::<lunco_core::EguiFocus>()
             .add_observer(apply_viewport_panel_measurement)
             .add_systems(Startup, ensure_egui_host)
             // Clear the pick gate's per-frame inputs. `First` — NOT the egui pass —

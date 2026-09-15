@@ -720,9 +720,9 @@ pub fn setup_big_space_hierarchy(
             Transform::from_translation(cam_translation).looking_to(cam_direction, Vec3::Y),
             GlobalTransform::default(),
             lunco_core::Avatar,
-            lunco_core::IntentState::default(),
+            lunco_control_core::IntentState::default(),
             input_map,
-            lunco_core::IntentAnalogState::default(),
+            lunco_control_core::IntentAnalogState::default(),
             Name::new("Observer Camera"),
             ChildOf(earth_inertial),
         )); // Star-fixed frame at Earth — NOT the rotating Earth Grid.

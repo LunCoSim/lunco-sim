@@ -45,6 +45,7 @@ transport-http = ["networking", "lunco-api-transport/transport-http"]
 bevy = { workspace = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-core = { path = "../lunco-core" }
+lunco-control-core = { path = "../lunco-control-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 # `default-features = false`: we only use the registry/executor types + plugin,

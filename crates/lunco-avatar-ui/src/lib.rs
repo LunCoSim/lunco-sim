@@ -8,8 +8,9 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAp
 use lunco_avatar::RoverNameTagSettings;
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, LocalGravityField, SurfacePoseQuery};
+use lunco_control_core::{ControlBinding, UserIntent};
 use lunco_controller::{resolved_input_label, InputBindingsSettings};
-use lunco_core::{Avatar, CameraFollow, ControlBinding, GlobalEntityId, LocalAvatar, UserIntent};
+use lunco_core::{Avatar, CameraFollow, GlobalEntityId, LocalAvatar};
 use lunco_core_session::{SessionProfiles, SessionRegistry};
 use lunco_cosim_core::ControlLink;
 

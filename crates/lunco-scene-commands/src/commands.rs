@@ -1436,7 +1436,7 @@ pub fn persist_rotation_to_runtime_layer(
 /// name box) edits the text instead of silently reverting the scene.
 pub fn handle_undo_input(
     keys: Res<ButtonInput<KeyCode>>,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut commands: Commands,
 ) {

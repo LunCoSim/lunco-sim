@@ -3005,7 +3005,7 @@ pub fn block_action_states(
     settings: Res<TutorialSettings>,
     tutor_status: Res<TutorStatusResource>,
     local: Option<Res<LocalSession>>,
-    mut q_user_intent: Query<&mut ActionState<lunco_core::UserIntent>>,
+    mut q_user_intent: Query<&mut ActionState<lunco_control_core::UserIntent>>,
 ) {
     if perspective_inputs_blocked(&settings, &tutor_status, local.as_deref()) {
         for mut state in &mut q_user_intent {

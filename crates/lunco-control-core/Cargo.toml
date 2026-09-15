@@ -1,0 +1,14 @@
+[package]
+name = "lunco-control-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Generic semantic-control contracts and input state for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+leafwing-input-manager = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+
+[lints]
+workspace = true

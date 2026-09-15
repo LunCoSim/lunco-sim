@@ -11,7 +11,7 @@
     A vessel adds a child `def "Controls" (references = @lunco://vessels/control_profiles.usda@</RoverControls>)`
     to receive this intent->port scope. The entity translator walks
     `<Vessel>/Controls/<intent>` (child prim NAME = intent, `string lunco:port` +
-    `double lunco:factor`) and builds a `lunco_core::ControlBinding`. Delivered as a
+    `double lunco:factor`) and builds a `lunco_control_core::ControlBinding`. Delivered as a
     child `references` arc (NOT root subLayers + inherits) so it composes through a
     spawn/reference exactly like a wheel component does — the arc that empirically
     survives runtime instantiation. Authoring the profile ONCE here keeps every

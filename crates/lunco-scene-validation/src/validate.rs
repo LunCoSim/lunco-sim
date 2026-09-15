@@ -21,7 +21,7 @@
 //!   spawner runs on every `PhysxVehicleWheelAPI` prim — a wheel that would
 //!   refuse to spawn fails validation here, with the exact attribute names.
 //!   Control bindings are checked against the same authority the loader uses
-//!   (`lunco_core::parse_user_intent`): `ControlBinding` load is deliberately
+//!   (`lunco_control_core::parse_user_intent`): `ControlBinding` load is deliberately
 //!   TOLERANT — an unknown intent warns and is skipped — so a typo silently
 //!   costs one control at runtime. This is where that becomes a hard error, on
 //!   purpose: tolerant load, strict pre-flight.

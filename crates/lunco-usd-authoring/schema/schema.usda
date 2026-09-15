@@ -20,7 +20,7 @@
 
     TODO — GENERATE VOCABULARIES FROM THE ENGINE. Token vocabularies here are
     still hand-copied from Rust (the `UserIntent` alias table in
-    `lunco_core::architecture::parse_user_intent` is the clearest case);
+    `lunco_control_core::parse_user_intent` is the clearest case);
     The generator keeps the two DERIVED FILES in sync, not the vocabularies.
 
     NAMING. Every property lives under the `lunco:` namespace, sub-namespaced by

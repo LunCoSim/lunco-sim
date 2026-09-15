@@ -8,6 +8,7 @@ license.workspace = true
 bevy = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-control-core = { path = "../lunco-control-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 # The generic vessel-control command contracts live in the backend-neutral
 # package; `drive_from_bindings` triggers them from held keys.

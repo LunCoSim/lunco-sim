@@ -27,6 +27,7 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # lunco-core. The API discovers it by reflection (AppTypeRegistry) — no direct
 # lunco-api dep. Lua remains only a reserved language id; it has no command.
 lunco-core = { path = "../lunco-core" }
+lunco-control-core = { path = "../lunco-control-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 # Render recovery is an application-edge policy provider. Keep it optional and

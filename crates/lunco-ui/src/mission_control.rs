@@ -8,8 +8,9 @@ use lunco_workbench_widgets::{icon_text_button, UiIcon};
 use lunco_avatar_core::commands::{FocusTarget, PossessVessel, ReleaseVessel};
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
+use lunco_control_core::{ControlBinding, UserIntent};
 use lunco_controller::{resolved_input_label, InputBindingsSettings};
-use lunco_core::{Avatar, ControlBinding, Spacecraft, UserIntent};
+use lunco_core::{Avatar, Spacecraft};
 use lunco_time::{
     realtime_rate_label, SetTimeTransport, TimeTransport, TransportMode, WorldTime,
     REALTIME_RATE_OPTIONS,

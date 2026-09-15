@@ -998,7 +998,7 @@ pub fn restore_gizmo_dynamic(
 pub fn drive_gizmo_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     mut gate: Option<ResMut<ScenePickGate>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     viewport: Option<Res<UsdViewportState>>,

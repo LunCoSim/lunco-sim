@@ -3,7 +3,7 @@
 //! This crate translates user input into the ONE generic vessel control command,
 //! [`lunco_cosim_core::commands::SetPorts`] — a batch of named input-port writes — through a
 //! **two-stage, fully data-driven** mapping that reuses the existing
-//! [`lunco_core::UserIntent`] input-abstraction (leafwing) rather than reading
+//! [`lunco_control_core::UserIntent`] input-abstraction (leafwing) rather than reading
 //! raw keys:
 //!
 //! 1. **key → intent**: the possessed avatar's [`leafwing_input_manager`]
@@ -43,7 +43,8 @@ use bevy::input::{
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
 use leafwing_input_manager::prelude::ActionState;
-use lunco_core::{on_command, register_commands, Ack, Command, OpId, UserIntent};
+use lunco_control_core::{ControlBinding, LunCoControlPlugin, UserIntent};
+use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 use lunco_cosim_core::ControlLink;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
@@ -355,7 +356,7 @@ fn restore_injected_cursor(
 /// driving a held control value. Use [`SimulateIntentEdge`] for an atomic
 /// momentary press/release or pulse. The named intent is the USD control
 /// vocabulary (`forward`, `action`, `yaw_left`, …), parsed by
-/// [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
+/// [`lunco_control_core::parse_user_intent`], so it matches whatever a vessel's
 /// `Controls` profile binds.
 #[Command]
 pub struct SimulateIntent {
@@ -386,7 +387,7 @@ impl Default for SimulateIntent {
 /// emulate a pulse with ordered `held: true` / `held: false` commands.
 ///
 /// This is the API/Rhai/network entry point. The handler validates the shared
-/// intent vocabulary and emits [`lunco_core::SemanticIntentEdge`]; it does not
+/// intent vocabulary and emits [`lunco_control_core::SemanticIntentEdge`]; it does not
 /// decide which port or mechanism the consuming Twin should actuate.
 #[Command]
 pub struct SimulateIntentEdge {
@@ -409,11 +410,11 @@ impl Default for SimulateIntentEdge {
     }
 }
 
-fn parse_intent_edge(name: &str) -> Option<lunco_core::SemanticIntentEdgeKind> {
+fn parse_intent_edge(name: &str) -> Option<lunco_control_core::SemanticIntentEdgeKind> {
     match name.trim().to_ascii_lowercase().as_str() {
-        "pressed" | "press" => Some(lunco_core::SemanticIntentEdgeKind::Pressed),
-        "released" | "release" => Some(lunco_core::SemanticIntentEdgeKind::Released),
-        "pulse" => Some(lunco_core::SemanticIntentEdgeKind::Pulse),
+        "pressed" | "press" => Some(lunco_control_core::SemanticIntentEdgeKind::Pressed),
+        "released" | "release" => Some(lunco_control_core::SemanticIntentEdgeKind::Released),
+        "pulse" => Some(lunco_control_core::SemanticIntentEdgeKind::Pulse),
         _ => None,
     }
 }
@@ -424,7 +425,7 @@ fn on_simulate_intent_edge(
     active_command: Res<lunco_core::ActiveCommandId>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
-    let Some(intent) = lunco_core::parse_user_intent(&cmd.intent) else {
+    let Some(intent) = lunco_control_core::parse_user_intent(&cmd.intent) else {
         return Err(format!("unknown semantic intent '{}'", cmd.intent));
     };
     if cmd.target == Entity::PLACEHOLDER {
@@ -436,7 +437,7 @@ fn on_simulate_intent_edge(
             cmd.edge
         ));
     };
-    commands.trigger(lunco_core::SemanticIntentEdge {
+    commands.trigger(lunco_control_core::SemanticIntentEdge {
         target: cmd.target,
         intent,
         kind,
@@ -456,9 +457,9 @@ fn on_simulate_intent_edge(
 /// scenarios can consume `intent.edge` in `on_event` without importing this
 /// crate or creating a second event transport.
 fn project_intent_edge(
-    trigger: On<lunco_core::SemanticIntentEdge>,
+    trigger: On<lunco_control_core::SemanticIntentEdge>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
-    mut causal_trace: ResMut<lunco_core::CausalTrace>,
+    mut causal_trace: ResMut<lunco_control_core::CausalTrace>,
     mut commands: Commands,
 ) {
     use lunco_core::telemetry::TelemetryValue;
@@ -496,7 +497,7 @@ fn project_intent_edge(
 #[on_command(SimulateIntent)]
 fn on_simulate_intent(trigger: On<SimulateIntent>, mut sim: ResMut<SimulatedIntents>) {
     let cmd = trigger.event();
-    let Some(intent) = lunco_core::parse_user_intent(&cmd.intent) else {
+    let Some(intent) = lunco_control_core::parse_user_intent(&cmd.intent) else {
         warn!("[simulate-intent] unknown intent '{}'", cmd.intent);
         return;
     };
@@ -612,6 +613,7 @@ fn reset_scene_control_state(
 
 impl Plugin for LunCoControllerPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(LunCoControlPlugin);
         // NOTE: OwnedInputLog / AppliedInputSeq are always-on session substrate
         // owned by LunCoCoreSessionPlugin (lunco-core-session). The controller's
         // observers consume them unconditionally, but it does NOT init them here;
@@ -698,14 +700,13 @@ impl Plugin for LunCoControllerPlugin {
     }
 }
 
-/// The per-vessel **intent → port** binding (stage 2) is [`lunco_core::ControlBinding`]
+/// The per-vessel **intent → port** binding (stage 2) is
+/// [`lunco_control_core::ControlBinding`]
 /// — pure data, authored on the VESSEL from USD (`lunco:controlBindings`) or
-/// defaulted by topology at possess time. Re-exported for the possession code and
-/// tests; the actual mapping/parse logic lives in `lunco-core` alongside
-/// [`UserIntent`]. This crate only provides the SYSTEM that consumes it
+/// defaulted by topology at possess time. The semantic contract and authored
+/// binding implementation live in `lunco-control-core`; this crate only provides
+/// the SYSTEM that consumes it
 /// ([`drive_from_bindings`]).
-pub use lunco_core::ControlBinding;
-
 /// Interaction-schedule boundary for the avatar's command producer.
 ///
 /// The free avatar consumes its command ports in `lunco-avatar` on the same
@@ -758,7 +759,7 @@ fn drive_from_bindings(
     // is focused we treat every intent as released so a keypress typed into the UI
     // doesn't also drive the vessel — see the `held` closure below. `Option` so a
     // controller-only test app without the workbench still runs (no gate).
-    egui_focus: Option<Res<lunco_core::EguiFocus>>,
+    egui_focus: Option<Res<lunco_control_core::EguiFocus>>,
     // Intents forced by `SimulateIntent` — the headless/API/rhai stand-in for keys.
     sim_intents: Option<Res<SimulatedIntents>>,
     // Per-vessel "keys were active last tick" memory for the idle-yield below.
@@ -959,13 +960,13 @@ fn emit_intent_edges(
         .insert((target, UserIntent::Action), active)
         .unwrap_or(false);
     if active != prior {
-        commands.trigger(lunco_core::SemanticIntentEdge {
+        commands.trigger(lunco_control_core::SemanticIntentEdge {
             target,
             intent: UserIntent::Action,
             kind: if active {
-                lunco_core::SemanticIntentEdgeKind::Pressed
+                lunco_control_core::SemanticIntentEdgeKind::Pressed
             } else {
-                lunco_core::SemanticIntentEdgeKind::Released
+                lunco_control_core::SemanticIntentEdgeKind::Released
             },
             correlation_id: OpId::new().0,
         });
@@ -978,13 +979,13 @@ fn emit_intent_edges(
         let active = intent_held(target, *intent, intents, sim_intents, egui_keyboard);
         let prior = previous.insert((target, *intent), active).unwrap_or(false);
         if active != prior {
-            commands.trigger(lunco_core::SemanticIntentEdge {
+            commands.trigger(lunco_control_core::SemanticIntentEdge {
                 target,
                 intent: *intent,
                 kind: if active {
-                    lunco_core::SemanticIntentEdgeKind::Pressed
+                    lunco_control_core::SemanticIntentEdgeKind::Pressed
                 } else {
-                    lunco_core::SemanticIntentEdgeKind::Released
+                    lunco_control_core::SemanticIntentEdgeKind::Released
                 },
                 correlation_id: OpId::new().0,
             });
@@ -1008,7 +1009,7 @@ fn emit_intent_edges(
 /// on the sim tick and freezes with the sim, as pause is meant to.
 fn drive_self_drivers(
     q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControlLink>>,
-    egui_focus: Option<Res<lunco_core::EguiFocus>>,
+    egui_focus: Option<Res<lunco_control_core::EguiFocus>>,
     sim_intents: Option<Res<SimulatedIntents>>,
     mut edge_state: Local<std::collections::HashMap<(Entity, UserIntent), bool>>,
     mut commands: Commands,
@@ -1292,7 +1293,7 @@ impl SettingsSection for InputBindingsSettings {
             return Err(format!("invalid look_button '{}'", self.look_button));
         }
         for intent in self.bindings.keys() {
-            if lunco_core::parse_user_intent(intent).is_none() {
+            if lunco_control_core::parse_user_intent(intent).is_none() {
                 return Err(format!("unknown input intent '{intent}'"));
             }
         }
@@ -1330,7 +1331,7 @@ impl InputBindingsSettings {
         self.bindings
             .iter()
             .map(|(name, keys)| {
-                lunco_core::parse_user_intent(name)
+                lunco_control_core::parse_user_intent(name)
                     .map(|intent| (intent, keys.clone()))
                     .ok_or_else(|| format!("unknown input intent '{name}'"))
             })
@@ -1439,7 +1440,7 @@ pub fn key_label(keys: &[KeyCode]) -> String {
 /// names, and `look_button` selects the button that chords the `Look` axis.
 pub fn build_avatar_input_map(
     json: &str,
-) -> Result<leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent>, String> {
+) -> Result<leafwing_input_manager::prelude::InputMap<lunco_control_core::UserIntent>, String> {
     let settings: InputBindingsSettings =
         serde_json::from_str(json).map_err(|error| format!("invalid input bindings: {error}"))?;
     settings.input_map()
@@ -1448,9 +1449,9 @@ pub fn build_avatar_input_map(
 fn build_input_map(
     bindings: Vec<(UserIntent, Vec<KeyCode>)>,
     button: MouseButton,
-) -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
+) -> leafwing_input_manager::prelude::InputMap<lunco_control_core::UserIntent> {
     use leafwing_input_manager::prelude::*;
-    use lunco_core::UserIntent::{Look, Zoom};
+    use lunco_control_core::UserIntent::{Look, Zoom};
 
     let mut input_map = InputMap::default();
     for (intent, keys) in bindings {
@@ -1660,7 +1661,7 @@ mod input_ack_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_core::UserIntent;
+    use lunco_control_core::UserIntent;
 
     #[derive(Resource, Default)]
     struct WindowInputObserved {
@@ -1774,12 +1775,12 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct SemanticEdgeObserved {
-        typed: Vec<lunco_core::SemanticIntentEdge>,
+        typed: Vec<lunco_control_core::SemanticIntentEdge>,
         telemetry: Vec<lunco_core::TelemetryEvent>,
     }
 
     fn observe_semantic_edge(
-        trigger: On<lunco_core::SemanticIntentEdge>,
+        trigger: On<lunco_control_core::SemanticIntentEdge>,
         mut observed: ResMut<SemanticEdgeObserved>,
     ) {
         observed.typed.push(*trigger.event());
@@ -1799,7 +1800,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>()
-            .init_resource::<lunco_core::CausalTrace>()
+            .init_resource::<lunco_control_core::CausalTrace>()
             .init_resource::<SimulatedIntents>()
             .init_resource::<lunco_core_session::CommandPolicyRegistry>()
             .add_observer(observe_semantic_edge)
@@ -1843,7 +1844,7 @@ mod tests {
         assert_eq!(observed.typed[0].intent, UserIntent::Release);
         assert_eq!(
             observed.typed[0].kind,
-            lunco_core::SemanticIntentEdgeKind::Pulse
+            lunco_control_core::SemanticIntentEdgeKind::Pulse
         );
         assert_ne!(observed.typed[0].correlation_id, 0);
         assert_eq!(observed.typed[0].target, target);
@@ -1866,7 +1867,7 @@ mod tests {
             data["correlation_id"],
             lunco_core::TelemetryValue::I64(observed.typed[0].correlation_id as i64)
         );
-        let trace = app.world().resource::<lunco_core::CausalTrace>();
+        let trace = app.world().resource::<lunco_control_core::CausalTrace>();
         assert_eq!(trace.len(), 1);
         assert!(trace
             .find(
@@ -2210,7 +2211,7 @@ mod tests {
                 continue;
             }
             assert!(
-                lunco_core::parse_user_intent(name).is_some(),
+                lunco_control_core::parse_user_intent(name).is_some(),
                 "keybindings.json names unknown intent '{name}'"
             );
             let keys: Vec<KeyCode> =

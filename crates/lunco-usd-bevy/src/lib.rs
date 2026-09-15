@@ -1064,7 +1064,8 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                     Some((intent, port, factor))
                 })
                 .collect();
-            if let Some(binding) = lunco_core::ControlBinding::from_intent_entries(&entries) {
+            if let Some(binding) = lunco_control_core::ControlBinding::from_intent_entries(&entries)
+            {
                 // Preserve authored `inputs:<port>` constants on the command
                 // surface. The binding declares which names are writable; USD
                 // remains the source of their initial state. Omitted inputs

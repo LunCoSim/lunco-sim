@@ -208,7 +208,8 @@ removal intents; editor-facing perspectives own unmodified clicks for
 selection and gizmos. Do not add a second per-crate mode flag or let global
 pointer observers infer ownership from the hit entity.
 
-The workbench host is also the app-level semantic input surface. Editor actions
+The workbench host is also the app-level semantic input surface. The shared
+contract is owned by `lunco-control-core`; editor actions
 such as Cancel must consume the shared `UserIntent`/`InputBindingsSettings`
 path, not a raw `KeyCode` or an assumption that an isolated USD preview has a
 local avatar. `CancelIntent` suppresses the action while egui owns keyboard

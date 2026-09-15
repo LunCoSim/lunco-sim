@@ -302,7 +302,7 @@ pub fn update_spawn_ghost(
     camera_frame: SpawnCameraFrame,
     windows: Query<&Window, With<PrimaryWindow>>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     // Diagnostics only: names the collider a placement ray actually landed on.
     q_names: Query<&Name>,
     mut diagnostics: ResMut<SpawnDiagnostics>,
@@ -536,14 +536,14 @@ pub fn update_spawn_ghost(
 /// system, so it now lives in its own Update system. Cancel is keyboard-driven,
 /// not a pointer pick, so it stays a system too.
 ///
-/// Reads the [`lunco_core::CancelIntent`], NOT a raw `KeyCode::Escape`: the bindings
+/// Reads the [`lunco_control_core::CancelIntent`], NOT a raw `KeyCode::Escape`: the bindings
 /// are data (`assets/config/keybindings.json`), so backing out of the spawn ghost uses
 /// the same vocabulary as backing out of everything else and follows a rebind.
 pub fn spawn_tool_state_system(
     mut commands: Commands,
     mut spawn_state: ResMut<SpawnState>,
     mut tool_active: ResMut<lunco_core::SpawnToolActive>,
-    cancel: lunco_core::CancelIntent,
+    cancel: lunco_control_core::CancelIntent,
     q_ghost: Query<Entity, With<SpawnGhost>>,
 ) {
     tool_active.0 = matches!(spawn_state.as_ref(), SpawnState::Selecting { .. });
@@ -572,7 +572,7 @@ pub fn on_scene_click_spawn(
     diagnostics: Res<SpawnDiagnostics>,
     q_ghost: Query<Entity, With<SpawnGhost>>,
     camera_frame: SpawnCameraFrame,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     // `GridSpatialQuery`, not raw `SpatialQuery` — same choke point the ghost preview
     // (and wheels / altimeter) use: the click ray + corner probes originate in the
     // render frame, so they must be shifted into avian's grid-absolute frame or they
@@ -617,7 +617,7 @@ pub fn on_scene_click_spawn(
         return;
     }
     let Some(ray) = lunco_core::scene_click_ray(
-        &egui_focus,
+        egui_focus.wants_pointer,
         camera,
         cam_gtf,
         click.pointer_location.position,

@@ -93,13 +93,13 @@ pub struct TerrainBrushGhost;
 /// (read by possession + selection so they stand down while sculpting) and
 /// disarm on Cancel. Keyboard-driven, so it stays a plain system.
 ///
-/// Reads the [`lunco_core::CancelIntent`], NOT a raw `KeyCode::Escape`: the bindings
+/// Reads the [`lunco_control_core::CancelIntent`], NOT a raw `KeyCode::Escape`: the bindings
 /// are data (`assets/config/keybindings.json`), so disarming the brush shares one
 /// vocabulary with every other "back out" and follows a rebind.
 pub fn terrain_tool_state_system(
     mut state: ResMut<TerrainToolState>,
     mut active: ResMut<lunco_core::TerrainToolActive>,
-    cancel: lunco_core::CancelIntent,
+    cancel: lunco_control_core::CancelIntent,
 ) {
     active.0 = state.armed();
     if state.armed() && cancel.just_pressed() {
@@ -178,7 +178,7 @@ pub fn update_terrain_brush_ghost(
     >,
     viewport: Res<lunco_core::SceneViewport>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     mut q_ghost: Query<
         (
             Entity,

@@ -39,11 +39,9 @@ use lunco_camera_core::{
     FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera, OrbitReturnBehavior,
     OrbitViewReturn, RadialArrival, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
+use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
 use lunco_controller::InputBindingsSettings;
-use lunco_core::{
-    on_command, register_commands, Avatar, CelestialBody, IntentAnalogState, IntentState,
-    LocalAvatar, Spacecraft, UserIntent,
-};
+use lunco_core::{on_command, register_commands, Avatar, CelestialBody, LocalAvatar, Spacecraft};
 use lunco_core_session::commands::UpdateProfile;
 use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
 use lunco_cosim_core::ControlLink;
@@ -59,7 +57,7 @@ use lunco_cosim_core::ControlLink;
 /// should track the target's yaw (a thing that steers has a meaningful heading;
 /// a prop tumbles).
 type Controllable = bevy::prelude::Or<(
-    bevy::prelude::With<lunco_core::ControlBinding>,
+    bevy::prelude::With<lunco_control_core::ControlBinding>,
     bevy::prelude::With<lunco_cosim_core::SimComponent>,
 )>;
 use lunco_celestial::geo::LocalTangentFrame;
@@ -884,7 +882,7 @@ impl Plugin for LunCoAvatarPlugin {
         // `science::take_photo` is registered by `lunco-workbench`'s `ScreenshotPlugin`,
         // not here: the tool's closure triggers `CaptureFromCamera`, whose observer is a
         // render-world readback this crate deliberately cannot link.
-        app.add_plugins(InputManagerPlugin::<UserIntent>::default());
+        app.add_plugins(lunco_control_core::LunCoControlPlugin);
         // Possession and release commands own both authority bookkeeping and
         // local binding, so the registry and `ControlLink` commit together.
         app.add_systems(lunco_core::SceneTeardown, clear_scene_possession_claims);
@@ -903,11 +901,6 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<lunco_core::SpawnToolActive>();
         app.init_resource::<lunco_core::TerrainToolActive>();
         app.init_resource::<lunco_core::ArmedScriptTool>();
-        // Populated by `lunco-workbench` when egui is present; guaranteed here so
-        // the keyboard gate (`scene_keyboard_active`) has a resource to read on
-        // binaries that use the avatar without the workbench (headless server) —
-        // there it stays default `false` and the gate is always open.
-        app.init_resource::<lunco_core::EguiFocus>();
         app.init_resource::<lunco_core::SceneInteractionMode>();
         app.add_observer(avatar_raycast_possession);
         // Native avatar construction receives the resolved command policy;
@@ -1413,12 +1406,12 @@ fn reset_easing_before_spatial_rebase(
 /// Run-condition: `true` when the 3D scene may consume raw keyboard input —
 /// i.e. egui is NOT holding the keyboard (no focused text field / drag-value).
 ///
-/// [`lunco_core::EguiFocus`] is published each frame by `lunco-workbench` from
+/// [`lunco_control_core::EguiFocus`] is published each frame by `lunco-workbench` from
 /// the primary egui context's `wants_keyboard_input()`. On a headless binary
 /// nothing writes it, so it stays default (`false`) and the gate is always open.
 /// One-frame latency (the flag reflects the previous egui pass) is imperceptible
 /// for held input.
-fn scene_keyboard_active(focus: Res<lunco_core::EguiFocus>) -> bool {
+fn scene_keyboard_active(focus: Res<lunco_control_core::EguiFocus>) -> bool {
     !focus.wants_keyboard
 }
 
@@ -1445,7 +1438,7 @@ pub fn spawn_avatar_camera(
     initial_offset: DVec3,
     profile: lunco_render::RenderQualityProfile,
     bindings: &InputBindingsSettings,
-    control_binding: lunco_core::ControlBinding,
+    control_binding: lunco_control_core::ControlBinding,
 ) -> Entity {
     let (yaw, pitch) = (std::f32::consts::PI * 0.5, -0.3);
     let input_map = bindings
@@ -1492,7 +1485,7 @@ pub fn spawn_avatar_camera(
             LocalAvatar,
             OrbitViewHistory::default(),
             IntentAnalogState::default(),
-            ActionState::<lunco_core::UserIntent>::default(),
+            ActionState::<lunco_control_core::UserIntent>::default(),
             (
                 input_map,
                 control_binding,
@@ -3262,7 +3255,7 @@ fn capture_avatar_intent(
         (With<Avatar>, With<LocalAvatar>),
     >,
     world: Option<Res<WorldTime>>,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
     mut commands: Commands,
 ) {
@@ -3310,7 +3303,7 @@ fn normalized_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
 /// the active camera behavior to consume + reset.
 fn collect_camera_zoom(
     time: Res<Time<Real>>,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
     scroll: Res<AccumulatedMouseScroll>,
     mut q_avatar: Query<&mut CameraZoomInput, (With<Avatar>, With<LocalAvatar>)>,
@@ -3499,7 +3492,7 @@ fn avatar_global_hotkeys(
 /// `SelectableRoot` is an editor boundary, and every independently simulated
 /// wheel may carry it. [`lunco_core::InputPorts`] is the public interface:
 /// its nonempty vocabulary is the input surface a session may own. A
-/// [`lunco_core::ControlBinding`] or [`lunco_core::MobilityRoot`] identifies the
+/// [`lunco_control_core::ControlBinding`] or [`lunco_core::MobilityRoot`] identifies the
 /// authored vehicle boundary, which takes precedence over nested component
 /// endpoints. An [`Avatar`] endpoint is excluded even when it carries its own
 /// movement ports; walking past one to this owner makes a click on a vehicle
@@ -3511,7 +3504,7 @@ fn find_control_owner_from_hit(
     q_vehicle_roots: &Query<
         (),
         Or<(
-            With<lunco_core::ControlBinding>,
+            With<lunco_control_core::ControlBinding>,
             With<lunco_core::MobilityRoot>,
         )>,
     >,
@@ -3629,7 +3622,7 @@ const CELESTIAL_CLICK_FOCUS: bool = false;
 /// Shared scene-click mode and egui gate for the avatar pointer observer.
 pub struct SceneInteractionGate<'w> {
     mode: Res<'w, lunco_core::SceneInteractionMode>,
-    egui_focus: Res<'w, lunco_core::EguiFocus>,
+    egui_focus: Res<'w, lunco_control_core::EguiFocus>,
 }
 
 pub fn avatar_raycast_possession(
@@ -3657,7 +3650,7 @@ pub fn avatar_raycast_possession(
     q_vehicle_roots: Query<
         (),
         Or<(
-            With<lunco_core::ControlBinding>,
+            With<lunco_control_core::ControlBinding>,
             With<lunco_core::MobilityRoot>,
         )>,
     >,
@@ -3715,7 +3708,7 @@ pub fn avatar_raycast_possession(
     // click; the ray drives the analytic hit-sphere tests (celestial bodies /
     // spacecraft, which have no pickable mesh) alongside the mesh pick.
     let Some(ray) = lunco_core::scene_click_ray(
-        &scene_interaction.egui_focus,
+        scene_interaction.egui_focus.wants_pointer,
         camera,
         cam_gtf,
         click.pointer_location.position,
@@ -5833,7 +5826,10 @@ mod tests {
         // camera state is available.
         let avatar = app
             .world_mut()
-            .spawn((Avatar, ActionState::<lunco_core::UserIntent>::default()))
+            .spawn((
+                Avatar,
+                ActionState::<lunco_control_core::UserIntent>::default(),
+            ))
             .id();
         let rover = app
             .world_mut()
@@ -5954,7 +5950,7 @@ mod tests {
             Query<
                 (),
                 Or<(
-                    With<lunco_core::ControlBinding>,
+                    With<lunco_control_core::ControlBinding>,
                     With<lunco_core::MobilityRoot>,
                 )>,
             >,
@@ -5997,7 +5993,7 @@ mod tests {
             Query<
                 (),
                 Or<(
-                    With<lunco_core::ControlBinding>,
+                    With<lunco_control_core::ControlBinding>,
                     With<lunco_core::MobilityRoot>,
                 )>,
             >,
@@ -6038,7 +6034,7 @@ mod tests {
             Query<
                 (),
                 Or<(
-                    With<lunco_core::ControlBinding>,
+                    With<lunco_control_core::ControlBinding>,
                     With<lunco_core::MobilityRoot>,
                 )>,
             >,
@@ -6079,7 +6075,7 @@ mod tests {
             Query<
                 (),
                 Or<(
-                    With<lunco_core::ControlBinding>,
+                    With<lunco_control_core::ControlBinding>,
                     With<lunco_core::MobilityRoot>,
                 )>,
             >,
@@ -6122,7 +6118,7 @@ mod tests {
             Query<
                 (),
                 Or<(
-                    With<lunco_core::ControlBinding>,
+                    With<lunco_control_core::ControlBinding>,
                     With<lunco_core::MobilityRoot>,
                 )>,
             >,
@@ -6158,7 +6154,7 @@ mod tests {
             Query<
                 (),
                 Or<(
-                    With<lunco_core::ControlBinding>,
+                    With<lunco_control_core::ControlBinding>,
                     With<lunco_core::MobilityRoot>,
                 )>,
             >,
@@ -6195,7 +6191,7 @@ mod tests {
             Query<
                 (),
                 Or<(
-                    With<lunco_core::ControlBinding>,
+                    With<lunco_control_core::ControlBinding>,
                     With<lunco_core::MobilityRoot>,
                 )>,
             >,
@@ -7650,7 +7646,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
         // Collect first so the &mut World query borrow ends before the immutable
         // per-entity component reads below.
         let mut q = world.query_filtered::<Entity, bevy::prelude::Or<(
-            bevy::prelude::With<lunco_core::ControlBinding>,
+            bevy::prelude::With<lunco_control_core::ControlBinding>,
             bevy::prelude::With<lunco_cosim_core::SimComponent>,
         )>>();
         let ents: Vec<Entity> = q.iter(world).collect();
@@ -7668,7 +7664,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
             let has_cmd = world.get::<lunco_core::InputPorts>(e).is_some();
             let has_sim = world.get::<lunco_cosim_core::SimComponent>(e).is_some();
             let has_sel = world.get::<lunco_core::SelectableRoot>(e).is_some();
-            let binding = world.get::<lunco_core::ControlBinding>(e).map(|b| {
+            let binding = world.get::<lunco_control_core::ControlBinding>(e).map(|b| {
                 let ports: Vec<&str> = b.ports().collect();
                 (b.binds.len(), ports.join(","))
             });

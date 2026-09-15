@@ -25,7 +25,7 @@ LunCoSim decouples human interaction from physical execution using five distinct
 
 | Layer | Name | Responsibility | Logical Flow |
 | :--- | :--- | :--- | :--- |
-| **5** | **UserIntent** | **Semantic Mapping**: The specialized input owner translates configured devices into abstract goals (`MoveForward`, `Look`, `Zoom`). | Keyboard/gamepad/mouse -> `lunco-avatar` / `lunco-controller` -> `UserIntent` |
+| **5** | **UserIntent** | **Semantic Mapping**: The specialized input owner translates configured devices into abstract goals (`MoveForward`, `Look`, `Zoom`). | Keyboard/gamepad/mouse -> `lunco-avatar` / `lunco-controller` -> `lunco-control-core::UserIntent` |
 | **4** | **Controller** | **Translation**: Translates semantic intents into specific typed commands (e.g., `SetPorts`) or actions for a target entity. | `UserIntent` -> `lunco-controller` -> typed command |
 | **3** | **FSW / Subsystem**| **The Brain**: Decentralized observers that execute commands and emit ACK/NACK responses. | `Typed Command` -> `Subsystem Observer` -> `ACK` |
 | **2** | **Logic / Device** | **Hardware Logic**: The individual components responding to state changes. | `Subsystem` -> `Component Field` |
@@ -321,8 +321,11 @@ existing generic Twin-settings command.
 ### 6.7 Vehicle control frame
 
 The controller has one shared input path: persisted `input_bindings` resolve raw
-devices to semantic `UserIntent`s, then the vessel's authored `ControlBinding`
-resolves those intents to named command ports. A vehicle profile owns the second
+devices to semantic `lunco-control-core::UserIntent`s, then the vessel's authored
+`lunco-control-core::ControlBinding` resolves those intents to named command
+ports. `lunco-control-core` is the reusable contract package for input state,
+focus gating, authored bindings, and semantic edges; the controller and avatar
+are producers/consumers around that contract. A vehicle profile owns the second
 mapping; Rust does not add key-specific or vehicle-kind exceptions.
 
 The free-flight avatar uses the same contract: the configured `SpeedBoost`

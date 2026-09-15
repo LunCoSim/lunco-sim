@@ -1881,7 +1881,7 @@ impl Default for Suspension {
 // ── Drive command ports ─────────────────────────────────────────────────────────
 
 /// Derive each endpoint's input surface from its intent binding: for any entity
-/// that has both [`InputPorts`] and a [`lunco_core::ControlBinding`], ensure every
+/// that has both [`InputPorts`] and a [`lunco_control_core::ControlBinding`], ensure every
 /// bound port exists in `InputPorts.values` (seeded `0.0`).
 ///
 /// This is what lets the command vocabulary be **data, not a Rust literal**: a
@@ -1892,8 +1892,11 @@ impl Default for Suspension {
 /// the surface, and regardless of spawn order.
 fn sync_input_ports(
     mut q: Query<
-        (&lunco_core::ControlBinding, &mut InputPorts),
-        Or<(Changed<lunco_core::ControlBinding>, Added<InputPorts>)>,
+        (&lunco_control_core::ControlBinding, &mut InputPorts),
+        Or<(
+            Changed<lunco_control_core::ControlBinding>,
+            Added<InputPorts>,
+        )>,
     >,
 ) {
     for (binding, mut inputs) in q.iter_mut() {

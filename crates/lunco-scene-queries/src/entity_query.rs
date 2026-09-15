@@ -46,7 +46,7 @@ impl ApiQueryProvider for QueryEntityProvider {
         let Some(mut q_meta) = QueryState::<(
             Option<&Name>,
             Option<&lunco_core::markers::Callsign>,
-            Has<lunco_core::ControlBinding>,
+            Has<lunco_control_core::ControlBinding>,
             Option<&lunco_core::CelestialBody>,
             Option<&Transform>,
             Option<&CatalogEntryId>,
@@ -124,7 +124,7 @@ pub fn register(app: &mut App) {
     // optional field turn the entire query into an internal error.
     world.register_component::<Name>();
     world.register_component::<lunco_core::markers::Callsign>();
-    world.register_component::<lunco_core::ControlBinding>();
+    world.register_component::<lunco_control_core::ControlBinding>();
     world.register_component::<lunco_core::CelestialBody>();
     world.register_component::<Transform>();
     world.register_component::<CatalogEntryId>();

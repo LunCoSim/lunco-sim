@@ -15,6 +15,7 @@ lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-feature
 lunco-controller = { path = "../lunco-controller" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-control-core = { path = "../lunco-control-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-theme = { path = "../lunco-theme" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

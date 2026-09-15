@@ -84,7 +84,7 @@ fn control_binding_facts(view: &StageView<'_>) -> (Vec<H>, Vec<serde_json::Value
         }
         for bind in view.children(&prim) {
             let Some(name) = bind.name() else { continue };
-            let valid = lunco_core::parse_user_intent(name).is_some();
+            let valid = lunco_control_core::parse_user_intent(name).is_some();
             let port = view.text(&bind, "lunco:port");
             facts.push(H::map([
                 ("prim", H::str(bind.as_str())),

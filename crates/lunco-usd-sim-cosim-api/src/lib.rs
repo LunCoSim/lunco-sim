@@ -239,7 +239,7 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
             );
         };
         let target_gid = lunco_core::GlobalEntityId::from_raw(raw_target);
-        let Some(trace) = world.get_resource::<lunco_core::CausalTrace>() else {
+        let Some(trace) = world.get_resource::<lunco_control_core::CausalTrace>() else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::InternalError,
                 "CausalTrace ledger is unavailable",
@@ -281,7 +281,7 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
             });
 
         let (binding_entries, port_surface) = if let Some(entity) = target {
-            let binding = world.get::<lunco_core::ControlBinding>(entity);
+            let binding = world.get::<lunco_control_core::ControlBinding>(entity);
             let binding_entries = binding
                 .map(|binding| {
                     binding

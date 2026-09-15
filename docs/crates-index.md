@@ -65,6 +65,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
+| **`lunco-control-core`** | Generic semantic-control contracts: the shared `UserIntent` vocabulary, authored intent-to-port bindings, input state, egui focus gate, and bounded causal-edge trace. Input producers and domain consumers depend on this focused package instead of placing control policy in `lunco-core`. |
 | **`lunco-camera-core`** | Backend-neutral camera-rig contracts: free-flight, orbit, spring-arm, surface, authored rig intent, pose-transition state, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
 | **`lunco-avatar-core`** | Backend-neutral avatar contracts: possession/focus command payloads and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
 | **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: fast camera/possession systems, the local input-to-intent boundary, collision policy, and Twin-scoped presentation state. It consumes `lunco-camera-core` and `lunco-avatar-core`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
@@ -357,6 +358,13 @@ Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a 
 **`lunco-mobility`**
 Physics models for surface mobility and traction — the parameterized substrate (a vehicle is a USD file, not a Rust struct). Raycast wheel model with contact-plane traction (supports leaning single-track bikes), suspension (spring-damper), generic authored drive/heading output realization, and a soft rocker-bogie `DifferentialCoupling`.
 
+**`lunco-control-core`**
+Generic semantic-control contract package. Owns the shared `UserIntent` vocabulary,
+authored intent-to-port bindings, input state, egui focus gating, and the bounded
+semantic-edge trace. It is the single contract used by raw input translation,
+avatar behavior, editor tools, API/Rhai simulation, and vessel control; the
+generic engine substrate remains in `lunco-core`.
+
 **`lunco-avatar`**
 Headless-safe human-interaction runtime. Implements the camera **rigs** (SpringArm, Orbit, FreeFlight, Surface), possession/focus observers, input intent projection, collision policy, and Twin-scoped presentation state described by `lunco-camera-core` and `lunco-avatar-core`. Optional egui presentation is supplied by `lunco-avatar-ui`. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy-camera`.
 
@@ -373,7 +381,7 @@ Optional egui presentation adapter for `lunco-avatar` and `lunco-camera-core`. I
 Physical actuator and sensor implementations. Bridges `Port` values to the `avian3d` physics engine, providing concrete motor, brake, and sensor components that interact with the simulation world.
 
 **`lunco-controller`**
-Input mapping and translation. Owns the persisted `InputBindingsSettings` keymap and converts raw human-interface device inputs (Keyboard, Gamepad, Mouse) into abstract `UserIntent` actions and typed command events for consumption by Flight Software.
+Input mapping and translation. Owns the persisted `InputBindingsSettings` keymap and converts raw human-interface device inputs (Keyboard, Gamepad, Mouse) into the shared `lunco-control-core::UserIntent` actions and typed command events for consumption by Flight Software. The semantic contract itself is reusable by non-controller producers and is not re-exported through this adapter.
 
 ---
 

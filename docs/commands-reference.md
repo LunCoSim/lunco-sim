@@ -1092,7 +1092,7 @@ actually call, with the fields the deserializer actually accepts. See the
  driving a held control value. Use [`SimulateIntentEdge`] for an atomic
  momentary press/release or pulse. The named intent is the USD control
  vocabulary (`forward`, `action`, `yaw_left`, …), parsed by
- [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
+ [`lunco_control_core::parse_user_intent`], so it matches whatever a vessel's
  `Controls` profile binds.
 
 - *defined in:* `crates/lunco-controller/src/lib.rs`
@@ -1109,7 +1109,7 @@ actually call, with the fields the deserializer actually accepts. See the
  emulate a pulse with ordered `held: true` / `held: false` commands.
 
  This is the API/Rhai/network entry point. The handler validates the shared
- intent vocabulary and emits [`lunco_core::SemanticIntentEdge`]; it does not
+ intent vocabulary and emits [`lunco_control_core::SemanticIntentEdge`]; it does not
  decide which port or mechanism the consuming Twin should actuate.
 
 - *defined in:* `crates/lunco-controller/src/lib.rs`

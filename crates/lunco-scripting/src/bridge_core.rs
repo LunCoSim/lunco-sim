@@ -1246,7 +1246,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
             Query<(
                 Option<&Name>,
                 Option<&lunco_core::markers::Callsign>,
-                Has<lunco_core::ControlBinding>,
+                Has<lunco_control_core::ControlBinding>,
                 Has<lunco_core::InputPorts>,
                 Option<&CelestialBody>,
                 Option<&lunco_core::CatalogEntryId>,

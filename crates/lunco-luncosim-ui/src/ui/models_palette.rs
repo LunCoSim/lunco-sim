@@ -375,7 +375,7 @@ pub(crate) fn on_scene_click_attach(
 /// The `Cancel` intent drops a pending attachment.
 pub(crate) fn attach_escape_system(
     mut state: ResMut<AttachState>,
-    cancel: lunco_core::CancelIntent,
+    cancel: lunco_control_core::CancelIntent,
 ) {
     if matches!(*state, AttachState::Pending(_)) && cancel.just_pressed() {
         *state = AttachState::Idle;

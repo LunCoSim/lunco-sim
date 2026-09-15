@@ -89,6 +89,13 @@ system recompute structure at state cadence? → `RebuildOnChange` it."*
   crates depend inward on substrate crates** (the CID-lift is the first
   correction of an accidental outward coupling).
 
+The same boundary applies to control: `lunco-control-core` owns the reusable
+semantic input and authored intent-to-port contracts, while `lunco-core` owns
+the generic engine and port substrate. Raw input adapters, avatar behavior,
+editor tools, and API/Rhai producers use the focused control contract directly;
+the controller is not an API re-export layer. This keeps changes to input
+vocabulary and control policy from invalidating the high-fanout engine crate.
+
 ## Non-goals (protect these)
 
 - **No big-bang rewrite.** Each substrate is independently shippable and

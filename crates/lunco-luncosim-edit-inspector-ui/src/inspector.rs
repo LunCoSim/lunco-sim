@@ -1244,7 +1244,7 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
 /// button. The shortcut comes from `UserIntent::DeleteSelection`, so it remains
 /// rebindable and never fires while an egui field or cursor tool owns input.
 pub fn delete_selected_on_intent(
-    delete: lunco_core::DeleteSelectionIntent,
+    delete: lunco_control_core::DeleteSelectionIntent,
     cursor_mode: lunco_core::CursorModeActive,
     selected: Res<SelectedEntities>,
     mut commands: Commands,

@@ -135,7 +135,7 @@ nobody anticipated (`mass-outside-any-body` is the worked example) needs **no
 Rust change**.
 
 `control_bindings` is a composed-stage projection from the same
-`lunco_core::parse_user_intent` authority used by the loader. Rust supplies only
+`lunco_control_core::parse_user_intent` authority used by the loader. Rust supplies only
 the authored binding, port text, and validity bit; `lint_usd.rhai` owns the
 severity and message for an unknown intent. There is no second spelling table
 for suggestions, so adding or removing a canonical intent cannot leave lint

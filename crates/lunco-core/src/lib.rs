@@ -415,7 +415,7 @@ pub struct Spacecraft {
 // NOTE: there is intentionally NO `Vessel` / `RoverVessel` / `LanderVessel`
 // marker. "Possessable / controllable" is derived from TOPOLOGY: an entity is
 // controllable iff it exposes writable control ports — an `InputPorts`
-// command surface, declared by its authored `Controls` scope (→ `ControlBinding`),
+// command surface, declared by its authored `Controls` scope (→ a control binding),
 // or a Modelica `SimComponent`. The components a body already carries ARE its
 // definition; possession, control routing, prediction membership, and UI
 // labels read those capabilities directly instead of a redundant taxonomy tag.
@@ -582,43 +582,6 @@ pub struct DragModeActive {
 #[derive(Resource, Default)]
 pub struct SpawnToolActive(pub bool);
 
-/// Whether egui is currently consuming pointer / keyboard input.
-///
-/// egui is a second, immediate-mode input world layered on top of Bevy: it
-/// reads its own copy of the winit events and never removes anything from
-/// Bevy's `ButtonInput`. So a key pressed while an egui text field is focused
-/// reaches BOTH egui and Bevy's `ButtonInput<KeyCode>` — and without this gate
-/// it would also drive the avatar (typing `w`/`a`/`s`/`d` in the Inspector or a
-/// REPL would move the vessel). Likewise a scroll/orbit over a panel would move
-/// the camera.
-///
-/// This resource relays egui's `wants_keyboard_input()` / `wants_pointer_input()`
-/// (from the primary egui context) into the ECS so scene-input systems can gate
-/// on it without depending on `bevy_egui`. Populated once per frame by
-/// `lunco-workbench` (the crate that owns the `PrimaryEguiContext`); a press in
-/// the main scene explicitly surrenders stale editor focus before this resource
-/// is published. On a headless server nothing writes it, so both flags stay
-/// `false` and every gate is a no-op.
-///
-/// Discrete scene *picks* (click-to-select / click-to-spawn) do NOT need this —
-/// they flow through `bevy_picking`, where egui occlusion is already handled by
-/// the workbench's egui picking backend. This gate is for the *continuous / raw*
-/// input systems: keyboard driving, camera orbit, scroll-zoom.
-#[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct EguiFocus {
-    /// A focused egui widget (text field, drag-value, …) wants the keyboard.
-    pub wants_keyboard: bool,
-    /// The pointer is over an egui widget that wants pointer input.
-    pub wants_pointer: bool,
-}
-
-/// Marks the app-level input surface that resolves the local user's semantic
-/// intents when no avatar owns the keyboard. The workbench carries one such
-/// surface so editor-only views can use the same rebindable intent vocabulary
-/// as simulation control without inventing a raw-key path.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct LocalIntentSurface;
-
 /// Which subsystem owns primary scene clicks for the active workbench mode.
 ///
 /// This is a cross-crate interaction contract rather than a workbench UI detail:
@@ -669,56 +632,11 @@ mod scene_interaction_mode_tests {
     }
 }
 
-#[cfg(test)]
-mod cancel_intent_tests {
-    use super::{CancelIntent, EguiFocus, LocalIntentSurface, UserIntent};
-    use bevy::prelude::*;
-    use leafwing_input_manager::prelude::{ActionState, InputManagerPlugin, InputMap};
-
-    #[derive(Resource, Default)]
-    struct ObservedCancel(bool);
-
-    fn observe_cancel(cancel: CancelIntent, mut observed: ResMut<ObservedCancel>) {
-        observed.0 = cancel.just_pressed();
-    }
-
-    #[test]
-    fn editor_cancel_works_without_a_local_avatar() {
-        let mut app = App::new();
-        app.add_plugins((
-            bevy::time::TimePlugin,
-            bevy::input::InputPlugin,
-            InputManagerPlugin::<UserIntent>::default(),
-        ))
-        .init_resource::<EguiFocus>()
-        .init_resource::<ObservedCancel>()
-        .add_systems(Update, observe_cancel);
-
-        let mut input_map = InputMap::default();
-        input_map.insert(UserIntent::Cancel, KeyCode::Escape);
-        app.world_mut().spawn((
-            LocalIntentSurface,
-            ActionState::<UserIntent>::default(),
-            input_map,
-        ));
-
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Escape);
-        app.update();
-
-        assert!(
-            app.world().resource::<ObservedCancel>().0,
-            "the shared cancel intent must read the app-level editor input surface"
-        );
-    }
-}
-
 /// Camera ray for a discrete scene click — the SINGLE shared entry point for
 /// every scene-click observer (possession, selection, placement).
 ///
-/// Returns the world-space ray from `camera` through `cursor`, or `None` when the
-/// click belongs to egui ([`EguiFocus::wants_pointer`]) or the ray can't be built.
+/// Returns the world-space ray from `camera` through `cursor`, or `None` when
+/// `pointer_blocked` is true or the ray can't be built.
 ///
 /// `wants_pointer` is a **global** signal, and now (fed by the workbench's
 /// egui-authoritative `pointer_over_scene` hit test) it is `false` over the
@@ -736,12 +654,12 @@ mod cancel_intent_tests {
 /// colliders (`SpatialQuery`, e.g. the terrain) or their own analytic shapes
 /// (hit-spheres).
 pub fn scene_click_ray(
-    focus: &EguiFocus,
+    pointer_blocked: bool,
     camera: &Camera,
     cam_gtf: &GlobalTransform,
     cursor: Vec2,
 ) -> Option<Ray3d> {
-    if focus.wants_pointer {
+    if pointer_blocked {
         return None;
     }
     // `cursor` is bevy_picking's pointer position: LOGICAL pixels from the WINDOW
@@ -805,7 +723,7 @@ impl ArmedScriptTool {
 ///
 /// The spawn ghost, terrain brush, and authored script tools can own the cursor.
 /// The click observers already consult these flags one-by-one; this bundles them
-/// so the keyboard ([`CancelIntent`]) honours exactly the same set.
+/// so the shared cancel intent honours exactly the same set.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct CursorModeActive<'w> {
     spawn_tool: Option<Res<'w, SpawnToolActive>>,
@@ -819,59 +737,6 @@ impl CursorModeActive<'_> {
         self.spawn_tool.as_ref().is_some_and(|t| t.0)
             || self.terrain_tool.as_ref().is_some_and(|t| t.0)
             || self.script_tool.as_ref().is_some_and(|t| t.armed())
-    }
-}
-
-/// "The user asked to back out" — the [`UserIntent::Cancel`] intent.
-///
-/// Read this instead of sniffing `KeyCode::Escape`/`Backspace`: the bindings are DATA
-/// (`assets/config/keybindings.json`), so a rebind works everywhere at once and every
-/// mode agrees on what cancelling means. It reads both the local avatar and the
-/// workbench's app-level intent surface, so editor-only previews do not require an
-/// avatar. Suppressed while an egui field has keyboard focus, so Backspace typed into
-/// a text box edits text rather than backing out.
-#[derive(bevy::ecs::system::SystemParam)]
-pub struct CancelIntent<'w, 's> {
-    avatars: Query<'w, 's, &'static IntentState, (With<Avatar>, With<LocalAvatar>)>,
-    global_surface: Query<'w, 's, &'static IntentState, With<LocalIntentSurface>>,
-    egui_focus: Res<'w, EguiFocus>,
-}
-
-impl CancelIntent<'_, '_> {
-    /// True on the frame the user pressed Cancel.
-    pub fn just_pressed(&self) -> bool {
-        if self.egui_focus.wants_keyboard {
-            return false;
-        }
-        self.avatars
-            .iter()
-            .any(|i| i.just_pressed(&UserIntent::Cancel))
-            || self
-                .global_surface
-                .iter()
-                .any(|i| i.just_pressed(&UserIntent::Cancel))
-    }
-}
-
-/// "Delete the current selection" — the rebindable
-/// [`UserIntent::DeleteSelection`] editor intent.
-///
-/// Like [`CancelIntent`], it stands down while egui owns keyboard focus so a
-/// focused text editor receives Delete normally.
-#[derive(bevy::ecs::system::SystemParam)]
-pub struct DeleteSelectionIntent<'w, 's> {
-    avatars: Query<'w, 's, &'static IntentState, (With<Avatar>, With<LocalAvatar>)>,
-    egui_focus: Res<'w, EguiFocus>,
-}
-
-impl DeleteSelectionIntent<'_, '_> {
-    /// True on the frame the user requested deletion.
-    pub fn just_pressed(&self) -> bool {
-        !self.egui_focus.wants_keyboard
-            && self
-                .avatars
-                .iter()
-                .any(|intent| intent.just_pressed(&UserIntent::DeleteSelection))
     }
 }
 
@@ -1025,10 +890,6 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<Parameter>()
             .register_type::<SampledParameter>()
             .register_type::<ModelStateRevision>()
-            .register_type::<UserIntent>()
-            .register_type::<SemanticIntentEdgeKind>()
-            .register_type::<SemanticIntentEdge>()
-            .register_type::<IntentAnalogState>()
             .register_type::<Port>()
             .register_type::<CausalStateSink>()
             .register_type::<PhysicalProperties>()
@@ -1085,7 +946,6 @@ pub(crate) fn register_core_resources(app: &mut App) {
         // LunCoCoreSessionPlugin for the session layer).
         .init_resource::<CommandResults>()
         .init_resource::<ActiveCommandId>()
-        .init_resource::<CausalTrace>()
         // Port identity is a core substrate shared by every provider and UI
         // consumer. Keeping the invalidation generation and its structural
         // state here removes plugin-order dependence from lifecycle observers.
@@ -1100,12 +960,8 @@ pub(crate) fn register_core_resources(app: &mut App) {
 }
 
 /// Reset core-owned scene state before the outgoing entities are despawned.
-fn reset_core_scene_state(
-    mut rollback: ResMut<RollbackInProgress>,
-    mut causal_trace: ResMut<CausalTrace>,
-) {
+fn reset_core_scene_state(mut rollback: ResMut<RollbackInProgress>) {
     rollback.0 = false;
-    causal_trace.clear();
 }
 
 /// Advance the discrete [`SimTick`] once per fixed step, *only while time is

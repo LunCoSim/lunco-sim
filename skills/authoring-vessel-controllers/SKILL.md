@@ -207,7 +207,7 @@ A vessel is **possessable + drivable** when it carries two things:
    (`external_throttle`, `pitch`, …). This surface is topology-derived; you don't
    hand-write it.
 2. **A `Controls` scope** — the intent→port map (stage 2 of control), read into a
-   `lunco_core::ControlBinding`. Without it a vessel can be possessed but **keyboard
+   `lunco_control_core::ControlBinding`. Without it a vessel can be possessed but **keyboard
    input does nothing** — `drive_from_bindings` skips a bindingless vessel. (API /
    `set_input` / rhai can still drive it by port name — that path needs only the surface.)
 

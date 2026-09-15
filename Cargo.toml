@@ -9,6 +9,7 @@ members = [
     "crates/lunco-time",
     "crates/lunco-behavior",
     "crates/lunco-controller",
+    "crates/lunco-control-core",
     "crates/lunco-avatar",
     "crates/lunco-avatar-core",
     "crates/lunco-camera-core",

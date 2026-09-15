@@ -7073,6 +7073,7 @@ name = "lunco-api"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-control-core",
  "lunco-core",
  "lunco-readiness",
  "serde",
@@ -7200,6 +7201,7 @@ dependencies = [
  "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
+ "lunco-control-core",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -7235,6 +7237,7 @@ dependencies = [
  "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
+ "lunco-control-core",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -7325,6 +7328,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-celestial",
+ "lunco-control-core",
  "lunco-controller",
  "lunco-core",
  "lunco-environment",
@@ -7355,11 +7359,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-control-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "leafwing-input-manager",
+ "lunco-core",
+]
+
+[[package]]
 name = "lunco-controller"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "leafwing-input-manager",
+ "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
@@ -7376,7 +7390,6 @@ version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "getrandom 0.2.17",
- "leafwing-input-manager",
  "lunco-command-macro",
  "lunco-hash",
  "serde",
@@ -7624,6 +7637,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
+ "lunco-control-core",
  "lunco-core",
  "lunco-physics",
  "lunco-render",
@@ -7648,6 +7662,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets-core",
  "lunco-celestial",
+ "lunco-control-core",
  "lunco-core",
  "lunco-cosim",
  "lunco-cosim-core",
@@ -7691,6 +7706,7 @@ dependencies = [
  "lunco-camera-core",
  "lunco-canvas",
  "lunco-celestial-spatial",
+ "lunco-control-core",
  "lunco-controller",
  "lunco-core",
  "lunco-cosim",
@@ -7792,6 +7808,7 @@ dependencies = [
  "lunco-capture",
  "lunco-celestial",
  "lunco-celestial-spatial",
+ "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
@@ -7867,6 +7884,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-api",
+ "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
@@ -8122,6 +8140,7 @@ dependencies = [
  "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
+ "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
@@ -8318,6 +8337,7 @@ dependencies = [
  "big_space",
  "lunco-api",
  "lunco-assets-core",
+ "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8347,6 +8367,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-api",
+ "lunco-control-core",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -8380,6 +8401,7 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-assets-core",
+ "lunco-control-core",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -8427,6 +8449,7 @@ dependencies = [
  "lunco-behavior",
  "lunco-celestial",
  "lunco-celestial-spatial",
+ "lunco-control-core",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -8718,6 +8741,7 @@ dependencies = [
  "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
+ "lunco-control-core",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -8815,6 +8839,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "big_space",
+ "lunco-control-core",
  "lunco-core",
  "lunco-render",
  "lunco-usd-bevy-camera",
@@ -9215,6 +9240,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-api",
+ "lunco-control-core",
  "lunco-core",
  "lunco-cosim-core",
  "lunco-modelica-runtime",
@@ -9419,6 +9445,7 @@ dependencies = [
  "egui_dock",
  "leafwing-input-manager",
  "lunco-capture",
+ "lunco-control-core",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",

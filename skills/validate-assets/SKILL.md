@@ -323,7 +323,7 @@ error. Rust only supplies these facts; the Rhai USD policy chooses rule IDs,
 severity, and wording. `ValidateAsset` cannot prove dynamic runtime names.
 
 Control-binding validity is projected from the canonical
-`lunco_core::parse_user_intent` parser and reported by the same Rhai USD policy.
+`lunco_control_core::parse_user_intent` parser and reported by the same Rhai USD policy.
 The Rust validator does not maintain a second intent spelling list or produce
 policy wording; unknown bindings are surfaced as
 `control-binding-unknown-intent` findings.

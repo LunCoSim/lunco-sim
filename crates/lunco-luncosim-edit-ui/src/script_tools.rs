@@ -93,7 +93,7 @@ pub(crate) struct SceneToolWorld<'w, 's> {
 /// a `KeyCode::Escape` test per tool.
 pub fn disarm_script_tool_on_cancel(
     mut armed: ResMut<lunco_core::ArmedScriptTool>,
-    cancel: lunco_core::CancelIntent,
+    cancel: lunco_control_core::CancelIntent,
 ) {
     if armed.armed() && cancel.just_pressed() {
         armed.0 = None;
@@ -122,7 +122,7 @@ pub(crate) fn on_scene_click_script_tool(
     mut click: On<Pointer<Click>>,
     armed: Res<lunco_core::ArmedScriptTool>,
     keys: Res<ButtonInput<KeyCode>>,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     world: SceneToolWorld,
     mut commands: Commands,
 ) {
@@ -406,7 +406,7 @@ pub(crate) fn on_scene_pointer_event(
     armed: Res<lunco_core::ArmedScriptTool>,
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_core::TerrainToolActive>,
-    egui_focus: Res<lunco_core::EguiFocus>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,
     mut commands: Commands,
