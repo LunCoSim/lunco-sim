@@ -28,38 +28,6 @@
 
 #define_import_path lunco::lunar
 
-// Gain used by the shared authored-orthophoto transfer.
-//
-// `process.rs` (`kind = "map"`) bakes grayscale orthos as a 1–99 PERCENTILE
-// STRETCH: the full 0..255 range is spent on the site's brightness spread, so
-// the image is a CONTRAST map, not a linear reflectance map. The bake
-// sRGB-encodes that normalized linear signal because the texture loader decodes
-// authored colour layers from sRGB to linear. The value below is therefore the
-// original normalized contrast, not a display-space byte.
-//
-// Map contrast around its neutral midpoint instead of treating zero as a
-// physically meaningful albedo. This preserves local orthophoto detail while
-// keeping the authored layer a bounded, site-independent tone modulation.
-//
-// LIVES HERE, not in either terrain shader, because `terrain_geomorph.wgsl` (the
-// streamed CDLOD path) and `terrain_layered.wgsl` (the static-mesh path) must
-// agree on what a given `weight_albedo` MEANS — the same authored scene has to
-// read identically whether or not its site streams.
-const ORTHO_MID: f32 = 0.5;
-const ORTHO_GAIN: f32 = 0.55;
-
-/// Convert a percentile-stretched orthophoto sample into a bounded linear
-/// albedo multiplier. Keeping this in the shared lunar module makes the streamed
-/// and static terrain paths use one transfer contract.
-fn orthophoto_factor(map: vec3<f32>) -> vec3<f32> {
-    let contrast = clamp(map, vec3<f32>(0.0), vec3<f32>(1.0));
-    return clamp(
-        vec3<f32>(1.0) + (contrast - vec3<f32>(ORTHO_MID)) * ORTHO_GAIN,
-        vec3<f32>(0.7),
-        vec3<f32>(1.3),
-    );
-}
-
 /// Floor on μ = cos(emission). At a grazing view μ → 0 and the Lommel-Seeliger
 /// denominator collapses onto μ₀ alone, so `ls` would run away. The product that
 /// actually reaches the framebuffer is bounded regardless (bevy multiplies by μ₀),

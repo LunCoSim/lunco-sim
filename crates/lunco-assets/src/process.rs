@@ -87,7 +87,12 @@ impl ProcessControl {
 ///   square, georeferenced float32 `heightmap.tif` the runtime DEM reader
 ///   expects. `output` is a **folder** (the `demSource` target);
 ///   the heightmap lands at `<output>/materials/textures/heightmap.tif`.
-/// - `"map"` / `"normalmap"`: co-registered ROI crops — see the
+/// - `"map"`: co-registered ROI crop for a display/analysis raster.
+/// - `"albedo"`: co-registered material-albedo bake. Grayscale orthophotos
+///   are treated as illumination-bearing measurements: their low-frequency
+///   field is removed and only bounded local detail is retained around an
+///   authored neutral regolith albedo.
+/// - `"normalmap"`: co-registered ROI crop — see the
 ///   [`ProcessConfig`] kind list.
 ///
 /// `cache_root` is the cache that owns the declaration's derived artifact.
@@ -157,6 +162,7 @@ fn process_asset_to(
         "gltf" => process_gltf(source_path, &stage_output, control)?,
         "dem" => process_dem(source_path, &stage_output, process, control)?,
         "map" => process_map(source_path, &stage_output, process, control)?,
+        "albedo" => process_albedo(source_path, &stage_output, process, control)?,
         "normalmap" => process_normalmap(source_path, &stage_output, process, control)?,
         "texture" => {
             let [tw, th] = process.target_resolution.ok_or_else(|| {
@@ -187,7 +193,7 @@ fn process_asset_to(
                 std::io::ErrorKind::InvalidInput,
                 format!(
                     "Unknown process kind `{}` (expected \"texture\", \"gltf\", \"dem\", \
-                     \"map\", or \"normalmap\")",
+                     \"map\", \"albedo\", or \"normalmap\")",
                     other
                 ),
             ));
@@ -241,7 +247,7 @@ fn commit_staged_output(
     control.check()?;
 
     let mut destinations = vec![output_path.to_path_buf(), bake_stamp_path(output_path)];
-    if process.kind == "map" && output_path.extension().is_some() {
+    if matches!(process.kind.as_str(), "map" | "albedo") && output_path.extension().is_some() {
         destinations.push(output_path.with_extension("mean"));
     }
     let backup_root = stage_root.with_file_name(format!(
@@ -1172,37 +1178,19 @@ fn process_map(
     //   than a correction for interpolation.
     let is_measurement = |v: f64| v.is_finite() && v != 0.0;
 
-    let mut sorted: Vec<f64> = gray
-        .iter()
-        .copied()
-        .filter(|v| is_measurement(*v))
-        .collect();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let (lo, hi) = if sorted.is_empty() {
-        (0.0, 1.0)
-    } else {
-        let lo = sorted[(sorted.len() - 1) / 100];
-        let hi = sorted[(sorted.len() - 1) * 99 / 100];
-        if (hi - lo).abs() < f64::EPSILON {
-            (lo, lo + 1.0)
-        } else {
-            (lo, hi)
-        }
-    };
+    let (lo, hi) = grayscale_percentile_bounds(&gray, is_measurement);
     // Accumulated over the MEASURED samples only — nodata bakes to white, and
-    // folding that into the mean would bias the gain by the size of the margin.
+    // folding that into the mean would bias the display contrast by the size of the margin.
     // Keep the sidecar in the normalized linear domain; the PNG bytes below
     // are sRGB-encoded for the runtime image loader.
     let mut sum_measured = 0.0f64;
     let mut n_measured = 0.0f64;
     let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
     for (i, px) in png.pixels_mut().enumerate() {
-        // Nodata bakes to WHITE, not black. These maps are consumed
-        // multiplicatively — `terrain_geomorph.wgsl` / `terrain_layered.wgsl` do
-        // `albedo = mix(albedo, albedo * map, weight)` — so the neutral element
-        // is 1.0 and "no data" must mean "no contribution". Black is 0.0, which
-        // annihilates the albedo and paints unsurveyed ground as an unlit void
-        // that no sun angle, BRDF or fill light can recover.
+        // Nodata bakes to WHITE, not black. The map pipeline produces
+        // display/analysis rasters, and white is the neutral convention for
+        // consumers that use the map as a multiplicative signal. Black would
+        // turn unsurveyed ground into an unlit void for those consumers.
         //
         // NOTE this cannot be left to the `as u8` cast: were a NaN to reach here
         // it would cast to 0 in Rust (saturating), i.e. silently to the worst
@@ -1223,11 +1211,10 @@ fn process_map(
     png.save(output_path)
         .map_err(|e| io_err(format!("writing map PNG: {e}")))?;
 
-    // Keep the measured mean beside the map for bake inspection. The PNG is a
-    // percentile-stretched linear contrast map, encoded as sRGB in the PNG;
-    // the runtime's shared
-    // `orthophoto_factor` maps it to bounded albedo tone and does not consume a
-    // per-site gain from this sidecar.
+    // Keep the measured mean beside the map for bake inspection. `kind = "map"`
+    // is an analysis/display product, not a material-albedo product: a caller
+    // that binds a grayscale orthophoto as `inputs:albedo_map` must use
+    // `kind = "albedo"` so source illumination is removed at the bake boundary.
     if n_measured > 0.0 {
         let mean = sum_measured / n_measured;
         let sidecar = output_path.with_extension("mean");
@@ -1235,6 +1222,199 @@ fn process_map(
         println!("    map mean {mean:.4} (linear contrast; PNG is sRGB-encoded)",);
     }
     Ok(())
+}
+
+/// `kind = "albedo"` converts an illumination-bearing grayscale orthophoto
+/// into a material colour map.
+///
+/// A NAC orthophoto is a measured image, not intrinsic reflectance: its broad
+/// brightness field contains the acquisition sun/view geometry. Feeding that
+/// field directly into `inputs:albedo_map` makes the runtime light it twice.
+/// This bake keeps the measured local texture detail, removes that low-frequency
+/// field with a valid-sample box filter, and anchors the result at the authored
+/// neutral regolith albedo. The output is therefore a stable material albedo,
+/// not a claim that an unnormalised orthophoto has become calibrated reflectance.
+#[cfg(not(target_arch = "wasm32"))]
+fn process_albedo(
+    source: &Path,
+    output_path: &Path,
+    cfg: &ProcessConfig,
+    control: &ProcessControl,
+) -> Result<(), std::io::Error> {
+    control.check()?;
+    let ext = source
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "img" {
+        return Err(io_err(
+            "albedo pipeline requires a grayscale PDS orthophoto `.IMG`; use `texture` for an already-authored colour albedo".into(),
+        ));
+    }
+
+    let src = decode_gray_source(source)?;
+    let (roi, scale, _clat, _clon) = resolve_roi(cfg, &src, "albedo")?;
+    let out_n = roi.out_n;
+    let crop = roi_samples(&src.samples, src.w, src.h, &roi, control)?;
+    reject_if_mostly_nodata(&crop, "albedo", 0.02)?;
+    let gray = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
+    let measured = |v: f64| v.is_finite() && v != 0.0;
+    let (lo, hi) = grayscale_percentile_bounds(&gray, measured);
+    let span = (hi - lo).max(f64::EPSILON);
+    let contrast: Vec<f64> = gray
+        .iter()
+        .map(|&v| {
+            measured(v)
+                .then_some(((v - lo) / span).clamp(0.0, 1.0))
+                .unwrap_or(f64::NAN)
+        })
+        .collect();
+
+    let base = cfg.albedo_base_linear.unwrap_or(0.13);
+    let detail_strength = cfg.albedo_detail_strength.unwrap_or(0.35);
+    let radius_m = cfg.albedo_illumination_radius_m.unwrap_or(40.0);
+    if !base.is_finite() || !(0.0..=1.0).contains(&base) || base <= 0.0 {
+        return Err(io_err(format!(
+            "albedo pipeline requires `albedo_base_linear` in (0, 1], got {base}"
+        )));
+    }
+    if !detail_strength.is_finite() || !(0.0..=1.0).contains(&detail_strength) {
+        return Err(io_err(format!(
+            "albedo pipeline requires `albedo_detail_strength` in [0, 1], got {detail_strength}"
+        )));
+    }
+    if !radius_m.is_finite() || radius_m <= 0.0 {
+        return Err(io_err(format!(
+            "albedo pipeline requires a positive `albedo_illumination_radius_m` for an orthophoto, got {radius_m}"
+        )));
+    }
+
+    let texel_m = (roi.win as f64 * scale) / out_n.max(1) as f64;
+    let radius_px = if out_n < 2 {
+        0
+    } else {
+        ((radius_m / texel_m).ceil() as usize).clamp(1, (out_n - 1) / 2)
+    };
+    let illumination = local_mean_field(&contrast, out_n, radius_px, control)?;
+    let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
+    for (i, px) in png.pixels_mut().enumerate() {
+        if i.is_multiple_of(out_n.max(1) * 64) {
+            control.check()?;
+        }
+        // Invalid source coverage is the neutral material value, never black.
+        // Valid texels retain only local texture residuals; broad image
+        // illumination is intentionally not reintroduced into the material.
+        let delta = if measured(gray[i]) && illumination[i].is_finite() {
+            contrast[i] - illumination[i]
+        } else {
+            0.0
+        };
+        let linear = (base * (1.0 + detail_strength * delta)).clamp(0.0, 1.0);
+        let encoded = encode_linear_to_srgb_u8(linear);
+        px.0 = [encoded, encoded, encoded];
+    }
+    png.save(output_path)
+        .map_err(|e| io_err(format!("writing albedo PNG: {e}")))?;
+    std::fs::write(output_path.with_extension("mean"), format!("{base:.6}\n"))?;
+    println!(
+        "    albedo base {base:.4}, local detail {detail_strength:.3}, illumination radius {radius_m:.1} m ({radius_px} px)"
+    );
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn grayscale_percentile_bounds<F>(values: &[f64], is_measurement: F) -> (f64, f64)
+where
+    F: Fn(f64) -> bool,
+{
+    let mut sorted: Vec<f64> = values
+        .iter()
+        .copied()
+        .filter(|&value| is_measurement(value))
+        .collect();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    if sorted.is_empty() {
+        return (0.0, 1.0);
+    }
+    let lo = sorted[(sorted.len() - 1) / 100];
+    let hi = sorted[(sorted.len() - 1) * 99 / 100];
+    if (hi - lo).abs() < f64::EPSILON {
+        (lo, lo + 1.0)
+    } else {
+        (lo, hi)
+    }
+}
+
+/// Compute a square valid-sample box mean in O(n²), without turning nodata
+/// into an artificial dark or bright illumination source. Integral fields keep
+/// the offline bake bounded even for large source crops and give edge pixels
+/// the correctly clipped 2D window.
+#[cfg(not(target_arch = "wasm32"))]
+fn local_mean_field(
+    values: &[f64],
+    n: usize,
+    radius: usize,
+    control: &ProcessControl,
+) -> Result<Vec<f64>, std::io::Error> {
+    if values.len() != n.saturating_mul(n) {
+        return Err(io_err(format!(
+            "albedo local mean requires {expected} samples, got {actual}",
+            expected = n.saturating_mul(n),
+            actual = values.len()
+        )));
+    }
+    // A 2D integral field is both simpler and more correct at the image edge
+    // than averaging two independently clipped 1D windows: the latter gives
+    // corner pixels the wrong weights. Keep a second integral for valid-sample
+    // counts so nodata is excluded from the denominator rather than treated as
+    // a dark illumination source.
+    let stride = n
+        .checked_add(1)
+        .ok_or_else(|| io_err("albedo local mean dimension overflow".into()))?;
+    let cells = stride
+        .checked_mul(stride)
+        .ok_or_else(|| io_err("albedo local mean integral field overflow".into()))?;
+    let mut sums = vec![0.0; cells];
+    let mut counts = vec![0u64; cells];
+    for y in 0..n {
+        control.check()?;
+        let mut row_sum = 0.0;
+        let mut row_count = 0usize;
+        for x in 0..n {
+            let value = values[y * n + x];
+            if value.is_finite() {
+                row_sum += value;
+                row_count += 1;
+            }
+            let current = (y + 1) * stride + (x + 1);
+            let above = y * stride + (x + 1);
+            sums[current] = sums[above] + row_sum;
+            counts[current] = counts[above] + row_count as u64;
+        }
+    }
+
+    let mut output = vec![f64::NAN; values.len()];
+    for y in 0..n {
+        control.check()?;
+        let y0 = y.saturating_sub(radius);
+        let y1 = y.saturating_add(radius.saturating_add(1)).min(n);
+        for x in 0..n {
+            let x0 = x.saturating_sub(radius);
+            let x1 = x.saturating_add(radius.saturating_add(1)).min(n);
+            let top_left = y0 * stride + x0;
+            let top_right = y0 * stride + x1;
+            let bottom_left = y1 * stride + x0;
+            let bottom_right = y1 * stride + x1;
+            let sum = sums[bottom_right] + sums[top_left] - sums[top_right] - sums[bottom_left];
+            let count =
+                counts[bottom_right] + counts[top_left] - counts[top_right] - counts[bottom_left];
+            output[y * n + x] = (count > 0)
+                .then_some(sum / count as f64)
+                .unwrap_or(f64::NAN);
+        }
+    }
+    Ok(output)
 }
 
 /// Encode a normalized grayscale map signal for an 8-bit PNG loaded as sRGB.
@@ -1251,6 +1431,11 @@ fn encode_map_contrast_to_srgb_u8(value: f64) -> u8 {
         1.055 * value.powf(1.0 / 2.4) - 0.055
     };
     (encoded * 255.0).round() as u8
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn encode_linear_to_srgb_u8(value: f64) -> u8 {
+    encode_map_contrast_to_srgb_u8(value)
 }
 
 /// `kind = "normalmap"` pipeline — derive a DEM-local ENU normal map from the
@@ -1358,6 +1543,31 @@ mod tests {
     }
 
     #[test]
+    fn albedo_illumination_field_is_local_and_nodata_neutral() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, f64::NAN, 6.0, 7.0, 8.0, 9.0];
+        let mean = local_mean_field(&values, 3, 1, &control()).expect("valid local field");
+        assert!(
+            (mean[0] - (7.0 / 3.0)).abs() < 1e-9,
+            "clipped corner mean: {}",
+            mean[0]
+        );
+        assert!(
+            (mean[4] - 5.0).abs() < 1e-9,
+            "nodata is excluded: {}",
+            mean[4]
+        );
+        assert!(
+            (mean[8] - (23.0 / 3.0)).abs() < 1e-9,
+            "clipped corner mean: {}",
+            mean[8]
+        );
+
+        let flat = vec![0.25; 9];
+        let flat_mean = local_mean_field(&flat, 3, 1, &control()).expect("flat field");
+        assert!(flat_mean.iter().all(|value| (*value - 0.25).abs() < 1e-9));
+    }
+
+    #[test]
     fn rgb_map_bake_writes_identity_normaliser_and_is_installed() {
         let tmp = tempfile::tempdir().expect("temporary map processing directory");
         let source = tmp.path().join("source.tif");
@@ -1384,6 +1594,9 @@ mod tests {
             src_max_lon: Some(1.0),
             site_id: None,
             frame: None,
+            albedo_base_linear: None,
+            albedo_detail_strength: None,
+            albedo_illumination_radius_m: None,
         };
         process_asset(&source, &process, tmp.path(), None, &control()).expect("RGB map processing");
 
@@ -1501,6 +1714,9 @@ mod tests {
             src_max_lon: None,
             site_id: None,
             frame: None,
+            albedo_base_linear: None,
+            albedo_detail_strength: None,
+            albedo_illumination_radius_m: None,
         };
 
         assert!(commit_staged_output(&stage, &output, &process, &control).is_err());
@@ -1624,6 +1840,9 @@ mod tests {
             src_max_lon: Some(1.0),
             site_id: Some("testsite".into()),
             frame: Some("MOON_ME".into()),
+            albedo_base_linear: None,
+            albedo_detail_strength: None,
+            albedo_illumination_radius_m: None,
         };
         let out_dir = tmp.join("site");
         process_dem(&src_path, &out_dir, &cfg, &control()).expect("dem process should succeed");
@@ -1712,6 +1931,9 @@ mod tests {
             src_max_lon: None,
             site_id: None,
             frame: Some("MOON_ME".into()),
+            albedo_base_linear: None,
+            albedo_detail_strength: None,
+            albedo_illumination_radius_m: None,
         };
         let out_dir = tmp.join("site");
         process_dem(&src_path, &out_dir, &cfg, &control()).expect("PDS IMG dem ingest succeeds");
@@ -1765,6 +1987,9 @@ mod tests {
             src_max_lon: Some(1.0),
             site_id: None,
             frame: None,
+            albedo_base_linear: None,
+            albedo_detail_strength: None,
+            albedo_illumination_radius_m: None,
         };
         let out_path = tmp.join("normal.png");
         process_normalmap(&src_path, &out_path, &cfg, &control()).expect("normalmap succeeds");
@@ -1821,6 +2046,9 @@ mod tests {
             src_max_lon: Some(1.0),
             site_id: None,
             frame: None,
+            albedo_base_linear: None,
+            albedo_detail_strength: None,
+            albedo_illumination_radius_m: None,
         };
         let out_path = tmp.join("map.png");
         process_map(&src_path, &out_path, &cfg, &control()).expect("map crop succeeds");

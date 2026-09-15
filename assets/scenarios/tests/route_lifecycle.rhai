@@ -130,7 +130,8 @@ fn context(doc, path, position) {
         target_entity_id: if path == () { () } else { find_path(path) },
         hit_entity_id: if path == () { () } else { find_path(path) },
         modifiers: #{ alt: true, shift: false, ctrl: false },
-        world_position: position,
+        pointer_intents: ["route.add_point"],
+        world_position: point3(position, "active_physics"),
     }
 }
 
@@ -299,16 +300,35 @@ fn on_tick(me) {
             this.phase = 100;
             return;
         }
+        let terrain_pointer = selected_route_context(
+            this.doc, (), [0.0, 1.0, -31.0], ROUTE,
+        );
+        terrain_pointer.route_path = ();
+        terrain_pointer.selected_path = ();
+        terrain_pointer.target_path = ();
+        terrain_pointer.hit_path = ();
+        terrain_pointer.prim_paths = [];
+        terrain_pointer.pointer_intents = ["route.add_point"];
+        let terrain_added = waypoint_editor::on_pointer(terrain_pointer);
+        this.checks.push(t_true(terrain_added.ok && terrain_added.path != (),
+            "terrain add-point intent resolves a route without a hit or selected prim"));
+        if terrain_added.ok && terrain_added.path != () {
+            let terrain_removed = waypoint_editor::on_delete(
+                context(this.doc, terrain_added.path, ()),
+            );
+            this.checks.push(t_true(terrain_removed.ok,
+                "the terrain-created point can be removed through the typed edit path"));
+        }
         let pointer = waypoint_editor::on_pointer(
             selected_route_context(this.doc, (), [0.0, 1.0, -32.0], ROUTE),
         );
         if pointer.ok != true {
-            this.checks.push(t_true(false, "generic pointer policy rejected Alt-click"));
+            this.checks.push(t_true(false, "generic pointer policy rejected the add-point intent"));
             finish(this);
             return;
         }
         this.checks.push(t_true(pointer.path != (),
-            "Alt-click resolves the bound program through the subject programs relationship"));
+            "the add-point intent resolves the bound program through the subject programs relationship"));
         this.phase = 2;
         return;
     }
@@ -392,7 +412,7 @@ fn on_tick(me) {
             context(this.doc, (), [0.0, 1.0, -32.0]),
         );
         if pointer.ok != true {
-            this.checks.push(t_true(false, "generic pointer policy rejected Alt-click"));
+            this.checks.push(t_true(false, "generic pointer policy rejected the add-point intent"));
             finish(this);
             return;
         }
@@ -406,13 +426,14 @@ fn on_tick(me) {
         if point_count(this.doc) != 4 || !has_path(this.doc, this.new_point)
             || ribbon_count(this.doc) != 4 || !ribbon_normals_match(this.doc, 4) { return; }
         this.checks.push(t_true(true,
-            "Alt-click policy appends a named route point"));
+            "the add-point policy appends a named route point"));
         let position = point_position(this.doc, this.new_point);
         this.checks.push(t_true(position != () && position[2] == -32.0,
             "appended point has the clicked world position"));
         let secondary = context(this.doc, this.new_point, ());
         secondary.button = "secondary";
         secondary.modifiers = #{ alt: false, shift: false, ctrl: false };
+        secondary.pointer_intents = ["route.context"];
         let pointer = waypoint_editor::on_pointer(secondary);
         this.checks.push(t_true(pointer.ok == true,
             "generic pointer policy accepts secondary-click context"));
@@ -589,8 +610,10 @@ fn on_tick(me) {
 
     if this.phase == 9 {
         if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
-        waypoint_editor::on_pointer(modified_context(this.doc, (), [0.0, 1.0, -24.0],
-            #{ alt: true, shift: true, ctrl: true }));
+        let modified = modified_context(this.doc, (), [0.0, 1.0, -24.0],
+            #{ alt: true, shift: true, ctrl: true });
+        modified.pointer_intents = [];
+        waypoint_editor::on_pointer(modified);
         this.phase = 90;
         return;
     }
@@ -608,7 +631,7 @@ fn on_tick(me) {
         if !this.active_edit {
             if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
             this.checks.push(t_true(true,
-                "modifier-combined Alt-click does not append a route point"));
+                "a non-matching modifier combination does not append a route point"));
             let added = waypoint_editor::on_click(
                 context(this.doc, (), [0.0, 1.0, -24.0]),
             );

@@ -129,6 +129,23 @@ the scene root's parent-local representation with
 `CellCoord` and local `Transform`; do not attach the rover under a terrain
 mesh or write a large parent-local f32 value with a zero cell.
 
+For Rhai scene tools, use the shared pointer coordinate contract. Rust converts
+the picking backend's `RenderPos` exactly once through the admitted
+`ActivePhysicsFrame`; the context exposes `world_position` as a tagged
+`point3` in `active_physics` and `render_position` as a tagged `render` point.
+Use the prelude helpers `point3`, `world_point`, `point_values`, `point_frame`,
+`point_delta`, `point_distance`, `point_offset`, and `pointer_point`. Never
+author from the render point, subtract raw arrays from points in another frame,
+or silently use the persistent world grid when the active nested site frame is
+unavailable. `pointer_point` is the user-facing failure boundary: it returns an
+explicit error for a missing hit or frame rather than an identity/floating-origin
+fallback. This keeps all screen tools—terrain, route, gizmo, and future tools—on
+one conversion owner. Scene-tool behavior must consume the generic
+`context.pointer_intents`/`pointer_intent(context, name)` surface from the
+shared input settings; do not encode Alt, Shift, Ctrl, or mouse-button meaning
+inside a route or terrain tool. This keeps remapping a settings change while
+the coordinate conversion remains owned by the Rust frame adapter.
+
 For waypoint labels, author `lunco:billboard*` on the waypoint and let the
 generic billboard renderer consume its propagated `GlobalTransform`. The
 renderer uses the shared BigSpace world-pose machinery for the camera/subject

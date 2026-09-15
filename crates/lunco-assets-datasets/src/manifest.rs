@@ -60,7 +60,7 @@ impl AssetEntry {
 /// Processing configuration from an `Assets.toml` declaration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProcessConfig {
-    /// Pipeline selector (`texture`, `gltf`, `dem`, `map`, or `normalmap`).
+    /// Pipeline selector (`texture`, `gltf`, `dem`, `map`, `albedo`, or `normalmap`).
     pub kind: String,
     /// Target dimensions for image-like pipelines.
     #[cfg(not(target_arch = "wasm32"))]
@@ -119,6 +119,22 @@ pub struct ProcessConfig {
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub frame: Option<String>,
+    /// Linear material albedo used by the `albedo` pipeline when the source is
+    /// a grayscale orthophoto rather than a calibrated reflectance raster.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(default)]
+    pub albedo_base_linear: Option<f64>,
+    /// Maximum relative albedo variation retained from the source's local
+    /// detail. The `albedo` pipeline removes the low-frequency illumination
+    /// field before applying this contrast.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(default)]
+    pub albedo_detail_strength: Option<f64>,
+    /// Positive radius of the illumination field removed from an orthophoto, in
+    /// metres. Calibrated reflectance should use the `texture` pipeline instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(default)]
+    pub albedo_illumination_radius_m: Option<f64>,
 }
 
 fn default_output_root() -> String {
@@ -339,7 +355,7 @@ pub fn source_pool_path(root: &Path, url: &str) -> PathBuf {
 }
 
 /// Current processing pipeline identity used by bake completion stamps.
-pub const PROCESS_PIPELINE_VERSION: u32 = 6;
+pub const PROCESS_PIPELINE_VERSION: u32 = 7;
 
 /// Resolve the output path of a native process declaration.
 #[cfg(not(target_arch = "wasm32"))]
@@ -438,7 +454,7 @@ pub fn processed_output_present(
                     .join("materials/textures/heightmap.tif")
                     .is_file()
         }
-        "map" | "gltf" | "normalmap" | "texture" => output_path.is_file(),
+        "map" | "albedo" | "gltf" | "normalmap" | "texture" => output_path.is_file(),
         _ => false,
     };
     if !payload_present {

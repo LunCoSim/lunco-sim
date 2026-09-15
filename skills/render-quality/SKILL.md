@@ -17,9 +17,13 @@ runtime binder projects that intent to Bevy.
    shader `info:wgsl:sourceAsset`, and authored `inputs:albedo_map`/
    `inputs:normal_map`/weights in the composed stage. A composed-stage read is
    the runtime truth; do not open layers from a tutorial.
-2. Inspect the actual asset role and color space. An orthophoto/albedo is the
-   terrain colour source; hillshade, slope, elevation colour, and mineral
-   diagnostics are not substitutes for it. Keep role-aware filtering and mip
+2. Inspect the actual asset role and color space. An illumination-bearing
+   orthophoto is not intrinsic albedo: it must be processed with
+   `kind = "albedo"`, which removes its broad source-light field and emits a
+   stable linear material colour before PNG encoding. A calibrated reflectance
+   raster may use the `texture` pipeline when its colour contract is known.
+   `kind = "map"`, hillshade, slope, elevation colour, and mineral diagnostics
+   are not direct albedo substitutes. Keep role-aware filtering and mip
    generation intact.
 3. Check the authored light and shadow contract, GPU shadow-resource status,
    and `primvars:doNotCastShadows` before changing material brightness. A

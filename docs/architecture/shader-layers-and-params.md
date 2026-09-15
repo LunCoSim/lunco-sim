@@ -88,18 +88,26 @@ fragment shader. The terrain pair (`terrain_layered.wgsl` + `terrain_geomorph.wg
 keeps that ABI duplicated at the stage boundary and the cross-shader contract test
 guards it against drift.
 
-Authored grayscale orthophotos are another shared shader contract. The asset
-pipeline's percentile stretch produces a normalized linear contrast map rather
-than linear reflectance, then sRGB-encodes it for the 8-bit PNG contract. The
-texture-role loader decodes that image back to linear samples, so both terrain
-paths pass the recovered contrast through the single
-`lunco::lunar::orthophoto_factor` transfer. It bounds the albedo modulation and
-keeps map extrema from becoming black or washed-out terrain. When
-`weight_albedo` is fully authored, that raster owns terrain colour variation:
-the layered static path attenuates its procedural dust/mottle term by
-`1 - weight_albedo`, while normal, roughness, ambient occlusion, and lunar
-photometry remain independent. This keeps a real orthophoto spatially stable
-instead of overlaying unrelated fine-scale colour noise on it.
+Authored grayscale orthophotos are not intrinsic albedo: their broad brightness
+field contains acquisition illumination and would be lit a second time by the
+runtime. The native `lunco-assets` processor therefore has a distinct
+`kind = "albedo"` pipeline. It computes the low-frequency illumination field
+from valid samples, removes that field, anchors the remaining local variation
+at an authored neutral regolith value, and sRGB-encodes the resulting linear
+material colour for the 8-bit PNG contract. The texture-role loader decodes
+that image back to linear samples, and both terrain paths use the material
+directly at `weight_albedo`; there is no shader-side orthophoto transfer or
+second lighting compensation.
+
+`kind = "map"` remains the generic percentile-stretched analysis/display
+pipeline. It must not be bound directly as `inputs:albedo_map`. A calibrated
+reflectance raster may use the `texture` pipeline instead, but its colour-space
+contract must be declared by the authored asset. When `weight_albedo` is fully
+authored, that raster owns terrain colour variation: the layered static path
+attenuates its procedural dust/mottle term by `1 - weight_albedo`, while normal,
+roughness, ambient occlusion, and lunar photometry remain independent. Heavy
+decode/filter math stays in the offline Rust asset pipeline; Rhai assembly
+policy chooses the produced asset and authors the standard USD inputs.
 
 The packed surface map's G channel is ambient occlusion. Both terrain paths
 resolve it through `lunco::terrain::terrain_surface_occlusion` and pass the

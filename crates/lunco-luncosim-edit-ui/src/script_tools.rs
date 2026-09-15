@@ -27,9 +27,13 @@
 
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
+use lunco_controller::InputBindingsSettings;
 use lunco_core::{TelemetryEvent, TelemetryValue, TheLocalAvatar};
 use lunco_cosim_core::ControlLink;
 use lunco_scene_selection::SelectedEntities;
+use lunco_spatial::coords::{
+    ActiveFrameCoordinates, RenderPos, ACTIVE_FRAME_NAME, RENDER_FRAME_NAME,
+};
 use std::collections::HashSet;
 
 /// Build the language-neutral map passed to a script tool. The map is an
@@ -75,8 +79,10 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     selected: Res<'w, SelectedEntities>,
     local_avatar: Res<'w, TheLocalAvatar>,
     q_links: Query<'w, 's, &'static ControlLink>,
+    input_bindings: Res<'w, InputBindingsSettings>,
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
     asset_server: Res<'w, AssetServer>,
+    coordinates: ActiveFrameCoordinates<'w, 's>,
 }
 
 /// Disarm the armed script tool on Cancel (Esc), like every other cursor mode.
@@ -144,6 +150,8 @@ pub(crate) fn on_scene_click_script_tool(
         &world.q_links,
         &world.backed,
         &world.asset_server,
+        &world.coordinates,
+        &world.input_bindings,
     );
     commands.trigger(lunco_scripting::commands::RunRhaiTool {
         tool,
@@ -171,6 +179,8 @@ fn scene_tool_context(
     q_links: &Query<&ControlLink>,
     backed: &lunco_usd_bevy_twin::DocBackedTwinScenes,
     asset_server: &AssetServer,
+    coordinates: &ActiveFrameCoordinates<'_, '_>,
+    input_bindings: &InputBindingsSettings,
 ) -> TelemetryValue {
     let mut cursor = click.entity;
     let root = loop {
@@ -224,10 +234,25 @@ fn scene_tool_context(
         PointerButton::Secondary => "secondary",
         PointerButton::Middle => "middle",
     };
+    let pointer_intents = input_bindings.pointer_intents(
+        button,
+        keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
+        keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+        keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
+    );
     let mut context = vec![
         (
             "button".to_string(),
             TelemetryValue::String(button.to_string()),
+        ),
+        (
+            "pointer_intents".to_string(),
+            TelemetryValue::Array(
+                pointer_intents
+                    .into_iter()
+                    .map(TelemetryValue::String)
+                    .collect(),
+            ),
         ),
         (
             "screen_position".to_string(),
@@ -322,18 +347,53 @@ fn scene_tool_context(
         }
     }
     if let Some(position) = click.hit.position {
+        let render_position = RenderPos::from_render_f32(position);
         context.push((
-            "world_position".to_string(),
+            "render_position".to_string(),
+            coordinate_point(render_position.0, RENDER_FRAME_NAME, "pointer_hit"),
+        ));
+        if let Some(world_position) = coordinates.render_to_active(render_position) {
+            context.push((
+                "world_position".to_string(),
+                coordinate_point(world_position.0, ACTIVE_FRAME_NAME, "pointer_hit"),
+            ));
+        } else {
+            context.push((
+                "position_error".to_string(),
+                TelemetryValue::String("active scene coordinate frame is unavailable".to_string()),
+            ));
+        }
+    }
+    tool_map(context)
+}
+
+/// Encode a point for the Rhai coordinate contract. The values stay native
+/// `TelemetryValue` data; this is not a JSON transport or an untagged vector.
+fn coordinate_point(position: bevy::math::DVec3, frame: &str, source: &str) -> TelemetryValue {
+    tool_map(vec![
+        (
+            "kind".to_string(),
+            TelemetryValue::String("point3".to_string()),
+        ),
+        (
+            "values".to_string(),
             TelemetryValue::Array(
                 position
                     .to_array()
                     .into_iter()
-                    .map(|value| TelemetryValue::F64(value as f64))
+                    .map(TelemetryValue::F64)
                     .collect(),
             ),
-        ));
-    }
-    tool_map(context)
+        ),
+        (
+            "frame".to_string(),
+            TelemetryValue::String(frame.to_string()),
+        ),
+        (
+            "source".to_string(),
+            TelemetryValue::String(source.to_string()),
+        ),
+    ])
 }
 
 /// Publish one typed scene-pointer event for Rhai policy programs. The event
@@ -389,6 +449,8 @@ pub(crate) fn on_scene_pointer_event(
         &world.q_links,
         &world.backed,
         &world.asset_server,
+        &world.coordinates,
+        &world.input_bindings,
     );
     let source = world
         .q_ids

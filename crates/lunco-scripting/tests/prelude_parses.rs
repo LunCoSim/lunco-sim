@@ -189,6 +189,21 @@ fn assembly_ui_templates_use_existing_surfaces_and_workflows() {
 }
 
 #[test]
+fn assembly_builder_exposes_the_native_albedo_bake_as_usd_policy() {
+    let (_, source) = lunco_assets_core::scripting::tool_libraries()
+        .into_iter()
+        .find(|(name, _)| *name == "assembly_builder")
+        .expect("assembly_builder.rhai must be embedded");
+    let result = runtime_engine()
+        .eval::<rhai::Map>(&format!(
+            "{source}\nlunar_albedo_material_plan(\"runtime\", \"/Looks/Terrain/Surface\", \"twin://terrain/apollo15/materials/textures/albedo.png\", \"twin://terrain/apollo15/materials/textures/normal.png\", 1.0, 0.5)"
+        ))
+        .expect("the albedo policy must evaluate without a host command");
+    assert_eq!(result.get("ok").and_then(|v| v.as_bool().ok()), Some(true));
+    assert_eq!(result.get("ops").map(|v| v.clone().into_array().unwrap().len()), Some(4));
+}
+
+#[test]
 fn assembly_tool_libraries_are_discoverable() {
     use lunco_tools::Tool;
 

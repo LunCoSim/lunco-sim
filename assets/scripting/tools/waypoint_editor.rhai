@@ -18,23 +18,19 @@ fn route_ribbon_sample_spacing() { 3.0 }
 fn route_ribbon_max_samples() { 768 }
 
 fn ui_label() { "Route point" }
-fn ui_hint() { "Alt-click the terrain to append a point to the active route" }
+fn ui_hint() { "Use the configured add-point gesture on terrain to append a point to the active route" }
 
 // The generic scene adapter invokes this hook for an unarmed pointer gesture.
-// Button and modifier meaning stay in this authored policy; Rust only resolves
-// the canonical scene context and routes the hook.
+// Physical button/modifier meaning is resolved by shared input settings; this
+// policy consumes only semantic pointer intents.
 fn on_pointer(context) {
     if context == () { return #{ ok: true, changed: false, handled: false }; }
-    let modifiers = context.modifiers;
-    if context.button == "primary"
-        && modifiers != ()
-        && modifiers["alt"] == true
-        && modifiers["shift"] != true
-        && modifiers["ctrl"] != true
-        && context.world_position != () {
+    if pointer_intent(context, "route.add_point") {
+        let point = pointer_point(context);
+        if point.ok != true { return failure(point.error); }
         return on_click(context);
     }
-    if context.button == "secondary" {
+    if pointer_intent(context, "route.context") {
         let route = route_edit_path(context);
         if route == () || context_route_point(context, route) == () {
             return #{ ok: true, changed: false, handled: false };
@@ -133,7 +129,8 @@ fn route_edit_path(context) {
         // the selection transaction, so retain that explicit choice by its
         // stable parent path instead of guessing a scene-root route. Pointer
         // hit paths still require the composed-program validation above.
-        if path == context["selected_path"] && path.ends_with("/Program") {
+        let selected_path = context["selected_path"];
+        if selected_path != () && path == selected_path && path.ends_with("/Program") {
             return route_parent_path(path);
         }
     }
@@ -703,12 +700,13 @@ fn on_click(context) {
     }
     let subject = subject_path(context);
     if subject == () { return failure("select or possess the object that owns this route"); }
-    if context.world_position == () { return failure("click has no world position"); }
+    let pointer = pointer_point(context);
+    if pointer.ok != true { return failure(pointer.error); }
     let route = route_edit_path(context);
     if route == () {
         return failure("select an authored route program before adding a point");
     }
-    let point = marker_ops(context.doc_id, route, context.world_position);
+    let point = marker_ops(context.doc_id, route, point_values(pointer.point));
     if !point.ok { return failure(point.error); }
     let result = apply_ops(context.doc_id, "Append route point", point.ops);
     if result.ok { result.path = point.path; }
@@ -719,7 +717,8 @@ fn on_move(context) {
     if context == () || context.doc_id == () {
         return failure("move has no active document");
     }
-    if context.world_position == () { return failure("move has no target position"); }
+    let pointer = pointer_point(context);
+    if pointer.ok != true { return failure(pointer.error); }
     let route = route_edit_path(context);
     let point = context_route_point(context, route);
     if point == () { return failure("move target is not a direct route point"); }
@@ -727,10 +726,10 @@ fn on_move(context) {
     if !target.ok || !target.exists { return failure("move target does not exist"); }
     let edit_target = if target.authored_here && !target.under_arc { "@root@" } else { "@runtime@" };
     let ops = [#{ SetTranslate: #{
-        edit_target: edit_target,
-        path: point,
-        value: context.world_position,
-    }}];
+            edit_target: edit_target,
+            path: point,
+            value: point_values(pointer.point),
+        }}];
     let result = apply_ops(context.doc_id, "Move route point", ops);
     if result.ok { result.path = point; }
     result

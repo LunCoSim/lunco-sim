@@ -474,6 +474,7 @@ fn print_usage() {
     println!("  kind = \"gltf\"     clean a .glb for Bevy 0.18 (needs Node/npx)");
     println!("  kind = \"dem\"      crop a square georeferenced float32 heightmap from a raw DTM (GeoTIFF or PDS3 .IMG)");
     println!("  kind = \"map\"      crop a co-registered ortho/shade/slope raster to the same ROI as an 8-bit PNG layer map");
+    println!("  kind = \"albedo\"   bake a stable material albedo from a calibrated raster or illumination-bearing orthophoto");
     println!("  kind = \"normalmap\" derive a world-space normal-map PNG from a DTM crop");
     println!();
     println!("Examples:");

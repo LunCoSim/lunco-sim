@@ -186,6 +186,16 @@ impl GridFrameTransform {
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct RenderPos(pub DVec3);
 
+/// Stable names used at the scripting boundary for the two coordinate spaces
+/// that can appear in a scene interaction.
+///
+/// The values are intentionally semantic rather than entity identifiers. A
+/// scene may replace its active nested grid while the script contract remains
+/// the same: interactive points are in the current physics frame, while
+/// render points are floating-origin presentation values.
+pub const ACTIVE_FRAME_NAME: &str = "active_physics";
+pub const RENDER_FRAME_NAME: &str = "render";
+
 impl GridPos {
     pub fn new(v: DVec3) -> Self {
         Self(v)
@@ -205,6 +215,35 @@ impl GridRot {
 impl RenderPos {
     pub fn from_render_f32(v: Vec3) -> Self {
         Self(v.as_dvec3())
+    }
+}
+
+/// Convert floating-origin pointer coordinates into the one active scene
+/// frame used by physics, terrain, and authored placement.
+///
+/// This is deliberately generic and lives beside the canonical coordinate
+/// conversion rather than in the editor, terrain, or Avian crates. A screen
+/// tool must not select a Grid by traversal order or use the persistent world
+/// shell when a site scene has mounted a nested active frame.
+#[derive(SystemParam)]
+pub struct ActiveFrameCoordinates<'w, 's> {
+    active_frame: Option<Res<'w, ActivePhysicsFrame>>,
+    grids: Query<'w, 's, &'static Grid>,
+}
+
+impl ActiveFrameCoordinates<'_, '_> {
+    /// The concrete active BigSpace grid, when the scene has admitted one.
+    pub fn frame(&self) -> Option<Entity> {
+        self.active_frame.as_deref().map(|frame| frame.0)
+    }
+
+    /// Convert a render-space point to an absolute point in the active frame.
+    /// Missing frame topology is an unavailable result, never an identity
+    /// conversion or a renderer-coordinate fallback.
+    pub fn render_to_active(&self, render_point: RenderPos) -> Option<GridPos> {
+        let frame = self.frame()?;
+        let grid = self.grids.get(frame).ok()?;
+        Some(render_to_grid_absolute(grid, render_point))
     }
 }
 

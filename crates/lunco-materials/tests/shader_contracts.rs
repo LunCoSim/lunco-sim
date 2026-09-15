@@ -9,7 +9,7 @@
 //!
 //! | contract | what it shipped as |
 //! |---|---|
-//! | one shared bounded orthophoto transfer | the percentile-stretched albedo map drove terrain to near-black and washed-out extrema when multiplied as reflectance |
+//! | material albedo is baked before shading | an illumination-bearing orthophoto was interpreted as a live reflectance multiplier and lit twice |
 //! | shared surface kernel, no local copies | `aa_fade` retuned in one file of six; the other four kept the old constants |
 //! | full-arity `regolith_factor` | the opposition surge was dead code with zero call sites |
 //! | every `lunco::` import has a keep-alive | terrain drew with NO material at all — flat grey, reported as "the ground went transparent" |
@@ -68,32 +68,33 @@ fn code_only(src: &str) -> String {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A baked orthophoto is a 1–99 PERCENTILE STRETCH, not a reflectance map. Every
-/// consumer must use the shared bounded transfer in `lunco::lunar`; a direct
-/// `albedo * map` multiply makes the map's extrema become black/white terrain.
+/// The terrain shader consumes a material-albedo texture, not an
+/// illumination-bearing orthophoto. The asset pipeline owns the conversion;
+/// the shader must blend the decoded linear colour directly and must not apply
+/// a second orthophoto transfer.
 #[test]
-fn every_albedo_map_uses_shared_bounded_transfer() {
+fn every_albedo_map_uses_material_albedo_directly() {
     for (name, src) in all_shaders() {
         let code = code_only(&src);
         if !code.contains("weight_albedo") {
             continue;
         }
-        // The composite line must route the map through the shared transfer.
+        // The composite line must consume the already prepared material colour.
         let line = code
             .lines()
-            .find(|l| l.contains("mix(albedo") && l.contains("orthophoto_factor"))
+            .find(|l| l.contains("mix(albedo") && (l.contains("map_a") || l.contains("a,")))
             .unwrap_or_else(|| {
                 panic!("{name} declares weight_albedo but never composites it into albedo")
             });
         assert!(
-            line.contains("orthophoto_factor"),
-            "{name} applies the authored map without the shared bounded orthophoto transfer. Line: {}",
+            !line.contains("orthophoto_factor") && !line.contains("albedo *"),
+            "{name} applies an authored material albedo as a multiplier instead of a colour. Line: {}",
             line.trim()
         );
         assert!(
-            code.contains("orthophoto_factor") && src.contains("lunco::lunar::"),
-            "{name} must IMPORT orthophoto_factor from lunco::lunar, not redefine the \
-             transfer — two copies are how terrain paths drift apart"
+            !code.contains("orthophoto_factor"),
+            "{name} must not relight an orthophoto in the shader; the asset pipeline owns \
+             material-albedo conversion"
         );
     }
 }
@@ -124,8 +125,8 @@ fn authored_albedo_suppresses_only_procedural_colour_variation() {
     assert!(geomorph.contains("let authored_albedo_weight = clamp(mat.weight_albedo"));
     let line = geomorph
         .lines()
-        .find(|line| line.contains("orthophoto_factor(map_a)"))
-        .expect("geomorph terrain must apply the authored albedo transfer");
+        .find(|line| line.contains("mix(albedo") && line.contains("map_a"))
+        .expect("geomorph terrain must apply the authored material albedo");
     assert!(line.contains("authored_albedo_weight"));
     assert!(geomorph.contains("authored_albedo_weight,"));
 

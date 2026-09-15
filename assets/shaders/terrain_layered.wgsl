@@ -37,7 +37,7 @@
     mesh_view_bindings::lights,
 }
 #import lunco::horizon::sun_visibility_resolved
-#import lunco::lunar::{orthophoto_factor, regolith_factor}
+#import lunco::lunar::regolith_factor
 #import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
 
 //!@ui      albedo            color       "Albedo"
@@ -275,13 +275,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let map_weight_ao = map_weights.z;
     let map_weight_tone = map_weights.w;
     var map_ao = 1.0;
-    // Albedo: the real colour mosaic is a percentile-stretched contrast map, not
-    // linear reflectance. The shared transfer bounds its tone modulation so map
-    // extrema cannot collapse the ground to black or wash it to white. It must
-    // stay identical to the streamed path in `terrain_geomorph.wgsl`.
+    // Albedo is already a linear material colour. The asset pipeline separates
+    // source-image illumination from local surface detail before writing this
+    // sRGB-authored texture; this shader must not relight the source image.
     if (authored_albedo_weight > 0.0) {
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
-        albedo = mix(albedo, albedo * orthophoto_factor(a), authored_albedo_weight);
+        albedo = mix(albedo, a, authored_albedo_weight);
     }
     // (Mineral/classification is NOT applied here: it is an OVERLAY — data
     // visualization, not material — and composites after lighting below, so a
