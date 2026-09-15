@@ -540,6 +540,27 @@ impl BridgeShadow {
         self.physics_frame = physics_frame;
     }
 
+    /// Whether the current spatial representation is exactly the one this
+    /// bridge last published for the active physics frame.
+    ///
+    /// `position_to_pose` is the sanctioned `Transform` writer for solved
+    /// bodies. Bevy change detection cannot distinguish that write from an
+    /// authored teleport, so the shadow is the provenance boundary: an
+    /// unchanged shadow means the write came from this bridge and must not be
+    /// fed back into Avian as a new pose input.
+    fn matches_current_pose(
+        &self,
+        cell: Option<&CellCoord>,
+        tf: &Transform,
+        physics_frame: Entity,
+    ) -> bool {
+        self.is_seeded()
+            && self.physics_frame == physics_frame
+            && self.cell == cell.copied()
+            && self.translation == tf.translation
+            && self.rotation == tf.rotation
+    }
+
     /// Whether the current representation is exactly what BigSpace's
     /// `CellCoord::recenter_large_transforms` produces from this shadow.
     ///
@@ -942,7 +963,7 @@ fn pose_to_position(
     >,
     mut body_queries: ParamSet<(
         Query<
-            Entity,
+            (Entity, Option<&CellCoord>, &Transform, &BridgeShadow),
             (
                 BridgeSynced,
                 Without<lunco_core::PhysicsPoseAuthoritative>,
@@ -1043,14 +1064,23 @@ fn pose_to_position(
             moved.insert(entity);
         }
     }
-    // A direct body change is a precise wake signal, not proof that the
-    // change is semantic: BigSpace can re-split the same pose into a new
-    // `(CellCoord, Transform)` pair.  The exact shadow check in pass 2 remains
-    // authoritative for that distinction.  The unseeded marker query also
-    // catches bodies materialized before this system's change-detection
-    // baseline; once seeded, they leave that query permanently and steady
-    // state is driven only by actual pose/topology changes.
-    moved.extend(body_queries.p0().iter());
+    // A direct body change is only a candidate. `position_to_pose` is the
+    // bridge's own Transform writer, and Bevy reports that write through the
+    // same Changed<Transform> bit as an authored teleport. Check provenance
+    // here before treating it as a semantic physics input. BigSpace can also
+    // re-split the same pose into a new `(CellCoord, Transform)` pair; the
+    // exact resplit check below handles that representation-only case.
+    for (entity, cell, tf, shadow) in body_queries.p0().iter() {
+        let parent_grid = q_parents
+            .get(entity)
+            .ok()
+            .and_then(|parent| q_grids.get(parent.parent()).ok());
+        let bridge_owned = shadow.matches_current_pose(cell, tf, active_frame)
+            || shadow.is_representation_only(cell, tf, parent_grid, active_frame);
+        if !bridge_owned {
+            moved.insert(entity);
+        }
+    }
     let process_all_bodies = first_read || handoff.is_some();
     if !process_all_bodies && moved.is_empty() {
         return;
@@ -1613,6 +1643,21 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
     use lunco_spatial::coords::world_pose;
+
+    #[test]
+    fn bridge_owned_writeback_is_not_an_external_pose_change() {
+        let frame = Entity::from_bits(7);
+        let transform =
+            Transform::from_xyz(1.0, 2.0, 3.0).with_rotation(Quat::from_rotation_y(0.25));
+        let mut shadow = BridgeShadow::default();
+        shadow.capture(None, &transform, frame);
+
+        assert!(shadow.matches_current_pose(None, &transform, frame));
+
+        let moved = Transform::from_xyz(1.0, 2.01, 3.0).with_rotation(Quat::from_rotation_y(0.25));
+        assert!(!shadow.matches_current_pose(None, &moved, frame));
+        assert!(!shadow.matches_current_pose(None, &transform, Entity::from_bits(8)));
+    }
 
     #[test]
     fn disconnected_physics_is_held_before_solver_admission() {

@@ -216,7 +216,6 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
 pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
     let mut app = App::new();
     lunco_assets_core::register_lunco_asset_sources(&mut app);
-    app.add_plugins(lunco_assets::datasets::DatasetsPlugin);
 
     let mut plugins = default_plugins();
     let compute = if let Some(threads) = compute_threads {
@@ -1554,6 +1553,12 @@ mod big_space_propagation_gate_tests {
 impl Plugin for LunCoSimCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
+
+        // Dataset state is part of the shared simulation composition. The USD
+        // terrain projection consumes this registry in GUI and headless hosts;
+        // installing it only in the headless constructor leaves the windowed
+        // production app with a missing-resource panic during its first update.
+        app.add_plugins(lunco_assets::datasets::DatasetsPlugin);
 
         // Asset and loaded-stage validation is a shared headless/UI service;
         // install it once with the simulator core rather than coupling it to

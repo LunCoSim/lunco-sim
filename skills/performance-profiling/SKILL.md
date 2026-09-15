@@ -33,6 +33,12 @@ structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
 
+For physics, distinguish persistent environmental state from transient
+commands: use the engine's persistent acceleration or passive non-waking force
+contract for gravity and contact support, and reserve waking force/torque writes
+for authored drive, braking, or actuator commands. Do not emulate this with a
+timer, sleep threshold, or a second cache.
+
 Use the existing cache/revision owner and preserve the USD projection boundary.
 Do not add a second cache, a timer, a compatibility path, or a quality fallback.
 If the hot path is not established, stop after source inspection and capture a

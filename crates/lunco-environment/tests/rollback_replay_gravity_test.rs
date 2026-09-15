@@ -1,26 +1,26 @@
 //! **Weight must survive a rollback replay.**
 //!
 //! The shipped app sets avian's own `Gravity::ZERO` (`lunco-luncosim`); gravity
-//! reaches a rigid body ONLY through `apply_gravity_to_rigid_bodies`, which
-//! writes it into avian's force accumulator every `FixedUpdate`.
+//! reaches a rigid body through the standard `ConstantLinearAcceleration`
+//! projection of the cached `LocalGravity` field.
 //!
 //! Client rollback does not re-run `FixedUpdate`. `replay_one_tick`
 //! (`lunco-networking`) runs `lunco_core::RollbackReplay` and then steps
-//! `PhysicsSchedule` — and the physics step CLEARS the accumulator, so nothing
-//! carries over from the live tick that preceded the correction. A replayed tick
-//! therefore solves with exactly the forces `RollbackReplay` produced and nothing
-//! else. With gravity absent from that schedule the rover is re-simulated
+//! `PhysicsSchedule`. The standard acceleration component is consumed directly
+//! by Avian's integrator in that schedule, so a replayed tick solves with the
+//! same gravity field as the live tick. With gravity absent from that schedule
+//! the rover is re-simulated
 //! WEIGHTLESS: no weight, no normal force, no wheel traction, and the replayed
 //! trajectory diverges from the host's on the one body rollback exists to keep in
 //! sync.
 //!
 //! This drives the REAL schedules in the REAL order `replay_one_tick` uses —
-//! calling the system as a bare function would assert nothing about the
-//! registration, which is the thing that was missing.
+//! calling the projection as a bare function would assert nothing about the
+//! registration and replay boundary.
 //!
-//! A hand-built probe with gravity inserted directly into `PhysicsSchedule` would
-//! miss this: gravity would be present during replay by construction. This test
-//! instead exercises the shipped schedule ordering.
+//! A hand-built probe with acceleration inserted directly into `PhysicsSchedule`
+//! would miss the projection boundary. This test first runs the shipped
+//! `FixedUpdate` projection, then exercises the actual replay schedule.
 
 use avian3d::prelude::*;
 use bevy::math::DVec3;
@@ -52,6 +52,7 @@ fn rollback_replay_applies_local_gravity() {
         .insert_resource(avian3d::prelude::Gravity::ZERO)
         .insert_resource(Gravity::flat(1.62, DVec3::NEG_Y))
         .add_plugins(EnvironmentPlugin);
+    app.init_schedule(lunco_core::RollbackReplay);
     app.finish();
     app.cleanup();
 
@@ -69,6 +70,15 @@ fn rollback_replay_applies_local_gravity() {
         ))
         .id();
 
+    // The live fixed boundary projects the cached field onto Avian's standard
+    // persistent acceleration component. Rollback then consumes that component
+    // without re-running the live environment schedule.
+    app.world_mut().run_schedule(FixedUpdate);
+    assert!(app
+        .world()
+        .get::<ConstantLinearAcceleration>(body)
+        .is_some());
+
     let dt = std::time::Duration::from_secs_f64(1.0 / 60.0);
     for _ in 0..10 {
         replay_one_tick(app.world_mut(), dt);
@@ -83,9 +93,8 @@ fn rollback_replay_applies_local_gravity() {
     assert!(
         vy < -0.1,
         "a replayed tick must solve WITH the body's weight — got vy = {vy}. \
-         Gravity reaches a body only through `apply_gravity_to_rigid_bodies`, and \
-         the physics step clears the force accumulator, so if that system is not \
-         registered in `RollbackReplay` the client re-simulates a weightless rover \
-         and prediction diverges from the host."
+         The cached local field must be projected onto Avian's standard \
+         acceleration component before rollback; otherwise the client \
+         re-simulates a weightless rover and prediction diverges from the host."
     );
 }

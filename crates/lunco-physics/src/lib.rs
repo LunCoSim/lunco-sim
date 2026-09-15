@@ -741,35 +741,21 @@ impl PhysicsStepRequest {
 
 /// Run condition: **the solver will consume forces applied this tick.**
 ///
-/// Every system that writes into avian's force accumulator (gravity, suspension,
-/// wheel drive, thrusters, …) must be gated on this. avian clears the accumulator
+/// Every system that writes into Avian's transient force accumulator (suspension,
+/// wheel drive, thrusters, …) must be gated on this. Avian clears that accumulator
 /// *inside* the physics step, so a force applied while the step is skipped is never
-/// cleared — it is ADDED TO on the next tick, and the next, and discharges in full
-/// on the single step that eventually runs.
-///
-/// MEASURED, and the reason this exists (episode 2, six-wheel rover): shots 1-3 are
-/// "frozen" beats, which by design hold *physics* while leaving the *world clock*
-/// ticking (see `assets/scripting/prelude/recording.rhai` — pausing the world clock
-/// would stop `FixedUpdate` and deadlock the very script that paused it). Across
-/// those 28 s ≈ 1800 fixed ticks, `lunco_environment::apply_gravity_to_rigid_bodies`
-/// kept adding `m·g` downward with nothing consuming it — ~4 MN accumulated. The
-/// hold released at the start of shot 4 and discharged it in ONE step: the rover
-/// left the surface at **224.20 m/s downward on that shot's first captured frame**
-/// (HUD `elev -2.2`, `speed 224.20 m/s`), which is 3.7 m of travel per 1/60 s step
-/// and so tunnels straight through the 1 m ground slab. It was never a fall: it was
-/// a launch. Velocity then decayed under the chassis' `linearDamping = 0.5`
-/// (169.94 m/s at frame 19, 36.87 m/s at frame 150) — the exponential signature that
-/// identified an impulse rather than free fall in the first place.
+/// cleared and is added to the next live step. Persistent acceleration components,
+/// such as the environment's `ConstantLinearAcceleration` projection, are not
+/// transient force writes and must not use this gate.
 ///
 /// Gating on `Time<Physics>` rather than on [`PhysicsHolds`] is deliberate: it is
 /// the clock the solver actually integrates, so this is also correct for anything
 /// that pauses physics out of band, exactly as [`apply_physics_holds`] is.
 ///
-/// `Time<Virtual>` is NOT a substitute and was the original mistake in
-/// `lunco-mobility`: a physics hold does not pause virtual time, so a virtual-clock
-/// gate is open for the entire window this needs to close. Both are checked here —
-/// a paused world clock must stop force application too, and `Time<Physics>` does
-/// not report itself paused merely because virtual time is.
+/// `Time<Virtual>` is not a substitute: a physics hold does not pause virtual
+/// time, so a virtual-clock gate can remain open while the solver is stopped.
+/// Both clocks are checked here because a paused world clock must stop transient
+/// force application too.
 pub fn physics_is_live_state(
     physics_time: &Time<Physics>,
     virtual_time: &Time<Virtual>,

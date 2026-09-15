@@ -1427,6 +1427,15 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
         bridge_core::query(&RhaiBuilder, name.as_str(), serde_json::json!({}))
     });
 
+    // Read the authoritative USD document generation directly. Structural
+    // scenario policy uses it as an invalidation clock; it must not pay for
+    // the full InspectUsdDocument JSON snapshot on every fixed tick.
+    engine.register_fn("usd_document_generation", |doc_id: i64| -> Dynamic {
+        bridge_core::usd_document_generation(doc_id as u64)
+            .map(|generation| Dynamic::from_int(generation as i64))
+            .unwrap_or(Dynamic::UNIT)
+    });
+
     // SysML is a normal read-only query surface. These JSON helpers are a
     // small production bridge for authored tests that want a stable snapshot
     // without constructing a second parser or walking the Twin root. The

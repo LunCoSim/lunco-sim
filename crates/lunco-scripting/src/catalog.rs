@@ -180,6 +180,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "Compute one authored-capability-aware navigation command through the shared host law; () means the authoritative pose or steering geometry is unavailable and the caller must hold brake.",
     ),
     (
+        "usd_document_generation",
+        "usd_document_generation(doc_id)",
+        "u64 | ()",
+        "Read the authoritative USD document generation as a cheap structural invalidation clock; perform detailed topology queries only after it changes.",
+    ),
+    (
         "geolocation",
         "geolocation(id)",
         "#{lat, lon, height} | ()",

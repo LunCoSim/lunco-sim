@@ -53,11 +53,11 @@ use lunco_core::{
 };
 use lunco_core_session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_physics::PhysicsTime;
-use lunco_time::{Clocks, MissionClock, ResolvedDomains, TimeTransport, WorldTime};
 use lunco_spatial::{
     coords::{GridPos, VehicleFrame},
     NavigationCommand, SteeringGeometry,
 };
+use lunco_time::{Clocks, MissionClock, ResolvedDomains, TimeTransport, WorldTime};
 
 // ── Native value construction ──────────────────────────────────────────────
 
@@ -508,6 +508,25 @@ pub(crate) fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
     world
         .get_resource::<ApiEntityRegistry>()?
         .resolve(&GlobalEntityId::from_raw(gid))
+}
+
+/// Read the authoritative USD document generation without constructing the
+/// full `InspectUsdDocument` JSON response.
+///
+/// A fixed-step policy may use this as its structural invalidation clock, then
+/// perform its expensive topology read only when the generation changes. The
+/// registry/document pair is the owner of this fact; this helper is only the
+/// native language-neutral bridge to that owner.
+pub fn usd_document_generation(doc_id: u64) -> Option<u64> {
+    with_world(|world| {
+        let registry = world.get_resource::<
+            lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>,
+        >()?;
+        registry
+            .host(lunco_doc::DocumentId::new(doc_id))
+            .map(|host| host.generation())
+    })
+    .flatten()
 }
 
 /// The session id currently controlling `gid`, or `None` if nobody owns it. Reads the same

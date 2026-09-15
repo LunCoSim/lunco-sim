@@ -41,7 +41,7 @@ Three layers, mapped to ECS:
         PROVIDERS                       COMPUTED                CONSUMERS
    (on celestial Body entity)        (on each entity)
 
-   ┌─ GravityProvider ─────────►  ┌─ LocalGravity ──────► apply_gravity_to_rigid_bodies (Avian)
+   ┌─ GravityProvider ─────────►  ┌─ LocalGravity ──────► ConstantLinearAcceleration (Avian)
    │                              │                       inject_environment (cosim)
    ├─ AtmosphereProvider ──sys──► ├─ LocalAtmosphere ──► aerodynamic models
    │                              │                       inject_environment
@@ -133,7 +133,7 @@ shadow design. Inert until a terrain carries the (USD-stamped)
 ### `EnvironmentPlugin`
 
 Adds `compute_local_gravity` to `FixedUpdate` in the `EnvironmentSet::Compute`
-set, `apply_gravity_to_rigid_bodies` + `inject_local_gravity_into_cosim` in
+set, `sync_local_gravity_to_avian` + `inject_local_gravity_into_cosim` in
 `EnvironmentSet::Apply`, and (behind `render`) the solar/lighting/horizon
 presentation half. Add it once during app setup:
 
@@ -285,7 +285,7 @@ injected — opt-in by name.
 
 ## Roadmap
 
-- [x] **Gravity** — `LocalGravity`, `compute_local_gravity`, `apply_gravity_to_rigid_bodies`, `inject_local_gravity_into_cosim`
+- [x] **Gravity** — `LocalGravity`, `compute_local_gravity`, `sync_local_gravity_to_avian`, `inject_local_gravity_into_cosim`
 - [x] **Solar direction** — `LocalSolar`, `compute_local_solar`, `inject_local_solar_into_cosim` (sun direction as a cosim output)
 - [x] **Lunar lighting** — `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`, `SetEnvironmentLight` tuner, earthshine fill
 - [x] **Horizon self-shadowing** — `HorizonShadowPlugin`, `HorizonMap`
@@ -297,15 +297,16 @@ injected — opt-in by name.
 ## Design notes
 
 **Why Local\* components instead of recomputing on demand?**
-Gravity is read by multiple consumers each tick (Avian force application,
+Gravity is read by multiple consumers each tick (Avian acceleration,
 cosim injection, UI display). Computing once and storing as a component is
 faster and more idiomatic ECS than re-deriving from Position + Body each time.
 
 **Why `Bevy` change detection?**
-The compute systems write the Local\* components every tick unconditionally.
-That triggers `Changed<LocalGravity>` filters in consumers — useful for
-reactive UI ("gravity just changed because we crossed an SOI boundary"). If
-this becomes a perf issue, add equality checks before insert.
+The compute systems observe their actual dependencies and compare the computed
+value before inserting a Local\* component. Consumers such as Avian's
+acceleration projection therefore wake only when the field really changes;
+reactive UI can still use `Changed<LocalGravity>` for events such as crossing
+an SOI boundary.
 
 **Why opt-in by input name in `inject_environment`?**
 A solar panel doesn't need `g`, so it doesn't declare `input Real g`. The

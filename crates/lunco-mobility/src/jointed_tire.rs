@@ -139,7 +139,7 @@ pub fn apply_jointed_tire_forces(
     if full_dt <= 0.0 {
         return;
     }
-    let mut pending: Vec<(Entity, DVec3, DVec3)> = Vec::new();
+    let mut pending: Vec<(Entity, DVec3, DVec3, bool)> = Vec::new();
 
     {
         let q_state = bodies.p1();
@@ -288,15 +288,23 @@ pub fn apply_jointed_tire_forces(
                     tire.lateral_stiffness_graph,
                 );
                 let force = contact.forward * f_long + contact.right * f_lat;
-                pending.push((wheel, force, contact.point));
+                // A zero-torque tire patch is a persistent contact reaction,
+                // not a wake-up event. Preserve the command bit with the
+                // pending force so a real drive or brake command can wake a
+                // sleeping wheel island through Avian's regular accumulator.
+                pending.push((wheel, force, contact.point, port.value != 0.0 || braking));
             }
         }
     }
 
     let mut q_forces = bodies.p0();
-    for (wheel, force, point) in pending {
+    for (wheel, force, point, commanded) in pending {
         if let Ok(mut forces) = q_forces.get_mut(wheel) {
-            forces.apply_force_at_point(force, point);
+            if commanded {
+                forces.apply_force_at_point(force, point);
+            } else {
+                forces.non_waking().apply_force_at_point(force, point);
+            }
         }
     }
 }

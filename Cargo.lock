@@ -8370,6 +8370,7 @@ dependencies = [
  "lunco-tools-rhai",
  "lunco-twin-journal",
  "lunco-usd-bevy-scene",
+ "lunco-usd-core",
  "lunco-workspace",
  "pyo3",
  "rhai",

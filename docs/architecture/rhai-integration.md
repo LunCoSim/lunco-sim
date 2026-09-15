@@ -97,10 +97,23 @@ second fixed-tick loop or cursor map. The `on_tick` hook is reserved for
 authored test scenarios that sample state and publish a bounded verdict; it is
 not part of the production mission contract.
 
+### Structural invalidation in authored policy
+
+Policy that reads USD topology on a fixed tick must use the owning document's
+generation as its invalidation clock. The native `usd_document_generation(doc)`
+bridge reads `DocumentHost::generation()` directly; it does not serialize an
+`InspectUsdDocument` response or wait for the asynchronous projection. A policy
+may cache its route/component/relationship snapshot and refresh it only when
+that generation changes. Runtime transforms, sensor values, and actuation stay
+on their live per-tick paths because they are state, not structural invalidation.
+Structural edits still go through the typed USD owner, which advances the same
+generation and makes the cache refresh deterministic.
+
 ### Host verbs (the entire Rust-exposed vocabulary — `world_bridge.rs`)
 
 | verb | channel | purpose |
 |------|---------|---------|
+| `usd_document_generation(doc_id)` → `u64` | read | read the authoritative USD generation as a cheap structural invalidation clock; detailed topology queries happen only after it changes |
 | `cmd(name, #{params})` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
 | `query(name, #{params})` | read | invoke a read-only structured provider; data is direct, no-data is `()`, errors are `#{ok:false,error}` |
 | `query("CausalTrace", #{target: gid, correlation_id: id})` | read | inspect one semantic edge through its authored binding, selected port owner, USD/Avian admission, and current measured channels |
