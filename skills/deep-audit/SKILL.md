@@ -30,7 +30,7 @@ fixed soon graduates to its own `docs/reviews/open-<name>.md`, which stays.
      check whether a USD-native concept already expresses it (kind, purpose, variants,
      payloads, `doc`, existing applied APIs, physics schemas). Every `lunco:` attr that IS
      authored must be declared in `schema.usda` (the staleness gate
-     `scripts/run_rust_tests.sh -p lunco-usd --filter schema_generation::` enforces generatedSchema sync).
+     `python3 scripts/gen_schema.py` enforces generatedSchema sync).
      Name-squatting check: places that adopt Pixar/Omniverse NAMES but diverge semantically.
    - **Modelica/cosim conformance** — flattening, connect semantics, initialization,
      events; master-algorithm honesty (declared ZOH/Jacobi contract vs. actual behavior);

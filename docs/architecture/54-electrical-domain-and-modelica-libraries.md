@@ -374,7 +374,7 @@ library-specific installer or root-name branch.
   is sent through the existing `LoadSourceRoot { Disk }` worker command, which recursively
   reads standard `package.mo`/`package.order` trees and uses the same input-default
   normalization as other disk roots. **Why in `lunco-modelica-core`, not at the USD twin-mount
-  site?** Because `lunco-usd` has no dependency on `lunco-modelica-core` and should not gain one
+  site?** Because `lunco-usd-commands` has no dependency on `lunco-modelica-core` and should not gain one
   just to poke the worker; the crate that *owns* the Modelica worker is the right owner of
   "load a Twin's Modelica," and it already sees the shared Twin asset authority.
 

@@ -237,8 +237,8 @@ and `normal`.
   terrain tile streaming, so it cannot hide tile progress or make a presentable
   ground scene wait for an optional map.
 - For multi-site scenes, author these inputs **inside a terrain variant** and
-  verify with
-  `cargo run -p lunco-usd --example variant_probe -- <scene.usda>`.
+  verify the composed variant through the production scene-test command; do
+  not add a package-specific USD probe for this asset contract.
 
 Node-graph authoring is outside this asset pipeline. Read the current
 multi-domain architecture before introducing a new graph owner.

@@ -113,6 +113,10 @@ crossbeam-channel = { workspace = true }
 # already set by scripts/build_web.sh). Mirrors luncosim/lunco-luncosim/modelica.
 getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
 
+[package.metadata.cargo-machete]
+# Feature-only browser RNG backend for Rhai's transitive rand dependency.
+ignored = ["getrandom"]
+
 [dev-dependencies]
 
 [lints]

@@ -7,7 +7,7 @@ description = "Application-level composition of the USD visual, animation, diagn
 
 [dependencies]
 bevy = { workspace = true }
-lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-commands = { path = "../lunco-usd-commands" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-animation = { path = "../lunco-usd-bevy-animation" }
 lunco-usd-bevy-diagnostics = { path = "../lunco-usd-bevy-diagnostics" }

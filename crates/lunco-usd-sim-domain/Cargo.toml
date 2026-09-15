@@ -26,7 +26,6 @@ lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
-lunco-usd-core = { path = "../lunco-usd-core" }
 
 [lints]
 workspace = true

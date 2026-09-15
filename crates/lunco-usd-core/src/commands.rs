@@ -1,7 +1,7 @@
 //! Typed USD document mutation commands.
 //!
 //! These are the shared command contracts for applying authored USD operations.
-//! The runtime observer lives in `lunco-usd`; keeping the data types here lets
+//! The runtime observer lives in `lunco-usd-commands`; keeping the data types here lets
 //! scene and authoring packages submit USD edits without depending on the
 //! aggregate runtime package.
 
@@ -15,7 +15,7 @@ use lunco_usd_document::document::UsdOp;
 
 /// Apply one [`UsdOp`] to a document through the typed command bus.
 ///
-/// The `lunco-usd` runtime observes this command and routes it through the
+/// The `lunco-usd-commands` runtime observes this command and routes it through the
 /// document registry so undo/redo, change notification, and read-only
 /// enforcement remain centralized there.
 #[Command(default)]
@@ -31,7 +31,7 @@ pub struct ApplyUsdOp {
 
 /// Apply one authored intent consisting of several USD operations.
 ///
-/// The `lunco-usd` runtime journals this list as one undo unit and observes it
+/// The `lunco-usd-commands` runtime journals this list as one undo unit and observes it
 /// only after the document reaches its complete shape.
 #[Command(default)]
 pub struct ApplyUsdOps {

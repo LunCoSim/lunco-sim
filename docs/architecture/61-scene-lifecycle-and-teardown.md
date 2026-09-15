@@ -36,7 +36,7 @@ remain explicit and do not become the active running scene.
 
 `lunco-core::SceneTransitionIntent` is the typed in-process request boundary.
 Higher-level domains such as tutorials emit `Load`, `Clear`, or `Restart`
-intents; `lunco-usd` is the only owner that translates them into the concrete
+intents; `lunco-usd-commands` is the only owner that translates them into the concrete
 USD commands and resolves scene identity. No subsystem sends a command name or
 JSON payload to another subsystem.
 

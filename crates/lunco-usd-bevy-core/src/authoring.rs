@@ -26,16 +26,29 @@ pub struct DefaultPrim {
 impl DefaultPrim {
     /// Parse `text` and locate its `defaultPrim`.
     pub fn parse(text: &str) -> Option<Self> {
-        let data = parse_usda(text).ok()?;
-        let name = data
-            .field(&SdfPath::abs_root(), "defaultPrim")?
-            .as_str()?
-            .to_string();
+        Self::parse_result(text).ok().flatten()
+    }
+
+    /// Parse `text` and locate its `defaultPrim`, preserving syntax failures.
+    ///
+    /// `Ok(None)` means the layer is valid USDA but does not author a usable
+    /// `defaultPrim`; `Err` means the source itself could not be parsed.
+    pub fn parse_result(text: &str) -> Result<Option<Self>, String> {
+        let data = parse_usda(text).map_err(|error| error.to_string())?;
+        let Some(default_prim) = data.field(&SdfPath::abs_root(), "defaultPrim") else {
+            return Ok(None);
+        };
+        let Some(name) = default_prim.as_str() else {
+            return Ok(None);
+        };
+        let name = name.to_string();
         if name.is_empty() {
-            return None;
+            return Ok(None);
         }
-        let path = SdfPath::new(&format!("/{name}")).ok()?;
-        Some(Self { data, path })
+        let Some(path) = SdfPath::new(&format!("/{name}")).ok() else {
+            return Ok(None);
+        };
+        Ok(Some(Self { data, path }))
     }
 
     /// The authored `defaultPrim` path, absolute in the source layer.

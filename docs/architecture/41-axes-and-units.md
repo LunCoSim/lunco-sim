@@ -378,7 +378,7 @@ its keep (YAGNI).
    centimetre stage, the identity stage, and the conjugated-chain property
    (`S·W·p = L₁'·L₂'·S·p`). The **save**-side round trip is pinned by
    `a_non_canonical_stage_is_authored_in_its_own_frame` and
-   `undo_on_a_non_canonical_stage_restores_the_original_position` in `lunco-usd`.
+   `undo_on_a_non_canonical_stage_restores_the_original_position` in the USD command integration tests.
 3. **Promote to a `lunco-axes-and-units` crate + `CanonicalScene` trait** when a
    *second* format spoke actually arrives. Speculative today — USD is the
    interchange hub, so Blender/Isaac arrive *through* USD, not beside it.

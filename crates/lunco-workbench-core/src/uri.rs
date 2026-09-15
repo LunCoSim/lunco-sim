@@ -28,7 +28,7 @@
 //!
 //! The workbench stays domain-free: it holds the registry and knows
 //! the common resolution shapes. Domain crates (lunco-modelica-core, a
-//! future lunco-usd, etc.) bring their own handler + observer that
+//! future USD command domains, etc.) bring their own handler + observer that
 //! translates the generic `UriResolution` into their concrete
 //! behaviour. Adding a new scheme is registering one handler and one
 //! observer; no edits to this file.

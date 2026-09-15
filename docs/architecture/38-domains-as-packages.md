@@ -118,7 +118,7 @@ library prim) declares namespace, connector kinds, part library, and rule-script
 
 **(g) Domain-neutral reader.** The USD core never branches on a domain — it reads generic
 attrs/rels/schemas; all domain knowledge is in the descriptor (USD) + rules (rhai). This is the whole
-point: `lunco-usd` stays domain-agnostic forever.
+point: the USD runtime packages stay domain-agnostic forever.
 
 > Net USD shape: `Rover` (assembly and, when appropriate, the network root) owns a
 > `CollectionAPI:components` working set and typed boundary ports. A separate `Thermal` scope is

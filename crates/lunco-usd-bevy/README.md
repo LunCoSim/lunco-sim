@@ -5,7 +5,7 @@ The core **OpenUSD Hierarchy and Visuals** bridge for Bevy.
 ## Rationale
 This crate provides the foundational integration between OpenUSD and Bevy. It handles the mapping of USD Prims to Bevy Entities and automatically synchronizes visual properties (shapes and transforms) from USDA files. 
 
-By separating visuals into this crate, we keep the core integration lightweight and allow physics (`lunco-usd-avian`), lighting (`lunco-usd-bevy-light`), or simulation metadata (`lunco-usd`) to be added as modular layers. USD composition and default-time projection data are prepared by the async asset loader; the Bevy update schedule only binds that owned snapshot to ECS. The non-`Send` canonical OpenUSD stage is retained for authoring and live edits.
+By separating visuals into this crate, we keep the core integration lightweight and allow physics (`lunco-usd-avian`), lighting (`lunco-usd-bevy-light`), or simulation metadata (`lunco-usd-sim`) to be added as modular layers. USD composition and default-time projection data are prepared by the async asset loader; the Bevy update schedule only binds that owned snapshot to ECS. The non-`Send` canonical OpenUSD stage is retained for authoring and live edits.
 
 ## Key Functions & Features
 

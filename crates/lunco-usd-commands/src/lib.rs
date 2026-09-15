@@ -66,6 +66,11 @@ use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 use openusd::schemas::lux::tokens as ltok;
 
+mod live_consume;
+mod program_runtime;
+mod runtime_persistence;
+mod twin_projection;
+
 /// Telemetry mnemonic for a default Twin scene whose authoritative source did
 /// not become available. This is a scene-load failure, not a simulation fault:
 /// the viewport remains empty and a later Twin replacement is still admitted.

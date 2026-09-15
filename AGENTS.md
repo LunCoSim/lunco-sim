@@ -101,7 +101,7 @@ package checks after changing skill metadata or packaging.
 - Asset identity, traversal, and storage belong to `lunco-assets`; USD runtime
   crates do not read asset bytes with `std::fs`. `lunco-usd-compose` owns USD
   dependency interpretation and assembly (sublayers, references, payloads,
-  variants), re-exported by `lunco-usd`.
+  variants), consumed directly by the USD runtime packages.
 - Modelica owns continuous equations/state; behavior trees own sequencing; Rhai
   owns scenario glue/policy; Rust owns engine mechanisms. Production Rhai must
   not use `on_tick` except for test verdicts. Prefer events to polling.

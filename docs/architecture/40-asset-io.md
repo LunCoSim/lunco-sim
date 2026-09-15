@@ -205,7 +205,7 @@ no manual hunt.
 | `lunco-usd-bevy-core/compose.rs` compose (resolver-backed stage, injected fetcher) | ✅ injected fetcher, wasm path pre-fetches via `LoadContext::read_asset_bytes` |
 | `lunco-usd-sim-cosim/src/lib.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
 | `lunco-usd-ui/src/ui/browser_dispatch.rs` twin browser open | ✅ routed through the shared `OpenFile` USD document command |
-| `lunco-usd/src/commands.rs` usd document load | ✅ reads through the storage abstraction |
+| `lunco-usd-commands/src/lib.rs` usd document load | ✅ reads through the storage abstraction |
 | `lunco-modelica-core/library_remote.rs` source-library fetch | ⚠️ uses the generic browser fetch primitives but remains coupled to Modelica's parsed-bundle protocol; move the protocol boundary to the asset/source package when the web worker contract is next revised |
 | `lunco-modelica-core::models::bundled_models()` `include_str!` | ⚠️ candidate for `EmbeddedAssetSource` registration so it looks like every other asset path |
 

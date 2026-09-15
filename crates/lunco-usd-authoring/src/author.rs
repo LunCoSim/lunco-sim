@@ -1,10 +1,9 @@
 //! Path-addressed USD authoring for the document layer (Phase C2/C3).
 //!
-//! The document layer used to mutate its canonical `.usda` **source text** by
-//! splicing byte ranges (`lunco-usd::text_edit`). That is the CQ-503 nested-child
-//! corruption class: editing `/World/Box.radius` could clobber
-//! `/World/Box/Inner.radius` because the two share an attribute name and the
-//! splicer reasons about text, not structure.
+//! The document layer mutates its canonical `.usda` **authored data** through
+//! openusd's path-addressed authoring engine. Editing `/World/Box.radius`
+//! addresses that property structurally, so a nested `/World/Box/Inner.radius`
+//! cannot be mistaken for the target.
 //!
 //! This module routes every edit through openusd's authoring engine instead.
 //! The document's canonical representation is a Send-safe [`sdf::Data`] holding

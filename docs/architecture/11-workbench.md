@@ -32,7 +32,7 @@
 > shell edge. Together they
 > are depended on by ~10 crates
 > (luncosim, lunco-luncosim, lunco-luncosim-edit-core, lunco-luncosim-edit-ui,
-> lunco-usd, lunco-modelica-ui,
+> lunco-usd-commands, lunco-modelica-ui,
 > lunco-celestial, lunco-avatar, lunco-networking, …).
 
 ## Contents
@@ -1026,7 +1026,7 @@ refs, external anchors) without reinventing the wheel.
 - `UriRegistry` (Bevy `Resource`) holds scheme handlers. Each domain
   plugin registers its own on `build()`:
   - `lunco-modelica-ui` → `modelica://Modelica.Blocks.Examples.PID` → drill-in.
-  - Future `lunco-usd` → `usd://stage.usd@</World/Rover>`.
+  - Future USD command domain → `usd://stage.usd@</World/Rover>`.
   - Future `lunco-sysml` → `sysml://package::Element`.
 - `UriClicked` event carries `{ uri, resolution }`; domain observers
   match on `resolution.doc_kind` and fire their own commands

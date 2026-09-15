@@ -552,7 +552,7 @@ Run the smallest relevant checks first, then the production binary:
 ```bash
 python3 scripts/gen_schema.py
 RUSTC_WRAPPER= cargo fmt --all -- --check
-RUSTC_WRAPPER= cargo test -p lunco-usd-document --test schema_generation -j 4
+python3 scripts/gen_schema.py
 "$LUNCOSIM_BIN" test --scene scenes/tests/sensor.usda
 RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_mechanics -j 4
 CARGO_INCREMENTAL=1 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4

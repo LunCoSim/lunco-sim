@@ -2520,9 +2520,9 @@ fn settle_binding_epoch(
 ///   removed. Covers initial scene load, async payload/vessel spawn,
 ///   source-after-sink ordering, and a generated island publishing its boundary
 ///   contract; visual-only prims are not wiring endpoints.
-/// - **live edit** — [`UsdWiringDirty`], set by the op-driven projection
-///   ([`lunco_usd::live_consume`]) when a `connectionPaths` change is drained
-///   from the live stage (an edit that is not itself a prim spawn/despawn).
+/// - **live edit** — [`UsdWiringDirty`], set by the op-driven USD command
+///   runtime when a `connectionPaths` change is drained from the live stage
+///   (an edit that is not itself a prim spawn/despawn).
 ///
 /// A connection whose source prim is not yet spawned is skipped (its later spawn
 /// re-runs this); a malformed source path is logged and skipped — restoring the
@@ -3427,7 +3427,7 @@ pub struct LoadScene {
     pub root_prim: String,
 }
 
-// The `LoadScene` OBSERVER lives in `lunco-usd`
+// The `LoadScene` OBSERVER lives in `lunco-usd-commands`
 // (`commands.rs::on_load_scene`), not here: mounting a scene has to resolve the
 // requested path to its DOCUMENT first (a doc-backed scene must mount its
 // composed `base ⊕ runtime`, never the base file), and the document registry
@@ -3680,10 +3680,10 @@ fn on_scene_transition_failed(
 /// owners may have already reclaimed a target in the same transaction.
 /// The scene-owned entities a teardown touches, bundled as one `SystemParam`.
 ///
-/// Every scene-lifecycle observer — `LoadScene` (in `lunco-usd`), `ClearScene`,
+/// Every scene-lifecycle observer — `LoadScene` (in `lunco-usd-commands`), `ClearScene`,
 /// `RestartScene` — needs exactly this set. Bundling keeps the mount API honest:
 /// a caller drives a teardown without naming `WorldGrid`, `OriginAnchor` or the
-/// cosim `SimConnection` wire type, so `lunco-usd` needs no dependency on
+/// cosim `SimConnection` wire type, so `lunco-usd-commands` needs no dependency on
 /// `lunco-cosim` to orchestrate a scene swap.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct SceneEntities<'w, 's> {
@@ -3829,7 +3829,7 @@ pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
 
 /// Spawn one new USD child prim into a live scene, mirroring the child branch of
 /// the visual projector's per-prim analogue of a full scene-root mount, used
-/// by E2 incremental spawn ([`lunco_usd::live_consume`])
+/// by the USD command runtime's E2 incremental-spawn path
 /// when a `Resync` reports a prim added to the composed document.
 ///
 /// The caller resolves the live parent from the canonical stage identity and
@@ -3950,7 +3950,7 @@ pub fn spawn_scene_root_world(
 ) -> Option<Entity> {
     let asset_path = validate_scene_address(path_in)?;
     // File-backed source: the AssetServer reads + composes the on-disk
-    // stage. lunco-usd's E1 projection takes the other door
+    // stage. The USD command runtime's E1 projection takes the other door
     // ([`spawn_scene_root_with_stage`]) to mount a document's *composed*
     // (base ⊕ runtime) stage instead.
     let handle = world
@@ -3980,7 +3980,7 @@ pub fn spawn_scene_root_world(
 ///
 /// The handle-supplying sibling of [`spawn_scene_root_world`]: instead of
 /// loading the stage from disk via the `AssetServer`, the caller hands in a
-/// `Handle<UsdStageAsset>` it built itself. This is the seam E1 uses — lunco-usd
+/// `Handle<UsdStageAsset>` it built itself. This is the seam E1 uses — lunco-usd-commands
 /// passes a handle holding a [`UsdDocument`](lunco_usd_document::document::UsdDocument)'s
 /// *composed* (`base ⊕ runtime`) stage, so the live world projects the editable
 /// document (with its persisted runtime spawns/moves) rather than the raw file.

@@ -4578,7 +4578,7 @@ impl InstancePanel for UsdPreviewViewPanel {
 mod tests {
     use super::*;
     use lunco_render::SceneCamera;
-    use lunco_usd::commands::UsdCommandsPlugin;
+    use lunco_usd_commands::UsdCommandsPlugin;
     use lunco_usd_document::document::UsdOp;
     /// Without any rendering plugins (`Assets<Image>` absent), opening a
     /// document does not allocate a preview session or panic.

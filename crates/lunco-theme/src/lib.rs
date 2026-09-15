@@ -32,7 +32,7 @@
 //! ## The split, when it is worth doing
 //!
 //! Follow the established pair pattern — `lunco-doc`/`lunco-doc-bevy`,
-//! `lunco-usd`/`lunco-usd-bevy`, `lunco-render`/`lunco-render-bevy`:
+//! `lunco-usd-document`/`lunco-usd-bevy`, `lunco-render`/`lunco-render-bevy`:
 //!
 //! * **`lunco-theme` (core, render-free)** — [`ColorPalette`], [`DesignTokens`],
 //!   [`SchematicTokens`], [`PlotTokens`], [`JournalTokens`], [`ThemeMode`] and

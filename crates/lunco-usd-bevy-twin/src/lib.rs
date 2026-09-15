@@ -3,9 +3,8 @@
 //! This package owns the identity and lifetime seam between a document in the
 //! document registry and a `twin://` USD stage asset. It does not load stages,
 //! compose layers, or project entities. Those runtime mechanisms remain in
-//! `lunco-usd`; UI packages consume this contract without importing that
-//! aggregate runtime crate.
-
+//! `lunco-usd-commands`; UI packages consume this contract without importing
+//! that command/runtime package's visual adapters.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

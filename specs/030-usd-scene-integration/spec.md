@@ -47,7 +47,7 @@ As a developer, I want to add new simulation-specific mapping logic (e.g., for a
 | Planned (spec) | Implemented | Notes |
 |---|---|---|
 | `lunco-usd-core` | `lunco-usd-document` + `lunco-usd-core` | Document/layer parser and authoring substrate; typed operation and edit contracts |
-| `lunco-usd-physx` | (folded into `lunco-usd`) | PhysX-specific USD attrs handled inline |
+| `lunco-usd-physx` | `lunco-usd-sim` / `lunco-usd-avian` | PhysX-specific USD attrs are read by the owning simulation and physics bridges |
 | `lunco-usd-avian` | `lunco-usd-avian` | Avian3D physics implementation — as planned |
 | `lunco-usd-mapping` | (folded into `lunco-usd-document` / runtime owners) | `lunco:` schema and authored mapping facts live in the document package; runtime projection stays with its owning bridge |
 | `lunco-usd-bevy` | `lunco-usd-bevy` | Bevy `AssetLoader` and entity spawning — as planned |

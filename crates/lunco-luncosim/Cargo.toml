@@ -107,9 +107,8 @@ lunco-networking = { path = "../lunco-networking", optional = true, default-feat
 lunco-storage = { path = "../lunco-storage" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Native desktop startup hooks and update checks for the windowed `luncosim`.
+# Native desktop startup hooks for the windowed `luncosim`.
 velopack = { version = "=1.2.110-ge826545", optional = true, features = ["public-utils"] }
-ureq = { workspace = true, optional = true }
 
 [features]
 # `ui` + `api-transport` are on by default so native `cargo run --bin luncosim`
@@ -135,7 +134,6 @@ default = ["ui", "celestial", "api-transport", "transport-http", "sysml"]
 ui = [
     "dep:lunco-assets",
     "dep:velopack",
-    "dep:ureq",
     # Screenshot capture is a rendered application capability kept on the UI edge.
     "dep:lunco-capture",
     "lunco-capture/api",
@@ -229,21 +227,6 @@ sysml = ["lunco-luncosim-core/sysml"]
 # tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p
 # tracy-client` after enabling).
 tracy = ["bevy/trace_tracy"]
-
-# Web-specific: wasm32-unknown-unknown needs JS interop for console output,
-# panic hooks, and RNG (std::time is unavailable on wasm32).
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = { workspace = true }
-# Drive the rhai REPL panel's async bridge call on wasm (no threads → `spawn_local`).
-wasm-bindgen-futures = { workspace = true }
-console_error_panic_hook = { workspace = true }
-# URL-parameter boot path (`?workspace=…&open=…`) reads `window.location.search`.
-web-sys = { workspace = true, features = ["Window", "Location"] }
-js-sys = { workspace = true }
-# The wasm build's RNG pull from Bevy and lightyear's netcode needs an explicit
-# browser-crypto backend. Enable the `wasm_js` feature here; build_web.sh sets
-# the matching `--cfg getrandom_backend="wasm_js"` (both are required).
-getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [lints]
 workspace = true

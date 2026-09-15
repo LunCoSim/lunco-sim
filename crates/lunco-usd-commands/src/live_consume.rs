@@ -472,12 +472,10 @@ fn seat_authored_translate(world: &mut World, entity: Entity, v: Vec3) {
             // NOTE: a prim that carries a rigid body owns its pose in avian's
             // `Position`, and avian syncs `Position` → `Transform`, not the reverse —
             // so for those prims this seat is overwritten on the next physics tick.
-            // The fix does NOT belong here: this crate is deliberately physics-free
-            // (avian is a dev-dependency only), so re-seating a body is
-            // `lunco-usd-sim`'s to own, next to the rest of its avian mapping. A
-            // Non-body visuals are updated here. A scripted move of a rigid
-            // body is owned by the physics projection, which keeps its pose
-            // authority beside the Avian mapping.
+            // Re-seating an admitted body remains owned by the USD physics
+            // projection, next to the rest of its Avian mapping. Non-body
+            // visuals are updated here; a scripted move of a rigid body keeps
+            // its pose authority beside that mapping.
         }
         None => {
             if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {

@@ -150,10 +150,6 @@ lightyear_aeronet = { version = "0.28.0", default-features = false }
 
 # Native (desktop / dedicated server): full client+server WebTransport.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-# Native byte-GET for the HTTP asset plane (`http_fetch`). Already in the workspace
-# tree (lunco-assets/celestial use it), so this pulls no new transitive deps. Web
-# uses `lunco_assets_core::web_fetch` (browser `fetch`) instead.
-ureq = { workspace = true }
 # Shared version + feature set come from [workspace.dependencies]; these two are
 # the native-only additions. `webtransport_dangerous_configuration` accepts the
 # self-signed cert digest and must never reach the browser build.
@@ -196,6 +192,11 @@ wasm-bindgen-futures = { workspace = true }
 #     `--cfg getrandom_backend="wasm_js"` (set globally by scripts/build_web.sh).
 getrandom_v02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+
+[package.metadata.cargo-machete]
+# These are feature-only browser backend activators; the source intentionally
+# calls the owning crates' APIs rather than these packages directly.
+ignored = ["getrandom_v02", "getrandom_v04"]
 
 [lints]
 workspace = true

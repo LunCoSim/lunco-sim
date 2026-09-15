@@ -35,7 +35,6 @@ big_space = { workspace = true }
 web-time = { workspace = true }
 
 [dev-dependencies]
-lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [lints]

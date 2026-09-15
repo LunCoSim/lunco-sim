@@ -133,10 +133,11 @@ optional Python source with no declared `inputs:`/`outputs:` is reported as sour
 it is not treated as a running participant. `AttachProgram` is the canonical
 way to add the source and its explicit scalar contract. "My model does nothing"
 should be diagnosed by checking `CosimStatus` and `GetBrokenConnections`, not by
-assuming a hidden fallback. The guard test
-`crates/lunco-usd/tests/program_sources_exist.rs` walks every `.usda` and asserts
-each `sourceAsset` file exists — but only [`validate-assets`](../validate-assets/SKILL.md)
-catches a broken `references` arc before you launch.
+assuming a hidden fallback. The production scene-test catalog reports read and
+parse status for every discovered `.usd*` asset, and the sandbox smoke
+scenario asserts that shipped USD sources are readable and parseable. Only
+[`validate-assets`](../validate-assets/SKILL.md) catches a broken `references`
+arc before you launch.
 
 > Rhai `import` uses the same canonical asset identity as USD. Use a logical
 > `lunco://…` or `twin://…` URI, an assets-root `/…` path, or a path relative to

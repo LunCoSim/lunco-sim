@@ -55,6 +55,4 @@ web-time = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
-lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }

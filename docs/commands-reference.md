@@ -29,7 +29,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **USD / scenes**
 
-- [`lunco-usd`](#lunco-usd) (1 command)
+- [`lunco-usd-commands`](#lunco-usd-commands) (1 command)
 
 **Modelica modeling & simulation**
 
@@ -336,7 +336,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Written through `Transform`, never through avian's `Rotation`, for exactly
  the reason `MoveEntity` never hand-writes `Position`:
- `lunco-usd_avian_core::PhysicsBridgeSystems::Read` detects the external
+ `lunco_usd_avian_core::PhysicsBridgeSystems::Read` detects the external
  `Transform` write and derives the physics pose from it (carrying it to
  jointed descendants); a hand-written `Rotation` is a second, wronger opinion
  that the bridge's writeback then undoes. The body is pinned Kinematic for the
@@ -427,7 +427,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ## USD / scenes
 
-### `lunco-usd` <a id="lunco-usd"></a>
+### `lunco-usd-commands` <a id="lunco-usd-commands"></a>
 
 #### `SetDomeLight`
 
@@ -447,7 +447,7 @@ actually call, with the fields the deserializer actually accepts. See the
  leaves the authored value alone, so a lighting tweak need not restate the
  texture.
 
-- *defined in:* `crates/lunco-usd/src/commands.rs`
+- *defined in:* `crates/lunco-usd-commands/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1572,7 +1572,7 @@ actually call, with the fields the deserializer actually accepts. See the
  path without any UI.
 
  The actual loading is domain-specific: `lunco-modelica-core` observes this
- and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
+ and reads `.mo` files; `lunco-usd-commands` observes it for `.usd*`. Each
  domain's observer ignores paths it doesn't own, so they coexist.
 
  Lives here (not in the egui workbench) so headless / sandbox / server
@@ -2786,7 +2786,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Apply one [`UsdOp`] to a document through the typed command bus.
 
- The `lunco-usd` runtime observes this command and routes it through the
+ The `lunco-usd-commands` runtime observes this command and routes it through the
  document registry so undo/redo, change notification, and read-only
  enforcement remain centralized there.
 
@@ -2802,7 +2802,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Apply one authored intent consisting of several USD operations.
 
- The `lunco-usd` runtime journals this list as one undo unit and observes it
+ The `lunco-usd-commands` runtime journals this list as one undo unit and observes it
  only after the document reaches its complete shape.
 
 - *defined in:* `crates/lunco-usd-core/src/commands.rs`

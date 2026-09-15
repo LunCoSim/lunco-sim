@@ -16,7 +16,7 @@ $ cargo tree -e normal -p lunco-luncosim-server -i winit              # warning:
 Both flags are load-bearing. Absence is reported as `warning: nothing to print.` on
 **stdout with exit code 0** — not a non-zero exit — so a check that keys on the exit
 status passes unconditionally. And without `-e normal`, `-i` also walks dev- and
-build-dependencies, where wgpu legitimately appears (visual examples, `lunco-usd`'s
+build-dependencies, where wgpu legitimately appears in visual examples,
 dev-only `bevy_pbr`), reporting a regression that is not one.
 
 `naga` remains, via `bevy_shader` — the WGSL **compiler**, kept for live shader editing

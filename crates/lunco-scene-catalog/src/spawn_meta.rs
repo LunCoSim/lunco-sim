@@ -26,6 +26,13 @@ use lunco_usd_bevy_core::DefaultPrim;
 /// Spawn metadata authored on a `*.usda`'s default prim.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SpawnMeta {
+    /// Asset read failure, if the canonical asset source could not provide text.
+    pub read_error: Option<String>,
+    /// USDA parse failure, if the asset text was not valid USDA.
+    ///
+    /// This is kept beside the metadata read because the catalog already
+    /// reads every shipped USD asset through the canonical asset resolver.
+    pub parse_error: Option<String>,
     /// `bool lunco:spawnable` — whether the file is a spawnable part.
     ///
     /// **Opt-in.** Default `false`: a file is offered in the palette only if it
@@ -44,10 +51,20 @@ pub struct SpawnMeta {
 /// [`SpawnMeta::default`] — i.e. *not* spawnable. Unreadable is not a licence to
 /// guess: a file that cannot state it is a part is not offered as one.
 pub fn parse_spawn_meta(src: &str) -> SpawnMeta {
-    let Some(prim) = DefaultPrim::parse(src) else {
-        return SpawnMeta::default();
+    let prim = match DefaultPrim::parse_result(src) {
+        Ok(Some(prim)) => prim,
+        Ok(None) => return SpawnMeta::default(),
+        Err(error) => {
+            return SpawnMeta {
+                read_error: None,
+                parse_error: Some(error),
+                ..Default::default()
+            };
+        }
     };
     SpawnMeta {
+        read_error: None,
+        parse_error: None,
         // Typed `bool`, declared by `LunCoCatalogAPI` (see
         // lunco-usd-authoring/schema/schema.usda).
         spawnable: prim.scalar::<bool>("lunco:spawnable").unwrap_or(false),
@@ -91,7 +108,9 @@ def Xform "Rover" (
 
     #[test]
     fn unparseable_source_is_not_spawnable() {
-        assert_eq!(parse_spawn_meta("not usd at all"), SpawnMeta::default());
+        let meta = parse_spawn_meta("not usd at all");
+        assert!(!meta.spawnable);
+        assert!(meta.parse_error.is_some());
     }
 
     /// Punctuation in the `doc` value is preserved by USD parsing.

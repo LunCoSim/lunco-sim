@@ -481,7 +481,7 @@ When adding a new domain (Modelica, USD, SysML, Mission):
    document, renders a projection, emits ops.
 
 Keep the *core document and ops in the domain crate* (`lunco-modelica-core`,
-`lunco-usd`, etc.). Keep *views in UI packages* (`lunco-modelica-ui/src/ui`,
+`lunco-usd-document`/`lunco-usd-core`, etc.). Keep *views in UI packages* (`lunco-modelica-ui/src/ui`,
 `lunco-luncosim-edit-ui/src/ui`, and the USD-specific
 `lunco-luncosim-edit-inspector-ui` and `lunco-usd-prim-tree-ui` packages).
 

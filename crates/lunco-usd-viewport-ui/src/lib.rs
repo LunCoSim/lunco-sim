@@ -6,7 +6,6 @@
 //! render-heavy surface separate means browser/document changes do not rebuild
 //! the viewport package and headless USD consumers do not depend on it.
 
-
 pub mod viewport;
 
 pub use viewport::*;

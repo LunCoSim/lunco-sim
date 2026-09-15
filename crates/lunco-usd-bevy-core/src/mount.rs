@@ -33,7 +33,7 @@
 //! ```
 //!
 //! This module only *reads* — the frame math ([`resolve_mount_placement`]) and the
-//! op-lowering ([`realign_component_ops`]) live in `lunco-usd`, unit-tested with no
+//! op-lowering ([`realign_component_ops`]) live in `lunco-usd-commands`, unit-tested with no
 //! stage. A socket/plug frame is composed relative to its **body root** (the host or
 //! the part), so arbitrary intermediate grouping is handled correctly.
 //!
@@ -426,7 +426,7 @@ pub fn read_asset_plug(asset_path: &std::path::Path) -> Option<MountPlug> {
 mod mount_reader_tests {
     //! Exercises the socket/plug reader against a **real composed stage** — the
     //! read half of the retrofit snap that unit-testing `resolve_mount_placement`
-    //! (in `lunco-usd`, over bare transforms) can't reach: that the frames read
+    //! (in `lunco-usd-commands`, over bare transforms) can't reach: that the frames read
     //! *body-local* through an arbitrary intermediate group, and that the mount
     //! metadata + `part` relationship compose. A wrong frame here is the physics
     //! bug the design deferred the UI for; this pins it deterministically.

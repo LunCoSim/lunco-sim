@@ -52,7 +52,6 @@
 //! domains?" — useful for replay, audit, debugging, the journal panel,
 //! and future cross-doc transactions / multi-user sync.
 
-
 pub mod diagnostics;
 pub mod rename;
 pub use diagnostics::DocumentDiagnostics;
@@ -364,7 +363,7 @@ pub struct NewDocument {
 /// path without any UI.
 ///
 /// The actual loading is domain-specific: `lunco-modelica-core` observes this
-/// and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
+/// and reads `.mo` files; `lunco-usd-commands` observes it for `.usd*`. Each
 /// domain's observer ignores paths it doesn't own, so they coexist.
 ///
 /// Lives here (not in the egui workbench) so headless / sandbox / server
@@ -1457,7 +1456,7 @@ fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
 /// close-time [`DocumentDiagnostics`] cleanup shared by every document
 /// domain.
 ///
-/// Domain crates (lunco-modelica-core, lunco-usd, …) add this plugin once
+/// Domain crates (lunco-modelica-core, lunco-usd-commands, …) add this plugin once
 /// per app. Events from any domain's registry flow into one canonical
 /// journal.
 ///

@@ -263,7 +263,7 @@ fn domain_title(crate_name: &str) -> (&'static str, u32) {
         "lunco-scene-commands" | "lunco-luncosim-edit-core" | "lunco-luncosim-edit-ui" => {
             ("Scene editing & authoring", 10)
         }
-        "lunco-usd" => ("USD / scenes", 11),
+        "lunco-usd-commands" => ("USD / scenes", 11),
         "lunco-usd-bevy" | "lunco-usd-sim" | "lunco-usd-avian" => ("USD / scenes", 12),
         "lunco-modelica-core" | "lunco-modelica-ui" => ("Modelica modeling & simulation", 20),
         "lunco-cosim" => ("Co-simulation", 21),

@@ -84,7 +84,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-authoring`** | OpenUSD authored-layer operations and schema registry: path-addressed authoring, USDA conversion, reference/list-op helpers, and registered schema metadata. No document lifecycle, runtime, physics, rendering, or UI. |
 | **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
-| **`lunco-usd`** | UI-free USD runtime orchestration, document commands, and engineering metadata mapping. |
+| **`lunco-usd-commands`** | Headless USD document and Twin-scene command boundary: document kind registration, open/new/save/undo/redo, scene-transition admission, and typed USD authoring commands. It owns no UI or visual projection. |
 | **`lunco-usd-bevy-runtime`** | Application-level USD plugin bundle composing visual, diagnostics, physics, simulation, and document-command projections. |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
@@ -114,7 +114,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-scene-commands`** | The render-free scene/document **mutation layer**: runtime spawn, move, delete, and USD connection edits. It is the shared command path for rhai, HTTP API, peer replay, and editor tools; catalog resources live in `lunco-scene-catalog`, document-backed property and shader authoring live in `lunco-scene-authoring`, and camera commands live in `lunco-scene-camera`. |
 | **`lunco-scene-camera`** | Render-free camera framing commands (`FocusEntityById`, `FocusEntityByPath`, and `SetCameraLookAt`) plus the active-physics-frame focus transaction. Application composition roots install it alongside the independent `lunco-scene-selection` plugin when path focus and telemetry focus are exposed. |
 | **`lunco-scene-selection`** | Render-free scene-lifetime selection state and the shared selection-to-telemetry-focus projection. It is independent from scene mutation commands so exposure and other headless consumers do not inherit the command layer's dependency closure. |
-| **`lunco-scene-catalog`** | Production USD-backed catalog boundary: asynchronous asset enumeration, authored `doc`/`lunco:spawnable` metadata, shader/source listings, `SpawnCatalog`, and the generic runtime USD spawn constructor. `ListSpawnCatalog` and `ListUsdAssetMetadata` publish the same authored `doc` text consumed by the catalog UI and Rhai scene tests. It also owns catalog-only rescan commands and is installed by `SpawnCommandPlugin`. |
+| **`lunco-scene-catalog`** | Production USD-backed catalog boundary: asynchronous asset enumeration, authored `doc`/`lunco:spawnable` metadata, parser/read status, shader/source listings, `SpawnCatalog`, and the generic runtime USD spawn constructor. `ListSpawnCatalog` and `ListUsdAssetMetadata` publish the same authored `doc` text consumed by the catalog UI and Rhai scene tests. It also owns catalog-only rescan commands and is installed by `SpawnCommandPlugin`. |
 | **`lunco-scene-queries`** | Production read-only scene boundary: `QueryEntity` for active-physics identity/pose and `QueryUsdPrim` for composed USD attributes, relationships, topology, and collision bounds. Installed by `SpawnCommandPlugin`; shared by Rhai, HTTP, MCP, and headless hosts. |
 | **`lunco-scene-authoring`** | Production USD authoring boundary: document ownership resolution, `SetObjectProperty`, standard USD property persistence, and journaled/live shader source commands. Installed by `SpawnCommandPlugin`; it has no dependency on scene mutation handlers. |
 | **`lunco-scene-validation`** | Production asset, loaded-stage, scene-test discovery, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, `luncosim test --list`, live `RunLint`, USD lint-fact aggregation, and Twin namespace inspection. It owns composition/parse/lint integration while `lunco-scene-commands` owns scene mutation. |
@@ -399,14 +399,13 @@ substrate. It owns `ApplyUsdOp`/`ApplyUsdOps`, disposable
 `ApplyUsdTransientOps`, and operation lowerings, while depending on the
 document package for authored-layer state.
 
-**`lunco-usd`**
-UI-free USD runtime orchestration and engineering metadata bridge. Maps
-LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy
-components, enriching 3D models with simulation-critical data like Ephemeris
-IDs. Its document commands are available to headless consumers; complete
-application plugin composition lives in
-`lunco-usd-bevy-runtime`, while interactive presentation lives in
-`lunco-usd-ui`.
+**`lunco-usd-commands`**
+Headless USD document and Twin-scene runtime boundary. It registers the USD
+document kind, owns file/open/save and scene-transition observers, lowers typed
+USD document commands through the canonical journal path, and runs the live
+document-backed projection bridges. It is a production capability shared by
+the runtime bundle and UI shells; it does not own visual projection or
+presentation.
 
 **`lunco-usd-queries`**
 UI-free public query providers for the USD document boundary. It owns
@@ -465,10 +464,10 @@ authoring, terrain, validation, and UI adapters. It owns the
 `UsdDocumentUserOwned`, `LiveRebuildExempt`, and the event-driven
 `TwinProjectionWake` signal. It depends on the stage-asset identity and asset
 path contracts, but it does not load or compose USD stages and does not depend
-on the aggregate `lunco-usd` runtime.
+on the command/runtime boundary.
 
 **`lunco-usd-ui`**
-Interactive USD browser and document presentation. Owns workbench sections, loaded-stage and scene-file views, browser dispatch, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`. Add `lunco-usd-viewport-ui` when an application needs the render-heavy preview surface.
+Interactive USD browser and document presentation. Owns workbench sections, loaded-stage and scene-file views, browser dispatch, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd-commands`. Add `lunco-usd-viewport-ui` when an application needs the render-heavy preview surface.
 
 **`lunco-usd-viewport-ui`**
 Render-heavy USD preview surface. Owns preview sessions/views, offscreen cameras and images, viewport interaction, inspection commands/queries, and the viewport panels. It consumes the document and projection APIs but does not own Twin-browser lifecycle or document navigation.

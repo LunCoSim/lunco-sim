@@ -49,7 +49,6 @@
 //!   `&'static str`).
 //! - **Command palette** — `Ctrl+P` unbound.
 
-
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_dock::{
@@ -819,7 +818,7 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<source_viewer::PendingSourceReads>()
             .init_resource::<source_viewer::PendingSourceWrites>()
             // Cross-domain URI registry. Starts empty; each domain
-            // plugin (lunco-modelica-core, a future lunco-usd, …) pushes
+            // plugin (lunco-modelica-core, a future USD command domain, …) pushes
             // its own handler on build. See `uri.rs` for the trait.
             .init_resource::<UriRegistry>()
             .init_resource::<CurrentSceneName>()
@@ -4727,7 +4726,7 @@ fn render_layout(
 
     // ── Empty-viewport placeholder ──────────────────────────────────
     // Drawn last so it sits on top of the (empty) 3D framebuffer. Only
-    // when a domain crate set a message (e.g. lunco-usd: "no scene
+    // when a domain crate set a message (e.g. USD command domain: "no scene
     // loaded") AND the viewport is actually on screen — View (empty
     // layout, full-window 3D) or Build (ViewportPanel in the centre).
     // Never in Design mode, where Camera3d is inactive and the centre
