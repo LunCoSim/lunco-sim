@@ -10,6 +10,7 @@
 #![warn(missing_docs)]
 
 use bevy::prelude::*;
+use lunco_workbench_core::commands::FocusPanel;
 use lunco_workbench_core::WorkbenchPanelAppExt;
 
 mod files_panel;
@@ -60,6 +61,6 @@ fn drain_browser_navigation(world: &mut World) {
         let BrowserAction::OpenPanel { id } = action else {
             continue;
         };
-        world.trigger(lunco_workbench::FocusPanel { id });
+        world.trigger(FocusPanel { id });
     }
 }

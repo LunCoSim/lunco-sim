@@ -44,7 +44,7 @@
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
-use lunco_doc_bevy::SaveAsDocument;
+use lunco_doc_bevy::{rename::RenameOpenDocument, SaveAsDocument};
 use lunco_twin::{DocumentKindId, DocumentKindRegistry};
 
 use crate::picker::{PickFollowUp, PickHandle, PickMode, PickResolved};
@@ -52,7 +52,7 @@ use lunco_workspace::open::{
     drain_pending_twin_opens, AddFolderToWorkspace, AddTwin, CreateTwin, OpenFolder, OpenTwin,
     PendingTwinOpens,
 };
-use lunco_workspace::{FileRenamed, WorkspaceResource};
+use lunco_workspace::{rename::RenameTwinEntry, FileRenamed, WorkspaceResource};
 
 /// Request a system "Open File" dialog.
 ///
@@ -88,61 +88,6 @@ use lunco_doc_bevy::{NewDocument, OpenFile};
 /// touching a clipboard.
 #[Command(default)]
 pub struct CopyShareLink {}
-
-/// Rename an open document (a tab in the workspace).
-///
-/// Differs from [`RenameTwinEntry`]: identifies the target by
-/// [`DocumentId`] rather than `(twin_root, relative_path)`, so it works
-/// for Untitled drafts that have no on-disk path, as well as for saved
-/// files that belong to no open Twin.
-///
-/// The observer routes by [`DocumentOrigin`]:
-///
-/// - `File { writable: true }` *under an open Twin*: forwards to
-///   [`RenameTwinEntry`] — same on-disk path, same `FileRenamed` chain,
-///   same Modelica class-name rewrite.
-/// - `Untitled { name }`: domain crates observe this command directly
-///   (Modelica chains to [`RenameModelicaClass`]) — workbench has no
-///   semantic handle on what an Untitled draft means.
-/// - `File { writable: false }` or `Bundled`: read-only, rejected.
-#[Command(default)]
-pub struct RenameOpenDocument {
-    /// The document to rename.
-    pub doc_id: lunco_doc::DocumentId,
-    /// New filename / class identifier — no path separators allowed.
-    pub new_name: String,
-}
-
-/// Rename a file or folder *inside* an open Twin.
-///
-/// Identifies the entry by `(twin_root, relative_path)` so the
-/// command body is self-contained (no Bevy resource handles) — HTTP
-/// callers, scripts, and the inline browser editor all dispatch the
-/// same shape. The observer:
-///
-/// 1. Validates inputs (new_name non-empty, no path separators, source
-///    exists, target doesn't already exist).
-/// 2. Asks [`lunco_storage`] to rename backend handles for the absolute paths.
-/// 3. Re-scans the affected Twin via [`Twin::reload`] so the file
-///    index reflects disk.
-/// 4. Patches every open Document whose `DocumentOrigin::File { path }`
-///    lay under the old path — paths are rewritten so live edits don't
-///    detach from disk.
-/// 5. Fires [`FileRenamed`] for domain plugins to chain follow-ups
-///    (Modelica class-declaration rename, USD reference rewrites, …).
-#[Command(default)]
-pub struct RenameTwinEntry {
-    /// Absolute path of the Twin root the entry belongs to. The
-    /// observer resolves this back to a `TwinId` via
-    /// [`WorkspaceResource::twins`].
-    pub twin_root: String,
-    /// Path of the entry relative to `twin_root` (e.g. `Rover.mo` or
-    /// `subdir/Other.mo`).
-    pub relative_path: String,
-    /// New filename — no path separators allowed (rename only; move
-    /// across directories is a separate concern).
-    pub new_name: String,
-}
 
 /// Save every open document in the current session.
 ///

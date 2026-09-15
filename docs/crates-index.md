@@ -13,12 +13,12 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-spatial`** | BigSpace spatial substrate: f64 coordinate/frame helpers, the persistent `WorldRoot`/`WorldGrid` shell, atomic grid migration, hierarchy invariants, spatial markers, and the vehicle-neutral navigation law. It depends on `lunco-core` for the shared runtime-diagnostic resource, but core does not depend on spatial. |
 | **`lunco-core-session`** | Always-on session and authority substrate: network role/status, possession and RBAC policy, prediction markers/input watermarks, and session-dependent identity admission. It depends on `lunco-core`; the lower-level core remains usable without session policy. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
-| **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, recents, and generic active-Twin setting persistence (`SetTwinSetting` / `ResetTwinSetting`). |
+| **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, recents, generic active-Twin setting persistence (`SetTwinSetting` / `ResetTwinSetting`), and Twin-entry command payloads such as `rename::RenameTwinEntry`. |
 | **`lunco-workspace-api`** | API adapter for Workspace-owned queries (`ListOpenDocuments`, `ListRecentFiles`, `ListTwin`), installable by windowed, headless, or offscreen hosts without making the data-only Workspace crate depend on the API layer. |
 | **`lunco-twin`** | The simulation unit on disk: folder structure, `twin.toml` manifest parsing, generic scalar `[settings]`, and file indexing. |
 | **`lunco-twin-journal`** | Canonical Twin-scoped op log: Lamport-ordered entries, DAG parents (for future merges), Streams + Composition, ChangeSets, Markers (named milestones), Branches, `UndoManager`. CRDT-shapable schema; in-memory backend today, yrs-swap-ready. |
 | **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): process-wide live document handle allocation, the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo. |
-| **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
+| **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, document-identity command payloads such as `rename::RenameOpenDocument`, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, embedded sources, discovery, and storage-facing readers. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, lifecycle state, and Bevy registry/command events. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
@@ -132,10 +132,10 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, panel registration, perspective layout plans, menu contributions, the published `WorkbenchSnapshot`, shell scheduling labels, and perspective command payloads. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
+| **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, tab/source-view commands, scene display state, pending close state, panel registration, perspective layout plans, menu contributions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
 | **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel-host consumption, persistence, viewport integration, and shell-owned command observers. It consumes `lunco-workbench-core` and `lunco-workbench-widgets`; headless adapters use the core contract without linking this shell. |
-| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on `lunco-assets-core`, not the dataset processing stack. |
+| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
 | **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets-datasets`' shared registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, and the shared bounded log model/renderer. It uses workbench contracts and shell-independent widgets, not the concrete workbench shell. |
@@ -572,18 +572,23 @@ Reflection-based data extraction engine. Automatically samples and standardizes 
 
 **`lunco-workbench`**
 The engineering-IDE shell. Handles the docking engine (tabs, splits),
-perspective presets (Build, Simulate), shared hierarchy-row presentation
-(`tree::{branch, leaf}`), and picker/command adapters. It does not own file
+perspective presets (Build, Simulate), picker/command adapters, and the
+concrete source editor. Shared hierarchy-row and text/icon presentation lives
+in `lunco-workbench-widgets`; shell-neutral tab, source-view, scene-state, and
+pending-close contracts live in `lunco-workbench-core`. It does not own file
 bytes or backend I/O; those go through `lunco-storage`, while Twin discovery
 stays in `lunco-workspace`/`lunco-twin`. GPU health and presentation recovery
 live in the independent `lunco-render-recovery` crate; the workbench only
 composes its banner and recovery systems. Hosts that need Twin and Files
-navigation add the separate `lunco-workbench-browser` feature package.
+navigation add the separate `lunco-workbench-browser` feature package, which
+does not link this shell.
 
 **`lunco-workbench-browser`**
-Reusable navigation feature for the concrete workbench. It owns the Twin and
-Files panels, browser query/actions/resources, built-in filesystem and library
-sections. Domain UI crates register their own `BrowserSection` implementations;
+Reusable navigation feature for a rendered host. It owns the Twin and Files
+panels, browser query/actions/resources, built-in filesystem and library
+sections, while consuming shell-neutral panel, source-view, scene-state, and
+rename command contracts from their owning crates. Domain UI crates register
+their own `BrowserSection` implementations;
 optional dataset controls live in `lunco-workbench-datasets-ui`, which depends
 only on the lightweight `lunco-assets-datasets` contract; the native
 asset-provisioning runtime is composed separately by the application. This keeps

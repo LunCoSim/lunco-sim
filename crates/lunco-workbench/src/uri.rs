@@ -164,7 +164,8 @@ impl UriRegistry {
 /// observers match on `resolution` to dispatch their own concrete
 /// action — for example the Modelica observer handles
 /// `OpenDocument { doc_kind: "modelica", .. }` by triggering
-/// [`crate::OpenTab`] (or a Modelica-specific `OpenClass`) event.
+/// [`lunco_workbench_core::commands::OpenTab`] (or a Modelica-specific
+/// `OpenClass`) event.
 ///
 /// The original URI string is kept on the event so observers can log
 /// or surface it in errors without rebuilding from the resolution.

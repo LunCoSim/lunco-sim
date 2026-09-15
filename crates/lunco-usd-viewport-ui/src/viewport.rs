@@ -78,10 +78,11 @@ use lunco_usd_bevy_scene::{
     UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
     UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision,
 };
-use lunco_workbench::{
-    CloseTab, OpenTab, PanelRect, PanelRects, PendingTabCloses, ScenePickGate, SceneTarget,
-};
+use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};
 use lunco_workbench_core::{
+    commands::{CloseTab, OpenTab},
+    source::OpenTwinSource,
+    tabs::PendingTabCloses,
     InstancePanel, Panel, PanelCtx, PanelId, PanelRenderTarget, PanelScrollPolicy, PanelSlot,
     TabId, WorkbenchPanelAppExt,
 };
@@ -493,7 +494,7 @@ fn on_usd_document_ready(
             .max_by_key(|root| root.components().count())
         {
             if let Ok(relative) = path.strip_prefix(root) {
-                commands.trigger(lunco_workbench::OpenTwinSource {
+                commands.trigger(OpenTwinSource {
                     twin_root: root.to_string_lossy().into_owned(),
                     relative_path: relative.to_string_lossy().into_owned(),
                     pinned: false,

@@ -7,7 +7,8 @@
 > sections below are explicit future design, not current behavior.
 > Establishes the framework on top of which all domain-specific UI
 > lives. `lunco-workbench-browser` is a separate reusable feature package for
-> Twin and Files navigation; the shell itself remains browser-agnostic.
+> Twin and Files navigation; it consumes the core/widget contracts and does
+> not link the concrete shell. The shell itself remains browser-agnostic.
 >
 > **Terminology note.** Later sections of this doc (§4 onward) use
 > "workspace" in its original Blender/CATIA sense — a layout preset.
@@ -19,9 +20,11 @@
 > `lunco-status-core` owns renderer-independent lifecycle, progress, and status
 > data. The workbench status bar is one consumer of that contract, alongside
 > busy widgets and headless diagnostics. `lunco-workbench-core` is the stable
-> workbench contract crate, `lunco-workbench-widgets` owns shell-independent
-> egui controls, `lunco-workbench` is the concrete shell, and
-> `lunco-workbench-browser` is the optional navigation feature. Together they
+> workbench contract crate, including shell-neutral tab/source/scene state;
+> `lunco-workbench-widgets` owns shell-independent egui controls,
+> `lunco-workbench` is the concrete shell, and
+> `lunco-workbench-browser` is the optional navigation feature without a
+> shell edge. Together they
 > are depended on by ~10 crates
 > (luncosim, lunco-luncosim, lunco-luncosim-edit-core, lunco-luncosim-edit-ui,
 > lunco-usd, lunco-modelica-ui,
@@ -56,7 +59,7 @@ including persistence and viewport integration. The
 `lunco-workbench-widgets` crate owns reusable icons, text-editor builders, and
 hierarchy-row presentation without depending on the shell. The optional
 `lunco-workbench-browser` crate builds the reusable Twin and Files navigation
-panels on top of that shell. GPU health, adapter capability admission, and
+panels on top of the core/widget contracts. GPU health, adapter capability admission, and
 presentation recovery are owned by the independent
 `lunco-render-recovery` crate, which the shell composes. A command palette and
 detachable-window host remain planned capabilities (§7–8).
@@ -234,10 +237,10 @@ interleaving.
 
 `WorkbenchRenderSet` and `ApplicationOverlayRenderSet` are scheduling labels,
 not implementations of the dock shell, so they live in
-`lunco-workbench-core`. The perspective command payloads follow the same
-boundary at `lunco_workbench_core::commands`: the concrete shell owns their
-observers, while networking and other adapters may transport or trigger the
-typed data without linking `egui_dock`.
+`lunco-workbench-core`. Tab navigation, source-view commands, scene display
+resources, and pending tab-close state follow the same boundary. The concrete
+shell owns their observers, while networking, browsers, and other adapters may
+transport or trigger the typed data without linking `egui_dock`.
 
 ### 3.3 Render-time resource ownership
 

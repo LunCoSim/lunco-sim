@@ -269,7 +269,7 @@ fn restore_from_localstorage(world: &mut World) {
             let tab_id = world
                 .resource_mut::<crate::model_tabs::ModelTabs>()
                 .ensure_for(doc_id, drilled);
-            world.trigger(lunco_workbench::OpenTab {
+            world.trigger(lunco_workbench_core::commands::OpenTab {
                 kind: crate::ui::MODEL_VIEW_KIND,
                 instance: tab_id,
             });

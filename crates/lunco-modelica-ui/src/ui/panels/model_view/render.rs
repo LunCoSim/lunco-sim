@@ -3,6 +3,8 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
+use lunco_workbench_core::commands::{FocusPanel, OpenTab};
+use lunco_workbench_core::tabs::PendingTabCloses;
 use lunco_workbench_core::{InstancePanel, Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
@@ -318,7 +320,7 @@ impl InstancePanel for ModelViewPanel {
         if ui.button("Open in new view").clicked() {
             let new_id = ctx.resource_scope::<ModelTabs, _>(|_, tabs| tabs.open_new(doc, drilled));
             if let Some(new_id) = new_id {
-                ctx.trigger(lunco_workbench::OpenTab {
+                ctx.trigger(OpenTab {
                     kind: MODEL_VIEW_KIND,
                     instance: new_id,
                 });
@@ -335,7 +337,7 @@ impl InstancePanel for ModelViewPanel {
         // prompt to Save before they vanish.
         use crate::ui::commands::TabCloseScope;
         if ui.button("Close").clicked() {
-            let _ = ctx.resource_scope::<lunco_workbench::PendingTabCloses, _>(|_, pending| {
+            let _ = ctx.resource_scope::<PendingTabCloses, _>(|_, pending| {
                 pending.push(lunco_workbench_core::TabId::Instance {
                     kind: MODEL_VIEW_KIND,
                     instance,
@@ -677,7 +679,7 @@ fn render_unified_toolbar(
         });
     }
     if focus_diagnostics {
-        ctx.trigger(lunco_workbench::FocusPanel {
+        ctx.trigger(FocusPanel {
             id: "modelica_diagnostics".into(),
         });
     }

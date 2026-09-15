@@ -114,7 +114,7 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
             });
         world
             .commands()
-            .trigger(lunco_workbench::OpenTabPreserveFocus {
+            .trigger(lunco_workbench_core::commands::OpenTabPreserveFocus {
                 kind: crate::ui::panels::graphs::MODELICA_PLOT_KIND,
                 instance: id.0,
                 restore,

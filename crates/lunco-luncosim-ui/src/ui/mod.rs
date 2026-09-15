@@ -12,7 +12,7 @@ use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_usd_bevy_camera::camera_switch::{
     CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector, SetUserCamera,
 };
-use lunco_workbench::{CurrentSceneName, CurrentScenePath};
+use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
 use lunco_workbench_core::{MenuCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
 
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).

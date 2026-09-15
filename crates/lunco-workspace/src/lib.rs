@@ -47,6 +47,7 @@
 pub mod journal_persistence;
 pub mod open;
 pub mod recents;
+pub mod rename;
 pub mod session;
 
 pub use open::{ResetTwinSetting, SetTwinSetting, TwinSettingInput};

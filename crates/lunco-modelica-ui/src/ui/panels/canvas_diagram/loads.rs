@@ -167,7 +167,7 @@ pub fn drive_duplicate_loads(
                     .find(|(_, s)| s.drilled_class.is_none())
                     .map(|(id, _)| id);
                 if let Some(old_id) = placeholder {
-                    commands.trigger(lunco_workbench::CloseTab {
+                    commands.trigger(lunco_workbench_core::commands::CloseTab {
                         kind: crate::ui::MODEL_VIEW_KIND,
                         instance: old_id,
                     });
@@ -177,7 +177,7 @@ pub fn drive_duplicate_loads(
                 if let Some(tab) = tabs.get_mut(new_id) {
                     tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
                 }
-                commands.trigger(lunco_workbench::OpenTab {
+                commands.trigger(lunco_workbench_core::commands::OpenTab {
                     kind: crate::ui::MODEL_VIEW_KIND,
                     instance: new_id,
                 });
@@ -385,10 +385,12 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
         {
             workspace.active_document = Some(doc_id);
         }
-        world.commands().trigger(lunco_workbench::OpenTab {
-            kind: crate::ui::MODEL_VIEW_KIND,
-            instance: tab_id,
-        });
+        world
+            .commands()
+            .trigger(lunco_workbench_core::commands::OpenTab {
+                kind: crate::ui::MODEL_VIEW_KIND,
+                instance: tab_id,
+            });
         bevy::log::info!(
             "[CanvasDiagram] drill-in: opened tab #{tab_id} for `{}` on existing doc",
             qualified,
@@ -529,10 +531,12 @@ fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::
         }
         tab_id
     };
-    world.commands().trigger(lunco_workbench::OpenTab {
-        kind: crate::ui::MODEL_VIEW_KIND,
-        instance: tab_id,
-    });
+    world
+        .commands()
+        .trigger(lunco_workbench_core::commands::OpenTab {
+            kind: crate::ui::MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
 
     bevy::log::info!(
         "[CanvasDiagram] drill-in: opened placeholder tab for `{}` (file: `{}`) — loading in background",

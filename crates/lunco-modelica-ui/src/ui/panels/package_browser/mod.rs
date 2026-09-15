@@ -484,10 +484,12 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
         let tab_id = world
             .resource_mut::<crate::model_tabs::ModelTabs>()
             .ensure_for(doc, drilled_for_tab);
-        world.commands().trigger(lunco_workbench::OpenTab {
-            kind: MODEL_VIEW_KIND,
-            instance: tab_id,
-        });
+        world
+            .commands()
+            .trigger(lunco_workbench_core::commands::OpenTab {
+                kind: MODEL_VIEW_KIND,
+                instance: tab_id,
+            });
         return;
     }
 
@@ -497,10 +499,12 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(reserved_doc_id, drilled_for_tab);
-    world.commands().trigger(lunco_workbench::OpenTab {
-        kind: MODEL_VIEW_KIND,
-        instance: tab_id,
-    });
+    world
+        .commands()
+        .trigger(lunco_workbench_core::commands::OpenTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
 
     let display_name = class.short_name().to_string();
     let filename_for_task = filename;
@@ -619,10 +623,12 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
                 .resource_mut::<crate::model_tabs::ModelTabs>()
                 .set_view_mode(tab_id, mode);
         }
-        world.commands().trigger(lunco_workbench::OpenTab {
-            kind: MODEL_VIEW_KIND,
-            instance: tab_id,
-        });
+        world
+            .commands()
+            .trigger(lunco_workbench_core::commands::OpenTab {
+                kind: MODEL_VIEW_KIND,
+                instance: tab_id,
+            });
         return;
     }
 
@@ -637,10 +643,12 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
             .resource_mut::<crate::model_tabs::ModelTabs>()
             .set_view_mode(tab_id, mode);
     }
-    world.commands().trigger(lunco_workbench::OpenTab {
-        kind: MODEL_VIEW_KIND,
-        instance: tab_id,
-    });
+    world
+        .commands()
+        .trigger(lunco_workbench_core::commands::OpenTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
 
     let display_name = path
         .file_stem()
@@ -697,8 +705,10 @@ fn focus_existing_doc_tab(world: &mut World, doc: lunco_doc::DocumentId, qualifi
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(doc, drilled);
-    world.commands().trigger(lunco_workbench::OpenTab {
-        kind: MODEL_VIEW_KIND,
-        instance: tab_id,
-    });
+    world
+        .commands()
+        .trigger(lunco_workbench_core::commands::OpenTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
 }

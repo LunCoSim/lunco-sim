@@ -149,7 +149,7 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
             // retire the stale tab after this paint instead of presenting a
             // dead "not found" panel to the user.
             let stale_instance = viz_id.0;
-            ctx.trigger(lunco_workbench::CloseTab {
+            ctx.trigger(lunco_workbench_core::commands::CloseTab {
                 kind: MODELICA_PLOT_KIND,
                 instance: stale_instance,
             });

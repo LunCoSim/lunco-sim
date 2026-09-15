@@ -724,7 +724,7 @@ fn render_workspace_doc_row(
                         new_name.clone()
                     }
                 };
-                ctx.trigger(lunco_workbench::file_ops::RenameTwinEntry {
+                ctx.trigger(lunco_workspace::rename::RenameTwinEntry {
                     twin_root,
                     relative_path,
                     new_name: new_file_name,

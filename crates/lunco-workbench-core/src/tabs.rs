@@ -1,8 +1,10 @@
-//! Domain-neutral lifecycle for document editor tab instances.
+//! Domain-neutral editor tab lifecycle and close-request state.
 
 use std::collections::HashMap;
 
 use bevy::prelude::Resource;
+
+use crate::TabId;
 
 /// Workbench-local identity of an editor tab instance.
 pub type EditorTabId = u64;
@@ -139,6 +141,33 @@ impl<T: Send + Sync + 'static> EditorTabs<T> {
     /// Current unpinned preview, if any.
     pub fn preview(&self) -> Option<EditorTabId> {
         self.preview
+    }
+}
+
+/// Queue of instance tabs whose close request needs domain-level handling.
+///
+/// The concrete shell fills this queue when a tab close is vetoed. Domain UI
+/// decides whether the tab is clean or needs confirmation, then emits
+/// [`crate::commands::CloseTab`] when the close is authorized.
+#[derive(Resource, Default)]
+pub struct PendingTabCloses {
+    pending: Vec<TabId>,
+}
+
+impl PendingTabCloses {
+    /// Drain queued close requests in insertion order.
+    pub fn drain(&mut self) -> Vec<TabId> {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Add a tab to the close-request queue.
+    pub fn push(&mut self, tab: TabId) {
+        self.pending.push(tab);
+    }
+
+    /// Return whether no close requests are pending.
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
     }
 }
 

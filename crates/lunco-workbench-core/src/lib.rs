@@ -12,7 +12,10 @@ mod menu;
 mod panel;
 mod perspective;
 mod registration;
+pub mod scene;
 mod snapshot;
+pub mod source;
+pub mod tabs;
 
 pub mod commands;
 

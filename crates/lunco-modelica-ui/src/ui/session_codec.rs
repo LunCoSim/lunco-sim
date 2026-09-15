@@ -16,9 +16,8 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use lunco_workbench::{
-    finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot, OpenTab,
-};
+use lunco_workbench::{finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot};
+use lunco_workbench_core::commands::OpenTab;
 
 use crate::model_tabs::ModelTabs;
 use crate::state::{is_generated_document, ModelicaDocumentRegistry};

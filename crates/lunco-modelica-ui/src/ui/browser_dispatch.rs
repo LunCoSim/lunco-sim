@@ -131,10 +131,12 @@ pub fn drain_browser_actions(world: &mut World) {
                 // workbench shell is removed from the World for the duration
                 // of rendering.
                 if let Some(old_id) = evict {
-                    world.commands().trigger(lunco_workbench::CloseTab {
-                        kind: crate::ui::MODEL_VIEW_KIND,
-                        instance: old_id,
-                    });
+                    world
+                        .commands()
+                        .trigger(lunco_workbench_core::commands::CloseTab {
+                            kind: crate::ui::MODEL_VIEW_KIND,
+                            instance: old_id,
+                        });
                     world
                         .resource_mut::<crate::model_tabs::ModelTabs>()
                         .close_tab(old_id);
@@ -144,10 +146,12 @@ pub fn drain_browser_actions(world: &mut World) {
                         state.drop_tab(old_id);
                     }
                 }
-                world.commands().trigger(lunco_workbench::OpenTab {
-                    kind: crate::ui::MODEL_VIEW_KIND,
-                    instance: tab_id,
-                });
+                world
+                    .commands()
+                    .trigger(lunco_workbench_core::commands::OpenTab {
+                        kind: crate::ui::MODEL_VIEW_KIND,
+                        instance: tab_id,
+                    });
                 // Make this doc the active workspace doc so the
                 // canvas (which reads `WorkspaceResource::active_document`
                 // to decide what to render) follows the click. Without
@@ -172,10 +176,12 @@ pub fn drain_browser_actions(world: &mut World) {
                 // draft stops resurrecting on reload.
                 let tab_ids = world.resource_mut::<ModelTabs>().close_all_for_doc(doc);
                 for tab in tab_ids {
-                    world.commands().trigger(lunco_workbench::CloseTab {
-                        kind: MODEL_VIEW_KIND,
-                        instance: tab,
-                    });
+                    world
+                        .commands()
+                        .trigger(lunco_workbench_core::commands::CloseTab {
+                            kind: MODEL_VIEW_KIND,
+                            instance: tab,
+                        });
                     if let Some(mut state) = world
                         .get_resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>(
                     ) {

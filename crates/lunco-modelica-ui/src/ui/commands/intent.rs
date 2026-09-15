@@ -11,7 +11,7 @@ pub fn resolve_editor_intent(
     trigger: On<EditorIntent>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
     registry: Res<ModelicaDocumentRegistry>,
-    mut pending_closes: ResMut<lunco_workbench::PendingTabCloses>,
+    mut pending_closes: ResMut<lunco_workbench_core::tabs::PendingTabCloses>,
     mut commands: Commands,
 ) {
     let Some(doc) = workspace.active_document else {
@@ -37,7 +37,9 @@ pub fn resolve_editor_intent(
                 else {
                     return;
                 };
-                if let Some(mut q) = world.get_resource_mut::<lunco_workbench::PendingTabCloses>() {
+                if let Some(mut q) =
+                    world.get_resource_mut::<lunco_workbench_core::tabs::PendingTabCloses>()
+                {
                     q.push(lunco_workbench_core::TabId::Instance {
                         kind: crate::ui::MODEL_VIEW_KIND,
                         instance: tab_id,

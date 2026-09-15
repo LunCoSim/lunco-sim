@@ -114,10 +114,12 @@ pub fn on_focus_document_by_name(trigger: On<FocusDocumentByName>, mut commands:
         let tab_id = world
             .resource_mut::<crate::model_tabs::ModelTabs>()
             .ensure_for(doc, None);
-        world.commands().trigger(lunco_workbench::OpenTab {
-            kind: crate::ui::MODEL_VIEW_KIND,
-            instance: tab_id,
-        });
+        world
+            .commands()
+            .trigger(lunco_workbench_core::commands::OpenTab {
+                kind: crate::ui::MODEL_VIEW_KIND,
+                instance: tab_id,
+            });
     });
 }
 

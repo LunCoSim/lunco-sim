@@ -450,7 +450,7 @@ fn setup_web_workbench(
 
     // Open the model tab so the user lands on the model view.
     let tab_id = model_tabs.ensure_for(doc_id, None);
-    commands.trigger(lunco_workbench::OpenTab {
+    commands.trigger(lunco_workbench_core::commands::OpenTab {
         kind: lunco_modelica_ui::ui::MODEL_VIEW_KIND,
         instance: tab_id,
     });

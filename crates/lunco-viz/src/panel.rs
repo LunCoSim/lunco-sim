@@ -14,6 +14,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_workbench_core::commands::CloseTab;
 use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 
 use crate::registry::{VisualizationRegistry, VizKindCatalog};
@@ -94,7 +95,7 @@ impl InstancePanel for VizPanel {
                 // visualization. The registry is authoritative, so remove
                 // the stale tab after this paint rather than showing a dead
                 // panel body.
-                ctx.trigger(lunco_workbench::CloseTab {
+                ctx.trigger(CloseTab {
                     kind: VIZ_PANEL_KIND,
                     instance,
                 });

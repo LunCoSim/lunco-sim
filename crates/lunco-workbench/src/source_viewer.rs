@@ -9,10 +9,12 @@ use lunco_core::on_command;
 use lunco_doc_bevy::OpenFile;
 use lunco_workbench_widgets::text_editor;
 
-use crate::{
-    CloseTab, EditorTabId, EditorTabs, InstancePanel, OpenEphemeralSource, OpenSourceView, OpenTab,
-    OpenTwinSource, PanelCtx, PanelId, PanelSlot, PendingTabCloses, SaveSourceText, TabId,
+use lunco_workbench_core::commands::{CloseTab, OpenTab, OpenTabPreserveFocus};
+use lunco_workbench_core::source::{
+    is_source_only_text_path, OpenEphemeralSource, OpenSourceView, OpenTwinSource, SaveSourceText,
 };
+use lunco_workbench_core::tabs::{EditorTabId, EditorTabs, PendingTabCloses};
+use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot, TabId};
 
 const SOURCE_EDITOR_KIND: PanelId = PanelId("source_editor");
 // Rich editors own `.mo` and USD layers for their native document workflows,
@@ -20,31 +22,10 @@ const SOURCE_EDITOR_KIND: PanelId = PanelId("source_editor");
 // USD is intentionally retained here for explicit OpenSourceView/OpenTwinSource
 // requests; the generic OpenFile observer below claims only source-only text so
 // it cannot race the USD document editor.
-const TEXT_VIEW_EXTS: &[&str] = &["rhai", "wgsl", "usda", "usd", "usdc"];
-
-fn is_text_view_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            TEXT_VIEW_EXTS
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(extension))
-        })
-}
-
 /// Text assets without a richer domain editor. These must stay on the source
 /// viewer path even when a host's document registry happens to classify their
 /// extension; otherwise a double-click can be consumed by a domain dispatcher
 /// that has no editor for the file.
-pub(crate) fn is_source_only_text_path(path: &Path) -> bool {
-    if !is_text_view_path(path) {
-        return false;
-    }
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "rhai" | "wgsl"))
-}
-
 pub(crate) struct SourceEditorPanel;
 
 impl InstancePanel for SourceEditorPanel {
@@ -510,7 +491,7 @@ fn open_source_tab(world: &mut World, tab: EditorTabId, focus: bool) {
             instance: tab,
         });
     } else {
-        world.trigger(crate::OpenTabPreserveFocus {
+        world.trigger(OpenTabPreserveFocus {
             kind: SOURCE_EDITOR_KIND,
             instance: tab,
             restore: None,
@@ -791,9 +772,13 @@ mod tests {
 
     #[test]
     fn rhai_and_wgsl_open_files_use_the_shared_text_viewer() {
-        assert!(is_text_view_path(Path::new("scripts/teleop_policy.rhai")));
-        assert!(is_text_view_path(Path::new("shaders/terrain_layered.wgsl")));
-        assert!(!is_text_view_path(Path::new("textures/ortho.png")));
+        assert!(is_source_only_text_path(Path::new(
+            "scripts/teleop_policy.rhai"
+        )));
+        assert!(is_source_only_text_path(Path::new(
+            "shaders/terrain_layered.wgsl"
+        )));
+        assert!(!is_source_only_text_path(Path::new("textures/ortho.png")));
     }
 
     #[test]

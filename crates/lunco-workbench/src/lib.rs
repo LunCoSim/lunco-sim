@@ -57,9 +57,12 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_dock::{
     widgets::tab_viewer::OnCloseResponse, DockArea, DockState, NodeIndex, Style, TabViewer,
 };
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
+use lunco_workbench_core::commands::{CloseTab, FocusPanel, OpenTab, OpenTabPreserveFocus};
+use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
+use lunco_workbench_core::tabs::{EditorTabs, PendingTabCloses};
 use lunco_workbench_core::WorkbenchPanelAppExt;
 use lunco_workbench_core::{
     ApplicationOverlayRenderSet, InstancePanel, MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup,
@@ -71,7 +74,6 @@ use lunco_workbench_widgets::{icon_button_sized, text_editor, UiIcon};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-mod editor_tabs;
 mod perspective;
 mod perspective_help;
 mod session;
@@ -226,49 +228,7 @@ impl HelpAnchors {
         self.rects.clear();
     }
 }
-pub use editor_tabs::{EditorTab, EditorTabId, EditorTabs};
 pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tab-management commands
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Request the workbench open (or focus) a multi-instance tab.
-///
-/// Fire via `commands.trigger(OpenTab { kind, instance })` from
-/// anywhere — a panel's render fn, a system, a domain-crate observer.
-/// The workbench installs an observer that handles the event by mutating its
-/// private concrete dock state on its own schedule, which avoids the
-/// re-entrance trap of touching the shell while it is extracted for rendering.
-#[derive(Event, Clone, Copy, Debug)]
-pub struct OpenTab {
-    /// The [`InstancePanel::kind`] to open.
-    pub kind: PanelId,
-    /// The tab's instance discriminant (typically a raw `DocumentId`).
-    pub instance: u64,
-}
-
-/// Request opening a multi-instance tab while preserving the currently
-/// focused tab. Used when creating a secondary view from an active editor or
-/// graph; ordinary navigation continues to use [`OpenTab`].
-#[derive(Event, Clone, Copy, Debug)]
-pub struct OpenTabPreserveFocus {
-    /// The [`InstancePanel::kind`] to open.
-    pub kind: PanelId,
-    /// The tab's instance discriminant.
-    pub instance: u64,
-    /// Explicit tab to restore when the caller has a more precise focus source.
-    pub restore: Option<TabId>,
-}
-
-/// Request the workbench close a multi-instance tab, if open.
-#[derive(Event, Clone, Copy, Debug)]
-pub struct CloseTab {
-    /// The [`InstancePanel::kind`] to close.
-    pub kind: PanelId,
-    /// The tab's instance discriminant.
-    pub instance: u64,
-}
 
 /// Name of the binary actually running, for the Help menu's build line.
 ///
@@ -511,23 +471,6 @@ fn sync_workbench_snapshot(layout: Res<WorkbenchLayout>, mut snapshot: ResMut<Wo
     publish_workbench_snapshot(&layout, &mut snapshot);
 }
 
-/// Bring a registered singleton panel forward in the dock, mounting it in its
-/// authored default slot when it is currently closed.
-///
-/// `id` is matched against [`Panel::id`]'s static string (e.g.
-/// `"modelica_experiments"`, `"modelica_telemetry"`). An unregistered panel
-/// is a no-op; a registered closed panel is opened in its authored default
-/// slot.
-///
-/// Exposed as a typed command so HTTP automation can deterministically
-/// reach a tab before screenshotting / driving it.
-#[Command(default)]
-pub struct FocusPanel {
-    /// The singleton panel's [`PanelId`] string (e.g.
-    /// `"modelica_experiments"`).
-    pub id: String,
-}
-
 /// Focus requests emitted while the dock layout is scoped out during egui
 /// rendering. Drained on the next `Update`, when `WorkbenchLayout` is present.
 #[derive(Resource, Default)]
@@ -626,68 +569,6 @@ fn drain_pending_panel_focus(
 
 register_commands!(on_focus_panel,);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// OpenSourceView — open a file's text in the read-only source viewer
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Open a registered asset as read-only text in the source viewer panel.
-///
-/// Fired by the LunCo Library browser section when any file is clicked —
-/// uniformly for every source extension (`.usda`, `.rhai`, `.mo`,
-/// `.wgsl`), because the library is a *browse + read* surface, not a load
-/// surface. Distinct from [`OpenFile`](lunco_doc_bevy::OpenFile) on purpose:
-/// `OpenFile` is extension-routed (USD and Modelica each claim their own types
-/// and open their native editors), so routing the library through it would
-/// double-open `.usda`/`.mo` (their observers fire too). `OpenSourceView` has
-/// exactly one observer — the workbench source viewer — so there is no conflict.
-///
-/// The command and its viewer live here because the LunCo Library is a
-/// workbench built-in and must behave consistently in every workbench host.
-#[Command(default)]
-pub struct OpenSourceView {
-    /// Registered `AssetFile::asset_path`; arbitrary filesystem paths are not
-    /// accepted by this library-only command.
-    pub asset_path: String,
-}
-
-/// Open an ephemeral generated document in the read-only source viewer.
-#[Command(default)]
-pub struct OpenEphemeralSource {
-    /// URI shown as the document identity.
-    pub uri: String,
-    /// Complete generated source text.
-    pub text: String,
-}
-
-/// Open one file belonging to an open Twin in the editable source panel.
-#[Command(default)]
-pub struct OpenTwinSource {
-    /// Absolute root of the already-open Twin.
-    pub twin_root: String,
-    /// File path relative to that root.
-    pub relative_path: String,
-    /// Keep the file open when another preview is selected.
-    pub pinned: bool,
-    /// Whether opening the source should focus its tab. `None` preserves the
-    /// normal source-opening behavior; USD's paired preview passes `Some(false)`
-    /// so its read-only text companion cannot steal focus from Visual mode.
-    #[serde(default)]
-    pub focus: Option<bool>,
-}
-
-/// Persist the editable source buffer, optionally refreshing its owning domain.
-#[Command(default)]
-pub struct SaveSourceText {
-    /// Absolute root of the already-open Twin.
-    pub twin_root: String,
-    /// File path relative to that root.
-    pub relative_path: String,
-    /// Complete UTF-8 source text.
-    pub text: String,
-    /// Re-dispatch `OpenFile` after writing so the owning domain updates.
-    pub update: bool,
-}
-
 // The session binding (WorkspaceResource, WorkspacePlugin, add/close events)
 // lives in `lunco-workspace` now — consumers import it from there directly.
 // `session` here is just the workbench-side recents persistence.
@@ -696,14 +577,6 @@ pub use viewport::{
     EguiPointerState, PanelRect, PanelRects, ScenePickGate, SceneTarget, ViewportPanel,
     ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
 };
-
-/// Return whether a path belongs to the generic source-only text viewer.
-///
-/// Shared UI features such as the Twin browser use this predicate to avoid
-/// duplicating the source-routing policy owned by the workbench editor.
-pub fn is_source_only_text_path(path: &std::path::Path) -> bool {
-    source_viewer::is_source_only_text_path(path)
-}
 
 /// Get the backdrop colour from the active theme.
 fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
@@ -1062,21 +935,6 @@ impl Plugin for WorkbenchPlugin {
     }
 }
 
-/// Holds the name of the currently loaded USD scene file to display in the status bar.
-#[derive(Resource, Clone, Default, Debug, Reflect)]
-#[reflect(Resource, Default)]
-pub struct CurrentSceneName(pub String);
-
-/// Holds the canonical path used to load the currently displayed USD scene.
-///
-/// The status bar owns the display affordance, while the luncosim host updates
-/// this resource at the typed `LoadScene` boundary. Keeping the path beside the
-/// display name means a click can reveal the exact source without making the UI
-/// parse or reconstruct a path from a filename.
-#[derive(Resource, Clone, Default, Debug, Reflect)]
-#[reflect(Resource, Default)]
-pub struct CurrentScenePath(pub String);
-
 /// Workbench state: registered panels plus the concrete dock tree.
 ///
 /// Holds an `egui_dock::DockState<TabId>` plus registries of the panel
@@ -1145,43 +1003,6 @@ pub(crate) struct PerspectiveDockSlot {
     pub(crate) right_inspector: Vec<PanelId>,
     pub(crate) right_inspector_bottom: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
-}
-
-/// Queue of tabs whose close-X was clicked but whose close the
-/// [`TabViewer`] vetoed so a domain handler can prompt
-/// (e.g. unsaved-changes dialog) before the final close.
-///
-/// Only multi-instance tabs use this pipeline; singleton panels
-/// honour [`Panel::closable`] directly. Kept as a standalone resource
-/// (not a field on [`WorkbenchLayout`]) because the layout is
-/// *extracted* from the world during `render_workbench`, and `on_close`
-/// fires from inside that render — so anything it touches has to live
-/// on a different resource.
-#[derive(Resource, Default)]
-pub struct PendingTabCloses {
-    pending: Vec<TabId>,
-}
-
-impl PendingTabCloses {
-    /// Drain queued close requests. Domain-side systems call this
-    /// each frame, decide per-tab (clean → confirm & close, dirty →
-    /// prompt, then fire [`CloseTab`] on user confirmation).
-    pub fn drain(&mut self) -> Vec<TabId> {
-        std::mem::take(&mut self.pending)
-    }
-
-    /// Push a tab id to the queue. Used by the workbench's own
-    /// `on_close` hook; domain crates usually go via
-    /// [`drain`](Self::drain) instead.
-    pub fn push(&mut self, tab: TabId) {
-        self.pending.push(tab);
-    }
-
-    /// `true` when nothing is queued. Used by close-flow finalizers
-    /// to detect whether the per-tab close pipeline has fully drained.
-    pub fn is_empty(&self) -> bool {
-        self.pending.is_empty()
-    }
 }
 
 impl Default for WorkbenchLayout {

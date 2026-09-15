@@ -55,17 +55,20 @@ each API-capable composition root install it explicitly. Keep the data/core
 crate independent of transport and presentation layers.
 
 Keep the workbench split at the dependency boundary: `lunco-workbench-core`
-owns renderer-independent panel/menu/perspective/registration contracts and the
-published `WorkbenchSnapshot`, scheduling labels, and perspective command
-payloads; `lunco-workbench-widgets` owns shell-independent egui controls;
+owns renderer-independent panel/menu/perspective/registration contracts, tab
+navigation, source-view commands, scene display state, pending tab-close state,
+and the published `WorkbenchSnapshot`; `lunco-workbench-widgets` owns
+shell-independent egui controls;
 `lunco-workbench` owns `egui_dock`, `bevy_egui`, viewport rendering,
 persistence, source editing, and command observers; and
 `lunco-workbench-browser` owns the optional Twin/Files panels, browser state,
-and built-in filesystem/library sections. Domain UI crates implement contracts
-from the core crate, read layout facts from the snapshot, and depend on the
-concrete shell or browser feature only when they use those presentation
-services. Do not expose or consume the shell's private `WorkbenchLayout`
-outside that crate.
+and built-in filesystem/library sections without depending on the concrete
+shell. Rename payloads belong to `lunco-doc-bevy` or `lunco-workspace` according
+to the identity they address; the shell retains only picker/execution
+observers. Domain UI crates implement contracts from the core crate, read
+layout facts from the snapshot, and depend on the concrete shell only when
+they use those presentation services. Do not expose or consume the shell's
+private `WorkbenchLayout` outside that crate.
 
 For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources as
 one linked material contract: both stages read the same `@binding(0)` uniform

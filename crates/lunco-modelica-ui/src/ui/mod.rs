@@ -386,7 +386,7 @@ fn clear_modelica_state_on_twin_closed(
             .collect();
         for tab in tab_ids {
             state.close_tab(tab);
-            commands.trigger(lunco_workbench::CloseTab {
+            commands.trigger(lunco_workbench_core::commands::CloseTab {
                 kind: MODEL_VIEW_KIND,
                 instance: tab,
             });

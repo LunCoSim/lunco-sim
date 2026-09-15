@@ -10,6 +10,9 @@
 //! command so its owning domain can refresh it.
 
 use bevy_egui::egui;
+use lunco_doc_bevy::rename::RenameOpenDocument;
+use lunco_workbench_core::source::{is_source_only_text_path, OpenTwinSource};
+use lunco_workspace::rename::RenameTwinEntry;
 
 use super::{
     path_tree::{build_path_tree, PathTree},
@@ -285,7 +288,7 @@ impl BrowserSection for FilesSection {
             self.rename_doc = None;
             let new_name = new_name.trim().to_string();
             if !new_name.is_empty() {
-                ctx.trigger(lunco_workbench::file_ops::RenameOpenDocument {
+                ctx.trigger(RenameOpenDocument {
                     doc_id: doc,
                     new_name,
                 });
@@ -473,7 +476,7 @@ impl BrowserSection for FilesSection {
                     relative_path: twin_root.join(relative_path),
                 });
             } else {
-                ctx.trigger(lunco_workbench::OpenTwinSource {
+                ctx.trigger(OpenTwinSource {
                     twin_root: twin_root.to_string_lossy().into_owned(),
                     relative_path: relative_path.to_string_lossy().into_owned(),
                     pinned,
@@ -495,7 +498,7 @@ impl BrowserSection for FilesSection {
                 .unwrap_or_default();
             let new_name = req.buffer.trim().to_string();
             if !new_name.is_empty() && new_name != old_leaf {
-                ctx.trigger(lunco_workbench::file_ops::RenameTwinEntry {
+                ctx.trigger(RenameTwinEntry {
                     twin_root: req.twin_root.to_string_lossy().into_owned(),
                     relative_path: req.relative_path.to_string_lossy().into_owned(),
                     new_name,
@@ -527,7 +530,7 @@ fn should_open_as_document(
                 "usd" | "usda" | "usdc"
             )
         });
-    registered && !lunco_workbench::is_source_only_text_path(relative_path) && (pinned || is_usd)
+    registered && !is_source_only_text_path(relative_path) && (pinned || is_usd)
 }
 
 /// Recursively render one directory of the Twin's filesystem tree.

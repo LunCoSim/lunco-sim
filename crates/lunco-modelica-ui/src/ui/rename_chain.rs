@@ -1,7 +1,7 @@
 //! UI→core bridge: workbench file/tab rename events → `RenameModelicaClass`.
 //!
 //! This observer reacts to a workbench (UI) event
-//! ([`lunco_workbench::file_ops::RenameOpenDocument`]) and chains it into the
+//! ([`lunco_doc_bevy::rename::RenameOpenDocument`]) and chains it into the
 //! core [`crate::api::class::RenameModelicaClass`] command. It lives in the
 //! `ui` module because the trigger is a UI workflow event; the core API plugin
 //! stays free of workbench types. A headless server never fires the event, so
@@ -16,15 +16,15 @@ use bevy::prelude::*;
 
 use crate::api::class::RenameModelicaClass;
 
-/// Chain observer: workbench [`lunco_workbench::file_ops::RenameOpenDocument`]
+/// Chain observer: document [`lunco_doc_bevy::rename::RenameOpenDocument`]
 /// → [`RenameModelicaClass`] for Untitled Modelica drafts.
 ///
 /// The workbench's own observer routes saved files via
-/// `lunco_workbench::file_ops::RenameTwinEntry` (which then chains to the
+/// `lunco_workspace::rename::RenameTwinEntry` (which then chains to the
 /// saved-file path). Untitled docs have no on-disk presence, so the rename is
 /// purely a class-declaration rewrite — that's what this observer handles.
 pub fn on_rename_open_document_chain_to_modelica(
-    trigger: On<lunco_workbench::file_ops::RenameOpenDocument>,
+    trigger: On<lunco_doc_bevy::rename::RenameOpenDocument>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
     registry: Res<crate::state::ModelicaDocumentRegistry>,
     mut commands: Commands,

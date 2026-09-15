@@ -11,7 +11,8 @@ use super::{
     path_tree::{build_path_tree, PathTree},
     BrowserCtx, BrowserScope, BrowserSection,
 };
-use lunco_workbench::OpenSourceView;
+use lunco_workbench_core::scene::CurrentSceneName;
+use lunco_workbench_core::source::OpenSourceView;
 
 /// Display-ready source entry retained between UI frames.
 struct LibraryEntry {
@@ -104,7 +105,7 @@ impl BrowserSection for LuncoLibrarySection {
         }
 
         let loaded_name = ctx
-            .resource::<lunco_workbench::CurrentSceneName>()
+            .resource::<CurrentSceneName>()
             .map(|scene| scene.0.clone())
             .unwrap_or_default();
         let mut clicked = None;

@@ -84,8 +84,10 @@ Apps (luncosim, luncosim-server, lunica)
    │          │
    │          ▼
    ├── Framework layer
+   │     lunco-workbench-core ← renderer-independent UI contracts and state
+   │     lunco-workbench-widgets ← shell-independent reusable egui controls
    │     lunco-workbench  ← canonical UI scaffold, docking, perspectives, File menu
-   │     lunco-workbench-browser ← optional Twin/Files navigation feature
+   │     lunco-workbench-browser ← optional Twin/Files navigation feature (shell-free)
    │     lunco-doc        ← Authority, diagnostics substrate, CRUD foundation
    │     lunco-doc-bevy   ← Bevy bridge: DocumentDiagnostics, open/new document
    │          │
@@ -107,10 +109,11 @@ Arrows point at dependencies, and two edges deserve calling out explicitly:
   `lunco-workbench` depends on `lunco-twin` and `lunco-workspace` (it wraps the
   session as `WorkspaceResource`, and mounts Twins from the File menu).
   Applications that need the Twin/Files side browser add
-  `lunco-workbench-browser`; the shell does not pull its asset-provisioning
+  `lunco-workbench-browser`; the browser does not pull the shell or asset-provisioning
   dependency.
 - **UI crates are deliberate cross-layer adapters.** They are not widget
-  toolkits under the workbench: `lunco-ui` sits *on top of* `lunco-workbench`
+  toolkits under the workbench: `lunco-ui` consumes `lunco-workbench-core` and
+  `lunco-workbench-widgets`
   and reaches into domain crates for mission-control views, while
   `lunco-avatar-ui` owns Avatar-specific egui presentation over the
   headless-safe `lunco-avatar` runtime. UI and domain state meet below the

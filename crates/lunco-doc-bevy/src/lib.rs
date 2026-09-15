@@ -56,6 +56,7 @@
 #![warn(missing_docs)]
 
 pub mod diagnostics;
+pub mod rename;
 pub use diagnostics::DocumentDiagnostics;
 
 // The pure-data half lives in lunco-doc; re-export for convenience so callers

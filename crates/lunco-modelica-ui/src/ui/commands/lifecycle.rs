@@ -86,7 +86,7 @@ impl PendingCloseAfterSave {
 /// which *other* tabs go with it. Resolved by
 /// [`resolve_tab_close_scopes`], which expands the scope into concrete
 /// instance ids (using dock order from the published workbench snapshot)
-/// and feeds them through the existing [`lunco_workbench::PendingTabCloses`]
+/// and feeds them through the existing [`lunco_workbench_core::tabs::PendingTabCloses`]
 /// pipeline — so each dirty tab still gets its Save / Don't-save prompt.
 #[derive(Clone, Copy, Debug)]
 pub enum TabCloseScope {
@@ -116,7 +116,7 @@ impl PendingTabCloseScopes {
 /// State for the Dymola-style app-close save flow. When the user
 /// requests exit (via API `Exit`, menu, window-X), [`request_app_close`]
 /// arms this and pushes every dirty doc's tab into the existing
-/// [`lunco_workbench::PendingTabCloses`] queue. The per-tab Save/Don't
+/// [`lunco_workbench_core::tabs::PendingTabCloses`] queue. The per-tab Save/Don't
 /// save/Cancel modal infrastructure (`render_close_dialogs`) walks one
 /// prompt at a time. The [`finalize_app_close`] system polls the
 /// close pipeline and fires `AppExit` once all prompts resolve cleanly,
@@ -210,7 +210,9 @@ pub fn request_app_close(world: &mut World) {
     // Push tabs into the workbench's per-tab close queue. The existing
     // `drain_pending_tab_closes` system will detect dirty docs and
     // enqueue Save/Don't save/Cancel modals through `render_close_dialogs`.
-    if let Some(mut pending) = world.get_resource_mut::<lunco_workbench::PendingTabCloses>() {
+    if let Some(mut pending) =
+        world.get_resource_mut::<lunco_workbench_core::tabs::PendingTabCloses>()
+    {
         for (_doc, tab) in dirty_tabs {
             pending.push(lunco_workbench_core::TabId::Instance {
                 kind: MODEL_VIEW_KIND,
@@ -274,7 +276,7 @@ pub fn finalize_app_close(
     flow: Option<ResMut<AppCloseFlow>>,
     close_dialogs: Option<Res<CloseDialogState>>,
     pending_save_close: Option<Res<PendingCloseAfterSave>>,
-    pending_tab_closes: Option<Res<lunco_workbench::PendingTabCloses>>,
+    pending_tab_closes: Option<Res<lunco_workbench_core::tabs::PendingTabCloses>>,
     registry: Option<Res<ModelicaDocumentRegistry>>,
     pending_runs: Option<Res<crate::experiments_runner::PendingHandles>>,
     mut exit_events: bevy::ecs::message::MessageWriter<bevy::app::AppExit>,
@@ -362,15 +364,17 @@ fn unique_in_memory_name(cache: &PackageTreeCache, base: &str) -> String {
 }
 
 /// CQ-111: tear down a single model tab. Triggers the workbench
-/// [`lunco_workbench::CloseTab`], drops the tab from [`ModelTabs`] and the
+/// [`lunco_workbench_core::commands::CloseTab`], drops the tab from [`ModelTabs`] and the
 /// canvas diagram state. Caller is responsible for the post-close
 /// `count_for_doc` / [`CloseDocument`] check (its placement differs per
 /// site). Runs inside a `&mut World` closure.
 fn close_model_tab(world: &mut World, tab_id: u64) {
-    world.commands().trigger(lunco_workbench::CloseTab {
-        kind: MODEL_VIEW_KIND,
-        instance: tab_id,
-    });
+    world
+        .commands()
+        .trigger(lunco_workbench_core::commands::CloseTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
     if let Some(mut tabs) = world.get_resource_mut::<ModelTabs>() {
         tabs.close_tab(tab_id);
     }
@@ -428,7 +432,7 @@ pub fn on_create_new_scratch_model(
     workspace.active_document = Some(doc_id);
 
     let tab_id = model_tabs.ensure_for(doc_id, None);
-    commands.trigger(lunco_workbench::OpenTab {
+    commands.trigger(lunco_workbench_core::commands::OpenTab {
         kind: MODEL_VIEW_KIND,
         instance: tab_id,
     });
@@ -519,7 +523,7 @@ pub fn on_duplicate_model_from_read_only(
     if let Some(tab) = model_tabs.get_mut(tab_id) {
         tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
     }
-    commands.trigger(lunco_workbench::OpenTab {
+    commands.trigger(lunco_workbench_core::commands::OpenTab {
         kind: MODEL_VIEW_KIND,
         instance: tab_id,
     });
@@ -625,10 +629,12 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         }
         tab_id
     };
-    world.commands().trigger(lunco_workbench::OpenTab {
-        kind: MODEL_VIEW_KIND,
-        instance: tab_id,
-    });
+    world
+        .commands()
+        .trigger(lunco_workbench_core::commands::OpenTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
 
     // Resolve the origin source on the main thread — the unified
     // resolver reads `World` (the open-document registry is one of its
@@ -729,10 +735,12 @@ pub fn on_open_in_new_view(trigger: On<OpenInNewView>, mut commands: Commands) {
             .get_resource::<ModelTabs>()
             .and_then(|t| t.drilled_class_for_doc(doc));
         let new_id = world.resource_mut::<ModelTabs>().open_new(doc, drilled);
-        world.commands().trigger(lunco_workbench::OpenTab {
-            kind: MODEL_VIEW_KIND,
-            instance: new_id,
-        });
+        world
+            .commands()
+            .trigger(lunco_workbench_core::commands::OpenTab {
+                kind: MODEL_VIEW_KIND,
+                instance: new_id,
+            });
     });
 }
 
@@ -927,10 +935,12 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
         if let Some(tab) = tabs.get_mut(tab_id) {
             tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
         }
-        world.commands().trigger(lunco_workbench::OpenTab {
-            kind: MODEL_VIEW_KIND,
-            instance: tab_id,
-        });
+        world
+            .commands()
+            .trigger(lunco_workbench_core::commands::OpenTab {
+                kind: MODEL_VIEW_KIND,
+                instance: tab_id,
+            });
         bevy::log::info!("[OpenFile] opened `{}` as `{}`", path.display(), stem);
     }
 }
@@ -951,10 +961,12 @@ pub fn focus_in_memory_doc(world: &mut World, name: &str) {
         return;
     };
     let tab_id = world.resource_mut::<ModelTabs>().ensure_for(doc_id, None);
-    world.commands().trigger(lunco_workbench::OpenTab {
-        kind: MODEL_VIEW_KIND,
-        instance: tab_id,
-    });
+    world
+        .commands()
+        .trigger(lunco_workbench_core::commands::OpenTab {
+            kind: MODEL_VIEW_KIND,
+            instance: tab_id,
+        });
 }
 
 #[on_command(Open)]
@@ -1088,7 +1100,7 @@ pub fn finish_close_after_save(
 
 /// Expand queued [`PendingTabCloseScopes`] (Close Others / to the
 /// Right / All / Saved) into concrete tab ids and hand them to
-/// [`lunco_workbench::PendingTabCloses`]. Runs before
+/// [`lunco_workbench_core::tabs::PendingTabCloses`]. Runs before
 /// [`drain_pending_tab_closes`] so the expanded tabs flow through the
 /// same dirty-check + Save-prompt pipeline a single × click uses.
 pub fn resolve_tab_close_scopes(
@@ -1096,7 +1108,7 @@ pub fn resolve_tab_close_scopes(
     layout: Res<lunco_workbench_core::WorkbenchSnapshot>,
     registry: Res<ModelicaDocumentRegistry>,
     model_tabs: Res<ModelTabs>,
-    mut pending: ResMut<lunco_workbench::PendingTabCloses>,
+    mut pending: ResMut<lunco_workbench_core::tabs::PendingTabCloses>,
 ) {
     if scopes.requests.is_empty() {
         return;
@@ -1135,7 +1147,7 @@ pub fn resolve_tab_close_scopes(
 }
 
 pub fn drain_pending_tab_closes(
-    mut pending: ResMut<lunco_workbench::PendingTabCloses>,
+    mut pending: ResMut<lunco_workbench_core::tabs::PendingTabCloses>,
     registry: Res<ModelicaDocumentRegistry>,
     mut model_tabs: ResMut<ModelTabs>,
     mut dialogs: ResMut<CloseDialogState>,
@@ -1155,7 +1167,7 @@ pub fn drain_pending_tab_closes(
         if kind == lunco_viz::VIZ_PANEL_KIND
             || kind == crate::ui::panels::graphs::MODELICA_PLOT_KIND
         {
-            commands.trigger(lunco_workbench::CloseTab { kind, instance });
+            commands.trigger(lunco_workbench_core::commands::CloseTab { kind, instance });
             commands.queue(move |world: &mut World| {
                 if let Some(mut reg) = world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
                 {
@@ -1169,7 +1181,7 @@ pub fn drain_pending_tab_closes(
             continue;
         }
         let Some(doc) = model_tabs.get(instance).map(|s| s.doc) else {
-            commands.trigger(lunco_workbench::CloseTab { kind, instance });
+            commands.trigger(lunco_workbench_core::commands::CloseTab { kind, instance });
             continue;
         };
         let (is_dirty, is_read_only) = registry
@@ -1188,7 +1200,7 @@ pub fn drain_pending_tab_closes(
                 dialogs.pending.push((doc, instance));
             }
         } else {
-            commands.trigger(lunco_workbench::CloseTab { kind, instance });
+            commands.trigger(lunco_workbench_core::commands::CloseTab { kind, instance });
             model_tabs.close_tab(instance);
             commands.queue(move |world: &mut World| {
                 if let Some(mut state) = world
