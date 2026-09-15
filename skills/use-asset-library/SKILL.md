@@ -68,7 +68,7 @@ consumer declare `gravity_accel`, `sun_mount_*`, or `earth_mount_*` as its own
 output and connect that output back to itself.
 
 The engine-recognized **source** extensions are walked into the discovery manifest
-(`crates/lunco-assets/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,
+(`crates/lunco-assets-core/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,
 `.py`, `.sysml`, `.kerml`**. `.mo` (Modelica), `.py` (optional Python), and
 SysML/KerML sources are catalogued both because a `.usda`/Twin names them and
 so they can be browsed directly. Python is not the standard scenario backend;
@@ -80,14 +80,14 @@ evaluated ad hoc, not browsed as an authored asset.
 
 `lunco://<rel>` = the runtime `assets/<rel>`, with that root's packed cache and
 the shared cache after authored assets. The runtime root is selected by
-`lunco_assets::assets_dir_abs()` from the executable/package ancestry before
+`lunco_assets_core::assets_dir_abs()` from the executable/package ancestry before
 the current-directory ancestry; the complete order is built by
-`lunco_assets::library_roots()` (`crates/lunco-assets/src/lunco_source.rs`).
+`lunco_assets_core::library_roots()` (`crates/lunco-assets-core/src/lunco_source.rs`).
 `twin://<name>/<rel>` is the same shape one level down: the Twin's authored
 root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
 global downloaded product without putting a machine path into USD.
 Authored bytes always win over materialised ones. Schemes are registered in
-`crates/lunco-assets/src/asset_sources.rs`; `twin://` is stateful, it is not a
+`crates/lunco-assets-core/src/asset_sources.rs`; `twin://` is stateful, it is not a
 second texture scheme. Use the existing logical `lunco://` or `twin://` identity
 for every delivered artifact.
 
@@ -98,8 +98,9 @@ fetches on its own, so an asset that is merely declared resolves to nothing
 until someone asks for it. The browser rows are only a view of
 `lunco_assets_datasets::DatasetRegistry`; they must emit its typed
 request/cancel commands and never create a second downloader or parse cache
-paths. The optional `lunco-assets` package owns the native workers; consumers
-that only inspect declarations or state should depend on
+paths. The optional `lunco-assets` package composes native workers from
+`lunco-assets-transport`, `lunco-assets-download`, and
+`lunco-assets-processing`; consumers that only inspect declarations or state should depend on
 `lunco-assets-datasets`.
 
 All requesters use the `download` section of the one settings file owned by
@@ -278,7 +279,7 @@ progression in task/events.
 
 Native runtime walks the filesystem, so **adding a file needs no step at all**.
 The **web** build has no filesystem: it fetches `assets/manifest.json`
-(`crates/lunco-assets/src/discovery.rs`). After adding or removing any catalogued source
+(`crates/lunco-assets-core/src/discovery.rs`). After adding or removing any catalogued source
 (`.usda`/`.wgsl`/`.rhai`/`.mo`):
 
 ```bash
@@ -312,7 +313,7 @@ strict wheel reader. See [`validate-assets`](../validate-assets/SKILL.md).
 
 ## Anti-patterns
 
-USD composition is owned by `lunco-usd-compose`: `lunco-assets` supplies
+USD composition is owned by `lunco-usd-compose`: `lunco-assets-core` supplies
 canonical IDs, traversal, and bytes; composition interprets USD arcs into an
 inert stage. Modelica, Rhai, behavior trees, physics, and rendering bind later
 in their own layers. A tutorial only projects metadata from that stage.

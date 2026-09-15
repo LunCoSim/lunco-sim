@@ -17,12 +17,13 @@
 // raw `std::fs` access to the on-disk asset cache.
 #![cfg_attr(not(target_arch = "wasm32"), allow(clippy::disallowed_methods))]
 
-#[cfg(not(target_arch = "wasm32"))]
-use lunco_assets::{download, process};
 use lunco_assets_datasets::{
     entry_artifact_path, entry_dest_path, installed_destination_present, processed_output_present,
     AssetEntry, AssetManifest,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_assets_download::download;
+use lunco_assets_processing::process;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_settings::DownloadSettings;
 #[cfg(not(target_arch = "wasm32"))]

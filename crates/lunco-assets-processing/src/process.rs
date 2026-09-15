@@ -22,6 +22,8 @@ use lunco_assets_datasets::{
 #[cfg(not(target_arch = "wasm32"))]
 use resvg::tiny_skia;
 #[cfg(not(target_arch = "wasm32"))]
+use std::collections::BTreeMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,7 +47,8 @@ pub struct ProcessControl {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ProcessControl {
-    pub(crate) fn new(cancel: Arc<AtomicBool>, commit_gate: Arc<Mutex<()>>) -> Self {
+    /// Create processing control owned by an application worker.
+    pub fn new(cancel: Arc<AtomicBool>, commit_gate: Arc<Mutex<()>>) -> Self {
         Self {
             cancel,
             commit_gate,
@@ -76,9 +79,99 @@ impl ProcessControl {
     }
 }
 
+/// Native function implemented by one asset processor.
+#[cfg(not(target_arch = "wasm32"))]
+pub type ProcessorFn = fn(
+    source: &Path,
+    output: &Path,
+    config: &ProcessConfig,
+    control: &ProcessControl,
+) -> Result<(), std::io::Error>;
+
+/// One registered processing implementation.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+pub struct ProcessorSpec {
+    /// Manifest value that selects this processor.
+    pub kind: &'static str,
+    /// Native implementation of the processor.
+    pub run: ProcessorFn,
+    /// Output sidecar extensions committed with the primary artifact.
+    pub sidecars: &'static [&'static str],
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ProcessorSpec {
+    /// Define a processor and the sidecars it atomically publishes.
+    pub const fn new(
+        kind: &'static str,
+        run: ProcessorFn,
+        sidecars: &'static [&'static str],
+    ) -> Self {
+        Self {
+            kind,
+            run,
+            sidecars,
+        }
+    }
+}
+
+/// Registry of native processors selected by authored `process.kind` values.
+///
+/// The registry keeps the bake dispatcher open for domain crates: adding a
+/// heavy decoder or transform does not require growing one central match. The
+/// registry is a Rust extension seam because processors own I/O and math;
+/// Rhai remains responsible for selecting and sequencing authored policy.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+pub struct ProcessorRegistry {
+    specs: BTreeMap<String, ProcessorSpec>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ProcessorRegistry {
+    /// Create a registry containing the processors shipped by LunCoSim.
+    pub fn builtin() -> Self {
+        let mut registry = Self::default();
+        registry.register(ProcessorSpec::new("texture", process_texture, &[]));
+        registry.register(ProcessorSpec::new("gltf", process_gltf_adapter, &[]));
+        registry.register(ProcessorSpec::new("dem", process_dem, &[]));
+        registry.register(ProcessorSpec::new("map", process_map, &["mean"]));
+        registry.register(ProcessorSpec::new("albedo", process_albedo, &["mean"]));
+        registry.register(ProcessorSpec::new("normalmap", process_normalmap, &[]));
+        registry
+    }
+
+    /// Register or replace one processor. The returned value is the previous
+    /// definition, if any, so an application can reject accidental overrides.
+    pub fn register(&mut self, spec: ProcessorSpec) -> Option<ProcessorSpec> {
+        self.specs.insert(spec.kind.to_owned(), spec)
+    }
+
+    /// Resolve a processor selected by a manifest.
+    pub fn get(&self, kind: &str) -> Option<&ProcessorSpec> {
+        self.specs.get(kind)
+    }
+
+    /// Sorted processor names, suitable for diagnostics and capability
+    /// discovery.
+    pub fn kinds(&self) -> impl Iterator<Item = &str> {
+        self.specs.keys().map(String::as_str)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for ProcessorRegistry {
+    fn default() -> Self {
+        Self {
+            specs: BTreeMap::new(),
+        }
+    }
+}
+
 /// Processes a single source asset according to `process.kind`.
 ///
-/// - `"texture"` (default): resize an image to `target_resolution` and
+/// - `"texture"`: resize an image to `target_resolution` and
 ///   save as PNG. Supports JPEG, PNG, TIFF, BMP, WebP, SVG inputs.
 /// - `"gltf"`: clean a `.glb` for Bevy 0.18 — decode Draco geometry,
 ///   re-encode WebP textures as PNG. Shells out to `npx
@@ -92,8 +185,9 @@ impl ProcessControl {
 ///   are treated as illumination-bearing measurements: their low-frequency
 ///   field is removed and only bounded local detail is retained around an
 ///   authored neutral regolith albedo.
-/// - `"normalmap"`: co-registered ROI crop — see the
-///   [`ProcessConfig`] kind list.
+/// - `"normalmap"`: co-registered ROI crop — see the [`ProcessConfig`] kind
+///   documentation. Registered extensions use the same shared staging and
+///   commit contract and may consume `ProcessConfig::parameters`.
 ///
 /// `cache_root` is the cache that owns the declaration's derived artifact.
 /// Engine entries use the global cache; a Twin entry uses its own cache unless
@@ -107,6 +201,31 @@ pub fn process_asset(
     twin_root: Option<&Path>,
     control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
+    let registry = ProcessorRegistry::builtin();
+    process_asset_with_registry(
+        source_path,
+        process,
+        cache_root,
+        twin_root,
+        control,
+        &registry,
+    )
+}
+
+/// Process one asset with an application-supplied processor registry.
+///
+/// This is the extension point for a domain-specific native processor. The
+/// registry changes dispatch only; output-path resolution, bake keys, staging,
+/// cancellation, and atomic commit remain shared here.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn process_asset_with_registry(
+    source_path: &Path,
+    process: &ProcessConfig,
+    cache_root: &Path,
+    twin_root: Option<&Path>,
+    control: &ProcessControl,
+    registry: &ProcessorRegistry,
+) -> Result<(), std::io::Error> {
     control.check()?;
     let output_path = process_output_path(process, Some(cache_root), twin_root)?;
 
@@ -114,7 +233,7 @@ pub fn process_asset(
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    process_asset_to(source_path, process, &output_path, control)
+    process_asset_to(source_path, process, &output_path, control, registry)
 }
 
 /// The body of [`process_asset`] once its output path is known.
@@ -124,9 +243,20 @@ fn process_asset_to(
     process: &ProcessConfig,
     output_path: &Path,
     control: &ProcessControl,
+    registry: &ProcessorRegistry,
 ) -> Result<(), std::io::Error> {
     control.check()?;
     let output_path = output_path.to_path_buf();
+    let processor = registry.get(&process.kind).ok_or_else(|| {
+        let kinds = registry.kinds().collect::<Vec<_>>().join(", ");
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Unknown process kind '{}' (registered processors: {})",
+                process.kind, kinds
+            ),
+        )
+    })?;
 
     // ── Bake-key staleness check ──────────────────────────────────────────
     // The processed output is a pure function of (source bytes, this config,
@@ -158,54 +288,14 @@ fn process_asset_to(
         ))
     })?);
 
-    match process.kind.as_str() {
-        "gltf" => process_gltf(source_path, &stage_output, control)?,
-        "dem" => process_dem(source_path, &stage_output, process, control)?,
-        "map" => process_map(source_path, &stage_output, process, control)?,
-        "albedo" => process_albedo(source_path, &stage_output, process, control)?,
-        "normalmap" => process_normalmap(source_path, &stage_output, process, control)?,
-        "texture" => {
-            let [tw, th] = process.target_resolution.ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "texture pipeline requires `target_resolution = [w, h]`",
-                )
-            })?;
-            let ext = source_path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            match ext {
-                "svg" => process_svg(source_path, &stage_output, tw, th)?,
-                "jpg" | "jpeg" | "png" | "tiff" | "tif" | "bmp" | "webp" => {
-                    process_image(source_path, &stage_output, tw, th)?
-                }
-                _ => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Unsupported source format: .{}", ext),
-                    ));
-                }
-            }
-        }
-        other => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "Unknown process kind `{}` (expected \"texture\", \"gltf\", \"dem\", \
-                     \"map\", \"albedo\", or \"normalmap\")",
-                    other
-                ),
-            ));
-        }
-    }
+    (processor.run)(source_path, &stage_output, process, control)?;
 
     control.check()?;
     // Stamp only after a fully successful bake, so a failed/interrupted run
     // never masquerades as fresh. The staged artifact and all of its sidecars
     // become visible together under the commit gate.
     std::fs::write(bake_stamp_path(&stage_output), &key)?;
-    commit_staged_output(&stage_root, &output_path, process, control)?;
+    commit_staged_output(&stage_root, &output_path, processor.sidecars, control)?;
 
     println!("  ✓ processed → {}", output_path.display());
     Ok(())
@@ -240,15 +330,19 @@ fn staging_root(output_path: &Path) -> Result<std::path::PathBuf, std::io::Error
 fn commit_staged_output(
     stage_root: &Path,
     output_path: &Path,
-    process: &ProcessConfig,
+    sidecars: &[&str],
     control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
     let _gate = control.commit_guard()?;
     control.check()?;
 
     let mut destinations = vec![output_path.to_path_buf(), bake_stamp_path(output_path)];
-    if matches!(process.kind.as_str(), "map" | "albedo") && output_path.extension().is_some() {
-        destinations.push(output_path.with_extension("mean"));
+    if output_path.extension().is_some() {
+        destinations.extend(
+            sidecars
+                .iter()
+                .map(|suffix| output_path.with_extension(suffix)),
+        );
     }
     let backup_root = stage_root.with_file_name(format!(
         ".{}-backup",
@@ -310,6 +404,45 @@ fn commit_staged_output(
     drop(_gate);
     let _ = std::fs::remove_dir_all(&backup_root);
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn process_texture(
+    source: &Path,
+    output: &Path,
+    config: &ProcessConfig,
+    _control: &ProcessControl,
+) -> Result<(), std::io::Error> {
+    let [tw, th] = config.target_resolution.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "texture pipeline requires `target_resolution = [w, h]`",
+        )
+    })?;
+    let ext = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    match ext {
+        "svg" => process_svg(source, output, tw, th),
+        "jpg" | "jpeg" | "png" | "tiff" | "tif" | "bmp" | "webp" => {
+            process_image(source, output, tw, th)
+        }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Unsupported source format: .{ext}"),
+        )),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn process_gltf_adapter(
+    source: &Path,
+    output: &Path,
+    _config: &ProcessConfig,
+    control: &ProcessControl,
+) -> Result<(), std::io::Error> {
+    process_gltf(source, output, control)
 }
 
 /// glb cleanup pipeline. Runs `gltf-transform` twice in series:
@@ -1536,6 +1669,7 @@ fn tiff_io_err(e: tiff::TiffError) -> std::io::Error {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::io::Cursor;
 
     fn control() -> ProcessControl {
@@ -1597,6 +1731,7 @@ mod tests {
             albedo_base_linear: None,
             albedo_detail_strength: None,
             albedo_illumination_radius_m: None,
+            parameters: BTreeMap::new(),
         };
         process_asset(&source, &process, tmp.path(), None, &control()).expect("RGB map processing");
 
@@ -1697,29 +1832,7 @@ mod tests {
 
         let control = ProcessControl::unrestricted();
         control.cancel.store(true, Ordering::Release);
-        let process = ProcessConfig {
-            kind: "texture".into(),
-            output: "texture.png".into(),
-            output_root: "cache".into(),
-            target_resolution: Some([1, 1]),
-            center_lat: None,
-            center_lon: None,
-            window_m: None,
-            pixel_scale_m: 2.0,
-            source_height_scale_m_per_unit: 1.0,
-            source_height_offset_m: 0.0,
-            src_min_lat: None,
-            src_max_lat: None,
-            src_min_lon: None,
-            src_max_lon: None,
-            site_id: None,
-            frame: None,
-            albedo_base_linear: None,
-            albedo_detail_strength: None,
-            albedo_illumination_radius_m: None,
-        };
-
-        assert!(commit_staged_output(&stage, &output, &process, &control).is_err());
+        assert!(commit_staged_output(&stage, &output, &[], &control).is_err());
         assert_eq!(std::fs::read(&output).expect("output remains"), b"old");
         assert_eq!(
             std::fs::read(bake_stamp_path(&output)).expect("stamp remains"),
@@ -1843,6 +1956,7 @@ mod tests {
             albedo_base_linear: None,
             albedo_detail_strength: None,
             albedo_illumination_radius_m: None,
+            parameters: BTreeMap::new(),
         };
         let out_dir = tmp.join("site");
         process_dem(&src_path, &out_dir, &cfg, &control()).expect("dem process should succeed");
@@ -1934,6 +2048,7 @@ mod tests {
             albedo_base_linear: None,
             albedo_detail_strength: None,
             albedo_illumination_radius_m: None,
+            parameters: BTreeMap::new(),
         };
         let out_dir = tmp.join("site");
         process_dem(&src_path, &out_dir, &cfg, &control()).expect("PDS IMG dem ingest succeeds");
@@ -1990,6 +2105,7 @@ mod tests {
             albedo_base_linear: None,
             albedo_detail_strength: None,
             albedo_illumination_radius_m: None,
+            parameters: BTreeMap::new(),
         };
         let out_path = tmp.join("normal.png");
         process_normalmap(&src_path, &out_path, &cfg, &control()).expect("normalmap succeeds");
@@ -2049,6 +2165,7 @@ mod tests {
             albedo_base_linear: None,
             albedo_detail_strength: None,
             albedo_illumination_radius_m: None,
+            parameters: BTreeMap::new(),
         };
         let out_path = tmp.join("map.png");
         process_map(&src_path, &out_path, &cfg, &control()).expect("map crop succeeds");

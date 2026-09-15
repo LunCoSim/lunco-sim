@@ -60,7 +60,8 @@ impl AssetEntry {
 /// Processing configuration from an `Assets.toml` declaration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProcessConfig {
-    /// Pipeline selector (`texture`, `gltf`, `dem`, `map`, `albedo`, or `normalmap`).
+    /// Pipeline selector. Built-ins include `texture`, `gltf`, `dem`, `map`,
+    /// `albedo`, and `normalmap`; native hosts may register additional kinds.
     pub kind: String,
     /// Target dimensions for image-like pipelines.
     #[cfg(not(target_arch = "wasm32"))]
@@ -135,6 +136,13 @@ pub struct ProcessConfig {
     #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub albedo_illumination_radius_m: Option<f64>,
+    /// Processor-specific parameters preserved for registered native
+    /// processors. Keeping these values in the manifest makes the dispatch
+    /// contract extensible without adding a new field to this shared crate for
+    /// every domain-specific baker.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub parameters: BTreeMap<String, toml::Value>,
 }
 
 fn default_output_root() -> String {
@@ -429,9 +437,12 @@ pub fn bake_key(source: &Path, config: &ProcessConfig) -> Result<String, std::io
         }
         hasher.update(&buffer[..read]);
     }
-    let config_json = serde_json::to_string(config)
+    // TOML is the manifest's canonical serialization format. It is stable for
+    // this field-ordered config and avoids pulling JSON into the lightweight
+    // registry crate solely for internal change detection.
+    let config_toml = toml::to_string(config)
         .map_err(|error| std::io::Error::other(format!("serializing ProcessConfig: {error}")))?;
-    hasher.update(config_json.as_bytes());
+    hasher.update(config_toml.as_bytes());
     hasher.update(PROCESS_PIPELINE_VERSION.to_le_bytes());
     Ok(hasher
         .finalize()
@@ -455,7 +466,23 @@ pub fn processed_output_present(
                     .is_file()
         }
         "map" | "albedo" | "gltf" | "normalmap" | "texture" => output_path.is_file(),
-        _ => false,
+        // Registered extension processors use the same atomic output
+        // contract. A file output must be non-directory; a directory output
+        // must contain at least one payload besides its bake stamp. The
+        // processor registry owns deeper format validation when it runs.
+        _ => {
+            output_path.is_file()
+                || (output_path.is_dir()
+                    && std::fs::read_dir(output_path)
+                        .ok()
+                        .into_iter()
+                        .flatten()
+                        .any(|entry| {
+                            entry
+                                .ok()
+                                .is_some_and(|entry| entry.file_name() != ".bakekey")
+                        }))
+        }
     };
     if !payload_present {
         return false;

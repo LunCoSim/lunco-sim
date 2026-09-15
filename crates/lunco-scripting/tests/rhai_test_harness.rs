@@ -146,6 +146,32 @@ fn assertion_harness_selftest_passes() {
     );
 }
 
+/// Dataset selection and sequencing remain authored Rhai policy. The Rust
+/// harness supplies only the production-shaped query/command stubs and checks
+/// the authored verdict; it does not duplicate the policy assertions in Rust.
+#[test]
+fn assets_policy_selftest_passes() {
+    let policy = lunco_assets_core::scripting::tool_libraries()
+        .into_iter()
+        .find(|(name, _)| *name == "assets")
+        .map(|(_, source)| source)
+        .expect("assets.rhai must be embedded");
+    let script = format!(
+        "{}\n{}\n{}",
+        libs(),
+        policy,
+        std::fs::read_to_string(tests_dir().join("test_assets_policy.rhai"))
+            .expect("test_assets_policy.rhai must exist")
+    );
+    let printed = run_capturing_print(&script);
+    assert_eq!(
+        printed.last().map(String::as_str),
+        Some("TESTS_OK 7"),
+        "assets policy self-test did not pass:\n{}",
+        printed.join("\n")
+    );
+}
+
 /// `t_report` actually REPORTS — a failing check must produce `TESTS_FAIL`.
 ///
 /// The selftest above proves the individual helpers can return a failure

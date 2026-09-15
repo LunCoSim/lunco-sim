@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
 use lunco_assets_datasets::{
     dataset_failed, AssetEntry, CancelDataset, DatasetEntry, DatasetInstalled, DatasetRegistry,
-    DatasetScope, DatasetScopeReady, DatasetScopeRemoved, DatasetState, RequestDataset,
+    DatasetScope, DatasetScopeRemoved, DatasetState, RequestDataset,
 };
 use lunco_core::{on_command, register_commands};
 
@@ -49,6 +49,8 @@ struct DatasetRuntime {
     #[cfg(not(target_arch = "wasm32"))]
     retiring: Vec<DownloadHandle>,
     commit_gate: Arc<Mutex<()>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    processors: lunco_assets_processing::process::ProcessorRegistry,
 }
 
 impl Default for DatasetRuntime {
@@ -58,6 +60,8 @@ impl Default for DatasetRuntime {
             #[cfg(not(target_arch = "wasm32"))]
             retiring: Vec::new(),
             commit_gate: Arc::new(Mutex::new(())),
+            #[cfg(not(target_arch = "wasm32"))]
+            processors: lunco_assets_processing::process::ProcessorRegistry::builtin(),
         }
     }
 }
@@ -73,6 +77,7 @@ impl DatasetRuntime {
                 handle.status.clone(),
                 handle.cancel.clone(),
                 handle.commit_gate.clone(),
+                self.processors.clone(),
             ));
         }
         #[cfg(target_arch = "wasm32")]
@@ -170,10 +175,11 @@ fn spawn_download(
     status: StatusSlot,
     cancel: Arc<std::sync::atomic::AtomicBool>,
     commit_gate: Arc<Mutex<()>>,
+    processors: lunco_assets_processing::process::ProcessorRegistry,
 ) -> bevy::tasks::Task<DatasetState> {
     use std::sync::atomic::Ordering;
 
-    use crate::download::{download_asset_with_control, DownloadControl};
+    use lunco_assets_download::download::{download_asset_with_control, DownloadControl};
 
     let key = entry.key.clone();
     let spec = entry.spec.clone();
@@ -187,8 +193,10 @@ fn spawn_download(
 
     bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let process_control =
-                crate::process::ProcessControl::new(cancel.clone(), commit_gate.clone());
+            let process_control = lunco_assets_processing::process::ProcessControl::new(
+                cancel.clone(),
+                commit_gate.clone(),
+            );
             let progress_slot = status.clone();
             let extracting_slot = status.clone();
             let download_control = DownloadControl {
@@ -225,7 +233,13 @@ fn spawn_download(
                             });
                         }
                     }
-                    match run_process_step(&spec, &scope, &destination, &process_control) {
+                    match run_process_step(
+                        &spec,
+                        &scope,
+                        &destination,
+                        &process_control,
+                        &processors,
+                    ) {
                         Ok(()) => DatasetState::Installed,
                         Err(error) if cancel.load(Ordering::Acquire) => {
                             let _ = error;
@@ -234,7 +248,9 @@ fn spawn_download(
                         Err(error) => DatasetState::Failed(format!("processing failed: {error}")),
                     }
                 }
-                Err(crate::download::DownloadError::Cancelled) => DatasetState::Cancelled,
+                Err(lunco_assets_download::download::DownloadError::Cancelled) => {
+                    DatasetState::Cancelled
+                }
                 Err(error) => DatasetState::Failed(error.to_string()),
             }
         }))
@@ -247,7 +263,8 @@ fn run_process_step(
     spec: &AssetEntry,
     scope: &DatasetScope,
     destination: &std::path::Path,
-    control: &crate::process::ProcessControl,
+    control: &lunco_assets_processing::process::ProcessControl,
+    processors: &lunco_assets_processing::process::ProcessorRegistry,
 ) -> Result<(), std::io::Error> {
     let Some(process) = &spec.process else {
         return Ok(());
@@ -262,12 +279,13 @@ fn run_process_step(
         process.kind,
         destination.display()
     );
-    crate::process::process_asset(
+    lunco_assets_processing::process::process_asset_with_registry(
         destination,
         process,
         &cache_root,
         twin_root.as_deref(),
         control,
+        processors,
     )
 }
 
@@ -381,104 +399,50 @@ fn drain_dataset_status(
     }
 }
 
-fn reload_installed_asset(trigger: On<DatasetInstalled>, asset_server: Option<Res<AssetServer>>) {
-    if let Some(asset_server) = asset_server {
-        asset_server.reload(trigger.event().artifact_uri.clone());
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn scan_open_twins_for_datasets(
-    roots: Option<Res<lunco_assets_core::TwinRoots>>,
-    mut registry: ResMut<DatasetRegistry>,
-    mut commands: Commands,
-) {
-    let Some(roots) = roots else {
-        return;
-    };
-    let open = match roots.names() {
-        Ok(open) => open,
-        Err(error) => {
-            lunco_core::trigger_error(
-                &mut commands,
-                "twin-dataset-registry-unavailable",
-                format!("could not enumerate open Twins for dataset discovery: {error}"),
-            );
-            return;
-        }
-    };
-    for name in open {
-        match roots.root_for(&name) {
-            Ok(Some(root)) => {
-                let scope = DatasetScope::Twin {
-                    name: name.clone(),
-                    root: root.clone(),
-                };
-                if registry.is_scope_scanned(&scope) {
-                    continue;
-                }
-                registry.scan_twin(&name, &root);
-                commands.trigger(DatasetScopeReady { scope });
-            }
-            Ok(None) => {}
-            Err(error) => {
-                lunco_core::trigger_error(
-                    &mut commands,
-                    "twin-dataset-registry-unavailable",
-                    format!("could not resolve Twin {name} for dataset discovery: {error}"),
-                );
-                return;
-            }
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn scan_engine_manifests(mut registry: ResMut<DatasetRegistry>, mut commands: Commands) {
-    let manifests = match lunco_assets_core::engine_manifests() {
-        Ok(manifests) => manifests,
-        Err(error) => {
-            registry.record_failure(format!(
-                "cannot enumerate engine manifests in {}: {error}",
-                lunco_assets_core::manifests_dir().display()
-            ));
-            commands.trigger(DatasetScopeReady {
-                scope: DatasetScope::Engine,
-            });
-            return;
-        }
-    };
-    let mut total = 0;
-    for (group, path) in manifests {
-        match std::fs::read_to_string(&path) {
-            Ok(text) => total += registry.register(&text, &group),
-            Err(error) => {
-                registry.record_failure(format!("cannot read {}: {error}", path.display()))
-            }
-        }
-    }
-    info!("[datasets] {total} declared dataset(s) from assets/manifests");
-    commands.trigger(DatasetScopeReady {
-        scope: DatasetScope::Engine,
-    });
-}
-
 /// Installs dataset discovery, state, and explicit provisioning workers.
-pub struct DatasetsPlugin;
+pub struct DatasetProvisioningPlugin {
+    #[cfg(not(target_arch = "wasm32"))]
+    processors: lunco_assets_processing::process::ProcessorRegistry,
+}
 
-impl Plugin for DatasetsPlugin {
+impl Default for DatasetProvisioningPlugin {
+    fn default() -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            processors: lunco_assets_processing::process::ProcessorRegistry::builtin(),
+        }
+    }
+}
+
+impl DatasetProvisioningPlugin {
+    /// Add or replace a native processor before the worker runtime starts.
+    ///
+    /// The processor is still selected by the authored manifest `kind`; Rhai
+    /// composes that policy, while this Rust seam supplies the heavy native
+    /// implementation.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_processor(
+        mut self,
+        processor: lunco_assets_processing::process::ProcessorSpec,
+    ) -> Self {
+        self.processors.register(processor);
+        self
+    }
+}
+
+impl Plugin for DatasetProvisioningPlugin {
     fn build(&self, app: &mut App) {
-        lunco_settings::ensure_download_settings(app);
-        app.init_resource::<DatasetRegistry>();
+        #[cfg(not(target_arch = "wasm32"))]
+        app.insert_resource(DatasetRuntime {
+            processors: self.processors.clone(),
+            ..Default::default()
+        });
+        #[cfg(target_arch = "wasm32")]
         app.init_resource::<DatasetRuntime>();
+        app.init_resource::<lunco_assets_datasets::DatasetProvisioningActive>();
         register_commands!(on_request_dataset, on_cancel_dataset);
         register_all_commands(app);
-        app.add_observer(reload_installed_asset);
         app.add_observer(on_twin_closed);
         app.add_systems(Update, drain_dataset_status);
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Startup, scan_engine_manifests);
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Update, scan_open_twins_for_datasets);
     }
 }

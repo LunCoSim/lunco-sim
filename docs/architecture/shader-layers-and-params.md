@@ -90,7 +90,7 @@ guards it against drift.
 
 Authored grayscale orthophotos are not intrinsic albedo: their broad brightness
 field contains acquisition illumination and would be lit a second time by the
-runtime. The native `lunco-assets` processor therefore has a distinct
+runtime. The native `lunco-assets-processing` processor therefore has a distinct
 `kind = "albedo"` pipeline. It computes the low-frequency illumination field
 from valid samples, removes that field, anchors the remaining local variation
 at an authored neutral regolith value, and sRGB-encodes the resulting linear

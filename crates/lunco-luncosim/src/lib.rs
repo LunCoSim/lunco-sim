@@ -517,6 +517,11 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
     }
     app.add_plugins(LunCoSimCorePlugin { headless: false });
+    // Provisioning is an explicit GUI application capability. The shared core
+    // installs only the lightweight registry/discovery plugin, so headless and
+    // server compositions do not inherit native HTTP/archive/image workers.
+    #[cfg(feature = "ui")]
+    app.add_plugins(lunco_assets::datasets::DatasetProvisioningPlugin::default());
     // Scene-wide ambient fill is a presentation concern. Keep the resource on
     // the GUI edge so the shared simulation core has no dependency on Bevy's
     // light/render feature family.

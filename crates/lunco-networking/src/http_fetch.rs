@@ -207,7 +207,7 @@ fn fetch_bytes_native(
     url: &str,
     settings: &lunco_settings::DownloadSettings,
 ) -> Result<Vec<u8>, String> {
-    lunco_assets::download::download_bytes_with_resume(url, settings)
+    lunco_assets_transport::download_bytes_with_resume(url, settings)
 }
 
 /// Web byte-GET, cache-first-forever in a Cache-Storage bucket: the blob is

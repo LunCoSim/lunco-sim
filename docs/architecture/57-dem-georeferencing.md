@@ -4,7 +4,7 @@
 
 [`crates/lunco-geotiff`](../../crates/lunco-geotiff/src/lib.rs)
 is the one place georeferencing is encoded and decoded, shared by the writer
-(`lunco-assets`) and the reader (`lunco-terrain-bake`). Companion to
+(`lunco-assets-processing`) and the reader (`lunco-terrain-bake`). Companion to
 [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.md) and
 [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md) — same
 principle (*one source of truth, derive the rest*), applied to spatial reference
@@ -46,7 +46,7 @@ a centred square crop.
 
 ## Writer contract (`write_geo_tags`)
 
-Called by the bake (`crates/lunco-assets/src/process.rs`) on every emitted
+Called by the bake (`crates/lunco-assets-processing/src/process.rs`) on every emitted
 heightmap. Writes:
 
 - `ModelPixelScale` — one spacing for both axes (square pixels only).

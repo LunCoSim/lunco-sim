@@ -20,7 +20,9 @@ use std::path::Path;
 /// Geographic extent a PDS3 `IMAGE_MAP_PROJECTION` object declares.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PdsExtent {
+    /// Minimum latitude in degrees.
     pub min_lat: f64,
+    /// Maximum latitude in degrees.
     pub max_lat: f64,
     /// `WESTERNMOST_LONGITUDE`, degrees East as authored (labels use 0–360).
     pub west_lon: f64,
@@ -32,11 +34,14 @@ pub struct PdsExtent {
 /// label itself declares (used as fallbacks for absent manifest fields).
 #[derive(Debug, Clone)]
 pub struct PdsImage {
+    /// Number of decoded samples per row.
     pub width: usize,
+    /// Number of decoded rows.
     pub height: usize,
     /// Row-major samples, `SCALING_FACTOR`/`OFFSET` applied, missing
     /// constants mapped to `NaN`.
     pub samples: Vec<f64>,
+    /// Projection extent declared by the source label, when present.
     pub extent: Option<PdsExtent>,
     /// `MAP_SCALE` in metres/pixel, when the label declares one.
     pub map_scale_m: Option<f64>,

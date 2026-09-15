@@ -73,6 +73,7 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets = { path = "../lunco-assets", optional = true }
 lunco-twin = { path = "../lunco-twin" }
 serde_json = { workspace = true }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
@@ -132,6 +133,7 @@ default = ["ui", "celestial", "api-transport", "transport-http"]
 # intent (`PbrLook`/`ShaderLook`/`SceneCamera`); this binds it.
 # See docs/architecture/render-decoupling.md.
 ui = [
+    "dep:lunco-assets",
     "dep:velopack",
     "dep:ureq",
     # Screenshot capture is a rendered application capability kept on the UI edge.

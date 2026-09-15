@@ -1,7 +1,7 @@
 // ── Assertion harness for rhai tests ────────────────────────────────────────
 //
 // TEST-ONLY. This lives under `assets/scripting/tests/`, NOT
-// `assets/scripting/prelude/` — `lunco_assets::scripting::prelude_files()` scans
+// `assets/scripting/prelude/` — `lunco_assets_core::scripting::prelude_files()` scans
 // only the prelude directory, so nothing here is ever auto-loaded into a running
 // scenario. Test code must not ride along in production scripts; a harness
 // concatenates these libs ahead of a test file explicitly — either

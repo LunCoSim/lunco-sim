@@ -1,13 +1,14 @@
 ---
 name: geo-assets
-description: Download and process lunar geo assets (DEMs, stable material albedo, ortho/slope/shade maps, normal maps) with lunco-assets — Assets.toml entries, ROI cropping, terrain layer wiring in USD, quality presets, bake keys. Use when adding a terrain site to a twin, baking layer maps, or debugging the asset pipeline.
+description: Download and process lunar geo assets (DEMs, stable material albedo, ortho/slope/shade maps, normal maps) with the LunCoSim asset pipeline — Assets.toml entries, ROI cropping, terrain layer wiring in USD, quality presets, bake keys. Use when adding a terrain site to a twin, baking layer maps, or debugging the asset pipeline.
 ---
 
 # Geo assets: download & process lunar terrain for a Twin
 
-The pipeline is `crates/lunco-assets` in this repo. Pure Rust — no GDAL.
+The application pipeline is composed by `crates/lunco-assets`; the heavy native
+processors live in `crates/lunco-assets-processing`. Pure Rust — no GDAL.
 Sources may be **GeoTIFF or PDS3 `.IMG`** (attached or detached `.LBL`;
-`src/pds_img.rs`); polar-stereographic products are refused loudly because the
+`lunco-assets-processing/src/pds_img.rs`); polar-stereographic products are refused loudly because the
 crop affine is equirectangular-only. Use the target Twin's own `Assets.toml` as
 the worked example and inspect its current scene before wiring outputs.
 
@@ -95,6 +96,15 @@ vertical datum, or record the native-tool gap as blocked work.
 | `normalmap` | DTM | DEM-local ENU normal PNG (`RGB = n*0.5+0.5`, decoded by the shared terrain-surface shader kernel) |
 | `texture` | any image | resized PNG (non-geo default) |
 | `gltf` | .glb | Bevy-clean .glb (needs npx) |
+
+The built-in processors are registered through
+`lunco-assets-processing::process::ProcessorRegistry`. A domain-specific
+native baker should register a `ProcessorSpec` and publish its sidecars through
+the shared staging/commit path. Put processor-specific manifest values in
+`[key.process.parameters]`; do not add a new shared manifest field for every
+domain. Keep selection, ordering, and onboarding policy in the reusable Rhai
+`assets` tool library or a Twin-owned script; Rust remains the owner of
+decoding, heavy math, cancellation, and atomic publication.
 
 Shared ROI fields: `center_lat`, `center_lon`, `window_m`,
 `target_resolution = [n, n]`, `pixel_scale_m`, `src_min/max_lat`,

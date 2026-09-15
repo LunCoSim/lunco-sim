@@ -382,7 +382,8 @@ bottom egui bar).
 The fork lives at `LunCoSim/rumoca`; the web build pulls branch
 `wasm-asset-loader` (adds `Session::load_source_root_in_memory` on top of
 `main`). Local dev typically uses a sibling worktree at `../rumoca/` with
-`path = …` deps in `lunco-modelica-core/Cargo.toml` / `lunco-assets/Cargo.toml`.
+`path = …` deps in `lunco-modelica-core/Cargo.toml` and the explicit asset
+provisioning packages (`lunco-assets-download` / `lunco-assets-processing`).
 To update:
 
 ```bash

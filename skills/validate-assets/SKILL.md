@@ -212,7 +212,7 @@ is the reflected param schema (`info.shader_params` with `name`/`type`/`offset`/
 
 1. **`Path::new(ref).is_file()`** — absolute, or **relative to the current
    working directory**.
-2. `lunco_assets::engine_asset_local_path(ref)` — the runtime `lunco://` root,
+2. `lunco_assets_core::engine_asset_local_path(ref)` — the runtime `lunco://` root,
    selected from the executable/package ancestry and then the current-directory
    ancestry.
 

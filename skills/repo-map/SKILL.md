@@ -54,7 +54,7 @@ verified” or “externally blocked”.
 | Ground physics / rovers / USD scenes / Modelica / visual evidence | **`luncosim`** | The production scene/runtime binary; use it for scene tests, screenshots, and visual acceptance. |
 | Numeric headless simulation / CI automation | **`luncosim-server`** | The same simulation through `run_headless()`, with no GUI evidence; use it for numeric/API automation. |
 | Author / compile / simulate Modelica models, browse MSL | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
-| Download / verify / process external assets | **`lunco-assets`** | `-- download\|list\|process`; native provisioning and processing. |
+| Download / verify / process external assets | **`lunco-assets` + `lunco-assets-{transport,download,processing}`** | `-- download\|list\|process`; explicit workers/CLI compose shared transport, atomic installation, and native processors. |
 
 Launch the installed production executable, or explicitly select a checkout
 build when source validation is the goal. Workspace `default-members` make a
