@@ -698,6 +698,17 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         world
             .resource_mut::<DocBackedTwinScenes>()
             .mark_applied(doc, scene_id, cur_gen);
+        // A standalone Editor preview has no `UsdSceneRoot`, so the live ECS
+        // sink cannot publish its cursor through `live_consume`.  The preview
+        // renders the canonical stage directly; mark that stage consumed here
+        // after its typed ops/rebuild have completed.  Mounted Twin scenes
+        // deliberately stay on the live-consume boundary so a query can never
+        // observe a generation before ECS projection has finished.
+        if active_doc != Some(doc) {
+            world
+                .resource_mut::<DocBackedTwinScenes>()
+                .mark_stage_projected(scene_id);
+        }
         let composed_source = world
             .resource::<DocumentRegistry<UsdDocument>>()
             .host(doc)
