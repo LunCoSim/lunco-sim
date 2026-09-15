@@ -614,10 +614,10 @@ restart:
   `<OS config dir>/lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
   `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
   churn, and personal layout never leaks into a shared project.
-The `lunco-workbench-window` crate restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). Volatile UI state is managed via `lunco-workbench::workspace_state`, which loads a per-Twin `WorkspaceState` upon Twin activation and saves it when changes occur. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
+The `lunco-workbench-window` crate restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). The `lunco-workbench-state` crate owns volatile per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies only the layout-provider adapter used for dock capture and restore. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
 
 An explicit host launch may provide a one-shot
-`WorkspaceStateRestorePolicy` initial perspective. The policy is consumed when
+`lunco-workbench-state::WorkspaceStateRestorePolicy` initial perspective. The policy is consumed when
 the first real Twin becomes active, so a scene-oriented launch can open its
 View presentation without allowing a stale Design/Lunica choice to cover it.
 Later Twin switches and ordinary launches continue to restore the persisted
@@ -867,6 +867,11 @@ simulation default.
 
 ## 11. Relationship to `lunco-ui` and domain crates
 
+The capability packages below are siblings composed by the concrete shell; the
+vertical layout groups them by responsibility and reuse, not as a strict
+dependency chain. In particular, `lunco-workbench-state` and
+`lunco-workbench-window` are independent services consumed by the shell.
+
 ```
   Apps
    ├── Panel crates (domain-specific UI)
@@ -923,6 +928,11 @@ simulation default.
    │     - settings-backed geometry and explicit native placement
    │         │
    │         ▼
+   ├── lunco-workbench-state  (per-Twin session state)
+   │     - persisted document/session schema and codec registry
+   │     - storage-backed state lifecycle and layout-provider contract
+   │         │
+   │         ▼
    ├── lunco-workbench  (concrete app shell — this document)
    │     - Root layout (SidePanel + CentralPanel)
    │     - egui_dock materialization and persistence
@@ -959,8 +969,9 @@ simulation default.
   existing document/workspace commands.
 - `lunco-workbench-text-editor` owns generic source editing, while
   `lunco-workbench-window` owns OS-window commands and geometry/placement
-  persistence. `lunco-workbench` remains the concrete app framework — layout,
-  per-Twin workspace state, viewport composition, and panel host.
+  persistence. `lunco-workbench-state` owns per-Twin session persistence and
+  exposes only the layout-provider contract; `lunco-workbench` remains the
+  concrete app framework — layout, viewport composition, and panel host.
 - `lunco-workbench-browser` is the optional navigation feature — Twin/Files
   panels, browser state/actions, and the built-in generic sections.
 - `lunco-ui` is the widget library — draws things inside panels.
@@ -1066,4 +1077,4 @@ launches LunCoSim) is a later task — see task #90.
 - [`01-ontology.md`](01-ontology.md) § 4d — workbench vocabulary
 - [`14-simulation-layers.md`](14-simulation-layers.md) — Twin/Run/Scenario control surface
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific panels
-- `specs/008-developer-experience` — detailed spec
+- `specs/008-developer-experience` — detail

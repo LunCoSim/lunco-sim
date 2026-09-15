@@ -117,6 +117,7 @@ members = [
     "crates/lunco-workbench-guided-ui",
     "crates/lunco-workbench-file-dialog",
     "crates/lunco-workbench-file-ops",
+    "crates/lunco-workbench-state",
     "crates/lunco-workbench-text-editor",
     "crates/lunco-workbench-window",
     "crates/lunco-workbench-widgets",

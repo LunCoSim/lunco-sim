@@ -7836,6 +7836,7 @@ dependencies = [
  "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workbench-guided-ui",
+ "lunco-workbench-state",
  "lunco-workbench-widgets",
  "lunco-workbench-window",
  "lunco-workspace",
@@ -8063,6 +8064,7 @@ dependencies = [
  "lunco-workbench-file-dialog",
  "lunco-workbench-file-ops",
  "lunco-workbench-guided-ui",
+ "lunco-workbench-state",
  "lunco-workbench-widgets",
  "lunco-workbench-window",
  "lunco-workspace",
@@ -9321,6 +9323,7 @@ dependencies = [
  "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workbench-file-dialog",
+ "lunco-workbench-state",
  "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
@@ -9397,18 +9400,17 @@ dependencies = [
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
- "lunco-doc",
  "lunco-doc-bevy",
  "lunco-render",
  "lunco-render-recovery",
  "lunco-settings",
  "lunco-status-core",
- "lunco-storage",
  "lunco-theme",
  "lunco-time",
  "lunco-twin",
  "lunco-workbench-core",
  "lunco-workbench-file-ops",
+ "lunco-workbench-state",
  "lunco-workbench-text-editor",
  "lunco-workbench-widgets",
  "lunco-workbench-window",
@@ -9494,6 +9496,20 @@ dependencies = [
  "lunco-theme",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
+]
+
+[[package]]
+name = "lunco-workbench-state"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-doc",
+ "lunco-settings",
+ "lunco-storage",
+ "lunco-workbench-core",
+ "lunco-workspace",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

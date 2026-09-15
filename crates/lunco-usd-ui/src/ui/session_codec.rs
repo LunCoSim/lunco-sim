@@ -1,7 +1,7 @@
 //! USD side of workbench document hot-exit (VSCode-style session
 //! restore) — the mirror of `lunco-modelica-core`'s `session_codec`.
 //!
-//! Registers a [`DocumentSessionCodec`] so `lunco-workbench` captures
+//! Registers a [`DocumentSessionCodec`] so `lunco-workbench-state` captures
 //! every open USD document's **live buffer** into the per-Twin
 //! `workspace-state` file and recreates it on next launch. Restore
 //! replays [`DocumentRegistry::<UsdDocument>::allocate`], which fires the
@@ -13,7 +13,9 @@
 //! origin, is_dirty}`) — no changes to the registry or document types.
 
 use bevy::prelude::*;
-use lunco_workbench::{finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot};
+use lunco_workbench_state::{
+    finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot,
+};
 
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_document::document::UsdDocument;

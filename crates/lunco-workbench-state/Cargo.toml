@@ -1,0 +1,19 @@
+[package]
+name = "lunco-workbench-state"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Per-Twin Workbench session state, document codecs, and persistence"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-doc = { path = "../lunco-doc" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-storage = { path = "../lunco-storage" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workspace = { path = "../lunco-workspace" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 //! Modelica side of workbench document hot-exit (VSCode-style session
 //! restore).
 //!
-//! Registers a [`DocumentSessionCodec`] so `lunco-workbench` can capture
+//! Registers a [`DocumentSessionCodec`] so `lunco-workbench-state` can capture
 //! every persistable Modelica document's **live editor buffer** into the
 //! per-Twin `workspace-state` file and recreate it on next launch — the
 //! buffer is the source of truth, so unsaved edits survive a restart.
@@ -16,8 +16,10 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use lunco_workbench::{finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot};
 use lunco_workbench_core::commands::OpenTab;
+use lunco_workbench_state::{
+    finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot,
+};
 
 use crate::model_tabs::ModelTabs;
 use crate::state::{is_generated_document, ModelicaDocumentRegistry};

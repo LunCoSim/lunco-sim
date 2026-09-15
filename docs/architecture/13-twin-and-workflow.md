@@ -1035,8 +1035,9 @@ the persistent world shell, consults the GUI boot policy, and loads an
 explicit native scene. Browser startup loads the deployment Twin through its
 page autoload hook. The server does not use the GUI startup path.
 
-Workbench plugins provide document/session UI and persistence; they do not
-replace scene or simulation composition. New examples should be authored as
+The workbench shell and `lunco-workbench-state` provide document/session UI
+integration and persistence; they do not replace scene or simulation
+composition. New examples should be authored as
 Twins or scenes and opened through the normal document/load commands.
 
 ### Per-app: "New file" menu entries

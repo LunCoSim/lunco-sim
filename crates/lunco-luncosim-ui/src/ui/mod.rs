@@ -129,7 +129,7 @@ pub fn add_runtime_ui_layer(app: &mut App) {
         bevy_flair::FlairPlugin,
         runtime_exposure::RuntimeUiManifestPlugin,
     ))
-    .init_resource::<lunco_workbench::RuntimeSurfaceLayouts>()
+    .init_resource::<lunco_workbench_state::RuntimeSurfaceLayouts>()
     .init_resource::<runtime_exposure::RuntimeUiRenderState>()
     .init_resource::<runtime_exposure::RuntimeUiPresentationGeneration>()
     .init_resource::<runtime_exposure::RuntimeUiRecordingContract>()
@@ -277,7 +277,7 @@ impl Plugin for LunCoSimUiPlugin {
             .is_some_and(|scene| scene.0.is_some());
         if has_explicit_scene {
             app.insert_resource(
-                lunco_workbench::WorkspaceStateRestorePolicy::with_initial_perspective(
+                lunco_workbench_state::WorkspaceStateRestorePolicy::with_initial_perspective(
                     "sandbox_view",
                 ),
             );

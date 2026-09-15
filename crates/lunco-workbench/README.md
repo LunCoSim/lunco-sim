@@ -44,6 +44,8 @@ also owns scheduling labels and command payloads; this crate owns their
 concrete observers. Reusable icons, text editors, and hierarchy rows live in
 `lunco-workbench-widgets`. This crate owns the concrete egui/egui_dock shell and
 publishes `WorkbenchSnapshot` for consumers that need current layout facts.
+Per-Twin session persistence is provided by `lunco-workbench-state`; this shell
+supplies that package's layout-provider adapter for dock capture and restore.
 The Twin and Files browser is a separate reusable feature package,
 `lunco-workbench-browser`, which consumes the core/widget contracts without
 linking this shell; hosts compose both explicitly when they need those
@@ -155,7 +157,7 @@ cargo run --bin lunica      # Modelica workbench
   transparent so a Bevy 3D scene shows through.
 - **`WorkspaceResource`** — single source of truth for open Twins +
   documents + the active Twin / Document / Perspective.
-- **`WorkspaceStateRestorePolicy`** — a host may provide a one-shot initial
+- **`lunco_workbench_state::WorkspaceStateRestorePolicy`** — a host may provide a one-shot initial
   perspective for an explicit launch request. It takes precedence during the
   first Twin restore and is then consumed; ordinary user perspective changes
   continue to persist per Twin.
@@ -206,8 +208,10 @@ no naming collision.
 ```
 bevy + bevy_egui
    │
-   ├── lunco-storage     ← I/O trait + backends
-   ├── lunco-doc         ← Document trait, DocumentId, DocumentOrigin
+   ├── lunco-workbench-state ← session persistence and codec boundary
+   │       ├── lunco-storage  ← storage-backed state I/O
+   │       ├── lunco-doc      ← document snapshots and origins
+   │       └── lunco-workspace
    ├── lunco-twin        ← Twin struct + manifest + recursion
    ├── lunco-workspace   ← editor session type (headless)
    │

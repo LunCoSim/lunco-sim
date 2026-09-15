@@ -592,7 +592,7 @@ impl Plugin for ModelicaUiPlugin {
         // next launch. The workbench owns the file + lifecycle; this
         // codec just reads/writes Modelica buffers (AGENTS.md §3 + the
         // VS Code `workspaceStorage` model in 11-workbench §9).
-        use lunco_workbench::AppDocumentSessionExt;
+        use lunco_workbench_state::AppDocumentSessionExt;
         app.register_document_session_codec(session_codec::ModelicaSessionCodec);
 
         // Long-lived workspace `ModelicaEngine` mirrored from

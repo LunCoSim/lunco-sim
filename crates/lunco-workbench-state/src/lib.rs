@@ -21,8 +21,8 @@
 //!
 //! Global, app-wide preferences (theme, perf HUD, **default window
 //! geometry**) stay in the shared LunCoSim settings file via `lunco-settings` —
-//! see [`lunco_workbench_window::WindowPersistencePlugin`]. This module owns only the
-//! per-project slice.
+//! see `lunco-workbench-window::WindowPersistencePlugin`. This module owns
+//! only the per-project slice.
 //!
 //! ## Persistence pattern
 //!
@@ -37,10 +37,53 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use lunco_doc::{DocumentId, DocumentOrigin};
+use lunco_workbench_core::PanelId;
 use serde::{Deserialize, Serialize};
 
-use crate::{PanelId, WorkbenchLayout};
 use lunco_workspace::WorkspaceResource;
+
+/// Provides the concrete layout operations needed by workspace-state
+/// persistence without making this package depend on a particular dock shell.
+///
+/// The state package owns the persisted representation and lifecycle. A host
+/// supplies this adapter for its own layout implementation; the default
+/// Workbench registers its adapter when it installs [`WorkspaceStatePlugin`].
+pub trait WorkspaceStateLayoutProvider: Send + Sync + 'static {
+    /// Return the active perspective's stable string id, if one is active.
+    fn active_perspective(&self, world: &World) -> Option<String>;
+    /// Return the focused instance-tab id, if the layout has one focused.
+    fn active_tab_instance(&self, world: &World) -> Option<u64>;
+    /// Return a cheap structural layout revision for change detection.
+    fn dock_layout_hash(&self, world: &World) -> u64;
+    /// Capture every restorable perspective dock and its slot intent.
+    fn capture_perspective_docks(&self, world: &World) -> HashMap<String, PerspectiveDockSnapshot>;
+    /// Activate a persisted perspective id when it is registered by the host.
+    fn activate_perspective_by_str(&self, world: &mut World, id: &str) -> bool;
+    /// Restore persisted dock trees after domain documents have been opened.
+    fn seed_perspective_docks(
+        &self,
+        world: &mut World,
+        docks: &HashMap<String, PerspectiveDockSnapshot>,
+        id_map: &HashMap<(&'static str, u64), u64>,
+    );
+}
+
+#[derive(Resource)]
+struct LayoutProvider(std::sync::Arc<dyn WorkspaceStateLayoutProvider>);
+
+fn with_layout<R>(
+    world: &mut World,
+    f: impl FnOnce(&dyn WorkspaceStateLayoutProvider, &World) -> R,
+) -> R {
+    world.resource_scope(|world, provider: Mut<LayoutProvider>| f(provider.0.as_ref(), world))
+}
+
+fn with_layout_mut<R>(
+    world: &mut World,
+    f: impl FnOnce(&dyn WorkspaceStateLayoutProvider, &mut World) -> R,
+) -> R {
+    world.resource_scope(|world, provider: Mut<LayoutProvider>| f(provider.0.as_ref(), world))
+}
 
 /// Host-supplied presentation intent for the first per-Twin workspace restore.
 ///
@@ -229,12 +272,10 @@ impl AppDocumentSessionExt for App {
 /// Serialized snapshot of one perspective's dock tree + slot intent — the
 /// unit [`WorkspaceState::docks`] stores per perspective so a return visit
 /// after a restart restores the exact tabs + splits + active centre tab the
-/// user left in THAT mode, not its preset. The runtime analogue is
-/// `WorkbenchLayout`'s `PerspectiveDockSlot` (a *live* `DockState<TabId>`);
-/// this DTO keeps the dock as opaque JSON so restore can route it through
-/// the same reconciliation ([`WorkbenchLayout::reconcile_dock`]) as the
-/// active tree, and carries the slot intent so a later rebuild/reset
-/// reproduces the saved layout.
+/// user left in THAT mode, not its preset. The host layout provider supplies
+/// the live dock implementation; this DTO keeps the dock as opaque JSON so
+/// restore can route it through the host's reconciliation path and carries
+/// the slot intent so a later rebuild/reset reproduces the saved layout.
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
 pub struct PerspectiveDockSnapshot {
     /// Revision of the perspective preset that produced this snapshot.
@@ -414,7 +455,7 @@ pub struct WorkspaceState {
     /// string. The active perspective's tree is `docks[perspective]`. Each
     /// perspective keeps its own tabs/splits across restarts while the
     /// underlying documents stay shared. Empty for apps that don't persist
-    /// a dock. The inverse of `WorkbenchLayout::capture_perspective_docks`.
+    /// a dock. The inverse of the registered layout provider's capture method.
     #[serde(default)]
     pub docks: HashMap<String, PerspectiveDockSnapshot>,
     /// User positions of authored draggable runtime UI surfaces, keyed by
@@ -674,37 +715,38 @@ fn session_revision(world: &mut World) -> u64 {
 /// perspective, active Twin) — gates the expensive capture/serialize.
 fn gate_value(world: &mut World) -> u64 {
     let docs = session_revision(world);
-    let persp = world
-        .resource::<WorkbenchLayout>()
-        .active_perspective()
-        .map(|p| fnv1a64(p.as_str().as_bytes()))
-        .unwrap_or(0);
+    let (persp, active, dock) = with_layout(world, |layout, world| {
+        let persp = layout
+            .active_perspective(world)
+            .map(|p| fnv1a64(p.as_bytes()))
+            .unwrap_or(0);
+        // Fold in the focused tab so switching tabs re-fires the gate and
+        // re-saves the active index (the dock focus is the real signal;
+        // `active_document` is the fallback the build also uses).
+        let active = layout
+            .active_tab_instance(world)
+            .or_else(|| {
+                world
+                    .resource::<WorkspaceResource>()
+                    .active_document
+                    .map(|id| id.raw())
+            })
+            .map(|raw| raw.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .unwrap_or(0);
+        // Fold the dock arrangement (split sizes + tab layout + active leaf)
+        // so a drag re-fires the save. Only when 5a is on — otherwise the
+        // dock isn't persisted and folding it would re-save needlessly.
+        // Uses a direct structural hash, NOT JSON: this gate runs every
+        // frame, and serializing the dock to JSON just to hash it churned a
+        // `Value` tree + `String` per frame for no good reason (CQ-209).
+        let dock = if RESTORE_DOCK_ARRANGEMENT {
+            layout.dock_layout_hash(world)
+        } else {
+            0
+        };
+        (persp, active, dock)
+    });
     let twin = fnv1a64(active_twin_root(world).to_string_lossy().as_bytes());
-    // Fold in the focused tab so switching tabs re-fires the gate and
-    // re-saves the active index (the dock focus is the real signal;
-    // `active_document` is the fallback the build also uses).
-    let active = world
-        .resource::<WorkbenchLayout>()
-        .active_tab_instance()
-        .or_else(|| {
-            world
-                .resource::<WorkspaceResource>()
-                .active_document
-                .map(|id| id.raw())
-        })
-        .map(|raw| raw.wrapping_mul(0x9E37_79B9_7F4A_7C15))
-        .unwrap_or(0);
-    // Fold the dock arrangement (split sizes + tab layout + active leaf)
-    // so a drag re-fires the save. Only when 5a is on — otherwise the
-    // dock isn't persisted and folding it would re-save needlessly.
-    // Uses a direct structural hash, NOT JSON: this gate runs every
-    // frame, and serializing the dock to JSON just to hash it churned a
-    // `Value` tree + `String` per frame for no good reason (CQ-209).
-    let dock = if RESTORE_DOCK_ARRANGEMENT {
-        world.resource::<WorkbenchLayout>().dock_layout_hash()
-    } else {
-        0
-    };
     let runtime_surface_layouts = world.resource::<RuntimeSurfaceLayouts>().revision();
     docs.wrapping_add(persp)
         .wrapping_add(twin)
@@ -716,25 +758,21 @@ fn gate_value(world: &mut World) -> u64 {
 /// Build the full hot-exit state from live resources.
 fn build_state(world: &mut World) -> WorkspaceState {
     let twin_root = active_twin_root(world);
-    let perspective = world
-        .resource::<WorkbenchLayout>()
-        .active_perspective()
-        .map(|p| p.as_str().to_string());
+    let perspective = with_layout(world, |layout, world| layout.active_perspective(world));
     let pairs = capture_documents(world);
     // Active tab = index of the document whose live id matches the
     // focused dock tab. The dock's focused leaf is authoritative;
     // `WorkspaceResource.active_document` is a fallback for the rare
     // path that sets it but never focuses a tab. Doc tabs carry their
     // `DocumentId.raw()` as the instance, so this matches `pairs` ids.
-    let active_id = world
-        .resource::<WorkbenchLayout>()
-        .active_tab_instance()
-        .or_else(|| {
+    let active_id = with_layout(world, |layout, world| {
+        layout.active_tab_instance(world).or_else(|| {
             world
                 .resource::<WorkspaceResource>()
                 .active_document
                 .map(|id| id.raw())
-        });
+        })
+    });
     let active_document = active_id.and_then(|aid| pairs.iter().position(|(id, _)| *id == aid));
     // Stamp each snapshot with its live id so the persisted dock tree's
     // tab instances can be remapped onto the restored docs next launch.
@@ -752,9 +790,9 @@ fn build_state(world: &mut World) -> WorkspaceState {
     // the viewport-only rebuild branch) is skipped rather than round-tripping
     // as a layout with missing panels.
     let docks = if RESTORE_DOCK_ARRANGEMENT {
-        world
-            .resource::<WorkbenchLayout>()
-            .capture_perspective_docks()
+        with_layout(world, |layout, world| {
+            layout.capture_perspective_docks(world)
+        })
     } else {
         HashMap::new() // see RESTORE_DOCK_ARRANGEMENT
     };
@@ -831,9 +869,9 @@ fn restore_workspace_state(world: &mut World) {
 
     // Perspective: reconcile against the registered set (unknown → drop).
     if let Some(persp) = initial_perspective.or(state.perspective) {
-        world
-            .resource_mut::<WorkbenchLayout>()
-            .activate_perspective_by_str(&persp);
+        with_layout_mut(world, |layout, world| {
+            layout.activate_perspective_by_str(world, &persp);
+        });
     }
 
     // Open every saved document once — the doc set is GLOBAL (shared
@@ -925,8 +963,9 @@ fn restore_workspace_state(world: &mut World) {
     // tab id) across all trees; the codecs' deferred `OpenTab` then focuses
     // them. See RESTORE_DOCK_ARRANGEMENT.
     if RESTORE_DOCK_ARRANGEMENT {
-        let mut layout = world.resource_mut::<WorkbenchLayout>();
-        layout.seed_perspective_docks(&state.docks, &id_map);
+        with_layout_mut(world, |layout, world| {
+            layout.seed_perspective_docks(world, &state.docks, &id_map);
+        });
     }
 }
 
@@ -993,14 +1032,24 @@ fn persist_workspace_state(world: &mut World) {
     last.json = current;
 }
 
-/// Registers per-Twin workspace-state load/save. Added by
-/// [`WorkbenchPlugin`](crate::WorkbenchPlugin) (which owns
-/// [`WorkbenchLayout`]). Idempotent.
-pub struct WorkspaceStatePlugin;
+/// Registers per-Twin workspace-state load/save for a host layout.
+pub struct WorkspaceStatePlugin {
+    provider: std::sync::Arc<dyn WorkspaceStateLayoutProvider>,
+}
+
+impl WorkspaceStatePlugin {
+    /// Create the state plugin with the host's concrete layout adapter.
+    pub fn new(provider: impl WorkspaceStateLayoutProvider) -> Self {
+        Self {
+            provider: std::sync::Arc::new(provider),
+        }
+    }
+}
 
 impl Plugin for WorkspaceStatePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorkspaceStateLast>()
+        app.insert_resource(LayoutProvider(std::sync::Arc::clone(&self.provider)))
+            .init_resource::<WorkspaceStateLast>()
             .init_resource::<AppliedTwin>()
             .init_resource::<WorkspaceStateRestorePolicy>()
             .init_resource::<RuntimeSurfaceLayouts>()
@@ -1020,11 +1069,6 @@ fn clear_runtime_surface_layouts_on_twin_closed(
     layouts.clear();
 }
 
-// Test fixtures live on disk — the case `clippy.toml`'s allow-list already names
-// but cannot express (cargo has no path-scoped lint config). Tests never run on
-// wasm, so the ban's failure mode is unreachable here. Production `save()` goes
-// through `lunco_storage`, which is the point of the lint.
-#[allow(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1097,21 +1141,19 @@ mod tests {
         assert!(a.to_string_lossy().ends_with(".json"));
     }
 
-    /// End-to-end: save round-trips through disk, and a state file whose
-    /// stored `twin_root` doesn't match the lookup root is rejected
-    /// (hash-collision guard). One test so the `LUNCOSIM_CONFIG` env
-    /// override (read by `lunco_settings::user_config_dir`) isn't raced by siblings.
+    /// End-to-end: save round-trips through the storage boundary, and a state
+    /// file whose stored `twin_root` doesn't match the lookup root is rejected
+    /// (hash-collision guard). One test keeps the process-level test config
+    /// isolation in one place.
     #[test]
     fn save_load_roundtrip_and_collision_guard() {
-        let tmp = std::env::temp_dir().join(format!(
-            "lunco-ws-state-test-{}",
-            fnv1a64(b"roundtrip-fixture")
-        ));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::env::set_var("LUNCOSIM_CONFIG", &tmp);
-
-        let root = tmp.join("proj");
-        std::fs::create_dir_all(&root).unwrap();
+        lunco_settings::isolate_config_dir_for_tests("workbench-state");
+        let root = std::env::temp_dir()
+            .join(format!(
+                "lunco-ws-state-test-{:016x}",
+                fnv1a64(b"roundtrip-fixture")
+            ))
+            .join("proj");
         let state = WorkspaceState {
             schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
             twin_root: root.clone(),
@@ -1151,11 +1193,9 @@ mod tests {
         let path = workspace_state_path(&root);
         let mut bad = state;
         bad.twin_root = PathBuf::from("/totally/different");
-        std::fs::write(&path, serde_json::to_string(&bad).unwrap()).unwrap();
+        lunco_storage::write_file_sync(&path, serde_json::to_string(&bad).unwrap().as_bytes())
+            .unwrap();
         assert!(WorkspaceState::load(&root).is_none(), "collision guard");
-
-        std::env::remove_var("LUNCOSIM_CONFIG");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Per-perspective docks round-trip through serde, and the written form

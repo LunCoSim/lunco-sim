@@ -39,7 +39,7 @@
 //! - **Per-Twin UI state** (active perspective + open-document list) —
 //!   `workspace-state/<hash>.json` in the shared LunCoSim config directory,
 //!   keyed by Twin path,
-//!   VSCode-`workspaceStorage` style. See [`workspace_state`].
+//!   VSCode-`workspaceStorage` style. See [`lunco_workbench_state`].
 //!
 //! ## What's deferred
 //!
@@ -71,6 +71,7 @@ use lunco_workbench_core::{
     PerspectiveLayoutPlan, TabId, UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchPanelRegistry,
     WorkbenchRenderSet, WorkbenchSnapshot,
 };
+use lunco_workbench_state::{PerspectiveDockSnapshot, WorkspaceStateLayoutProvider};
 use lunco_workbench_widgets::{icon_button_sized, text_editor, UiIcon};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -86,18 +87,11 @@ pub mod input_overlay;
 pub mod perf_hud;
 pub mod perspective_command;
 pub mod theme_command;
-pub mod workspace_state;
 
 pub use perspective_help::{
     HelpMouse, HelpPopup, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp,
     PerspectiveHelpPlugin, PerspectiveHelpRegistry,
 };
-pub use workspace_state::{
-    finalize_revision, revision_term, workspace_state_path, AppDocumentSessionExt,
-    DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, RuntimeSurfaceLayout,
-    RuntimeSurfaceLayouts, WorkspaceState, WorkspaceStatePlugin, WorkspaceStateRestorePolicy,
-};
-
 /// Authoritative version and build identity supplied by the host application.
 ///
 /// Workbench is shared by multiple binaries, so its own package metadata is
@@ -756,10 +750,12 @@ impl Plugin for WorkbenchPlugin {
         }
         // Per-Twin (per-project) volatile UI state — active perspective +
         // open-document list — keyed by Twin path, VSCode `workspaceStorage`
-        // style. Needs `WorkbenchLayout`, so it lives here, not in the
-        // headless `WorkspacePlugin`.
-        if !app.is_plugin_added::<workspace_state::WorkspaceStatePlugin>() {
-            app.add_plugins(workspace_state::WorkspaceStatePlugin);
+        // style. Persistence is a reusable capability; this adapter is the
+        // only concrete-shell bridge for dock capture and restore.
+        if !app.is_plugin_added::<lunco_workbench_state::WorkspaceStatePlugin>() {
+            app.add_plugins(lunco_workbench_state::WorkspaceStatePlugin::new(
+                WorkbenchLayoutStateProvider,
+            ));
         }
         // Plugin-driven registry of document kinds. Domain crates
         // (modelica, future julia/usd/sysml/...) register their kinds
@@ -1707,8 +1703,7 @@ impl WorkbenchLayout {
     /// live tree.
     pub(crate) fn capture_perspective_docks(
         &self,
-    ) -> std::collections::HashMap<String, crate::workspace_state::PerspectiveDockSnapshot> {
-        use crate::workspace_state::PerspectiveDockSnapshot;
+    ) -> std::collections::HashMap<String, PerspectiveDockSnapshot> {
         let mut out: std::collections::HashMap<String, PerspectiveDockSnapshot> =
             std::collections::HashMap::new();
         for (id, slot) in &self.dock_cache {
@@ -1776,7 +1771,7 @@ impl WorkbenchLayout {
     /// skipped (a `luncosim`-only perspective loaded into `lunica`).
     pub(crate) fn seed_perspective_docks(
         &mut self,
-        docks: &std::collections::HashMap<String, crate::workspace_state::PerspectiveDockSnapshot>,
+        docks: &std::collections::HashMap<String, PerspectiveDockSnapshot>,
         id_map: &HashMap<(&'static str, u64), u64>,
     ) {
         let active_str = self.active_perspective().map(|p| p.as_str().to_string());
@@ -1843,7 +1838,7 @@ impl WorkbenchLayout {
     /// first visit instead).
     fn reconcile_dock_slot(
         &self,
-        snap: &crate::workspace_state::PerspectiveDockSnapshot,
+        snap: &PerspectiveDockSnapshot,
         id_map: &HashMap<(&'static str, u64), u64>,
     ) -> Option<PerspectiveDockSlot> {
         let dock = self.reconcile_dock(snap.dock.clone(), id_map)?;
@@ -2293,6 +2288,55 @@ impl WorkbenchLayout {
             .chain(center.iter())
             .filter(|id| self.panels.contains_key(id))
             .all(|id| in_dock.contains(id))
+    }
+}
+
+/// Bridges the reusable workspace-state capability to the concrete egui dock.
+///
+/// The provider keeps persisted session logic independent from this shell,
+/// while all dock reconciliation remains owned by `WorkbenchLayout`.
+struct WorkbenchLayoutStateProvider;
+
+impl WorkspaceStateLayoutProvider for WorkbenchLayoutStateProvider {
+    fn active_perspective(&self, world: &World) -> Option<String> {
+        world
+            .resource::<WorkbenchLayout>()
+            .active_perspective()
+            .map(|id| id.as_str().to_string())
+    }
+
+    fn active_tab_instance(&self, world: &World) -> Option<u64> {
+        world.resource::<WorkbenchLayout>().active_tab_instance()
+    }
+
+    fn dock_layout_hash(&self, world: &World) -> u64 {
+        world.resource::<WorkbenchLayout>().dock_layout_hash()
+    }
+
+    fn capture_perspective_docks(
+        &self,
+        world: &World,
+    ) -> std::collections::HashMap<String, lunco_workbench_state::PerspectiveDockSnapshot> {
+        world
+            .resource::<WorkbenchLayout>()
+            .capture_perspective_docks()
+    }
+
+    fn activate_perspective_by_str(&self, world: &mut World, id: &str) -> bool {
+        world
+            .resource_mut::<WorkbenchLayout>()
+            .activate_perspective_by_str(id)
+    }
+
+    fn seed_perspective_docks(
+        &self,
+        world: &mut World,
+        docks: &std::collections::HashMap<String, lunco_workbench_state::PerspectiveDockSnapshot>,
+        id_map: &std::collections::HashMap<(&'static str, u64), u64>,
+    ) {
+        world
+            .resource_mut::<WorkbenchLayout>()
+            .seed_perspective_docks(docks, id_map);
     }
 }
 

@@ -109,7 +109,7 @@ impl Plugin for UsdUiPlugin {
         // per-Twin workspace-state, mirroring Modelica. Restore replays
         // `DocumentRegistry::<UsdDocument>::allocate`, which fires `DocumentOpened`
         // → the stage registration above. See `session_codec`.
-        use lunco_workbench::AppDocumentSessionExt;
+        use lunco_workbench_state::AppDocumentSessionExt;
         app.register_document_session_codec(session_codec::UsdSessionCodec);
 
         // Click-to-open: `.usda` / `.usd` / `.usdc` rows in the Twin browser
