@@ -90,7 +90,7 @@ collection host clips long lists and consumes wheel input at the host boundary;
 Rhai remains the owner of the records, order, and actions.
 
 The `celestial-view` surface also owns the authored lunar map. Rust resolves the
-local avatar's driven vessel through `TheLocalAvatar` and `ControllerLink`,
+local avatar's driven target through `TheLocalAvatar` and `ControlLink`,
 projects that vessel's canonical `SurfacePose.geodetic` into the map's
 equirectangular marker coordinates, and publishes only typed status and marker
 properties. The HUI/Flair template owns the map, grid, marker, and no-fix

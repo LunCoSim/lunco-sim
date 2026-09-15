@@ -1193,7 +1193,7 @@ fn rect_to_logical(rect: PanelRect, scale_factor: f32) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_controller::ControllerLink;
+    use lunco_cosim_core::ControlLink;
     use lunco_render::SceneCamera;
 
     #[test]
@@ -1449,9 +1449,7 @@ mod tests {
             .targets
             .insert(vessel);
 
-        app.world_mut().spawn(ControllerLink {
-            vessel_entity: vessel,
-        });
+        app.world_mut().spawn(ControlLink { target: vessel });
         app.world_mut()
             .resource_mut::<SelectedEntities>()
             .entities

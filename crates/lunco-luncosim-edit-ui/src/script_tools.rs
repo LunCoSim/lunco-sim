@@ -27,8 +27,8 @@
 
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
-use lunco_controller::ControllerLink;
 use lunco_core::{TelemetryEvent, TelemetryValue, TheLocalAvatar};
+use lunco_cosim_core::ControlLink;
 use lunco_scene_selection::SelectedEntities;
 use std::collections::HashSet;
 
@@ -74,7 +74,7 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     q_parents: Query<'w, 's, &'static ChildOf>,
     selected: Res<'w, SelectedEntities>,
     local_avatar: Res<'w, TheLocalAvatar>,
-    q_links: Query<'w, 's, &'static ControllerLink>,
+    q_links: Query<'w, 's, &'static ControlLink>,
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
     asset_server: Res<'w, AssetServer>,
 }
@@ -168,7 +168,7 @@ fn scene_tool_context(
     q_parents: &Query<&ChildOf>,
     selected: &SelectedEntities,
     local_avatar: &TheLocalAvatar,
-    q_links: &Query<&ControllerLink>,
+    q_links: &Query<&ControlLink>,
     backed: &lunco_usd_bevy_twin::DocBackedTwinScenes,
     asset_server: &AssetServer,
 ) -> TelemetryValue {
@@ -199,7 +199,7 @@ fn scene_tool_context(
     let selected_entity = selected.primary();
     let controlled_entity = local_avatar
         .0
-        .and_then(|avatar| q_links.get(avatar).ok().map(|link| link.vessel_entity));
+        .and_then(|avatar| q_links.get(avatar).ok().map(|link| link.target));
     let context_prim = controlled_entity
         .and_then(|entity| q_prim.get(entity).ok())
         .or_else(|| selected_entity.and_then(|entity| q_prim.get(entity).ok()))

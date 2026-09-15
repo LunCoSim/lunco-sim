@@ -10,7 +10,8 @@
 described in §1–§5 remain an aspirational ontology and are not required
 components. The reusable implementation is split across four owners:
 `lunco-usd-bevy-camera` decodes standard USD cameras and camera roles,
-`lunco-avatar-core` carries render-free rig contracts, `lunco-scene-camera`
+`lunco-camera-core` carries reusable render-free rig contracts,
+`lunco-avatar-core` carries avatar lifecycle/command contracts, `lunco-scene-camera`
 exposes script/API camera transactions, and `lunco-avatar` is the specialized
 owner of raw input translation plus fast interactive pose solvers. Camera
 selection and the viewport follow the single-authority design in §6.
@@ -38,7 +39,7 @@ LunCoSim decouples human interaction from physical execution using five distinct
 > still a design vocabulary, not a reason to add a marker to `lunco-core`.
 > Today the concrete rig components (`SpringArmCamera`, `OrbitCamera`,
 > `FreeFlightCamera`, `SurfaceCamera`) are backend-neutral contracts in
-> `lunco-avatar-core`; `lunco-avatar` supplies their fast solvers. Standard
+> `lunco-camera-core`; `lunco-avatar` supplies their fast solvers. Standard
 > USD projection, mounted cameras, camera paths, and selection live in
 > `lunco-usd-bevy-camera`. `lunco-render-bevy` binds render intent to a
 > `Camera3d`, while `lunco-render` remains render-pipeline-free.
@@ -99,10 +100,10 @@ over automated camera ownership:
 ---
 
 ## 5. Headless Compatibility
-The simulation core (`lunco-celestial`, `lunco-core`) has NO dependency on the
-camera solvers or Bevy's rendering pipeline. It exposes scene facts, spatial
-poses, and typed semantic/control values; it does not read keyboard, mouse, or
-gamepad state.
+The simulation core (`lunco-celestial`, `lunco-core`) exposes scene facts,
+spatial poses, and typed semantic/control values. Camera solvers and device
+translation are supplied by the specialized avatar runtime, while Bevy's
+rendering pipeline is attached by the render adapter.
 - **Bots and Modelica** can produce continuous pose/aim/math values through
   authored ports or state, while a camera adapter consumes those values.
 - **Server** instances run the full spatial logic without a GPU.
@@ -198,8 +199,9 @@ hierarchy. A nested camera with `cameraPose =
 
 The *behavior contracts* of the free/possession cameras — `SpringArmCamera`,
 `OrbitCamera`, `FreeFlightCamera`, `SurfaceCamera` — live in
-`lunco-avatar-core`; their fast BigSpace-safe solvers and transitions live in
-`lunco-avatar`. The viewport reconciler decides *which* camera is shown; a rig
+`lunco-camera-core`; their fast BigSpace-safe solvers and transitions live in
+`lunco-avatar`. Avatar lifecycle and possession commands remain in
+`lunco-avatar-core`. The viewport reconciler decides *which* camera is shown; a rig
 decides *how* its pose is solved. They compose: possession changes the avatar
 camera's rig without changing which camera the viewport shows.
 
@@ -280,12 +282,28 @@ joins the semantic edge to the authored control binding, selected
 `SignalRegistry` measurements; it is diagnostic composition, not another
 control or telemetry path.
 
-Possession and release are single-owner transactions in `lunco-avatar`: the command
-validates the writable endpoint and requested local binding before changing the
-Twin-scoped `SessionRegistry` or `ControllerLink`. A handoff releases all prior claims
-for the session except the selected target, hard-stops every released vessel, and then
-commits the new link. Release performs the same hard stop before returning the avatar to
-free flight; wire-applied commands update authority without binding a remote avatar to the
+Control authority has two independent layers. The generic session layer's
+`SessionRegistry` answers *which session controls which stable target id*; the
+backend-neutral `lunco_cosim_core::ControlLink` answers *which local producer
+projects semantic input onto which entity*. Neither layer knows what a vessel,
+avatar, or camera is. A producer can therefore be an avatar, an autopilot, a
+remote-control adapter, or another specialized controller.
+
+`PossessVessel` is the avatar-level composition of those primitives: its command
+validates the target's writable input surface, asks the session authority to
+commit the claim, installs the local `ControlLink`, and optionally performs the
+camera transaction. `FocusTarget` and `FollowTarget` are likewise reachable
+high-level avatar camera commands; Rhai selects when and which target to request,
+while Rust enforces the local-avatar boundary and the BigSpace-safe pose update.
+The generic command/value surface remains `SetPorts` for a controller that does
+not need an avatar camera. A future generic claim command must reuse the same
+`SessionRegistry` transaction and emit the same release/hard-stop transition;
+it must not become a second ownership table.
+
+A possession handoff releases all prior claims for the session except the selected
+target, hard-stops every released vessel, and then commits the new link. Release
+performs the same hard stop before returning the avatar to free flight;
+wire-applied commands update authority without binding a remote avatar to the
 local camera.
 
 Free-flight and surface movement are kinematic camera motion and use the shared

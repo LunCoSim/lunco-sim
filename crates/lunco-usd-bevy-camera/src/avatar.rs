@@ -3,7 +3,7 @@
 //! Standard `UsdGeomCamera` owns photographic and projection facts. The
 //! `LunCoAvatarAPI` adds the behavior parameters that USD has no standard
 //! vocabulary for. This module decodes that authored contract into the
-//! renderer-independent [`lunco_avatar_core::camera::AvatarCameraIntent`].
+//! renderer-independent [`lunco_camera_core::CameraRigIntent`].
 //! Runtime realization remains in `lunco-avatar`; scenario policy remains in
 //! Rhai.
 
@@ -11,19 +11,17 @@ use bevy::prelude::Transform;
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::camera::read_camera_exposure_ev100;
-use lunco_avatar_core::camera::{
-    AvatarCameraIntent, AvatarCameraMode, AvatarFlightSettings, FollowAttitude,
-};
+use lunco_camera_core::{CameraRigIntent, CameraRigMode, FollowAttitude, FreeFlightSettings};
 use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64, UsdReadObject};
 
 /// An authored avatar camera contract is malformed at the named USD boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AvatarCameraIntentError {
+pub struct CameraRigIntentError {
     code: &'static str,
     message: String,
 }
 
-impl AvatarCameraIntentError {
+impl CameraRigIntentError {
     /// Stable diagnostic code for the authored contract failure.
     pub fn code(&self) -> &'static str {
         self.code
@@ -35,8 +33,8 @@ impl AvatarCameraIntentError {
     }
 }
 
-fn invalid(code: &'static str, message: impl Into<String>) -> AvatarCameraIntentError {
-    AvatarCameraIntentError {
+fn invalid(code: &'static str, message: impl Into<String>) -> CameraRigIntentError {
+    CameraRigIntentError {
         code,
         message: message.into(),
     }
@@ -45,14 +43,14 @@ fn invalid(code: &'static str, message: impl Into<String>) -> AvatarCameraIntent
 /// Read the authored avatar camera contract from one composed USD prim.
 ///
 /// `Ok(None)` means that the prim is not an avatar. Missing values use the
-/// defaults declared by [`AvatarCameraIntent::default`], which mirror the
+/// defaults declared by [`CameraRigIntent::default`], which mirror the
 /// registered `LunCoAvatarAPI` schema fallbacks. An authored value with the
 /// wrong type or range returns an error; it is never replaced by a Rust guess.
 pub fn read_avatar_camera_intent(
     reader: &dyn UsdReadObject,
     path: &SdfPath,
     existing_transform: &Transform,
-) -> Result<Option<AvatarCameraIntent>, AvatarCameraIntentError> {
+) -> Result<Option<CameraRigIntent>, CameraRigIntentError> {
     let is_avatar = read_authored_bool_strict(reader, path, "lunco:avatar").map_err(|_| {
         invalid(
             "avatar-attribute",
@@ -63,7 +61,7 @@ pub fn read_avatar_camera_intent(
         return Ok(None);
     }
 
-    let defaults = AvatarCameraIntent::default();
+    let defaults = CameraRigIntent::default();
     let mode = read_camera_mode(reader, path, defaults.mode)?;
     let mut yaw = read_camera_real(reader, path, "lunco:cameraYaw", defaults.yaw, "camera-yaw")?;
     let mut pitch = read_camera_real(
@@ -135,7 +133,7 @@ pub fn read_avatar_camera_intent(
         )
     })?;
 
-    Ok(Some(AvatarCameraIntent {
+    Ok(Some(CameraRigIntent {
         mode,
         yaw,
         pitch,
@@ -152,8 +150,8 @@ pub fn read_avatar_camera_intent(
 fn read_camera_mode(
     reader: &dyn UsdReadObject,
     path: &SdfPath,
-    default: AvatarCameraMode,
-) -> Result<AvatarCameraMode, AvatarCameraIntentError> {
+    default: CameraRigMode,
+) -> Result<CameraRigMode, CameraRigIntentError> {
     let Some(value) = reader.attr_value(path, "lunco:cameraMode") else {
         if reader.has_authored_attribute(path, "lunco:cameraMode") {
             return Err(invalid(
@@ -170,9 +168,9 @@ fn read_camera_mode(
         ));
     };
     match value.as_str() {
-        "freeflight" => Ok(AvatarCameraMode::FreeFlight),
-        "orbit" => Ok(AvatarCameraMode::Orbit),
-        "springarm" => Ok(AvatarCameraMode::SpringArm),
+        "freeflight" => Ok(CameraRigMode::FreeFlight),
+        "orbit" => Ok(CameraRigMode::Orbit),
+        "springarm" => Ok(CameraRigMode::SpringArm),
         value => Err(invalid(
             "camera-mode",
             format!(
@@ -188,7 +186,7 @@ fn read_camera_real(
     name: &str,
     default: f32,
     code: &'static str,
-) -> Result<f32, AvatarCameraIntentError> {
+) -> Result<f32, CameraRigIntentError> {
     match reader.real_f32(path, name) {
         Some(value) if value.is_finite() => Ok(value),
         Some(_) => Err(invalid(code, format!("authored {name} must be finite"))),
@@ -206,7 +204,7 @@ fn read_positive_real(
     name: &str,
     default: f64,
     code: &'static str,
-) -> Result<f64, AvatarCameraIntentError> {
+) -> Result<f64, CameraRigIntentError> {
     match reader.real(path, name) {
         Some(value) if value.is_finite() && value > 0.0 => Ok(value),
         Some(value) => Err(invalid(
@@ -227,7 +225,7 @@ fn read_camera_bool(
     name: &str,
     default: bool,
     code: &'static str,
-) -> Result<bool, AvatarCameraIntentError> {
+) -> Result<bool, CameraRigIntentError> {
     match read_authored_bool_strict(reader, path, name) {
         Ok(Some(value)) => Ok(value),
         Ok(None) => Ok(default),
@@ -239,7 +237,7 @@ fn read_attitude(
     reader: &dyn UsdReadObject,
     path: &SdfPath,
     default: FollowAttitude,
-) -> Result<FollowAttitude, AvatarCameraIntentError> {
+) -> Result<FollowAttitude, CameraRigIntentError> {
     let Some(value) = reader.attr_value(path, "lunco:camera:springArmAttitude") else {
         if reader.has_authored_attribute(path, "lunco:camera:springArmAttitude") {
             return Err(invalid(
@@ -269,8 +267,8 @@ fn read_attitude(
 fn read_flight_settings(
     reader: &dyn UsdReadObject,
     path: &SdfPath,
-    defaults: AvatarFlightSettings,
-) -> Result<AvatarFlightSettings, AvatarCameraIntentError> {
+    defaults: FreeFlightSettings,
+) -> Result<FreeFlightSettings, CameraRigIntentError> {
     let speed_mps = read_flight_real(reader, path, "lunco:avatar:flightSpeed", defaults.speed_mps)?;
     let boost_multiplier = read_flight_real(
         reader,
@@ -315,7 +313,7 @@ fn read_flight_settings(
             "lunco:avatar:inputDeadzone must be finite and within [0, 1)",
         ));
     }
-    Ok(AvatarFlightSettings {
+    Ok(FreeFlightSettings {
         speed_mps,
         boost_multiplier,
         boost_threshold,
@@ -328,7 +326,7 @@ fn read_flight_real(
     path: &SdfPath,
     name: &str,
     default: f64,
-) -> Result<f64, AvatarCameraIntentError> {
+) -> Result<f64, CameraRigIntentError> {
     match reader.real(path, name) {
         Some(value) if value.is_finite() => Ok(value),
         Some(_) => Err(invalid(
@@ -349,7 +347,7 @@ mod tests {
     use lunco_usd_bevy_core::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
 
-    fn read(source: &str) -> Result<Option<AvatarCameraIntent>, AvatarCameraIntentError> {
+    fn read(source: &str) -> Result<Option<CameraRigIntent>, CameraRigIntentError> {
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("avatar.usda", source))
             .expect("avatar fixture composes");
         let path = SdfPath::new("/Avatar").expect("avatar path");
@@ -373,7 +371,7 @@ def Xform "Avatar" (
         .expect("avatar intent reads")
         .expect("avatar is present");
 
-        assert_eq!(intent.mode, AvatarCameraMode::SpringArm);
+        assert_eq!(intent.mode, CameraRigMode::SpringArm);
         assert_eq!(intent.spring_arm_distance, 9.0);
         assert_eq!(intent.spring_arm_attitude, FollowAttitude::Heading);
     }

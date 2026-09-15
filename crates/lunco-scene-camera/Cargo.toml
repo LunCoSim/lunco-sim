@@ -10,6 +10,7 @@ bevy = { workspace = true }
 big_space = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-core = { path = "../lunco-core" }

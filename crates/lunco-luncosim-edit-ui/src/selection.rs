@@ -13,8 +13,8 @@ use bevy::camera::primitives::Aabb;
 use bevy::math::primitives::Cuboid;
 use bevy::math::Isometry3d;
 
-use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
+use lunco_cosim_core::ControlLink;
 use lunco_luncosim_edit_core::SpawnState;
 use lunco_scene_selection::{
     SelectEntityTarget, SelectedEntities, SelectionIntent, SelectionTarget,
@@ -359,22 +359,17 @@ pub(crate) fn clear_selection(
 /// Releasing control leaves the last vessel focused, just as it leaves the
 /// camera at its current view.
 pub fn select_possessed_vessel(
-    q_avatar: Query<Ref<ControllerLink>, (With<Avatar>, With<LocalAvatar>)>,
+    q_avatar: Query<Ref<ControlLink>, (With<Avatar>, With<LocalAvatar>)>,
     q_old: Query<Entity, With<Selected>>,
     mut selected: ResMut<SelectedEntities>,
     mut inspector_target: ResMut<SelectionTarget>,
     mut commands: Commands,
 ) {
     for link in q_avatar.iter() {
-        if !link.is_changed() || selected.primary() == Some(link.vessel_entity) {
+        if !link.is_changed() || selected.primary() == Some(link.target) {
             continue;
         }
-        apply_focus(
-            &mut commands,
-            &mut selected,
-            q_old.iter(),
-            link.vessel_entity,
-        );
+        apply_focus(&mut commands, &mut selected, q_old.iter(), link.target);
         inspector_target.part = None;
     }
 }
@@ -1208,13 +1203,8 @@ mod tests {
             .entities
             .push(previously_selected);
         let vessel = app.world_mut().spawn_empty().id();
-        app.world_mut().spawn((
-            Avatar,
-            LocalAvatar,
-            ControllerLink {
-                vessel_entity: vessel,
-            },
-        ));
+        app.world_mut()
+            .spawn((Avatar, LocalAvatar, ControlLink { target: vessel }));
 
         app.update();
 

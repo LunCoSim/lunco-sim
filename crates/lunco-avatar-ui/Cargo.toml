@@ -9,10 +9,11 @@ description = "Egui presentation for the render-free LunCoSim avatar runtime"
 bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"] }
 bevy_egui = { workspace = true }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
-lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-theme = { path = "../lunco-theme" }

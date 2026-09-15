@@ -11,6 +11,7 @@ members = [
     "crates/lunco-controller",
     "crates/lunco-avatar",
     "crates/lunco-avatar-core",
+    "crates/lunco-camera-core",
     "crates/lunco-avatar-ui",
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-core",

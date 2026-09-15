@@ -7159,6 +7159,7 @@ dependencies = [
  "big_space",
  "leafwing-input-manager",
  "lunco-avatar-core",
+ "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-controller",
@@ -7183,9 +7184,7 @@ name = "lunco-avatar-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
- "big_space",
  "lunco-core",
- "lunco-environment",
 ]
 
 [[package]]
@@ -7195,12 +7194,13 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "lunco-avatar",
- "lunco-avatar-core",
+ "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
+ "lunco-cosim-core",
  "lunco-theme",
  "lunco-workbench-core",
  "lunco-workspace",
@@ -7209,6 +7209,15 @@ dependencies = [
 [[package]]
 name = "lunco-behavior"
 version = "0.1.0"
+
+[[package]]
+name = "lunco-camera-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "big_space",
+ "lunco-environment",
+]
 
 [[package]]
 name = "lunco-canvas"
@@ -7647,6 +7656,7 @@ dependencies = [
  "big_space",
  "lunco-api",
  "lunco-avatar-core",
+ "lunco-camera-core",
  "lunco-canvas",
  "lunco-celestial-spatial",
  "lunco-controller",
@@ -7703,7 +7713,6 @@ dependencies = [
  "big_space",
  "lunco-celestial",
  "lunco-celestial-spatial",
- "lunco-controller",
  "lunco-core",
  "lunco-cosim-core",
  "lunco-hooks",
@@ -8066,6 +8075,7 @@ dependencies = [
  "lunco-assets",
  "lunco-assets-core",
  "lunco-avatar-core",
+ "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-core",
@@ -8223,6 +8233,7 @@ dependencies = [
  "big_space",
  "lunco-api",
  "lunco-avatar-core",
+ "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-core",
@@ -8654,6 +8665,7 @@ dependencies = [
  "bevy_egui",
  "egui_plot",
  "lunco-avatar-core",
+ "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-controller",
@@ -8824,7 +8836,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "big_space",
- "lunco-avatar-core",
+ "lunco-camera-core",
  "lunco-core",
  "lunco-render",
  "lunco-spatial",

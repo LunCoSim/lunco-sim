@@ -1,0 +1,14 @@
+[package]
+name = "lunco-camera-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Backend-neutral camera rig contracts for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+big_space = { workspace = true }
+lunco-environment = { path = "../lunco-environment" }
+
+[lints]
+workspace = true

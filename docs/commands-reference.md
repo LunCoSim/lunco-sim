@@ -1290,7 +1290,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Follow a target with the chase camera, without taking control.
 
  Inserts `SpringArmCamera` so the camera tracks the target's heading,
- but omits `ControllerLink` and vessel input bindings — keyboard input
+ but omits `ControlLink` and target input bindings — keyboard input
  stays inert toward the target. Use this for non-vessel objects (balloons,
  props, observation targets) where the player wants to ride along but
  not drive. `PossessVessel` is conceptually `FollowTarget` plus a
@@ -1320,7 +1320,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Possess a vessel, taking direct control of it.
 
  Switches the avatar to a vessel-locked camera mode and inserts a
- `ControllerLink` so that input events are forwarded to the vessel.
+ `ControlLink` so that semantic input events are forwarded to the target.
 
 - *defined in:* `crates/lunco-avatar-core/src/commands.rs`
 
@@ -1334,7 +1334,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Release possession of the currently controlled vessel.
 
- Removes the `ControllerLink` and returns the avatar to free-flight mode.
+ Removes the `ControlLink` and returns the avatar to free-flight mode.
  Keeps the camera at its current position — no jarring teleport.
 
 - *defined in:* `crates/lunco-avatar-core/src/commands.rs`
@@ -1349,7 +1349,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  mode and BigSpace frame from which that view was entered.
 
  Unlike [`ReleaseVessel`], this is a presentation transition: it does not
- release control authority or remove a `ControllerLink`.
+ release control authority or remove a `ControlLink`.
 
 - *defined in:* `crates/lunco-avatar-core/src/commands.rs`
 

@@ -8,11 +8,12 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAp
 use lunco_avatar::RoverNameTagSettings;
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, LocalGravityField, SurfacePoseQuery};
-use lunco_controller::{resolved_input_label, ControllerLink, InputBindingsSettings};
+use lunco_controller::{resolved_input_label, InputBindingsSettings};
 use lunco_core::{Avatar, CameraFollow, ControlBinding, GlobalEntityId, LocalAvatar, UserIntent};
 use lunco_core_session::{SessionProfiles, SessionRegistry};
+use lunco_cosim_core::ControlLink;
 
-use lunco_avatar_core::camera::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
+use lunco_camera_core::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 
 /// Register the avatar's Twin-scoped safety policy in the existing Settings
 /// menu. The movement system and this row call the same policy reader, so the
@@ -153,7 +154,7 @@ pub struct AvatarStatusView {
     mode_label: String,
     /// Secondary mode detail, e.g. `"Distance: 12.0 m"` (empty if none).
     mode_detail: String,
-    /// The vessel the local avatar is currently controlling (`ControllerLink`
+    /// The vessel the local avatar is currently controlling (`ControlLink`
     /// target), or `None` when free-flying. Drives the "Driving: <vessel>" /
     /// "Free flight" readout.
     possessing_vessel: Option<Entity>,
@@ -212,9 +213,9 @@ impl Panel for AvatarStatusPanel {
         };
 
         // ── Possession readout ──
-        // Step 6: surface "Driving: <vessel>" when the avatar's `ControllerLink`
+        // Step 6: surface "Driving: <vessel>" when the avatar's `ControlLink`
         // targets a vessel, else "Free flight". The producer
-        // (`populate_avatar_status_view`) resolves `ControllerLink` → label.
+        // (`populate_avatar_status_view`) resolves `ControlLink` → label.
         if let Some(_vessel) = view.possessing_vessel {
             ui.horizontal(|ui| {
                 ui.label("Driving:");
@@ -347,7 +348,7 @@ pub fn populate_avatar_status_view(
     orbit: Query<&OrbitCamera>,
     free_flight: Query<&FreeFlightCamera>,
     surface: Query<&SurfaceCamera>,
-    q_link: Query<&ControllerLink>,
+    q_link: Query<&ControlLink>,
     q_name: Query<&Name>,
     q_gid: Query<&GlobalEntityId>,
 ) {
@@ -356,12 +357,12 @@ pub fn populate_avatar_status_view(
     view.avatar = avatar_ent;
 
     // ── Possession readout ──
-    // Resolve the avatar's `ControllerLink` target (the vessel it's driving) and
+    // Resolve the avatar's `ControlLink` target (the target it's driving) and
     // its display label. `None` → free flight.
     (view.possessing_vessel, view.possessed_label) = match avatar_ent {
         Some(av) => match q_link.get(av) {
             Ok(link) => {
-                let v = link.vessel_entity;
+                let v = link.target;
                 let label = q_name
                     .get(v)
                     .ok()

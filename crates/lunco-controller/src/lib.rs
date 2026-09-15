@@ -26,7 +26,7 @@
 //! * [`drive_self_drivers`] — the **free avatar**, in
 //!   [`lunco_time::InteractionSchedule`]. Kinematic, client-local, never predicted, so
 //!   it belongs on the unpausable presentation step: pausing the simulation must not
-//!   paralyse the user. Possessing a vessel adds a [`ControllerLink`], which moves that
+//!   paralyse the user. A control producer adds a [`ControlLink`], which moves that
 //!   entity to the first system by query, not by a flag.
 //!
 //! Both share stage 1 ([`intent_held`]) and stage 2 ([`ControlBinding::resolve`]).
@@ -38,6 +38,7 @@ use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 use lunco_core::{on_command, register_commands, Ack, Command, OpId, UserIntent};
+use lunco_cosim_core::ControlLink;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -377,7 +378,7 @@ impl Plugin for LunCoControllerPlugin {
         // construction*, not a `run_if(paused)` twin or a raw `Time<Real>` bypass.
         //
         // Pause still means what it says for the SIMULATION: a possessed vessel gets
-        // a `ControllerLink`, which excludes it from `q_self`, so its input keeps
+        // a `ControlLink`, which excludes it from `q_self`, so its input keeps
         // riding `FixedUpdate` and a paused rover stays put.
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
@@ -394,14 +395,6 @@ impl Plugin for LunCoControllerPlugin {
         // command was produced.
         app.add_observer(record_control_input);
     }
-}
-
-/// A marker component mapping the controller Entity directly
-/// to the Space System root Entity (the focus of the control).
-#[derive(Component)]
-pub struct ControllerLink {
-    /// The entity representing the vehicle or vessel to be controlled.
-    pub vessel_entity: Entity,
 }
 
 /// The per-vessel **intent → port** binding (stage 2) is [`lunco_core::ControlBinding`]
@@ -454,7 +447,7 @@ fn drive_from_bindings(
     // substrate still runs ungated.
     rbac: Option<Res<lunco_core_session::SessionRbac>>,
     control_paths: Option<Res<lunco_core_session::ControlPathRegistry>>,
-    q_ctrl: Query<(&ControllerLink, &ActionState<UserIntent>)>,
+    q_ctrl: Query<(&ControlLink, &ActionState<UserIntent>)>,
     q_binding: Query<&ControlBinding>,
     q_vessel: Query<(
         &lunco_core::GlobalEntityId,
@@ -500,13 +493,13 @@ fn drive_from_bindings(
         // stage 2 maps this vessel's active intents → summed, clamped port writes.
         // The binding is authored ON THE VESSEL as a USD `Controls` child scope
         // (referencing a shared profile) — skip a vessel that carries none.
-        let Ok(binding) = q_binding.get(link.vessel_entity) else {
+        let Ok(binding) = q_binding.get(link.target) else {
             continue;
         };
 
         // The vessel's id (gid + is-it-locally-owned) — used both by the ownership
         // yield below and the client seq bookkeeping.
-        let vessel_id = q_vessel.get(link.vessel_entity).ok();
+        let vessel_id = q_vessel.get(link.target).ok();
 
         // Spec 034 yield: if this vessel is owned by a session OTHER than ours, that
         // actor (a remote player, or an autopilot's `AiAgent` session) is the single
@@ -558,7 +551,7 @@ fn drive_from_bindings(
         }
 
         emit_intent_edges(
-            link.vessel_entity,
+            link.target,
             binding,
             intents,
             sim_intents,
@@ -567,7 +560,7 @@ fn drive_from_bindings(
             &mut commands,
         );
 
-        let writes = binding.resolve(|intent| held(link.vessel_entity, intent, intents));
+        let writes = binding.resolve(|intent| held(link.target, intent, intents));
 
         // Owned + predicted on a client → assign a real seq (buffered for replay
         // by `record_control_input`). seq MUST be stamped HERE (the origin)
@@ -588,9 +581,7 @@ fn drive_from_bindings(
         // writing immediately: the human always preempts a script mid-drive.
         //
         let active = writes.iter().any(|(_, v)| v.abs() > f64::EPSILON);
-        let prev = was_active
-            .insert(link.vessel_entity, active)
-            .unwrap_or(false);
+        let prev = was_active.insert(link.target, active).unwrap_or(false);
         // An idle client does not own the control surface merely because it is
         // predicted. The active→idle edge above emits one real zero batch so
         // the actuator stops; subsequent idle ticks are silent and cannot
@@ -610,7 +601,7 @@ fn drive_from_bindings(
         };
 
         commands.trigger(lunco_cosim_core::commands::SetPorts {
-            target: link.vessel_entity,
+            target: link.target,
             writes,
             seq,
             tick: tick.0,
@@ -711,11 +702,11 @@ fn emit_intent_edges(
 /// here reads a `dt`: the binding maps held intents to setpoints, and the consumer
 /// (`apply_fly`) integrates them on the interaction clock.
 ///
-/// Disjoint from [`drive_from_bindings`]'s query by `Without<ControllerLink>`: an
+/// Disjoint from [`drive_from_bindings`]'s query by `Without<ControlLink>`: an
 /// avatar that possesses a vessel is no longer a self-driver, so its input goes back
 /// on the sim tick and freezes with the sim, as pause is meant to.
 fn drive_self_drivers(
-    q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControllerLink>>,
+    q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControlLink>>,
     egui_focus: Option<Res<lunco_core::EguiFocus>>,
     sim_intents: Option<Res<SimulatedIntents>>,
     mut edge_state: Local<std::collections::HashMap<(Entity, UserIntent), bool>>,
@@ -1155,12 +1146,13 @@ mod input_ack_tests {
     }
 
     fn drive(app: &mut App, target: Entity, seq: u32, steer: f64) {
-        app.world_mut().trigger(lunco_cosim_core::commands::SetPorts {
-            target,
-            writes: vec![("steer".to_string(), steer)],
-            seq,
-            tick: seq as u64,
-        });
+        app.world_mut()
+            .trigger(lunco_cosim_core::commands::SetPorts {
+                target,
+                writes: vec![("steer".to_string(), steer)],
+                seq,
+                tick: seq as u64,
+            });
         app.update();
     }
 
@@ -1801,7 +1793,7 @@ mod tests {
 
     /// Possession redirects the shared keyboard action state to the authored
     /// vessel binding. This is the complete desktop control seam: a physical
-    /// `KeyW` updates the avatar's leafwing state, `ControllerLink` selects the
+    /// `KeyW` updates the producer's input state, `ControlLink` selects the
     /// vessel, and `ControlBinding` produces its named command port.
     #[test]
     fn possessed_avatar_keyboard_drives_the_authored_vessel() {
@@ -1836,9 +1828,7 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                ControllerLink {
-                    vessel_entity: vessel,
-                },
+                ControlLink { target: vessel },
                 ActionState::<UserIntent>::default(),
                 InputBindingsSettings::default().input_map().unwrap(),
             ))
@@ -2088,7 +2078,7 @@ mod tests {
             },
         );
 
-        // A free avatar: its own input + its own binding, no `ControllerLink`.
+        // A free producer: its own input + its own binding, no `ControlLink`.
         let mut state = ActionState::<UserIntent>::default();
         state.press(&UserIntent::MoveForward);
         app.world_mut().spawn((

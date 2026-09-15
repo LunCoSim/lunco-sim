@@ -280,7 +280,7 @@ stable cross-process identity, derived as follows:
 conflate them.
 
 **Design rule that still holds: `GlobalEntityId` is a component, never a field type.**
-Domain code uses `Entity` everywhere (queries, `Wire.source`, `ControllerLink.vessel_entity`,
+Domain code uses `Entity` everywhere (queries, `Wire.source`, `ControlLink.target`,
 `ChildOf`); the networking layer reads `GlobalEntityId` only when crossing boundaries
 (serialize, command resolution, edit logging). Putting `GlobalEntityId` in component fields
 would force a HashMap lookup into every system iteration — Bevy needs `Entity` for component

@@ -268,7 +268,7 @@ impl SessionRegistry {
     }
 
     /// Free every entity a dropped session held; returns the freed gids so the
-    /// caller can release the corresponding `ControllerLink`s (G5).
+    /// caller can release the corresponding `ControlLink`s (G5).
     pub fn release_session(&mut self, session: SessionId) -> Vec<u64> {
         let freed: Vec<u64> = self
             .owners
@@ -1235,7 +1235,7 @@ pub fn authorize_policy(
 ///
 /// The possession command owns both semantic binding and authority mutation. It asks
 /// this predicate before claiming a vessel, so a policy-approved takeover cannot leave
-/// the authority table and the local `ControllerLink` in different states.
+/// the authority table and the local `ControlLink` in different states.
 ///
 /// Deliberately permissive on an *unknown* vessel (no owner recorded): a client's table is
 /// a replicated copy that can lag its own claim, and single-player's is empty until the

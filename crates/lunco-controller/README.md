@@ -26,7 +26,7 @@ The controller acts as the **Human-Machine Interface (HMI)** layer, decoupling r
 lunco-controller/
   ├── InputBindingsSettings — persisted semantic key/pointer map
   ├── UserIntent            — shared abstract action vocabulary
-  ├── ControllerLink    — Component linking a controller entity to a vessel
+  ├── ControlLink       — Component from lunco-cosim-core linking a producer to a target
   └── lib.rs             — translation, authority, and input projection
 ```
 
@@ -39,7 +39,7 @@ app.add_plugins(LunCoControllerPlugin);
 commands.spawn((
     ActionState::<UserIntent>::default(),
     InputBindingsSettings::default().input_map().expect("bundled keymap"),
-    ControllerLink { vessel_entity: rover_id },
+    ControlLink { target: rover_id },
 ));
 ```
 

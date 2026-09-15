@@ -1,13 +1,17 @@
-//! Camera behavior components shared by avatar systems and scene consumers.
+//! Backend-neutral camera rig contracts shared by avatar and scene systems.
+//!
+//! This crate contains camera state and pose contracts only. Specialized
+//! runtimes such as `lunco-avatar` translate interaction into these contracts
+//! and provide fast pose solvers; authored scene policy remains in USD/Rhai.
 
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_environment::GravityBody;
 
-/// Authored flight-control parameters for an avatar embodiment.
+/// Authored parameters for a free-flight camera rig.
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component)]
-pub struct AvatarFlightSettings {
+pub struct FreeFlightSettings {
     /// Straight-line free-flight speed in stage metres per second.
     pub speed_mps: f64,
     /// Multiplier applied while the authored boost command is active.
@@ -18,7 +22,7 @@ pub struct AvatarFlightSettings {
     pub input_deadzone: f64,
 }
 
-impl Default for AvatarFlightSettings {
+impl Default for FreeFlightSettings {
     fn default() -> Self {
         Self {
             speed_mps: 23.1,
@@ -29,13 +33,13 @@ impl Default for AvatarFlightSettings {
     }
 }
 
-/// Initial camera behavior authored for an avatar in USD.
+/// Initial camera behavior authored for a camera rig in USD.
 ///
 /// This is a data contract between the USD projection and the generic avatar
 /// movement runtime. It deliberately contains no scenario policy: Rhai may
 /// select, focus, or replace the active camera through the command surface.
 #[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum AvatarCameraMode {
+pub enum CameraRigMode {
     /// Move independently in the active spatial frame.
     #[default]
     FreeFlight,
@@ -183,7 +187,7 @@ pub enum FollowAttitude {
     FullAttitude,
 }
 
-/// USD-authored initial camera and movement contract for a local avatar.
+/// USD-authored initial camera and movement contract for an interactive rig.
 ///
 /// USD owns the initial mode, pose, rig parameters, and flight parameters.
 /// [`lunco-avatar`](https://docs.rs/lunco-avatar) only realizes this contract
@@ -191,9 +195,9 @@ pub enum FollowAttitude {
 /// camera mode or hard-code a vehicle policy.
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component)]
-pub struct AvatarCameraIntent {
+pub struct CameraRigIntent {
     /// Initial interactive camera mode.
-    pub mode: AvatarCameraMode,
+    pub mode: CameraRigMode,
     /// Initial yaw in radians.
     pub yaw: f32,
     /// Initial pitch in radians.
@@ -209,15 +213,15 @@ pub struct AvatarCameraIntent {
     /// How the spring arm derives its target attitude.
     pub spring_arm_attitude: FollowAttitude,
     /// Authored free-flight movement parameters.
-    pub flight_settings: AvatarFlightSettings,
+    pub flight_settings: FreeFlightSettings,
     /// Authored photographic exposure, if present.
     pub exposure_ev100: Option<f32>,
 }
 
-impl Default for AvatarCameraIntent {
+impl Default for CameraRigIntent {
     fn default() -> Self {
         Self {
-            mode: AvatarCameraMode::FreeFlight,
+            mode: CameraRigMode::FreeFlight,
             yaw: std::f32::consts::PI * 0.8,
             pitch: -0.3,
             orbit_distance: 30.0,
@@ -225,7 +229,7 @@ impl Default for AvatarCameraIntent {
             spring_arm_vertical_offset: 2.0,
             spring_arm_track_heading: true,
             spring_arm_attitude: FollowAttitude::Heading,
-            flight_settings: AvatarFlightSettings::default(),
+            flight_settings: FreeFlightSettings::default(),
             exposure_ev100: None,
         }
     }
@@ -357,7 +361,7 @@ pub struct RadialArrival;
 /// Free-flight camera that moves independently of a target.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
-#[require(AvatarFlightSettings)]
+#[require(FreeFlightSettings)]
 pub struct FreeFlightCamera {
     /// Camera yaw in radians.
     pub yaw: f32,
@@ -370,7 +374,7 @@ pub struct FreeFlightCamera {
 /// Camera whose orientation is derived from a local surface frame.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
-#[require(AvatarFlightSettings)]
+#[require(FreeFlightSettings)]
 pub struct SurfaceCamera {
     /// Heading from local north in radians.
     pub heading: f32,
