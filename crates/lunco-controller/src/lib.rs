@@ -1,7 +1,7 @@
 //! Input mapping and controller translation for simulation vessels.
 //!
 //! This crate translates user input into the ONE generic vessel control command,
-//! [`lunco_cosim::SetPorts`] — a batch of named input-port writes — through a
+//! [`lunco_cosim_core::commands::SetPorts`] — a batch of named input-port writes — through a
 //! **two-stage, fully data-driven** mapping that reuses the existing
 //! [`lunco_core::UserIntent`] input-abstraction (leafwing) rather than reading
 //! raw keys:
@@ -432,7 +432,7 @@ const MAX_INPUT_FRAMES: usize = 128;
 /// presence of writes is NOT an activity signal — the *value* is.
 const INPUT_EPS: f64 = 1e-3;
 
-/// Fixed-tick input emission for prediction. Emits a [`lunco_cosim::SetPorts`]
+/// Fixed-tick input emission for prediction. Emits a [`lunco_cosim_core::commands::SetPorts`]
 /// while a controller is active and once on the active→idle edge, from its
 /// [`ControlBinding`] and held keys, stamped with a per-vessel `seq` + `SimTick`.
 /// For a vessel this client owns + predicts ([`lunco_core_session::OwnedLocally`]) the
@@ -609,7 +609,7 @@ fn drive_from_bindings(
             0
         };
 
-        commands.trigger(lunco_cosim::SetPorts {
+        commands.trigger(lunco_cosim_core::commands::SetPorts {
             target: link.vessel_entity,
             writes,
             seq,
@@ -736,7 +736,7 @@ fn drive_self_drivers(
         );
         let writes = binding
             .resolve(|intent| intent_held(entity, intent, intents, sim_intents, egui_keyboard));
-        commands.trigger(lunco_cosim::SetPorts {
+        commands.trigger(lunco_cosim_core::commands::SetPorts {
             target: entity,
             writes,
             seq: 0,
@@ -745,13 +745,13 @@ fn drive_self_drivers(
     }
 }
 
-/// The single chokepoint where a [`lunco_cosim::SetPorts`] records its input
+/// The single chokepoint where a [`lunco_cosim_core::commands::SetPorts`] records its input
 /// bookkeeping, regardless of origin (local keyboard via [`drive_from_bindings`],
 /// the HTTP/MCP API, or a wire-replayed remote input). Unifying it here is what
 /// keeps control and prediction on the same path: prediction logging (client) and
 /// the reconcile ack (host) no longer depend on *how* the command was made.
 fn record_control_input(
-    trigger: On<lunco_cosim::SetPorts>,
+    trigger: On<lunco_cosim_core::commands::SetPorts>,
     role: Res<lunco_core_session::NetworkRole>,
     sim_tick: Res<lunco_core::SimTick>,
     virtual_time: Option<Res<Time<Virtual>>>,
@@ -1155,7 +1155,7 @@ mod input_ack_tests {
     }
 
     fn drive(app: &mut App, target: Entity, seq: u32, steer: f64) {
-        app.world_mut().trigger(lunco_cosim::SetPorts {
+        app.world_mut().trigger(lunco_cosim_core::commands::SetPorts {
             target,
             writes: vec![("steer".to_string(), steer)],
             seq,
@@ -1792,7 +1792,7 @@ mod tests {
     struct VesselControlObserved(Vec<(Entity, Vec<(String, f64)>)>);
 
     fn observe_vessel_control(
-        trigger: On<lunco_cosim::SetPorts>,
+        trigger: On<lunco_cosim_core::commands::SetPorts>,
         mut observed: ResMut<VesselControlObserved>,
     ) {
         let event = trigger.event();
@@ -2083,7 +2083,7 @@ mod tests {
         struct Writes(Vec<(String, f64)>);
         app.init_resource::<Writes>();
         app.add_observer(
-            |trigger: On<lunco_cosim::SetPorts>, mut w: ResMut<Writes>| {
+            |trigger: On<lunco_cosim_core::commands::SetPorts>, mut w: ResMut<Writes>| {
                 w.0.extend(trigger.event().writes.iter().cloned());
             },
         );

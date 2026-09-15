@@ -187,7 +187,7 @@ fn main() {
 
     // Register the command types so the wire reflect (de)serialize + trigger
     // path works (the domain plugins normally do this; the harness skips them).
-    app.register_type::<lunco_cosim::SetPorts>();
+    app.register_type::<lunco_cosim_core::commands::SetPorts>();
     app.register_type::<lunco_avatar::PossessVessel>();
 
     // Both peers activate the SAME scripted (rhai) convergent merge policy before
@@ -305,7 +305,7 @@ fn host_on_possess(
 /// `"throttle"` port write. An *unauthorized* drive never reaches here —
 /// `apply_sync_command` rejects it at the authority gate before triggering.
 fn host_on_drive(
-    trigger: On<lunco_cosim::SetPorts>,
+    trigger: On<lunco_cosim_core::commands::SetPorts>,
     mut q: Query<(&lunco_core::GlobalEntityId, &mut DriveVel)>,
     mut buf: ResMut<lunco_core_session::BufferedClientInputs>,
 ) {
@@ -438,7 +438,7 @@ fn client_act(
     // Drive G1 (host-owned) — must be REJECTED by the host authority gate (the
     // client never owns it). G2 (owned) is driven by `client_drive_cadence` on the
     // fixed clock — the seq-stamped sweep that the cadence sub-test measures.
-    commands.trigger(lunco_cosim::SetPorts {
+    commands.trigger(lunco_cosim_core::commands::SetPorts {
         target: rovers.g1,
         writes: vec![("throttle".into(), 1.0), ("steer".into(), 0.0)],
         seq: 0,
@@ -468,7 +468,7 @@ fn client_drive_cadence(
     };
     *seq += 1;
     let throttle = cadence_throttle(*seq);
-    commands.trigger(lunco_cosim::SetPorts {
+    commands.trigger(lunco_cosim_core::commands::SetPorts {
         target: rovers.g2,
         writes: vec![("throttle".into(), throttle)],
         seq: *seq,

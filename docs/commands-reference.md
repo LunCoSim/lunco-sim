@@ -1148,7 +1148,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  untouched. The safe values remain held until a new owner writes them, so a
  wired controller cannot resurrect a released command on the next tick.
 
-- *defined in:* `crates/lunco-cosim/src/lib.rs`
+- *defined in:* `crates/lunco-cosim-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1162,7 +1162,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  stream. The reflected `Entity` field keeps API, Rhai, UI, and network
  callers on the same entity-resolution and authority path.
 
-- *defined in:* `crates/lunco-cosim/src/lib.rs`
+- *defined in:* `crates/lunco-cosim-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1192,7 +1192,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  port is replaced or released; use [`ReleaseControl`] for the vehicle-wide
  safe state.
 
-- *defined in:* `crates/lunco-cosim/src/lib.rs`
+- *defined in:* `crates/lunco-cosim-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|

@@ -29,7 +29,7 @@ use lunco_scripting::{LunCoScriptingPlugin, ScriptRegistry};
 
 const ROVER_GID: u64 = 7777;
 
-// ── Spy command (stand-in for the real `lunco_cosim::SetPorts`) ────────────────
+// ── Spy command (stand-in for the real `lunco_cosim_core::commands::SetPorts`) ────────────────
 // Control is now the ONE generic `SetPorts` command (a batch of named port
 // writes). The spy records drive samples (throttle/steer) into `DriveLog`, so
 // the recording proves the whole `cmd("SetPorts", …)` dispatch path end-to-end.
@@ -40,7 +40,7 @@ struct DriveLog(Vec<(f64, f64)>); // (throttle, steer) per drive SetPorts
 #[derive(Resource, Default)]
 struct EventLog(Vec<String>); // names of every emitted TelemetryEvent
 
-// A SPY that deliberately shadows the real `SetPorts` (`lunco-cosim`).
+// A SPY that deliberately shadows the real `SetPorts` (`lunco-cosim-core`).
 //
 // The name is load-bearing, not lazy copy-paste: command dispatch resolves by
 // *short type path*, so a rhai script calling `cmd("SetPorts", …)` is routed to

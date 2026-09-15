@@ -586,7 +586,7 @@ impl PortPanel {
                 .clicked()
             {
                 if let Ok(value) = validation.as_ref() {
-                    ctx.trigger(lunco_cosim::SetPorts {
+                    ctx.trigger(lunco_cosim_core::commands::SetPorts {
                         target: row.entity,
                         writes: vec![(info.name.clone(), *value)],
                         seq: 0,
@@ -600,7 +600,7 @@ impl PortPanel {
                     .on_hover_text("Return this input to its authored wiring")
                     .clicked()
             {
-                ctx.trigger(lunco_cosim::ReleasePort {
+                ctx.trigger(lunco_cosim_core::commands::ReleasePort {
                     target: row.entity,
                     name: info.name.clone(),
                 });

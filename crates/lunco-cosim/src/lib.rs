@@ -60,7 +60,8 @@ use lunco_cosim_core::{
 // the `lunco-command-macro` proc-macros). Used by the `SetPorts` command +
 // observer defined below — the ONE generic vessel-control command (a batch of
 // named input-port writes), driving landers, rovers, and any port-bearing vessel.
-use lunco_core::{on_command, register_commands, Ack, Command, OpId};
+use lunco_core::{on_command, register_commands, Ack, OpId};
+use lunco_cosim_core::commands::{ReleaseControl, ReleasePort, SetPorts};
 
 fn endpoint_ready_on_add<T: Component>(
     trigger: On<Add, T>,
@@ -907,77 +908,6 @@ mod binding_lifecycle_tests {
         assert!(!app.world().resource::<ControlWriteFence>().blocks(entity));
         assert!(!app.world().resource::<BindingRevision>().pending());
     }
-}
-
-// ── Typed Command: generic port actuation ─────────────────────────────────────
-
-/// The ONE generic control command: write a batch of named input ports on
-/// `target`, applied through [`PortRegistry::write_port`]. This is the whole of
-/// vessel control — there are no dedicated rover/lander command verbs and no
-/// axis/`VesselIntent` vocabulary. "Controlling" anything means writing its
-/// command input ports:
-/// - a wheeled rover exposes `throttle`/`steer`/`brake` (its `InputPorts`
-///   input surface, via the core input-port backend); a mix system projects them
-///   onto its actuator ports,
-/// - a cosim-flown lander exposes its Modelica command inputs (`throttle`/`pitch`/
-///   `roll`/`yaw`) via the [`SimComponent`] backend,
-/// - a crane/door/factory arm exposes whatever input ports it declares.
-///
-/// The same command is emitted by the keyboard input path
-/// (`lunco-controller`), the HTTP/MCP API, scripts, and replayed remote peers —
-/// so every surface drives every controllable thing identically. `seq`/`tick`
-/// carry the prediction bookkeeping (host ack + client input log); it rides
-/// `SyncChannel::ControlStream` over the network.
-/// Each accepted value persists at the receiver across fixed ticks until that
-/// port is replaced or released; use [`ReleaseControl`] for the vehicle-wide
-/// safe state.
-#[Command]
-pub struct SetPorts {
-    /// The entity whose input ports are written.
-    #[authz_target]
-    pub target: Entity,
-    /// `(port_name, value)` writes to apply this tick. Undeclared names are
-    /// dropped by `PortRegistry` (strict per-backend) — the write stays a no-op,
-    /// but when the target exposes a port surface WITHOUT that name the drop is
-    /// recorded once per `(entity, port)` in [`CosimDiagnostics::faults`] (M12),
-    /// so a typo'd port from the API/script/controller surfaces instead of
-    /// vanishing. A binding may still name ports a given vessel doesn't have.
-    pub writes: Vec<(String, f64)>,
-    #[serde(default)]
-    #[reflect(default)]
-    pub seq: u32,
-    #[serde(default)]
-    #[reflect(default)]
-    pub tick: u64,
-}
-
-/// Release one manual input-port intent and hand that port back to its wiring.
-///
-/// This is a discrete command beside the high-frequency [`SetPorts`] control
-/// stream. The reflected `Entity` field keeps API, Rhai, UI, and network
-/// callers on the same entity-resolution and authority path.
-#[Command]
-pub struct ReleasePort {
-    /// The entity whose hold is released.
-    #[authz_target]
-    pub target: Entity,
-    /// Input-port name.
-    pub name: String,
-}
-
-/// Release the complete vehicle control intent and apply its safe state.
-///
-/// Every authored command input is cleared in one transaction: rover
-/// throttle/steer become zero and its brake is engaged; lander attitude/thrust
-/// and RCS inputs become zero. A direct hold on a Modelica command is cleared
-/// too. Plant parameters and sensor inputs outside the command surface are left
-/// untouched. The safe values remain held until a new owner writes them, so a
-/// wired controller cannot resurrect a released command on the next tick.
-#[Command]
-pub struct ReleaseControl {
-    /// The vehicle whose complete control intent is released.
-    #[authz_target]
-    pub target: Entity,
 }
 
 /// Observer for [`SetPorts`]: applies each `(name, value)` via the

@@ -943,6 +943,7 @@ mod tests {
                 vehicle,
                 vec![TrailLane {
                     wheel,
+                    half_width: 0.5,
                     points: vec![
                         RibbonPoint {
                             position: DVec3::ZERO,

@@ -21,9 +21,6 @@ avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
-# Read `SimComponent` presence to pick the input map for a possessed vessel by
-# TOPOLOGY (Modelica-flown → lander controls) rather than a vessel-kind marker.
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }

@@ -9,9 +9,9 @@ bevy = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
-# The ONE generic vessel-control command `SetPorts` (a batch of named input-port
-# writes) lives in `lunco-cosim`; `drive_from_bindings` triggers it from held keys.
-lunco-cosim = { path = "../lunco-cosim" }
+# The generic vessel-control command contracts live in the backend-neutral
+# package; `drive_from_bindings` triggers them from held keys.
+lunco-cosim-core = { path = "../lunco-cosim-core" }
 # The interaction cadence (`InteractionSchedule`): the constant-rate, never-paused
 # step the free avatar's self-drive runs on, so pausing the sim doesn't freeze the
 # user's own movement.
@@ -24,3 +24,8 @@ serde_json = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The controller's integration tests install the real co-simulation plugin;
+# production controller users need only the command contracts above.
+lunco-cosim = { path = "../lunco-cosim" }

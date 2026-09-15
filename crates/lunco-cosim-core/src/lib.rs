@@ -7,6 +7,7 @@
 
 pub mod actuation;
 pub mod binding;
+pub mod commands;
 pub mod component;
 pub mod connection;
 pub mod contract;

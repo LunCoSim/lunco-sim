@@ -336,7 +336,7 @@ fn on_client_disconnected(
             // The disconnected client cannot issue its normal ReleaseVessel path.
             // Clear predicted/local intents now so reconnecting or re-possession
             // cannot inherit an abandoned command surface.
-            commands.trigger(lunco_cosim::ReleaseControl { target: entity });
+            commands.trigger(lunco_cosim_core::commands::ReleaseControl { target: entity });
         }
     }
     local.0 = SessionId::LOCAL;

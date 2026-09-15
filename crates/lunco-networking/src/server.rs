@@ -940,7 +940,7 @@ fn on_server_disconnected(
                 // A disconnected owner has no opportunity to send ReleaseControl.
                 // Apply the same safe state as an explicit handoff before another
                 // session can claim the freed vessel.
-                commands.trigger(lunco_cosim::ReleaseControl { target: entity });
+                commands.trigger(lunco_cosim_core::commands::ReleaseControl { target: entity });
             }
         }
     }

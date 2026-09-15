@@ -18,7 +18,8 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 
 use lunco_avatar::{FreeFlightCamera, OrbitCamera, SurfaceCamera, SurfaceRelativeMode};
-use lunco_celestial::{CelestialBody, PointMassGravity, ReferenceFrame};
+use lunco_celestial::{CelestialBody, ReferenceFrame};
+use lunco_celestial_spatial::PointMassGravity;
 use lunco_core::Avatar;
 use lunco_environment::GravityProvider;
 
