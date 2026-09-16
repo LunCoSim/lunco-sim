@@ -7,8 +7,6 @@ description = "Backend-neutral camera rig contracts for LunCoSim"
 
 [dependencies]
 bevy = { workspace = true }
-big_space = { workspace = true }
-lunco-environment = { path = "../lunco-environment" }
 
 [lints]
 workspace = true

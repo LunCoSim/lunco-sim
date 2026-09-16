@@ -914,7 +914,7 @@ pub fn resolve_camera_paths(
                 // as a whole take recorded at the spawn heading while the path
                 // moved the eye. The marker is the cross-crate contract; the
                 // avatar side honours it at every mode-transition boundary.
-                lunco_core::CameraPoseLock,
+                lunco_camera_core::CameraPoseLock,
             ));
         lunco_spatial::attach::migrate_to_grid(
             &mut commands,

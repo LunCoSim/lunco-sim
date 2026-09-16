@@ -16,6 +16,13 @@ fn usd_prim(path) {
     return query("QueryUsdPrim", #{ path: path });
 }
 
+/// Resolve several prims from one composed-stage snapshot. The returned
+/// record is `{ records: [...], count }`; a missing path is a loud query
+/// failure rather than a shortened result list.
+fn usd_prims(paths) {
+    return query("QueryUsdPrims", #{ paths: paths });
+}
+
 /// Named attributes only. Much cheaper on prims carrying big arrays — a trimmed
 /// NurbsPatch holds thousands of control points, and pulling all of them to read
 /// one radius is pure waste. Prefer this in a loop.

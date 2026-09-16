@@ -78,7 +78,7 @@ def Xform "BuildBase" (
     # Fly-cam looking down over the empty plot from the south-west, so the
     # student sees the whole build area and can fly in to place each part.
     def Camera "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
         prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
@@ -88,7 +88,6 @@ def Xform "BuildBase" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
         double3 xformOp:translate = (-45.0, 35.0, -55.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]

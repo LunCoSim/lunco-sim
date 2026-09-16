@@ -80,10 +80,9 @@ def Xform "Mission"
         float physics:friction = 1.0
     }
 
-    def Xform "Avatar" ( prepend apiSchemas = ["LunCoAvatarAPI"] )
+    def Camera "Avatar" ( prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"] )
     {
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 xformOp:translate = (18.0, 12.0, 20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

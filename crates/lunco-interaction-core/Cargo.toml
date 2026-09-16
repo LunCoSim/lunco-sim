@@ -1,0 +1,12 @@
+[package]
+name = "lunco-interaction-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Shared cursor-interaction contracts for LunCoSim runtimes"
+
+[dependencies]
+bevy = { workspace = true }
+
+[lints]
+workspace = true

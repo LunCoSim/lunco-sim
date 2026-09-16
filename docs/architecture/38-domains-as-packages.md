@@ -812,8 +812,10 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 ### 14.4 Keep `lunco:` (LunCo-specific — USD has no name), just tidy the namespaces
 
 `lunco:avatar`, `lunco:scenario`, `lunco:triggerZone`, `lunco:waypoint`,
-`lunco:net:*`, `lunco:terrain:*`, `lunco:shadow:*`, `lunco:camera*` (behavior; the camera prim itself is
-`UsdGeomCamera`), `lunco:link:*`, `lunco:celestial:*`, `lunco:placeholder`/`spawnable`.
+`lunco:net:*`, `lunco:terrain:*`, `lunco:shadow:*`, `lunco:camera*` (camera
+role/look-at/pose metadata; behavior remains Rhai policy over the
+`UsdGeomCamera` prim), `lunco:link:*`, `lunco:celestial:*`,
+`lunco:placeholder`/`spawnable`.
 These are genuine LunCo glue — keep the `lunco:` prefix, group consistently (`lunco:<domain>:<prop>`), and
 prefer a `ui:nodegraph:node:pos` (UsdUI) over any bespoke diagram-position attr.
 
@@ -884,7 +886,7 @@ never dispatched) and **muddles domain with role**. Refactor:
 
 | current `lunco:` | → USD standard | note |
 |---|---|---|
-| `lunco:cameraLookAt`/`activeCamera` + camera intrinsics | **`UsdGeomCamera`** (prim) + `focalLength`/`clippingRange`/… | the camera *is* a `UsdGeomCamera`; keep `lunco:cameraMode` (follow/orbit = behavior, no USD std) |
+| `lunco:cameraLookAt`/`activeCamera` + camera intrinsics | **`UsdGeomCamera`** (prim) + `focalLength`/`clippingRange`/… | the camera *is* a `UsdGeomCamera`; camera behavior (follow/orbit/etc.) is Rhai policy over generic commands |
 | former `lunco:name` / `lunco:description` | prim **`displayName`** metadata + **`UsdUISceneGraphPrimAPI`** (`ui:displayName`/`ui:displayGroup`) | `openusd` already has `SceneGraphPrimAPI` |
 | diagram/node positions | **`UsdUINodeGraphNodeAPI`** (`ui:nodegraph:node:pos`) | §14 |
 | EPS/motor params | typed USD **attributes** (the bound program's parameters) | §14.3 |

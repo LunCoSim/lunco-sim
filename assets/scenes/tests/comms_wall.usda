@@ -179,8 +179,8 @@ def Xform "CommsWallTest" (
 
     # Side-on fly-cam: rover, wall and mast all in frame, so the geometry of the
     # blockage is visible at a glance.
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -189,7 +189,6 @@ def Xform "CommsWallTest" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 2.0, 0.0)
         double3 xformOp:translate = (45.0, 18.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]

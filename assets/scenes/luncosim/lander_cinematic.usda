@@ -92,7 +92,7 @@ over "LanderTest" (
         prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
-        custom double3 lunco:cameraLookAt = (0, 9, 0)
+        double3 lunco:cameraLookAt = (0, 9, 0)
         double3 xformOp:translate = (13, 2.5, 15)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float focalLength = 30.0
@@ -120,7 +120,7 @@ over "LanderTest" (
         )
         {
             uniform token lunco:cameraPose = "mounted"
-            custom double3 lunco:cameraLookAt = (0, -2, 0)
+            double3 lunco:cameraLookAt = (0, -2, 0)
             double3 xformOp:translate = (44, 30, 46)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             float focalLength = 26.0
@@ -133,7 +133,7 @@ over "LanderTest" (
         )
         {
             uniform token lunco:cameraPose = "mounted"
-            custom double3 lunco:cameraLookAt = (0, 0, 0)
+            double3 lunco:cameraLookAt = (0, 0, 0)
             double3 xformOp:translate = (16, 9, 30)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             float focalLength = 24.0
@@ -147,7 +147,7 @@ over "LanderTest" (
         )
         {
             uniform token lunco:cameraPose = "mounted"
-            custom double3 lunco:cameraLookAt = (0, -30, 0)
+            double3 lunco:cameraLookAt = (0, -30, 0)
             double3 xformOp:translate = (0, 2.4, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             float focalLength = 20.0
@@ -168,7 +168,7 @@ over "LanderTest" (
         )
         {
             uniform token lunco:cameraPose = "mounted"
-            custom double3 lunco:cameraLookAt = (0, 0.6, -9)
+            double3 lunco:cameraLookAt = (0, 0.6, -9)
             double3 xformOp:translate = (0, 3, 7)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             float focalLength = 26.0

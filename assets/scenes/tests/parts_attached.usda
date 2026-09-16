@@ -73,8 +73,8 @@ def Xform "PartsAttached" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -83,7 +83,6 @@ def Xform "PartsAttached" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
         double3 xformOp:translate = (0.0, 30.0, 175.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -96,7 +95,7 @@ def Xform "PartsAttached" (
         prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
-        custom double3 lunco:cameraLookAt = (0.0, 1.0, 90.0)
+        double3 lunco:cameraLookAt = (0.0, 1.0, 90.0)
         double3 xformOp:translate = (0.0, 40.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float focalLength = 24.0

@@ -872,7 +872,7 @@ mod tests {
     fn variability_is_read_from_the_schema() {
         // Declared `uniform` in luncoSchema.
         assert_eq!(
-            variability_of("lunco:cameraMode"),
+            variability_of("lunco:cameraPose"),
             sdf::Variability::Uniform
         );
         assert_eq!(

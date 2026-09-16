@@ -504,13 +504,13 @@ fn capture_final_gizmo_pose(
 }
 
 /// Mirrors each `GizmoTarget`'s active state onto the core
-/// [`lunco_core::GizmoDragging`] marker, so render/sim crates (e.g. the avatar
+/// [`lunco_interaction_core::GizmoDragging`] marker, so render/sim crates (e.g. the avatar
 /// camera-follow systems) can react to a drag **without** depending on
 /// `transform-gizmo-bevy`. This is the only place the marker is written.
 fn sync_gizmo_dragging_marker(
     mut commands: Commands,
     q: Query<(&GizmoProxy, &GizmoTarget)>,
-    mut drag_mode: ResMut<lunco_core::DragModeActive>,
+    mut drag_mode: ResMut<lunco_interaction_core::DragModeActive>,
 ) {
     let mut any_active = false;
     for (link, gt) in &q {
@@ -521,9 +521,13 @@ fn sync_gizmo_dragging_marker(
             // deselect-then-despawn) between this query read and command apply.
             // The plain `insert`/`remove` then error on the dead entity; the
             // fallible variants no-op instead.
-            commands.entity(e).try_insert(lunco_core::GizmoDragging);
+            commands
+                .entity(e)
+                .try_insert(lunco_interaction_core::GizmoDragging);
         } else {
-            commands.entity(e).try_remove::<lunco_core::GizmoDragging>();
+            commands
+                .entity(e)
+                .try_remove::<lunco_interaction_core::GizmoDragging>();
         }
     }
     // Single writer of `DragModeActive`: possession is blocked only while a

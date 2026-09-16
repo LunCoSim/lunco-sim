@@ -126,6 +126,16 @@ fn set_camera(name)            { cmd("SetActiveCamera", #{ name: name }) }
 fn focus(target)               { cmd("FocusTarget", #{ target: target }) }
 /// Chase a target with a spring-arm follow cam (rides behind/above it).
 fn follow(target)              { cmd("FollowTarget", #{ target: target }) }
+/// Tune the generic interactive camera response from an authored scenario.
+/// Camera modes remain engine mechanisms, while their presentation policy can
+/// be changed live without rebuilding the Rust camera/runtime packages.
+fn set_camera_input(look_radians_per_pointer_unit, orbit_surface_min_scale, orbit_distance_curve_exponent) {
+    cmd("SetCameraInput", #{
+        look_radians_per_pointer_unit: look_radians_per_pointer_unit,
+        orbit_surface_min_scale: orbit_surface_min_scale,
+        orbit_distance_curve_exponent: orbit_distance_curve_exponent
+    })
+}
 
 /// Capture a screenshot from the active scene camera. For a vessel-mounted
 /// photo, see `photo_from(vessel)` in `science.rhai`.

@@ -101,8 +101,8 @@ def Xform "SixIndependentParity" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -111,7 +111,6 @@ def Xform "SixIndependentParity" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
         double3 xformOp:translate = (0.0, 30.0, 175.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -123,7 +122,7 @@ def Xform "SixIndependentParity" (
         prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
-        custom double3 lunco:cameraLookAt = (0.0, 1.0, 60.0)
+        double3 lunco:cameraLookAt = (0.0, 1.0, 60.0)
         double3 xformOp:translate = (0.0, 60.0, 190.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float focalLength = 24.0

@@ -470,6 +470,9 @@ soon as `ModelicaModel` exists, carrying the AST's inputs, with
 `SimStatus::Compiling` until variables populate (`can_step()` already refuses to
 step that state). `modelica_status()` is the single place that decides
 Compiling / Running / Paused, so the bind and the per-tick sync cannot disagree.
+The presentation bridge waits for that lifecycle to settle across the complete
+current participant set and emits one aggregate readiness event per settled
+set; it does not use status-message text as a deduplication key.
 
 The fixed-step exchange implementation lives in
 [`lunco-usd-sim-cosim::sync`](../../crates/lunco-usd-sim-cosim/src/sync.rs): it

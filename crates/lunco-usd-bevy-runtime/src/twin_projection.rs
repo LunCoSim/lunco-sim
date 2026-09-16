@@ -655,9 +655,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             }
 
             match ops {
-                // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe /
-                // relationship — no incremental stage-author yet, and whole-source
-                // undo may change surviving prims' attribute values): rebuild the
+                // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe
+                // removal / composition arc — no incremental stage-author yet,
+                // and whole-source undo may change surviving prims' values): rebuild the
                 // stage from composed_source + the already-loaded closure. (The
                 // overlay is refreshed on the next settled frame.)
                 None => {
@@ -944,31 +944,24 @@ pub(crate) fn wake_twin_projection_on_stage_event(
 /// authors incrementally), or a composition-arc edit whose effect is non-local
 /// (a variant selection or payload re-composes a whole subtree). The common
 /// interactive ops — translate, attribute, spawn, remove, keyframe *authoring*,
-/// and now relationship / connection edits — return `false` and replay
-/// incrementally via [`apply_incremental_op_to_stage`].
+/// relationship/connection edits, API-schema edits, and kind edits — return
+/// `false` and replay incrementally via [`apply_incremental_op_to_stage`].
 ///
 /// `SetRelationship` and `SetConnection` use live-stage authors
 /// (`CanonicalStage::author_relationship` / `author_connection`). Their consumers
 /// (the Avian joint builder and the cosim wire reconcile) re-read on a subtree
 /// refresh, so the incremental path fully reconciles them.
 ///
-/// Physical `SetApiSchemas` and `SetPrimKind` do NOT: their effect is which ECS
-/// *components* a prim carries (rigid body, collider), and the incremental
-/// path cannot derive a changed component set in place. Metadata-only schemas
-/// use the live authoring path, so enabling a Twin-authored UI or program
-/// surface does not tear down unrelated simulation state.
+/// `SetApiSchemas` and `SetPrimKind` use live authoring too.  A schema edit
+/// refreshes only the affected prim subtree so physical ECS components are
+/// rebuilt at the smallest safe scope; kind is identity metadata and needs no
+/// ECS refresh.  Neither operation tears down unrelated simulation state.
 ///
 /// Active state is structural, but the generic structural reconciler already
 /// owns exactly that operation: it despawns an inactive subtree and spawns it
 /// again when reactivated. Keeping `SetActive` incremental prevents a route
 /// annotation edit from rebuilding unrelated live vessels and their models.
 fn op_needs_rebuild(op: &UsdOp) -> bool {
-    // Metadata-only API schemas stay on the live incremental path. Kind and
-    // defaultPrim changes rebuild so the projection reads the new composed
-    // metadata from one authoritative document snapshot.
-    if let UsdOp::SetApiSchemas { schemas, .. } = op {
-        return !incremental_api_schemas(schemas);
-    }
     matches!(
         op,
         UsdOp::ReplaceSource { .. }
@@ -980,20 +973,20 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
             | UsdOp::SetPayload { .. }
             | UsdOp::SetReferenceArcs { .. }
             | UsdOp::SetDefaultPrim { .. }
-            | UsdOp::SetPrimKind { .. }
     )
 }
 
-/// Applied schemas with metadata-only runtime consequences. Physical schemas
-/// still take the rebuild path because their ECS body/collider presence cannot
-/// be reconciled by a visual subtree refresh.
+/// Classify a schema list whose effects are metadata-only.  An empty list is
+/// deliberately treated as physical/unknown: clearing a previously applied
+/// physics schema must refresh the prim subtree so its ECS components disappear.
 fn incremental_api_schemas(schemas: &[String]) -> bool {
-    schemas.iter().all(|schema| {
-        matches!(
-            schema.as_str(),
-            "LunCoProgramAPI" | "LunCoMountAttachmentAPI" | "LunCoUiSchemaAPI"
-        )
-    })
+    !schemas.is_empty()
+        && schemas.iter().all(|schema| {
+            matches!(
+                schema.as_str(),
+                "LunCoProgramAPI" | "LunCoMountAttachmentAPI" | "LunCoUiSchemaAPI"
+            )
+        })
 }
 
 /// Replay one **incremental** op's typed delta onto the scene's live
@@ -1022,6 +1015,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             | UsdOp::SetRelationship { path, .. }
             | UsdOp::SetConnection { path, .. }
             | UsdOp::SetApiSchemas { path, .. }
+            | UsdOp::SetPrimKind { path, .. }
             | UsdOp::SetActive { path, .. }
             | UsdOp::ClearActive { path, .. } => Some(path.as_str()),
             _ => None,
@@ -1397,16 +1391,48 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 refresh_prim_subtree(world, scene_id, path);
             }
         }
-        UsdOp::SetApiSchemas { path, schemas, .. } if incremental_api_schemas(schemas) => {
+        UsdOp::SetApiSchemas { path, schemas, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
-            let authored = world
+            let authored = match world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
-                .is_some_and(|cs| cs.projector().author_api_schemas(&sp, schemas).is_ok());
-            if !authored {
-                warn!("[twin] author metadata API schemas at {path} failed");
+            {
+                Some(cs) => match cs.projector().author_api_schemas(&sp, schemas) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        warn!("[twin] author API schemas at {path}: {e}");
+                        false
+                    }
+                },
+                None => {
+                    warn!("[twin] no canonical stage while authoring API schemas at {path}");
+                    false
+                }
+            };
+            // Metadata-only Twin schemas do not affect ECS. Physical/unknown
+            // schemas do, so refresh only this prim's subtree after the live
+            // author succeeds; unrelated scene roots and running scripts stay
+            // intact.
+            if authored && !incremental_api_schemas(schemas) {
+                refresh_prim_subtree(world, scene_id, path);
+            }
+        }
+        UsdOp::SetPrimKind { path, kind, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            match world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
+                Some(cs) => {
+                    if let Err(e) = cs.projector().author_kind(&sp, kind.as_deref()) {
+                        warn!("[twin] author kind at {path}: {e}");
+                    }
+                }
+                None => warn!("[twin] no canonical stage while authoring kind at {path}"),
             }
         }
         UsdOp::SetActive { path, active, .. } => {
@@ -1445,8 +1471,8 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 warn!("[twin] clear active at {path} failed");
             }
         }
-        // Coarse ops never reach here (the caller rebuilds for them). Active
-        // state is handled above by the shared structural reconciler.
+        // Coarse composition ops never reach here (the caller rebuilds for
+        // them). Metadata and kind are handled above on the live stage.
         _ => {}
     }
 }
@@ -2072,9 +2098,9 @@ mod tests {
             type_name: "float".into(),
             sources: vec![],
         }));
-        // Physical apiSchema changes still rebuild: their effect is a prim's ECS
-        // component set, which the structural reconciler cannot change in place.
-        assert!(op_needs_rebuild(&UsdOp::SetApiSchemas {
+        // Physical API schemas are authored live and refresh only the affected
+        // prim subtree, so unrelated scripts and bodies keep running.
+        assert!(!op_needs_rebuild(&UsdOp::SetApiSchemas {
             edit_target: et.clone(),
             path: "/W".into(),
             schemas: vec!["PhysicsRigidBodyAPI".into()],
@@ -2120,7 +2146,7 @@ mod tests {
             edit_target: et.clone(),
             default_prim: Some("World".into()),
         }));
-        assert!(op_needs_rebuild(&UsdOp::SetPrimKind {
+        assert!(!op_needs_rebuild(&UsdOp::SetPrimKind {
             edit_target: et.clone(),
             path: "/Rover".into(),
             kind: Some("component".into()),

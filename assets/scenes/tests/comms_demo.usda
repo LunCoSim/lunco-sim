@@ -80,8 +80,8 @@ def Xform "CommsDemoScene" (
         float lunco:env:exposureEv100 = 12.5
     }
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -90,7 +90,6 @@ def Xform "CommsDemoScene" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         # Framed on the rover (at ~(6, 1.4, 0)) from a 3/4 view, so the scene opens
         # looking straight at it and its connectivity beams, not out at empty regolith.
         double3 xformOp:translate = (14, 6, 12)

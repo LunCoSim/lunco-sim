@@ -250,7 +250,7 @@ pub struct SelectUsdPrim {
 /// Highlights with `Selected` + `GizmoSelected` (so the sibling gizmo package
 /// can maintain its render proxy) and maintains [`SelectedEntities`].
 ///
-/// It deliberately does **not** touch [`lunco_core::DragModeActive`]: selecting
+/// It deliberately does **not** touch [`lunco_interaction_core::DragModeActive`]: selecting
 /// only highlights. The shared scene-interaction mode reserves plain clicks
 /// for selection in Editor and modifier clicks for selection/removal in View;
 /// possession is independently gated by that same mode and key intent.
@@ -1226,7 +1226,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<SelectedEntities>()
             .init_resource::<SelectionTarget>()
-            .insert_resource(lunco_core::DragModeActive::default())
+            .insert_resource(lunco_interaction_core::DragModeActive::default())
             .add_observer(on_select_entity_target);
 
         let first = app.world_mut().spawn_empty().id();
@@ -1269,7 +1269,11 @@ mod tests {
         );
         assert!(app.world().get::<Selected>(first).is_none());
         assert!(app.world().get::<GizmoSelected>(first).is_none());
-        assert!(!app.world().resource::<lunco_core::DragModeActive>().active);
+        assert!(
+            !app.world()
+                .resource::<lunco_interaction_core::DragModeActive>()
+                .active
+        );
     }
 
     #[test]

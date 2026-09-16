@@ -91,6 +91,14 @@ impl ValueBuilder for RhaiBuilder {
     fn int(&self, i: i64) -> Dynamic {
         Dynamic::from_int(i)
     }
+    fn uint(&self, u: u64) -> Dynamic {
+        // Rhai's native integer is signed. Keep the fast native path for the
+        // representable range and make the wider case explicit and lossless;
+        // never route an unsigned identity through f64 or a wrapping cast.
+        i64::try_from(u)
+            .map(Dynamic::from_int)
+            .unwrap_or_else(|_| Dynamic::from(u.to_string()))
+    }
     fn bool(&self, b: bool) -> Dynamic {
         Dynamic::from_bool(b)
     }
@@ -3998,5 +4006,36 @@ mod tests {
         "#;
         let out = super::eval_with_world(&mut world, code).unwrap();
         assert_eq!(out.trim(), "[true, true]", "got {out}");
+    }
+
+    #[test]
+    fn rhai_unsigned_values_use_native_int_or_lossless_text() {
+        let small = lunco_scripting_bridge_core::build_from_reflect(
+            &super::RhaiBuilder,
+            &42_u64,
+        )
+        .expect("small unsigned value");
+        assert_eq!(small.as_int().expect("small value stays native"), 42);
+
+        let wide = lunco_scripting_bridge_core::build_from_reflect(
+            &super::RhaiBuilder,
+            &u64::MAX,
+        )
+        .expect("wide unsigned value");
+        assert_eq!(
+            wide.into_string().expect("wide value uses explicit text"),
+            u64::MAX.to_string()
+        );
+
+        let json_wide = lunco_scripting_bridge_core::build_from_json(
+            &super::RhaiBuilder,
+            &serde_json::json!(u64::MAX),
+        );
+        assert_eq!(
+            json_wide
+                .into_string()
+                .expect("wide JSON value uses explicit text"),
+            u64::MAX.to_string()
+        );
     }
 }

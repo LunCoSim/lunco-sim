@@ -18,8 +18,8 @@ def Xform "BatteryEmptyActuator" (
 {
     uniform bool lunco:spawnable = false
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -28,7 +28,6 @@ def Xform "BatteryEmptyActuator" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 xformOp:translate = (0.0, 6.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

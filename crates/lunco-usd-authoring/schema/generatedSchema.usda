@@ -737,54 +737,11 @@ class "LunCoAvatarAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = "The scene's player viewpoint — where the camera starts and how it moves."
+    doc = "Marks the prim that represents the scene's local avatar role."
 )
 {
     uniform bool lunco:avatar = false (
-        doc = "Whether this prim is the scene's avatar."
-    )
-    uniform token lunco:cameraMode = "freeflight" (
-        doc = "How the avatar's camera moves."
-        allowedTokens = ["freeflight", "orbit", "springarm"]
-    )
-    double3 lunco:cameraLookAt = (0, 0, 0) (
-        doc = "The point the avatar's camera faces on spawn."
-    )
-    float lunco:cameraYaw = 2.5132742 (
-        doc = """Initial camera yaw, radians. Overridden by a derived aim when
-        `lunco:cameraLookAt` is authored."""
-    )
-    float lunco:cameraPitch = -0.3 (
-        doc = """Initial camera pitch, radians. Overridden by a derived aim when
-        `lunco:cameraLookAt` is authored."""
-    )
-    float lunco:camera:orbitDistance = 30.0 (
-        doc = "Initial orbit arm length in metres."
-    )
-    float lunco:camera:springArmDistance = 15.0 (
-        doc = "Initial spring-arm length in metres."
-    )
-    float lunco:camera:springArmVerticalOffset = 2.0 (
-        doc = "Initial spring-arm vertical offset in metres."
-    )
-    bool lunco:camera:springArmTrackHeading = true (
-        doc = "Whether the spring arm follows the target heading."
-    )
-    uniform token lunco:camera:springArmAttitude = "heading" (
-        allowedTokens = ["heading", "world_locked", "full_attitude"]
-        doc = "How the spring arm derives the target attitude."
-    )
-    float lunco:avatar:flightSpeed = 23.1 (
-        doc = "Free-flight speed in metres per second."
-    )
-    float lunco:avatar:boostMultiplier = 10.0 (
-        doc = "Multiplier applied while the authored speed_boost input is active."
-    )
-    float lunco:avatar:boostThreshold = 0.5 (
-        doc = "Normalized speed_boost command threshold that activates the multiplier."
-    )
-    float lunco:avatar:inputDeadzone = 0.01 (
-        doc = "Absolute command magnitude below which an avatar axis is idle."
+        doc = "Whether this prim is the scene's local avatar role."
     )
 }
 
@@ -792,9 +749,12 @@ class "LunCoCameraAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = "Declares a standard UsdGeomCamera's LunCo runtime role and sole pose authority. Apply to every non-avatar camera that participates in a LunCo scene."
+    doc = "Declares a standard UsdGeomCamera's LunCo runtime role and sole pose authority. Apply to every camera that participates in a LunCo scene."
 )
 {
+    double3 lunco:cameraLookAt (
+        doc = "Optional parent-local point this standard camera faces."
+    )
     uniform token lunco:cameraRole = "viewport" (
         allowedTokens = ["viewport", "sensor"]
         doc = "viewport participates in the main workbench view; sensor is an instrument camera and never becomes a window-view candidate."

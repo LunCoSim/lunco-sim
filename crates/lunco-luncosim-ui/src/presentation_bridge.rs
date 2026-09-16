@@ -746,11 +746,16 @@ fn report_dome_environment_status(
 
 /// Mirror the aggregate USD-driven Modelica lifecycle into the same status
 /// channel consumed by offline recording readiness. One scene can create many
-/// participants; publishing one permanent event per participant left the last
-/// source filename looking like ongoing work after the scene had settled.
+/// participants; the bridge waits for the current participant set to settle,
+/// then publishes one aggregate event for that set. The set is the lifecycle
+/// owner here, not the status-bar text: formatting changes cannot accidentally
+/// hide a new participant, a participant removal, or recovery from failure.
 fn report_modelica_status(
     pending_sources: Query<(), With<lunco_usd_sim_cosim::PendingModelicaSource>>,
-    models: Query<&lunco_modelica_runtime::ModelicaModel, With<lunco_cosim_core::UsdSourcedCosim>>,
+    models: Query<
+        (Entity, &lunco_modelica_runtime::ModelicaModel),
+        With<lunco_cosim_core::UsdSourcedCosim>,
+    >,
     bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut mirror: ResMut<ModelicaStatusMirrorState>,
 ) {
@@ -765,11 +770,11 @@ fn report_modelica_status(
     // the first tick that would make the participant Running can never happen.
     // The authoritative source lifecycle is the Modelica model itself; the
     // solver's first-step hold remains owned by the readiness subsystem.
-    let mut model_count = 0;
+    let mut participants = models.iter().map(|(entity, _)| entity).collect::<Vec<_>>();
+    participants.sort_unstable();
     let mut compiling = 0;
     let mut failed = 0;
-    for model in &models {
-        model_count += 1;
+    for (_, model) in &models {
         let ready = model.is_compiled && !model.is_compiling && model.last_error.is_none();
         if !ready && model.last_error.is_none() {
             compiling += 1;
@@ -797,21 +802,28 @@ fn report_modelica_status(
         bus.remove_progress(SOURCE);
     }
 
-    if !active && failed == 0 && model_count > 0 && (mirror.was_active || mirror.model_count == 0) {
+    if participants.is_empty() || failed > 0 {
+        mirror.ready_after_interruption = true;
+    }
+    if !active
+        && failed == 0
+        && !participants.is_empty()
+        && (mirror.ready_after_interruption || mirror.participants != participants)
+    {
         bus.push(
             SOURCE,
             lunco_status_core::status_bus::StatusLevel::Info,
-            format!("Modelica ready — {model_count} participant(s)"),
+            format!("Modelica ready — {} participant(s)", participants.len()),
         );
+        mirror.participants = participants;
+        mirror.ready_after_interruption = false;
     }
-    mirror.was_active = active;
-    mirror.model_count = model_count;
 }
 
 #[derive(Resource, Default)]
 struct ModelicaStatusMirrorState {
-    was_active: bool,
-    model_count: usize,
+    participants: Vec<Entity>,
+    ready_after_interruption: bool,
 }
 
 fn reset_modelica_status_mirror_on_scene_teardown(
@@ -889,5 +901,48 @@ mod modelica_status_tests {
         assert!(bus
             .active_progress()
             .all(|event| { event.source != lunco_status_core::status_bus::MODELICA_SOURCE }));
+    }
+
+    #[test]
+    fn modelica_readiness_waits_for_the_settled_participant_set() {
+        let mut app = App::new();
+        app.insert_resource(lunco_status_core::status_bus::StatusBus::default())
+            .init_resource::<ModelicaStatusMirrorState>()
+            .add_systems(Update, report_modelica_status);
+        app.world_mut()
+            .spawn((lunco_cosim_core::UsdSourcedCosim, ready_model("First")));
+        let second = app
+            .world_mut()
+            .spawn((lunco_cosim_core::UsdSourcedCosim, ready_model("Second")))
+            .id();
+        app.world_mut()
+            .entity_mut(second)
+            .get_mut::<lunco_modelica_runtime::ModelicaModel>()
+            .expect("second Modelica model")
+            .is_compiled = false;
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .history_total(),
+            0,
+            "the bridge must not announce a partial participant set"
+        );
+
+        app.world_mut()
+            .entity_mut(second)
+            .get_mut::<lunco_modelica_runtime::ModelicaModel>()
+            .expect("second Modelica model")
+            .is_compiled = true;
+        app.update();
+        let bus = app
+            .world()
+            .resource::<lunco_status_core::status_bus::StatusBus>();
+        assert_eq!(bus.history_total(), 1);
+        assert_eq!(
+            bus.history().next().map(|event| event.message.as_str()),
+            Some("Modelica ready — 2 participant(s)")
+        );
     }
 }

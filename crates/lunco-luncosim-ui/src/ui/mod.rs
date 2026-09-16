@@ -1634,7 +1634,7 @@ mod tests {
         properties.insert("height".to_owned(), ExposureValue::Number(240.0));
         let exposure = ExposureSurface {
             properties,
-            ..default()
+            ..Default::default()
         };
         assert_eq!(runtime_ui_dimension(&exposure, "width"), Some(280.0));
         assert_eq!(runtime_ui_dimension(&exposure, "height"), Some(240.0));

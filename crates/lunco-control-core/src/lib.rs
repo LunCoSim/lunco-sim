@@ -526,6 +526,21 @@ impl CancelIntent<'_, '_> {
 /// Install the semantic-control resources and the shared leafwing action state.
 pub struct LunCoControlPlugin;
 
+/// Install the semantic-control substrate exactly once at an application
+/// composition boundary.
+///
+/// Avatar, controller, and workbench plugins can be composed independently in
+/// headless, Editor, or GUI hosts. They all depend on the same substrate, so
+/// making each caller hand-roll an `add_plugins` call turns normal composition
+/// into a startup panic. This helper is an idempotent ownership check, not a
+/// runtime fallback: the plugin is still required and is installed before the
+/// caller registers systems that consume its resources.
+pub fn ensure_control_plugin(app: &mut App) {
+    if !app.is_plugin_added::<LunCoControlPlugin>() {
+        app.add_plugins(LunCoControlPlugin);
+    }
+}
+
 impl Plugin for LunCoControlPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(InputManagerPlugin::<UserIntent>::default())

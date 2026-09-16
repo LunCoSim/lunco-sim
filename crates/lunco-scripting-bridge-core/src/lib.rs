@@ -66,6 +66,14 @@ pub trait ValueBuilder {
     fn float(&self, f: f64) -> Self::Value;
     /// An integer.
     fn int(&self, i: i64) -> Self::Value;
+    /// An unsigned integer.
+    ///
+    /// Backends must preserve the value without narrowing it.  A backend
+    /// whose native integer type cannot represent the full `u64` range may
+    /// choose an explicit lossless representation (for example, decimal
+    /// text) rather than truncating or converting through a floating point
+    /// value.
+    fn uint(&self, u: u64) -> Self::Value;
     /// A boolean.
     fn bool(&self, b: bool) -> Self::Value;
     /// A string.
@@ -175,7 +183,7 @@ pub fn build_from_reflect<B: ValueBuilder>(
             return Some(b.int(*v as i64));
         }
         if let Some(v) = any.downcast_ref::<u64>() {
-            return Some(b.int(*v as i64));
+            return Some(b.uint(*v));
         }
         if let Some(v) = any.downcast_ref::<bool>() {
             return Some(b.bool(*v));
@@ -243,7 +251,9 @@ pub fn build_from_reflect<B: ValueBuilder>(
 }
 
 /// Convert a `serde_json::Value` (a `cmd`/`query` result, or telemetry payload)
-/// into a backend-native value in one pass. Integers stay integers.
+/// into a backend-native value in one pass. Signed and unsigned integers stay
+/// integers when the backend supports their range; otherwise the backend's
+/// explicit lossless unsigned representation is used.
 pub fn build_from_json<B: ValueBuilder>(b: &B, v: &serde_json::Value) -> B::Value {
     use serde_json::Value as J;
     match v {
@@ -252,8 +262,15 @@ pub fn build_from_json<B: ValueBuilder>(b: &B, v: &serde_json::Value) -> B::Valu
         J::Number(n) => {
             if let Some(i) = n.as_i64() {
                 b.int(i)
+            } else if let Some(u) = n.as_u64() {
+                b.uint(u)
+            } else if let Some(f) = n.as_f64() {
+                b.float(f)
             } else {
-                b.float(n.as_f64().unwrap_or(0.0))
+                // Preserve an unusual numeric token instead of silently
+                // replacing it with zero. This branch is only reachable for
+                // a number outside serde_json's native scalar projections.
+                b.string(&n.to_string())
             }
         }
         J::String(s) => b.string(s),
@@ -294,6 +311,9 @@ impl ValueBuilder for JsonBuilder {
     }
     fn int(&self, i: i64) -> serde_json::Value {
         serde_json::Value::Number(i.into())
+    }
+    fn uint(&self, u: u64) -> serde_json::Value {
+        serde_json::Value::Number(u.into())
     }
     fn bool(&self, b: bool) -> serde_json::Value {
         serde_json::Value::Bool(b)
@@ -1394,7 +1414,7 @@ pub fn build_event<B: ValueBuilder>(b: &B, ev: &TelemetryEvent) -> B::Value {
         ("name".to_string(), b.string(&ev.name)),
         // The emitter's gid — branch on `evt.source` to tell WHICH sensor/script
         // fired (independent of the name). `0` = global/no entity.
-        ("source".to_string(), b.int(ev.source as i64)),
+        ("source".to_string(), b.uint(ev.source)),
         ("value".to_string(), telemetry_value(b, &ev.data)),
         (
             "severity".to_string(),
@@ -1630,5 +1650,16 @@ mod tests {
         );
         let error = query_raw("MissingProbe", serde_json::json!({})).expect_err("missing query");
         assert!(error.contains("not registered"), "{error}");
+    }
+
+    #[test]
+    fn unsigned_values_are_preserved_without_float_or_signed_narrowing() {
+        let reflected = build_from_reflect(&JsonBuilder, &u64::MAX)
+            .expect("u64 reflection must have a native JSON representation");
+        assert_eq!(reflected.as_u64(), Some(u64::MAX));
+
+        let encoded = serde_json::json!(u64::MAX);
+        let decoded = build_from_json(&JsonBuilder, &encoded);
+        assert_eq!(decoded.as_u64(), Some(u64::MAX));
     }
 }

@@ -19,7 +19,6 @@ def Camera "VisualReviewCamera" (
         {
         }
         uniform bool lunco:avatar = true
-    uniform token lunco:cameraMode = "freeflight"
     double3 lunco:cameraLookAt = (0.0, 1.0, 50.0)
     double3 xformOp:translate = (0.0, 18.0, 82.0)
     float focalLength = 18.0

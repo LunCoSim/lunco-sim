@@ -77,6 +77,14 @@ package checks after changing skill metadata or packaging.
   preserve an obsolete contract. Policy and tutorial-specific assertions belong
   in Rhai when the architecture permits; Rust owns shared engine mechanisms,
   kinematics, dynamics, and hot paths.
+- **No hidden precision narrowing.** Canonical simulation state, requirements,
+  authored parameters, and persisted values stay in their native `f64`/USD
+  `double` representation. Do not silently convert them to `f32`/USD `float`
+  during a simulation or storage pass. Narrowing is allowed only at an explicit
+  rendering/GPU boundary, or where a USD schema mandates a lower-precision field
+  (for example `extent` or a color), and that boundary must name the conversion
+  and validate its range. Geometry dimensions such as `UsdGeomCylinder.radius`
+  and `.height` use the schema's `double` fields.
 - Keep the Rust core lean. Rust exposes the generic, low-level capabilities that
   authored behavior needs; most product behavior, policy, scenario glue, and
   tutorial flow belongs in Rhai. Add Rust behavior only when it is an

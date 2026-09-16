@@ -67,12 +67,15 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | :--- | :--- |
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
 | **`lunco-control-core`** | Generic semantic-control contracts: the shared `UserIntent` vocabulary, authored intent-to-port bindings, input state, egui focus gate, and bounded causal-edge trace. Input producers and domain consumers depend on this focused package instead of placing control policy in `lunco-core`. |
+| **`lunco-interaction-core`** | Small cross-runtime cursor-interaction contract: editor drag state and the affected-entity marker consumed by camera, possession, and follow runtimes. It contains no editor implementation. |
 | **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |
 | **`lunco-input-ui`** | Optional egui presentation for the shared input state: the recording/observation input overlay and its typed visibility command. It does not translate input or own vessel control. |
-| **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, authored rig intent, smoothing defaults, pose-transition state, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
+| **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, smoothing defaults, pose-transition state, adaptive clip-plane math, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
+| **`lunco-camera-runtime`** | Generic interactive camera realization: camera-mode exclusivity, frame-handoff rebasing, free-flight/surface pose writers, persisted camera-input settings, and the typed `SetCameraInput` command over the camera-core contracts. Rhai authors presentation policy through the generic command surface. |
 | **`lunco-avatar-core`** | Backend-neutral avatar contracts: ECS role markers and the derived local-avatar index, possession/focus command payloads, transient notification command/queue types, and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
+| **`lunco-avatar-camera-core`** | Avatar-specific camera transition contracts: BigSpace orbit-return state and arrival markers. It depends on the generic camera contracts without making generic camera consumers carry avatar frame state. |
 | **`lunco-avatar-policy`** | Twin-scoped avatar safety policy and physical collision-controller settings. It is shared directly by the runtime and UI, so the UI does not depend on the monolithic avatar implementation. |
-| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: fast camera/possession systems and the local input-to-intent boundary. It consumes `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
+| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: possession/focus systems, local input-to-intent translation, and source-specific camera solvers. Generic camera realization lives in `lunco-camera-runtime`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
 | **`lunco-avatar-ui`** | Optional egui presentation adapter for `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`: avatar status panel, camera/name-tag and notification overlays, and the Avatar settings row. It does not depend on the avatar runtime implementation. |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Specialized vessel-control adapter: translates semantic `UserIntent` actions into authored port writes, handles control authority and input injection, and yields a vessel to its owning session (spec 034). Shared keymap settings live in `lunco-input-core`. |
@@ -95,7 +98,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, visual-split markers, preview/ancestry ownership, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, projection cursors, user-ownership events, and the live-projection wake signal. It owns no stage loading, composition, rendering, or UI. |
-| **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection intent, authored avatar-camera contract decoding, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It contains no raw input mapping and does not own geometry math or visual projection. |
+| **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection/look-at intent, camera roles/pose, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It contains no avatar behavior parser or raw input mapping and does not own geometry math or visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdVisualPlugin`): projects USD hierarchy, shapes, transforms, and material intent into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns async projection orchestration while consuming mesh geometry from `lunco-usd-bevy-mesh` and installing the independent camera and light adapters. |
 | **`lunco-usd-bevy-mesh`** | Render-free USD visual mesh projection for built-in primitives, native `UsdGeomMesh`, `BasisCurves`/`NurbsCurves`, and `NurbsPatch`, including quality invalidation and low-level geometry tests. |
@@ -108,7 +111,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-avian`** | Physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. Its USD physics-material reader is isolated from the main projection module. It consumes the independent collision-filter package and `lunco-usd-avian-reader`; lint fact production is in `lunco-usd-avian-lint`. |
 | **`lunco-usd-actuation`** | Render-free composed USD force/torque actuator reader. It converts authored actuator geometry and limits into generic co-simulation components without depending on the Avian runtime projection. |
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
-| **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It publishes authored avatar identity/intent handoff only; it has no camera-mode realization or raw input dependency. It no longer installs the heavy USD cosim translator. |
+| **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
 | **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, and pending differential contract used by vehicle and cosim projectors. It contains no projection systems. |
 | **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, scene lifecycle, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`. |
 | **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
@@ -122,7 +125,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-scene-camera`** | Render-free camera framing commands (`FocusEntityById`, `FocusEntityByPath`, and `SetCameraLookAt`) plus the active-physics-frame focus transaction. Application composition roots install it alongside the independent `lunco-scene-selection` plugin when path focus and telemetry focus are exposed. |
 | **`lunco-scene-selection`** | Render-free scene-lifetime selection state and the shared selection-to-telemetry-focus projection. It is independent from scene mutation commands so exposure and other headless consumers do not inherit the command layer's dependency closure. |
 | **`lunco-scene-catalog`** | Production USD-backed catalog boundary: asynchronous asset enumeration, authored `doc`/`lunco:spawnable` metadata, parser/read status, shader/source listings, `SpawnCatalog`, and the generic runtime USD spawn constructor. `ListSpawnCatalog` and `ListUsdAssetMetadata` publish the same authored `doc` text consumed by the catalog UI and Rhai scene tests. It also owns catalog-only rescan commands and is installed by `SpawnCommandPlugin`. |
-| **`lunco-scene-queries`** | Production read-only scene boundary: `QueryEntity` for active-physics identity/pose and `QueryUsdPrim` for composed USD attributes, relationships, topology, and collision bounds. Installed by `SpawnCommandPlugin`; shared by Rhai, HTTP, MCP, and headless hosts. |
+| **`lunco-scene-queries`** | Production read-only scene boundary: `QueryEntity` for active-physics identity/pose, `QueryUsdPrim` for one composed USD prim, and `QueryUsdPrims` for deterministic multi-prim reads from one composed-stage snapshot. Installed by `SpawnCommandPlugin`; shared by Rhai, HTTP, MCP, and headless hosts. |
 | **`lunco-scene-authoring`** | Production USD authoring boundary: document ownership resolution, `SetObjectProperty`, standard USD property persistence, and journaled/live shader source commands. Installed by `SpawnCommandPlugin`; it has no dependency on scene mutation handlers. |
 | **`lunco-scene-validation`** | Production asset, loaded-stage, scene-test discovery, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, `luncosim test --list`, live `RunLint`, USD lint-fact aggregation, and Twin namespace inspection. It owns composition/parse/lint integration while `lunco-scene-commands` owns scene mutation. |
 | **`lunco-materials`** | Shader appearance **intent**, render-free: `ShaderLook` (`.wgsl` path + open `dyn_params` + texture layers), the WGSL-reflected param schema, the CDLOD vertex attribute. Names no material type. |
@@ -383,11 +386,30 @@ semantic-edge trace. It is the single contract used by raw input translation,
 avatar behavior, editor tools, API/Rhai simulation, and vessel control; the
 generic engine substrate remains in `lunco-core`.
 
+**`lunco-interaction-core`**
+Small cross-runtime cursor-interaction contract package. The editor publishes
+`DragModeActive` and `GizmoDragging`; camera, possession, and follow runtimes
+consume those contracts to stand down during a transform drag. Keeping these
+types here prevents the camera runtime from depending on the high-fan-out
+`lunco-core` package and keeps editor implementation details out of consumers.
+
 **`lunco-avatar`**
-Headless-safe human-interaction runtime. Implements the camera **rigs** (SpringArm, Orbit, FreeFlight, Surface), possession/focus observers, and input intent projection described by `lunco-camera-core` and `lunco-avatar-core`. It consumes the shared Twin-scoped safety policy from `lunco-avatar-policy`; optional egui presentation is supplied by `lunco-avatar-ui`. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy-camera`.
+Headless-safe local-avatar runtime. Implements possession/focus observers,
+input intent projection, and the BigSpace-aware orbit/spring-arm camera solvers
+described by `lunco-camera-core` and `lunco-avatar-core`. Generic camera mode
+exclusivity, input policy, clip-plane math, and free-flight/surface pose writers
+live in `lunco-camera-runtime`/`lunco-camera-core`; optional egui presentation is supplied by
+`lunco-avatar-ui`. The viewport reconciler in `lunco-usd-bevy-camera` owns which
+camera is shown.
 
 **`lunco-avatar-core`**
 Backend-neutral avatar contract package. Its `roles` module owns the `Avatar`, `LocalAvatar`, and `RemoteAvatar` markers plus the derived `TheLocalAvatar` lookup and its single-claim hooks. The package also owns possession/focus command payloads, the `ShowNotification`/`ScreenNotifications` presentation contract, and the `AvatarSceneHandoffSet` schedule boundary. Scene camera, USD projection, networking, and UI consumers use these focused contracts; `lunco-avatar` supplies the avatar system implementation.
+
+**`lunco-avatar-camera-core`**
+Avatar-specific camera transition contract package. Owns the BigSpace-backed
+`OrbitViewReturn` snapshot, its captured behavior variants, and orbit arrival
+markers. Generic camera consumers use `lunco-camera-core` without acquiring
+these avatar-only frame and restoration types.
 
 **`lunco-avatar-policy`**
 Owns the generic workspace-setting interpretation for avatar soil collision and
@@ -395,7 +417,24 @@ the runtime's measured collision shape. Both the movement runtime and avatar UI
 read this package directly; it has no dependency on the avatar implementation.
 
 **`lunco-camera-core`**
-Backend-neutral camera contract package. Owns reusable camera behavior components, shared smoothing defaults, pure frame/zoom/movement math, authored rig intent, camera-mode transition state, and pose-input accumulators. `lunco-avatar` supplies the specialized input boundary and fast BigSpace solvers.
+Backend-neutral camera contract package. Owns reusable camera behavior
+components, shared smoothing defaults, pure frame/zoom/movement/clip-plane
+math, camera-mode transition state, and pose-input accumulators. It does not
+choose an avatar, a camera source, or an authored behavior policy.
+
+**`lunco-camera-runtime`**
+Generic interactive camera realization package. Owns the exclusive camera-mode
+hooks, frame-handoff rebasing, free-flight/surface pose writers, persisted
+`CameraInputSettings`, and the `SetCameraInput` command over `lunco-camera-core`.
+It is reusable by avatar, inspection, and other authored
+operators; source-specific frame production remains with the calling runtime,
+while Rhai can author presentation policy through the command surface.
+
+**`lunco-camera-celestial`**
+Celestial spatial adapter for the generic `SurfaceCameraFrame` contract and
+adaptive perspective clip planes. It resolves a camera's body-fixed ENU basis
+and celestial bounds from live BigSpace poses, keeping those conversions out of
+generic camera and avatar interaction packages.
 
 **`lunco-avatar-ui`**
 Optional egui presentation adapter for `lunco-camera-core`,

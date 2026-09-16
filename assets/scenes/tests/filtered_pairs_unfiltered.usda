@@ -42,8 +42,8 @@ def Xform "SandboxScene" (
         bool physics:collisionEnabled = true
     }
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -52,7 +52,6 @@ def Xform "SandboxScene" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 6.0, 0.0)
         double3 xformOp:translate = (0.0, 8.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]

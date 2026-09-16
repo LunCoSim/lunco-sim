@@ -43,7 +43,7 @@ use bevy::input::{
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
 use leafwing_input_manager::prelude::ActionState;
-use lunco_control_core::{ControlBinding, LunCoControlPlugin, UserIntent};
+use lunco_control_core::{ControlBinding, UserIntent, ensure_control_plugin};
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 use lunco_cosim_core::ControlLink;
 use lunco_input_core::InputBindingsSettings;
@@ -612,7 +612,7 @@ fn reset_scene_control_state(
 
 impl Plugin for LunCoControllerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(LunCoControlPlugin);
+        ensure_control_plugin(app);
         // NOTE: OwnedInputLog / AppliedInputSeq are always-on session substrate
         // owned by LunCoCoreSessionPlugin (lunco-core-session). The controller's
         // observers consume them unconditionally, but it does NOT init them here;

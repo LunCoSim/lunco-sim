@@ -18,8 +18,10 @@ payload, habitat, or instrument; it is not a model-specific design contract.
   preview. A saved or committed component edit propagates to dependent
   previews without a scene restart, while the projection owns the camera and
   selection state.
-- `QueryUsdPrim` and the measurement/authoring facades expose composed
-  topology, bounds, frames, schemas, relationships, and source provenance.
+- `QueryUsdPrim` and `QueryUsdPrims` plus the measurement/authoring facades
+  expose composed topology, bounds, frames, schemas, relationships, and
+  source provenance. `QueryUsdPrims` validates the request once and reads all
+  paths from one composed-stage snapshot in request order.
 - `luncosim test-component --twin <PATH> --component <NAME>` already resolves
   a manifest-owned component, verification case, fixture, and verdict channel
   without duplicating component-specific loading logic.
@@ -115,12 +117,11 @@ in the generic report: `pass`, `fail`, `planned`, and `not_run` must be
 separate outcomes. A report containing planned checks must not be presented as
 complete acceptance merely because its executable subset passed.
 
-The evaluator's local query cache reduces duplicate reads, but large
-assemblies still cross the Rhai→Rust query boundary once per distinct path and
-attribute shape. A native `QueryUsdPrims`/measurement batch provider should
-read one composed stage snapshot and return typed records in canonical path
-order. Rhai should retain the check table and policy; Rust should own only the
-bounded traversal and value conversion.
+The native `QueryUsdPrims` provider now removes the repeated stage-open and
+projection-check cost: it reads one composed stage snapshot and returns typed
+records in the caller's deterministic path order. Rhai retains the check table
+and policy; Rust owns only the bounded traversal and value conversion. The
+measurement facade uses this provider for multi-endpoint distance checks.
 
 ## Deliberately not a feature
 

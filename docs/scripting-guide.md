@@ -107,6 +107,14 @@ After review, apply USD operations through `assembly_edit::batch` or the normal
 proposal/review/commit flow, then re-read the new generation. Do not write
 USDA text directly.
 
+Camera creation is authored through the camera entry in that recipe: Rhai
+validates the requested role, pose, projection, look-at, and standard
+`UsdGeomCamera` intrinsics, then emits a standard `def Camera` with
+`LunCoCameraAPI`. Omitted intrinsics use only the defaults defined by the USD
+camera schema. A missing or invalid camera contract remains a visible
+no-camera/diagnostic result; the runtime does not choose a first camera, infer
+an avatar camera from an entity, or repair malformed authored values.
+
 Use `port_graph` to discover standard USD `inputs:`, `outputs:`, and
 `connectors:` endpoints. `wiring_plan` validates exact source/sink paths,
 direction, and USD type before returning `SetConnection` operations. Modelica
@@ -866,6 +874,23 @@ let selected = query("QueryUsdPrim", #{
     topology: true,
 });
 ```
+
+When a check needs several existing prims, use `QueryUsdPrims` so the runtime
+validates the document/projection once and reads one composed-stage snapshot:
+
+```rhai
+let records = query("QueryUsdPrims", #{
+    doc_id: doc,
+    paths: ["/Assembly/FrameA", "/Assembly/FrameB"],
+    attrs: ["xformOp:translate"],
+});
+```
+
+The provider is strict: an invalid or missing path fails the whole request;
+`records` remains in the requested deterministic path order. Use
+`QueryUsdPrim` when a rule intentionally probes one path that may be absent and
+needs its individual error. Do not recreate a Rhai cache around these reads;
+the native provider owns the snapshot boundary and generation check.
 
 For numeric authoring evidence, use the built-in `authoring_measurements`
 Rhai library. It evaluates explicit requirements over the same composed USD

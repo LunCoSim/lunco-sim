@@ -45,8 +45,8 @@ def Xform "SandboxScene" (
     }
 
     # Avatar so the API observer has someone to focus from.
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -55,7 +55,6 @@ def Xform "SandboxScene" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (1.0, 5.0, 0.0)
         double3 xformOp:translate = (0.0, 8.0, 12.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]

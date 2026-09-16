@@ -1639,7 +1639,7 @@ mod tests {
         // The structural mutation verbs share the registry under a capability key,
         // ownership-gated so a remote script only restructures what it owns.
         assert_eq!(
-            reg.policy_for(bridge_core::capability::STRUCTURAL_MUTATE),
+            reg.policy_for(super::bridge_core::capability::STRUCTURAL_MUTATE),
             CommandPolicy::OWNED_CONTROL,
         );
 

@@ -40,5 +40,8 @@ web-sys = { workspace = true, features = [
 ruzstd = "0.7"
 tar = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

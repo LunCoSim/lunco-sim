@@ -35,10 +35,12 @@
 
 use bevy::prelude::*;
 use lunco_camera_core::CameraPoseMode;
+use lunco_usd_bevy_core::read::read_vec3_f64;
 use openusd::schemas::geom::{self, tokens};
 use openusd::sdf::{Path as SdfPath, Value};
 
-use lunco_usd_data::units::StageMetrics;
+use lunco_usd_bevy_scene::UsdSceneProjectionFailed;
+use lunco_usd_data::units::{ConventionTransform, StageMetrics};
 
 /// `UsdGeomCamera` spec defaults (Pixar), so an unauthored attribute matches a
 /// standard ~50 mm full-frame camera rather than Bevy's 45° default FOV.
@@ -55,11 +57,36 @@ const DEFAULT_FAR: f32 = 1.0e6;
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct UsdSensorCamera;
 
+/// Outcome of projecting a standard USD camera prim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CameraProjectionOutcome {
+    /// The prim is not a `UsdGeomCamera`.
+    NotCamera,
+    /// The camera passed the authored contract and its render-free intent was inserted.
+    Projected,
+    /// The camera was authored but invalid, and a terminal failure marker was inserted.
+    Rejected,
+}
+
+fn reject_camera(
+    commands: &mut Commands,
+    entity: Entity,
+    sdf_path: &SdfPath,
+    reason: impl Into<String>,
+) -> CameraProjectionOutcome {
+    let message = format!("{}: {}", sdf_path.as_str(), reason.into());
+    error!("[usd-camera] {message}");
+    commands
+        .entity(entity)
+        .try_insert((UsdSceneProjectionFailed(message), Visibility::Hidden));
+    CameraProjectionOutcome::Rejected
+}
+
 /// Convert standard `UsdGeomCamera` photographic exposure into Bevy EV100.
 ///
-/// This is deliberately shared by imported cameras and `LunCoAvatarAPI`
-/// cameras: a camera's ISO, shutter time and f-stop have one USD spelling and
-/// therefore one conversion. `exposure` is a post-photographic compensation in
+/// This is deliberately shared by every imported viewport camera: a camera's
+/// ISO, shutter time and f-stop have one USD spelling and therefore one
+/// conversion. `exposure` is a post-photographic compensation in
 /// USD, so positive compensation opens the effective exposure (lowers EV).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CameraExposureError {
@@ -130,7 +157,7 @@ fn read_camera_exposure_real(
 }
 
 /// If `prim_type` is `Camera`, attach the camera intent to `entity` and return
-/// `true`. The render binding later adds an **inactive** Bevy `Camera3d` with a
+/// [`CameraProjectionOutcome::Projected`]. The render binding later adds an **inactive** Bevy `Camera3d` with a
 /// complete render graph. Called from `instantiate_usd_prim`; the prim's
 /// transform and visibility are applied by the shared path there.
 pub fn instantiate_camera_prim(
@@ -140,18 +167,36 @@ pub fn instantiate_camera_prim(
     commands: &mut Commands,
     entity: Entity,
     quality: lunco_render::RenderQualityProfile,
-) -> bool {
+) -> CameraProjectionOutcome {
     if prim_type != Some(tokens::T_CAMERA) {
-        return false;
+        return CameraProjectionOutcome::NotCamera;
     }
 
     let Some((projection, h_fov)) = read_projection(reader, sdf_path) else {
-        // The prim is still handled as a USD camera, but it must not enter a
-        // render role with an invalid Bevy projection. The authored value is
-        // reported at the point where it becomes invalid; silently choosing a
-        // perspective or 45° fallback would hide a broken scene contract.
-        return true;
+        // The prim remains a USD camera identity, but it must not enter a
+        // render role with an invalid Bevy projection. The failed marker makes
+        // the terminal state visible to scene/UI diagnostics; no heuristic
+        // projection can hide a broken authored contract.
+        reject_camera(
+            commands,
+            entity,
+            sdf_path,
+            "invalid USD projection or camera film-back attributes",
+        );
+        return CameraProjectionOutcome::Rejected;
     };
+    // `cameraLookAt` is optional, but an authored value must be a finite USD
+    // vec3. Do not create a partially projected camera that quietly keeps an
+    // unrelated authored rotation when the aim contract is malformed.
+    if read_camera_look_at(reader, sdf_path).is_err() {
+        reject_camera(
+            commands,
+            entity,
+            sdf_path,
+            "authored lunco:cameraLookAt is not a finite USD vec3",
+        );
+        return CameraProjectionOutcome::Rejected;
+    }
     let kind = match &projection {
         Projection::Orthographic(_) => "orthographic",
         _ => "perspective",
@@ -176,14 +221,66 @@ pub fn instantiate_camera_prim(
     let is_avatar = if reader.has_api_schema(sdf_path, "LunCoAvatarAPI") {
         match read_camera_bool(reader, sdf_path, "lunco:avatar", false) {
             Some(value) => value,
-            None => return true,
+            None => {
+                reject_camera(
+                    commands,
+                    entity,
+                    sdf_path,
+                    "authored lunco:avatar has an unsupported value",
+                );
+                return CameraProjectionOutcome::Rejected;
+            }
         }
     } else {
         false
     };
     let has_camera_api = reader.has_api_schema(sdf_path, "LunCoCameraAPI");
+    if is_avatar && !has_camera_api {
+        error!(
+            "[usd-bevy] {} has LunCoAvatarAPI without LunCoCameraAPI; refusing incomplete avatar camera contract",
+            sdf_path.as_str()
+        );
+        reject_camera(
+            commands,
+            entity,
+            sdf_path,
+            "LunCoAvatarAPI requires LunCoCameraAPI",
+        );
+        return CameraProjectionOutcome::Rejected;
+    }
     let (is_viewport, is_sensor, pose) = if is_avatar {
-        (true, false, CameraPoseMode::Interactive)
+        match read_camera_token(
+            reader,
+            sdf_path,
+            "lunco:cameraRole",
+            "viewport",
+            &["viewport", "sensor"],
+        ) {
+            Some(value) if value == "viewport" => (true, false, CameraPoseMode::Interactive),
+            Some(value) if value == "sensor" => {
+                error!(
+                    "[usd-bevy] {} is marked lunco:avatar but has cameraRole=sensor; refusing contradictory camera roles",
+                    sdf_path.as_str()
+                );
+                reject_camera(
+                    commands,
+                    entity,
+                    sdf_path,
+                    "lunco:avatar cameras must have lunco:cameraRole=viewport",
+                );
+                return CameraProjectionOutcome::Rejected;
+            }
+            None => {
+                reject_camera(
+                    commands,
+                    entity,
+                    sdf_path,
+                    "missing or invalid lunco:cameraRole",
+                );
+                return CameraProjectionOutcome::Rejected;
+            }
+            Some(_) => unreachable!("camera token helper validates its allowed values"),
+        }
     } else if !has_camera_api {
         warn!(
             "[usd-bevy] {} Camera has no LunCoCameraAPI; it is not a viewport or sensor camera",
@@ -200,7 +297,15 @@ pub fn instantiate_camera_prim(
         ) {
             Some(value) if value == "authored" => CameraPoseMode::Authored,
             Some(value) if value == "mounted" => CameraPoseMode::Mounted,
-            None => return true,
+            None => {
+                reject_camera(
+                    commands,
+                    entity,
+                    sdf_path,
+                    "missing or invalid lunco:cameraPose",
+                );
+                return CameraProjectionOutcome::Rejected;
+            }
             Some(_) => unreachable!("camera token helper validates its allowed values"),
         };
         // A mounted follower has a fixed camera-local offset. Time samples on
@@ -219,7 +324,13 @@ pub fn instantiate_camera_prim(
             );
             // Reject this camera from runtime roles. Reclassifying it as an
             // authored viewport would hide an invalid two-writer declaration.
-            return true;
+            reject_camera(
+                commands,
+                entity,
+                sdf_path,
+                "mounted cameras cannot also author xform timeSamples",
+            );
+            return CameraProjectionOutcome::Rejected;
         } else {
             match read_camera_token(
                 reader,
@@ -230,7 +341,15 @@ pub fn instantiate_camera_prim(
             ) {
                 Some(value) if value == "viewport" => (true, false, pose),
                 Some(value) if value == "sensor" => (false, true, pose),
-                None => return true,
+                None => {
+                    reject_camera(
+                        commands,
+                        entity,
+                        sdf_path,
+                        "missing or invalid lunco:cameraRole",
+                    );
+                    return CameraProjectionOutcome::Rejected;
+                }
                 Some(_) => unreachable!("camera token helper validates its allowed values"),
             }
         }
@@ -239,7 +358,15 @@ pub fn instantiate_camera_prim(
     let camera_exposure = if is_viewport {
         match read_camera_exposure_ev100(reader, sdf_path) {
             Ok(exposure) => exposure,
-            Err(_) => return true,
+            Err(_) => {
+                reject_camera(
+                    commands,
+                    entity,
+                    sdf_path,
+                    "authored camera exposure is invalid",
+                );
+                return CameraProjectionOutcome::Rejected;
+            }
         }
     } else {
         None
@@ -296,7 +423,68 @@ pub fn instantiate_camera_prim(
         "unassigned"
     };
     info!("[usd-bevy] {} Camera → {role} ({kind})", sdf_path.as_str());
-    true
+    CameraProjectionOutcome::Projected
+}
+
+/// Apply the optional generic camera aim to a projected standard camera.
+///
+/// `lunco:cameraLookAt` is owned by `LunCoCameraAPI` and is expressed in the
+/// camera parent's USD frame. The visual projector supplies the already
+/// validated stage convention and retains ownership of the complete Bevy
+/// transform; this adapter only supplies the camera-specific orientation.
+pub fn apply_camera_look_at(
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    sdf_path: &SdfPath,
+    prim_type: Option<&str>,
+    convention: &ConventionTransform,
+    transform: &mut Transform,
+) {
+    if prim_type != Some(tokens::T_CAMERA) {
+        return;
+    }
+    let look_at = match read_camera_look_at(reader, sdf_path) {
+        Ok(look_at) => look_at,
+        Err(()) => {
+            error!(
+                "[usd-bevy] {} has an authored cameraLookAt with an invalid vec3 value",
+                sdf_path.as_str()
+            );
+            return;
+        }
+    };
+    let Some([tx, ty, tz]) = look_at else {
+        return;
+    };
+
+    // Both the eye and target are parent-local. Convert the target through the
+    // same USD stage convention as the rest of the camera transform.
+    let target = convention.point(Vec3::new(tx as f32, ty as f32, tz as f32));
+    if (target - transform.translation).length_squared() > 1e-6 {
+        transform.rotation = Transform::from_translation(transform.translation)
+            .looking_at(target, Vec3::Y)
+            .rotation;
+    }
+}
+
+/// Read the optional camera aim while preserving the distinction between an
+/// omitted USD opinion and malformed authored data.
+fn read_camera_look_at(
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    path: &SdfPath,
+) -> Result<Option<[f64; 3]>, ()> {
+    let value = read_vec3_f64(reader, path, "lunco:cameraLookAt");
+    if let Some(value) = value {
+        return value
+            .iter()
+            .all(|component| component.is_finite())
+            .then_some(Some(value))
+            .ok_or(());
+    }
+    if reader.has_authored_attribute(path, "lunco:cameraLookAt") {
+        Err(())
+    } else {
+        Ok(None)
+    }
 }
 
 /// Build a Bevy `Projection` from a `UsdGeomCamera`'s film-back + clip attrs.
@@ -593,6 +781,28 @@ fn conform_vertical_fov(h_fov: f32, v_fov: f32, window_aspect: f32) -> f32 {
 mod tests {
     use super::*;
 
+    #[derive(Resource)]
+    struct CameraEntity(Entity);
+
+    fn project_invalid_camera(
+        stage: NonSend<lunco_usd_bevy_core::canonical::CanonicalStage>,
+        entity: Res<CameraEntity>,
+        mut commands: Commands,
+    ) {
+        let path = SdfPath::new("/Camera").expect("valid test path");
+        assert_eq!(
+            instantiate_camera_prim(
+                &stage.view(),
+                &path,
+                Some(tokens::T_CAMERA),
+                &mut commands,
+                entity.0,
+                lunco_render::RenderingQuality::Balanced.profile(),
+            ),
+            CameraProjectionOutcome::Rejected
+        );
+    }
+
     #[test]
     fn ortho_aperture_is_tenths_of_scene_units_times_meters_per_unit() {
         // Spec defaults: 20.955 / 15.2908 tenths → 2.0955 × 1.52908 world units.
@@ -675,6 +885,50 @@ mod tests {
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert!(read_projection(&stage.view(), &path).is_none());
+    }
+
+    #[test]
+    fn invalid_authored_camera_look_at_is_not_treated_as_omitted() {
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\ndef Camera \"Camera\"\n{\n    string lunco:cameraLookAt = \"not-a-vec3\"\n}\n",
+        );
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        assert!(read_camera_look_at(&stage.view(), &path).is_err());
+    }
+
+    #[test]
+    fn invalid_authored_camera_is_terminal_projection_failure() {
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\ndef Camera \"Camera\"\n{\n    float focalLength = 0\n}\n",
+        );
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app.world_mut().spawn(Visibility::Visible).id();
+        app.insert_non_send(stage);
+        app.insert_resource(CameraEntity(entity));
+        app.add_systems(Update, project_invalid_camera);
+
+        app.update();
+
+        let failure = app
+            .world()
+            .get::<UsdSceneProjectionFailed>(entity)
+            .expect("invalid authored camera must be visible to scene diagnostics");
+        assert!(failure.0.contains("invalid USD projection"));
+        assert_eq!(
+            app.world().get::<Visibility>(entity),
+            Some(&Visibility::Hidden)
+        );
+        assert!(app
+            .world()
+            .get::<lunco_render::SceneCamera>(entity)
+            .is_none());
     }
 
     #[test]

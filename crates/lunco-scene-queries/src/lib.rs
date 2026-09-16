@@ -2,10 +2,13 @@
 //!
 //! `QueryEntity` reports the active physics-frame identity and pose,
 //! `QueryPhysicsState` reports generic body/admission/support facts, while
-//! `QueryUsdPrim` reads composed USD facts and optional runtime topology. The
-//! providers are intentionally separate from scene mutation commands: query
-//! implementation changes then rebuild this package and its consumers without
-//! recompiling the command-handler implementation.
+//! `QueryUsdPrim` and `QueryUsdPrims` read composed USD facts and optional
+//! runtime topology. The multi-prim provider borrows one validated composed
+//! stage for the whole request, which is the preferred path for authored
+//! verification and Editor inspection. The providers are intentionally
+//! separate from scene mutation commands: query implementation changes then
+//! rebuild this package and its consumers without recompiling the
+//! command-handler implementation.
 
 pub mod entity_query;
 pub mod physics_query;

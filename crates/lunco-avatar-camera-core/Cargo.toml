@@ -1,0 +1,15 @@
+[package]
+name = "lunco-avatar-camera-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Avatar-specific camera transition contracts for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+big_space = { workspace = true }
+lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-environment = { path = "../lunco-environment" }
+
+[lints]
+workspace = true

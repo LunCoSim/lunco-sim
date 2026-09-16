@@ -48,7 +48,7 @@ def Xform "SixWheelIndependent" (
         # height behind the chassis so the forward view includes the body and
         # the path ahead, rather than looking outward from the front bumper.
         double3 xformOp:translate = (0.0, 0.55, 4.0)
-        custom double3 lunco:cameraLookAt = (0.0, 0.75, -12.0)
+        double3 lunco:cameraLookAt = (0.0, 0.75, -12.0)
     }
 
     uniform bool lunco:spawnable = true

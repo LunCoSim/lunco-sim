@@ -84,6 +84,7 @@ use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_usd_bevy_twin::{canonical_stage_for_document, scene_document_for, DocBackedTwinScenes};
 use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
+use std::collections::{HashMap, HashSet};
 
 /// One attribute, converted to JSON by probing the typed readers in turn.
 ///
@@ -457,6 +458,398 @@ type PrimRead = (
     Option<serde_json::Value>,
 );
 
+/// The read switches shared by the single- and multi-prim query surfaces.
+/// Keeping this as one native request type is important: a batch query must
+/// use exactly the same composed-data contract as `QueryUsdPrim`, rather than
+/// growing a second, subtly different inspection implementation.
+#[derive(Clone, Default)]
+struct UsdPrimQueryOptions {
+    requested: Option<Vec<String>>,
+    requested_relationships: Option<Vec<String>>,
+    include_relationships: bool,
+    include_connections: bool,
+    include_schemas: bool,
+    include_children: bool,
+    include_collision_bounds: bool,
+    include_geometry_bounds: bool,
+    include_topology: bool,
+}
+
+fn query_options(params: &serde_json::Value) -> UsdPrimQueryOptions {
+    let requested = params
+        .get("attrs")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect()
+        });
+    let requested_relationships = params
+        .get("rels")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect()
+        });
+    UsdPrimQueryOptions {
+        requested,
+        requested_relationships,
+        include_relationships: params
+            .get("relationships")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        include_connections: params
+            .get("connections")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        include_schemas: params
+            .get("schemas")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        include_children: params
+            .get("children")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        include_collision_bounds: params
+            .get("collision_bounds")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        include_geometry_bounds: params
+            .get("geometry_bounds")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        include_topology: params
+            .get("topology")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    }
+}
+
+fn query_document_id(
+    world: &World,
+    params: &serde_json::Value,
+) -> Result<(Option<DocumentId>, Option<u64>), ApiResponse> {
+    if params.get("doc_id").is_none() {
+        return Ok((None, None));
+    }
+    let Some(raw) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
+        return Err(ApiResponse::error(
+            ApiErrorCode::DeserializationError,
+            "QueryUsdPrim: doc_id must be an explicit numeric document id",
+        ));
+    };
+    let doc = DocumentId::new(raw);
+    let Some(host) = world
+        .get_resource::<DocumentRegistry<UsdDocument>>()
+        .and_then(|registry| registry.host(doc))
+    else {
+        return Err(ApiResponse::error(
+            ApiErrorCode::EntityNotFound,
+            format!("QueryUsdPrim: document {doc} is not open"),
+        ));
+    };
+    let generation = host.document().generation();
+    if let Some(synced_generation) = world
+        .get_resource::<DocBackedTwinScenes>()
+        .and_then(|scenes| scenes.synced_generation(doc))
+    {
+        if synced_generation != generation {
+            return Err(ApiResponse::error(
+                ApiErrorCode::InternalError,
+                format!("QueryUsdPrim: document {doc} projection is not current"),
+            ));
+        }
+    }
+    Ok((Some(doc), Some(generation)))
+}
+
+fn spawned_entities_for_paths(
+    world: &World,
+    paths: &HashSet<&str>,
+    doc: Option<DocumentId>,
+    live_stage: Option<bevy::asset::AssetId<UsdStageAsset>>,
+) -> Result<HashMap<String, Entity>, ApiResponse> {
+    if doc.is_some() {
+        return Ok(HashMap::new());
+    }
+    let Some(mut query) = QueryState::<(Entity, &UsdPrimPath)>::try_new(world) else {
+        return Err(ApiResponse::error(
+            ApiErrorCode::InternalError,
+            "QueryUsdPrim: USD entity query is unavailable",
+        ));
+    };
+    let mut candidates = query
+        .iter(world)
+        .filter(|(entity, prim)| {
+            Some(prim.stage_handle.id()) == live_stage
+                && paths.contains(prim.path.as_str())
+                && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
+        })
+        .map(|(entity, prim)| (prim.path.clone(), entity))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.to_bits().cmp(&right.1.to_bits()))
+    });
+    let mut spawned = HashMap::new();
+    for (path, entity) in candidates {
+        if spawned.insert(path.clone(), entity).is_some() {
+            return Err(ApiResponse::error(
+                ApiErrorCode::InternalError,
+                format!("QueryUsdPrim: multiple live entities are bound to prim `{path}`"),
+            ));
+        }
+    }
+    Ok(spawned)
+}
+
+fn query_record_json(
+    world: &World,
+    path: &str,
+    read: PrimRead,
+    doc: Option<DocumentId>,
+    generation: Option<u64>,
+    live_document: Option<DocumentId>,
+    spawned: Option<Entity>,
+    options: &UsdPrimQueryOptions,
+    poses: &mut Option<lunco_physics::SimulationPoseReadState>,
+) -> Result<serde_json::Value, ApiResponse> {
+    let (
+        authored_position,
+        type_name,
+        attrs,
+        relationships,
+        connections,
+        schemas,
+        children,
+        active,
+        collision_bounds,
+        geometry_bounds,
+        topology,
+    ) = read;
+
+    // Document placement is authored; live entity poses use the active
+    // physics frame shared with `QueryEntity`.
+    let mut out = serde_json::json!({
+        "path": path,
+        "type_name": type_name,
+        "attrs": attrs,
+        "spawned": spawned.is_some(),
+        "active": active,
+    });
+    if let Some(doc) = doc {
+        out["doc_id"] = serde_json::json!(doc);
+        out["generation"] = serde_json::json!(generation);
+        if let Some(position) = authored_position {
+            out["world_position"] = serde_json::json!([position.x, position.y, position.z]);
+            out["position_frame"] = serde_json::json!("canonical_stage");
+        }
+    } else if let Some(doc) = live_document {
+        out["doc_id"] = serde_json::json!(doc);
+    }
+    if options.requested_relationships.is_some() || options.include_relationships {
+        out["relationships"] = serde_json::Value::Object(relationships);
+    }
+    if options.include_connections {
+        out["connections"] = serde_json::Value::Object(connections);
+    }
+    if options.include_schemas {
+        out["api_schemas"] = serde_json::json!(schemas);
+    }
+    if options.include_children {
+        out["children"] = serde_json::json!(children);
+    }
+    if options.include_collision_bounds {
+        out["collision_bounds"] = collision_bounds.unwrap_or(serde_json::Value::Null);
+    }
+    if options.include_geometry_bounds {
+        out["geometry_bounds"] = geometry_bounds.unwrap_or(serde_json::Value::Null);
+    }
+    if options.include_topology {
+        let mut topology = topology.unwrap_or(serde_json::Value::Null);
+        if let Some(object) = topology.as_object_mut() {
+            object.insert(
+                "projection".to_string(),
+                serde_json::json!({
+                    "source": if doc.is_some() { "document" } else { "live_stage" },
+                    "composed": true,
+                    "document_generation": generation,
+                    "projected_generation": generation,
+                }),
+            );
+            object.insert(
+                "binding".to_string(),
+                runtime_binding_json(world, spawned),
+            );
+        }
+        out["topology"] = topology;
+    }
+
+    if let Some(entity) = spawned {
+        let Some(poses) = poses.as_mut() else {
+            return Err(ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: active physics frame is unavailable",
+            ));
+        };
+        let Some(pos) = poses.position(world, entity) else {
+            return Err(ApiResponse::error(
+                ApiErrorCode::InternalError,
+                format!(
+                    "QueryUsdPrim: spawned prim `{path}` is disconnected from the active physics frame"
+                ),
+            ));
+        };
+        out["world_position"] = serde_json::json!([pos.0.x, pos.0.y, pos.0.z]);
+        out["position_frame"] = serde_json::json!("active_physics");
+    }
+
+    Ok(out)
+}
+
+/// Execute one or more prim reads against one validated stage/document
+/// context. The stage is borrowed once for the entire batch, so component
+/// verification can ask for hundreds of paths without reopening the composed
+/// stage or repeating projection/generation checks for every path.
+fn execute_query_paths(
+    world: &World,
+    params: &serde_json::Value,
+    paths: &[(String, SdfPath)],
+) -> Result<Vec<serde_json::Value>, ApiResponse> {
+    let options = query_options(params);
+    let (doc, generation) = query_document_id(world, params)?;
+
+    // Unscoped queries belong to the live simulation root. Preview stages and
+    // detached cached stages cannot satisfy a live-scene query.
+    let Some(mut live_roots) = QueryState::<&UsdPrimPath, With<UsdSceneRoot>>::try_new(world)
+    else {
+        return Err(ApiResponse::error(
+            ApiErrorCode::InternalError,
+            "QueryUsdPrim: live scene ownership is unavailable",
+        ));
+    };
+    let mut live_stages = live_roots
+        .iter(world)
+        .map(|p| p.stage_handle.id())
+        .collect::<HashSet<_>>();
+    if doc.is_none() && live_stages.len() != 1 {
+        return Err(ApiResponse::error(
+            ApiErrorCode::InternalError,
+            "QueryUsdPrim: exactly one mounted live stage is required; pass doc_id for an Editor document",
+        ));
+    }
+    let live_stage = live_stages.drain().next();
+    let live_document = if doc.is_none() {
+        live_stage.and_then(|stage| {
+            let backed = world.get_resource::<DocBackedTwinScenes>()?;
+            let asset_server = world.get_resource::<AssetServer>()?;
+            scene_document_for(backed, asset_server, stage)
+        })
+    } else {
+        None
+    };
+
+    let requested_paths = paths
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect::<HashSet<_>>();
+    let spawned = spawned_entities_for_paths(world, &requested_paths, doc, live_stage)?;
+    let mut poses = if spawned.is_empty() {
+        None
+    } else {
+        Some(lunco_physics::SimulationPoseReadState::try_new(world).ok_or_else(|| {
+            ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: active physics frame is unavailable",
+            )
+        })?)
+    };
+
+    let mut read_paths = |view: &StageView<'_>| -> Result<Vec<serde_json::Value>, ApiResponse> {
+        paths
+            .iter()
+            .map(|(path, prim)| {
+                let read = read_prim_from_view(
+                    view,
+                    prim,
+                    path,
+                    &options.requested,
+                    &options.requested_relationships,
+                    options.include_relationships,
+                    options.include_connections,
+                    options.include_schemas,
+                    options.include_children,
+                    options.include_collision_bounds,
+                    options.include_geometry_bounds,
+                    options.include_topology,
+                    doc,
+                )
+                .map_err(|error| ApiResponse::error(ApiErrorCode::InternalError, error))?
+                .ok_or_else(|| {
+                    ApiResponse::error(
+                        ApiErrorCode::EntityNotFound,
+                        format!(
+                            "QueryUsdPrim: prim `{path}` not found in the requested document or live stage"
+                        ),
+                    )
+                })?;
+                query_record_json(
+                    world,
+                    path,
+                    read,
+                    doc,
+                    generation,
+                    live_document,
+                    spawned.get(path).copied(),
+                    &options,
+                    &mut poses,
+                )
+            })
+            .collect()
+    };
+
+    // Read everything under one short canonical-stage borrow. An Editor fork
+    // is not a Twin and therefore has no canonical mapping; its composed
+    // document is opened once as the explicit fallback stage owner.
+    if let Some(stage) = world
+        .get_non_send::<CanonicalStages>()
+        .and_then(|stages| match doc {
+            Some(doc) => canonical_stage_for_document(world, doc),
+            None => live_stage.and_then(|id| stages.get(id)),
+        })
+    {
+        return read_paths(&stage.view());
+    }
+
+    let Some(doc) = doc else {
+        return Err(ApiResponse::error(
+            ApiErrorCode::InternalError,
+            "QueryUsdPrim: no USD stage loaded",
+        ));
+    };
+    let Some(document) = world
+        .get_resource::<DocumentRegistry<UsdDocument>>()
+        .and_then(|registry| registry.host(doc))
+        .map(|host| host.document())
+    else {
+        return Err(ApiResponse::error(
+            ApiErrorCode::EntityNotFound,
+            format!("QueryUsdPrim: document {doc} is not open"),
+        ));
+    };
+    let stage = open_doc_stage(document.composed_arc().as_ref()).map_err(|error| {
+        ApiResponse::error(
+            ApiErrorCode::InternalError,
+            format!("QueryUsdPrim: document stage could not be opened: {error}"),
+        )
+    })?;
+    read_paths(&StageView::new(&stage))
+}
+
 fn read_prim_from_view(
     view: &StageView<'_>,
     prim: &SdfPath,
@@ -617,321 +1010,71 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 format!("QueryUsdPrim: `{path}` is not a valid USD prim path"),
             );
         };
+        let records = match execute_query_paths(
+            world,
+            params,
+            &[(path.to_string(), prim)],
+        ) {
+            Ok(records) => records,
+            Err(error) => return error,
+        };
+        ApiResponse::ok(records.into_iter().next().expect("one query path produces one record"))
+    }
+}
 
-        let requested: Option<Vec<String>> = params
-            .get("attrs")
-            .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            });
-        let requested_relationships: Option<Vec<String>> = params
-            .get("rels")
-            .and_then(serde_json::Value::as_array)
-            .map(|names| {
-                names
-                    .iter()
-                    .filter_map(|value| value.as_str().map(str::to_string))
-                    .collect()
-            });
-        let include_relationships = params
-            .get("relationships")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let include_connections = params
-            .get("connections")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let include_schemas = params
-            .get("schemas")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let include_children = params
-            .get("children")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let include_collision_bounds = params
-            .get("collision_bounds")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let include_geometry_bounds = params
-            .get("geometry_bounds")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let include_topology = params
-            .get("topology")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+/// `QueryUsdPrims { doc_id?, paths, attrs?, rels?, children?, collision_bounds?, geometry_bounds?, topology? }`
+/// → the same records as `QueryUsdPrim`, read from one composed-stage snapshot.
+///
+/// This is the preferred surface for authored verification and Editor
+/// inspection. It is intentionally strict: paths are validated up front and
+/// one missing or stale path fails the whole request rather than returning a
+/// misleading partial verdict.
+pub struct QueryUsdPrimsProvider;
 
-        let doc = if params.get("doc_id").is_some() {
-            let Some(raw) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
+impl ApiQueryProvider for QueryUsdPrimsProvider {
+    fn name(&self) -> &'static str {
+        "QueryUsdPrims"
+    }
+
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+        let Some(values) = params.get("paths").and_then(serde_json::Value::as_array) else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "QueryUsdPrims: `paths` (array of USD prim paths) required",
+            );
+        };
+        if values.is_empty() {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "QueryUsdPrims: `paths` must contain at least one USD prim path",
+            );
+        }
+
+        let mut paths = Vec::with_capacity(values.len());
+        for value in values {
+            let Some(path) = value.as_str() else {
                 return ApiResponse::error(
                     ApiErrorCode::DeserializationError,
-                    "QueryUsdPrim: doc_id must be an explicit numeric document id",
+                    "QueryUsdPrims: every entry in `paths` must be a string",
                 );
             };
-            Some(DocumentId::new(raw))
-        } else {
-            None
-        };
-        let generation = if let Some(doc) = doc {
-            let Some(host) = world
-                .get_resource::<DocumentRegistry<UsdDocument>>()
-                .and_then(|registry| registry.host(doc))
-            else {
+            let Ok(prim) = SdfPath::new(path) else {
                 return ApiResponse::error(
-                    ApiErrorCode::EntityNotFound,
-                    format!("QueryUsdPrim: document {doc} is not open"),
+                    ApiErrorCode::DeserializationError,
+                    format!("QueryUsdPrims: `{path}` is not a valid USD prim path"),
                 );
             };
-            let generation = host.document().generation();
-            if let Some(synced_generation) = world
-                .get_resource::<DocBackedTwinScenes>()
-                .and_then(|scenes| scenes.synced_generation(doc))
-            {
-                if synced_generation != generation {
-                    return ApiResponse::error(
-                        ApiErrorCode::InternalError,
-                        format!("QueryUsdPrim: document {doc} projection is not current"),
-                    );
-                }
-            }
-            Some(generation)
-        } else {
-            None
+            paths.push((path.to_string(), prim));
+        }
+
+        let records = match execute_query_paths(world, params, &paths) {
+            Ok(records) => records,
+            Err(error) => return error,
         };
-
-        // Unscoped queries belong to the live simulation root. Preview stages
-        // and detached cached stages cannot satisfy a live-scene query.
-        let Some(mut live_roots) = QueryState::<&UsdPrimPath, With<UsdSceneRoot>>::try_new(world)
-        else {
-            return ApiResponse::error(
-                ApiErrorCode::InternalError,
-                "QueryUsdPrim: live scene ownership is unavailable",
-            );
-        };
-        let mut live_stages = live_roots
-            .iter(world)
-            .map(|p| p.stage_handle.id())
-            .collect::<std::collections::HashSet<_>>();
-        if doc.is_none() && live_stages.len() != 1 {
-            return ApiResponse::error(
-                ApiErrorCode::InternalError,
-                "QueryUsdPrim: exactly one mounted live stage is required; pass doc_id for an Editor document",
-            );
-        }
-        let live_stage = live_stages.drain().next();
-        // A live Twin scene may be backed by an explicit USD document. Expose
-        // that identity on the generic live query so authored programs can
-        // update a runtime overlay without guessing which editor document is
-        // mounted. Raw-file scenes correctly remain document-less.
-        let live_document = if doc.is_none() {
-            live_stage.and_then(|stage| {
-                let backed = world.get_resource::<DocBackedTwinScenes>()?;
-                let asset_server = world.get_resource::<AssetServer>()?;
-                scene_document_for(backed, asset_server, stage)
-            })
-        } else {
-            None
-        };
-
-        let Some(mut spawned_query) = QueryState::<(Entity, &UsdPrimPath)>::try_new(world) else {
-            return ApiResponse::error(
-                ApiErrorCode::InternalError,
-                "QueryUsdPrim: USD entity query is unavailable",
-            );
-        };
-        let spawned: Option<(Entity, bevy::asset::AssetId<UsdStageAsset>)> = spawned_query
-            .iter(world)
-            .find(|(entity, p)| {
-                doc.is_none()
-                    && p.path == path
-                    && Some(p.stage_handle.id()) == live_stage
-                    && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
-            })
-            .map(|(e, p)| (e, p.stage_handle.id()));
-
-        // Read everything under one short canonical-stage borrow. An Editor
-        // fork is not a Twin and therefore has no DocBackedTwinScenes entry;
-        // its document-owned composed data is still authoritative for local
-        // authoring queries, so use a transient USD stage when no canonical
-        // mapping exists. External arcs remain the responsibility of the
-        // mounted canonical stage and are reported as unavailable until it is
-        // ready rather than guessed from authored text.
-        let (authored_position, read): (Option<Vec3>, Option<PrimRead>) = {
-            let canonical = world
-                .get_non_send::<CanonicalStages>()
-                .and_then(|stages| match doc {
-                    Some(doc) => canonical_stage_for_document(world, doc),
-                    None => live_stage.and_then(|id| stages.get(id)),
-                });
-
-            if let Some(stage) = canonical {
-                match read_prim_from_view(
-                    &stage.view(),
-                    &prim,
-                    path,
-                    &requested,
-                    &requested_relationships,
-                    include_relationships,
-                    include_connections,
-                    include_schemas,
-                    include_children,
-                    include_collision_bounds,
-                    include_geometry_bounds,
-                    include_topology,
-                    doc,
-                ) {
-                    Ok(read) => (read.as_ref().and_then(|read| read.0), read),
-                    Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
-                }
-            } else if let Some(doc) = doc {
-                let Some(document) = world
-                    .get_resource::<DocumentRegistry<UsdDocument>>()
-                    .and_then(|registry| registry.host(doc))
-                    .map(|host| host.document())
-                else {
-                    return ApiResponse::error(
-                        ApiErrorCode::EntityNotFound,
-                        format!("QueryUsdPrim: document {doc} is not open"),
-                    );
-                };
-                let stage = match open_doc_stage(document.composed_arc().as_ref()) {
-                    Ok(stage) => stage,
-                    Err(error) => {
-                        return ApiResponse::error(
-                            ApiErrorCode::InternalError,
-                            format!("QueryUsdPrim: document stage could not be opened: {error}"),
-                        );
-                    }
-                };
-                let view = StageView::new(&stage);
-                match read_prim_from_view(
-                    &view,
-                    &prim,
-                    path,
-                    &requested,
-                    &requested_relationships,
-                    include_relationships,
-                    include_connections,
-                    include_schemas,
-                    include_children,
-                    include_collision_bounds,
-                    include_geometry_bounds,
-                    include_topology,
-                    Some(doc),
-                ) {
-                    Ok(read) => (read.as_ref().and_then(|read| read.0), read),
-                    Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
-                }
-            } else {
-                return ApiResponse::error(
-                    ApiErrorCode::InternalError,
-                    "QueryUsdPrim: no USD stage loaded",
-                );
-            }
-        };
-
-        let Some((
-            _,
-            type_name,
-            attrs,
-            relationships,
-            connections,
-            schemas,
-            children,
-            active,
-            collision_bounds,
-            geometry_bounds,
-            topology,
-        )) = read
-        else {
-            return ApiResponse::error(
-                ApiErrorCode::EntityNotFound,
-                format!(
-                    "QueryUsdPrim: prim `{path}` not found in the requested document or live stage"
-                ),
-            );
-        };
-
-        // Document placement is authored; live entity poses use the active
-        // physics frame shared with `QueryEntity`.
-        let mut out = serde_json::json!({
-            "path": path,
-            "type_name": type_name,
-            "attrs": attrs,
-            "spawned": spawned.is_some(),
-            "active": active,
-        });
-        if let Some(doc) = doc {
-            out["doc_id"] = serde_json::json!(doc);
-            out["generation"] = serde_json::json!(generation);
-            if let Some(position) = authored_position {
-                out["world_position"] = serde_json::json!([position.x, position.y, position.z]);
-                out["position_frame"] = serde_json::json!("canonical_stage");
-            }
-        } else if let Some(doc) = live_document {
-            out["doc_id"] = serde_json::json!(doc);
-        }
-        if requested_relationships.is_some() || include_relationships {
-            out["relationships"] = serde_json::Value::Object(relationships);
-        }
-        if include_connections {
-            out["connections"] = serde_json::Value::Object(connections);
-        }
-        if include_schemas {
-            out["api_schemas"] = serde_json::json!(schemas);
-        }
-        if include_children {
-            out["children"] = serde_json::json!(children);
-        }
-        if include_collision_bounds {
-            out["collision_bounds"] = collision_bounds.unwrap_or(serde_json::Value::Null);
-        }
-        if include_geometry_bounds {
-            out["geometry_bounds"] = geometry_bounds.unwrap_or(serde_json::Value::Null);
-        }
-        if include_topology {
-            let mut topology = topology.unwrap_or(serde_json::Value::Null);
-            if let Some(object) = topology.as_object_mut() {
-                object.insert(
-                    "projection".to_string(),
-                    serde_json::json!({
-                        "source": if doc.is_some() { "document" } else { "live_stage" },
-                        "composed": true,
-                        "document_generation": generation,
-                        "projected_generation": generation,
-                    }),
-                );
-                object.insert(
-                    "binding".to_string(),
-                    runtime_binding_json(world, spawned.as_ref().map(|(entity, _)| *entity)),
-                );
-            }
-            out["topology"] = topology;
-        }
-
-        if let Some((entity, _)) = spawned {
-            let Some(mut poses) = lunco_physics::SimulationPoseReadState::try_new(world) else {
-                return ApiResponse::error(
-                    ApiErrorCode::InternalError,
-                    "QueryUsdPrim: active physics frame is unavailable".to_string(),
-                );
-            };
-            let Some(pos) = poses.position(world, entity) else {
-                return ApiResponse::error(
-                    ApiErrorCode::InternalError,
-                    format!(
-                        "QueryUsdPrim: spawned prim `{path}` is disconnected from the active physics frame"
-                    ),
-                );
-            };
-            out["world_position"] = serde_json::json!([pos.0.x, pos.0.y, pos.0.z]);
-            out["position_frame"] = serde_json::json!("active_physics");
-        }
-
-        ApiResponse::ok(out)
+        ApiResponse::ok(serde_json::json!({
+            "records": records,
+            "count": paths.len(),
+        }))
     }
 }
 
@@ -944,4 +1087,7 @@ pub fn register(app: &mut App) {
     app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(QueryUsdPrimProvider);
+    app.world_mut()
+        .resource_mut::<ApiQueryRegistry>()
+        .register(QueryUsdPrimsProvider);
 }

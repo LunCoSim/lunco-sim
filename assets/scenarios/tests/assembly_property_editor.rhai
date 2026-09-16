@@ -6,6 +6,7 @@
 
 const ROOT = "/AssemblyPropertyEditorTest";
 const PANEL = ROOT + "/Assembly/Panel";
+const TEMP_KIND = "component_test";
 
 fn query_ok(record) {
     record != () && record.ok != false
@@ -31,6 +32,17 @@ fn property(catalog, name) {
     ()
 }
 
+fn composed_kind(inspection) {
+    if !query_ok(inspection) || inspection.prim == ()
+        || inspection.prim.metadata == ()
+        || inspection.prim.metadata.kind == () {
+        return ();
+    }
+    let kind = inspection.prim.metadata.kind.composed;
+    if kind == () || kind.present != true { return (); }
+    kind.value
+}
+
 fn fail(me, message) {
     if !me.done {
         me.done = true;
@@ -42,14 +54,11 @@ fn find_document() {
     let docs = query("ListOpenDocuments");
     if docs == () || docs.open_documents == () { return -1; }
     for item in docs.open_documents {
-        if item.kind == "usd" {
-            let root = query("QueryUsdPrim", #{
-                doc_id: item.doc_id,
-                path: ROOT,
-                children: false,
-            });
-            if query_ok(root) { return item.doc_id; }
-        }
+        // The scene test launches one explicit USD document. Do not gate
+        // discovery on a transient composed query while a prior scoped edit
+        // is still being projected; the exact prim is checked below through
+        // InspectUsdDocument before any authoring command is issued.
+        if item.kind == "usd" { return item.doc_id; }
     }
     -1
 }
@@ -59,6 +68,8 @@ fn on_start(me, ctx) {
     this.phase = 0;
     this.elapsed = 0.0;
     this.wait_generation = -1;
+    this.kind_override_seen = false;
+    this.kind_restore_seen = false;
     this.done = false;
 }
 
@@ -77,6 +88,72 @@ fn on_tick(me, ctx) {
     if !query_ok(current) || current.generation == () {
         fail(this, "property-editor fixture did not expose a document generation");
         return;
+    }
+
+    // SetPrimKind is an authored USD metadata edit, not an asset-free Rust
+    // fixture. Exercise the complete Rhai -> typed command -> composition
+    // path against a runtime override, then clear it and verify that the
+    // weaker component kind is visible again. A restart can leave the
+    // temporary override in flight, so resume that explicit phase rather
+    // than reporting a false fixture failure.
+    if this.phase == 0 {
+        let before_kind = composed_kind(assembly_edit::inspect(this.doc, PANEL));
+        if before_kind == TEMP_KIND {
+            this.wait_generation = current.generation - 1;
+            this.phase = 2;
+            return;
+        }
+        if before_kind != "component" {
+            fail(this, "fixture panel did not expose its authored component kind");
+            return;
+        }
+        let authored = assembly_edit::prim_kind(
+            this.doc, "@runtime@", PANEL, TEMP_KIND, current.generation,
+        );
+        if !query_ok(authored) {
+            fail(this, "runtime kind override was rejected: " + authored.error);
+            return;
+        }
+        this.wait_generation = current.generation;
+        this.phase = 2;
+        return;
+    }
+
+    if this.phase == 2 {
+        if current.generation <= this.wait_generation {
+            if this.elapsed > 10.0 { fail(this, "runtime kind override did not reach its committed generation"); }
+            return;
+        }
+        let overridden = composed_kind(assembly_edit::inspect(this.doc, PANEL));
+        if overridden != TEMP_KIND {
+            fail(this, "runtime kind override was not visible through composed USD");
+            return;
+        }
+        this.kind_override_seen = true;
+        let cleared = assembly_edit::prim_kind(
+            this.doc, "@runtime@", PANEL, (), current.generation,
+        );
+        if !query_ok(cleared) {
+            fail(this, "runtime kind override could not be cleared: " + cleared.error);
+            return;
+        }
+        this.wait_generation = current.generation;
+        this.phase = 3;
+        return;
+    }
+
+    if this.phase == 3 {
+        if current.generation <= this.wait_generation {
+            if this.elapsed > 10.0 { fail(this, "cleared runtime kind did not reach its committed generation"); }
+            return;
+        }
+        let restored = composed_kind(assembly_edit::inspect(this.doc, PANEL));
+        if restored != "component" {
+            fail(this, "clearing runtime kind did not reveal the authored component kind");
+            return;
+        }
+        this.kind_restore_seen = true;
+        this.phase = 4;
     }
 
     if this.phase == 1 {
@@ -118,6 +195,8 @@ fn on_tick(me, ctx) {
         );
         this.done = true;
         report_verdict([
+            t_true(this.kind_override_seen && this.kind_restore_seen,
+                "SetPrimKind runtime override and clear restore composed USD metadata"),
             t_true(vector_close(values.attrs["xformOp:translate"], [2.0, 0.0, 0.0])
                 && close_enough(values.attrs.size, 2.0)
                 && values.attrs["physics:collisionEnabled"] == false
@@ -187,8 +266,9 @@ fn on_tick(me, ctx) {
     let patch = assembly_builder::editable_property_patch_plan(
         this.doc, "@root@", PANEL,
         [
-            // `kind` is intentionally unchanged, so this list also exercises
-            // no-op filtering inside a mixed patch.
+            // The kind was already verified through the dedicated runtime
+            // override/clear cycle above, so this mixed patch keeps it as a
+            // deliberate no-op while exercising the other standard fields.
             #{ name: "kind", value: "component" },
             #{ name: "xformOp:translate", value: [2.0, 0.0, 0.0] },
             #{ name: "size", type_name: "double", value: 2.0 },

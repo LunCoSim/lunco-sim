@@ -11,10 +11,14 @@ described in §1–§5 remain an aspirational ontology and are not required
 components. The reusable implementation is split across four owners:
 `lunco-usd-bevy-camera` decodes standard USD cameras and camera roles,
 `lunco-camera-core` carries reusable render-free rig contracts,
+`lunco-camera-runtime` realizes generic interactive camera modes,
 `lunco-avatar-core` carries avatar lifecycle/command contracts, `lunco-scene-camera`
 exposes script/API camera transactions, and `lunco-avatar` is the specialized
-owner of raw input translation plus fast interactive pose solvers. Camera
-selection and the viewport follow the single-authority design in §6.
+owner of raw input translation, possession, and BigSpace-specific pose solvers.
+Generic input response and clip precision policy live in
+`lunco-camera-runtime`/`lunco-camera-core`; Rhai selects and tunes presentation
+policy through the reflected command surface.
+Camera selection and the viewport follow the single-authority design in §6.
 
 This document provides a technical guide to the modular, action-oriented, and headless-safe camera and intent systems in LunCoSim.
 
@@ -39,7 +43,9 @@ LunCoSim decouples human interaction from physical execution using five distinct
 > still a design vocabulary, not a reason to add a marker to `lunco-core`.
 > Today the concrete rig components (`SpringArmCamera`, `OrbitCamera`,
 > `FreeFlightCamera`, `SurfaceCamera`) are backend-neutral contracts in
-> `lunco-camera-core`; `lunco-avatar` supplies their fast solvers. Standard
+> `lunco-camera-core`; `lunco-camera-runtime` supplies the generic free-flight,
+> surface, input-policy, and clip-plane mechanisms, while `lunco-avatar` supplies source-specific
+> possession, orbit, spring-arm, and BigSpace solvers. Standard
 > USD projection, mounted cameras, camera paths, and selection live in
 > `lunco-usd-bevy-camera`. `lunco-render-bevy` binds render intent to a
 > `Camera3d`, while `lunco-render` remains render-pipeline-free.
@@ -55,9 +61,13 @@ Representing a sensing hardware unit.
 - **Crate**: would live in `lunco-core` (Hardware Marker). *Not yet implemented.*
 - **Purpose**: Attaches a `ViewPoint` to a physical presence. It can optionally have a **Physical Collider** (via `avian`) to prevent terrain clipping.
 
-### **Renderer / Blender (Visual)** — *today: `lunco-avatar` + `lunco-avatar-ui`*
+### **Renderer / Blender (Visual)** — *today: `lunco-camera-runtime` + `lunco-avatar` + `lunco-avatar-ui`*
 The rendering bridge.
-- **Crates**: `lunco-avatar` (`LunCoAvatarPlugin`, client-only camera rigs), the optional `lunco-avatar-ui` egui adapter, and the focused `lunco-avatar-core`/`lunco-avatar-policy` contracts. Sun/shadow in `lunco-render`.
+- **Crates**: `lunco-camera-runtime` (generic camera-mode realization),
+  `lunco-avatar` (`LunCoAvatarPlugin`, avatar input and source-specific camera
+  solvers), the optional `lunco-avatar-ui` egui adapter, and the focused
+  `lunco-avatar-core`/`lunco-avatar-policy` contracts. Sun/shadow in
+  `lunco-render`.
 - **Purpose**: Drives a Bevy `Camera3d`; the persistent `OriginAnchor` tracks
   the selected camera's f64 cell while camera rigs (spring-arm, orbit,
   free-flight, surface-relative) handle motion between simulation truth and
@@ -107,7 +117,11 @@ rendering pipeline is attached by the render adapter.
 - **Bots and Modelica** can produce continuous pose/aim/math values through
   authored ports or state, while a camera adapter consumes those values.
 - **Server** instances run the full spatial logic without a GPU.
-- **Clients** add **`LunCoAvatarPlugin`** (`lunco-avatar`) to provide the camera rigs and runtime bridge, and add **`AvatarUiPlugin`** (`lunco-avatar-ui`) when they need egui presentation; post-processing / lighting come from `lunco-render`.
+- **Clients** add **`CameraRuntimePlugin`** (`lunco-camera-runtime`) and
+  **`LunCoAvatarPlugin`** (`lunco-avatar`) for the local avatar's input,
+  possession, and source-specific solvers. Add **`AvatarUiPlugin`**
+  (`lunco-avatar-ui`) when egui presentation is needed; post-processing /
+  lighting come from `lunco-render`.
 
 ---
 
@@ -133,10 +147,11 @@ and USD standards rather than inventing bespoke types, and follows a strict
   `lunco:cameraRole = "viewport"`, plus the local avatar camera. Instrument
   cameras use `lunco:cameraRole = "sensor"` and are never main-window
   candidates. RTT (`Image`-target) cameras and the egui `Camera2d` are excluded.
-- An avatar may be an `Xform` carrying `LunCoAvatarAPI`. The USD simulation
-  projector publishes its authored camera/movement contract; the avatar owner
-  realizes it on the next update. This keeps the simulation projector free of
-  camera modes, input maps, and raw device dependencies.
+- The local avatar is a standard `def Camera` carrying `LunCoCameraAPI` and
+  `LunCoAvatarAPI`. `LunCoAvatarAPI` marks only the avatar role; USD simulation
+  publishes that role and its spatial identity, while the avatar owner adds the
+  generic interactive substrate. Rhai selects camera behavior and parameters
+  through typed commands and reflected components.
 
 ### 6.2 The Viewport is the single source of truth
 
@@ -154,11 +169,23 @@ after re-projection; the ECS entity is only the current realization. A command
 or camera track changes the selection intent, while exactly **one** system writes
 `SceneViewport::active_camera`, window-camera `is_active`, and `viewport`:
 `lunco-usd-bevy-camera`'s **`reconcile_scene_viewport`**. It actuates the viewport
-(`is_active = bound-camera && visible`) and relocates the big_space
-the persistent `OriginAnchor` to the active camera's f64 `WorldGrid` cell. A
+(`is_active = bound-camera && visible`) and relocates the persistent
+`OriginAnchor` to the active camera's f64 `WorldGrid` cell. A
 missing, stale, or projectionless explicit request produces no active camera
 and a visible status diagnostic; it never selects the first authored camera as
 a repair or silently substitutes a different authored camera.
+
+The same rule applies during scene handoff: a local avatar receives interactive
+behavior only after a standard USD camera has been projected with its
+`SceneCamera` intent. Missing camera intent is an explicit no-camera state, not
+an invitation for the avatar runtime to create or guess a camera.
+
+An authored camera that fails USD attribute/API validation is a terminal
+projection failure: the prim is hidden and carries `UsdSceneProjectionFailed`,
+so the scene/UI diagnostic identifies the authored path. It is not reclassified
+as an omitted camera, assigned a guessed projection, or replaced by the prior
+scene's camera. USD schema defaults are used only for genuinely unauthored
+attributes.
 
 ### 6.3 Switching
 
@@ -199,11 +226,23 @@ hierarchy. A nested camera with `cameraPose =
 
 The *behavior contracts* of the free/possession cameras — `SpringArmCamera`,
 `OrbitCamera`, `FreeFlightCamera`, `SurfaceCamera` — live in
-`lunco-camera-core`; their fast BigSpace-safe solvers and transitions live in
-`lunco-avatar`. Avatar lifecycle and possession commands remain in
+`lunco-camera-core`. Generic mode exclusivity, free-flight orientation, and
+surface-frame pose writing, validated input response, and clip precision live in
+`lunco-camera-runtime`/`lunco-camera-core`; avatar-owned
+BigSpace solvers and transitions stay in `lunco-avatar`; the avatar-only orbit
+return snapshot is in `lunco-avatar-camera-core`. Avatar lifecycle and
+possession commands remain in
 `lunco-avatar-core`. The viewport reconciler decides *which* camera is shown; a rig
 decides *how* its pose is solved. They compose: possession changes the avatar
 camera's rig without changing which camera the viewport shows.
+
+The celestial surface adapter is `lunco-camera-celestial`. It resolves the
+camera's body-fixed ENU frame from its own live BigSpace pose and
+`GravityBody` binding, then publishes the backend-neutral `SurfaceCameraFrame`.
+It also owns the celestial-body query used for adaptive perspective clip
+planes; the avatar runtime does not write projection precision.
+The generic runtime consumes that contract without importing celestial or
+BigSpace types, and avatar interaction does not own this conversion.
 
 `lunco-avatar` is the default raw-input owner. It is the only layer that turns
 the configured keyboard/gamepad/mouse surface into `UserIntent` for the local
@@ -219,9 +258,9 @@ The camera architecture is intended to let Rhai compose many camera styles
 without growing a Rust state machine for each one:
 
 1. **USD owns identity and authored facts.** A standard `UsdGeomCamera` owns
-   projection, photographic values, transform, and role. An avatar's
-   `LunCoAvatarAPI` owns its explicit initial rig parameters where standard USD
-   has no vocabulary.
+   projection, photographic values, and transform. `LunCoCameraAPI` owns the
+   LunCo-specific camera role, pose authority, and optional look-at; the
+   `LunCoAvatarAPI` only marks the local avatar role.
 2. **Rhai owns policy.** Scripts choose cameras, follow/focus targets, start or
    scrub camera paths, and decide when a camera transaction begins or ends.
    Those actions use typed commands and authored scene queries, not raw input
@@ -301,6 +340,8 @@ commit the claim, installs the local `ControlLink`, and optionally performs the
 camera transaction. `FocusTarget` and `FollowTarget` are likewise reachable
 high-level avatar camera commands; Rhai selects when and which target to request,
 while Rust enforces the local-avatar boundary and the BigSpace-safe pose update.
+Rhai can also call `set_camera_input(...)` to tune the generic camera response
+without a Rust rebuild; Rust retains only the validated hot-path mechanism.
 The generic command/value surface remains `SetPorts` for a controller that does
 not need an avatar camera. `PossessVessel` uses the same `SessionRegistry`
 transaction rather than maintaining a parallel ownership path.

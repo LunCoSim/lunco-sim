@@ -74,7 +74,6 @@ def Xform "TerrainRocksTest" (
     )
     {
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
         double3 xformOp:translate = (300.0, 350.0, 300.0)
         float2 clippingRange = (0.1, 200000.0)

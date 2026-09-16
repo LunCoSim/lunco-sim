@@ -132,7 +132,7 @@ pub fn apply_pending_focus(
             &mut big_space::prelude::CellCoord,
             &ChildOf,
             Option<&mut lunco_camera_core::FreeFlightCamera>,
-            Has<lunco_camera_core::OrbitViewReturn>,
+            Has<lunco_avatar_camera_core::OrbitViewReturn>,
         ),
         (
             With<lunco_avatar_core::roles::Avatar>,
@@ -423,14 +423,14 @@ pub fn on_set_camera_look_at(
     }
     commands
         .entity(entity)
-        .remove::<lunco_camera_core::OrbitViewReturn>()
+        .remove::<lunco_avatar_camera_core::OrbitViewReturn>()
         .remove::<lunco_camera_core::OrbitCamera>()
         .remove::<lunco_camera_core::SpringArmCamera>()
         .remove::<lunco_camera_core::SurfaceCamera>()
         .remove::<lunco_camera_core::FreeFlightCamera>()
         .remove::<lunco_camera_core::SurfaceRelativeMode>()
         .remove::<lunco_environment::GravityBody>()
-        .try_insert(lunco_core::CameraPoseLock);
+        .try_insert(lunco_camera_core::CameraPoseLock);
     info!(
         "SET_CAMERA: camera={:?} eye=({:.2},{:.2},{:.2}) target=({:.2},{:.2},{:.2})",
         cmd.camera, cmd.eye.x, cmd.eye.y, cmd.eye.z, cmd.target.x, cmd.target.y, cmd.target.z
@@ -503,7 +503,7 @@ mod tests {
         );
         assert!(app
             .world()
-            .get::<lunco_core::CameraPoseLock>(avatar)
+            .get::<lunco_camera_core::CameraPoseLock>(avatar)
             .is_some());
     }
 

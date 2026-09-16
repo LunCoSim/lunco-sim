@@ -9,7 +9,7 @@ license.workspace = true
 # `RenderLayers`, `bevy_light` the lights, `bevy_mesh` `Mesh3d` — none of them pulls
 # `bevy_render`. There is no `bevy_pbr` / `bevy_core_pipeline` here and there must
 # not be: the camera *pipeline* (`Camera3d`, tonemapping, MSAA, bloom) is attached by
-# `lunco-render-bevy` from the `lunco_render::SceneCamera` intent this crate spawns.
+# `lunco-render-bevy` from the `lunco_render::SceneCamera` intent projected from USD.
 #
 # Render-bound screenshots and offline recording live in `lunco-capture`; keeping them out
 # preserves this crate's render-free camera/interaction dependency boundary.
@@ -22,9 +22,12 @@ big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
 lunco-input-core = { path = "../lunco-input-core" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-avatar-camera-core = { path = "../lunco-avatar-camera-core" }
 lunco-avatar-policy = { path = "../lunco-avatar-policy" }
 lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-camera-runtime = { path = "../lunco-camera-runtime" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
@@ -39,7 +42,6 @@ lunco-time = { path = "../lunco-time" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
-serde = { workspace = true }
 
 [lints]
 workspace = true

@@ -52,12 +52,14 @@ fn find_document() {
     if docs == () || docs.open_documents == () { return -1; }
     for item in docs.open_documents {
         if item.kind == "usd" {
-            let root = query("QueryUsdPrim", #{
-                doc_id: item.doc_id,
-                path: ROOT,
-                children: false,
-            });
-            if query_ok(root) { return item.doc_id; }
+            // The Editor inspection contract carries the document id and
+            // composed prim record together.  Keep discovery on that typed
+            // path so an empty fixture cannot be mistaken for an unavailable
+            // document when the stage is still being projected.
+            let root = assembly_edit::inspect(item.doc_id, ROOT);
+            if query_ok(root) && root.prim != () && root.prim.exists == true {
+                return item.doc_id;
+            }
         }
     }
     -1
@@ -565,7 +567,7 @@ fn on_tick(me, ctx) {
             "twin://ExampleTwin/components/mobility/wheel.usda",
             (), (), (), (), (),
         );
-        if !plan.ok || plan.kind != "referenced_instance" || plan.ops.len() != 3
+        if !plan.ok || plan.kind != "referenced_instance" || plan.ops.len() != 4
             || missing_parent.ok || invalid_asset.ok || !twin_asset.ok
             || twin_asset.ops.len() != 1 {
             fail(this, "component-instance plan did not build or reject its explicit contract");
