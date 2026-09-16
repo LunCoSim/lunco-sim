@@ -168,9 +168,12 @@ fn report_structured_verdict(report, title, channel) {
     let ok = report != () && report.ok == true;
     let source_revision = "";
     let result_count = 0;
+    let check_count = 0;
     let results = [];
     let verification = "";
     let requirement_count = 0;
+    let requirement_names = [];
+    let requirement_summary = #{};
     let source_files = [];
     let source_revision_hex = "";
     let metrics = #{};
@@ -190,8 +193,14 @@ fn report_structured_verdict(report, title, channel) {
             // is the durable per-check evidence consumed by UI/CI clients.
             results = report.results;
         }
+        if report.check_count != () { check_count = report.check_count; }
+        // Keep compatibility with older Twin observers that only supplied
+        // `results`; the generic evaluator now supplies the precise count.
+        if check_count == 0 && result_count > 0 { check_count = result_count; }
         if report.verification != () { verification = report.verification; }
         if report.requirement_count != () { requirement_count = report.requirement_count; }
+        if report.requirement_names != () { requirement_names = report.requirement_names; }
+        if report.requirement_summary != () { requirement_summary = report.requirement_summary; }
         if report.failures != () {
             for failure in report.failures {
                 if type_of(failure) == "map" {
@@ -223,6 +232,8 @@ fn report_structured_verdict(report, title, channel) {
     let evidence = #{schema_version: 1, ok: ok, title: title, channel: channel,
         verdict: if ok { "pass" } else { "fail" },
         verification: verification, requirement_count: requirement_count,
+        check_count: check_count, requirement_names: requirement_names,
+        requirement_summary: requirement_summary,
         source_revision: source_revision, source_revision_hex: source_revision_hex,
         source_files: source_files, result_count: result_count,
         failure_count: raw_failures.len(), evidence_chunked: !inline_results,
@@ -241,7 +252,8 @@ fn report_structured_verdict(report, title, channel) {
         }
     }
     print(channel + "_EVIDENCE source_revision=" + source_revision
-        + " results=" + result_count + " failures=" + raw_failures.len());
+        + " requirements=" + requirement_count + " checks=" + check_count
+        + " failures=" + raw_failures.len());
     report_verdict(failures, title, channel)
 }
 

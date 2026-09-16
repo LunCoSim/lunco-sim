@@ -319,10 +319,15 @@ its explicit `expected` value. Do not copy a threshold into Rhai, TOML, a UI
 label, or a Rust constant. Do not infer a requirement from a screenshot or
 from an ambiguous short-name lookup.
 
-The result contains `ok`, `results`, `failures`, `requirement_count`,
-`failure_count`, `verification`, `source_revision`, and `source_files`. Keep
-the result and emitted evidence with the run. A missing observation is a
-failure, not a passing empty set.
+The result contains `ok`, `results`, `failures`, `check_count`,
+`requirement_count`, `requirement_names`, `requirement_summary`,
+`failure_count`, `verification`, `source_revision`, and `source_files`.
+`check_count` is the number of concrete observations (for example, one
+transform or attribute on one repeated part); `requirement_count` is the
+number of unique SysML requirement usages represented by those observations.
+Use `requirement_summary` for a compact per-requirement `{ checks, failures }`
+view and keep the complete result table as evidence. A missing observation is
+a failure, not a passing empty set.
 
 ## Select and run a verification case
 

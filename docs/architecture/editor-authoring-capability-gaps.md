@@ -20,9 +20,14 @@ payload, habitat, or instrument; it is not a model-specific design contract.
   selection state.
 - `QueryUsdPrim` and the measurement/authoring facades expose composed
   topology, bounds, frames, schemas, relationships, and source provenance.
+- `luncosim test-component --twin <PATH> --component <NAME>` already resolves
+  a manifest-owned component, verification case, fixture, and verdict channel
+  without duplicating component-specific loading logic.
 - Twin-owned SysML is the source of requirements and parameters; Rhai loads
   that source and emits structured component and assembly evidence. Missing or
-  stale facts fail closed.
+  stale facts fail closed. Evidence distinguishes formal SysML requirement
+  usages from expanded USD observations, so repeated parts do not inflate the
+  requirement count.
 - Physics admission and deferred USD work are ordered by authored path. The
   deterministic profile is single-threaded physics with explicit clocks and
   strict replay tolerances.
@@ -74,15 +79,15 @@ world/local frames, and marks each value as authored, composed or unavailable.
 It is a read-only aid for preparing SysML requirements, not an inferred
 requirement generator; no guessed dimensions may be promoted to a PASS.
 
-### 5. Component test runner without fixture boilerplate
+### 5. In-process component test command
 
-`luncosim test` is reliable but each detached component needs a small scene
-fixture and command line wiring. A generic `component test <asset> <rhai>`
-entry point could create an ephemeral test host through the normal typed
-composition path, run the Rhai gate in the current process, and tear it down
-with an explicit lifecycle result. It must not bypass the Twin resolver or
-create a second scene graph. The existing fixture path remains the auditable
-and portable form for CI.
+The manifest-backed `test-component` command is the correct auditable CI path,
+but it still starts a throwaway process and runs the component's declared
+fixture. For interactive authoring, add a live API/Rhai equivalent that opens
+the detached component in the current session, runs its declared observer, and
+returns a lifecycle result without creating a second scene graph. Keep the
+fixture command as the portable deterministic gate; the live command must use
+the same Twin resolver, verification registry, and clocks.
 
 ### 6. Explicit command/persistence status
 
@@ -100,6 +105,15 @@ preview/view handles, camera preset, screenshot path, selected path, and the
 matching document/projected generations. Human review remains authoritative for
 recognizability; the record makes that review reproducible and prevents a stale
 or unrelated screenshot from being attached to a PASS.
+
+### 8. Compact evidence and coverage status
+
+The evaluator reports `requirement_count` (unique SysML usages) separately
+from `check_count` (concrete observations) and provides a bounded
+`requirement_summary`. The next improvement is to make coverage state explicit
+in the generic report: `pass`, `fail`, `planned`, and `not_run` must be
+separate outcomes. A report containing planned checks must not be presented as
+complete acceptance merely because its executable subset passed.
 
 ## Deliberately not a feature
 
