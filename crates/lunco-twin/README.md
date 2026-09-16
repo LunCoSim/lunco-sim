@@ -68,6 +68,7 @@ remote-twin milestone.
 | `discover_sysml_sources_checked()` | Returns the manifest-scoped SysML/KerML source set or explicit errors for missing/excluded declarations. |
 | `verification_registry_errors()` | Rejects unsafe, missing, duplicate, or mismatched Twin verification bindings. |
 | `component_registry_errors()` | Rejects components without unique indexed requirement sources and verification fixtures/scripts. |
+| `component_verification(name)` | Strictly resolves one component to its cloned manifest record and exact verification case, or returns all structural/selection errors. |
 | `save_manifest()` / `reload()` | Manifest persistence + folder re-scan. |
 
 ## Minimal usage
