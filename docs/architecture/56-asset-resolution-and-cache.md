@@ -195,6 +195,9 @@ publishes a scene-scoped diagnostic containing the referring layer and logical
 dependency. Malformed data, unsafe traversal, permission failures, and closure
 resource limits remain terminal at the owning boundary. No missing asset is
 silently aliased to another file.
+The warning is published from the stage-load event itself, so it remains visible
+even when the available root does not yet project a prim; it does not depend on
+the missing arc producing a placeholder entity.
 
 Consequently, a stale authored name such as `lunco://vessels/markers/waypoint.usda`
 must be corrected in the Twin's USD/library owner (or restored as an actually

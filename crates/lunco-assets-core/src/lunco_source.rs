@@ -428,18 +428,13 @@ impl AssetWatcher for FallbackWatcher {}
 /// Only [`AssetReaderError::NotFound`] falls through. A genuine I/O failure —
 /// permissions, a truncated HTTP response — propagates immediately, because
 /// retrying it against the next root would convert a real error into a
-/// confusing "not found" and hide the actual cause. The LAST root's error is
-/// the one returned, so a miss reports the deepest place we looked.
+/// confusing "not found" and hide the actual cause. A complete miss returns
+/// the reader-facing logical path, never the native path of the last root.
 ///
-/// That last part is a trap for whoever reads the log, which is why [`read`]
-/// also names every root. A miss on `lunco://components/cameras/lunar_surface_camera.usda`
-/// surfaced as `Path not found: C:\Users\…\AppData\Local\lunco\environment/…`,
-/// and a bug report reasonably concluded that `lunco://` resolved *into the
-/// AppData cache and never into the install's own `assets/`* — the exact
-/// opposite of the resolution order, which tries `assets/` FIRST. The proposed
-/// remedy ("fall back to `<install>/assets` on a cache miss") was already the
-/// behaviour, in reverse. One root named out of three read as the only root
-/// tried.
+/// [`read`] also names every root in its warning. A miss on
+/// `lunco://components/cameras/lunar_surface_camera.usda` therefore remains
+/// actionable without making a machine-local cache path part of the asset
+/// identity or user-facing error.
 ///
 /// [`read`]: AssetReader::read
 struct FallbackReader {
@@ -484,8 +479,8 @@ macro_rules! try_both {
                 Err(error) => return Err(AssetReaderError::from(error)),
             }
             match reader.$method($path).await {
-                Err(AssetReaderError::NotFound(p)) => {
-                    last = Some(Err(AssetReaderError::NotFound(p)))
+                Err(AssetReaderError::NotFound(_)) => {
+                    last = Some(Err(AssetReaderError::NotFound($path.to_path_buf())))
                 }
                 other => return other,
             }
@@ -574,6 +569,36 @@ mod windows_uri_tests {
             )
             .expect("Windows-authored Twin URI resolves through the Twin root"),
             b"#usda 1.0\n"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn missing_library_asset_reports_the_logical_path() {
+        let root = tempfile::tempdir().expect("temporary asset root");
+        let roots = [root.path().join("authored"), root.path().join("cache")];
+        let readers = roots
+            .iter()
+            .map(|root| AssetSource::get_default_reader(root.to_string_lossy().into_owned())())
+            .collect();
+        let reader = FallbackReader {
+            readers,
+            roots: roots
+                .iter()
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect(),
+        };
+
+        let error = match futures_lite::future::block_on(AssetReader::read(
+            &reader,
+            Path::new("vessels/markers/waypoint.usda"),
+        )) {
+            Ok(_) => panic!("missing asset unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            AssetReaderError::NotFound(PathBuf::from("vessels/markers/waypoint.usda"))
         );
     }
 }

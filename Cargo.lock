@@ -7136,6 +7136,7 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "dirs",
+ "futures-lite",
  "include_dir",
  "js-sys",
  "lunco-core",
