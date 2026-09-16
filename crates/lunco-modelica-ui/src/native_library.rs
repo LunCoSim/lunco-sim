@@ -29,7 +29,7 @@ struct NativeLibraryInstallSlot {
 #[derive(Resource, Default)]
 struct NativeLibraryIndexLoad {
     task: Option<
-        bevy::tasks::Task<Result<lunco_modelica_core::visual_diagram::LibraryIndex, String>>,
+        bevy::tasks::Task<Result<lunco_modelica_index::visual_diagram::LibraryIndex, String>>,
     >,
     failed: bool,
 }
@@ -300,7 +300,7 @@ fn drive_native_library_index(
         return;
     };
 
-    if index_load.failed || lunco_modelica_core::visual_diagram::library_index_available() {
+    if index_load.failed || lunco_modelica_index::visual_diagram::library_index_available() {
         return;
     }
 
@@ -318,10 +318,10 @@ fn drive_native_library_index(
         index_load.task = None;
         match result {
             Ok(index) => {
-                if lunco_modelica_core::visual_diagram::install_library_index(index) {
+                if lunco_modelica_index::visual_diagram::install_library_index(index) {
                     info!("[source library] editor index loaded off-thread");
                     commands.trigger(
-                        lunco_modelica_core::visual_diagram::LibraryEditorIndexBecameReady,
+                        lunco_modelica_index::visual_diagram::LibraryEditorIndexBecameReady,
                     );
                 }
             }
@@ -343,6 +343,6 @@ fn drive_native_library_index(
     info!("[source library] loading editor index off-thread");
     index_load.task =
         Some(bevy::tasks::AsyncComputeTaskPool::get().spawn(async {
-            lunco_modelica_core::visual_diagram::load_library_index_from_assets()
+            lunco_modelica_index::visual_diagram::load_library_index_from_assets()
         }));
 }

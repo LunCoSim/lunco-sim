@@ -25,11 +25,11 @@ Initial fixes were **point fixes** (swap `first_non_pkg` → `simulation_candida
 File references in `crates/lunco-modelica-core`, `crates/lunco-modelica-api`, and
 `crates/lunco-experiments`:
 
-### 2.1 Class candidates & ranking — `index.rs`
-- `ClassKind::is_simulatable()` (`index.rs`) → `true` only for `Model | Block | Class`.
-- `simulation_candidates() -> Vec<String>` (`index.rs`): filters `is_simulatable() && !partial`, ranks by `sim_tier`, then alphabetical. Returns fully-qualified names.
-- `simulation_preferred_count() -> usize` (`index.rs`): count of classes in the best (lowest) tier. `== 1` → auto-pick; `!= 1` → ambiguous → picker.
-- `sim_tier(c, used) -> u8` (`index.rs`): **0** = has `experiment(...)` annotation; **1** = top-level (not used as a subcomponent); **2** = used as a subcomponent/helper.
+### 2.1 Class candidates & ranking — `lunco-modelica-index/src/index.rs`
+- `ClassKind::is_simulatable()` (`lunco-modelica-index/src/index.rs`) → `true` only for `Model | Block | Class`.
+- `simulation_candidates() -> Vec<String>` (`lunco-modelica-index/src/index.rs`): filters `is_simulatable() && !partial`, ranks by `sim_tier`, then alphabetical. Returns fully-qualified names.
+- `simulation_preferred_count() -> usize` (`lunco-modelica-index/src/index.rs`): count of classes in the best (lowest) tier. `== 1` → auto-pick; `!= 1` → ambiguous → picker.
+- `sim_tier(c, used) -> u8` (`lunco-modelica-index/src/index.rs`): **0** = has `experiment(...)` annotation; **1** = top-level (not used as a subcomponent); **2** = used as a subcomponent/helper.
 
 ### 2.2 The four resolution paths
 1. **`on_compile_model`** (`compile.rs`) — class precedence: `explicit > drilled > picker(if ambiguous) > detected[0]`. Does not resolve bounds (compile only).

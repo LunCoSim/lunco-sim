@@ -51,7 +51,8 @@ pub(crate) fn find_open_doc_with_class(
     let registry = world.resource::<ModelicaDocumentRegistry>();
     registry.iter().find_map(|(doc_id, host)| {
         host.document().strict_ast().and_then(|ast| {
-            crate::diagram::find_class_by_qualified_name(&ast, qualified).map(|_| doc_id)
+            lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, qualified)
+                .map(|_| doc_id)
         })
     })
 }

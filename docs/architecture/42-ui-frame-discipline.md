@@ -172,7 +172,7 @@ package — none of these belong on the UI thread every frame. Patterns:
 - **One-shot + cache**: global `OnceLock<Mutex<HashMap>>` keyed by
   a stable identifier (path, hash, id). Cache-hit returns a
   `Arc<T>` clone. Reference: `svg_bytes_for` in the canvas panel,
-  the source-library component index in `visual_diagram.rs`.
+  the source-library component index in `lunco-modelica-index::visual_diagram`.
 - **Background task + poll**: `AsyncComputeTaskPool::get().spawn(...)`
   returns a `Task<T>`; `future::poll_once(&mut task)` in an Update
   system yields the result when ready without blocking. Reference:

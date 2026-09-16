@@ -1114,11 +1114,12 @@ mod tests {
 
         idx.patch_component_removed("RC", "extra");
         assert!(idx.find_component("RC", "extra").is_none());
-        assert!(!idx
-            .components_by_class
-            .get("RC")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false));
+        assert!(
+            !idx.components_by_class
+                .get("RC")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false)
+        );
     }
 
     #[test]
@@ -1160,14 +1161,16 @@ mod tests {
         assert_ne!(key2, key3, "connection key reused from Vec::len()");
         // The surviving connection (c→d) is still resolvable and distinct.
         assert_eq!(idx.connections.len(), 2);
-        assert!(idx
-            .connections
-            .iter()
-            .any(|c| c.key == key2 && c.from.component_name == "c"));
-        assert!(idx
-            .connections
-            .iter()
-            .any(|c| c.key == key3 && c.from.component_name == "e"));
+        assert!(
+            idx.connections
+                .iter()
+                .any(|c| c.key == key2 && c.from.component_name == "c")
+        );
+        assert!(
+            idx.connections
+                .iter()
+                .any(|c| c.key == key3 && c.from.component_name == "e")
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ use lunco_modelica_ast::parse_to_syntax;
 use rumoca_compile::parsing::ast::StoredDefinition;
 
 use super::ops::{FreshAst, ModelicaChange, ModelicaOp, CHANGE_HISTORY_CAPACITY};
-use crate::index::ModelicaIndex;
+use lunco_modelica_index::index::ModelicaIndex;
 
 // ---------------------------------------------------------------------------
 // SyntaxCache
@@ -599,7 +599,10 @@ impl ModelicaDocument {
 /// connection counts is robust to the dominant rename case (header
 /// edited, body untouched) and lets false-positives degrade
 /// gracefully into separate add/remove changes.
-fn class_shape_signature(index: &crate::index::ModelicaIndex, qualified: &str) -> (usize, usize) {
+fn class_shape_signature(
+    index: &lunco_modelica_index::index::ModelicaIndex,
+    qualified: &str,
+) -> (usize, usize) {
     let comps = index
         .components_by_class
         .get(qualified)

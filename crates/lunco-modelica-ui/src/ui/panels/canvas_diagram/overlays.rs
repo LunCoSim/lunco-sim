@@ -144,7 +144,9 @@ pub(super) fn render_empty_diagram_overlay(
                     index
                         .classes
                         .values()
-                        .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                        .find(|c| {
+                            !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package)
+                        })
                         .map(|c| c.name.clone())
                 })?;
                 let _ = document;
@@ -367,7 +369,7 @@ pub(super) fn empty_overlay_class_info(
 /// Resolve `name` (short or fully-qualified) to a class in `ast`,
 /// falling back to the first non-package class when nothing matches.
 ///
-/// Lookup is delegated to `crate::diagram::find_class_by_qualified_name`,
+/// Lookup is delegated to `lunco_modelica_index::class_lookup::find_class_by_qualified_name`,
 /// which handles both short names (`"PID"`) and qualified names with
 /// within-clause tolerance (`"Modelica.Blocks.PID"`). The previous
 /// hand-rolled walk only matched literal IndexMap keys, so qualified
@@ -380,7 +382,7 @@ pub(super) fn locate_class<'a>(
     ast: &'a rumoca_compile::parsing::ast::StoredDefinition,
     name: &str,
 ) -> Option<&'a rumoca_compile::parsing::ast::ClassDef> {
-    if let Some(c) = crate::diagram::find_class_by_qualified_name(ast, name) {
+    if let Some(c) = lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, name) {
         return Some(c);
     }
     use rumoca_compile::parsing::ClassType;
@@ -465,7 +467,7 @@ pub(super) fn paint_class_type_badge(
 }
 
 /// Counts for the empty-diagram overlay. All four numbers come from
-/// the per-doc [`crate::index::ModelicaIndex`]: components by
+/// the per-doc [`lunco_modelica_index::index::ModelicaIndex`]: components by
 /// variability / causality, connections by class, and the class's
 /// `equation_count` populated during rebuild.
 ///
@@ -483,10 +485,10 @@ pub(super) struct EmptyOverlayCounts {
 }
 
 pub(super) fn empty_overlay_counts_from_index(
-    index: &crate::index::ModelicaIndex,
+    index: &lunco_modelica_index::index::ModelicaIndex,
     qualified: &str,
 ) -> EmptyOverlayCounts {
-    use crate::index::{Causality, Variability};
+    use lunco_modelica_index::index::{Causality, Variability};
     let mut counts = EmptyOverlayCounts::default();
     for comp in index.components_in_class(qualified) {
         if matches!(comp.variability, Variability::Parameter) {

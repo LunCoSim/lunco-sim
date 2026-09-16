@@ -471,7 +471,7 @@ impl Panel for ExperimentsPanel {
                         .and_then(|r| r.host(doc))
                         .map(|h| {
                             h.document().index().classes.values().any(|c| {
-                                !matches!(c.kind, crate::index::ClassKind::Package)
+                                !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package)
                             })
                         })
                 })
@@ -1475,7 +1475,7 @@ impl ExperimentsPanel {
             .index()
             .classes
             .values()
-            .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+            .find(|c| !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package))
             .map(|c| c.name.clone());
         let Some(model_name) = drilled.or(first_non_pkg) else {
             return;

@@ -1,9 +1,8 @@
 //! Resource state and result types for the Package Browser.
 
-use super::types::{InMemoryEntry, PackageNode};
-use crate::state::ModelSource;
 use bevy::prelude::*;
 use bevy::tasks::Task;
+use lunco_modelica_index::package_tree::types::{InMemoryEntry, ModelSource, PackageNode};
 
 pub struct ScanResult {
     pub parent_id: String,
@@ -60,7 +59,8 @@ impl PackageTreeCache {
             is_loading: false,
         });
 
-        let bundled_tree_indexed = !crate::visual_diagram::library_bundled_nodes().is_empty();
+        let bundled_tree_indexed =
+            !lunco_modelica_index::visual_diagram::library_bundled_nodes().is_empty();
 
         Self {
             roots,
@@ -148,7 +148,7 @@ fn build_bundled_tree() -> Vec<PackageNode> {
                 .unwrap_or(m.filename)
                 .to_string(),
             library: ModelSource::Bundled,
-            class_kind: Some(crate::index::ClassKind::Model),
+            class_kind: Some(lunco_modelica_index::index::ClassKind::Model),
         })
         .collect()
 }

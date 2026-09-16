@@ -189,11 +189,13 @@ refactor, and should be taken explicitly rather than arrived at.
 ### Modelica compile-core split — completed
 
 `lunco-modelica-core` now owns the headless Modelica document, compiler, worker,
-simulation, API, and CLI/indexing seams. `lunco-modelica-ui` owns only the
-workbench presentation and `lunica` facade. USD simulation and scene commands
-depend on core directly, so they do not inherit egui/workbench or tutorial
-dependencies. The existing `lunco-modelica-ast` package remains the smaller
-parse/projection boundary for consumers that need source facts only.
+and simulation seams. `lunco-modelica-index` owns the reusable AST projection,
+editor-index artifact, diagram metadata, and package-browser values. The API
+and native indexing tools consume those boundaries explicitly; `lunco-modelica-ui`
+owns only the workbench presentation and `lunica` facade. USD simulation and
+scene commands depend on core directly, so they do not inherit egui/workbench
+or tutorial dependencies. The existing `lunco-modelica-ast` package remains the
+smaller parse/projection boundary for source facts that do not need the index.
 
 
 ### Re-home active-document clearing

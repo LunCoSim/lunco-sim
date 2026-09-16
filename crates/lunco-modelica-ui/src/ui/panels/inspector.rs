@@ -192,7 +192,7 @@ impl Panel for InspectorPanel {
             .or_else(|| crate::ui::context::default_simulation_class(ctx, doc_id));
 
         // Resolve the target class + component via the per-document
-        // [`crate::index::ModelicaIndex`]. The Index is patched
+        // [`lunco_modelica_index::index::ModelicaIndex`]. The Index is patched
         // optimistically on every structural op (see
         // `ModelicaDocument::apply_patch`) so this read sees fresh
         // state even during the 2.5 s AST-reparse debounce.

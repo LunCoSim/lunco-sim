@@ -554,13 +554,17 @@ mod tests {
         let decoded = decode_library_index(encoded.as_bytes()).expect("indexer format parses");
 
         assert_eq!(decoded.components.len(), 2);
-        assert!(decoded
-            .components
-            .iter()
-            .any(|entry| entry.short_name() == "Resistor"));
-        assert!(decoded
-            .components
-            .iter()
-            .any(|entry| entry.short_name() == "Ground"));
+        assert!(
+            decoded
+                .components
+                .iter()
+                .any(|entry| entry.short_name() == "Resistor")
+        );
+        assert!(
+            decoded
+                .components
+                .iter()
+                .any(|entry| entry.short_name() == "Ground")
+        );
     }
 }

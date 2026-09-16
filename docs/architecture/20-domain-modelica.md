@@ -7,7 +7,8 @@
 > a background worker thread.
 >
 > Engineering docs live in
-> [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) and
+> [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/),
+> [`../../crates/lunco-modelica-index/`](../../crates/lunco-modelica-index/), and
 > [`../../crates/lunco-modelica-ui/`](../../crates/lunco-modelica-ui/) and
 > [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md).
 

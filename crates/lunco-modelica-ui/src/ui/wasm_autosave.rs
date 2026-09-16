@@ -254,7 +254,7 @@ fn restore_from_localstorage(world: &mut World) {
             let id = format!("mem://{display_name}");
             cache
                 .in_memory_models
-                .push(crate::package_tree::InMemoryEntry {
+                .push(lunco_modelica_index::package_tree::types::InMemoryEntry {
                     display_name,
                     id,
                     doc: doc_id,

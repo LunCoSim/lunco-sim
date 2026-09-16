@@ -15,7 +15,7 @@ use lunco_canvas::{
     PortId as CanvasPortId, PortRef, Pos as CanvasPos, Rect as CanvasRect, Scene,
 };
 
-use crate::visual_diagram::{DiagramNodeId, VisualDiagram};
+use lunco_modelica_index::visual_diagram::{DiagramNodeId, VisualDiagram};
 
 use super::edge::{port_edge_dir, ConnectionEdgeData, PortDir};
 use super::node::IconNodeData;
@@ -35,7 +35,8 @@ pub(super) fn target_unit_instance(
     target: Option<&str>,
 ) -> Option<String> {
     let target = target.filter(|target| !target.is_empty() && *target != root_model_name)?;
-    let root = crate::diagram::find_class_by_qualified_name(ast, root_model_name)?;
+    let root =
+        lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, root_model_name)?;
     let target_leaf = target.rsplit('.').next().unwrap_or(target);
     let candidates: Vec<String> = root
         .components
@@ -198,12 +199,12 @@ pub(super) fn recover_edges_from_ast(
                 .map(|port| port.kind);
             let (source_id, source_port, target_id, target_port) = match (lhs_kind, rhs_kind) {
                 (
-                    Some(crate::visual_diagram::PortKind::Input),
-                    Some(crate::visual_diagram::PortKind::Output),
+                    Some(lunco_modelica_index::visual_diagram::PortKind::Input),
+                    Some(lunco_modelica_index::visual_diagram::PortKind::Output),
                 ) => (rhs_id, rhs_port, lhs_id, lhs_port),
                 (
-                    Some(crate::visual_diagram::PortKind::Output),
-                    Some(crate::visual_diagram::PortKind::Input),
+                    Some(lunco_modelica_index::visual_diagram::PortKind::Output),
+                    Some(lunco_modelica_index::visual_diagram::PortKind::Input),
                 ) => (lhs_id, lhs_port, rhs_id, rhs_port),
                 _ => continue,
             };
@@ -325,8 +326,8 @@ pub(super) fn project_scene(
                 resolution_message: node.component_def.resolution_message.clone(),
                 diagram_graphics: if matches!(
                     node.component_def.kind,
-                    crate::index::ClassKind::Connector
-                        | crate::index::ClassKind::ExpandableConnector
+                    lunco_modelica_index::index::ClassKind::Connector
+                        | lunco_modelica_index::index::ClassKind::ExpandableConnector
                 ) {
                     node.component_def.diagram_graphics.clone()
                 } else {
@@ -425,9 +426,9 @@ pub(super) fn project_scene(
         // outer `flange` PortDef. Without this, every recovered
         // edge with a sub-port lost its colour + stub direction
         // because the find() returned None.
-        let find_port = |defs: &[crate::visual_diagram::PortDef],
+        let find_port = |defs: &[lunco_modelica_index::visual_diagram::PortDef],
                          name: &str|
-         -> Option<crate::visual_diagram::PortDef> {
+         -> Option<lunco_modelica_index::visual_diagram::PortDef> {
             if let Some(p) = defs.iter().find(|p| p.name == name) {
                 return Some(p.clone());
             }
@@ -598,7 +599,7 @@ pub(super) fn project_scene(
                 kind: src_port_def
                     .as_ref()
                     .map(|p| p.kind)
-                    .unwrap_or(crate::visual_diagram::PortKind::Acausal),
+                    .unwrap_or(lunco_modelica_index::visual_diagram::PortKind::Acausal),
                 flow_vars,
                 smooth_bezier: edge.smooth_bezier,
                 // Modelica default thickness is 0.25; we expose it as

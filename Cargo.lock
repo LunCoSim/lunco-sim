@@ -7930,6 +7930,7 @@ dependencies = [
  "lunco-experiments",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
  "lunco-workspace",
@@ -7947,6 +7948,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-index",
  "rayon",
  "regex",
  "rumoca-compile",
@@ -7995,6 +7997,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-experiments",
  "lunco-modelica-ast",
+ "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
  "lunco-settings",
@@ -8014,7 +8017,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -8047,6 +8049,20 @@ dependencies = [
  "lyon_path",
  "lyon_tessellation",
  "web-time",
+]
+
+[[package]]
+name = "lunco-modelica-index"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-assets-core",
+ "lunco-doc",
+ "lunco-modelica-ast",
+ "rumoca-compile",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -8105,6 +8121,7 @@ dependencies = [
  "lunco-modelica-core",
  "lunco-modelica-docs-ui",
  "lunco-modelica-icon-ui",
+ "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
  "lunco-modelica-ui-core",
@@ -9308,6 +9325,7 @@ dependencies = [
  "lunco-hooks-rhai",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-signal",
  "lunco-usd-actuation",

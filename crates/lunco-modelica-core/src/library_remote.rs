@@ -201,12 +201,12 @@ pub fn deserialize_parsed_bundle(
 #[cfg(target_arch = "wasm32")]
 pub fn load_library_index_from_source_bundle(
     compressed: &[u8],
-) -> Result<crate::visual_diagram::LibraryIndex, String> {
+) -> Result<lunco_modelica_index::visual_diagram::LibraryIndex, String> {
     let files = lunco_assets_core::web_fetch::unpack_tar_zst(compressed, 1)?;
     let bytes = files
         .get(std::path::Path::new("library_index.json"))
         .ok_or_else(|| "source bundle has no generated library_index.json".to_string())?;
-    crate::visual_diagram::decode_library_index(bytes)
+    lunco_modelica_index::visual_diagram::decode_library_index(bytes)
 }
 
 // ─── Chunked main-thread source library deserialize ──────────────────────────
@@ -421,15 +421,15 @@ pub fn install_global_parsed_source_bundle_pub(
 
 #[cfg(target_arch = "wasm32")]
 struct WebLibraryIndexAssembly {
-    components: Vec<crate::index::ClassEntry>,
-    bundled: Vec<crate::package_tree::types::PackageNode>,
+    components: Vec<lunco_modelica_index::index::ClassEntry>,
+    bundled: Vec<lunco_modelica_index::package_tree::types::PackageNode>,
 }
 
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     static WEB_LIBRARY_INDEX: std::cell::RefCell<Option<WebLibraryIndexAssembly>> =
         const { std::cell::RefCell::new(None) };
-    static WEB_LIBRARY_INDEX_READY: std::cell::RefCell<Option<crate::visual_diagram::LibraryIndex>> =
+    static WEB_LIBRARY_INDEX_READY: std::cell::RefCell<Option<lunco_modelica_index::visual_diagram::LibraryIndex>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -438,8 +438,8 @@ thread_local! {
 /// one browser event-loop turn.
 #[cfg(target_arch = "wasm32")]
 pub fn ingest_worker_library_index_chunk(
-    components: Vec<crate::index::ClassEntry>,
-    bundled: Vec<crate::package_tree::types::PackageNode>,
+    components: Vec<lunco_modelica_index::index::ClassEntry>,
+    bundled: Vec<lunco_modelica_index::package_tree::types::PackageNode>,
     done: bool,
 ) {
     WEB_LIBRARY_INDEX.with(|slot| {
@@ -455,7 +455,7 @@ pub fn ingest_worker_library_index_chunk(
                 .take()
                 .expect("source library index assembly disappeared while completing");
             WEB_LIBRARY_INDEX_READY.with(|ready| {
-                *ready.borrow_mut() = Some(crate::visual_diagram::LibraryIndex {
+                *ready.borrow_mut() = Some(lunco_modelica_index::visual_diagram::LibraryIndex {
                     components: assembly.components,
                     bundled: assembly.bundled,
                 });
@@ -488,9 +488,9 @@ pub fn fail_worker_library(error: String) {
 fn drive_web_library_index(mut commands: Commands) {
     let index = WEB_LIBRARY_INDEX_READY.with(|ready| ready.borrow_mut().take());
     let Some(index) = index else { return };
-    if crate::visual_diagram::install_library_index(index) {
+    if lunco_modelica_index::visual_diagram::install_library_index(index) {
         bevy::log::info!("[source library] editor index loaded in bounded worker chunks");
-        commands.trigger(crate::visual_diagram::LibraryEditorIndexBecameReady);
+        commands.trigger(lunco_modelica_index::visual_diagram::LibraryEditorIndexBecameReady);
     }
 }
 

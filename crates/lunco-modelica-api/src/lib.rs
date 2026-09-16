@@ -23,7 +23,7 @@ use lunco_doc::CompileState;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_modelica_core::state::{is_generated_document, ModelicaDocumentRegistry};
-use lunco_modelica_core::visual_diagram::library_class_library;
+use lunco_modelica_index::visual_diagram::library_class_library;
 
 /// Plugin that registers the Modelica [`ApiQueryProvider`]s. Hosts add this
 /// capability alongside the Modelica compiler plugin when they expose the
@@ -215,7 +215,7 @@ impl ApiQueryProvider for ListLibraryProvider {
         // Apply filters in one pass over the static slice. The filter
         // closures are cheap; no allocation until we slice the
         // matching subset for the response.
-        let matched: Vec<&lunco_modelica_core::index::ClassEntry> = lib
+        let matched: Vec<&lunco_modelica_index::index::ClassEntry> = lib
             .iter()
             .filter(|c| match prefix {
                 Some(p) => c.name.starts_with(p),
@@ -357,7 +357,7 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
                 .index()
                 .classes
                 .values()
-                .filter(|c| !matches!(c.kind, lunco_modelica_core::index::ClassKind::Package))
+                .filter(|c| !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package))
                 .filter(|c| {
                     class_filter.as_ref().is_none_or(|f| {
                         c.name == *f || c.name.rsplit('.').next() == Some(f.as_str())
@@ -480,7 +480,7 @@ impl ApiQueryProvider for CompileStatusProvider {
                 // simulation_preferred_count).
                 let ranked = index.ranked_simulation_candidates();
                 let top_level =
-                    lunco_modelica_core::index::ModelicaIndex::preferred_count_of(&ranked);
+                    lunco_modelica_index::index::ModelicaIndex::preferred_count_of(&ranked);
                 let cands: Vec<String> = ranked.into_iter().map(|(_, n)| n).collect();
                 (cands, top_level, has_ast)
             }
@@ -1098,7 +1098,7 @@ impl ApiQueryProvider for DescribeModelProvider {
                 .index()
                 .classes
                 .values()
-                .find(|c| !matches!(c.kind, lunco_modelica_core::index::ClassKind::Package))
+                .find(|c| !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package))
                 .map(|c| c.name.clone())
         });
         let Some(target_name) = target_class_name else {

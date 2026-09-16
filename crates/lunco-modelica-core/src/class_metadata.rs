@@ -1,7 +1,7 @@
 //! Unified read-side view of "what does the workbench know about
 //! this class?".
 //!
-//! Both the pre-baked source library palette index ([`crate::index::ClassEntry`]) and
+//! Both the pre-baked source library palette index ([`lunco_modelica_index::index::ClassEntry`]) and
 //! the live per-document index ([`ClassEntry`]) carry the same
 //! conceptual fields — kind, description, documentation, icon —
 //! shaped differently because one is a serialised palette payload
@@ -23,14 +23,14 @@
 use bevy::prelude::World;
 
 use crate::class_ref::{ClassRef, Library};
-use crate::index::{ClassEntry, ClassKind};
 use crate::sim_default::ResourceRead;
 use lunco_modelica_ast::annotations::Icon;
+use lunco_modelica_index::index::{ClassEntry, ClassKind};
 
 /// Read-side metadata for a class, regardless of where the source
 /// of truth lives. Keep this minimal — it should *not* grow into
 /// every field of both backends. The projector keeps its own
-/// `crate::index::ClassEntry` lookup for ports / parameters / graphics;
+/// `lunco_modelica_index::index::ClassEntry` lookup for ports / parameters / graphics;
 /// callers that only want the display fields use this.
 #[derive(Clone, Debug)]
 pub struct ClassMetadata {
@@ -71,7 +71,9 @@ pub fn resolve_metadata(world: &World, class: &ClassRef) -> Option<ClassMetadata
             // 1. Pre-baked palette index — `library_index.json` covers
             //    every indexed class with absolute qualified names.
             let qualified = class.qualified();
-            if let Some(def) = crate::visual_diagram::library_class_by_path(&qualified) {
+            if let Some(def) =
+                lunco_modelica_index::visual_diagram::library_class_by_path(&qualified)
+            {
                 return Some(ClassMetadata::from(&def));
             }
             // 2. Fallback: if the user has the owning doc open
@@ -120,7 +122,7 @@ pub fn resolve_metadata_for_doc_in<R: ResourceRead>(
 /// drilled class (with within-tolerance + leaf fallback) or fall back
 /// to the first non-package class.
 fn resolve_metadata_from_index(
-    index: &crate::index::ModelicaIndex,
+    index: &lunco_modelica_index::index::ModelicaIndex,
     drilled: Option<&str>,
 ) -> Option<ClassMetadata> {
     if let Some(q) = drilled {

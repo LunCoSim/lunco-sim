@@ -147,7 +147,8 @@ fn build_registry() -> VisualRegistry {
         let causal_by_name = leaf.ends_with("Input") || leaf.ends_with("Output");
         let is_causal = matches!(
             d.kind,
-            crate::visual_diagram::PortKind::Input | crate::visual_diagram::PortKind::Output,
+            lunco_modelica_index::visual_diagram::PortKind::Input
+                | lunco_modelica_index::visual_diagram::PortKind::Output,
         ) || causal_by_name;
         // Materialise all flow-variable lookup keys once per projection —
         // avoids per-frame formatting and supports connectors with more than

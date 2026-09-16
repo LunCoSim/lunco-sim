@@ -9,7 +9,7 @@
 //!
 //! - [`class_to_file_index`] — `qualified → PathBuf` for every
 //!   class the visual palette knows about. Built from
-//!   [`crate::visual_diagram::library_class_library`].
+//!   [`lunco_modelica_index::visual_diagram::library_class_library`].
 //!
 //! [`locate_library_file`] is the single source-of-truth resolver: it
 //! walks the in-memory bundle (web) or filesystem roots (native,
@@ -38,7 +38,7 @@ pub fn class_to_file_index() -> &'static std::collections::HashMap<String, std::
     // index would stay empty for the lifetime of the page even after
     // source library lands. So: return an empty placeholder *without* memoising,
     // so the next caller retries the build.
-    let lib = crate::visual_diagram::library_class_library();
+    let lib = lunco_modelica_index::visual_diagram::library_class_library();
     if lib.is_empty() {
         return EMPTY.get_or_init(std::collections::HashMap::new);
     }
@@ -47,7 +47,7 @@ pub fn class_to_file_index() -> &'static std::collections::HashMap<String, std::
 
 fn build_class_to_file_index() -> std::collections::HashMap<String, std::path::PathBuf> {
     let start = web_time::Instant::now();
-    let lib = crate::visual_diagram::library_class_library();
+    let lib = lunco_modelica_index::visual_diagram::library_class_library();
     let mut map = std::collections::HashMap::with_capacity(lib.len());
     for comp in lib {
         if let Some(path) = locate_library_file(&comp.name) {

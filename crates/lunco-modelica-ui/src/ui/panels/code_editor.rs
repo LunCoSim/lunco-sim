@@ -379,7 +379,7 @@ pub fn editor_on_doc_changed(
         .index()
         .classes
         .values()
-        .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+        .find(|c| !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package))
         .map(|c| c.name.clone());
 
     buf_state.text = src;
@@ -531,7 +531,12 @@ impl Panel for CodeEditorPanel {
                                     .index()
                                     .classes
                                     .values()
-                                    .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                                    .find(|c| {
+                                        !matches!(
+                                            c.kind,
+                                            lunco_modelica_index::index::ClassKind::Package
+                                        )
+                                    })
                                     .map(|c| c.name.clone());
                                 (document.source().to_string(), detected, host.generation())
                             })

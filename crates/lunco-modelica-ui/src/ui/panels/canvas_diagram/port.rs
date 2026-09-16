@@ -12,14 +12,14 @@ use bevy_egui::egui;
 
 use super::edge::PortDir;
 
-/// Serialise a [`PortKind`](crate::visual_diagram::PortKind) into the
+/// Serialise a [`PortKind`](lunco_modelica_index::visual_diagram::PortKind) into the
 /// short string used in edge JSON data, so the factory can round-trip
 /// it without pulling in serde enum tagging.
-pub(super) fn port_kind_str(kind: crate::visual_diagram::PortKind) -> &'static str {
+pub(super) fn port_kind_str(kind: lunco_modelica_index::visual_diagram::PortKind) -> &'static str {
     match kind {
-        crate::visual_diagram::PortKind::Input => "input",
-        crate::visual_diagram::PortKind::Output => "output",
-        crate::visual_diagram::PortKind::Acausal => "acausal",
+        lunco_modelica_index::visual_diagram::PortKind::Input => "input",
+        lunco_modelica_index::visual_diagram::PortKind::Output => "output",
+        lunco_modelica_index::visual_diagram::PortKind::Acausal => "acausal",
     }
 }
 
@@ -311,10 +311,10 @@ pub(super) fn port_fallback_offset_for_size(
 /// connector class.
 pub(super) fn resolve_port_icons(
     parent_qualified: &str,
-    ports: &[crate::visual_diagram::PortDef],
+    ports: &[lunco_modelica_index::visual_diagram::PortDef],
 ) -> Vec<Option<lunco_modelica_ast::annotations::Icon>> {
-    let palette = crate::visual_diagram::library_class_library();
-    let palette_lookup: HashMap<&str, &crate::index::ClassEntry> =
+    let palette = lunco_modelica_index::visual_diagram::library_class_library();
+    let palette_lookup: HashMap<&str, &lunco_modelica_index::index::ClassEntry> =
         palette.iter().map(|d| (d.name.as_str(), d)).collect();
     let handle = crate::engine_resource::global_engine_handle();
     ports

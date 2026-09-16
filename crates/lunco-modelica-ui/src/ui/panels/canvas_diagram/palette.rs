@@ -1,7 +1,7 @@
 //! source library package palette tree + render-as-context-menu.
 //!
 //! Builds a static [`LibraryPackageNode`] tree from
-//! [`crate::visual_diagram::library_class_library`] and renders it as
+//! [`lunco_modelica_index::visual_diagram::library_class_library`] and renders it as
 //! a nested egui submenu so users can pick source library components without
 //! leaving the canvas. Also houses the user-tunable [`PaletteSettings`]
 //! and [`crate::ui::panels::canvas_diagram::DiagramProjectionLimits`] resources.
@@ -27,7 +27,7 @@ pub(super) struct LibraryPackageNode {
     /// every frame the pointer is over it; per-frame O(n log n)
     /// across nested submenus is the cause of the laggy right-click
     /// context-menu navigation).
-    classes: Vec<&'static crate::index::ClassEntry>,
+    classes: Vec<&'static lunco_modelica_index::index::ClassEntry>,
     /// Pre-computed: `true` if this subtree contains at least one
     /// non-icon-only class. Lets the menu skip empty branches in O(1)
     /// instead of recursively walking on every render.
@@ -103,7 +103,7 @@ pub(super) fn package_has_visible_classes(node: &LibraryPackageNode) -> bool {
 }
 
 /// Lazily-built package tree. Walks every entry in
-/// [`crate::visual_diagram::library_class_library`] once and
+/// [`lunco_modelica_index::visual_diagram::library_class_library`] once and
 /// inserts it under its dotted package path. Cached for the life
 /// of the process — source library content doesn't change at runtime.
 pub(super) fn library_package_tree() -> &'static LibraryPackageNode {
@@ -111,7 +111,7 @@ pub(super) fn library_package_tree() -> &'static LibraryPackageNode {
     static TREE: OnceLock<LibraryPackageNode> = OnceLock::new();
     TREE.get_or_init(|| {
         let mut root = LibraryPackageNode::new();
-        for comp in crate::visual_diagram::library_class_library() {
+        for comp in lunco_modelica_index::visual_diagram::library_class_library() {
             // Split the qualified path into package segments + a
             // trailing class name. `Modelica.Electrical.Analog.
             // Basic.Resistor` → walk subpackages

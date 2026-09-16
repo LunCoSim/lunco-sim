@@ -7,7 +7,7 @@
 //! asset-browser style.
 //!
 //! **What's in the palette**: every *leaf* component from
-//! [`crate::visual_diagram::library_class_library`] — interfaces and
+//! [`lunco_modelica_index::visual_diagram::library_class_library`] — interfaces and
 //! package nodes are excluded. One row per component. Click a row to
 //! instantiate on the active Diagram tab (placement cycles through a
 //! 3-column grid to avoid overlap).
@@ -23,7 +23,7 @@ use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::visual_diagram::library_class_library;
+use lunco_modelica_index::visual_diagram::library_class_library;
 
 /// Panel id — registered as a singleton panel, slotted RightInspector.
 pub const PALETTE_PANEL_ID: PanelId = PanelId("modelica_component_palette");
@@ -34,7 +34,7 @@ pub const PALETTE_PANEL_ID: PanelId = PanelId("modelica_component_palette");
 /// stale payloads don't leak between gestures.
 #[derive(Resource, Default)]
 pub struct ComponentDragPayload {
-    pub def: Option<crate::index::ClassEntry>,
+    pub def: Option<lunco_modelica_index::index::ClassEntry>,
 }
 
 /// Clear the palette drag payload after a canvas drop/miss.
@@ -53,7 +53,7 @@ pub(crate) fn on_clear_component_drag_payload(
 /// optional placement coordinates.
 #[derive(Event)]
 pub(crate) struct PlaceComponentRequested {
-    pub(crate) def: crate::index::ClassEntry,
+    pub(crate) def: lunco_modelica_index::index::ClassEntry,
     pub(crate) target_doc: Option<lunco_doc::DocumentId>,
     pub(crate) placement: Option<(f32, f32)>,
 }
@@ -149,13 +149,14 @@ fn category_color(name: &str, theme: &lunco_theme::Theme) -> egui::Color32 {
 /// `.Internal.` (library-private convention) is not filtered — it's
 /// source library author lore with no formal language marker, and users with a
 /// search box don't typically hit them by accident.
-pub(crate) fn is_instantiable(c: &crate::index::ClassEntry) -> bool {
+pub(crate) fn is_instantiable(c: &lunco_modelica_index::index::ClassEntry) -> bool {
     if c.partial {
         return false;
     }
     !matches!(
         c.kind,
-        crate::index::ClassKind::Connector | crate::index::ClassKind::ExpandableConnector
+        lunco_modelica_index::index::ClassKind::Connector
+            | lunco_modelica_index::index::ClassKind::ExpandableConnector
     )
 }
 
@@ -169,7 +170,7 @@ pub(crate) fn is_instantiable(c: &crate::index::ClassEntry) -> bool {
 /// user is actually typing a search.
 struct PaletteCatalog {
     /// Instantiable classes (connectors/partials dropped), in library order.
-    lib: Vec<&'static crate::index::ClassEntry>,
+    lib: Vec<&'static lunco_modelica_index::index::ClassEntry>,
     /// Per-category counts with no search query active (the default chips).
     cat_counts_all: std::collections::HashMap<&'static str, usize>,
     /// `lib.len()` — total instantiable component count.
@@ -195,7 +196,7 @@ fn palette_catalog() -> &'static PaletteCatalog {
         // next call (mirrors `library_class_library`'s own load retry).
         return empty();
     }
-    let lib: Vec<&'static crate::index::ClassEntry> =
+    let lib: Vec<&'static lunco_modelica_index::index::ClassEntry> =
         lib_all.iter().filter(|c| is_instantiable(c)).collect();
     let mut cat_counts_all: std::collections::HashMap<&'static str, usize> =
         std::collections::HashMap::new();
@@ -407,7 +408,7 @@ impl Panel for ComponentPalettePanel {
         //   +1 category contains query
         //   +0.5 description contains query
         // Plus: category filter acts as a hard gate.
-        let mut scored: Vec<(&crate::index::ClassEntry, f32)> = lib
+        let mut scored: Vec<(&lunco_modelica_index::index::ClassEntry, f32)> = lib
             .iter()
             .filter_map(|c| {
                 if let Some(cat) = selected_category {
@@ -444,8 +445,8 @@ impl Panel for ComponentPalettePanel {
         // into collapsible sections (Figma Assets style, OMEdit's
         // component-tree style). Each section is closed by default
         // except the first, keeping long category chains scannable.
-        let mut clicked: Option<crate::index::ClassEntry> = None;
-        let mut drag_started_def: Option<crate::index::ClassEntry> = None;
+        let mut clicked: Option<lunco_modelica_index::index::ClassEntry> = None;
+        let mut drag_started_def: Option<lunco_modelica_index::index::ClassEntry> = None;
         // Snapshot the currently-dragged def name so render_component_row
         // can dim the source row.
         let dragging_path: Option<String> = ctx
@@ -489,7 +490,7 @@ impl Panel for ComponentPalettePanel {
                     // immediately.
                     let mut groups: std::collections::BTreeMap<
                         &'static str,
-                        Vec<&crate::index::ClassEntry>,
+                        Vec<&lunco_modelica_index::index::ClassEntry>,
                     > = std::collections::BTreeMap::new();
                     for (comp, _score) in scored.iter() {
                         let cat = category_of(&comp.name);
@@ -573,7 +574,7 @@ struct PalettePlacementCounter(u32);
 /// trigger live in one place.
 pub(crate) fn place_component(
     world: &mut World,
-    def: &crate::index::ClassEntry,
+    def: &lunco_modelica_index::index::ClassEntry,
     target_doc: Option<lunco_doc::DocumentId>,
     placement: Option<(f32, f32)>,
 ) {
@@ -617,7 +618,7 @@ pub(crate) fn place_component(
                 .index()
                 .classes
                 .values()
-                .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                .find(|c| !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package))
                 .map(|c| c.name.clone())
         })
         .unwrap_or_default();
@@ -705,7 +706,7 @@ struct RowAction {
 /// grouped-by-category list.
 fn render_component_row(
     ui: &mut egui::Ui,
-    comp: &crate::index::ClassEntry,
+    comp: &lunco_modelica_index::index::ClassEntry,
     theme: &lunco_theme::Theme,
     is_being_dragged: bool,
 ) -> RowAction {
@@ -800,7 +801,7 @@ fn chip(ui: &mut egui::Ui, name: &str, color: egui::Color32, count: usize, selec
 
 /// Score a component against a lowercased query. Higher = better.
 /// Returns 0 for no match.
-fn score_component(c: &crate::index::ClassEntry, query_lc: &str) -> f32 {
+fn score_component(c: &lunco_modelica_index::index::ClassEntry, query_lc: &str) -> f32 {
     let name_lc = c.short_name().to_lowercase();
     let path_lc = c.name.to_lowercase();
     let cat_lc = c.category.to_lowercase();

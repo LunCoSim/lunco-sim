@@ -157,7 +157,7 @@ pub fn drive_duplicate_loads(
             let qualified = index
                 .classes
                 .values()
-                .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                .find(|c| !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package))
                 .map(|c| c.name.clone());
             // Replace the `(doc, None)` placeholder with a fresh tab
             // bound to `(doc, Some(qualified))`. TabId bindings are
@@ -293,7 +293,7 @@ pub fn drive_drill_in_loads(
             // instantiated components → Icon view; otherwise Canvas
             // (the user drilled FROM a canvas, expects a canvas).
             let has_components = doc.strict_ast().and_then(|ast| {
-                crate::diagram::find_class_by_qualified_name(&ast, &qualified)
+                lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, &qualified)
                     .map(|c| !c.components.is_empty())
             });
             (path, has_components)

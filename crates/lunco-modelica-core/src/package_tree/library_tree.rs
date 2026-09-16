@@ -5,7 +5,7 @@
 //! asset source registry; web roots come from the parsed source bundle. Both
 //! backends expose the same package-tree queries.
 
-use super::types::PackageNode;
+use lunco_modelica_index::package_tree::types::PackageNode;
 
 /// A browsable Modelica source tree.
 pub trait LibraryTree {

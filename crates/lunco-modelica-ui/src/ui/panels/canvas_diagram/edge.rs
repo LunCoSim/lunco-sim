@@ -27,8 +27,8 @@ pub struct ConnectionEdgeData {
     pub icon_color: Option<egui::Color32>,
     pub source_path: String,
     pub target_path: String,
-    pub kind: crate::visual_diagram::PortKind,
-    pub flow_vars: Vec<crate::visual_diagram::FlowVarMeta>,
+    pub kind: lunco_modelica_index::visual_diagram::PortKind,
+    pub flow_vars: Vec<lunco_modelica_index::visual_diagram::FlowVarMeta>,
     /// True when the source `Line` annotation carried
     /// `smooth=Smooth.Bezier`. Renderer switches from straight
     /// orthogonal segments to a Catmull-Rom-style curve through the
@@ -110,7 +110,7 @@ pub(super) struct OrthogonalEdgeVisual {
     pub(super) is_causal: bool,
     pub(super) source_path: String,
     pub(super) target_path: String,
-    pub(super) flow_vars: Vec<crate::visual_diagram::FlowVarMeta>,
+    pub(super) flow_vars: Vec<lunco_modelica_index::visual_diagram::FlowVarMeta>,
     pub(super) connector_leaf: String,
     /// Pre-built `("source.fv", "target.fv")` keys for every
     /// declared flow variable, materialised at projection time so

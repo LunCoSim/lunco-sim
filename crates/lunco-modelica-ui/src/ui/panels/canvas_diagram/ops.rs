@@ -447,7 +447,7 @@ pub(super) fn component_headers(
 /// nodes the user has just optimistically synthesised but that
 /// haven't yet round-tripped through the AST.
 pub(super) fn pick_add_instance_name(
-    comp: &crate::index::ClassEntry,
+    comp: &lunco_modelica_index::index::ClassEntry,
     scene: &lunco_canvas::Scene,
 ) -> String {
     let prefix = comp.name.chars().next().unwrap_or('X').to_ascii_uppercase();
@@ -470,7 +470,7 @@ pub(super) fn pick_add_instance_name(
 /// lands at the right spot in both the source and any downstream
 /// re-projection.
 pub(super) fn op_add_component_with_name(
-    comp: &crate::index::ClassEntry,
+    comp: &lunco_modelica_index::index::ClassEntry,
     instance_name: &str,
     at_world: lunco_canvas::Pos,
     class: &str,

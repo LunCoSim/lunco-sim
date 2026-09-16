@@ -840,7 +840,10 @@ impl ModelicaEngine {
         for uri in &mapped_uris {
             if let Some(parsed) = self.session.parsed_file_query(uri) {
                 if let Some(found) =
-                    crate::diagram::find_class_by_qualified_name(parsed, qualified).cloned()
+                    lunco_modelica_index::class_lookup::find_class_by_qualified_name(
+                        parsed, qualified,
+                    )
+                    .cloned()
                 {
                     return Some(found);
                 }
@@ -931,7 +934,9 @@ impl ModelicaEngine {
         // for `Foo.Bar` (the segment walk would look for "Foo" in
         // `parsed.classes`, which is keyed under "Bar"). Same bug
         // class as `walk_qualified` and `lookup_class_mut` had.
-        let Some(found) = crate::diagram::find_class_by_qualified_name(parsed, qualified).cloned()
+        let Some(found) =
+            lunco_modelica_index::class_lookup::find_class_by_qualified_name(parsed, qualified)
+                .cloned()
         else {
             self.class_uri_misses.insert(qualified.to_string());
             bevy::log::debug!(

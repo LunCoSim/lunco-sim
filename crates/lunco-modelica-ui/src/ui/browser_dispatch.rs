@@ -114,7 +114,9 @@ pub fn drain_browser_actions(world: &mut World) {
                             .index()
                             .classes
                             .values()
-                            .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                            .find(|c| {
+                                !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package)
+                            })
                             .map(|c| c.name.clone())
                     });
                 let (tab_id, evict) = {

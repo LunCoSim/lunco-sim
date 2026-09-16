@@ -12,7 +12,8 @@ mod render;
 // library-tree builder) lives in the ungated `crate::package_tree` module
 // so the headless/server build can resolve packages without egui. The Twin
 // Browser renders that backend; this module owns loading and opening.
-use crate::package_tree::{PackageNode, PackageTreeCache};
+use crate::package_tree::PackageTreeCache;
+use lunco_modelica_index::package_tree::types::PackageNode;
 use lunco_workbench_browser::BrowserQuery;
 
 /// Open a class selected in the Modelica Twin-Browser section through the
@@ -114,7 +115,7 @@ pub fn on_source_bundle_became_ready(
 /// The embedded model inventory is already available at boot, so this update
 /// only replaces its flat presentation with the richer authored tree.
 pub fn on_library_editor_index_became_ready(
-    _trigger: On<crate::visual_diagram::LibraryEditorIndexBecameReady>,
+    _trigger: On<lunco_modelica_index::visual_diagram::LibraryEditorIndexBecameReady>,
     mut cache: ResMut<PackageTreeCache>,
 ) {
     refresh_bundled_tree(&mut cache, "LibraryEditorIndexBecameReady");
@@ -124,7 +125,7 @@ fn refresh_bundled_tree(cache: &mut PackageTreeCache, source: &str) {
     if cache.bundled_tree_indexed {
         return;
     }
-    let fresh = crate::visual_diagram::library_bundled_nodes();
+    let fresh = lunco_modelica_index::visual_diagram::library_bundled_nodes();
     if fresh.is_empty() {
         return;
     }
@@ -339,7 +340,9 @@ pub fn render_root_subtree(
             pinned,
         });
     } else if let Some(render::PackageAction::DragStart { library_path }) = action {
-        if let Some(def) = crate::visual_diagram::library_class_by_path(&library_path) {
+        if let Some(def) =
+            lunco_modelica_index::visual_diagram::library_class_by_path(&library_path)
+        {
             let _ = ctx.resource_scope::<crate::ui::panels::palette::ComponentDragPayload, _>(
                 |_, payload| payload.def = Some(def),
             );

@@ -146,7 +146,7 @@ mod wasm {
     /// wire decode small enough that the browser remains responsive.
     fn post_library_index_chunks(
         scope: &DedicatedWorkerGlobalScope,
-        index: lunco_modelica_core::visual_diagram::LibraryIndex,
+        index: lunco_modelica_index::visual_diagram::LibraryIndex,
     ) {
         const COMPONENTS_PER_MESSAGE: usize = 64;
         let mut bundled = Some(index.bundled);

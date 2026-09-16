@@ -40,7 +40,7 @@ fn project_target_unit_scope(
 fn bundled_member_bounds(pkg: &str, ty: &str, member: &str) -> (Option<f64>, Option<f64>) {
     thread_local! {
         static CACHE: std::cell::RefCell<
-            std::collections::HashMap<String, std::rc::Rc<crate::index::ModelicaIndex>>,
+            std::collections::HashMap<String, std::rc::Rc<lunco_modelica_index::index::ModelicaIndex>>,
         > = std::cell::RefCell::new(std::collections::HashMap::new());
     }
     let idx = CACHE.with(|c| {
@@ -49,7 +49,7 @@ fn bundled_member_bounds(pkg: &str, ty: &str, member: &str) -> (Option<f64>, Opt
         }
         let src = crate::ui::class_source::bundled_source_for(pkg)?;
         let ast = lunco_modelica_ast::parse_to_ast(src, "input-bounds.mo").ok()?;
-        let mut index = crate::index::ModelicaIndex::new();
+        let mut index = lunco_modelica_index::index::ModelicaIndex::new();
         index.rebuild_with_errors(&ast, src, false);
         let rc = std::rc::Rc::new(index);
         c.borrow_mut().insert(pkg.to_string(), rc.clone());

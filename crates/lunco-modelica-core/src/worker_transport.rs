@@ -155,8 +155,8 @@ pub enum WireResult {
     /// A bounded part of the generated editor index decoded by the worker.
     /// `done` closes the current assembly on the main side.
     LibraryIndexChunk {
-        components: Vec<crate::index::ClassEntry>,
-        bundled: Vec<crate::package_tree::types::PackageNode>,
+        components: Vec<lunco_modelica_index::index::ClassEntry>,
+        bundled: Vec<lunco_modelica_index::package_tree::types::PackageNode>,
         done: bool,
     },
     /// The required source library runtime artifact could not be decoded. This is a

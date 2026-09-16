@@ -766,13 +766,13 @@ pub fn on_compile_model(
             for entry in &index.components {
                 let numeric = entry.binding.as_ref().and_then(|s| s.parse::<f64>().ok());
                 match (entry.variability, entry.causality) {
-                    (crate::index::Variability::Parameter, _)
-                    | (crate::index::Variability::Constant, _) => {
+                    (lunco_modelica_index::index::Variability::Parameter, _)
+                    | (lunco_modelica_index::index::Variability::Constant, _) => {
                         if let Some(v) = numeric {
                             params.insert(entry.name.clone(), v);
                         }
                     }
-                    (_, crate::index::Causality::Input) => {
+                    (_, lunco_modelica_index::index::Causality::Input) => {
                         if let Some(v) = numeric {
                             inputs_with_defaults.insert(entry.name.clone(), v);
                         } else {

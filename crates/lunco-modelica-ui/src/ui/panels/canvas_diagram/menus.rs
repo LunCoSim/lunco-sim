@@ -133,7 +133,7 @@ pub(super) fn render_node_menu(
 /// Collect plottable scalar signals — every signal in the registry
 /// that the owning `ModelicaModel` does not classify as a parameter
 /// or input. Both maps are populated at compile time by walking the
-/// document's [`crate::index::ModelicaIndex`] (variability /
+/// document's [`lunco_modelica_index::index::ModelicaIndex`] (variability /
 /// causality on each `ComponentEntry`), so this is a free lookup —
 /// no DAE introspection or runtime variance heuristic required.
 fn collect_varying_signals(ctx: &PanelCtx) -> Vec<(bevy::prelude::Entity, String)> {

@@ -19,7 +19,7 @@ use super::theme::modelica_icon_palette_from_ctx;
 #[derive(Clone, Copy)]
 struct LegendEntry {
     color: egui::Color32,
-    kind: crate::visual_diagram::PortKind,
+    kind: lunco_modelica_index::visual_diagram::PortKind,
     domain: &'static str,
 }
 
@@ -117,11 +117,11 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
         });
 }
 
-fn kind_label(kind: crate::visual_diagram::PortKind) -> &'static str {
+fn kind_label(kind: lunco_modelica_index::visual_diagram::PortKind) -> &'static str {
     match kind {
-        crate::visual_diagram::PortKind::Input => "input",
-        crate::visual_diagram::PortKind::Output => "output",
-        crate::visual_diagram::PortKind::Acausal => "acausal",
+        lunco_modelica_index::visual_diagram::PortKind::Input => "input",
+        lunco_modelica_index::visual_diagram::PortKind::Output => "output",
+        lunco_modelica_index::visual_diagram::PortKind::Acausal => "acausal",
     }
 }
 
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn legend_explains_typed_port_kinds() {
-        use crate::visual_diagram::PortKind;
+        use lunco_modelica_index::visual_diagram::PortKind;
         assert_eq!(kind_label(PortKind::Input), "input");
         assert_eq!(kind_label(PortKind::Output), "output");
         assert_eq!(kind_label(PortKind::Acausal), "acausal");

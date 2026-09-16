@@ -9,7 +9,7 @@ pub mod render;
 // egui-free core modules:
 //   - `crate::model_tabs_types` — MODEL_VIEW_KIND, ModelTabState, …
 //   - `crate::model_tabs`       — ModelTabs
-//   - `crate::doc_extract`      — extract_documentation
+//   - `lunco_modelica_index::doc_extract` — extract_documentation
 //   - `crate::sim_default`      — default_simulation_class, RunTargetOverrides, …
 pub use context::sync_active_tab_to_doc;
 pub use render::ModelViewPanel;

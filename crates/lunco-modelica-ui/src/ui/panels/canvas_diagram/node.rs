@@ -38,7 +38,7 @@ pub struct IconNodeData {
     pub icon_graphics: Option<lunco_modelica_ast::annotations::Icon>,
     /// Shared resolver state. Missing/loading classes render a diagnostic
     /// card rather than an indistinguishable generic component.
-    pub resolution: crate::index::ClassResolutionState,
+    pub resolution: lunco_modelica_index::index::ClassResolutionState,
     pub resolution_message: Option<String>,
     /// Decoded `Diagram(graphics={...})` annotation, populated only
     /// for connector classes that author one. When set the renderer
@@ -110,13 +110,13 @@ pub(super) struct IconNodeVisual {
     /// classes show their authored graphics instead of falling back
     /// to a generic placeholder.
     pub(super) icon_graphics: Option<lunco_modelica_ast::annotations::Icon>,
-    pub(super) resolution: crate::index::ClassResolutionState,
+    pub(super) resolution: lunco_modelica_index::index::ClassResolutionState,
     pub(super) resolution_message: Option<String>,
     /// Conditional component flag — render dimmed.
     pub(super) is_conditional: bool,
     /// Pre-formatted `(parameter_name, value)` pairs for `%paramName`
     /// text substitution. Carries class defaults from
-    /// `crate::index::ClassEntry.parameters` (instance-modification overlay
+    /// `lunco_modelica_index::index::ClassEntry.parameters` (instance-modification overlay
     /// is a follow-up — most icons display defaults anyway when no
     /// instance modifications are set).
     pub(super) parameters: Vec<(String, String)>,
@@ -210,16 +210,16 @@ impl NodeVisual for IconNodeVisual {
         let theme_snap = canvas_theme_from_ctx(ctx.ui.ctx());
         if !matches!(
             self.resolution,
-            crate::index::ClassResolutionState::Resolved
+            lunco_modelica_index::index::ClassResolutionState::Resolved
         ) {
             let (title, color) = match self.resolution {
-                crate::index::ClassResolutionState::Loading => {
+                lunco_modelica_index::index::ClassResolutionState::Loading => {
                     ("Loading class", theme_snap.warning_stroke)
                 }
-                crate::index::ClassResolutionState::Missing => {
+                lunco_modelica_index::index::ClassResolutionState::Missing => {
                     ("Missing class", theme_snap.error_stroke)
                 }
-                crate::index::ClassResolutionState::Resolved => unreachable!(),
+                lunco_modelica_index::index::ClassResolutionState::Resolved => unreachable!(),
             };
             painter_rect_diagnostic(
                 &clipped_painter,

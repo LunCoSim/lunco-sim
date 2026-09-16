@@ -16,12 +16,14 @@ use super::ops::{FreshAst, ModelicaChange, ModelicaOp};
 use lunco_modelica_ast::pretty;
 
 /// Map the op-layer's [`pretty::ClassKindSpec`] to the Index's
-/// [`crate::index::ClassKind`].
+/// [`lunco_modelica_index::index::ClassKind`].
 /// Inverse of [`class_kind_spec_to_index_kind`]. Used when the
 /// rebuild-time class diff emits `ClassAdded` for a class first
 /// seen in the index — we need the op-layer kind keyword.
-pub fn index_kind_to_class_kind_spec(kind: crate::index::ClassKind) -> pretty::ClassKindSpec {
-    use crate::index::ClassKind;
+pub fn index_kind_to_class_kind_spec(
+    kind: lunco_modelica_index::index::ClassKind,
+) -> pretty::ClassKindSpec {
+    use lunco_modelica_index::index::ClassKind;
     match kind {
         ClassKind::Model => pretty::ClassKindSpec::Model,
         ClassKind::Block => pretty::ClassKindSpec::Block,
@@ -37,8 +39,10 @@ pub fn index_kind_to_class_kind_spec(kind: crate::index::ClassKind) -> pretty::C
     }
 }
 
-pub fn class_kind_spec_to_index_kind(spec: pretty::ClassKindSpec) -> crate::index::ClassKind {
-    use crate::index::ClassKind;
+pub fn class_kind_spec_to_index_kind(
+    spec: pretty::ClassKindSpec,
+) -> lunco_modelica_index::index::ClassKind {
+    use lunco_modelica_index::index::ClassKind;
     match spec {
         pretty::ClassKindSpec::Model => ClassKind::Model,
         pretty::ClassKindSpec::Block => ClassKind::Block,

@@ -9,9 +9,9 @@ use crate::ui::workbench_state::WorkbenchState;
 use lunco_modelica_runtime::ModelicaModel;
 
 /// Per-input metadata snapshot — built once per render from
-/// [`crate::index::ModelicaIndex`] so the grid loop doesn't reborrow
+/// [`lunco_modelica_index::index::ModelicaIndex`] so the grid loop doesn't reborrow
 /// the document registry per row. Description and bounds resolve via
-/// [`crate::index::ModelicaIndex::find_component_by_leaf`].
+/// [`lunco_modelica_index::index::ModelicaIndex::find_component_by_leaf`].
 struct InputRow {
     name: String,
     value: f64,
@@ -819,7 +819,7 @@ fn render_selected_components_inspector(
 /// declared *directly* on the root model — these have no canvas icon
 /// and would otherwise be unreachable through the inspector.
 ///
-/// Reads from the document's [`crate::index::ModelicaIndex`] (already
+/// Reads from the document's [`lunco_modelica_index::index::ModelicaIndex`] (already
 /// kept current by the op pipeline) — no AST walk per frame, no engine
 /// lock, no shadow ECS state. Edits dispatch
 /// `ModelicaOp::SetParameter { component, param: "", value }` — the
@@ -885,7 +885,7 @@ impl FlatParam {
 /// index (direct key, then short-name suffix match) and harvests
 /// non-empty descriptions. Used for hover help on parameter rows.
 fn type_param_descriptions(
-    index: &crate::index::ModelicaIndex,
+    index: &lunco_modelica_index::index::ModelicaIndex,
     type_name: &str,
 ) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
@@ -987,7 +987,10 @@ pub fn populate_telemetry_view_model(world: &mut World) {
     vm.built_for = Some(key);
 }
 
-fn flatten_class_parameters(index: &crate::index::ModelicaIndex, class: &str) -> Vec<FlatParam> {
+fn flatten_class_parameters(
+    index: &lunco_modelica_index::index::ModelicaIndex,
+    class: &str,
+) -> Vec<FlatParam> {
     const MAX_DEPTH: usize = 4;
 
     /// Modelica-style class lookup, scope-walked. Tries the type
@@ -996,7 +999,7 @@ fn flatten_class_parameters(index: &crate::index::ModelicaIndex, class: &str) ->
     /// `AnnotatedRocketStage.Tank` resolves `Tank` to its sibling),
     /// then falls back to `within_path` if any.
     fn resolve_class<'a>(
-        index: &'a crate::index::ModelicaIndex,
+        index: &'a lunco_modelica_index::index::ModelicaIndex,
         scope: &str,
         type_name: &str,
     ) -> Option<&'a String> {
@@ -1028,7 +1031,7 @@ fn flatten_class_parameters(index: &crate::index::ModelicaIndex, class: &str) ->
     }
 
     fn walk(
-        index: &crate::index::ModelicaIndex,
+        index: &lunco_modelica_index::index::ModelicaIndex,
         owner_class: &str,
         type_path: &str,
         chain: &mut Vec<String>,
@@ -1068,7 +1071,8 @@ fn flatten_class_parameters(index: &crate::index::ModelicaIndex, class: &str) ->
                 continue;
             };
             match comp.variability {
-                crate::index::Variability::Parameter | crate::index::Variability::Constant => {
+                lunco_modelica_index::index::Variability::Parameter
+                | lunco_modelica_index::index::Variability::Constant => {
                     // Modification override on the parent's component
                     // declaration shadows this class's declared default.
                     // For depth 0 (the root call) chain.last() is None,

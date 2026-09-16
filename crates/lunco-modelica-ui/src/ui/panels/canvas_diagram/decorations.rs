@@ -228,7 +228,7 @@ pub(super) fn diagram_annotation_for_target(
     Vec<lunco_modelica_ast::annotations::LunCoPlotNode>,
 )> {
     // Route through the canonical AST class lookup
-    // `crate::diagram::find_class_by_qualified_name`. It already
+    // `lunco_modelica_index::class_lookup::find_class_by_qualified_name`. It already
     // handles within-clause stripping correctly — at segment
     // boundaries, not raw string boundaries. The earlier local
     // `walk_qualified` here used `.unwrap_or(rest)` after stripping
@@ -242,7 +242,7 @@ pub(super) fn diagram_annotation_for_target(
     // For `None` targets fall back to the first non-package class,
     // matching the workbench's default active-class picker.
     let class = if let Some(qualified) = target {
-        crate::diagram::find_class_by_qualified_name(ast, qualified)
+        lunco_modelica_index::class_lookup::find_class_by_qualified_name(ast, qualified)
     } else {
         use rumoca_compile::parsing::ClassType;
         ast.classes
@@ -267,7 +267,7 @@ pub(super) fn diagram_annotation_for_target(
 }
 
 // `walk_qualified` deleted: was a near-duplicate of
-// `crate::diagram::find_class_by_qualified_name` and silently
+// `lunco_modelica_index::class_lookup::find_class_by_qualified_name` and silently
 // disagreed with it on the within-clause strip. Two sources of
 // truth for the same lookup is how the duplicate-renders-nothing
 // bug shipped. Use the canonical helper.

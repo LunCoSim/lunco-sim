@@ -420,7 +420,7 @@ pub fn on_create_new_scratch_model(
     cache.in_memory_models.retain(|e| e.id != mem_id);
     cache
         .in_memory_models
-        .push(crate::package_tree::InMemoryEntry {
+        .push(lunco_modelica_index::package_tree::types::InMemoryEntry {
             display_name: name,
             id: mem_id,
             doc: doc_id,
@@ -514,7 +514,7 @@ pub fn on_duplicate_model_from_read_only(
     cache.in_memory_models.retain(|e| e.id != mem_id);
     cache
         .in_memory_models
-        .push(crate::package_tree::InMemoryEntry {
+        .push(lunco_modelica_index::package_tree::types::InMemoryEntry {
             display_name: name.clone(),
             id: mem_id,
             doc: doc_id,
@@ -615,7 +615,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
         cache.in_memory_models.retain(|e| e.id != mem_id);
         cache
             .in_memory_models
-            .push(crate::package_tree::InMemoryEntry {
+            .push(lunco_modelica_index::package_tree::types::InMemoryEntry {
                 display_name: name.clone(),
                 id: mem_id,
                 doc: doc_id,

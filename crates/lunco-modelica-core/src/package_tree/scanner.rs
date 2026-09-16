@@ -1,8 +1,7 @@
 //! Backend scanning logic for the Package Browser.
 
-use super::types::PackageNode;
-use crate::state::ModelSource;
 use bevy::prelude::*;
+use lunco_modelica_index::package_tree::types::{ModelSource, PackageNode};
 use std::path::Path;
 
 /// Canonical tree-node id for a source-library / third-party class, keyed by its dotted
@@ -85,19 +84,21 @@ pub(crate) fn library_inmem_top_level_libs() -> Vec<String> {
 
 #[cfg(target_arch = "wasm32")]
 fn library_inmem_index(
-) -> &'static std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>> {
+) -> &'static std::collections::HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>>
+{
     use std::sync::OnceLock;
     static CACHE: OnceLock<
-        std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>>,
+        std::collections::HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>>,
     > = OnceLock::new();
     CACHE.get_or_init(build_library_inmem_index)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn build_library_inmem_index(
-) -> std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>> {
+) -> std::collections::HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>> {
     use std::collections::HashMap;
-    let mut tree: HashMap<String, Vec<(String, crate::index::ClassKind)>> = HashMap::new();
+    let mut tree: HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>> =
+        HashMap::new();
     let Some(parsed) = crate::library_remote::global_parsed_source_bundle() else {
         return tree;
     };
@@ -106,14 +107,17 @@ fn build_library_inmem_index(
         parent_qname: &str,
         short_name: &str,
         def: &rumoca_compile::parsing::ast::ClassDef,
-        tree: &mut std::collections::HashMap<String, Vec<(String, crate::index::ClassKind)>>,
+        tree: &mut std::collections::HashMap<
+            String,
+            Vec<(String, lunco_modelica_index::index::ClassKind)>,
+        >,
     ) {
         let qname = if parent_qname.is_empty() {
             short_name.to_string()
         } else {
             format!("{parent_qname}.{short_name}")
         };
-        let kind = crate::index::map_class_type(&def.class_type);
+        let kind = lunco_modelica_index::index::map_class_type(&def.class_type);
         tree.entry(parent_qname.to_string())
             .or_default()
             .push((short_name.to_string(), kind));
@@ -236,8 +240,8 @@ enum LeafKind {
 }
 
 impl LeafKind {
-    fn from_kind(kind: Option<crate::index::ClassKind>) -> Self {
-        use crate::index::ClassKind;
+    fn from_kind(kind: Option<lunco_modelica_index::index::ClassKind>) -> Self {
+        use lunco_modelica_index::index::ClassKind;
         match kind {
             Some(ClassKind::Model) => Self::Model,
             Some(ClassKind::Block) => Self::Block,
@@ -280,12 +284,12 @@ fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> 
     class_def_to_node(path, qualified, display_name, top_class)
 }
 
-pub fn peek_class_kind_from_source(src: &str) -> Option<crate::index::ClassKind> {
+pub fn peek_class_kind_from_source(src: &str) -> Option<lunco_modelica_index::index::ClassKind> {
     let ast = lunco_modelica_ast::parse_to_recovered_ast(src, "");
     ast.classes
         .iter()
         .next()
-        .map(|(_, def)| crate::index::map_class_type(&def.class_type))
+        .map(|(_, def)| lunco_modelica_index::index::map_class_type(&def.class_type))
 }
 
 /// Native-only: both callers ([`scan_library_dir_native`], [`node_from_modelica_file`])
@@ -326,7 +330,7 @@ fn class_def_to_node(
             id: library_tree_id(qualified),
             name: short_name.to_string(),
             library: ModelSource::Source,
-            class_kind: Some(crate::index::map_class_type(&def.class_type)),
+            class_kind: Some(lunco_modelica_index::index::map_class_type(&def.class_type)),
         }
     }
 }

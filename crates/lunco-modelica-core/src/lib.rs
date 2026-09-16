@@ -93,20 +93,11 @@ pub mod library_fs;
 /// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
 pub mod diagram;
 
-/// Source-span readers for annotation data that Rumoca does not retain in the
-/// parsed AST, such as `Line(...)` routes on `connect()` equations.
-pub mod annotation_source;
-
-/// Visual diagram editor — drag-and-drop component composition.
-pub mod visual_diagram;
-
 // ── Shared headless domain modules. Presentation adapters live in
 // `lunco-modelica-ui`; these modules are also used by API, worker, and scene
 // hosts that do not load the workbench. ──────────────────────────────────────
 /// Core data for API-driven canvas focus/connection pulses (UI drains them).
 pub mod canvas_feedback;
-/// Documentation annotation extractor (was `ui::panels::model_view::parsing`).
-pub mod doc_extract;
 /// Egui-free Modelica document ops application
 /// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
 pub mod doc_ops;
@@ -116,18 +107,13 @@ pub mod doc_ops;
 pub mod model_tabs;
 /// Modelica tab registry data types (was `ui::panels::model_view::types`).
 pub mod model_tabs_types;
-/// Package-tree backend: egui-free data + scanning logic for the library /
-/// package browser (was `ui::panels::package_browser::{types,scanner,cache,library_tree}`).
+/// Package-tree backend: egui-free scanning and cache logic for the library /
+/// package browser. Value types live in `lunco-modelica-index`.
 pub mod package_tree;
 
 pub mod sim_default;
 /// Document registry and generated-source state shared by all Modelica hosts.
 pub mod state;
-
-/// Per-document UI projection — what panels read instead of the AST.
-/// Skeleton; population happens in the upcoming AST-canonical refactor.
-/// See `docs/architecture/20-domain-modelica.md` §5.
-pub mod index;
 
 /// Pure simulation-target & run-configuration resolution (which class to
 /// run, what bounds to run it with). No `World`/UI deps — the `ui/` layer

@@ -8,8 +8,6 @@
 pub mod cache;
 pub mod library_tree;
 pub mod scanner;
-pub mod types;
 
 pub use cache::{FileLoadResult, PackageTreeCache, ScanResult};
 pub use scanner::peek_class_kind_from_source;
-pub use types::{InMemoryEntry, PackageNode};

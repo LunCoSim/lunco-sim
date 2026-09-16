@@ -448,7 +448,7 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
     let ast = lunco_modelica_ast::parse_to_ast(&plan.source, "shipped-synthesis-policy.mo")
         .expect("the Rhai-owned source and visual annotations remain valid Modelica");
     assert!(
-        lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, "Rig_System")
+        lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, "Rig_System")
             .map(|class| {
                 assert!(
                     lunco_modelica_ast::annotations::extract_icon(&class.annotation).is_some(),
@@ -492,7 +492,7 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
         .first()
         .expect("at least one generated unit")
         .name;
-    let unit = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, unit_name)
+    let unit = lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, unit_name)
         .expect("the generated unit class is emitted");
     assert!(
         lunco_modelica_ast::annotations::extract_icon(&unit.annotation).is_some()

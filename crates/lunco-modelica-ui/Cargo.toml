@@ -80,6 +80,7 @@ path = "src/bin/lunica.rs"
 [dependencies]
 bevy.workspace = true
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-icon-ui = { path = "../lunco-modelica-icon-ui", optional = true }
 lunco-modelica-docs-ui = { path = "../lunco-modelica-docs-ui", optional = true }
 lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }

@@ -11,20 +11,6 @@ pub fn is_generated_document(document: &ModelicaDocument) -> bool {
     lunco_modelica_runtime::generated_source::is_generated_origin(document.origin())
 }
 
-/// Which source kind a model belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum ModelSource {
-    /// A read-only source library or package.
-    Source,
-    /// Bundled models shipped with LunCoSim (read-only for now).
-    #[default]
-    Bundled,
-    /// User-created models (writable, from opened folder).
-    User,
-    /// In-memory model created by user (writable until saved).
-    InMemory,
-}
-
 // ---------------------------------------------------------------------------
 // Document lifecycle events
 // ---------------------------------------------------------------------------

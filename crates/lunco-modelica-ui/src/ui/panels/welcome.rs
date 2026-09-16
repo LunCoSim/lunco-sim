@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::bundled_models;
 use crate::ui::welcome_progress::ExampleProgress;
-use crate::visual_diagram::library_class_library;
+use lunco_modelica_index::visual_diagram::library_class_library;
 
 /// Panel id.
 pub const WELCOME_PANEL_ID: PanelId = PanelId("modelica_welcome");
@@ -140,7 +140,7 @@ fn domain_icon(domain: &str) -> &'static str {
     }
 }
 
-fn is_top_level_example(c: &crate::index::ClassEntry) -> bool {
+fn is_top_level_example(c: &lunco_modelica_index::index::ClassEntry) -> bool {
     if !c.is_example() {
         return false;
     }
@@ -160,7 +160,7 @@ fn is_top_level_example(c: &crate::index::ClassEntry) -> bool {
 /// once the library is non-empty, so an early call on wasm doesn't
 /// poison it). `domain_counts` is sorted by count desc, then name.
 struct WelcomeCatalog {
-    examples: Vec<&'static crate::index::ClassEntry>,
+    examples: Vec<&'static lunco_modelica_index::index::ClassEntry>,
     domain_counts: Vec<(String, usize)>,
 }
 
@@ -179,7 +179,7 @@ fn welcome_catalog() -> &'static WelcomeCatalog {
         // call, exactly as `library_class_library` retries its own load.
         return &EMPTY;
     }
-    let examples: Vec<&'static crate::index::ClassEntry> =
+    let examples: Vec<&'static lunco_modelica_index::index::ClassEntry> =
         lib.iter().filter(|c| is_top_level_example(c)).collect();
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for c in &examples {
@@ -194,7 +194,7 @@ fn welcome_catalog() -> &'static WelcomeCatalog {
     CACHE.get().unwrap_or(&EMPTY)
 }
 
-fn card_subtitle(c: &crate::index::ClassEntry) -> String {
+fn card_subtitle(c: &lunco_modelica_index::index::ClassEntry) -> String {
     if !c.description.is_empty() {
         return c.description.clone();
     }
@@ -741,7 +741,7 @@ impl Panel for WelcomePanel {
                     ui.add_space(8.0);
 
                     let query_lc = wstate.browse_query.to_lowercase();
-                    let filtered: Vec<&crate::index::ClassEntry> = examples
+                    let filtered: Vec<&lunco_modelica_index::index::ClassEntry> = examples
                         .iter()
                         .copied()
                         .filter(|c| {

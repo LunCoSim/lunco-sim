@@ -1,8 +1,8 @@
 //! UI rendering helpers for the Modelica section of the Twin Browser.
 
-use crate::package_tree::types::PackageNode;
-use crate::state::ModelSource;
 use bevy_egui::egui;
+use lunco_modelica_index::package_tree::types::ModelSource;
+use lunco_modelica_index::package_tree::types::PackageNode;
 use lunco_workbench_browser::BrowserQuery;
 
 #[derive(Clone)]
@@ -109,10 +109,14 @@ pub(crate) fn render_node_single_ro(
                     crate::ui::browser_section::paint_badge(ui, badge, theme);
                 } else {
                     let icon = match library {
-                        crate::state::ModelSource::Source => "?",
-                        crate::state::ModelSource::Bundled => "Bundled",
-                        crate::state::ModelSource::User => "User",
-                        crate::state::ModelSource::InMemory => "Memory",
+                        lunco_modelica_index::package_tree::types::ModelSource::Source => "?",
+                        lunco_modelica_index::package_tree::types::ModelSource::Bundled => {
+                            "Bundled"
+                        }
+                        lunco_modelica_index::package_tree::types::ModelSource::User => "User",
+                        lunco_modelica_index::package_tree::types::ModelSource::InMemory => {
+                            "Memory"
+                        }
                     };
                     ui.label(egui::RichText::new(icon).size(11.0));
                 }
@@ -138,7 +142,10 @@ pub(crate) fn render_node_single_ro(
             if let Some(kind) = class_kind {
                 resp = resp.on_hover_text(format!("Kind: {}", kind.as_keyword()));
             }
-            if matches!(library, crate::state::ModelSource::Source) {
+            if matches!(
+                library,
+                lunco_modelica_index::package_tree::types::ModelSource::Source
+            ) {
                 let library_path = id.strip_prefix("library_path:").unwrap_or(id).to_string();
                 if ui.rect_contains_pointer(resp.rect) && ui.input(|i| i.pointer.any_down()) {
                     action = Some(PackageAction::DragStart { library_path });

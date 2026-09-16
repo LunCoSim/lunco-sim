@@ -173,8 +173,8 @@ fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32
 }
 
 // The indexer emits the canonical
-// [`lunco_modelica_core::index::ClassEntry`] and
-// [`lunco_modelica_core::visual_diagram::{PortDef, ParamDef}`] directly — `library_index.json`
+// [`lunco_modelica_index::index::ClassEntry`] and
+// [`lunco_modelica_index::visual_diagram::{PortDef, ParamDef}`] directly — `library_index.json`
 // deserialises straight back into those types at runtime, so there is no
 // indexer-local mirror to keep field-aligned by hand.
 
@@ -291,7 +291,7 @@ fn collect_documentation(
     out: &mut HashMap<String, String>,
 ) {
     let (info, _revisions) =
-        lunco_modelica_core::doc_extract::extract_documentation(&class_def.annotation);
+        lunco_modelica_index::doc_extract::extract_documentation(&class_def.annotation);
     if let Some(info) = info {
         out.insert(short_name.to_string(), clean_info_text(&info));
     }
@@ -555,8 +555,8 @@ impl SourceLibraryIndexer {
     fn resolve_inheritance(
         &self,
         class_name: &str,
-        ports: &mut Vec<lunco_modelica_core::visual_diagram::PortDef>,
-        params: &mut Vec<lunco_modelica_core::visual_diagram::ParamDef>,
+        ports: &mut Vec<lunco_modelica_index::visual_diagram::PortDef>,
+        params: &mut Vec<lunco_modelica_index::visual_diagram::ParamDef>,
         visited: &mut HashSet<String>,
     ) {
         if visited.contains(class_name) {
@@ -628,7 +628,7 @@ impl SourceLibraryIndexer {
                     // `canvas_diagram::si_unit_suffix`) can read
                     // `p.unit` directly. Until then `unit` is None
                     // and user-defined SI types lose their suffix.
-                    params.push(lunco_modelica_core::visual_diagram::ParamDef {
+                    params.push(lunco_modelica_index::visual_diagram::ParamDef {
                         name: comp.name.clone(),
                         param_type: comp.type_name.to_string(),
                         default,
@@ -756,7 +756,7 @@ impl SourceLibraryIndexer {
                             self.resolve_in_scope(class_name, &type_str)
                                 .unwrap_or_else(|| type_str.clone())
                         };
-                        ports.push(lunco_modelica_core::visual_diagram::PortDef {
+                        ports.push(lunco_modelica_index::visual_diagram::PortDef {
                             name: comp.name.clone(),
                             connector_type: type_str.clone(),
                             library_path: resolved_path,
@@ -770,7 +770,7 @@ impl SourceLibraryIndexer {
                             // projector/painter fills wire color, port
                             // kind, and flow-var metadata at runtime.
                             color: None,
-                            kind: lunco_modelica_core::visual_diagram::PortKind::default(),
+                            kind: lunco_modelica_index::visual_diagram::PortKind::default(),
                             flow_vars: Vec::new(),
                         });
                     }
@@ -779,7 +779,7 @@ impl SourceLibraryIndexer {
         }
     }
 
-    fn index_all(&mut self) -> Vec<lunco_modelica_core::index::ClassEntry> {
+    fn index_all(&mut self) -> Vec<lunco_modelica_index::index::ClassEntry> {
         use std::sync::Arc;
         let mut all_comps = Vec::new();
 
@@ -874,9 +874,9 @@ impl SourceLibraryIndexer {
                 // typed enum so consumers don't need a separate flag.
                 let class_kind = match (&class.class_type, class.expandable) {
                     (rumoca_compile::parsing::ClassType::Connector, true) => {
-                        lunco_modelica_core::index::ClassKind::ExpandableConnector
+                        lunco_modelica_index::index::ClassKind::ExpandableConnector
                     }
-                    (t, _) => lunco_modelica_core::index::map_class_type(t),
+                    (t, _) => lunco_modelica_index::index::map_class_type(t),
                 };
 
                 // Emit the canonical `ClassEntry` directly. Per-doc
@@ -884,7 +884,7 @@ impl SourceLibraryIndexer {
                 // equation_count, experiment) stay at their defaults —
                 // the live AST producer fills them when a user opens
                 // the file.
-                all_comps.push(lunco_modelica_core::index::ClassEntry {
+                all_comps.push(lunco_modelica_index::index::ClassEntry {
                     name: full_name.to_string(),
                     kind: class_kind,
                     description: short_description.unwrap_or_default(),
@@ -901,7 +901,7 @@ impl SourceLibraryIndexer {
                     children: Vec::new(),
                     equation_count: 0,
                     experiment: None,
-                    resolution: lunco_modelica_core::index::ClassResolutionState::Resolved,
+                    resolution: lunco_modelica_index::index::ClassResolutionState::Resolved,
                     resolution_message: None,
                 });
             }
@@ -1176,14 +1176,14 @@ pub fn run_with_cancel(
         bundled_nodes.len()
     );
 
-    // Borrowing mirror of `lunco_modelica_core::visual_diagram::LibraryIndex` — same
+    // Borrowing mirror of `lunco_modelica_index::visual_diagram::LibraryIndex` — same
     // field shape, but holds slices so we serialise without cloning
     // `components`/`bundled` into an owned `LibraryIndex`. Both fields are
     // the canonical types the runtime deserialises into directly.
     #[derive(Serialize)]
     struct LocalLibraryIndex<'a> {
-        components: &'a [lunco_modelica_core::index::ClassEntry],
-        bundled: &'a [lunco_modelica_core::package_tree::types::PackageNode],
+        components: &'a [lunco_modelica_index::index::ClassEntry],
+        bundled: &'a [lunco_modelica_index::package_tree::types::PackageNode],
     }
     let output_path = library_root.join("library_index.json");
     let index = LocalLibraryIndex {
@@ -1252,7 +1252,7 @@ pub fn run_with_cancel(
 /// Pure function over the in-memory `bundled_models()` list — no
 /// disk I/O beyond what `include_dir!` already inlined at compile
 /// time, so the cost is `n * parse(file)`, ≤ ~10 small files.
-fn scan_bundled_examples() -> Vec<lunco_modelica_core::package_tree::types::PackageNode> {
+fn scan_bundled_examples() -> Vec<lunco_modelica_index::package_tree::types::PackageNode> {
     use lunco_modelica_core::models::bundled_models;
 
     // `parse_to_syntax(...).best_effort()` is the same path
@@ -1277,13 +1277,13 @@ fn bundled_class_node(
     short_name: &str,
     class_def: &ClassDef,
     parent_path: &str,
-) -> lunco_modelica_core::package_tree::types::PackageNode {
-    use lunco_modelica_core::index::ClassKind;
-    use lunco_modelica_core::package_tree::types::PackageNode;
-    use lunco_modelica_core::state::ModelSource;
+) -> lunco_modelica_index::package_tree::types::PackageNode {
+    use lunco_modelica_index::index::ClassKind;
+    use lunco_modelica_index::package_tree::types::ModelSource;
+    use lunco_modelica_index::package_tree::types::PackageNode;
 
     let qualified = lunco_modelica_ast::ast_extract::qualify(parent_path, short_name);
-    let kind = lunco_modelica_core::index::map_class_type(&class_def.class_type);
+    let kind = lunco_modelica_index::index::map_class_type(&class_def.class_type);
     let id = format!("bundled://{filename}#{qualified}");
     let is_package = matches!(kind, ClassKind::Package);
     let children: Vec<PackageNode> = class_def

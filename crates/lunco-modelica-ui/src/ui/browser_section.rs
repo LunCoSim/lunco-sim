@@ -96,9 +96,11 @@ impl BrowserSection for ModelicaSection {
                     .roots
                     .iter()
                     .filter_map(|root| match root {
-                        crate::package_tree::PackageNode::Category { id, name, .. } => {
-                            Some((id.clone(), name.clone()))
-                        }
+                        lunco_modelica_index::package_tree::types::PackageNode::Category {
+                            id,
+                            name,
+                            ..
+                        } => Some((id.clone(), name.clone())),
                         _ => None,
                     })
                     .filter(|(id, name)| {
@@ -767,7 +769,7 @@ fn render_workspace_doc_row(
 /// already been drawn; we just paint the children inline.
 ///
 /// Source-of-truth read of [`crate::state::ModelicaDocumentRegistry`] via the doc's
-/// [`crate::index::ModelicaIndex`]. Stateless; the registry's
+/// [`lunco_modelica_index::index::ModelicaIndex`]. Stateless; the registry's
 /// off-thread refresh + per-op optimistic patches keep the Index current.
 pub(crate) fn render_workspace_doc(
     ui: &mut egui::Ui,
@@ -872,11 +874,13 @@ pub(crate) fn render_workspace_doc(
 }
 
 /// Build the same class tree from the per-doc Index. Reads only the
-/// [`crate::index::ClassEntry`]s (no AST walk). Used by the live
+/// [`lunco_modelica_index::index::ClassEntry`]s (no AST walk). Used by the live
 /// renderer; `classes_from_syntax` is kept for the test fixtures
 /// below until those migrate.
-fn classes_from_index(index: &crate::index::ModelicaIndex) -> (Vec<ClassEntry>, bool) {
-    use crate::index::ClassKind;
+fn classes_from_index(
+    index: &lunco_modelica_index::index::ModelicaIndex,
+) -> (Vec<ClassEntry>, bool) {
+    use lunco_modelica_index::index::ClassKind;
     fn map_kind(k: ClassKind) -> ClassType {
         match k {
             ClassKind::Model => ClassType::Model,
@@ -892,7 +896,10 @@ fn classes_from_index(index: &crate::index::ModelicaIndex) -> (Vec<ClassEntry>, 
             ClassKind::OperatorRecord => ClassType::Record,
         }
     }
-    fn build_subtree(index: &crate::index::ModelicaIndex, qualified: &str) -> Option<ClassEntry> {
+    fn build_subtree(
+        index: &lunco_modelica_index::index::ModelicaIndex,
+        qualified: &str,
+    ) -> Option<ClassEntry> {
         let entry = index.classes.get(qualified)?;
         let short = entry
             .name
@@ -1130,15 +1137,15 @@ pub(crate) fn type_badge(kind: &ClassType, theme: &lunco_theme::Theme) -> Badge 
     }
 }
 
-/// Badge mapping keyed by our typed [`crate::index::ClassKind`].
+/// Badge mapping keyed by our typed [`lunco_modelica_index::index::ClassKind`].
 /// Translates the workbench enum to rumoca's `ClassType` (the
 /// shape `type_badge` expects) at the one boundary instead of
 /// every consumer rolling its own string match.
 pub(crate) fn type_badge_for_kind(
-    kind: crate::index::ClassKind,
+    kind: lunco_modelica_index::index::ClassKind,
     theme: &lunco_theme::Theme,
 ) -> Badge {
-    use crate::index::ClassKind;
+    use lunco_modelica_index::index::ClassKind;
     let ct = match kind {
         ClassKind::Model => ClassType::Model,
         ClassKind::Block => ClassType::Block,

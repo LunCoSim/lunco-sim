@@ -7,9 +7,9 @@
 //! parser and then passed through the same typed extractor as class and
 //! component annotations; this is not a second annotation grammar.
 
-use lunco_modelica_ast::annotations::{extract_line_full, LineRoute};
+use lunco_modelica_ast::annotations::{LineRoute, extract_line_full};
+use lunco_modelica_ast::ast_mut::{FRAGMENT_CLASS_NAME, parse_stub_cached};
 use lunco_modelica_ast::ast_mut::{annotation_clause, find_keyword, line_start, statement_end};
-use lunco_modelica_ast::ast_mut::{parse_stub_cached, FRAGMENT_CLASS_NAME};
 use rumoca_compile::parsing::ast::{ComponentReference, Equation, StoredDefinition};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -30,7 +30,7 @@ pub fn connect_line_routes(
 ) -> HashMap<ConnectEndpointKey, LineRoute> {
     let mut routes = HashMap::new();
     if let Some(target) = target_class {
-        if let Some(class) = crate::diagram::find_class_by_qualified_name(ast, target) {
+        if let Some(class) = crate::class_lookup::find_class_by_qualified_name(ast, target) {
             collect_class_routes(class, source, &mut routes, false);
         }
     } else {
@@ -91,11 +91,7 @@ pub fn canonical_endpoint_key(
 ) -> ConnectEndpointKey {
     let lhs = endpoint_key(lhs);
     let rhs = endpoint_key(rhs);
-    if lhs <= rhs {
-        (lhs, rhs)
-    } else {
-        (rhs, lhs)
-    }
+    if lhs <= rhs { (lhs, rhs) } else { (rhs, lhs) }
 }
 
 fn endpoint_key(reference: &ComponentReference) -> (String, String) {

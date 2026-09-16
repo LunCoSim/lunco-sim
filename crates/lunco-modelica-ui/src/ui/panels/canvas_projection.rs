@@ -18,12 +18,12 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use std::collections::HashMap;
 
-use crate::visual_diagram::{library_class_library, VisualDiagram};
+use lunco_modelica_index::visual_diagram::{library_class_library, VisualDiagram};
 
 fn resolved_engine_class_entry(
     qualified: &str,
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
-) -> Option<crate::index::ClassEntry> {
+) -> Option<lunco_modelica_index::index::ClassEntry> {
     let (class_def, icon) = crate::engine_resource::global_engine_handle().and_then(|handle| {
         let mut engine = handle.try_lock()?;
         let class_def = engine.class_def(qualified)?;
@@ -35,9 +35,9 @@ fn resolved_engine_class_entry(
         Some((class_def, icon))
     })?;
 
-    let mut entry = crate::index::ClassEntry {
+    let mut entry = lunco_modelica_index::index::ClassEntry {
         name: qualified.to_string(),
-        kind: crate::index::ClassKind::Model,
+        kind: lunco_modelica_index::index::ClassKind::Model,
         source_range: None,
         extends: Vec::new(),
         description: String::new(),
@@ -52,7 +52,7 @@ fn resolved_engine_class_entry(
         diagram_graphics: None,
         icon_text: None,
         category: "User".to_string(),
-        resolution: crate::index::ClassResolutionState::Resolved,
+        resolution: lunco_modelica_index::index::ClassResolutionState::Resolved,
         resolution_message: None,
     };
 
@@ -65,8 +65,8 @@ fn resolved_engine_class_entry(
     use rumoca_compile::parsing::ClassType;
 
     let class_kind = match (&class_def.class_type, class_def.expandable) {
-        (ClassType::Connector, true) => crate::index::ClassKind::ExpandableConnector,
-        (class_type, _) => crate::index::map_class_type(class_type),
+        (ClassType::Connector, true) => lunco_modelica_index::index::ClassKind::ExpandableConnector,
+        (class_type, _) => lunco_modelica_index::index::map_class_type(class_type),
     };
     entry.kind = class_kind;
     entry.partial = class_def.partial;
@@ -151,7 +151,7 @@ pub(crate) fn scan_connect_annotations(
     ((String, String), (String, String)),
     lunco_modelica_ast::annotations::LineRoute,
 > {
-    lunco_modelica_core::annotation_source::connect_line_routes(ast, source, target_class)
+    lunco_modelica_index::annotation_source::connect_line_routes(ast, source, target_class)
 }
 
 fn canonical_edge_key(
@@ -280,7 +280,8 @@ pub fn import_model_to_diagram_from_ast(
         None => None,
     };
     if let Some(target) = resolved_target.as_deref() {
-        if crate::diagram::find_class_by_qualified_name(&ast, target).is_none() {
+        if lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target).is_none()
+        {
             return Err(format!(
                 "target Modelica class '{target}' was not found in the source"
             ));
@@ -344,7 +345,7 @@ pub fn import_model_to_diagram_from_ast(
     // reference doesn't resolve via scope or path, we surface it as
     // unresolved (skipped) rather than guess.
     let library_lib = library_class_library();
-    let indexed_lookup_by_path: HashMap<&str, &crate::index::ClassEntry> =
+    let indexed_lookup_by_path: HashMap<&str, &lunco_modelica_index::index::ClassEntry> =
         library_lib.iter().map(|c| (c.name.as_str(), c)).collect();
 
     // Build the active class's import map so we can resolve
@@ -402,14 +403,15 @@ pub fn import_model_to_diagram_from_ast(
     // alongside the model (e.g. `Engine`/`Tank` inside an
     // `AnnotatedRocketStage` package) would otherwise resolve as
     // unknown and disappear from the diagram. We synthesise a
-    // [`crate::index::ClassEntry`] for each top-level class and one nesting
+    // [`lunco_modelica_index::index::ClassEntry`] for each top-level class and one nesting
     // level deeper, carrying the extracted `Icon` annotation so the
     // canvas can render the user's own graphics.
     //
     // Ports are intentionally empty here — connector extraction for
     // user classes is a follow-up; the icon-rendering slice doesn't
     // need them.
-    let mut local_classes_by_short: HashMap<String, crate::index::ClassEntry> = HashMap::new();
+    let mut local_classes_by_short: HashMap<String, lunco_modelica_index::index::ClassEntry> =
+        HashMap::new();
     // Scope the local-class registration based on what we're projecting:
     //
     //  - **Drill-in into a source-library class** (`target_class = "Package.…"`):
@@ -435,7 +437,9 @@ pub fn import_model_to_diagram_from_ast(
     if is_source_drill_in {
         // External source classes are self-sufficient on qualified paths.
     } else if let Some(target) = target_class {
-        if let Some(target_class_def) = crate::diagram::find_class_by_qualified_name(&ast, target) {
+        if let Some(target_class_def) =
+            lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target)
+        {
             // Register two scopes for short-name lookup:
             //   1. **Sibling classes inside the target's enclosing
             //      package.** When drilling into
@@ -450,7 +454,10 @@ pub fn import_model_to_diagram_from_ast(
             //      types as inner classes.
             if let Some((parent_path, _)) = target.rsplit_once('.') {
                 if let Some(parent_class_def) =
-                    crate::diagram::find_class_by_qualified_name(&ast, parent_path)
+                    lunco_modelica_index::class_lookup::find_class_by_qualified_name(
+                        &ast,
+                        parent_path,
+                    )
                 {
                     for (sibling_name, sibling_class) in parent_class_def.classes.iter() {
                         register_local_class(
@@ -582,9 +589,15 @@ pub fn import_model_to_diagram_from_ast(
             ast.classes
                 .iter()
                 .find_map(|_| {
-                    crate::diagram::find_class_by_qualified_name(&ast, target).map(|class| {
-                        crate::diagram::collect_inherited_components(class, Some(target), &ast, 0)
-                    })
+                    lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target)
+                        .map(|class| {
+                            crate::diagram::collect_inherited_components(
+                                class,
+                                Some(target),
+                                &ast,
+                                0,
+                            )
+                        })
                 })
                 .unwrap_or_default()
         } else {
@@ -602,7 +615,7 @@ pub fn import_model_to_diagram_from_ast(
             // names and silently missed every drill-in into a
             // package-aggregated source.
             if let Some(target_class_def) =
-                crate::diagram::find_class_by_qualified_name(&ast, target)
+                lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, target)
             {
                 for (cname, comp) in target_class_def.components.iter() {
                     map.insert(cname.as_str(), comp);
@@ -661,7 +674,7 @@ pub fn import_model_to_diagram_from_ast(
         } else {
             imports_by_short.get(type_name).cloned()
         };
-        let mut component_def: Option<crate::index::ClassEntry> = resolved_path
+        let mut component_def: Option<lunco_modelica_index::index::ClassEntry> = resolved_path
             .as_deref()
             .and_then(|p| indexed_lookup_by_path.get(p).map(|d| (*d).clone()))
             .or_else(|| local_classes_by_short.get(type_name).cloned());
@@ -763,7 +776,7 @@ pub fn import_model_to_diagram_from_ast(
         );
         let is_type_alias = component_def
             .as_ref()
-            .map(|d| matches!(d.kind, crate::index::ClassKind::Type))
+            .map(|d| matches!(d.kind, lunco_modelica_index::index::ClassKind::Type))
             .unwrap_or(false)
             || type_name.contains(".SIunits.")
             || type_name.contains(".Units.SI.")
@@ -783,11 +796,11 @@ pub fn import_model_to_diagram_from_ast(
                 });
             let (resolution, resolution_message) = match availability {
                 crate::class_cache::ClassAvailability::Loading => (
-                    crate::index::ClassResolutionState::Loading,
+                    lunco_modelica_index::index::ClassResolutionState::Loading,
                     Some(format!("resolving Modelica class `{type_name}`")),
                 ),
                 crate::class_cache::ClassAvailability::Missing => (
-                    crate::index::ClassResolutionState::Missing,
+                    lunco_modelica_index::index::ClassResolutionState::Missing,
                     Some(
                         crate::class_cache::class_resolution_message(type_name).unwrap_or_else(
                             || format!("Modelica class `{type_name}` was not found"),
@@ -795,15 +808,15 @@ pub fn import_model_to_diagram_from_ast(
                     ),
                 ),
                 crate::class_cache::ClassAvailability::Ready => (
-                    crate::index::ClassResolutionState::Missing,
+                    lunco_modelica_index::index::ClassResolutionState::Missing,
                     Some(format!(
                         "Modelica class `{type_name}` is indexed but its definition is unavailable"
                     )),
                 ),
             };
-            component_def = Some(crate::index::ClassEntry {
+            component_def = Some(lunco_modelica_index::index::ClassEntry {
                 name: type_name.to_string(),
-                kind: crate::index::ClassKind::Model,
+                kind: lunco_modelica_index::index::ClassKind::Model,
                 source_range: None,
                 extends: Vec::new(),
                 description: String::new(),
@@ -824,7 +837,7 @@ pub fn import_model_to_diagram_from_ast(
         }
 
         // Re-extract the icon at runtime via the unified workspace
-        // engine. The pre-baked `crate::index::ClassEntry.icon_graphics` from
+        // engine. The pre-baked `lunco_modelica_index::index::ClassEntry.icon_graphics` from
         // `library_index.json` drops primitives whose `extends` base sits
         // in a sibling package the indexer's resolver doesn't reach
         // (SpeedSensor extends PartialAbsoluteSensor extends
@@ -1031,9 +1044,9 @@ pub fn import_model_to_diagram_from_ast(
     // (2) add any
     // remaining waypoint_map entries that have no edge yet.
     let mut to_add: Vec<(
-        crate::visual_diagram::DiagramNodeId,
+        lunco_modelica_index::visual_diagram::DiagramNodeId,
         String,
-        crate::visual_diagram::DiagramNodeId,
+        lunco_modelica_index::visual_diagram::DiagramNodeId,
         String,
         Vec<(f32, f32)>,
         bool,
@@ -1124,7 +1137,7 @@ pub fn import_model_to_diagram_from_ast(
 /// the source library palette doesn't know about. Skips classes that don't carry
 /// any of the data we'd render — i.e. no decoded `Icon` annotation.
 fn register_local_class(
-    out: &mut HashMap<String, crate::index::ClassEntry>,
+    out: &mut HashMap<String, lunco_modelica_index::index::ClassEntry>,
     short_name: &str,
     class_def: &rumoca_compile::parsing::ast::ClassDef,
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
@@ -1208,12 +1221,12 @@ fn register_local_class(
     // `expandable connector` lives on `class_kind` as
     // `ClassKind::ExpandableConnector`; no separate flag.
     let class_kind = match (&class_def.class_type, class_def.expandable) {
-        (ClassType::Connector, true) => crate::index::ClassKind::ExpandableConnector,
-        (t, _) => crate::index::map_class_type(t),
+        (ClassType::Connector, true) => lunco_modelica_index::index::ClassKind::ExpandableConnector,
+        (t, _) => lunco_modelica_index::index::map_class_type(t),
     };
     out.insert(
         short_name.to_string(),
-        crate::index::ClassEntry {
+        lunco_modelica_index::index::ClassEntry {
             name: short_name.to_string(),
             kind: class_kind,
             source_range: None,
@@ -1232,7 +1245,7 @@ fn register_local_class(
             ),
             icon_text: None,
             category: "Local".to_string(),
-            resolution: crate::index::ClassResolutionState::Resolved,
+            resolution: lunco_modelica_index::index::ClassResolutionState::Resolved,
             resolution_message: None,
         },
     );
@@ -1253,7 +1266,7 @@ fn extract_local_class_ports(
     class_def: &rumoca_compile::parsing::ast::ClassDef,
     class_qualified_path: &str,
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
-) -> Vec<crate::visual_diagram::PortDef> {
+) -> Vec<lunco_modelica_index::visual_diagram::PortDef> {
     use rumoca_compile::parsing::Causality;
     let mut out = Vec::new();
     for (sub_name, sub) in &class_def.components {
@@ -1310,7 +1323,7 @@ fn extract_local_class_ports(
                 (color, kind, flow_vars)
             })
             .unwrap_or_default();
-        out.push(crate::visual_diagram::PortDef {
+        out.push(lunco_modelica_index::visual_diagram::PortDef {
             name: sub_name.clone(),
             connector_type: sub_type.clone(),
             library_path: sub_type,
@@ -1345,10 +1358,10 @@ fn classify_connector(
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
     lookup_mode: crate::class_cache::ClassLookupMode,
 ) -> (
-    crate::visual_diagram::PortKind,
-    Vec<crate::visual_diagram::FlowVarMeta>,
+    lunco_modelica_index::visual_diagram::PortKind,
+    Vec<lunco_modelica_index::visual_diagram::FlowVarMeta>,
 ) {
-    use crate::visual_diagram::{FlowVarMeta, PortKind};
+    use lunco_modelica_index::visual_diagram::{FlowVarMeta, PortKind};
     use rumoca_compile::parsing::ast::Connection;
     use rumoca_compile::parsing::Causality;
 

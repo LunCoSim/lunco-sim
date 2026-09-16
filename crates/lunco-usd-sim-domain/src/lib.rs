@@ -755,7 +755,7 @@ fn parse_validated_root_interface(
 ) -> Result<StoredDefinition, String> {
     let ast = lunco_modelica_ast::parse_to_ast(source, "generated-policy.mo")
         .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
-    let root = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, model_name)
+    let root = lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, model_name)
         .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
 
     let mut expected_root_outputs = outputs.clone();
@@ -827,7 +827,7 @@ fn validate_generated_source(
     let outputs: BTreeSet<String> = network.outputs.keys().cloned().collect();
     let ast =
         parse_validated_root_interface(source, model_name, &network.inputs, &outputs, aliases)?;
-    let root = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, model_name)
+    let root = lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, model_name)
         .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
 
     let expected_members: BTreeMap<String, String> = network
@@ -882,8 +882,9 @@ fn validate_generated_source(
     }
 
     for unit in units {
-        let class = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, &unit.name)
-            .ok_or_else(|| format!("generated unit class `{}` is missing", unit.name))?;
+        let class =
+            lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, &unit.name)
+                .ok_or_else(|| format!("generated unit class `{}` is missing", unit.name))?;
         let mut expected_unit_outputs = unit.outputs.clone();
         expected_unit_outputs.extend(
             aliases
@@ -4798,9 +4799,11 @@ def Scope "Rig"
         assert!(source.contains("Force allocation | 1 actuator(s)"));
         let ast = lunco_modelica_ast::parse_to_ast(&source, "wrench.mo")
             .expect("generated actuator visual schema must remain valid Modelica");
-        let class =
-            lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, "AttitudeActuation")
-                .expect("generated actuator model");
+        let class = lunco_modelica_index::class_lookup::find_class_by_qualified_name(
+            &ast,
+            "AttitudeActuation",
+        )
+        .expect("generated actuator model");
         assert!(lunco_modelica_ast::annotations::extract_icon(&class.annotation).is_some());
         assert!(lunco_modelica_ast::annotations::extract_diagram(&class.annotation).is_some());
     }

@@ -78,6 +78,7 @@ lunco-experiments = { path = "../lunco-experiments" }
 # FACTS for the `modelica` lint domain (`../lunco-modelica-ast/src/lint_facts.rs`) are `HookValue`, the same
 # typed shape every other domain hands its authored rules.
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-solver = { path = "../lunco-modelica-solver" }
 rumoca-compile = { workspace = true }
@@ -125,7 +126,6 @@ lunco-api = { path = "../lunco-api", optional = true }
 # To keep `log::debug!` in release too, swap `release_max_level_info` →
 # `release_max_level_debug` (still kills the trace flood).
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
-uuid = { workspace = true }
 
 # Tracy profiler is wired via the `tracy` feature above
 # (`tracy = ["bevy/trace_tracy"]`). Off by default because tracy-client-sys

@@ -25,6 +25,7 @@ use lunco_modelica_ast::diagram_model::{
     ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind,
 };
 use lunco_modelica_ast::scope_chain_candidates;
+use lunco_modelica_index::class_lookup::find_class_by_qualified_name;
 use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, StoredDefinition};
 use rumoca_compile::parsing::{Causality, ClassType, Variability};
 use std::collections::HashMap;
@@ -544,53 +545,6 @@ pub fn resolve_primary_target(ast: &StoredDefinition) -> Option<String> {
         }
     }
     ast.classes.keys().next().map(|n| qualify(n))
-}
-
-/// Resolve a qualified class name against a parsed `StoredDefinition`.
-///
-/// Shared between the projection builder and the drill-in install
-/// path (which uses it to decide the default view for the
-/// newly-opened tab — if the class has zero instantiated
-/// components, landing in Canvas shows an empty diagram, so
-/// Icon is a better default).
-///
-/// # Resolution rules
-///
-/// 1. **Single-segment name** — check top-level `ast.classes`,
-///    then one level of nested descent. Preserves historic
-///    behaviour for callers like `target_class("MyClass")`.
-/// 2. **Dotted path** — walk nested classes segment-by-segment.
-///    `"Blocks.Examples.FilterWithRiseTime"` inside
-///    `Modelica/Blocks/package.mo` descends
-///    `Blocks → Examples → FilterWithRiseTime`.
-/// 3. **`within` prefix tolerance** — if the full path starts
-///    with the AST's `within` clause, strip it before walking.
-///    Lets drill-in callers pass `"Modelica.Blocks.Continuous.CriticalDamping"`
-///    without knowing the file's internal rooting.
-pub fn find_class_by_qualified_name<'a>(
-    ast: &'a StoredDefinition,
-    name: &str,
-) -> Option<&'a ClassDef> {
-    if !name.contains('.') {
-        if let Some(class) = ast.classes.get(name) {
-            return Some(class);
-        }
-        for (_, class) in &ast.classes {
-            if let Some(nested) = class.classes.get(name) {
-                return Some(nested);
-            }
-        }
-        return None;
-    }
-
-    let path = lunco_modelica_ast::strip_within_prefix(name, ast.within.as_ref());
-    let mut segments = path.split('.');
-    let first = segments.next()?;
-    let mut current = ast.classes.get(first)?;
-    for seg in segments {
-        current = current.classes.get(seg)?;
-    }
-    Some(current)
 }
 
 /// Walk a class's `extends` chain and collect all components inherited

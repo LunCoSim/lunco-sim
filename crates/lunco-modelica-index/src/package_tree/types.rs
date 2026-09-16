@@ -1,6 +1,18 @@
 //! Tree node types and basic structures for the Package Browser.
 
-use crate::state::ModelSource;
+/// Which source kind a package-browser model belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ModelSource {
+    /// A read-only source library or package.
+    Source,
+    /// Bundled models shipped with LunCoSim.
+    #[default]
+    Bundled,
+    /// User-created models from an opened folder.
+    User,
+    /// An in-memory model created during the current session.
+    InMemory,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PackageNode {
