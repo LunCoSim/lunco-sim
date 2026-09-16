@@ -4535,13 +4535,13 @@ def Cube "Part" (
     }
 }
 "#;
-        let recipe = StageRecipe {
-            root_id: root_id.clone(),
-            bytes: HashMap::from([
+        let recipe = StageRecipe::new(
+            root_id.clone(),
+            HashMap::from([
                 (root_id, scene.as_bytes().to_vec()),
                 (child_id, child.as_bytes().to_vec()),
             ]),
-        };
+        );
 
         let live = CanonicalStage::from_recipe(&recipe).expect("compose referenced body");
         let assembly = SdfPath::new("/Scene/Assembly").unwrap();
@@ -4557,10 +4557,10 @@ def Cube "Part" (
         assert_eq!(live_shapes[0].0 .0, DVec3::ZERO);
         assert_eq!(live_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
 
-        let child_recipe = StageRecipe {
-            root_id: "child.usda".to_string(),
-            bytes: HashMap::from([("child.usda".to_string(), child.as_bytes().to_vec())]),
-        };
+        let child_recipe = StageRecipe::new(
+            "child.usda",
+            HashMap::from([("child.usda".to_string(), child.as_bytes().to_vec())]),
+        );
         let prepared = UsdStageAsset::from_recipe(child_recipe).expect("prepare referenced body");
         let instance = prepared
             .projection_plan

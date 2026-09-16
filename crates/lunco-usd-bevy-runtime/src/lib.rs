@@ -69,6 +69,7 @@ impl Plugin for UsdSceneRuntimePlugin {
                 twin_projection::wake_twin_projection_on_stage_event,
                 twin_projection::sync_twin_overlays.run_if(twin_projection::twin_projection_ready),
                 twin_projection::mark_pending_ref_spawns,
+                twin_projection::sync_stage_dependency_diagnostics,
                 twin_projection::drain_ref_spawns.run_if(twin_projection::pending_ref_spawns_ready),
                 live_consume::project_stage_changes,
             )

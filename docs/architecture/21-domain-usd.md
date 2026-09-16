@@ -312,6 +312,23 @@ scene loads as a **single root** (the typed `SceneTransitionIntent` →
 `LoadScene` path — clear-and-replace, one `UsdPrimPath` root under the Grid).
 Loading another scene re-points that single active stage; it never stacks.
 
+### Composition closure and partial scene loading
+
+The root layer is the load transaction's required input: if its logical asset
+cannot be read, the scene transition fails and reports the root error. Its
+transitive USD composition graph is loaded through the canonical asset-source
+resolver with shared limits for layer count, dependency width, depth, and
+retained bytes. A missing sublayer, reference, or payload does not discard
+already available siblings. The loader publishes the available stage, leaves
+the missing authored arc unresolved as required by OpenUSD, and records a
+scene-scoped `RuntimeDiagnostics` warning with both logical layer identifiers.
+
+Other failures remain visible and terminal at their owner: unsafe traversal,
+permission or storage errors, malformed required input, and exceeded closure
+limits are not treated as missing files. The loader never rewrites a stale
+authored URI to a different asset. Fixing an old `waypoint.usda` reference is
+an authored Twin/library migration, not a Windows-path fallback.
+
 On `TwinAssetMounted` (`open_usd_docs_on_twin_asset_mounted`,
 `lunco-usd-bevy-runtime/src/scene_runtime.rs`), exactly **one** stage resolves per the table above,
 after the asset boundary has registered the exact `twin://` authority, and the mount is

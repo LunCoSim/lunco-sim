@@ -342,6 +342,58 @@ pub(crate) fn pending_ref_spawns_ready(pending: Res<PendingRefSpawns>) -> bool {
     pending.has_terminal_asset_event()
 }
 
+/// Publish non-fatal USD closure misses for the stage identities that are
+/// currently represented in the scene. OpenUSD has already dropped only the
+/// unresolved arc; the rest of the stage remains usable. Keeping this as a
+/// runtime diagnostic makes the authored URI actionable without turning a
+/// recoverable composition issue into a second scene-load failure.
+pub(crate) fn sync_stage_dependency_diagnostics(
+    mut events: MessageReader<bevy::asset::AssetEvent<UsdStageAsset>>,
+    added_prims: Query<(), Added<UsdPrimPath>>,
+    prims: Query<&UsdPrimPath>,
+    stages: Option<Res<Assets<UsdStageAsset>>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    const PRODUCER: &str = "usd-composition";
+    const MISSING_DEPENDENCY: &str = "USD_COMPOSITION_MISSING_DEPENDENCY";
+
+    let stage_event = events.read().count() > 0;
+    if !stage_event && added_prims.is_empty() {
+        return;
+    }
+    let Some(stages) = stages else {
+        return;
+    };
+
+    let stage_ids = prims
+        .iter()
+        .map(|prim| prim.stage_handle.id())
+        .collect::<HashSet<_>>();
+    let mut findings = Vec::new();
+    for stage_id in stage_ids {
+        let Some(asset) = stages.get(stage_id) else {
+            continue;
+        };
+        let Some(recipe) = asset.recipe.as_ref() else {
+            continue;
+        };
+        for missing in &recipe.dependency_diagnostics {
+            let message = missing.to_string();
+            warn!("[{PRODUCER}] {message}");
+            findings.push(lunco_core::RuntimeDiagnostic {
+                code: MISSING_DEPENDENCY.to_owned(),
+                severity: lunco_core::DiagnosticSeverity::Warning,
+                producer: PRODUCER.to_owned(),
+                subject: format!("{} -> {}", missing.referring_layer, missing.dependency),
+                message,
+            });
+        }
+    }
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        diagnostics.replace_producer(PRODUCER, findings);
+    }
+}
+
 /// Allocate the document for each pending twin scene once its base source text
 /// has loaded through the twin source, restore its persisted runtime overlay,
 /// publish the composed (`base ⊕ runtime`) source as the twin overlay, and then
@@ -1816,10 +1868,7 @@ fn rebuild_scene_from_composed(
         (cs.scene_layer.clone(), cs.layer_bytes_snapshot())
     };
     bytes.insert(scene_layer.clone(), composed_source.as_bytes().to_vec());
-    let recipe = StageRecipe {
-        root_id: scene_layer,
-        bytes,
-    };
+    let recipe = StageRecipe::new(scene_layer, bytes);
     let rebuilt = world
         .get_non_send_mut::<CanonicalStages>()
         .map(|mut stages| stages.rebuild(scene_id, &recipe))

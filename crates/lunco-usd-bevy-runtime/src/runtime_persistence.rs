@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentChanged, DocumentOpened};
-use lunco_storage::{Storage, StorageEntryKind, StorageHandle};
+use lunco_storage::{Storage, StorageHandle};
 use lunco_usd_core::runtime::runtime_persistence_for_twin;
 use lunco_workspace::WorkspaceResource;
 use openusd::sdf::SpecType;
@@ -263,6 +263,7 @@ pub(crate) fn on_doc_changed_save_runtime(
 mod tests {
     use super::*;
     use lunco_doc::{Document, DocumentOrigin};
+    use lunco_storage::StorageEntryKind;
     use lunco_usd_core::runtime::RUNTIME_PERSISTENCE_SETTING;
     use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
     use openusd::sdf::Path as SdfPath;

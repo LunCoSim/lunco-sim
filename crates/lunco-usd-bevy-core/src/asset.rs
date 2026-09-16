@@ -72,8 +72,9 @@ pub fn resolve_stage_asset_path(
     }
 }
 
-/// Bevy loader that fetches and composes the complete transitive USD layer
-/// closure before publishing a [`UsdStageAsset`].
+/// Bevy loader that fetches and composes the available transitive USD layer
+/// closure before publishing a [`UsdStageAsset`]. Missing transitive layers
+/// remain unresolved USD arcs and are carried as runtime diagnostics.
 #[derive(Default, TypePath)]
 pub struct UsdLoader;
 

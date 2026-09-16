@@ -10,6 +10,8 @@ mod resolver;
 
 pub mod recipe;
 
+use recipe::StageClosureLimits;
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::path::Path;
@@ -114,6 +116,42 @@ pub fn parse_usda(text: &str) -> Result<Data> {
     usda::parse(text).map_err(|e| anyhow!("USD parse error: {e}"))
 }
 
+/// Validate one layer-closure accounting snapshot against the shared safety
+/// policy used by every USD fetch adapter.
+pub fn check_stage_closure_limits(
+    limits: &StageClosureLimits,
+    layer_count: usize,
+    depth: usize,
+    dependency_count: usize,
+    byte_count: usize,
+) -> Result<()> {
+    if layer_count > limits.max_layers {
+        anyhow::bail!(
+            "USD layer closure contains {layer_count} discovered layers; the limit is {}",
+            limits.max_layers
+        );
+    }
+    if depth > limits.max_depth {
+        anyhow::bail!(
+            "USD layer closure reaches depth {depth}; the limit is {}",
+            limits.max_depth
+        );
+    }
+    if dependency_count > limits.max_dependencies_per_layer {
+        anyhow::bail!(
+            "USD layer declares {dependency_count} composition dependencies; the limit is {}",
+            limits.max_dependencies_per_layer
+        );
+    }
+    if byte_count > limits.max_bytes {
+        anyhow::bail!(
+            "USD layer closure retains {byte_count} bytes; the limit is {}",
+            limits.max_bytes
+        );
+    }
+    Ok(())
+}
+
 pub use resolver::{canonicalize_at, is_binary_asset, LuncoUsdResolver, SharedLayerBytes};
 
 /// True when `path` is a USD layer that can declare further asset dependencies.
@@ -182,30 +220,43 @@ pub fn compose_file_to_stage_with_roots(
     };
     let root_bytes = lunco_assets_core::read_asset_file_bytes(path)
         .map_err(|e| anyhow!("cannot read {}: {e}", path.display()))?;
+    let limits = StageClosureLimits::default();
+    check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
+    let mut total_bytes = root_bytes.len();
     let mut bytes = HashMap::from([(root_id.clone(), root_bytes)]);
-    let mut queue = vec![root_id.clone()];
-    while let Some(id) = queue.pop() {
-        let raw = bytes
-            .get(&id)
-            .cloned()
-            .expect("queued USD layer is present");
-        for child_id in child_layer_ids(&id, &raw)? {
-            if bytes.contains_key(&child_id) {
+    let mut seen = std::collections::HashSet::from([root_id.clone()]);
+    let mut queue = vec![(root_id.clone(), 0_usize)];
+    while let Some((id, depth)) = queue.pop() {
+        let raw = bytes.get(&id).expect("queued USD layer is present");
+        let child_ids = child_layer_ids(&id, raw)?;
+        check_stage_closure_limits(&limits, seen.len(), depth, child_ids.len(), total_bytes)?;
+        for child_id in child_ids {
+            if !seen.insert(child_id.clone()) {
                 continue;
             }
+            let child_depth = depth + 1;
+            check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
             let child = lunco_assets_core::read_asset_bytes_with_twin_root(
                 &child_id,
                 assets_root,
                 twin_root,
-            )
-            .map_err(|e| {
-                anyhow!(
-                    "failed to fetch sublayer {child_id} for {}: {e}",
-                    path.display()
-                )
-            })?;
+            );
+            let child = match child {
+                Ok(child) => child,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(anyhow!(
+                        "failed to fetch USD composition dependency {child_id} for {}: {error}",
+                        path.display()
+                    ));
+                }
+            };
+            total_bytes = total_bytes
+                .checked_add(child.len())
+                .ok_or_else(|| anyhow!("USD layer closure byte count overflowed"))?;
+            check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
             bytes.insert(child_id.clone(), child);
-            queue.push(child_id);
+            queue.push((child_id, child_depth));
         }
     }
     Stage::builder()
@@ -340,5 +391,21 @@ def Xform "World"
 "#;
         validate_usda_nesting(source).expect("quoted and commented delimiters are data");
         parse_usda(source).expect("valid USDA remains parseable");
+    }
+
+    #[test]
+    fn closure_limits_reject_unbounded_graph_dimensions() {
+        let limits = StageClosureLimits {
+            max_layers: 2,
+            max_dependencies_per_layer: 2,
+            max_depth: 2,
+            max_bytes: 8,
+        };
+
+        assert!(check_stage_closure_limits(&limits, 3, 0, 0, 0).is_err());
+        assert!(check_stage_closure_limits(&limits, 1, 3, 0, 0).is_err());
+        assert!(check_stage_closure_limits(&limits, 1, 0, 3, 0).is_err());
+        assert!(check_stage_closure_limits(&limits, 1, 0, 0, 9).is_err());
+        check_stage_closure_limits(&limits, 2, 2, 2, 8).expect("boundary values are permitted");
     }
 }

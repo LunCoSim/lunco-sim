@@ -953,10 +953,10 @@ fn proposal_diagnostics(diagnostics: &[String]) -> String {
 /// recipe root with its current opinions for each synchronous operation.
 fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
     let recipe = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc).map(|stage| {
-        lunco_usd_compose::recipe::StageRecipe {
-            root_id: stage.scene_layer.clone(),
-            bytes: stage.layer_bytes_snapshot(),
-        }
+        lunco_usd_compose::recipe::StageRecipe::new(
+            stage.scene_layer.clone(),
+            stage.layer_bytes_snapshot(),
+        )
     });
     if let Some(host) = world
         .resource_mut::<DocumentRegistry<UsdDocument>>()
