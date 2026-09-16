@@ -10,6 +10,7 @@ fn require(condition, message) {
 let usd = authoring_session::capabilities("usd");
 require(usd.ok && usd.grouped_apply && usd.undoable && usd.preview,
     "USD authoring capabilities must expose grouped undoable preview edits");
+require(usd.lifecycle.len() == 4, "USD must expose explicit lifecycle verbs");
 
 let modelica = authoring_session::capabilities("modelica");
 require(modelica.ok && modelica.generation_checked && modelica.source_checkpoint,
@@ -18,6 +19,7 @@ require(modelica.ok && modelica.generation_checked && modelica.source_checkpoint
 let sysml = authoring_session::capabilities("sysml");
 require(sysml.ok && sysml.grouped_apply && sysml.undoable,
     "SysML authoring capabilities must expose grouped undoable edits");
+require(sysml.lifecycle[0] == "open", "SysML lifecycle must start with explicit open");
 
 let rhai = authoring_session::capabilities("rhai");
 require(rhai.ok && rhai.generation_checked && rhai.source_checkpoint,

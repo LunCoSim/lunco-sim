@@ -48,7 +48,7 @@ domain policy in `assets/scripting/policy/lint_<domain>.rhai` over Rust-produced
 facts, while Twin verification scripts use
 `assets/scripting/tools/sysml_requirements.rhai` to read the mounted SysML
 snapshot and evaluate composed USD evidence. Keep both in Rhai; Rust supplies
-typed facts and lifecycle, not Griffin- or component-specific assertions.
+typed facts and lifecycle, not mission- or component-specific assertions.
 
 Relevant implementation and design references:
 

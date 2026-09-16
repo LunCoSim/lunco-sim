@@ -19,7 +19,7 @@ let result = sysml_requirements::evaluate(source, [
        expected_type: "Camera", visible: true },
     #{ id: "GV-002", component: "wheel_FL",
        requirement: "Project::gv004", verification: "Project::VerifyVisual",
-       kind: "attribute", path: "/Twin/FLIP/Wheel_FL", attr: "radius",
+       kind: "attribute", path: "/Twin/Vehicle/Wheel_FL", attr: "radius",
        expected_attr: "Project::Rover::visualWheelRadiusM", tolerance: 0.001 }
 ]);
 report_structured_verdict(result, "VISUAL REQUIREMENTS", "VISUAL_REQUIREMENTS");

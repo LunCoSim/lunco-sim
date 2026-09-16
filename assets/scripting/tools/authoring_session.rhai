@@ -30,24 +30,80 @@ fn capabilities(domain) {
         return #{ ok: true, domain: domain, dry_plan: true,
             grouped_apply: true, generation_checked: true, undoable: true,
             preview: true, selection: true, projection_checkpoint: true,
+            lifecycle: ["open", "new", "save", "save_as"],
             operations: ["typed_usd_ops", "proposal_review", "batch"] };
     }
     if domain == "modelica" {
         return #{ ok: true, domain: domain, dry_plan: true,
             grouped_apply: true, generation_checked: true, undoable: true,
             preview: false, source_checkpoint: true,
+            lifecycle: ["open", "new", "save", "save_as"],
             operations: ["ast_ops", "diagram_ops", "text_ops"] };
     }
     if domain == "rhai" {
         return #{ ok: true, domain: domain, dry_plan: true,
             grouped_apply: true, generation_checked: true, undoable: true,
             preview: false, source_checkpoint: true,
+            lifecycle: ["open", "new", "save", "save_as"],
             operations: ["replace_source", "edit_text"] };
     }
     #{ ok: true, domain: domain, dry_plan: true,
         grouped_apply: true, generation_checked: true, undoable: true,
         preview: false, source_checkpoint: true,
+        lifecycle: ["open", "new", "save", "save_as"],
         operations: ["replace_source", "edit_text"] }
+}
+
+/// Open a source document through the owner-specific asynchronous lifecycle.
+/// The command acknowledgement is admission only; callers discover the
+/// resulting explicit document id through the normal document query.
+fn open(domain, path) {
+    let valid = _domain(domain);
+    if !valid.ok { return valid; }
+    if path == () || type_of(path) != "string" || path == "" {
+        return _error("open", "a non-empty source path is required");
+    }
+    if domain == "usd" { return usd::open(path); }
+    if domain == "modelica" { return modelica::open(path); }
+    if domain == "rhai" { return _error("open", "Rhai documents are Twin-authored source"); }
+    sysml::open(path)
+}
+
+/// Create an untitled document owned by the selected format adapter.
+fn new_document(domain) {
+    let valid = _domain(domain);
+    if !valid.ok { return valid; }
+    if domain == "usd" { return usd::new_document(); }
+    if domain == "modelica" { return modelica::new_document(); }
+    if domain == "rhai" { return _error("new", "Rhai documents are Twin-authored source"); }
+    sysml::new_document()
+}
+
+/// Persist one explicit document through its format owner.
+fn save(domain, doc) {
+    let valid = _domain(domain);
+    if !valid.ok { return valid; }
+    let required = inspect(domain, doc);
+    if !required.ok { return required; }
+    if domain == "usd" { return usd::save_document(doc); }
+    if domain == "modelica" { return modelica::save(doc); }
+    if domain == "rhai" { return _error("save", "Rhai source is Twin-authored; use Twin persistence"); }
+    sysml::save(doc)
+}
+
+/// Persist one explicit document to a new path through its format owner.
+fn save_as(domain, doc, path) {
+    let valid = _domain(domain);
+    if !valid.ok { return valid; }
+    if path == () || type_of(path) != "string" || path == "" {
+        return _error("save_as", "a non-empty destination path is required");
+    }
+    let required = inspect(domain, doc);
+    if !required.ok { return required; }
+    if domain == "usd" { return usd::save_as_document(doc, path); }
+    if domain == "modelica" { return modelica::save_as(doc, path); }
+    if domain == "rhai" { return _error("save_as", "Rhai source is Twin-authored; use Twin persistence"); }
+    sysml::save_as(doc, path)
 }
 
 /// Read the owner-specific identity/generation snapshot.
