@@ -9,6 +9,8 @@ description = "Native and wasm file-dialog capability for LunCoSim workbench hos
 bevy = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
 lunco-storage = { path = "../lunco-storage" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
