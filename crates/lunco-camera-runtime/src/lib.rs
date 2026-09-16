@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use lunco_avatar_core::commands::SetCameraInput;
 use lunco_camera_core::{
-    CameraDefaults, CameraFollow, CameraPoseLock, CameraPoseMode, CameraRig, CameraRigIntent,
-    CameraRigMode, CameraUpdateSet, FollowAttitude, FreeFlightCamera, FreeFlightSettings,
-    OrbitCamera, SpringArmCamera, SurfaceCamera, SurfaceCameraFrame, math::surface_camera_rotation,
+    CameraDefaults, CameraFollow, CameraPoseLock, CameraPoseMode, CameraRig, CameraUpdateSet,
+    FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera, SpringArmCamera,
+    SurfaceCamera, SurfaceCameraFrame, math::surface_camera_rotation,
 };
 use lunco_core::{on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
@@ -177,8 +177,6 @@ impl Plugin for CameraRuntimePlugin {
             .register_type::<CameraPoseLock>()
             .register_type::<CameraFollow>()
             .register_type::<CameraPoseMode>()
-            .register_type::<CameraRigIntent>()
-            .register_type::<CameraRigMode>()
             .register_type::<FollowAttitude>()
             .register_type::<FreeFlightSettings>()
             .register_type::<SpringArmCamera>()

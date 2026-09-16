@@ -175,7 +175,8 @@ Mostly independent of Phases 1–2; can interleave.
   `inputs:` port with a constant instead of a connection (`float inputs:R = 1.2`). Use the MSL class's own name
   where it exists (`R`, …). Drop bespoke duplicates.
 - **P3.2 — Camera → `UsdGeomCamera`; lights → `UsdLux`; sensors → mirror Isaac shapes** (doc 38 §8.5).
-  Keep `lunco:cameraMode` (behavior). *Verify:* camera/light/sensor behavior unchanged.
+  Keep camera behavior in Rhai over the generic command surface; do not add a
+  USD camera-mode field. *Verify:* camera/light/sensor behavior unchanged.
 - **P3.4 — Lean placeholder/asset resolution on USD payloads + Ar;** `assetMode` and the authored
   `payload`/`references` arc
   shrink to a thin runtime cache (doc 38 §14.7).

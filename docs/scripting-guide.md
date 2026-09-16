@@ -107,6 +107,14 @@ After review, apply USD operations through `assembly_edit::batch` or the normal
 proposal/review/commit flow, then re-read the new generation. Do not write
 USDA text directly.
 
+Camera creation is authored through the camera entry in that recipe: Rhai
+validates the requested role, pose, projection, look-at, and standard
+`UsdGeomCamera` intrinsics, then emits a standard `def Camera` with
+`LunCoCameraAPI`. Omitted intrinsics use only the defaults defined by the USD
+camera schema. A missing or invalid camera contract remains a visible
+no-camera/diagnostic result; the runtime does not choose a first camera, infer
+an avatar camera from an entity, or repair malformed authored values.
+
 Use `port_graph` to discover standard USD `inputs:`, `outputs:`, and
 `connectors:` endpoints. `wiring_plan` validates exact source/sink paths,
 direction, and USD type before returning `SetConnection` operations. Modelica

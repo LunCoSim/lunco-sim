@@ -131,6 +131,14 @@ fn on_tick(me) {
                 parent: ROOT,
                 name: "PreviewCamera",
                 translation: [3.0, 2.0, 3.0],
+                role: "viewport",
+                pose: "authored",
+                projection: "perspective",
+                look_at: [0.0, 0.0, 0.0],
+                focal_length: 35.0,
+                vertical_aperture: 15.2908,
+                horizontal_aperture: 20.955,
+                clipping_range: [0.1, 1000.0],
             }],
             initial_state: [#{
                 path: CHASSIS,
@@ -154,6 +162,13 @@ fn on_tick(me) {
         this.doc, "@root@", #{
             root: ROOT,
             cameras: [#{ path: ROOT + "/MissingCamera" }],
+        },
+        context.generation,
+    );
+    let bad_camera = model_authoring::scene_recipe(
+        this.doc, "@root@", #{
+            root: ROOT,
+            cameras: [#{ parent: ROOT, name: "BadCamera", role: "unknown" }],
         },
         context.generation,
     );
@@ -190,13 +205,21 @@ fn on_tick(me) {
             "readiness_report did not combine the requested checks"),
         t_true(!bad_readiness.ok,
             "readiness_report accepted a missing control"),
-        t_true(recipe.ok && recipe.ops.len() == 4 && recipe.routes.len() == 1
+        t_true(recipe.ok && recipe.cameras.len() == 1
+            && recipe.cameras[0].created
+            && recipe.cameras[0].ops[0].AddPrim.type_name == "Camera"
+            && recipe.cameras[0].ops[1].SetApiSchemas.schemas.contains("LunCoCameraAPI")
+            && recipe.cameras[0].ops[2].SetAttribute.name == "lunco:cameraRole"
+            && recipe.cameras[0].ops[5].SetAttribute.name == "lunco:cameraLookAt"
+            && recipe.routes.len() == 1
             && recipe.programs.len() == 1,
-            "scene_recipe did not return the generic scene plan"),
+            "scene_recipe did not return a complete Rhai-authored camera plan"),
         t_true(!bad_recipe.ok,
             "scene_recipe accepted an invalid asset identity"),
         t_true(!bad_scene_identity.ok,
             "scene_recipe accepted a missing camera identity"),
+        t_true(!bad_camera.ok,
+            "scene_recipe accepted an invalid camera role"),
         t_true(publication.ok && publication.ops.len() == 2
             && publication.save_as.path == "target/scene-tests/model_authoring.usda",
             "publish_component did not return a clean typed publication/save plan"),

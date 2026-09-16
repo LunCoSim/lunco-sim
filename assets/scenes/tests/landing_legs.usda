@@ -55,8 +55,8 @@ def Xform "LandingLegsTest" (
     }
 
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -65,7 +65,6 @@ def Xform "LandingLegsTest" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 3.0, 0.0)
         double3 xformOp:translate = (14.0, 6.0, 14.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]

@@ -38,8 +38,8 @@ def Xform "ModelicaDriveLaw" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -48,7 +48,6 @@ def Xform "ModelicaDriveLaw" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 1.0, 100.0)
         double3 xformOp:translate = (0.0, 30.0, 175.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -58,7 +57,7 @@ def Xform "ModelicaDriveLaw" (
         prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
-        custom double3 lunco:cameraLookAt = (0.0, 1.0, 50.0)
+        double3 lunco:cameraLookAt = (0.0, 1.0, 50.0)
         double3 xformOp:translate = (0.0, 45.0, 170.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float focalLength = 24.0

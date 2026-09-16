@@ -501,6 +501,140 @@ fn scene_prim(doc, path, label) {
     #{ ok: true, path: path, type_name: record.type_name }
 }
 
+fn camera_scalar_literal(value) {
+    if value == () || (type_of(value) != "i64" && type_of(value) != "f64") {
+        return ();
+    }
+    value.to_string()
+}
+
+fn camera_positive_scalar(value) {
+    let literal = camera_scalar_literal(value);
+    if literal == () || value <= 0.0 { return (); }
+    literal
+}
+
+fn camera_tuple_literal(value, width) {
+    if value == () || type_of(value) != "array" || value.len() != width {
+        return ();
+    }
+    for component in value {
+        if camera_scalar_literal(component) == () { return (); }
+    }
+    if width == 2 {
+        return "(" + value[0].to_string() + ", " + value[1].to_string() + ")";
+    }
+    assembly_edit::tuple3_literal(value)
+}
+
+fn camera_enum(spec, field, allowed, path, label) {
+    let value = spec[field];
+    if value == () { return #{ ok: true, value: () }; }
+    if type_of(value) != "string" || !allowed.contains(value) {
+        return failure("scene_recipe", path + ": " + label + " must be one of " + allowed.join(", "));
+    }
+    #{ ok: true, value: value }
+}
+
+/// Build a standard USD camera entirely as a dynamic authoring plan.
+///
+/// USD remains the identity/topology and authored-facts owner: the resulting
+/// plan creates a `def Camera` and applies `LunCoCameraAPI`. Camera behavior is
+/// not encoded here; Rhai callers choose it later with generic camera
+/// commands. Optional fields use the standard `UsdGeomCamera` attributes and
+/// the registered `LunCoCameraAPI` role/pose/look-at properties.
+fn camera_plan(edit_target, parent, spec) {
+    if edit_target == () || parent == () || spec == () {
+        return failure("scene_recipe", "camera_plan requires edit target, parent, and camera spec");
+    }
+    let valid_parent = absolute_prim(parent, "camera parent");
+    if !valid_parent.ok { return valid_parent; }
+    if spec.name == () || spec.name == "" || type_of(spec.name) != "string"
+        || spec.name.contains("/") {
+        return failure("scene_recipe", "new camera name must be one USD identifier");
+    }
+    let path = if parent == "/" { "/" + spec.name } else { parent + "/" + spec.name };
+    let role = camera_enum(spec, "role", ["viewport", "sensor"], path, "camera role");
+    if !role.ok { return role; }
+    let pose = camera_enum(spec, "pose", ["authored", "mounted"], path, "camera pose");
+    if !pose.ok { return pose; }
+    let projection = camera_enum(
+        spec, "projection", ["perspective", "orthographic"], path, "projection");
+    if !projection.ok { return projection; }
+
+    let attrs = [];
+    if spec.look_at != () {
+        let literal = camera_tuple_literal(spec.look_at, 3);
+        if literal == () {
+            return failure("scene_recipe", path + ": look_at must contain three numeric components");
+        }
+        attrs.push(#{ name: "lunco:cameraLookAt", type_name: "double3", value: literal });
+    }
+    for field in ["focal_length", "vertical_aperture", "horizontal_aperture"] {
+        let value = spec[field];
+        if value == () { continue; }
+        let literal = camera_positive_scalar(value);
+        if literal == () {
+            return failure("scene_recipe", path + ": " + field + " must be a positive number");
+        }
+        let usd_name = if field == "focal_length" {
+            "focalLength"
+        } else if field == "vertical_aperture" {
+            "verticalAperture"
+        } else {
+            "horizontalAperture"
+        };
+        attrs.push(#{ name: usd_name, type_name: "float", value: literal });
+    }
+    if spec.clipping_range != () {
+        let literal = camera_tuple_literal(spec.clipping_range, 2);
+        if literal == () || spec.clipping_range[0] <= 0.0
+            || spec.clipping_range[1] <= spec.clipping_range[0] {
+            return failure("scene_recipe", path + ": clipping_range must be positive with far > near");
+        }
+        attrs.push(#{ name: "clippingRange", type_name: "float2", value: literal });
+    }
+
+    let ops = [#{ AddPrim: #{
+        edit_target: edit_target, parent_path: parent, name: spec.name,
+        type_name: "Camera", reference: (), reference_prim_path: "",
+    }}];
+    ops.push(#{ SetApiSchemas: #{
+        edit_target: edit_target, path: path, schemas: ["LunCoCameraAPI"],
+    }});
+    if role.value != () {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "lunco:cameraRole",
+            type_name: "token", value: "\"" + role.value + "\"",
+        }});
+    }
+    if pose.value != () {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "lunco:cameraPose",
+            type_name: "token", value: "\"" + pose.value + "\"",
+        }});
+    }
+    if projection.value != () {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "projection",
+            type_name: "token", value: "\"" + projection.value + "\"",
+        }});
+    }
+    for attribute in attrs {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: attribute.name,
+            type_name: attribute.type_name, value: attribute.value,
+        }});
+    }
+    if spec.translation != () || spec.rotation != () || spec.scale != () {
+        let placement = assembly_builder::place_plan(edit_target, path,
+            spec.translation, spec.rotation, spec.scale);
+        if !placement.ok { return placement; }
+        for op in placement.ops { ops.push(op); }
+    }
+    #{ ok: true, kind: "camera", path: path, ops: ops, created: true }
+}
+
 fn recipe_camera(edit_target, spec) {
     if spec == () { return failure("scene_recipe", "camera entry is missing"); }
     if spec.path != () {
@@ -519,18 +653,7 @@ fn recipe_camera(edit_target, spec) {
     if spec.name.contains("/") {
         return failure("scene_recipe", "camera name must be one USD identifier");
     }
-    let path = if spec.parent == "/" { "/" + spec.name } else { spec.parent + "/" + spec.name };
-    let ops = [#{ AddPrim: #{
-        edit_target: edit_target, parent_path: spec.parent, name: spec.name,
-        type_name: "Camera", reference: (), reference_prim_path: "",
-    }}];
-    if spec.translation != () || spec.rotation != () || spec.scale != () {
-        let placement = assembly_builder::place_plan(edit_target, path,
-            spec.translation, spec.rotation, spec.scale);
-        if !placement.ok { return placement; }
-        for op in placement.ops { ops.push(op); }
-    }
-    #{ ok: true, path: path, ops: ops, created: true }
+    camera_plan(edit_target, spec.parent, spec)
 }
 
 /// Build one generic scene recipe. USD changes are typed dry ops; route and

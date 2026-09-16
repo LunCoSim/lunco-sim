@@ -91,8 +91,8 @@ def Xform "RoverComparison" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -101,7 +101,6 @@ def Xform "RoverComparison" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0, 1, 0)
         double3 xformOp:translate = (20, 20, 38)
         uniform token[] xformOpOrder = ["xformOp:translate"]

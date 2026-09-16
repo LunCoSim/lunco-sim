@@ -547,8 +547,8 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
 | `float focalLength`, `float verticalAperture` | vertical FOV = `2·atan(verticalAperture / (2·focalLength))` |
 | `float2 clippingRange` | near / far planes |
 | `token projection` | `perspective` (default) or `orthographic` |
-| `custom double3 lunco:cameraLookAt` | aim the camera at this point (parent-local); overrides authored rotation |
-| `LunCoCameraAPI` / `lunco:cameraRole` | explicit `viewport` or `sensor` runtime role for a non-avatar camera |
+| `double3 lunco:cameraLookAt` (`LunCoCameraAPI`) | aim the camera at this point (parent-local); overrides authored rotation |
+| `LunCoCameraAPI` / `lunco:cameraRole` | explicit `viewport` or `sensor` runtime role for a participating camera |
 | `LunCoCameraAPI` / `lunco:cameraPose` | explicit `authored` or `mounted` sole pose authority |
 
 - **Placement:** `lunco:cameraPose = "authored"` keeps the camera in its USD
@@ -556,6 +556,11 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
   grid-direct follower with a static local offset; it stays jitter-free while
   the persistent `OriginAnchor` tracks the selected camera. A nested prim alone
   never changes pose authority. Aim either camera with `lunco:cameraLookAt`.
+
+- **Avatar behavior:** `LunCoAvatarAPI` only marks the local avatar role. The
+  initial interactive rig is generic Rust substrate; Rhai selects free-flight,
+  orbit, follow, or another composed behavior through the camera command/API
+  surface. USD does not carry a camera-mode field.
 - **Switching:** cameras spawn inactive; make one the active view with
   `set_camera("Name")` (rhai / API `SetActiveCamera`, matches the prim's leaf or
   full path) or the `KeyC` hotkey. Exactly one window camera renders at a time.

@@ -54,7 +54,6 @@ use lunco_usd_avian_contracts::{
     ShouldBeDynamic,
 };
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
-use lunco_usd_bevy_camera::avatar::read_avatar_camera_intent;
 use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
@@ -1049,18 +1048,28 @@ fn process_usd_sim_prim_read(
             return;
         }
     }
-    let avatar_intent = match read_avatar_camera_intent(reader, &sdf_path, &existing_tf) {
-        Ok(intent) => intent,
-        Err(error) => {
-            push_usd_sim_diagnostic(diagnostics, &prim_path.path, error.code(), error.message());
-            warn!(
-                "USD prim {} has malformed avatar camera contract: {}",
-                prim_path.path,
-                error.message()
-            );
-            commands.entity(entity).try_insert(UsdSimProcessed);
-            return;
+    let is_avatar = if reader.has_api_schema(&sdf_path, "LunCoAvatarAPI") {
+        match read_authored_bool_strict(reader, &sdf_path, "lunco:avatar") {
+            Ok(Some(value)) => value,
+            Ok(None) => false,
+            Err(error) => {
+                let message = format!(
+                    "{} has malformed authored `lunco:avatar`: {error}",
+                    sdf_path.as_str()
+                );
+                push_usd_sim_diagnostic(
+                    diagnostics,
+                    &prim_path.path,
+                    "avatar-attribute",
+                    message.clone(),
+                );
+                warn!("USD prim {message}");
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
         }
+    } else {
+        false
     };
 
     // --- Network replication policy, derived from USD ---
@@ -1345,11 +1354,11 @@ fn process_usd_sim_prim_read(
     // made a cosim prim, which skips this system, lose its LinkNode.
 
     // Avatar camera behavior is a presentation concern. USD simulation only
-    // projects the authored contract and spatial identity; `lunco-avatar`
-    // realizes movement, input, and camera mode components.
-    if let Some(intent) = avatar_intent {
+    // projects the avatar role and spatial identity; `lunco-avatar` realizes
+    // the generic movement substrate and Rhai selects camera behavior.
+    if is_avatar {
         info!(
-            "Detected Avatar prim at {}, publishing authored camera intent",
+            "Detected Avatar prim at {}, publishing avatar role and spatial identity",
             prim_path.path
         );
 
@@ -1357,40 +1366,52 @@ fn process_usd_sim_prim_read(
         // transform is local to its authored parent, so resolve the nearest
         // actual Grid in that parent chain and commit the complete spatial
         // handoff through the shared migration boundary.
-        let (grid_entity, grid) = lunco_spatial::coords::ancestor_grid(
-            entity,
-            q_child_of,
-            grid_components,
-        )
-        .unwrap_or_else(|| {
-            panic!(
-                "USD avatar {sdf_path} is not below a BigSpace Grid; an explicit spatial frame is required"
-            )
-        });
-        let (position, rotation) = lunco_spatial::coords::grid_relative_pose(
+        let Some((grid_entity, grid)) =
+            lunco_spatial::coords::ancestor_grid(entity, q_child_of, grid_components)
+        else {
+            let message = format!(
+                "{} is not below a BigSpace Grid; an explicit spatial frame is required",
+                sdf_path.as_str()
+            );
+            push_usd_sim_diagnostic(
+                diagnostics,
+                &prim_path.path,
+                "avatar-spatial-frame",
+                message.clone(),
+            );
+            warn!("USD avatar {message}");
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
+        };
+        let Some((position, rotation)) = lunco_spatial::coords::grid_relative_pose(
             entity,
             grid_entity,
             q_child_of,
             grid_components,
             q_spatial,
-        )
-        .unwrap_or_else(|| {
-            panic!("USD avatar {sdf_path} has an invalid spatial chain to Grid {grid_entity:?}")
-        });
+        ) else {
+            let message = format!(
+                "{} has an invalid spatial chain to Grid {grid_entity:?}",
+                sdf_path.as_str()
+            );
+            push_usd_sim_diagnostic(
+                diagnostics,
+                &prim_path.path,
+                "avatar-spatial-frame",
+                message.clone(),
+            );
+            warn!("USD avatar {message}");
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
+        };
         let (avatar_cell, translation) = grid.translation_to_grid(position);
         let avatar_tf = Transform::from_translation(translation)
             .with_rotation(rotation.as_quat())
             .with_scale(existing_tf.scale);
 
-        // `CameraPoseMode::Interactive` identifies this as an interactive USD
-        // camera for the camera mount/selection systems. It does not select
-        // behavior or read input; the authored intent is realized by the
-        // specialized avatar owner on the next update.
         commands.entity(entity).try_insert((
-            lunco_camera_core::CameraPoseMode::Interactive,
             lunco_avatar_core::roles::Avatar,
             lunco_avatar_core::roles::LocalAvatar,
-            intent,
         ));
         lunco_spatial::attach::migrate_to_grid(
             commands,

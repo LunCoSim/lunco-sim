@@ -12,8 +12,6 @@ license.workspace = true
 # NO `mesh_picking` — see `lunco-usd-bevy`. This crate does no hit-testing.
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 openusd = { workspace = true }
-lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
-lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
@@ -39,8 +37,8 @@ lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
-# Typed avatar lifecycle and authored camera-intent handoff only. Camera mode
-# realization and all raw input translation belong to `lunco-avatar`.
+# Typed avatar lifecycle and role handoff only. Camera behavior and all raw
+# input translation belong to `lunco-avatar` and the authored Rhai layer.
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }

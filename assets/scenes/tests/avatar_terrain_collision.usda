@@ -30,8 +30,8 @@ def Xform "AvatarTerrainCollision" (
         bool physics:collisionEnabled = true
     }
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -40,7 +40,6 @@ def Xform "AvatarTerrainCollision" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 xformOp:translate = (0.0, 3.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

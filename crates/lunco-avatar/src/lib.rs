@@ -45,9 +45,9 @@ use lunco_camera_core::{
         apply_scroll_zoom, camera_decay_alpha, camera_decay_rate, camera_move_direction,
         resolve_camera_arm_length, surface_camera_angles, surface_camera_rotation, zoom_factor,
     },
-    AdaptiveNearPlane, CameraDefaults, CameraRigIntent, CameraRigMode, CameraUpdateSet,
-    CameraZoomInput, FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera,
-    SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
+    AdaptiveNearPlane, CameraDefaults, CameraUpdateSet, CameraZoomInput, FollowAttitude,
+    FreeFlightCamera, FreeFlightSettings, OrbitCamera, SpringArmCamera, SurfaceCamera,
+    SurfaceRelativeMode,
 };
 use lunco_camera_runtime::{body_orbit_look_scale, CameraInputSettings};
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
@@ -885,99 +885,27 @@ fn scene_keyboard_active(focus: Res<lunco_control_core::EguiFocus>) -> bool {
     !focus.wants_keyboard
 }
 
-// ─── Avatar Camera Factory ───────────────────────────────────────────────────
-
-/// Spawns a fully-configured avatar camera entity.
-///
-/// Call this from setup code instead of manually assembling the avatar entity.
-/// Ensures consistency between the main client and the luncosim binary.
-///
-/// # Arguments
-/// * `commands` — Bevy commands for entity spawning.
-/// * `grid_entity` — The big_space grid entity to parent the avatar to.
-/// * `initial_offset` — Starting position offset in grid-local coordinates.
-/// * `profile` — The already-resolved authoritative graphics profile.
-/// * `control_binding` — An authored or otherwise resolved intent-to-port
-///   policy. The avatar factory does not select a command vocabulary.
-///
-/// # Returns
-/// The spawned entity ID.
-pub fn spawn_avatar_camera(
-    commands: &mut Commands,
-    grid_entity: Entity,
-    initial_offset: DVec3,
-    profile: lunco_render::RenderQualityProfile,
-    bindings: &InputBindingsSettings,
-    control_binding: lunco_control_core::ControlBinding,
-) -> Entity {
-    let (yaw, pitch) = (std::f32::consts::PI * 0.5, -0.3);
-    let input_map = bindings
-        .input_map()
-        .expect("registered input bindings must satisfy their settings contract");
-    let input_ports = lunco_port_core::InputPorts::with_defaults(
-        control_binding.ports().map(|port| (port.to_string(), 0.0)),
-    );
-    // Initial spawn: anchor `ChildOf` in the bundle so parent + cell +
-    // transform land atomically (same contract as `migrate_to_grid`).
-    //
-    // `Camera` + `SceneCamera` (both render-FREE) instead of `Camera3d`: the render
-    // *pipeline* half — `Camera3d`, tonemapping, MSAA, bloom — is attached by
-    // `lunco-render-bevy`'s `SceneCamera` binder in render builds, and simply never
-    // attached headless, where the camera stays a fully-formed scene entity (pose,
-    // projection, tracking, mounts) with no GPU pipeline. See
-    // `lunco_render::camera` and docs/architecture/render-decoupling.md.
-    commands
-        .spawn((
-            // Nested: a bundle tuple maxes out at 16 elements, and `SceneCamera` made 17.
-            //
-            // The same camera/exposure pair the USD camera projection uses, with
-            // no authored opinion to honour here. The caller supplies the
-            // authoritative graphics profile; this camera must not invent one.
-            // `SceneCamera` is the render-free camera intent. The render-side
-            // binder adds `Camera3d` and its complete render graph atomically;
-            // inserting a bare `Camera` here would trigger Bevy's missing
-            // render-graph warning before that binder runs.
-            (
-                lunco_render::scene_camera_look_with_profile(None, profile),
-                lunco_render::usd_default_perspective_projection(),
-                lunco_render::GraphicsCameraDefaults,
-            ),
-            FreeFlightCamera {
-                yaw,
-                pitch,
-                damping: None,
-            },
-            AdaptiveNearPlane,
-            Transform::from_translation(initial_offset.as_vec3()),
-            GlobalTransform::default(),
-            CellCoord::default(),
-            Avatar,
-            LocalAvatar,
-            OrbitViewHistory::default(),
-            IntentAnalogState::default(),
-            ActionState::<lunco_control_core::UserIntent>::default(),
-            (
-                input_map,
-                control_binding,
-                input_ports,
-                CameraZoomInput::default(),
-                FreeFlightSettings::default(),
-                Name::new("Avatar Camera"),
-                ChildOf(grid_entity),
-            ),
-        ))
-        .id()
-}
-
-/// Local avatars are command endpoints with an authored-equivalent ControlBinding and InputPorts surface. Native avatars receive the same profile as composed USD avatars; the shared controller translates intents into ports, and the flight realization consumes only those ports.
-fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands) {
+/// Local avatars are command endpoints with an authored-equivalent
+/// `ControlBinding` and `InputPorts` surface. The shared controller translates
+/// intents into ports, and the flight realization consumes only those ports.
+fn demote_former_avatar(
+    trigger: On<Remove, LocalAvatar>,
+    mut commands: Commands,
+    mut q_cameras: Query<&mut Camera>,
+) {
     let entity = trigger.entity;
+    // Deactivate before queuing removal of the render-free marker. The marker
+    // removal is deferred, while Bevy's render extraction can observe the
+    // existing `Camera3d` in the same frame. Keeping an orphan active would
+    // let it render after its LocalAvatar claim has moved to the replacement.
+    if let Ok(mut camera) = q_cameras.get_mut(entity) {
+        camera.is_active = false;
+    }
     commands.entity(entity).try_remove::<(
         Avatar,
         FreeFlightCamera,
         OrbitCamera,
         SpringArmCamera,
-        CameraRigIntent,
         SurfaceRelativeMode,
         OrbitViewHistory,
         OrbitUserInput,
@@ -993,14 +921,10 @@ fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands
     // removing it left the retired camera in that pool forever, so the app
     // accumulated one stale candidate per scene load.
     //
-    // That is the "two cameras" bug. An explicit host-created avatar camera
-    // (`spawn_avatar_camera`) is NOT a USD prim, so a scene load's `despawn` sweep
-    // never touches it; when the incoming scene authored its own `lunco:avatar`
-    // camera, the old one was demoted but stayed eligible. It also has a LOWER entity
-    // index than anything the new scene spawns, so the moment the binding went
-    // momentarily invalid — which it does every load, because the new camera's
-    // `Camera3d`/`Projection` is attached later by the deferred `SceneCamera` binder
-    // — the old camera could remain visible, undoing this demotion.
+    // A host-created camera that is not a USD prim is outside a scene load's
+    // `despawn` sweep. Deactivation above closes the ownership transition
+    // while the replacement's `Camera3d`/`Projection` is attached by the
+    // deferred `SceneCamera` binder.
     //
     // `Camera`/`Camera3d` are deliberately left in place: stripping `Camera` from a
     // live, already-extracted window camera orphans its render-world view and crashes
@@ -4163,13 +4087,14 @@ fn avatar_init_system(
             Entity,
             &Transform,
             Option<&OrbitViewHistory>,
-            Option<&CameraRigIntent>,
             Option<&InputMap<UserIntent>>,
             Option<&ActionState<UserIntent>>,
         ),
         (
             With<Avatar>,
             With<LocalAvatar>,
+            With<Projection>,
+            With<lunco_render::SceneCamera>,
             Without<SpringArmCamera>,
             Without<OrbitCamera>,
             Without<FreeFlightCamera>,
@@ -4187,38 +4112,28 @@ fn avatar_init_system(
             With<LocalAvatar>,
             Without<AdaptiveNearPlane>,
             With<Projection>,
+            With<lunco_render::SceneCamera>,
         ),
     >,
     bindings: Res<InputBindingsSettings>,
-    active_sun: Option<Res<lunco_environment::LunarSun>>,
 ) {
-    for (entity, tf, history, intent, input_map, action_state) in q_avatar.iter() {
+    for (entity, tf, history, input_map, action_state) in q_avatar.iter() {
         if history.is_none() {
             commands
                 .entity(entity)
                 .try_insert(OrbitViewHistory::default());
         }
 
-        let Some(intent) = intent.copied() else {
-            let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-            commands.entity(entity).try_insert(FreeFlightCamera {
-                yaw,
-                pitch,
-                damping: None,
-            });
-            continue;
-        };
-
-        // USD-authored avatars are the one non-native path that needs the
-        // local input surface assembled here. Raw device bindings stay inside
-        // this specialized avatar owner; simulation projection never imports
-        // the input crate or chooses a device policy.
+        // An authored standard USD camera already owns its projection, camera
+        // presentation profile, exposure, and initial look-at transform. The
+        // avatar owner adds only the generic interactive movement substrate;
+        // Rhai selects richer behavior through typed camera commands.
         let resolved_input_map = if input_map.is_none() {
             match bindings.input_map() {
                 Ok(input_map) => Some(input_map),
                 Err(error) => {
                     error!(
-                        "USD-authored avatar {entity:?} has invalid input bindings; refusing interactive initialization: {error}"
+                        "avatar {entity:?} has invalid input bindings; refusing interactive initialization: {error}"
                     );
                     continue;
                 }
@@ -4226,62 +4141,22 @@ fn avatar_init_system(
         } else {
             None
         };
-        let ev100 = intent.exposure_ev100.unwrap_or_else(|| {
-            active_sun
-                .as_deref()
-                .copied()
-                .unwrap_or_default()
-                .exposure_ev100
-        });
         let mut avatar = commands.entity(entity);
+        let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
         avatar.try_insert((
-            lunco_render::SceneCamera::agx(),
-            lunco_render::GraphicsCameraDefaults,
-            bevy::camera::Exposure { ev100 },
             AdaptiveNearPlane,
             IntentAnalogState::default(),
-            intent.flight_settings,
+            FreeFlightCamera {
+                yaw,
+                pitch,
+                damping: None,
+            },
         ));
         if let Some(input_map) = resolved_input_map {
             avatar.try_insert(input_map);
         }
         if action_state.is_none() {
             avatar.try_insert(ActionState::<UserIntent>::default());
-        }
-        match intent.mode {
-            CameraRigMode::FreeFlight => {
-                avatar.try_insert(FreeFlightCamera {
-                    yaw: intent.yaw,
-                    pitch: intent.pitch,
-                    damping: None,
-                });
-            }
-            CameraRigMode::Orbit => {
-                avatar.try_insert(OrbitCamera {
-                    target: Entity::PLACEHOLDER,
-                    distance: intent.orbit_distance,
-                    yaw: intent.yaw,
-                    pitch: intent.pitch,
-                    damping: None,
-                    vertical_offset: 0.0,
-                });
-            }
-            CameraRigMode::SpringArm => {
-                avatar.try_insert((
-                    SpringArmCamera {
-                        target: Entity::PLACEHOLDER,
-                        distance: intent.spring_arm_distance,
-                        yaw: intent.yaw,
-                        pitch: intent.pitch,
-                        damping: None,
-                        vertical_offset: intent.spring_arm_vertical_offset,
-                        track_heading: intent.spring_arm_track_heading,
-                        attitude: intent.spring_arm_attitude,
-                    },
-                    avian3d::prelude::TranslationInterpolation,
-                    avian3d::prelude::RotationInterpolation,
-                ));
-            }
         }
     }
     for entity in q_proj.iter() {
@@ -6253,6 +6128,7 @@ mod tests {
     #[test]
     fn avatar_init_does_not_reinsert_freeflight_over_surface_camera() {
         let mut app = App::new();
+        app.init_resource::<InputBindingsSettings>();
         app.add_systems(Update, avatar_init_system);
 
         let avatar = app
@@ -6261,10 +6137,21 @@ mod tests {
                 Avatar,
                 LocalAvatar,
                 Transform::default(),
+                Projection::Perspective(PerspectiveProjection::default()),
                 SurfaceCamera {
                     heading: 0.0,
                     pitch: -0.2,
                 },
+            ))
+            .id();
+
+        let camera_less_avatar = app
+            .world_mut()
+            .spawn((
+                Avatar,
+                LocalAvatar,
+                Transform::default(),
+                Projection::Perspective(PerspectiveProjection::default()),
             ))
             .id();
 
@@ -6274,6 +6161,24 @@ mod tests {
         assert!(
             app.world().get::<FreeFlightCamera>(avatar).is_none(),
             "camera initialization must not create two mutually-exclusive modes"
+        );
+        assert!(
+            app.world()
+                .get::<FreeFlightCamera>(camera_less_avatar)
+                .is_none(),
+            "camera behavior requires an authored SceneCamera intent"
+        );
+        assert!(
+            app.world()
+                .get::<lunco_render::SceneCamera>(camera_less_avatar)
+                .is_none(),
+            "avatar initialization must not fabricate missing camera intent"
+        );
+        assert!(
+            app.world()
+                .get::<AdaptiveNearPlane>(camera_less_avatar)
+                .is_none(),
+            "camera precision policy requires authored SceneCamera intent"
         );
     }
 
@@ -6484,18 +6389,11 @@ mod tests {
 
     /// **A retired avatar camera must leave the viewport candidate pool.**
     ///
-    /// Regression for the "two cameras / the view jumps between them" report. The
-    /// An explicit host-created avatar camera can be spawned in code
-    /// (`spawn_avatar_camera`), not from a prim, so a scene load's despawn sweep
-    /// never removes it. When the
-    /// incoming scene authors its own `lunco:avatar` camera, `LocalAvatar` moves
-    /// (singular by construction) and this observer demotes the old one — but it used
-    /// to leave `SceneCamera` on, and `SceneCamera` is exactly what every
-    /// camera-selection query filters on. The stale camera stayed eligible, kept a
-    /// lower entity index than anything the new scene spawns, and used to be picked by
-    /// implicit selection the moment the binding went briefly invalid — which happens
-    /// on every load, since the new camera's
-    /// `Projection` arrives with a deferred `Camera3d`.
+    /// A host-created camera can outlive a scene load because it is not owned by a
+    /// USD prim. When an incoming scene claims `LocalAvatar`, this observer makes
+    /// the previous camera inactive synchronously and removes its `SceneCamera`
+    /// intent marker. Camera selection therefore cannot render two viewport
+    /// candidates while the replacement's render components are attached.
     ///
     /// `Camera` must SURVIVE: stripping it from a live extracted window camera
     /// crashes the render app on the shadow cascade unwrap.
@@ -6520,6 +6418,10 @@ mod tests {
         assert!(
             app.world().get::<lunco_render::SceneCamera>(old).is_some(),
             "precondition: the explicit host camera starts as a viewport candidate"
+        );
+        assert!(
+            app.world().get::<Camera>(old).unwrap().is_active,
+            "precondition: the old camera starts active"
         );
 
         // The scene's own avatar camera arrives and claims the role. `lunco_core`'s
@@ -6549,6 +6451,10 @@ mod tests {
             app.world().get::<lunco_render::SceneCamera>(old).is_none(),
             "the retired camera must leave the viewport pool, or implicit selection \
              can put it back on screen — the two-camera bug"
+        );
+        assert!(
+            !app.world().get::<Camera>(old).unwrap().is_active,
+            "the retired camera must be inactive before its SceneCamera marker is removed"
         );
         assert!(
             app.world().get::<lunco_render::SceneCamera>(new).is_some(),

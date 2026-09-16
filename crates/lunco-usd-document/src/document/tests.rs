@@ -2405,7 +2405,7 @@ fn set_attribute_authors_variability_and_custom_from_the_schema() {
     // Core USD, declared `uniform` by UsdShadeShader.
     set(&mut host, "info:id", "token", "\"UsdPreviewSurface\"");
     // Ours, declared `uniform` by luncoSchema.
-    set(&mut host, "lunco:cameraMode", "token", "\"orbit\"");
+    set(&mut host, "lunco:cameraPose", "token", "\"mounted\"");
     // Ours, declared `varying` by luncoSchema.
     set(&mut host, "lunco:env:exposureEv100", "float", "12.5");
     // Ours, declared by NO schema — a per-model Modelica param, genuinely custom.
@@ -2417,8 +2417,8 @@ fn set_attribute_authors_variability_and_custom_from_the_schema() {
         "info:id is uniform per UsdShadeShader: {src}"
     );
     assert!(
-        src.contains("uniform token lunco:cameraMode"),
-        "lunco:cameraMode is uniform per luncoSchema: {src}"
+        src.contains("uniform token lunco:cameraPose"),
+        "lunco:cameraPose is uniform per luncoSchema: {src}"
     );
     assert!(
         src.contains("float lunco:env:exposureEv100") && !src.contains("uniform float lunco:env"),

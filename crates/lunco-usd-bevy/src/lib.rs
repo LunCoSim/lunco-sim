@@ -55,7 +55,7 @@ use lunco_usd_bevy_core::animation::{prim_is_animated, ANIMATED_SHADER_INPUTS};
 use lunco_usd_bevy_core::point_instancer::read_point_instancer;
 use lunco_usd_bevy_core::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
-    read_primvar_vec3_strict, read_vec3_f64,
+    read_primvar_vec3_strict,
 };
 use lunco_usd_bevy_core::source::{UsdSourceText, UsdSourceTextLoader};
 use lunco_usd_bevy_core::{
@@ -1223,28 +1223,13 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 );
             }
         }
-        // UsdGeomCamera aim by target point: when a `def Camera` authors
-        // `lunco:cameraLookAt` (double3, in the camera's PARENT-local space),
-        // orient it to look from its `xformOp:translate` toward that point.
-        // The ergonomic way to point a scene/cutscene camera at an object —
-        // move either the camera or the object and the aim stays correct.
-        // Overrides any authored rotation and produces a standard rotation
-        // (same convenience the avatar camera has, but pure `Transform`).
-        // Parent-local on both sides, so a camera nested under a rover aims in
-        // rover-local space and the aim rides the rover.
-        if prim_type.as_deref() == Some("Camera") {
-            if let Some([tx, ty, tz]) = read_vec3_f64(reader, &sdf_path, "lunco:cameraLookAt") {
-                // A point in the camera's PARENT-local (stage-frame) space →
-                // canonical, exactly like every other authored point.
-                let target = convention.point(Vec3::new(tx as f32, ty as f32, tz as f32));
-                let eye = transform.translation;
-                if (target - eye).length_squared() > 1e-6 {
-                    transform.rotation = Transform::from_translation(eye)
-                        .looking_at(target, Vec3::Y)
-                        .rotation;
-                }
-            }
-        }
+        lunco_usd_bevy_camera::camera::apply_camera_look_at(
+            reader,
+            &sdf_path,
+            prim_type.as_deref(),
+            &convention,
+            &mut transform,
+        );
         // Honour `token visibility = "invisible"` and the
         // `lunco:placeholder = true` author flag — both apply as
         // `Visibility::Hidden`.

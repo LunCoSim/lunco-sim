@@ -9,7 +9,7 @@ license.workspace = true
 # `RenderLayers`, `bevy_light` the lights, `bevy_mesh` `Mesh3d` — none of them pulls
 # `bevy_render`. There is no `bevy_pbr` / `bevy_core_pipeline` here and there must
 # not be: the camera *pipeline* (`Camera3d`, tonemapping, MSAA, bloom) is attached by
-# `lunco-render-bevy` from the `lunco_render::SceneCamera` intent this crate spawns.
+# `lunco-render-bevy` from the `lunco_render::SceneCamera` intent projected from USD.
 #
 # Render-bound screenshots and offline recording live in `lunco-capture`; keeping them out
 # preserves this crate's render-free camera/interaction dependency boundary.

@@ -18,8 +18,8 @@ def Xform "TerrainOnly" (
 
     # --- Avatar (Camera) --- freeflight, parked high so a spawned DEM (site
     #     elevation ~2 km) is in front of it before SetCameraLookAt reframes.
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -28,7 +28,6 @@ def Xform "TerrainOnly" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 1945.0, 0.0)
         double3 xformOp:translate = (300.0, 2600.0, 500.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]

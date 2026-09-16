@@ -181,7 +181,8 @@ work, in order:
 
 #### Current investigation result
 
-The Apollo scene authors `lunco:cameraMode = "freeflight"`. Its camera owner
+The Apollo scene authors a standard avatar camera; its authored Rhai policy
+selects free-flight behavior. Its camera owner
 was rebuilding and assigning the same rotation every interaction tick; the
 spring-arm and surface camera writers had the same equal-write behavior, and
 the spring-arm also assigned unchanged cell/local translation. Those writes

@@ -8,7 +8,6 @@
 //! consumers name these modules from this package rather than relying on a
 //! facade in `lunco-usd-bevy`.
 
-pub mod avatar;
 pub mod camera;
 pub mod camera_mount;
 pub mod camera_path;

@@ -36,8 +36,8 @@ def Xform "RoboticHandControls" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
         def "Controls" (
@@ -46,7 +46,6 @@ def Xform "RoboticHandControls" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 1.5, 0.0)
         double3 xformOp:translate = (0.0, 7.0, 12.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -56,7 +55,7 @@ def Xform "RoboticHandControls" (
         prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
-        custom double3 lunco:cameraLookAt = (0.0, 1.5, 0.0)
+        double3 lunco:cameraLookAt = (0.0, 1.5, 0.0)
         double3 xformOp:translate = (0.0, 7.0, 12.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float focalLength = 35.0

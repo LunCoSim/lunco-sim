@@ -260,10 +260,10 @@ def Xform "SandboxScene" (
     }
 
     # --- Avatar (Camera) ---
-    # Position, camera mode, and orientation defined in USD.
-    # lunco:cameraMode = "freeflight" | "orbit" | "springarm"
+    # Position and standard camera orientation are defined in USD. Camera
+    # behavior is selected by the authored Rhai policy.
     def Camera "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
         prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
@@ -277,7 +277,6 @@ def Xform "SandboxScene" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
         double3 xformOp:translate = (-30.0, 15.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
@@ -304,7 +303,7 @@ def Xform "SandboxScene" (
         prepend apiSchemas = ["LunCoCameraAPI"]
     )
     {
-        custom double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
+        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
         double3 xformOp:translate = (-45.0, 25.0, -35.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float focalLength = 24.0
@@ -365,7 +364,7 @@ def Xform "SandboxScene" (
         )
         {
             uniform token lunco:cameraPose = "mounted"
-            custom double3 lunco:cameraLookAt = (0.0, 0.4, -12.0)
+            double3 lunco:cameraLookAt = (0.0, 0.4, -12.0)
             double3 xformOp:translate = (0.0, 0.9, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             float focalLength = 28.0
@@ -497,7 +496,7 @@ def Xform "SandboxScene" (
         )
         {
             uniform token lunco:cameraPose = "mounted"
-            custom double3 lunco:cameraLookAt = (0.0, 0.4, -12.0)
+            double3 lunco:cameraLookAt = (0.0, 0.4, -12.0)
             double3 xformOp:translate = (0.0, 0.9, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             float focalLength = 28.0

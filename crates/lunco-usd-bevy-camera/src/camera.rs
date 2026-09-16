@@ -35,10 +35,11 @@
 
 use bevy::prelude::*;
 use lunco_camera_core::CameraPoseMode;
+use lunco_usd_bevy_core::read::read_vec3_f64;
 use openusd::schemas::geom::{self, tokens};
 use openusd::sdf::{Path as SdfPath, Value};
 
-use lunco_usd_data::units::StageMetrics;
+use lunco_usd_data::units::{ConventionTransform, StageMetrics};
 
 /// `UsdGeomCamera` spec defaults (Pixar), so an unauthored attribute matches a
 /// standard ~50 mm full-frame camera rather than Bevy's 45° default FOV.
@@ -57,9 +58,9 @@ pub struct UsdSensorCamera;
 
 /// Convert standard `UsdGeomCamera` photographic exposure into Bevy EV100.
 ///
-/// This is deliberately shared by imported cameras and `LunCoAvatarAPI`
-/// cameras: a camera's ISO, shutter time and f-stop have one USD spelling and
-/// therefore one conversion. `exposure` is a post-photographic compensation in
+/// This is deliberately shared by every imported viewport camera: a camera's
+/// ISO, shutter time and f-stop have one USD spelling and therefore one
+/// conversion. `exposure` is a post-photographic compensation in
 /// USD, so positive compensation opens the effective exposure (lowers EV).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CameraExposureError {
@@ -152,6 +153,12 @@ pub fn instantiate_camera_prim(
         // perspective or 45° fallback would hide a broken scene contract.
         return true;
     };
+    // `cameraLookAt` is optional, but an authored value must be a finite USD
+    // vec3. Do not create a partially projected camera that quietly keeps an
+    // unrelated authored rotation when the aim contract is malformed.
+    if read_camera_look_at(reader, sdf_path).is_err() {
+        return true;
+    }
     let kind = match &projection {
         Projection::Orthographic(_) => "orthographic",
         _ => "perspective",
@@ -182,8 +189,32 @@ pub fn instantiate_camera_prim(
         false
     };
     let has_camera_api = reader.has_api_schema(sdf_path, "LunCoCameraAPI");
+    if is_avatar && !has_camera_api {
+        error!(
+            "[usd-bevy] {} has LunCoAvatarAPI without LunCoCameraAPI; refusing incomplete avatar camera contract",
+            sdf_path.as_str()
+        );
+        return true;
+    }
     let (is_viewport, is_sensor, pose) = if is_avatar {
-        (true, false, CameraPoseMode::Interactive)
+        match read_camera_token(
+            reader,
+            sdf_path,
+            "lunco:cameraRole",
+            "viewport",
+            &["viewport", "sensor"],
+        ) {
+            Some(value) if value == "viewport" => (true, false, CameraPoseMode::Interactive),
+            Some(value) if value == "sensor" => {
+                error!(
+                    "[usd-bevy] {} is marked lunco:avatar but has cameraRole=sensor; refusing contradictory camera roles",
+                    sdf_path.as_str()
+                );
+                return true;
+            }
+            None => return true,
+            Some(_) => unreachable!("camera token helper validates its allowed values"),
+        }
     } else if !has_camera_api {
         warn!(
             "[usd-bevy] {} Camera has no LunCoCameraAPI; it is not a viewport or sensor camera",
@@ -297,6 +328,67 @@ pub fn instantiate_camera_prim(
     };
     info!("[usd-bevy] {} Camera → {role} ({kind})", sdf_path.as_str());
     true
+}
+
+/// Apply the optional generic camera aim to a projected standard camera.
+///
+/// `lunco:cameraLookAt` is owned by `LunCoCameraAPI` and is expressed in the
+/// camera parent's USD frame. The visual projector supplies the already
+/// validated stage convention and retains ownership of the complete Bevy
+/// transform; this adapter only supplies the camera-specific orientation.
+pub fn apply_camera_look_at(
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    sdf_path: &SdfPath,
+    prim_type: Option<&str>,
+    convention: &ConventionTransform,
+    transform: &mut Transform,
+) {
+    if prim_type != Some(tokens::T_CAMERA) {
+        return;
+    }
+    let look_at = match read_camera_look_at(reader, sdf_path) {
+        Ok(look_at) => look_at,
+        Err(()) => {
+            error!(
+                "[usd-bevy] {} has an authored cameraLookAt with an invalid vec3 value",
+                sdf_path.as_str()
+            );
+            return;
+        }
+    };
+    let Some([tx, ty, tz]) = look_at else {
+        return;
+    };
+
+    // Both the eye and target are parent-local. Convert the target through the
+    // same USD stage convention as the rest of the camera transform.
+    let target = convention.point(Vec3::new(tx as f32, ty as f32, tz as f32));
+    if (target - transform.translation).length_squared() > 1e-6 {
+        transform.rotation = Transform::from_translation(transform.translation)
+            .looking_at(target, Vec3::Y)
+            .rotation;
+    }
+}
+
+/// Read the optional camera aim while preserving the distinction between an
+/// omitted USD opinion and malformed authored data.
+fn read_camera_look_at(
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    path: &SdfPath,
+) -> Result<Option<[f64; 3]>, ()> {
+    let value = read_vec3_f64(reader, path, "lunco:cameraLookAt");
+    if let Some(value) = value {
+        return value
+            .iter()
+            .all(|component| component.is_finite())
+            .then_some(Some(value))
+            .ok_or(());
+    }
+    if reader.has_authored_attribute(path, "lunco:cameraLookAt") {
+        Err(())
+    } else {
+        Ok(None)
+    }
 }
 
 /// Build a Bevy `Projection` from a `UsdGeomCamera`'s film-back + clip attrs.
@@ -675,6 +767,18 @@ mod tests {
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert!(read_projection(&stage.view(), &path).is_none());
+    }
+
+    #[test]
+    fn invalid_authored_camera_look_at_is_not_treated_as_omitted() {
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\ndef Camera \"Camera\"\n{\n    string lunco:cameraLookAt = \"not-a-vec3\"\n}\n",
+        );
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
+        let path = SdfPath::new("/Camera").unwrap();
+        assert!(read_camera_look_at(&stage.view(), &path).is_err());
     }
 
     #[test]

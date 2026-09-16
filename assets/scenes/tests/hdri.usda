@@ -82,7 +82,7 @@ def Xform "HdriTest" (
     }
 
     def Camera "Avatar" (
-        prepend apiSchemas = ["LunCoAvatarAPI"]
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
         prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
     {
@@ -92,7 +92,6 @@ def Xform "HdriTest" (
         {
         }
         uniform bool lunco:avatar = true
-        uniform token lunco:cameraMode = "freeflight"
         double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
         double3 xformOp:translate = (0.0, 2.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]

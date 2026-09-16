@@ -147,10 +147,11 @@ and USD standards rather than inventing bespoke types, and follows a strict
   `lunco:cameraRole = "viewport"`, plus the local avatar camera. Instrument
   cameras use `lunco:cameraRole = "sensor"` and are never main-window
   candidates. RTT (`Image`-target) cameras and the egui `Camera2d` are excluded.
-- An avatar may be an `Xform` carrying `LunCoAvatarAPI`. The USD simulation
-  projector publishes its authored camera/movement contract; the avatar owner
-  realizes it on the next update. This keeps the simulation projector free of
-  camera modes, input maps, and raw device dependencies.
+- The local avatar is a standard `def Camera` carrying `LunCoCameraAPI` and
+  `LunCoAvatarAPI`. `LunCoAvatarAPI` marks only the avatar role; USD simulation
+  publishes that role and its spatial identity, while the avatar owner adds the
+  generic interactive substrate. Rhai selects camera behavior and parameters
+  through typed commands and reflected components.
 
 ### 6.2 The Viewport is the single source of truth
 
@@ -168,11 +169,16 @@ after re-projection; the ECS entity is only the current realization. A command
 or camera track changes the selection intent, while exactly **one** system writes
 `SceneViewport::active_camera`, window-camera `is_active`, and `viewport`:
 `lunco-usd-bevy-camera`'s **`reconcile_scene_viewport`**. It actuates the viewport
-(`is_active = bound-camera && visible`) and relocates the big_space
-the persistent `OriginAnchor` to the active camera's f64 `WorldGrid` cell. A
+(`is_active = bound-camera && visible`) and relocates the persistent
+`OriginAnchor` to the active camera's f64 `WorldGrid` cell. A
 missing, stale, or projectionless explicit request produces no active camera
 and a visible status diagnostic; it never selects the first authored camera as
 a repair or silently substitutes a different authored camera.
+
+The same rule applies during scene handoff: a local avatar receives interactive
+behavior only after a standard USD camera has been projected with its
+`SceneCamera` intent. Missing camera intent is an explicit no-camera state, not
+an invitation for the avatar runtime to create or guess a camera.
 
 ### 6.3 Switching
 
@@ -245,9 +251,9 @@ The camera architecture is intended to let Rhai compose many camera styles
 without growing a Rust state machine for each one:
 
 1. **USD owns identity and authored facts.** A standard `UsdGeomCamera` owns
-   projection, photographic values, transform, and role. An avatar's
-   `LunCoAvatarAPI` owns its explicit initial rig parameters where standard USD
-   has no vocabulary.
+   projection, photographic values, and transform. `LunCoCameraAPI` owns the
+   LunCo-specific camera role, pose authority, and optional look-at; the
+   `LunCoAvatarAPI` only marks the local avatar role.
 2. **Rhai owns policy.** Scripts choose cameras, follow/focus targets, start or
    scrub camera paths, and decide when a camera transaction begins or ends.
    Those actions use typed commands and authored scene queries, not raw input

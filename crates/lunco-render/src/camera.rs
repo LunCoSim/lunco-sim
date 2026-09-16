@@ -190,16 +190,7 @@ impl SceneCamera {
 ///
 /// Exposure is a Graphics setting when USD does not author a camera opinion. A
 /// camera that picks an unrelated renderer default is wrong by a measurable
-/// number of stops; the profile keeps the scene-camera and avatar paths aligned.
-///
-/// It exists because there were two spawn paths and only one of them was
-/// calibrated: the USD camera projection paired `agx()` with the calibrated
-/// exposure, while `lunco-avatar`'s "Avatar Camera" spawned `SceneCamera::default()`
-/// and NO `Exposure` at all — so it rendered at Bevy's default EV 9.7 against a
-/// ~131 klx sun, about five stops open, and every surface blew out to white. It
-/// could not be repaired downstream either: the UI environment bridge writes exposure
-/// only to cameras that already carry the component, so the avatar camera was
-/// unreachable by the very system meant to keep exposure consistent.
+/// number of stops; the profile supplies the shared unauthored-camera policy.
 ///
 /// Build the canonical camera look from the authoritative Graphics settings.
 ///
