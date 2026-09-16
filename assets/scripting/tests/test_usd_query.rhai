@@ -65,6 +65,15 @@ f.push(t_true(type_of(p) != "()", "usd_prim(PROBE) returns a record"));
 f.push(t_eq(p.path, PROBE, "returned path echoes the query"));
 f.push(t_true(p.type_name != "", "PROBE has a non-empty type_name"));
 
+// The batch provider must preserve the same record contract while resolving
+// the path from one native stage read. This is authored Rhai coverage of the
+// public mechanism, not a Rust-only fixture.
+let batch = usd_prims([PROBE]);
+f.push(t_true(type_of(batch.records) != "()", "QueryUsdPrims returns records"));
+f.push(t_eq(batch.count, 1, "QueryUsdPrims reports the requested count"));
+f.push(t_eq(batch.records[0].path, PROBE, "batch record echoes the query path"));
+f.push(t_eq(batch.records[0].type_name, p.type_name, "batch record matches QueryUsdPrim"));
+
 // The frame contract: world_position is meaningless unless it says which frame
 // it is in, and `MoveEntity` consumes that same frame. A provider that dropped
 // the tag would leave callers guessing between active-frame and parent-local.

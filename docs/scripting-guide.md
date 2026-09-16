@@ -858,6 +858,23 @@ let selected = query("QueryUsdPrim", #{
 });
 ```
 
+When a check needs several existing prims, use `QueryUsdPrims` so the runtime
+validates the document/projection once and reads one composed-stage snapshot:
+
+```rhai
+let records = query("QueryUsdPrims", #{
+    doc_id: doc,
+    paths: ["/Assembly/FrameA", "/Assembly/FrameB"],
+    attrs: ["xformOp:translate"],
+});
+```
+
+The provider is strict: an invalid or missing path fails the whole request;
+`records` remains in the requested deterministic path order. Use
+`QueryUsdPrim` when a rule intentionally probes one path that may be absent and
+needs its individual error. Do not recreate a Rhai cache around these reads;
+the native provider owns the snapshot boundary and generation check.
+
 For numeric authoring evidence, use the built-in `authoring_measurements`
 Rhai library. It evaluates explicit requirements over the same composed USD
 query and never guesses geometry or selects a document implicitly:

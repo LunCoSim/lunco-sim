@@ -50,11 +50,15 @@ fn distance_requirement(doc, spec) {
     if scale == () {
         return unavailable(subject, "distance", "unsupported units: " + units, "Rhai");
     }
-    let a = query("QueryUsdPrim", #{ doc_id: doc, path: from });
-    let b = query("QueryUsdPrim", #{ doc_id: doc, path: to });
-    if !query_ok(a) || !query_ok(b) {
-        return unavailable(subject, "distance", "one or both USD subjects are unavailable", "QueryUsdPrim");
+    // Read both endpoints from one composed-stage snapshot. This avoids
+    // reopening the stage and rechecking the document generation for every
+    // endpoint when a component has many dimensional rules.
+    let records = query("QueryUsdPrims", #{ doc_id: doc, paths: [from, to] });
+    if !query_ok(records) || records.records == () || records.records.len() != 2 {
+        return unavailable(subject, "distance", "one or both USD subjects are unavailable", "QueryUsdPrims");
     }
+    let a = records.records[0];
+    let b = records.records[1];
     let meters = distance3(a.world_position, b.world_position);
     let actual = if meters != () { meters / scale } else { () };
     let expected = if spec.expected != () { spec.expected } else { () };
@@ -72,7 +76,7 @@ fn distance_requirement(doc, spec) {
         actual: actual,
         expected: expected,
         tolerance: tolerance,
-        method: "QueryUsdPrim.world_position",
+        method: "QueryUsdPrims.world_position",
         source: "USD",
     }
 }
