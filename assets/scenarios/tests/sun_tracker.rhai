@@ -30,7 +30,7 @@ const STEP_YAW = 1.0;      // radians the sun is moved to (~57 deg)
 const TOL_RAD = 0.15;      // servo convergence band (~8.6 deg)
 const PORT_WAIT_S = 20.0;  // budget for the Modelica model to compile and publish
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     // WAIT FOR THE PORTS, do not assume a settle time. `SunTracker.mo` compiles
     // asynchronously and publishes nothing until it does — on the first run of
@@ -56,7 +56,7 @@ fn on_start(me) {
     print("[sun] controller gid=" + this.ctrl + " hinge gid=" + this.hinge);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.ctrl == () || this.ctrl < 0 || this.hinge == () || this.hinge < 0 ||

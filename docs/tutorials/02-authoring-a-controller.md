@@ -51,7 +51,7 @@ the #1 gotcha.)
 Create `assets/scenarios/hover_super.rhai`. **No control loop** — just react to events:
 
 ```rhai
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "hover_low_fuel" { notify_kind("Hover: low fuel", "warn"); }
 }
 ```

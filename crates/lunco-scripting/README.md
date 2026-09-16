@@ -24,15 +24,16 @@ by the spatial, time, and USD bridge adapters (see the package layout below).
 
 A scenario is a program attached to an entity via a `ScriptedModel` component +
 a `ScriptDocument` (managed like a `lunco-doc` document: versioned, hot-reloadable).
-Production mission progression is returned from `task(me)` and advanced by the
-native behavior kernel. Event and lifecycle hooks remain available for setup,
-telemetry, and teardown:
+Production mission progression is returned from `task(me, ctx)` and advanced by
+the native behavior kernel. `ctx` is the immutable, instance-specific launch
+parameter map. Event and lifecycle hooks remain available for setup, telemetry,
+and teardown:
 
 ```rhai
-fn task(me)          { seq([wait_until(|m| arrived(m, GOAL, 2.0))]); }
-fn on_start(me)      { /* setup */ }                         // once, after (re)compile
-fn on_event(me, evt) { /* a TelemetryEvent arrived */ }
-fn on_stop(me)       { brake(me); }                          // teardown
+fn task(me, ctx)          { seq([wait_until(|m| arrived(m, GOAL, 2.0))]); }
+fn on_start(me, ctx)      { /* setup */ }                         // once, after (re)compile
+fn on_event(me, evt, ctx) { /* a TelemetryEvent arrived */ }
+fn on_stop(me, ctx)       { brake(me); }                          // teardown
 ```
 
 New mission scripts must use the task tree and events. `on_tick` is reserved for
@@ -44,11 +45,11 @@ or dwell timing in user policy.
 Every task node has an explicit `kind` discriminator; missing/unknown kinds and
 fields from another node kind are rejected. See the [task-tree schema](../../docs/architecture/rhai-task-tree.md).
 
-Task action and predicate fields are anonymous closures with one positional
-argument, `|me| ...`, where `me` is the host entity id. The native task driver
-binds the persistent scenario-state map as `this` and owns cursor, dwell, and
-event progression. Named `Fn("...")` pointers are not task leaves; named
-helpers may be called explicitly from an anonymous closure.
+Task action and predicate fields accept an anonymous closure with one
+positional argument, `|me| ...`, or a named script function pointer
+`Fn("name")` declared as `fn name(me)`. Both forms access persistent task state
+through the driver-bound `this`; the native task driver owns cursor, dwell, and
+event progression.
 
 The host exposes a minimal generic bridge — `cmd` / `query` / `get` / `set` /
 `get_setting` / `set_setting` / `world_pos` / `world_forward` / `find` / `name` /
@@ -77,6 +78,30 @@ needed; display labels are not topology addresses.
 
 Scenarios are **host-authoritative**: they run on the host and in single-player,
 never on a networked client (which receives behaviour via replication).
+
+## Scenario parameters
+
+`RunScenario` and `RunScenarioAsset` accept one natural typed object for an
+instance's launch context. The source document remains reusable; parameters are
+stored on the attached `ScriptedModel` and passed explicitly as `ctx` to every
+lifecycle, task, and mission hook. Omitting the field means `{}`. Defaults for
+individual keys are authored in Rhai, at the point where the policy uses them.
+
+```json
+{"target": 4869542932533563, "source": "fn on_start(me, ctx) {}", "params": {"speed": 1.5}}
+```
+
+```rhai
+fn task(me, ctx) {
+    let speed = if ctx.speed == () { 0.6 } else { ctx.speed };
+    forever(once(|m| drive(m, speed, 0.0)))
+}
+```
+
+The command boundary rejects a scalar, array, `null`, non-finite number, or
+value outside the shared telemetry range. Rust performs that wire validation
+and one typed conversion; it does not choose domain defaults or inject a global
+`params` variable.
 
 ## Key commands & queries
 

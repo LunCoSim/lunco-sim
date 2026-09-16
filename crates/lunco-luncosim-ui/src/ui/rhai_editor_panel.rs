@@ -47,8 +47,6 @@ pub(crate) struct RhaiEditorVm {
     doc_id: Option<u64>,
     /// Editable source buffer.
     buffer: String,
-    /// Scenario params (JSON string) carried through `RunScenario` on save.
-    params: String,
     /// `(doc_id, generation)` the buffer was last synced from — a mismatch (and
     /// no unsaved edits) triggers a reload.
     loaded_key: Option<(u64, u64)>,
@@ -75,7 +73,6 @@ pub(crate) fn produce_rhai_editor_vm(
         vm.entity = entity;
         vm.doc_id = None;
         vm.buffer.clear();
-        vm.params.clear();
         vm.loaded_key = None;
         vm.dirty = false;
         vm.diagnostics.clear();
@@ -100,7 +97,6 @@ pub(crate) fn produce_rhai_editor_vm(
             // edits — otherwise a background generation bump would wipe typing.
             if vm.loaded_key != Some(key) && !vm.dirty {
                 vm.buffer = doc.source.clone();
-                vm.params = doc.params.clone();
                 vm.loaded_key = Some(key);
             }
         }
@@ -259,14 +255,13 @@ impl Panel for RhaiEditorPanel {
             if do_save {
                 let entity = vm.entity.expect("checked above");
                 let source = vm.buffer.clone();
-                let params = vm.params.clone();
                 // The producer resyncs to the new generation once RunScenario
                 // bumps it; clearing dirty lets that reload land.
                 vm.dirty = false;
                 ctx.trigger(RunScenario {
                     target: entity,
                     source,
-                    params,
+                    params: Default::default(),
                     reload_policy: ScenarioReloadPolicy::Retain,
                 });
                 ctx.trigger(SaveScenario { target: entity });

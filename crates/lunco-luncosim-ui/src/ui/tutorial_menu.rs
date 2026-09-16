@@ -191,7 +191,7 @@ fn register_tutorial_menu(world: &mut World) {
                                         ctx.trigger(RunScenarioAsset {
                                             target: Entity::PLACEHOLDER,
                                             source_asset: entry.source_asset.clone(),
-                                            params: String::new(),
+                                            params: Default::default(),
                                             scene_asset: entry.scene_asset.clone(),
                                             reload_policy: ScenarioReloadPolicy::Restart,
                                         });

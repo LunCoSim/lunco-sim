@@ -113,7 +113,7 @@ fn rover_specs() {
     ]
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
     this.specs = rover_specs();
@@ -140,7 +140,7 @@ fn on_start(me) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
     for i in 0..this.specs.len() {

@@ -22,7 +22,7 @@ fn verdict(pass, reason) {
     }
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
     this.rover = find("/SandboxRampPlacement/Skid_Raycast_1");
@@ -39,7 +39,7 @@ fn on_start(me) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
 

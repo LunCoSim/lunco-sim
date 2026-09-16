@@ -1,7 +1,7 @@
 // Production/headless acceptance test for the separate rover Wi-Fi graph.
 // Direct Links must remain policy-down for rover↔rover while WifiLinks connects.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.spawn_a = false;
     this.spawn_b = false;
@@ -31,7 +31,7 @@ fn catalog_ids_are_unique(catalog) {
     true
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

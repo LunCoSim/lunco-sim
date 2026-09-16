@@ -8,11 +8,11 @@ fn missing(record) {
     record == () || record.ok == false
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
 
     let camera = query("QueryUsdPrim", #{ path: ROOT + "/VisualCamera" });
@@ -71,7 +71,7 @@ fn on_tick(me) {
     ], "AUTHORED RUNTIME CONTRACTS NEGATIVE", "AUTHORED_RUNTIME_CONTRACTS_NEGATIVE");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         report_verdict(["negative authored contract fixture stopped before its rejection observations"],

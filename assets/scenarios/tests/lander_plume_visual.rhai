@@ -3,7 +3,7 @@
 // while USD owns the plume geometry, material bindings, and camera.
 const TEST_KIND = "graphics";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.lander = find("/LanderPlumeVisual/Lander");
     this.main = find("/LanderPlumeVisual/Lander/MainPropulsion");
     this.photometry = find("/LanderPlumeVisual/Lander/FlameCore/Photometry");
@@ -41,7 +41,7 @@ fn on_start(me) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 1.0 { return; }

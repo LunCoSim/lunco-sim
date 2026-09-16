@@ -19,7 +19,7 @@ fn count_visuals() {
     state.count
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
     this.started = false;
     this.camera = -1;
@@ -27,7 +27,7 @@ fn on_start(me) {
     this.compound = -1;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
 
     if this.camera < 0 { this.camera = find("/DiagnosticVisualsTest/VisualCamera"); }

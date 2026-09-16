@@ -18,7 +18,7 @@ and the runtime ticks that tree against its generic context.
 ## Authored shape
 
 ```rhai
-fn task(me) {
+fn task(me, ctx) {
     reactive_sel([
         seq([
             once(|m| nav_to(m, [10.0, 0.0, -20.0], 0.6, 2.0)),
@@ -38,8 +38,9 @@ The prelude constructors are the only script-facing schema:
 - Decorators: `repeat`, `forever`, `retry`, `invert`, `force_ok`, and
   `force_fail`.
 
-Leaves use anonymous closures. The runtime keeps the cursor and dwell state;
-Rhai keeps only authored policy and durable `this` state needed by hooks. A
+Leaves use anonymous closures or named callbacks (`Fn("name")` with a
+`fn name(me)` definition). The runtime keeps the cursor and dwell state; Rhai
+keeps only authored policy and durable `this` state needed by hooks. A
 task action may emit a typed tool event, while the generic tool registry and
 Bevy adapter own execution of registered executable tools.
 

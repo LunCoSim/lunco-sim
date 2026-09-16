@@ -12,7 +12,7 @@ fn issue_hand_command(state, open_value, grasp_value) {
     result.ok
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "await_ports";
     this.phase_start = 0.0;
@@ -68,7 +68,7 @@ fn bounded_pose(id, label) {
     t_bounded(world_pos(id), 100.0, label)
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
     let handles = resolve_handles();
@@ -199,7 +199,7 @@ fn on_tick(me) {
     report_verdict(failures, "ROBOTIC HAND", "ROBOTIC_HAND_CONTROLS");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if this.controller >= 0 {
         cmd("SetPorts", #{
             target: this.controller,

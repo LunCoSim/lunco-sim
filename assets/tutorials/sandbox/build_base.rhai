@@ -72,7 +72,7 @@ fn pad_placed(me) {
     notify_kind("Base components assembled — now review the layout as a design exercise.", "success");
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // The optional world is selected by the catalog and mounted by the generic
     // launcher before this runs.
     notify_kind("Tutorial: Build a Lunar Base", "info");
@@ -81,7 +81,7 @@ fn on_start(me) {
     spotlight("panel.spawn_palette", "Open Spawn, then choose a part from Structures.");
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     [
         // 1 — POWER FIRST. Nothing else runs without it. Either source counts:
         // the solar tower for daylight watts, or the fission plant (FSPS) for
@@ -120,7 +120,7 @@ fn mission(me) {
     ]
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
         clear_spotlight();
@@ -139,7 +139,7 @@ fn spawn_part(id, x, y, z) {
     notify_kind(`[debug] placed ${id}`, "info");
 }
 
-fn task(me) {
+fn task(me, ctx) {
     if !is_unattended() { return; }
     seq([
         // Illustrative layout only: the lesson checks catalog identity, not siting.

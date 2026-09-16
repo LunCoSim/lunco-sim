@@ -52,7 +52,7 @@ fn ys(ids) {
 
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // Pin this diagnostic fixture to Avian's documented production contract.
     // This is test policy, so it can be changed and rerun without rebuilding
     // the Rust host.
@@ -241,7 +241,7 @@ fn pad_tilts(pads, surface_up) {
     out
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     // A missing prim is the classic silent no-op: `find` yields -1 and every read

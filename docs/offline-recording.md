@@ -262,11 +262,11 @@ under `frozen: true`** — with `frozen: false` there is no explicit step to ord
 ## 8. The sequencer — `lib/shots.rhai`
 
 An episode is a `seq` of shots on the native task-tree kernel
-(`lunco-scripting/src/task_tree.rs`), which every scenario gets for free via `fn task(me)`.
-**There is no `on_tick`** — the kernel advances the tree. `fn on_start(me)` still runs once.
+(`lunco-scripting/src/task_tree.rs`), which every scenario gets for free via `fn task(me, ctx)`.
+**There is no `on_tick`** — the kernel advances the tree. `fn on_start(me, ctx)` still runs once.
 
 ```rhai
-fn task(me) {
+fn task(me, ctx) {
     import "/scripting/lib/shots" as shots;
     let out = "<episode>/shots";
 
@@ -311,12 +311,11 @@ ordering.
 
 ### Task callback contract
 
-Shot callbacks are anonymous task closures with one positional host id:
-`|me| ...`. The task driver binds the persistent scenario state map as `this`,
-and the closure may call prelude verbs or named helpers explicitly. Named
-`Fn("...")` pointers are not accepted as task leaves; this keeps the callback
-contract identical for every native task invocation and makes invalid task data
-fail at compile time.
+Shot callbacks use the shared task contract: an anonymous closure with one
+positional host id (`|me| ...`) or a named script callback (`Fn("name")`,
+declared as `fn name(me)`). The driver supplies the persistent state map as the
+bound `this` pointer for both forms, and the callback may call prelude verbs or
+named helpers.
 
 Imports used by a callback must be resolved through the normal scenario
 execution context. Keep shot-library calls on the maintained prelude/library

@@ -10,7 +10,7 @@ const SITE_B = [12.0, 0.0, 25.0];
 const SPEED  = 1.0;
 const RADIUS = 2.0;
 
-fn task(me) {
+fn task(me, ctx) {
     seq([
         // 1. Drive to site A, then advance once within RADIUS.
         step(|m| nav_to(m, SITE_A, SPEED, RADIUS), |m| arrived(m, SITE_A, RADIUS)),

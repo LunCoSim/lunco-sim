@@ -9,7 +9,7 @@
 //! when needed but is not a completion condition. Tilt is read with `is_tipped` /
 //! `tilt_deg` (prelude, off `world_rotation`).
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // The optional world is selected by the catalog and mounted by the generic
     // launcher before this runs.
     focus_panel("sandbox_inspector");
@@ -74,7 +74,7 @@ fn b3_brake(me) {
     brake(find("/SlopeTest/Rover"))
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     [
         objective("possess", #{
             text: "Select the Hauler and click Possess in Inspector or Command Deck",
@@ -104,7 +104,7 @@ fn mission(me) {
     ]
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "MISSION_COMPLETE" {
         clear_spotlight();
         hint("You found the Hauler's tipping point and climbed safely.\n\nClick Continue to compare rover variants.");
@@ -115,7 +115,7 @@ fn on_event(me, evt) {
 // UNATTENDED autopilot — possess and climb straight to the marker. Logs tilt via
 // the prelude's is_tipped/tilt_deg (which read world_rotation) so the accessor is
 // exercised in CI. With a window open, a human drives.
-fn task(me) {
+fn task(me, ctx) {
     if !is_unattended() { return; }
     seq([
         wait(1.0),

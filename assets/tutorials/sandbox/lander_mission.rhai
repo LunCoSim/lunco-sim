@@ -30,7 +30,7 @@
 //! ("AiAgent" = autopilot, "Owner"/"Operator" = a person), and it's true however
 //! the student got there — click it or use the authored handoff path.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts. The scene's
     // embedded scenarios do the flying; mission() coaches over their events.
     hint("Watch the lander touch down. Then take the rover and drive through the gates.");
@@ -98,7 +98,7 @@ fn lander_brake(me) {
     brake(find("/LanderTest/SkidRover"))
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     // Scene paths as LOCALS so the closures capture them (named fns can't see
     // module consts; closures capture enclosing locals) — same idiom as
     // first_drive.rhai. Each objective completes on a real event / world state.
@@ -142,7 +142,7 @@ fn mission(me) {
     ]
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     // Coach the course from the scene's own gate events — the scenario counts the
     // gates, the tutorial narrates them.
     if evt.name == "waypoint_1_reached" {
@@ -162,7 +162,7 @@ fn on_event(me, evt) {
 // a keypress. Possession makes the rover's autopilot stand down, so the automated
 // run drives the rest of the course itself. With a window open it returns () and
 // a human plays.
-fn task(me) {
+fn task(me, ctx) {
     if !is_unattended() { return; }
     seq([
         wait_for("rover_deployed"),

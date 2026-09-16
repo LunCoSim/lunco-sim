@@ -10,7 +10,7 @@ fn has_operation(operations, name) {
     false
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.phase = 0;
     this.elapsed = 0.0;
     this.done = false;
@@ -53,7 +53,7 @@ fn correction(context, generation) {
             path: context.primary.path, value: [0.0, 1.0, 0.0] } }], generation)
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 40.0 {

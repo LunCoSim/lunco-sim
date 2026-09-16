@@ -17,13 +17,13 @@
 const LANDER = "/LanderTest/Lander";
 const DOCK = "/LanderTest/LanderRoverJoint";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.lander_settled = false;
     this.release_latched = false;
     this.rover_detached = false;
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "cmd:SetPorts" {
         let transition = dock_release_edge(
             find(LANDER), this.release_latched, this.lander_settled, this.rover_detached);
@@ -195,6 +195,6 @@ fn deploy_and_survey() {
     seq([deploy_rover(), gate_one(), gate_two(), gate_three()])
 }
 
-fn task(me) {
+fn task(me, ctx) {
     seq([intro_and_touchdown(), deploy_and_survey()])
 }

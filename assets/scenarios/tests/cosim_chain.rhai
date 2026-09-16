@@ -6,7 +6,7 @@
 
 const WAIT_S = 30.0;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.osc = find("/CosimChain/Oscillator");
@@ -22,7 +22,7 @@ fn fail(message) {
     fail_fast(message, "COSIM CHAIN", "COSIM_CHAIN");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

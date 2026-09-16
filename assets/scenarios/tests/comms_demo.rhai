@@ -22,7 +22,7 @@
 //
 // `emit("COMMS_DEMO", "PASS"|"FAIL")`. Graph queries from `prelude/links.rhai`.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     // Ephemeris, orbit and the graph cadence all have to land first; a verdict on
     // tick one measures a graph nobody has filled in.
@@ -31,7 +31,7 @@ fn on_start(me) {
     print("[demo] ── routing: rover -> relay -> Earth ─────────────────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
     if this.t < this.settle_s { return; }

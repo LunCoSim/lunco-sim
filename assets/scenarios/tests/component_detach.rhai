@@ -15,7 +15,7 @@ fn fail(me, message) {
     }
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     // USD edits re-project the scenario participant and may invoke on_start
     // again. Keep the state in the runtime USD document, not in transient
@@ -65,7 +65,7 @@ fn save_phase(doc, phase) {
     result.ok == true
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

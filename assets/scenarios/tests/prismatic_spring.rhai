@@ -45,7 +45,7 @@ const EXPECTED_FORCE = 734.1;     // newtons along the strut axis, magnitude
 const SCENE_ROOT_NAME = "Scene:twin://tests/prismatic_spring.usda";
 const SCENE_ROOT_PATH = "/PrismaticSpringTest";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 5.0;    // free ring-down of a 4000 N/m, 2200 N·s/m strut
     this.sample_s = 0.5;
@@ -72,7 +72,7 @@ fn on_start(me) {
           " m at " + EXPECTED_FORCE + " N");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.ext == () || this.ext < 0 || this.comp == () || this.comp < 0 {

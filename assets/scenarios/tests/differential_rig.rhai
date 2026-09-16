@@ -22,7 +22,7 @@
 // `emit("DIFF_RIG", "PASS"|"FAIL")` — the telemetry verdict `scene_test` reads
 // for its exit code. Assertion helpers come from `prelude/auto_tests.rhai`.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 8.0;    // drop onto the stand, then ring down
     this.sample_s = 1.0;
@@ -46,7 +46,7 @@ fn on_start(me) {
           "  coupling stiffness=" + this.coupled);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.hl == () || this.hl < 0 || this.hr == () || this.hr < 0 {

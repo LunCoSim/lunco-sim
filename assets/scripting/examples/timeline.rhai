@@ -8,7 +8,7 @@
 // `task(me)` is initialized; the native task kernel owns fixed-step progression
 // and event delivery.
 
-fn task(me) {
+fn task(me, ctx) {
     // Keep the data in the directly-called task function. Rhai does not
     // resolve top-level constants from an indirect task invocation.
     let timeline = [

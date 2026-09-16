@@ -1,7 +1,7 @@
 // Graphics acceptance for the authored six-wheel rover presentation.
 const TEST_KIND = "graphics";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.rover = find("/SixWheelVisual/Rover");
     this.done = false;
     this.t = 0.0;
@@ -16,7 +16,7 @@ fn on_start(me) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
     if this.t < 0.5 { return; }

@@ -44,12 +44,12 @@ fn schema_checks(path, fields) {
     failures
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 0.1 { return; }
@@ -109,7 +109,7 @@ fn on_tick(me) {
     report_verdict(failures, "SHADER ASSET CONTRACTS", "SHADER_ASSET_CONTRACTS");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         report_verdict(["shader asset contract stopped before validation"],

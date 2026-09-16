@@ -5,7 +5,7 @@
 // that a user reaches from the Models palette. It is not a Rust copy of the
 // command's lowering logic.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.sent = false;
     this.done = false;
@@ -23,7 +23,7 @@ fn fail(me, message) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

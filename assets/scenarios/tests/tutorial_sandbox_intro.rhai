@@ -5,7 +5,7 @@
 //! MISSION_COMPLETE surface. Camera guidance is intentionally Next-gated: the
 //! input map belongs to the avatar, not to this tutorial.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.step = 0;
     this.done = false;
     this.elapsed = 0.0;
@@ -21,7 +21,7 @@ fn verdict(pass, reason) {
     }
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "MISSION_FAILED" && !this.done {
         this.done = true;
         verdict(false, "the Sandbox onboarding script reported failure");
@@ -33,7 +33,7 @@ fn on_event(me, evt) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

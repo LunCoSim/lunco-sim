@@ -9,7 +9,7 @@
 //
 // Coordinates are terrain-local metres (origin at the terrain centre).
 //
-//   fn on_start(me) {
+//   fn on_start(me, ctx) {
 //       terrain::dig(0.0, 0.0, 8.0, 2.0);        // 8 m pit, 2 m deep at origin
 //       terrain::flatten(30.0, 0.0, 12.0, 0.0);  // level a 12 m pad to y = 0
 //   }

@@ -15,20 +15,20 @@ fn verdict(pass, reason) {
     }
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     subscribe("MISSION_COMPLETE");
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     [objective("burst_received", #{
         text: "Receive the event burst through the mission event contract",
         requires_event: "mission_event_storm",
     })]
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "MISSION_COMPLETE" && !this.done {
         this.done = true;
         verdict(true, "");
@@ -37,7 +37,7 @@ fn on_event(me, evt) {
 
 // Test-only producer: a production authored scenario may use on_tick for a
 // deterministic fixture, while tutorial policy remains event/state driven.
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     if this.elapsed == 0.0 {
         for i in 0..STORM_COUNT {

@@ -35,7 +35,7 @@
 // moment they would just touch. Authored at 0.8, so they overlap by 0.5 m.
 const TOUCH_DIST = 1.3;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 4.0;
     this.sample_s = 1.0;
@@ -63,7 +63,7 @@ fn on_start(me) {
           "  filtered=" + this.filtered);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.hull == () || this.hull < 0 || this.pad == () || this.pad < 0 {

@@ -8,11 +8,11 @@ fn query_ok(record) {
     record != () && record.ok != false
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
 
     let camera = query("QueryUsdPrim", #{
@@ -137,7 +137,7 @@ fn on_tick(me) {
     report_verdict(checks, "AUTHORED RUNTIME CONTRACTS", "AUTHORED_RUNTIME_CONTRACTS");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         report_verdict(["authored runtime contract fixture stopped before its public observations"],

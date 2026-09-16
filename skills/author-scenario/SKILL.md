@@ -48,11 +48,12 @@ that lifecycle edge rather than relying on a timer. Sensor events may carry a
 nested collider; match the entrant through the generic `parent()` chain to the
 authored subject instead of adding a route-specific child relationship.
 
-The reusable route marker is an opaque, unlit annotation: its authored pending
-colour is bright amber in standard `primvars:displayColor`, and `route_follow`
-changes that gprim colour to bright green through `waypoint_editor`'s transient
-USD view operation when the generic sensor event reaches it. This is
-presentation state, not a vessel component or a second route fact.
+The reusable route marker is a translucent, unlit, shadowless annotation. Its
+unvisited colour is bright green and its visited colour is gray in standard
+`primvars:displayColor`; `route_follow` applies the visited colour through
+`waypoint_editor`'s transient USD view operation when the generic sensor event
+reaches the point. This is presentation state, not a vessel component or a
+second route fact.
 
 Script source edits made by a user go through the `ScriptDocument` host, so
 undo, redo, and the Twin journal see the same typed `ScriptOp`. A file-backed
@@ -127,18 +128,18 @@ authoritative callable surface in one place: the `ScriptingCatalog` query.
 ## 1. Lifecycle hooks — the shape of every scenario
 
 Define any subset. First param (`me`) is the host entity id. Production
-progression is returned by `task(me)` and advanced by the native behavior
-kernel; `mission(me)` supplies durable objective tracking. Lifecycle/event hooks
+progression is returned by `task(me, ctx)` and advanced by the native behavior
+kernel; `mission(me, ctx)` supplies durable objective tracking. Lifecycle/event hooks
 remain available for setup, reactions, and teardown.
 
 ```rhai
-fn task(me)           { seq([wait_until(|m| arrived(m, GOAL, 2.0))]); }
-fn mission(me)        { [objective("survey", #{})]; }       // optional
-fn on_start(me)       { this.i = 0; }                       // once, after (re)compile
-fn on_event(me, evt)  { if evt.name == "GO" { /* … */ } } // event-driven policy
-fn on_stop(me)        { brake(me); }                       // hot-reload / detach / despawn
+fn task(me, ctx)           { seq([wait_until(|m| arrived(m, GOAL, 2.0))]); }
+fn mission(me, ctx)        { [objective("survey", #{})]; }       // optional
+fn on_start(me, ctx)       { this.i = 0; }                       // once, after (re)compile
+fn on_event(me, evt, ctx)  { if evt.name == "GO" { /* … */ } } // event-driven policy
+fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / detach / despawn
 // Bounded sampled observer (tests only):
-// fn on_tick(me) { this.samples.push(query("rover_status", #{id: me})); }
+// fn on_tick(me, ctx) { this.samples.push(query("rover_status", #{id: me})); }
 ```
 
 **The state rule that trips up everyone (get this right first):**
@@ -148,8 +149,12 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
   receive the host entity id as `me`; task leaves receive that same id as their
   one positional argument and are authored as anonymous closures (`|me| ...`).
   The native task driver binds `this` while invoking those closures, and owns
-  the task cursor/dwell/event state. Named `Fn("...")` pointers are not task
-  leaves; call a named helper explicitly from an anonymous closure when useful.
+  the task cursor/dwell/event state. Named callbacks are also supported as
+  `Fn("name")` when declared `fn name(me)`; the driver binds the same
+  persistent state map as `this`.
+- Rhai map arguments are value/copy-on-write values. A helper that assigns a
+  persistent field must return the updated map, and the lifecycle callback must
+  assign it back to `this`; helper-side field assignments alone do not persist.
 - Hot-reload runs `on_stop` before installing the new program state; initialize
   all required `this` fields in the new run.
 
@@ -180,7 +185,7 @@ list. Highlights:
 - **Nav:** `drive(rover,fwd,steer)`, `brake(rover)`, `nav_to(entity,target,speed,radius)` (returns true on arrival). New missions return task trees. **`goto` is a reserved word — use `nav_to`.**
 - **Sensing:** `distance`, `arrived`, `velocity3`/`velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Selection:** `all_of_type`, `nearest_where`, `count_where`, `min_by`/`max_by`.
-- **Task tree:** `seq`/`par_all`/`par_race`/`repeat`/`forever`, leaves `step`/`once`/`act_for`/`wait`/`wait_until`/`wait_for`/`wait_for_from`, and failure nodes `check`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. Return the tree from `task(me)`; the kernel owns event delivery and there is one task progression path.
+- **Task tree:** `seq`/`par_all`/`par_race`/`repeat`/`forever`, leaves `step`/`once`/`act_for`/`wait`/`wait_until`/`wait_for`/`wait_for_from`, and failure nodes `check`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. Return the tree from `task(me, ctx)`; the kernel owns event delivery and there is one task progression path.
 - **Testing** (`prelude/auto_tests.rhai`): `t_range` `t_max` `t_true` `t_rel` `t_present` `t_bounded` `t_moved` `report_verdict` `fail_fast` `seg` `find_or_none` `r2`/`r4`.
 
 Add helpers freely — edit the prelude, no rebuild.
@@ -414,14 +419,15 @@ the very authoring the test exists to check.
 ## 4. Missions & sequencing (task policy, both pure rhai)
 
 - **Layer 1 — task tree** (`examples/sequence.rhai`): build a tree with
-  `step`/`wait`/`wait_for` and return it from `task(me)`. Action and predicate
-  leaves are anonymous `|me| ...` closures; the native kernel owns progression,
+  `step`/`wait`/`wait_for` and return it from `task(me, ctx)`. Action and predicate
+  leaves are anonymous `|me| ...` closures or named `Fn("name")` callbacks
+  (`fn name(me)`); the native kernel owns progression,
   state binding, and event delivery.
 - **Layer 2 — declarative timeline** (`examples/timeline.rhai`): a mission as
   **pure data**. Each step has exactly one operation word (`move_to`,
   `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`)
   and only that operation's fields; `compile_timeline` lowers it inside
-  `task(me)`. It is serialisable and can also be run through
+  `task(me, ctx)`. It is serialisable and can also be run through
   `RunTimeline`/`RunStoredTimeline`.
 
 Progress is observable on the bus: `TASK_COMPLETE`/`TASK_FAILED` for the native
@@ -469,11 +475,11 @@ Prefer the HTTP API (curl-first; canonical port **4101** — launch per the
 
 ```jsonc
 // attach + run (idempotent hot-reload); source is inline rhai OR an asset path
-{"type":"ExecuteCommand","command":"RunScenario","params":{"target":<gid>,"source":"<rhai or path>","params":"{\"speed\":1.5}"}}
+{"type":"ExecuteCommand","command":"RunScenario","params":{"target":<gid>,"source":"<rhai or path>","params":{"speed":1.5}}}
 {"type":"ExecuteCommand","command":"SetScenarioPaused","params":{"target":<gid>,"paused":true}}
 {"type":"ExecuteCommand","command":"StopScenario","params":{"target":<gid>}}
 ```
-- `params` is a JSON-object string; the script reads it as the read-only `params` constant.
+- `params` is a typed object; the script receives it as the explicit read-only `ctx` argument of its lifecycle and program hooks. Omitted parameters are `{}`.
 - **Debug:** `ScriptStatus {target}` → compile/runtime health + located errors; `ScriptInspect {target}` → live `this`, hooks, generation, running/paused. `print(...)` goes to the process log.
 - One-shot (no attach): `RunRhai {code}` — full world access, stdout in the original deferred response.
 
@@ -503,8 +509,9 @@ libraries → `<twin>/tools/*.rhai`.
    only in authored tests for bounded state sampling and verdicts; rover
    continuous control/dynamics belong to native fixed-step systems or Modelica.
 2. Return a task tree; pass task configuration into anonymous `|me| ...`
-   closures. Keep persistent lifecycle state on `this` only where a hook or
-   task closure genuinely needs it; named `Fn("...")` callbacks are not leaves.
+   closures or named callbacks. Keep persistent lifecycle state on `this` only
+   where a hook or task closure
+   genuinely needs it.
 3. Drive with prelude verbs (`nav_to`/`drive`/`cmd`) — never a control loop (that's Modelica).
 4. Wire reactions through `emit`/`on_event` (the next scenario pass delivers the event; paused simulations use `Update` while fixed simulation time is stopped).
 5. `RunScenario` on the target gid through the live API; verify with `ScriptInspect`; iterate by re-running (in-place hot-reload, no app restart).
@@ -519,8 +526,9 @@ libraries → `<twin>/tools/*.rhai`.
 - ❌ Assuming a scenario runs on clients — it's host-authoritative; clients get replicated state, not the script.
 - ❌ A generic `spawn(...)` — use `cmd("SpawnEntity", #{entry_id, position})` so clients reconstruct from the catalog.
 - ❌ Reading raw `Transform` for position — use `world_pos` (float-origin correct).
-- ❌ Passing `Fn("named_helper")` to `once`/`step`/`wait_until` — task leaves
-  require anonymous `|me| ...` closures so the native driver can bind `this`.
+- ✅ Passing `Fn("named_action")` to `once`/`step`/`wait_until` when the
+  callback is declared `fn named_action(me)`; the native driver binds the
+  persistent state as `this`.
 
 ## The gate set — what the shipped scene tests guard
 

@@ -14,7 +14,7 @@ fn show(s, i) {
     coach_step(s, i);
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts, so the REPL
     // examples have a live entity to talk to.
     this.i = 0;
@@ -22,7 +22,7 @@ fn on_start(me) {
     notify_kind("Tutorial: Rhai Editor & REPL", "info");
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     let s = steps();
     if evt.name == "cmd:GuidedNext"      { this.i += 1; }
     else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }

@@ -17,10 +17,9 @@ fn route_ribbon_sample_spacing() { 3.0 }
 // spacing adaptively while every authored waypoint remains an endpoint.
 fn route_ribbon_max_samples() { 768 }
 
-// Marker appearance is a generic route-tool policy. The asset carries the
-// unvisited colour in standard gprim displayColor; the route program applies
-// the visited colour through the transient USD view path when its generic
-// sensor event advances the route.
+// Marker appearance is a generic route-tool policy. State is a transient view
+// of the authored program's visited set, written through the standard gprim
+// displayColor attribute; the marker asset supplies only the initial visual.
 fn unvisited_marker_color() { [0.10, 0.95, 0.22] }
 fn visited_marker_color() { [0.55, 0.55, 0.55] }
 
@@ -79,8 +78,30 @@ fn generation(doc) {
 }
 
 fn prim_exists(doc, path) {
-    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path });
+    // Runtime presentation reads follow the composed stage. The authored
+    // document can be one journal revision ahead while a transient view edit
+    // is being projected, and that must not make the ribbon disappear.
+    let result = query("QueryUsdPrim", #{ path: path });
     result != () && result.ok != false
+}
+
+// Route points are identified by the standard trigger-zone child authored by
+// the route plan. Names and disposable presentation prims are not topology.
+fn is_route_point(doc, path) {
+    if doc == () || path == () || path == "" { return false; }
+    // Point identity is resolved from the canonical authoring boundary. The
+    // live projection may be one generation behind after a move or add, so a
+    // render query cannot be used to decide whether the trigger child exists.
+    let authored_trigger = query("ResolveUsdTarget", #{
+        doc_id: doc,
+        path: path + "/Trigger",
+        edit_target: "@root@",
+    });
+    let resolved = authored_trigger != () && authored_trigger.ok != false;
+    if !resolved { return false; }
+    if authored_trigger.composed_exists == true { return true; }
+    if authored_trigger.authored_in_document == true { return true; }
+    false
 }
 
 fn apply_ops(doc, label, ops) {
@@ -106,43 +127,24 @@ fn apply_view_ops(doc, label, ops) {
         ops: ops,
     });
     if result == () || result.ok != true {
-        return failure(if result == () { "USD view edit returned no result" } else { result.error });
+        // Presentation is disposable runtime state. A projection-generation
+        // race is retried by its owner and is never reported as a failed
+        // durable authoring command.
+        return #{ ok: false, retryable: true,
+            error: if result == () { "USD view edit returned no result" } else {
+                result.error
+            } };
     }
     #{ ok: true, changed: true }
 }
 
-fn set_marker_state(doc, point, visited) {
-    if doc == () || point == () || point == "" {
-        return #{ ok: false, error: "route-point state has no document or point path" };
-    }
-    let dome = point + "/Dome";
-    let current = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: dome,
-        attrs: ["primvars:displayColor"],
-    });
-    if current == () || current.ok == false || current.attrs == ()
-        || current.attrs["primvars:displayColor"] == () {
-        return #{ ok: false, retryable: true,
-            error: "route-point marker display state is not synchronized" };
-    }
-    let color = if visited { visited_marker_color() } else { unvisited_marker_color() };
-    let current_color = current.attrs["primvars:displayColor"];
-    if current_color.len() == 1 && vector_equal(current_color[0], color) {
-        return #{ ok: true, changed: false };
-    }
-    apply_view_ops(doc, "Update route-point state", [#{ SetAttribute: #{
-        edit_target: "@runtime@",
-        path: dome,
-        name: "primvars:displayColor",
-        type_name: "color3f[]",
-        value: "[" + point_literal(color) + "]",
-    }}])
-}
-
-fn reset_marker_states(doc, route) {
+// Synchronize all route-point marker colours from the policy-owned visited
+// set. The map is keyed by canonical USD point path, so adding a point starts
+// it green and editing a route cannot accidentally transfer state by index.
+// This is called only at a document/view revision boundary by the route
+// program; it is not a per-frame render update.
+fn sync_marker_states(doc, route, visited) {
     let points = query("QueryUsdPrim", #{
-        doc_id: doc,
         path: route,
         children: true,
     });
@@ -151,13 +153,12 @@ fn reset_marker_states(doc, route) {
             error: "route-point state cannot read the route children" };
     }
     let ops = [];
-    let color = unvisited_marker_color();
     for point in points.children {
-        let parts = point.split("/");
-        let leaf = parts[parts.len() - 1];
-        if leaf == "Program" || leaf == "RouteRibbon" { continue; }
+        if !is_route_point(doc, point) { continue; }
+        let marked = if visited == () { () } else { visited[point] };
+        let color = if marked == true { visited_marker_color() }
+            else { unvisited_marker_color() };
         let marker = query("QueryUsdPrim", #{
-            doc_id: doc,
             path: point + "/Dome",
             attrs: ["primvars:displayColor"],
         });
@@ -177,7 +178,7 @@ fn reset_marker_states(doc, route) {
             }});
         }
     }
-    apply_view_ops(doc, "Reset route-point states", ops)
+    apply_view_ops(doc, "Update route-point states", ops)
 }
 
 fn route_edit_path(context) {
@@ -234,7 +235,6 @@ fn route_parent_path(path) {
 fn is_route_program(doc, path, subject) {
     if path == () || path == "" { return false; }
     let record = query("QueryUsdPrim", #{
-        doc_id: doc,
         path: path,
         rels: ["inputs:subject"],
         schemas: true,
@@ -270,7 +270,6 @@ fn discover_subject_programs(doc, scope, subject, depth) {
     let programs = [];
     if scope == () || scope == "" || depth > 32 { return programs; }
     let result = query("QueryUsdPrim", #{
-        doc_id: doc,
         path: scope,
         children: true,
     });
@@ -291,7 +290,6 @@ fn discover_subject_programs(doc, scope, subject, depth) {
 
 fn linked_routes(doc, subject, scene_root) {
     let result = query("QueryUsdPrim", #{
-        doc_id: doc,
         path: subject,
         rels: ["programs"],
     });
@@ -328,19 +326,32 @@ fn subject_path(context) {
     ()
 }
 
-fn direct_route_point(path, route) {
+fn direct_route_point(doc, path, route) {
     if path == () || path == "" || route == () || route == "" {
         return false;
     }
     let prefix = route + "/";
     if !path.starts_with(prefix) { return false; }
     let remainder = path.sub_string(prefix.len());
-    remainder != "" && remainder.index_of("/") < 0
-        && remainder != "Program" && remainder != "RouteRibbon"
+    let direct = remainder != "" && remainder.index_of("/") < 0;
+    if !direct { return false; }
+    // Keep the edit target check in this same scope as the direct-child check.
+    // A freshly moved point may be ahead of the projected scene, but its
+    // canonical trigger target is already committed and remains authoritative.
+    let trigger = query("ResolveUsdTarget", #{
+        doc_id: doc,
+        path: path + "/Trigger",
+        edit_target: "@root@",
+    });
+    if trigger == () || trigger.ok == false { return false; }
+    if trigger.composed_exists == true { return true; }
+    trigger.authored_in_document == true
 }
 
 fn context_route_point(context, route) {
     if context == () { return (); }
+    let doc = context["doc_id"];
+    if doc == () { return (); }
     let candidates = [];
     if context.target_path != () { candidates.push(context.target_path); }
     if context.hit_path != () { candidates.push(context.hit_path); }
@@ -348,14 +359,14 @@ fn context_route_point(context, route) {
         for path in context.prim_paths { candidates.push(path); }
     }
     for path in candidates {
-        if direct_route_point(path, route) { return path; }
+        let direct = direct_route_point(doc, path, route);
+        if direct { return path; }
     }
     ()
 }
 
 fn next_point_name(doc, route) {
     let children = query("QueryUsdPrim", #{
-        doc_id: doc,
         path: route,
         children: true,
     });
@@ -364,9 +375,11 @@ fn next_point_name(doc, route) {
     }
     let prefix = "P";
     for child in children.children {
-        let parts = child.split("/");
-        let leaf = parts[parts.len() - 1];
-        if leaf.starts_with("W") { prefix = "W"; break; }
+        if is_route_point(doc, child) {
+            let parts = child.split("/");
+            let leaf = parts[parts.len() - 1];
+            if leaf.starts_with("W") { prefix = "W"; break; }
+        }
     }
     let index = 0;
     while index < 100000 {
@@ -391,7 +404,6 @@ fn route_positions(doc, route) {
             error: "route document generation is unavailable" };
     }
     let result = query("QueryUsdPrim", #{
-        doc_id: doc,
         path: route,
         children: true,
     });
@@ -399,25 +411,15 @@ fn route_positions(doc, route) {
     if result == () || result.ok == false || result.children == () {
         return #{ ok: false, retryable: true, error: "route stage is not synchronized" };
     }
-    if result.generation != document_gen {
-        return #{ ok: false, retryable: true, error: "route stage is not synchronized" };
-    }
     for child in result.children {
-        let parts = child.split("/");
-        let leaf = parts[parts.len() - 1];
-        if leaf == "Program" || leaf == "RouteRibbon" { continue; }
-        let record = query("QueryUsdPrim", #{ doc_id: doc, path: child });
+        if !is_route_point(doc, child) { continue; }
+        let record = query("QueryUsdPrim", #{ path: child });
         if record == () || record.ok == false {
-            return #{ ok: false, retryable: true,
-                error: "route point state is not synchronized" };
-        }
-        if record.generation != document_gen {
             return #{ ok: false, retryable: true,
                 error: "route point state is not synchronized" };
         }
         if record.active != true { continue; }
         let point = query("QueryUsdPrim", #{
-            doc_id: doc,
             path: child,
             attrs: ["xformOp:translate"],
         });
@@ -613,12 +615,10 @@ fn ribbon_width_matches(widths) {
 fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, local_normals) {
     if !prim_exists(doc, ribbon) { return true; }
     let root = query("QueryUsdPrim", #{
-        doc_id: doc,
         path: ribbon,
         attrs: ["xformOp:translate"],
     });
     let shape = query("QueryUsdPrim", #{
-        doc_id: doc,
         path: geometry,
         attrs: ["type", "wrap", "curveVertexCounts", "points", "widths", "normals"],
     });

@@ -7,7 +7,7 @@ const DRIVE_S = 8.0;
 const STEER_S = 6.0;
 const MIN_TRAVEL_M = 2.0;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
     this.rover = find("/RockerBogieDrive/Rover");
@@ -24,7 +24,7 @@ fn on_start(me) {
     print("[rb-drive] rover gid=" + this.rover);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     if this.rover == () || this.rover < 0 {
         fail_fast("rocker-bogie rover was not composed", "ROCKER BOGIE DRIVE", "ROCKER_BOGIE_DRIVE");

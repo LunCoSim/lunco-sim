@@ -7,7 +7,7 @@
 
 fn failure(message) {
     notify_kind("Program edit failed: " + message, "error");
-    #{ ok: false, error: message }
+    return #{ ok: false, error: message };
 }
 
 fn document_generation(doc) {
@@ -15,7 +15,7 @@ fn document_generation(doc) {
     if result == () || result.ok == false || result.generation == () {
         return ();
     }
-    result.generation
+    return result.generation;
 }
 
 fn target(doc, path) {
@@ -27,7 +27,7 @@ fn target(doc, path) {
     if result == () || result.ok == false {
         return #{ ok: false, error: if result == () { "USD target query returned no result" } else { result.error } };
     }
-    #{
+    return #{
         ok: true,
         exists: result.composed_exists == true || result.authored_in_document == true,
         authored_here: result.authored_here == true,
@@ -42,7 +42,7 @@ fn edit_target(doc, path) {
     }
     // A composed/reference child is overridden in the document root. A prim
     // authored in the runtime layer stays there; both are explicit USD edits.
-    #{
+    return #{
         ok: true,
         layer: if resolved.authored_here || resolved.under_arc { "@root@" } else { "@runtime@" },
     }
@@ -73,9 +73,9 @@ fn program_record(doc, path) {
     if !is_program {
         return #{ ok: false, error: "prim does not apply LunCoProgramAPI" };
     }
-    #{
+    return #{
         ok: true,
-        path: path,
+        path: path.to_string(),
         implementation_source: result.attrs["info:implementationSource"],
         id: result.attrs["info:id"],
         source_asset: result.attrs["info:sourceAsset"],
@@ -100,10 +100,24 @@ fn list(doc, scope) {
     }
     let programs = [];
     for child in result.children {
-        let record = program_record(doc, child);
-        if record.ok { programs.push(record); }
+        let path = child.to_string();
+        let record = program_record(doc, path);
+        if record.ok {
+            // Rebuild the public record at the list boundary. The scope query
+            // owns identity; copying its path here prevents a nested module
+            // map from dropping that identity before HUI/Rhai consumers see
+            // the dynamic program list.
+            programs.push(#{
+                ok: true,
+                path: path,
+                implementation_source: record.implementation_source,
+                id: record.id,
+                source_asset: record.source_asset,
+                source_code: record.source_code,
+            });
+        }
     }
-    #{ ok: true, scope: scope, programs: programs }
+    return #{ ok: true, scope: scope, programs: programs };
 }
 
 fn valid_source_asset(source) {
@@ -168,10 +182,13 @@ fn switch_source(doc, path, source) {
     // A source swap recreates the program instance. Re-emit the generic
     // selection edge so a selected program stays selected across hot reload.
     emit_selected(path);
-    #{ ok: true, path: path, source_asset: source, generation: result.generation }
+    return #{ ok: true, path: path, source_asset: source, generation: result.generation };
 }
 
 fn select(path) {
+    if path == () || path == "" {
+        return failure("program path is required for selection");
+    }
     let entity_id = find_path(path);
     if entity_id < 0 { return failure("program has no live projection"); }
     // Program selection is ephemeral control-plane state. Keep it in the
@@ -188,14 +205,14 @@ fn select(path) {
         return failure(if result == () { "SelectSceneEntity command is unavailable in this host" } else { result.error });
     }
     emit_selected(path);
-    #{ ok: true, path: path, entity_id: entity_id }
+    return #{ ok: true, path: path, entity_id: entity_id };
 }
 
 fn edit(path) {
     let selected = select(path);
     if !selected.ok { return selected; }
     if !is_unattended() { cmd("FocusPanel", #{ id: "rhai_editor" }); }
-    selected
+    return selected;
 }
 
 fn add(doc, host, name, source) {
@@ -217,7 +234,7 @@ fn add(doc, host, name, source) {
     if result == () || result.ok != true {
         return failure(if result == () { "AttachProgram returned no result" } else { result.error });
     }
-    #{ ok: true, path: host + "/" + name, source_asset: source }
+    return #{ ok: true, path: host + "/" + name, source_asset: source };
 }
 
 /// Opt one authored prim into the reusable program-browser surface. The
@@ -259,7 +276,7 @@ fn enable_hud(doc, scope, visibility) {
     if result == () || result.ok != true {
         return failure(if result == () { "program HUD authoring returned no result" } else { result.error });
     }
-    #{ ok: true, scope: scope, surface: "program-browser", visibility: visibility }
+    return #{ ok: true, scope: scope, surface: "program-browser", visibility: visibility };
 }
 
 fn disable_hud(doc, scope) {
@@ -281,5 +298,5 @@ fn disable_hud(doc, scope) {
     if result == () || result.ok != true {
         return failure(if result == () { "program HUD disable returned no result" } else { result.error });
     }
-    #{ ok: true, scope: scope, surface: "" }
+    return #{ ok: true, scope: scope, surface: "" };
 }

@@ -723,7 +723,7 @@ mod tests {
              def Scope \"InlineRhai\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
              {\n\
                  uniform token info:implementationSource = \"sourceCode\"\n\
-                 uniform string info:sourceCode = \"fn task(me) { seq([]) }\"\n\
+                 uniform string info:sourceCode = \"fn task(me, ctx) { seq([]) }\"\n\
              }\n\
              def Scope \"Rhai\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
              {\n\

@@ -34,14 +34,14 @@ fn has_subject(findings, subject) {
     false
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
     this.doc = -1;
     this.phase = 0;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

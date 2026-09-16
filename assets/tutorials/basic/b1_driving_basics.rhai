@@ -6,7 +6,7 @@
 //! on real actions, never a timer (see first_drive.rhai for the pattern this
 //! follows).
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // The application catalog selects the scene before this scenario starts.
     // Ordering belongs to the catalog; this script owns only its observable
     // driving objectives.
@@ -40,7 +40,7 @@ fn b1_at_flag(me) {
     arrived(rover, world_pos(flag), 2.5)
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     [
         // 1 — take control.
         objective("possess", #{
@@ -58,7 +58,7 @@ fn mission(me) {
     ]
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "MISSION_COMPLETE" {
         hint("You took control, climbed the ramp, and checked telemetry.\n\nClick Continue to try Slopes & Tip-Over.");
         notify_kind("Lesson complete — choose Continue for Slopes & Tip-Over", "success");
@@ -71,7 +71,7 @@ fn on_event(me, evt) {
 // The drive is authored as pure DATA (a timeline) and lowered with
 // `compile_timeline` — the same steps `RegisterTimeline` stores in the Twin.
 // `subject` drives the rover from the scenario host.
-fn task(me) {
+fn task(me, ctx) {
     if !is_unattended() { return; }
     let r = "/DrivingBasics/Rover";
     let drive = [

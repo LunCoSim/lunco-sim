@@ -16,6 +16,7 @@ fn modelica_waypoint(vessel, target, speed, radius, turn_only) {
     let t = if turn_only == () { 0.0 } else { turn_only };
     cmd("SetPorts", #{ target: vessel,
         writes: [
+            ["program_active", 1.0],
             ["autopilot_enable", 1.0],
             ["autopilot_target_x", target[0]],
             ["autopilot_target_z", target[2]],
@@ -32,6 +33,7 @@ fn modelica_waypoint(vessel, target, speed, radius, turn_only) {
 fn modelica_waypoint_stop(vessel) {
     cmd("SetPorts", #{ target: vessel,
         writes: [
+            ["program_active", 0.0],
             ["autopilot_enable", 0.0],
             ["throttle", 0.0],
             ["steer", 0.0],

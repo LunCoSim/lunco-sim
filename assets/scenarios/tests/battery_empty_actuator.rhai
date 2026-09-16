@@ -24,7 +24,7 @@ const ZERO_TOL = 1.0e-4; // 0.1 mW
 const BATTERY_DISCHARGE_POWER = "battery_discharge_power";
 const MOTOR_MECHANICAL_POWER = "motor_mechanical_power";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "wait";
     this.done = false;
@@ -40,13 +40,13 @@ fn on_start(me) {
     print("[battery-empty] ── empty battery actuator boundary ─────────────");
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "battery_drained" {
         this.event_seen = true;
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
 

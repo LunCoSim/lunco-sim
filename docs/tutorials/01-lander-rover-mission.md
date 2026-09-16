@@ -752,7 +752,7 @@ from altitude, velocity, or a priority-ordered list of strings.
 Now the supervisor. Create `assets/scenarios/my_mission/lander_supervisor.rhai`:
 
 ```rhai
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "lander_low_fuel" {
         notify_kind("Lander low on fuel.", "warn");
     } else if evt.name == "lander_depleted" {
@@ -923,7 +923,7 @@ step either *does* something once, *waits* for some time, or *waits* for a condi
 or an event.
 
 ```rhai
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     let route = find("/Mission/Route");
     if evt.name != "route_point_reached" || evt.source != route { return; }
     let index = evt.value;
@@ -938,7 +938,7 @@ fn on_event(me, evt) {
     }
 }
 
-fn task(me) {
+fn task(me, ctx) {
     seq([
         once(|m| {
             follow(find("/Mission/Lander"));           // ride the camera down

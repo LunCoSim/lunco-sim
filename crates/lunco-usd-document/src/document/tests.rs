@@ -360,7 +360,7 @@ fn set_attribute_string_round_trips_realistic_rhai_verbatim() {
     // double quotes, backslashes, and newlines. (The openusd USDA lexer keeps raw
     // bytes between triple-quote delimiters, so `\"` and `\` pass through verbatim
     // — no escape processing to corrupt them.)
-    let src = "fn on_tick(me) {\n    let s = \"he said \\\"hi\\\"\";\n    let path = \"C:\\\\rover\";\n    notify(s + path, \"info\");\n}\n";
+    let src = "fn on_tick(me, ctx) {\n    let s = \"he said \\\"hi\\\"\";\n    let path = \"C:\\\\rover\";\n    notify(s + path, \"info\");\n}\n";
     let mut doc = UsdDocument::with_origin(
         DocumentId::new(60),
         "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
@@ -434,7 +434,7 @@ fn set_attribute_string_undoes() {
         path: "/Rover".into(),
         name: "info:sourceCode".into(),
         type_name: "string".into(),
-        value: "fn on_tick(me) {}".into(),
+        value: "fn on_tick(me, ctx) {}".into(),
     }))
     .unwrap();
     assert!(host.document().source().contains("on_tick"), "authored");

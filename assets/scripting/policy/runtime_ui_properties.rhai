@@ -46,6 +46,14 @@ fn participant_text(values) {
     result
 }
 
+fn input_value(facts, name) {
+    let inputs = facts.inputs;
+    if inputs == () { return 0.0; }
+    let value = inputs[name];
+    if value == () { return 0.0; }
+    value
+}
+
 fn camera_ui_properties(facts) {
     let result = #{};
     result.active_label = facts.active_label;
@@ -98,8 +106,7 @@ fn runtime_ui_properties(facts) {
     result.program_count = programs.len().to_string() + " PROGRAMS";
     result.program_empty_display = programs.len() == 0;
     let program_active = programs.len() > 0
-        && facts.control_claimed == true
-        && facts.control_owner != "local";
+        && input_value(facts, "program_active") > 0.5;
     result.program_label = if programs.len() == 0 {
         "PROGRAM UNAVAILABLE"
     } else if program_active {

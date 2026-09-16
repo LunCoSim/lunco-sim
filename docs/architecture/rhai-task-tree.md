@@ -45,24 +45,28 @@ that enum and the maintained `lunco-behavior` node constructors.
 
 ## Leaf callback contract
 
-Action and predicate fields are anonymous Rhai closures with one positional
-argument: `|me| ...`. `me` is the host entity id. The native task driver binds
-the persistent scenario-state map as `this` while invoking the closure, so task
-policy can use state without a second callback convention. Named
-`Fn("...")` pointers are rejected as task leaves; named helpers may still be
-called explicitly from an anonymous closure.
+Action and predicate fields accept either an anonymous Rhai closure with one
+positional argument (`|me| ...`) or a named script function pointer
+(`Fn("name")`, declared as `fn name(me)`). `me` is the host entity id. Both
+forms access the persistent scenario-state map as the driver-bound `this`. The
+native task driver owns cursor, dwell, and event progression for both forms.
+Rhai maps passed to helper functions are value/copy-on-write values: assigning a
+field in a helper does not update the caller's `this`. A helper that changes
+task state must return the updated map (or an explicit result), and the
+lifecycle callback must assign it back to `this`. This keeps state transfer
+explicit at the single Rhai-to-kernel boundary.
 
 ## Authoring rule
 
-Production scripts return a tree from `fn task(me)`. The native kernel owns the
+Production scripts return a tree from `fn task(me, ctx)`. The native kernel owns the
 cursor, dwell timestamps, event delivery, and terminal status. Production
 scripts do not implement a fixed-tick `on_tick` loop. Authored test scenarios
 may use `on_tick` only to sample state and publish a bounded verdict, while
-`fn mission(me)` is a separate objective/checkpoint policy and may run beside
+`fn mission(me, ctx)` is a separate objective/checkpoint policy and may run beside
 the task.
 
 ```rhai
-fn task(me) {
+fn task(me, ctx) {
     seq([
         once(|m| drive(m, 1.0, 0.0)),
         wait_until(|m| arrived(m, [10.0, 0.0, 0.0], 2.0)),
@@ -72,7 +76,7 @@ fn task(me) {
 ```
 
 Use `RunTimeline` or `RunStoredTimeline` for pure data timelines. They lower
-into the same `task(me)` contract; they do not create a second progression
+into the same `task(me, ctx)` contract; they do not create a second progression
 engine. Do not add another map tag, alias, compatibility spelling, or private
 cursor mechanism. If a new behavior is needed, first check whether an existing
 `lunco-behavior` composite/decorator or a typed leaf already owns it; extend

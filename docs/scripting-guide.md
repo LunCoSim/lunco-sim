@@ -20,7 +20,7 @@ This guide has two parts:
 
 The language is **rhai** — a small, sandboxed, pure-Rust language that runs
 everywhere the sim does, including the browser (wasm). A **scenario** is a rhai
-program attached to an entity. Its `task(me)` tree is advanced on every fixed
+program attached to an entity. Its `task(me, ctx)` tree is advanced on every fixed
 simulation tick by the native behavior kernel; it is not a one-shot snippet.
 
 > **The host (Rust) is mechanism; the script is policy.** Navigation, objectives,
@@ -143,25 +143,25 @@ target/debug/luncosim --api 4101
 
 | You write | The engine does |
 |---|---|
-| `fn task(me)` | builds one native task tree; the kernel advances it each fixed step |
-| `fn mission(me)` | declares objective state and completion conditions |
-| `fn on_start(me)` | optional setup after (re)compile |
-| `fn on_event(me, evt)` | optional reaction to a `TelemetryEvent` |
-| `fn on_stop(me)` | optional teardown on hot-reload / detach / despawn |
+| `fn task(me, ctx)` | builds one native task tree; the kernel advances it each fixed step |
+| `fn mission(me, ctx)` | declares objective state and completion conditions |
+| `fn on_start(me, ctx)` | optional setup after (re)compile |
+| `fn on_event(me, evt, ctx)` | optional reaction to a `TelemetryEvent` |
+| `fn on_stop(me, ctx)` | optional teardown on hot-reload / detach / despawn |
 
-`me` is the host entity's id. Task action and predicate leaves use anonymous
-closures with that one positional argument (`|me| ...`). The native task driver
-binds the persistent scenario-state map as `this` and owns task progress, dwell
-timing, and event waits. Named `Fn("...")` pointers are not task leaves; named
-helpers may be called explicitly from an anonymous closure. You sense with
-queries/`get` and act with `cmd`/`set`.
+`me` is the host entity's id. Task action and predicate leaves accept anonymous
+closures with that one positional argument (`|me| ...`) or named script
+functions (`Fn("name")`, declared as `fn name(me)`). Both forms access
+persistent task state as the driver-bound `this`. The native task driver owns
+task progress, dwell timing, and event waits. You sense with queries/`get` and
+act with `cmd`/`set`.
 
 ## 2. Your first script
 
 Create `assets/scenarios/my_rover_mission.rhai`:
 
 ```rhai
-fn task(me) {
+fn task(me, ctx) {
     let waypoints = [
         [10.0, 0.0, 0.0],
         [20.0, 0.0, 10.0],
@@ -285,11 +285,11 @@ fills in the everyday verbs; Part II is the complete reference.
 ## 3. Lifecycle hooks
 
 ```rhai
-fn task(me)          { seq([wait(1.0)]); }               // canonical progression
-fn mission(me)       { [objective("landing", #{})]; }   // optional objectives
-fn on_start(me)      { /* setup */ }                     // once, after (re)compile
-fn on_event(me, evt) { if evt.name == "GO" { /* … */ } } // a TelemetryEvent arrived
-fn on_stop(me)       { brake(me); }                      // teardown: hot-reload / detach / despawn
+fn task(me, ctx)          { seq([wait(1.0)]); }               // canonical progression
+fn mission(me, ctx)       { [objective("landing", #{})]; }   // optional objectives
+fn on_start(me, ctx)      { /* setup */ }                     // once, after (re)compile
+fn on_event(me, evt, ctx) { if evt.name == "GO" { /* … */ } } // a TelemetryEvent arrived
+fn on_stop(me, ctx)       { brake(me); }                      // teardown: hot-reload / detach / despawn
 ```
 
 - Define any subset. `on_stop` is where you stop actuators / release claims.
@@ -432,7 +432,7 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 - **Sensing:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Connectivity / routing** ([`links.rhai`](../assets/scripting/prelude/links.rhai)): `links()` (the live link graph — `#{nodes, adj, edges, groups}` from `query("Links")`), `reachable(from, to)`, `link_path(from, to)`, `link_path_names(from, to)`, `can_reach(rover, station)`. The Rust kernel computes only link GEOMETRY at a tunable cadence and publishes the graph; **routing is pure rhai policy** — call it at decision time (e.g. in `on_event` on `link.los`), not every tick. Nodes are identified by **GID** — the same id `find()` returns — and every helper takes either a GID (that node) or a `lunco:link:class` string (the GROUP with that role), so `can_reach(find("…/Comms"), "earth")` means "any Earth station" while each station stays separately addressable. A class is a shared role, never an identity: three DSN complexes all author `class = "earth"`. See [doc 49](./architecture/49-connectivity-link-kernel.md).
 - **Collision events:** `collision_pair`/`collision_other`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
-- **Task trees (`task(me)`):** every constructor emits a node with an explicit `kind`; there is no field-presence inference. Leaves are `step`/`once`/`act_for`/`act_until_event`/`wait`/`wait_until`/`wait_for`/`wait_for_from`/`check`, and action/predicate leaves require anonymous `|me| ...` closures. Composites are `seq`/`par_all`/`par_race`/`sel`/`reactive_seq`/`reactive_sel`, and decorators are `repeat`/`forever`/`retry`/`invert`/`force_ok`/`force_fail`. The adapter rejects missing/unknown kinds, cross-kind fields, and named `Fn("...")` task callbacks, then compiles once onto the existing `lunco-behavior` kernel. See [`rhai-task-tree.md`](architecture/rhai-task-tree.md). The kernel emits `TASK_COMPLETE` or `TASK_FAILED`.
+- **Task trees (`task(me, ctx)`):** every constructor emits a node with an explicit `kind`; there is no field-presence inference. Leaves are `step`/`once`/`act_for`/`act_until_event`/`wait`/`wait_until`/`wait_for`/`wait_for_from`/`check`, and action/predicate leaves accept anonymous `|me| ...` closures or named `Fn("name")` callbacks declared as `fn name(me)`. Composites are `seq`/`par_all`/`par_race`/`sel`/`reactive_seq`/`reactive_sel`, and decorators are `repeat`/`forever`/`retry`/`invert`/`force_ok`/`force_fail`. The adapter rejects missing/unknown kinds and cross-kind fields, then compiles once onto the existing `lunco-behavior` kernel. See [`rhai-task-tree.md`](architecture/rhai-task-tree.md). The kernel emits `TASK_COMPLETE` or `TASK_FAILED`.
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`. A timeline step
   must contain exactly one explicit operation word (`move_to`,
   `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`);
@@ -467,7 +467,7 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 - **Route programs** ([`route_follow.rhai`](../assets/scenarios/route_follow.rhai)): the scene owns an ordered USD route and a sibling `LunCoProgramAPI` program. The program resolves its `inputs:subject` relationship, reads route-point poses, and advances only on generic sensor enter events. Route points are not stored on or discovered through a vessel-owned list.
 - **Route presentation**: the reusable [`route_point.usda`](../assets/markers/route_point.usda) asset owns the standard translucent, unlit, shadowless visual/material and trigger geometry. Its unvisited point is green in standard `primvars:displayColor`/`primvars:displayOpacity`; the generic `route_follow` policy uses the `waypoint_editor` transient USD view tool to turn a visited point gray. A scenario consumes `route_point_reached` for mission policy without recreating distance checks or adding a second marker implementation.
 - **Science instruments** ([`science.rhai`](../assets/scripting/prelude/science.rhai)): `photo_from(vessel)` captures from a vessel's mounted camera through the typed `CaptureFromCamera` command. Tool actions are generic task/program data; the engine dispatches only registered executable tools.
-- **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `focus_panel(id)` (open a singleton workbench panel on interactive hosts; unattended gates omit this presentation command), `objectives_hud(list)` (or just declare a `mission(me)` — it auto-publishes), `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).
+- **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `focus_panel(id)` (open a singleton workbench panel on interactive hosts; unattended gates omit this presentation command), `objectives_hud(list)` (or just declare a `mission(me, ctx)` — it auto-publishes), `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).
 
 `coach` only presents a step. Tutorial progression is authored in the lesson's
 `on_event`, where it matches raw public event names (`cmd:<Name>`, `key:<Name>`,
@@ -485,28 +485,37 @@ and the app does not silently run stale embedded helpers.
 
 ## C. Scenario parameters
 
-Reuse one source across entities/missions by passing a JSON object string; the
-script reads it as the read-only `params` constant:
+Reuse one source across entities/missions by passing one natural typed object.
+The object belongs to the attached program instance and arrives as the explicit
+`ctx` argument; there is no global `params` variable:
 
 ```jsonc
-RunScenario { target: <gid>, source: "...", params: "{\"speed\":1.5}" }
+RunScenario { target: <gid>, source: "...", params: #{ speed: 1.5 } }
 ```
 ```rhai
-fn task(me) {
-    forever(once(|m| drive(m, params.speed, 0.0)))
+fn task(me, ctx) {
+    let speed = if ctx.speed == () { 0.6 } else { ctx.speed };
+    forever(once(|m| drive(m, speed, 0.0)))
 }
 ```
+
+Omitting `params` means `{}`. Rhai owns defaults for individual keys, so a
+scenario can choose the right default for its policy. The command boundary
+rejects a scalar, array, `null`, non-finite number, or value outside the shared
+telemetry range; Rust only validates and transfers the typed map once per
+program instance. `param(id, key, default)` remains the separate USD-authored
+attribute helper and does not read launch parameters.
 
 ## D. Sequencing (missions)
 
 Two script-first layers, both pure rhai (no engine rebuild):
 
-- **Layer 1 — task tree** ([`sequence.rhai`](../assets/scripting/examples/sequence.rhai)): build a step tree with `step`/`once`/`wait`/`wait_until`/`wait_for`; return it from `task(me)`. The native kernel feeds events and owns the cursor.
+- **Layer 1 — task tree** ([`sequence.rhai`](../assets/scripting/examples/sequence.rhai)): build a step tree with `step`/`once`/`wait`/`wait_until`/`wait_for`; return it from `task(me, ctx)`. The native kernel feeds events and owns the cursor.
 - **Layer 2 — declarative timeline** ([`timeline.rhai`](../assets/scripting/examples/timeline.rhai)): a mission as **pure data**. Each step has exactly one operation word (`move_to`, `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`) and only that operation's fields; `compile_timeline` lowers it onto a task tree. Because it's data, a timeline is serialisable — run one inline with `RunTimeline`, or store it (see [§I](#i-persistence)).
 
 Progress is observable on the telemetry bus: `TASK_COMPLETE` or `TASK_FAILED`
 for the native task root, plus the mission/objective events emitted by your task
-leaves and `mission(me)` declaration.
+leaves and `mission(me, ctx)` declaration.
 
 ## E. Tools (shared libraries)
 
@@ -1071,7 +1080,7 @@ camera along without taking control via `follow(entity)`.
 >
 > Claim it before commanding it:
 > ```rhai
-> fn on_start(me) { cmd("PossessVessel", #{ target: me }); }
+> fn on_start(me, ctx) { cmd("PossessVessel", #{ target: me }); }
 > ```
 > The claim keys on `target`, **not on an avatar**, so this works headless — an unattended
 > or server-side run needs no avatar to hold authority.
@@ -1099,11 +1108,11 @@ The `lunco-behavior` crate owns only the reusable cursor, reset, and composite
 mechanics. Rhai owns route choice and mission policy; there is no separate
 vessel-specific behavior command or JSON behavior specification.
 
-Return a task tree from `task(me)` and attach it through a scene-level
+Return a task tree from `task(me, ctx)` and attach it through a scene-level
 `LunCoProgramAPI` source:
 
 ```rhai
-fn task(me) {
+fn task(me, ctx) {
     reactive_sel([
         seq([check(|m| obstacle_ahead(m, 8.0, 50.0)), once(|m| brake(m))]),
         forever(step(|m| nav_to(m, [120.0, 0.0, 50.0], 0.7, 3.0), |m| false)),
@@ -1154,7 +1163,7 @@ Developing scenarios requires quick feedback on compilation and runtime health. 
 ### Standard Output & Logging
 You can print variables and state information directly to standard output/console using the standard print statement:
 ```rhai
-fn task(me) {
+fn task(me, ctx) {
     seq([once(|m| print("Rover " + name(m) + " position: " + world_pos(m)))])
 }
 ```

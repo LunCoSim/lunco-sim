@@ -5,7 +5,7 @@
 // observable runtime verdict. Parser and annotation implementation details are
 // owned by their focused unit tests, not by this scene test.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.stage = find("/AnnotatedRocketStageTest/RocketStage");
     this.elapsed = 0.0;
     this.phase = 0;
@@ -18,7 +18,7 @@ fn on_start(me) {
     this.command_ok = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

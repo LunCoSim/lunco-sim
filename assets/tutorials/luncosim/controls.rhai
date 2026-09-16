@@ -40,14 +40,14 @@ fn authority_release(me) {
     cmd("ReleaseVessel", #{ target: find("/FirstDrive/Avatar") })
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     focus_panel("command_deck");
     hint("Select the rover, open Command Deck, and take control. Watch the status change before releasing it again.");
     spotlight("panel.command_deck", "The Command Deck is the authoritative handoff surface.");
     notify_kind("Tutorial: Authority Handoff", "info");
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     [
         objective("take_control", #{
             text: "Click the rover, then click Possess in the Inspector or Command Deck",
@@ -64,7 +64,7 @@ fn mission(me) {
     ]
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "MISSION_COMPLETE" {
         hint("Authority handoff complete. Click Continue in the Tutorial complete dialog to begin Moon Driving Basics.");
         notify_kind("Authority Handoff complete — choose Continue for Moon Driving Basics", "success");
@@ -74,7 +74,7 @@ fn on_event(me, evt) {
 // Headless verification performs the same possession/release state changes as
 // the learner. The UI path remains manual because this branch is gated by the
 // actual host mode, not by a debug build flag.
-fn task(me) {
+fn task(me, ctx) {
     if !is_unattended() { return; }
     seq([
         wait(1.0),

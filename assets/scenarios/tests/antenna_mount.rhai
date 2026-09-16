@@ -53,7 +53,7 @@ fn mounts() {
     ]
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     // Joints resolve over several ticks — avian must admit both bodies into its
     // island graph, and the physics-transform bridge must have written a real
@@ -71,7 +71,7 @@ fn on_start(me) {
     print("[mount] ── one antenna, three hosts, one parked control ─────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
 

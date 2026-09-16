@@ -60,7 +60,7 @@ fn port_or_zero(elec, port) {
 
 const ENVIRONMENT_WARMUP_S = 1.0;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
 
     // Modelica compiles asynchronously, so ports appear after the scene
@@ -107,7 +107,7 @@ fn on_start(me) {
           " nested=" + this.n_elec);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
 

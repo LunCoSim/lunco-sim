@@ -296,12 +296,12 @@ fn assembly_tool_negative_contracts_ok() {
         && invalid_explode.ok == false
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
     if this.t < 0.5 { return; }

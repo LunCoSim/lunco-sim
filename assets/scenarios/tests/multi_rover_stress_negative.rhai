@@ -2,7 +2,7 @@
 // contains three rovers; this scenario passes only when the production roster
 // exposes that unsupported cardinality instead of treating it as a stress run.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
     this.rovers = [];
     let group = find("/MultiRoverStress/Rovers");
@@ -13,7 +13,7 @@ fn on_start(me) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.done = true;
     report_verdict([
@@ -24,7 +24,7 @@ fn on_tick(me) {
     ], "MULTI-ROVER STRESS NEGATIVE", "MULTI_ROVER_STRESS_NEGATIVE");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         report_verdict(["negative multi-rover fixture stopped before its cardinality observation"],

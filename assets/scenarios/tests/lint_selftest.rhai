@@ -48,7 +48,7 @@ fn mentions(findings, subject) {
     false
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     // The malformed leg is kinematic because this scene tests authored lint
     // facts. The independent escape_containment scene owns the dynamic escape
@@ -64,7 +64,7 @@ fn on_start(me) {
     // malformation is tidied away, this scene still fails visibly.
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
     if this.t < this.lint_at { return; }

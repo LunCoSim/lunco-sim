@@ -14,7 +14,7 @@
 //
 // An episode is now a `seq` of shots on the native behaviour-tree kernel
 // (`lunco-scripting/src/task_tree.rs`), which every scenario already gets for free
-// via `fn task(me)`. No `on_tick` at all — the kernel advances the tree.
+// via `fn task(me, ctx)`. No `on_tick` at all — the kernel advances the tree.
 //
 // ── How to import it ─────────────────────────────────────────────────────────
 //

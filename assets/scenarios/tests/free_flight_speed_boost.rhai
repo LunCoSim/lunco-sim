@@ -22,7 +22,7 @@ fn fail(message) {
     report_verdict([message], "FREE FLIGHT SPEED BOOST", "FREE_FLIGHT_SPEED_BOOST");
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.phase = "warmup";
     this.avatar = find("/FreeFlightSpeedBoost/Avatar");
@@ -66,7 +66,7 @@ fn on_start(me) {
     this.base_start = world_pos(this.avatar);
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "intent.edge" && evt.source == this.avatar {
         let value = evt.value;
         if value["intent"] == "release" && value["edge"] == "pulse" &&
@@ -76,7 +76,7 @@ fn on_event(me, evt) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

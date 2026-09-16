@@ -73,7 +73,7 @@ USD topology address; walking to `parent(me)` would address the scene above the
 vessel and lose the typed latch handoff. `name(me)` is only a presentation label.
 
 ```rhai
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     // The fuel events, from the connected `LunCoEvent` prims above.
     if evt.name == "lander_low_fuel"  { notify_kind("Lander low on fuel.", "warn"); }
     else if evt.name == "lander_depleted" { notify_kind("Propellant depleted.", "warn"); }

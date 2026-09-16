@@ -27,7 +27,7 @@ const MAX_DISTANCE = 2.0;   // physics:maxDistance on the Tether
 const CONE_DEG = 45.0;      // coneAngle0/1Limit = 0.785 rad
 const D6_ARM_DISTANCE = 1.0;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 6.0;
     this.sample_s = 1.0;
@@ -48,7 +48,7 @@ fn on_start(me) {
     print("[g7] ── spherical + distance + reduced-D6 joints ─────────────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.ball_arm == () || this.ball_arm < 0 || this.weight == () || this.weight < 0 ||

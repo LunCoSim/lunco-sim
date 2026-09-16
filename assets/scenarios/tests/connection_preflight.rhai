@@ -32,14 +32,14 @@ fn find_document() {
     -1
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
     this.phase = 0;
     this.command_id = -1;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.phase == 0 {

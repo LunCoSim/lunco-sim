@@ -84,7 +84,7 @@ fn fail(me, message) {
     finish(me, [t_true(false, message)]);
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
     this.phase = 0;
     this.elapsed = 0.0;
@@ -94,7 +94,7 @@ fn on_start(me) {
     this.checks = [];
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 25.0 {
@@ -279,6 +279,6 @@ fn on_tick(me) {
     }
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     // Verdicts are emitted only from on_tick; teardown must not add one.
 }

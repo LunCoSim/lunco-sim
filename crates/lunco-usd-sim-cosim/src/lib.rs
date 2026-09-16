@@ -1922,7 +1922,6 @@ pub fn dispatch_loaded_python_sources(
                 origin: DocumentOrigin::untitled(format!("Python-{}", doc_id.raw())),
                 inputs: doc_inputs,
                 outputs: doc_outputs,
-                params: String::new(),
                 // No asset id: this source is SYNTHESIZED from a USD prim's inline
                 // script, so it has no location for a relative `import` to anchor
                 // against. `None` is the honest answer — an invented id would let a
@@ -1939,6 +1938,8 @@ pub fn dispatch_loaded_python_sources(
                 language: Some(ScriptLanguage::Python),
                 reload_policy: Default::default(),
                 paused: false,
+                parameters: Default::default(),
+                parameters_revision: 0,
                 inputs: Default::default(),
                 outputs: Default::default(),
             },

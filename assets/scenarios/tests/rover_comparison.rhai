@@ -65,7 +65,7 @@ const TRAVERSE_THROTTLE = 0.32;
 // rover is nearest without ever reaching the next one.
 const LANE_HALF_WIDTH = 5.0;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 4.0;
     // The course parent carries a uniform Y/Z compression for this bounded
@@ -151,7 +151,7 @@ fn on_start(me) {
     this.phase = "settle";
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
 
@@ -313,7 +313,7 @@ fn idx_of(names, want) {
 // A reload or manual stop can interrupt the run before its terminal release.
 // Apply the safe stop in that case too, so no vehicle inherits a route into the
 // next scenario.
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     for rover in this.rovers {
         if rover != () && rover >= 0 {
             brake(rover);

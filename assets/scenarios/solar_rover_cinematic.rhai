@@ -2,7 +2,7 @@
 // Coordinates camera cuts and subtitles. The sun, panel tracking, and battery
 // dynamics are physics — they run without any cinematic involvement.
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     let route = find("/SolarRoverTest/Route");
     if evt.name != "route_point_reached" || evt.source != route { return; }
     let index = evt.value;
@@ -152,6 +152,6 @@ fn survey() {
     seq([gate_one(), gate_two(), gate_three()])
 }
 
-fn task(me) {
+fn task(me, ctx) {
     seq([intro_and_deploy(), battery_cycle(), survey()])
 }

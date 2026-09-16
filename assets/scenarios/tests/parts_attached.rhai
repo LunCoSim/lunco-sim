@@ -77,7 +77,7 @@ fn radius(a, b) {
     vlen(vsub(a, b))
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 3.0;    // land, stop bouncing, and let the loader's
                             // kinematic → dynamic settle finish
@@ -122,7 +122,7 @@ fn on_start(me) {
           this.drive_s + "s drive");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     // A missing or incomplete authored pair is the classic silent no-op — fail

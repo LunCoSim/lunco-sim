@@ -18,7 +18,7 @@ fn mission_document(me) { 1 }
 // The checkpoint is written only when a phase completes. On hot reload or
 // restart, task(me) resumes from the last authored phase rather than replaying
 // already-completed work.
-fn task(me) {
+fn task(me, ctx) {
     let doc = mission_document(me);
     let phase = mission_checkpoint_read(me, "phase");
 
@@ -72,7 +72,7 @@ fn task(me) {
     ])
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     [
         objective("site_a", #{
             text: "Survey site A",

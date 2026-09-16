@@ -210,7 +210,7 @@ fn authored_variant_contract(rc, ph) {
 /// producer-to-consumer mismatch visible at the exact time parity diverges.
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // Tunables live on `this`: named fns cannot see top-level `const`s.
     this.t = 0.0;
     this.settle_s = 3.0;    // let both rovers land and stop bouncing
@@ -264,7 +264,7 @@ fn on_start(me) {
           "s -> steer " + this.steer_s + "s");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     // A missing rover is the classic silent no-op: `find` yields -1 and every
@@ -475,7 +475,7 @@ fn on_tick(me) {
 }
 
 /// Stop the rovers if the scenario is detached or hot-reloaded mid-run.
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     let rc = find("/DrivetrainParity/RoverRaycast");
     let ph = find("/DrivetrainParity/RoverPhysical");
     if rc >= 0 { brake(rc); }

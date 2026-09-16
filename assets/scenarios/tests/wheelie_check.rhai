@@ -23,7 +23,7 @@
 //
 // `emit("WHEELIE_CHECK", "PASS"|"FAIL")`.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 4.0;     // drop and ring down before any throttle
     this.drive_s = 6.0;      // full throttle, straight
@@ -45,7 +45,7 @@ fn on_start(me) {
     print("[wheelie] ── launch attitude, full throttle on the flat ───────────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.bl == () || this.bl < 0 || this.br == () || this.br < 0 {

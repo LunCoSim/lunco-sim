@@ -3,7 +3,7 @@ const TEST_KIND = "editor";
 const ROOT = "/PreviewDomainIsolation";
 const DORMANT = "/DormantPreviewNetwork";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.phase = 0; this.elapsed = 0.0; this.observed = 0.0;
     this.done = false; this.doc = -1; this.fork = -1;
     this.ids = []; this.checks = []; this.leaked = false; this.rejection_id = -1;
@@ -23,7 +23,7 @@ fn preview_has_solver() {
     let entity = find(DORMANT + "/Network");
     entity >= 0 && get(entity, "voltage") != ()
 }
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 40.0 {

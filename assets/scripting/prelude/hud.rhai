@@ -61,7 +61,7 @@ fn __obj_glyph(state) {
 
 /// Publish an objectives checklist to the HUD. `list` is an array of
 /// `#{ text, state }` (state ∈ "pending"|"active"|"complete"|"failed"). Use this
-/// for hand-driven step lists; a declarative `mission(me)` publishes itself.
+/// for hand-driven step lists; a declarative `mission(me, ctx)` publishes itself.
 fn objectives_hud(list) {
     let out = "";
     for o in list {

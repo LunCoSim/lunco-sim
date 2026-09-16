@@ -13,13 +13,13 @@
 
 const TARGET = 6;   // checkpoints to clear before the mission is done
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.count = 0;
     this.done = false;
     print("mission: armed, need " + TARGET + " checkpoints");
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if this.done { return; }
 
     if evt.name == "route_point_reached" {

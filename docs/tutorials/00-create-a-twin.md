@@ -131,12 +131,12 @@ infer a domain from a prim name.
 semantic commands. It should not reimplement the differential equation:
 
 ```rhai
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     print("Drive Twin started");
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "DriveComplete" {
         print("Drive observation complete");
         this.done = true;

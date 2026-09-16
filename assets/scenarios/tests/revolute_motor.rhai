@@ -15,7 +15,7 @@
 
 const TARGET = 1.2;   // rad, commanded through the port
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 2.0;    // confirm it is at rest BEFORE commanding
     this.done_s = 10.0;
@@ -31,7 +31,7 @@ fn on_start(me) {
     print("[motor] ── revolute motor via the `angle` port ───────────────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.hinge == () || this.hinge < 0 {

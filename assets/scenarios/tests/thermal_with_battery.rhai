@@ -22,7 +22,7 @@
 
 const PORT_WAIT_S = 30.0;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
 
@@ -38,7 +38,7 @@ fn finish_failure(s, message) {
     fail_fast(message, "THERMAL WITH BATTERY", "THERMAL_WITH_BATTERY");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
 

@@ -9,7 +9,7 @@
 // `run_tool` leaf:
 //
 //   photo_from(rover)                                  // capture from `rover`
-//   on_event(me, evt) { if evt.name == "route_point_reached" { take_photo(); } }
+//   on_event(me, evt, ctx) { if evt.name == "route_point_reached" { take_photo(); } }
 //   run_tool("science::take_photo")                    // ad-hoc leaf
 
 /// Capture a frame from `vessel`'s mounted camera (or the active scene camera

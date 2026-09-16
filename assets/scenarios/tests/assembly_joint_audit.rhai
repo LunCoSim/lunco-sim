@@ -1,7 +1,7 @@
 // TEST-ONLY: composed diagnostic contracts for payload and rover authoring.
-fn on_start(me) { this.done = false; }
+fn on_start(me, ctx) { this.done = false; }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.done = true;
     let checks = [];

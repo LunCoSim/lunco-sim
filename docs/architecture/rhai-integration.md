@@ -15,8 +15,9 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
 
 ### Capabilities
 
-- **Scenario parameters** — `RunScenario { …, params }` (JSON object string) →
-  read in-script as the `params` constant; one source serves many entities.
+- **Scenario parameters** — `RunScenario { …, params }` accepts one natural
+  typed object and passes it as the explicit `ctx` argument; one source serves
+  many independently configured entities.
 - **Lifecycle** — `on_stop` teardown hook (hot-reload / detach / despawn) +
   `SetScenarioPaused` / `StopScenario`. The lifecycle lives in a **language-neutral
   driver** (`scenario.rs`, `ScenarioRuntime` trait) over a **native world bridge**
@@ -112,11 +113,11 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
 ### Lifecycle hooks (per-entity runtime, `world_bridge.rs` `tick_rhai_models`)
 
 ```rhai
-fn task(me) { ... }            // builds the native task tree once
-fn mission(me) { ... }         // optional objective declaration
-fn on_start(me) { ... }        // optional setup after (re)compile
-fn on_event(me, evt) { ... }   // optional next-scenario-pass event reaction
-fn on_stop(me) { ... }         // optional teardown
+fn task(me, ctx) { ... }            // builds the native task tree once
+fn mission(me, ctx) { ... }         // optional objective declaration
+fn on_start(me, ctx) { ... }        // optional setup after (re)compile
+fn on_event(me, evt, ctx) { ... }   // optional next-scenario-pass event reaction
+fn on_stop(me, ctx) { ... }         // optional teardown
 ```
 
 State rule (rhai-specific, important): script `fn`s are **pure** — an indirect
@@ -271,7 +272,7 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 ┌─────────────────────────────────────────────────────────────┐
 │ Layer B — Scenario Runtime (temporal: checkpoints, goals)    │
 │   persistent per-scenario rhai (AST+Scope), host lifecycle   │
-│   task(me) / mission(me) + lifecycle and event hooks           │
+│   task(me,ctx) / mission(me,ctx) + lifecycle and event hooks    │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer A — Universal Bridge (manipulate everything, one-shot) │
 │   cmd(name, #{params})  query(name, #{params})  find(name)   │
@@ -343,12 +344,12 @@ mutation paths.
 rhai is synchronous and a mission must keep its control policy active while it
 is running, but `SetPorts` itself persists each accepted named value at the
 receiver until replacement or explicit release. The canonical script surface
-is a cooperative task tree: `task(me)` returns pure data once, and the native
+is a cooperative task tree: `task(me, ctx)` returns pure data once, and the native
 behavior kernel advances one deterministic step per fixed tick; lifecycle code
 uses `ReleasePort` or `ReleaseControl` when the task yields control.
 
 ```rhai
-fn task(me) {
+fn task(me, ctx) {
     let goals = [[12.0, 0.0, 0.0], [12.0, 0.0, 25.0]];
     let steps = [];
     for i in 0..goals.len() {
@@ -363,7 +364,7 @@ fn task(me) {
 
 Task leaves provide drive-until, one-shot, dwell, predicate, and event waits;
 composites provide sequence, parallel, repeat, race, retry, and reactive policy.
-`mission(me)` separately declares objective state and completion conditions.
+`mission(me, ctx)` separately declares objective state and completion conditions.
 Both are hot-reloadable Rhai policy; Rust supplies only the generic runtime,
 command/query bridge, and behavior-kernel mechanism.
 
@@ -374,7 +375,7 @@ writes:
 ```rhai
 intent_pulse(lander, "release");
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "intent.edge" && evt.value["target_gid"] == lander {
         if evt.value["intent"] == "release" && evt.value["edge"] == "pulse" {
             // Twin policy may now latch, detach, or otherwise consume the edge.
@@ -576,7 +577,7 @@ reads + command writes) is unusual vs Unity/Godot/Unreal (which read+write objec
 directly), but correct for our *category*: a **deterministic networked sim**
 (Factorio / RTS lockstep), where mutations must flow through a replicated ordered
 command stream and reads are local. Reads-via-reflection and a lifecycle callback
-(`task(me)` plus event hooks) are the production mission surface.
+(`task(me, ctx)` plus event hooks) are the production mission surface.
 
 **Scenario layer: implemented.** The current runtime is event-first and keeps
 policy out of the Rust engine core:
@@ -629,9 +630,10 @@ that the production runtime needs. ROS2 integration is planned. Resulting split:
 **Core exposes only (irreducible mechanism):**
 - Persistent scenario VM — `rhai::AST` + `Scope` per scenario, recompiled on
   `ScriptDocument` source change (hot-reload).
-- Host→script hooks: native `task(me)`/`mission(me)` drivers, `on_start()`,
-  `on_event(evt)` for production scenarios; authored test scenarios may also
-  use `on_tick(me)` for bounded verdict observation (all sim-time,
+- Host→script hooks: native `task(me, ctx)`/`mission(me, ctx)` drivers,
+  `on_start(me, ctx)`, `on_event(me, evt, ctx)` for production scenarios;
+  authored test scenarios may also
+  use `on_tick(me, ctx)` for bounded verdict observation (all sim-time,
   transport-gated via `TimeTransport`).
 - Ch.1 write — `cmd(name, #{…})` → `ReflectEvent::trigger`, behind RBAC.
 - Ch.2 read/local tuning — reflection and the canonical port bridge
@@ -745,7 +747,7 @@ subset for UI (`SyncChannel::Local` vs `ControlStream`). No client-side divergen
 per-entity hook (`document_id`, `language`, `paused`, `inputs`/`outputs`). Rhai
 scenarios use `RhaiScenarioRuntime`; Python has no `ScriptedModel` lifecycle
 runtime yet and is currently limited to one-shot `RunPython` evaluation. The
-script's `task(me)` identity is the host entity id; `this` is the persistent
+script's `task(me, ctx)` identity is the host entity id; `this` is the persistent
 scenario-state map supplied to lifecycle hooks and native task closures.
 
 **Execution model:** ONE shared `rhai::Engine` resource (all host fns registered),
@@ -754,11 +756,14 @@ change). Fixes today's "fresh Engine per eval" cost. The same `ScriptDocument`
 reused on many entities = **prefab scripts** — 10 subjects run `route_follow.rhai`, each
 with its own `Scope` (independent goal index/state).
 
-Task leaves use anonymous closures with one positional host id: `|me| ...`.
-The task driver invokes them with the persistent scenario state map as `this`.
-Named `Fn("...")` pointers are ordinary script callbacks, not task leaves; a
-named helper can be called explicitly from an anonymous task closure. This is
-the single callback contract at the Rhai-to-kernel boundary.
+Task leaves accept anonymous closures with one positional host id (`|me| ...`)
+or named script callbacks (`Fn("name")`, declared as `fn name(me)`). The task
+driver supplies the persistent scenario state map as the bound `this` pointer
+for both forms. Rhai map arguments are value/copy-on-write values, so helper
+functions do not mutate the caller's persistent state by assigning fields on a
+parameter. Stateful helpers return the updated map (and any operation result),
+and the lifecycle callback assigns that map back to `this`. This is the single
+callback/state-transfer contract at the Rhai-to-kernel boundary.
 
 **Two roles, both just `ScriptedModel`s:** entity-script (autonomy, ~Unity
 MonoBehaviour) and scenario-script (orchestration, on a scenario/singleton entity).

@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn omitted_kind_is_headless() {
         assert_eq!(
-            classify_rhai_source("fn on_start(me) { let value = me; }").unwrap(),
+            classify_rhai_source("fn on_start(me, ctx) { let value = me; }").unwrap(),
             SceneTestKind::Headless
         );
     }

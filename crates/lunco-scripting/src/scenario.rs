@@ -17,7 +17,7 @@
 //! TODO(python scenarios): give Python lifecycle parity by implementing
 //! `ScenarioRuntime` for a `PythonScenarioRuntime` (compile a module per entity;
 //! map policy/lifecycle functions to module-level `task`/`mission` and
-//! `on_start`/`on_tick`/`on_stop`/`on_event(evt)`
+//! `on_start(me, ctx)`/`on_tick(me, ctx)`/`on_stop(me, ctx)`/`on_event(me, evt, ctx)`
 //! functions via pyo3) and registering a `ScenarioDriver<PythonScenarioRuntime>`
 //! + a `tick_python_scenarios` exclusive system. Python then gets hot-reload,
 //! pause, on_stop teardown, and diagnostics FOR FREE from this driver — only the
@@ -36,6 +36,7 @@ use lunco_core::{SessionId, TelemetryEvent};
 use lunco_doc::{Diagnostic, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 
+use crate::doc::ScenarioParameters;
 use crate::doc::{ScriptLanguage, ScriptedModel};
 use crate::ScriptRegistry;
 use lunco_scripting_bridge_core as bridge_core;
@@ -364,9 +365,9 @@ pub struct ScenarioIntrospection<V> {
 pub trait ScenarioRuntime: Send + Sync + 'static {
     /// (Re)compile `source` for `entity`, replacing any prior program and running
     /// its top-level init. The driver guarantees the previous program's
-    /// `on_stop` has already been called before this. `params` is the scenario's
-    /// parameter JSON-object string (empty for none) — the backend exposes it to
-    /// the script (rhai: a `params` constant) so one scenario is reusable.
+    /// `on_stop` has already been called before this. `params` is the validated,
+    /// instance-owned launch context; the backend exposes it through its native
+    /// value model.
     ///
     /// `asset_id` is the canonical id the source was loaded from
     /// (`twin://ep1/main.rhai`), or `None` when it is not file-backed. It is the
@@ -378,7 +379,7 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
         &mut self,
         entity: Entity,
         source: &str,
-        params: &str,
+        params: &ScenarioParameters,
         asset_id: Option<&str>,
     ) -> CompileOutcome;
 
@@ -431,6 +432,10 @@ struct Fsm {
     /// compile. A broken revision is terminal until the document changes; retrying
     /// it every fixed tick only floods the log and repeats work that cannot succeed.
     attempted_generation: Option<u64>,
+    /// Parameter revision most recently sent to the compiler, including a
+    /// failed compile. Parameters belong to the attached instance rather than
+    /// the reusable source document.
+    parameters_revision: u64,
     /// Whether `on_start` has run for the current program.
     started: bool,
     /// Whether the backend currently holds a compiled program for this entity.
@@ -516,18 +521,20 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     }
 
     fn run_with_tick(world: &mut World, language: ScriptLanguage, run_tick: bool) {
-        // 1. Snapshot (entity, doc_id, gid, generation, source), releasing every
+        // 1. Snapshot (entity, doc_id, gid, source revision, parameter revision),
+        //    releasing every
         //    World borrow before we execute scripts. `live` = all THIS-LANGUAGE
         //    entities (incl. paused) — drives despawn/detach teardown.
-        // (entity, doc_id, gid, generation, maybe (source, params-json, asset-id),
-        // authority). Source+params+id are cloned only when a (re)compile is due
-        // (see below) — not every tick — since they're consumed solely by
-        // `runtime.compile`.
-        type CompileInput = (String, String, Option<String>);
+        // (entity, doc_id, gid, generation, parameter revision, maybe (source,
+        // parameters, asset-id), authority). Source+parameters+id are cloned only
+        // when a (re)compile is due (see below) — not every tick — since they're
+        // consumed solely by `runtime.compile`.
+        type CompileInput = (String, ScenarioParameters, Option<String>);
         let mut work: Vec<(
             Entity,
             u64,
             i64,
+            u64,
             u64,
             Option<CompileInput>,
             Option<SessionId>,
@@ -562,6 +569,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 Option<SessionId>,
                 ScriptScope,
                 crate::doc::ScenarioReloadPolicy,
+                u64,
             )> = q
                 .iter(world)
                 .map(|(e, m, auth, scope)| {
@@ -573,16 +581,27 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         auth.and_then(|a| a.0),
                         scope.copied().unwrap_or_default(),
                         m.reload_policy,
+                        m.parameters_revision,
                     )
                 })
                 .collect();
             live = models
                 .iter()
-                .filter(|(_, _, l, _, _, _, _)| *l == Some(language))
+                .filter(|(_, _, l, _, _, _, _, _)| *l == Some(language))
                 .map(|(e, ..)| *e)
                 .collect();
 
-            for (entity, paused, lang, doc_id, authority, scope, reload_policy) in models {
+            for (
+                entity,
+                paused,
+                lang,
+                doc_id,
+                authority,
+                scope,
+                reload_policy,
+                parameters_revision,
+            ) in models
+            {
                 if paused || lang != Some(language) {
                     continue;
                 }
@@ -614,12 +633,18 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         .and_then(|d| d.fsm.get(&entity))
                         .is_none_or(|st| {
                             st.attempted_generation != Some(generation)
+                                || st.parameters_revision != parameters_revision
                                 || (reload_policy == crate::doc::ScenarioReloadPolicy::Restart
                                     && st.started
                                     && st.scene_generation != scene_generation)
                         });
-                    let maybe_src = needs_recompile
-                        .then(|| (doc.source.clone(), doc.params.clone(), doc.asset_id.clone()));
+                    let maybe_src = needs_recompile.then(|| {
+                        let parameters = world
+                            .get::<ScriptedModel>(entity)
+                            .map(|model| model.parameters.clone())
+                            .unwrap_or_default();
+                        (doc.source.clone(), parameters, doc.asset_id.clone())
+                    });
                     (generation, maybe_src)
                 };
                 let gid = world
@@ -632,6 +657,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     raw,
                     gid,
                     generation,
+                    parameters_revision,
                     maybe_src,
                     authority,
                     reload_policy,
@@ -679,6 +705,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 raw,
                 gid,
                 generation,
+                parameters_revision,
                 maybe_src,
                 authority,
                 reload_policy,
@@ -704,6 +731,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 if let Some((source, params, asset_id)) = &maybe_src {
                     recompiled = true;
                     st.attempted_generation = Some(generation);
+                    st.parameters_revision = parameters_revision;
                     // Hot-reload teardown: the OUTGOING program cleans up first.
                     if scene_restart {
                         // The old scene is already gone. Discard the backend

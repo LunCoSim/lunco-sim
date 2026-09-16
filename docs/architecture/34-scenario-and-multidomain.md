@@ -23,7 +23,7 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 | Wiring (SSP Connection) | a native USD connection on the consumer — `inputs:x.connect = </Other.outputs:y>` → `SimConnection`; same form within a prim and across prims | ✅ |
 | Gravity from environment | env publishes `gravity_accel` output (`GRAVITY_SOURCE_CONNECTOR`); the model connects `inputs:g` to it | ✅ |
 | Many scripts in one world | each owner may have one executable Rhai `LunCoProgramAPI`; different owners remain independent | ✅; duplicate executable programs on one owner are rejected visibly |
-| Task state machines | rhai `seq`/`par_all`/`par_race`/`repeat` sequencer + `fn task(me)` | ✅ |
+| Task state machines | rhai `seq`/`par_all`/`par_race`/`repeat` sequencer + `fn task(me, ctx)` | ✅ |
 | Connector/`connect()` Modelica | rumoca flattens `RC_Circuit.mo`, `CascadedRCFilter.mo` | ✅ (verify MSL `LimPID` specifically) |
 | Live input retune (no recompile) | port write changes `input Real` next step | ✅ (must be a model **input**, not a `parameter`) |
 | Named trigger zones (geofence events) | `lunco:triggerZone="name"` → overlap-only Sensor → `enter:/exit:<name>` events | ✅ |

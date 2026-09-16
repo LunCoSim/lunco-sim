@@ -2,7 +2,7 @@
 // contract. The scene authors occupied, plug-kind, and joint mismatches; this
 // scenario submits all three through the same public command used by UI/API/Rhai.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.doc = -1;
     this.sent_occupied = false;
@@ -18,7 +18,7 @@ fn fail(message) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

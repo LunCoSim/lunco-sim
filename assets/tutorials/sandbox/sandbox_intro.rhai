@@ -32,14 +32,14 @@ fn show(s, i) {
     coach_step(s, i);
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // The optional world is selected by the catalog and mounted by the generic
     // launcher before this runs.
     this.i = 0;
     show(steps(), 0);
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     let s = steps();
     if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
     else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }

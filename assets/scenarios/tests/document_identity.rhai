@@ -8,7 +8,7 @@ fn record_for(docs, id) {
     ()
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.phase = 0;
     this.elapsed = 0.0;
     this.done = false;
@@ -19,7 +19,7 @@ fn on_start(me) {
     this.checks = [];
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 30.0 {
