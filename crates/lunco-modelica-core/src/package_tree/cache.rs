@@ -18,7 +18,7 @@ pub struct ScanResult {
 /// the duration of the load.
 pub struct FileLoadResult {
     pub doc_id: lunco_doc::DocumentId,
-    pub result: Result<crate::document::ModelicaDocument, String>,
+    pub result: Result<lunco_modelica_document::ModelicaDocument, String>,
 }
 
 #[derive(Resource)]

@@ -44,7 +44,7 @@ impl Plugin for IconWarmerPlugin {
 /// Observer body — extracted so unit tests can drive it without Bevy.
 fn on_document_opened_warm(
     trigger: On<DocumentOpened>,
-    registry: Res<crate::state::ModelicaDocumentRegistry>,
+    registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
 ) {
     let doc_id = trigger.event().doc;
     let Some(host) = registry.host(doc_id) else {
@@ -53,7 +53,7 @@ fn on_document_opened_warm(
     // Read from the doc's lenient cache — it's a reactive mirror of
     // the engine's strict parse, populated by either
     // `drive_engine_sync`'s drain step (workspace docs) or
-    // `load_library_file`'s strict-adopt (drill-in / library docs).
+    // the library document loader's strict-adopt path (drill-in / library docs).
     //
     // We must NOT call `engine.upsert_document(...)` here: for a
     // drill-in into Modelica.Blocks.* the source is the whole

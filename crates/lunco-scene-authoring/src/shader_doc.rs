@@ -100,7 +100,7 @@ impl Document for ShaderDocument {
 }
 
 /// `DocumentId`-keyed shader-source store with a path index and a journal handle.
-/// Mirrors `ScriptRegistry` / `ModelicaDocumentRegistry`.
+/// Mirrors the scripting registry and generic Modelica document registry.
 #[derive(Resource, Default)]
 pub struct ShaderRegistry {
     documents: HashMap<DocumentId, DocumentHost<ShaderDocument>>,

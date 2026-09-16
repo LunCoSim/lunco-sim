@@ -3207,7 +3207,7 @@ impl Plugin for UsdSimCosimPlugin {
         // initializes them, but minimal USD/physics apps intentionally omit
         // that plugin; keeping the resources here makes the projection
         // plugin's system contract complete and idempotent.
-        app.init_resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
+        app.init_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
             .init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .init_resource::<lunco_cosim::BindingRevision>()
             .init_resource::<lunco_core::SimulationBarrierParticipants>()

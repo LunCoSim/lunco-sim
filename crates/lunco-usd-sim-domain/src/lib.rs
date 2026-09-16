@@ -97,7 +97,7 @@ fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
 /// this guard keeps ordinary document lifecycle semantics untouched.
 fn retire_generated_document(
     document: lunco_doc::DocumentId,
-    documents: &mut lunco_modelica_core::state::ModelicaDocumentRegistry,
+    documents: &mut lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
 ) {
     if document.is_unassigned() {
         return;
@@ -113,7 +113,7 @@ fn retire_generated_document(
 fn queue_retire_generated_document(commands: &mut Commands, document: lunco_doc::DocumentId) {
     commands.queue(move |world: &mut World| {
         if let Some(mut documents) =
-            world.get_resource_mut::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
+            world.get_resource_mut::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
         {
             retire_generated_document(document, &mut documents);
         }
@@ -831,7 +831,9 @@ pub fn sync_generated_network_documents(
             Changed<GeneratedModelicaSource>,
         )>,
     >,
-    mut documents: ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>,
+    mut documents: ResMut<
+        lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
+    >,
     mut generated_metadata: ResMut<
         lunco_modelica_runtime::generated_source::GeneratedModelicaSources,
     >,
@@ -859,19 +861,23 @@ pub fn sync_generated_network_documents(
                 let _ = handle.ensure_source_root_async(&root);
             }
         }
-        let document =
-            if !model.document.is_unassigned() && documents.host(model.document).is_some() {
-                model.document
-            } else {
-                documents.allocate_with_origin(
-                    source.source.clone(),
-                    lunco_doc::DocumentOrigin::Bundled {
-                        filename: format!("generated/{}.mo", model.model_name),
-                    },
-                )
-            };
+        let document = if !model.document.is_unassigned()
+            && documents.host(model.document).is_some()
+        {
+            model.document
+        } else {
+            documents.allocate(
+                source.source.clone(),
+                lunco_doc::PathlessOrigin::bundled(format!("generated/{}.mo", model.model_name)),
+            )
+        };
         documents.reload_external_source(document, &source.source);
-        documents.link(entity, document);
+        if let Err(error) = documents.link(entity, document) {
+            bevy::log::warn!(
+                "[ModelicaProjection] failed to link entity {entity} to document {document}: {error}"
+            );
+            continue;
+        }
         model.document = document;
         generated_metadata.dirty = true;
     }
@@ -884,7 +890,9 @@ pub fn sync_generated_network_documents(
 pub fn on_remove_generated_source(
     trigger: On<Remove, GeneratedModelicaSource>,
     source_query: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
-    mut documents: Option<ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>>,
+    mut documents: Option<
+        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
+    >,
     mut generated: Option<
         ResMut<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>,
     >,
@@ -2115,17 +2123,15 @@ def Scope "Rig"
     #[test]
     fn removing_generated_source_retires_only_its_ephemeral_document() {
         let mut app = App::new();
-        app.init_resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
+        app.init_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
             .init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .add_observer(on_remove_generated_source);
         let document = app
             .world_mut()
-            .resource_mut::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
-            .allocate_with_origin(
+            .resource_mut::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
+            .allocate(
                 "model Generated end Generated;".into(),
-                lunco_doc::DocumentOrigin::Bundled {
-                    filename: "generated/Generated.mo".into(),
-                },
+                lunco_doc::PathlessOrigin::bundled("generated/Generated.mo"),
             );
         let entity = app
             .world_mut()
@@ -2151,8 +2157,9 @@ def Scope "Rig"
             ))
             .id();
         app.world_mut()
-            .resource_mut::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
-            .link(entity, document);
+            .resource_mut::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
+            .link(entity, document)
+            .expect("generated test document link");
         app.world_mut()
             .resource_mut::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .entries
@@ -2181,7 +2188,7 @@ def Scope "Rig"
 
         assert!(app
             .world()
-            .resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
+            .resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
             .host(document)
             .is_none());
         assert!(app

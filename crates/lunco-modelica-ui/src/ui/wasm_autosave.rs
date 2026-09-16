@@ -239,8 +239,8 @@ fn restore_from_localstorage(world: &mut World) {
         // Was this doc an open tab last session, and into which class was it
         // drilled? Looked up before `full_key` is moved into `AutosaveKeys`.
         let tab_drilled = session_tabs.get(&full_key).cloned();
-        let mut registry = world.resource_mut::<crate::state::ModelicaDocumentRegistry>();
-        let doc_id = registry.allocate_with_origin(source, origin);
+        let mut registry = world.resource_mut::<crate::ui::document_context::ModelicaDocuments>();
+        let doc_id = registry.restore(source, origin);
         // Remember the full key so a later close can clear localStorage
         // even after the registry host is gone.
         world
@@ -330,7 +330,7 @@ pub fn should_autosave(active: bool, is_untitled: bool) -> bool {
 #[cfg(target_arch = "wasm32")]
 fn autosave_on_changed(
     trigger: bevy::prelude::On<lunco_doc_bevy::DocumentChanged>,
-    registry: bevy::prelude::Res<crate::state::ModelicaDocumentRegistry>,
+    registry: bevy::prelude::Res<crate::ui::document_context::ModelicaDocuments>,
     gesture: bevy::prelude::Res<IsGestureActive>,
     mut keys: bevy::prelude::ResMut<AutosaveKeys>,
 ) {
@@ -392,7 +392,7 @@ fn autosave_on_changed(
 #[cfg(target_arch = "wasm32")]
 fn persist_open_tabs(
     tabs: bevy::prelude::Res<crate::model_tabs::ModelTabs>,
-    registry: bevy::prelude::Res<crate::state::ModelicaDocumentRegistry>,
+    registry: bevy::prelude::Res<crate::ui::document_context::ModelicaDocuments>,
     mut last: bevy::prelude::Local<String>,
 ) {
     let Some(storage) = local_storage() else {

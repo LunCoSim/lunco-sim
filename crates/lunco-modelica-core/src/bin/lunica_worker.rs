@@ -670,9 +670,7 @@ mod wasm {
                         let errors: Vec<lunco_doc::Diagnostic> = recovery
                             .parse_errors()
                             .iter()
-                            .map(|e| {
-                                lunco_modelica_core::document::parse_diag_from_error(e, &source)
-                            })
+                            .map(|e| lunco_modelica_document::parse_diag_from_error(e, &source))
                             .collect();
                         let ast = recovery.best_effort().clone();
                         (ast, errors)

@@ -5,7 +5,7 @@ use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentSaved, RedoDocument, SaveAsDocument, SaveDocument, UndoDocument};
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::panels::code_editor::EditorBufferState;
 use crate::ui::workbench_state::WorkbenchState;
 
@@ -80,7 +80,7 @@ pub fn on_redo(trigger: On<Redo>, mut commands: Commands) {
 #[on_command(UndoDocument)]
 pub fn on_undo_document(
     trigger: On<UndoDocument>,
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     mut editor: ResMut<EditorBufferState>,
     mut workbench: ResMut<WorkbenchState>,
 ) {
@@ -91,7 +91,7 @@ pub fn on_undo_document(
 #[on_command(RedoDocument)]
 pub fn on_redo_document(
     trigger: On<RedoDocument>,
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     mut editor: ResMut<EditorBufferState>,
     mut workbench: ResMut<WorkbenchState>,
 ) {
@@ -107,7 +107,7 @@ pub fn on_redo_document(
 fn apply_undo_or_redo(
     doc: DocumentId,
     is_undo: bool,
-    registry: &mut ModelicaDocumentRegistry,
+    registry: &mut ModelicaDocuments,
     editor: &mut EditorBufferState,
     workbench: &mut WorkbenchState,
 ) {
@@ -145,7 +145,7 @@ fn apply_undo_or_redo(
 pub fn sync_editor_buffer_to_source(
     doc: DocumentId,
     source: &str,
-    registry: &ModelicaDocumentRegistry,
+    registry: &ModelicaDocuments,
     editor: &mut EditorBufferState,
     workbench: &mut WorkbenchState,
 ) {
@@ -157,7 +157,7 @@ pub fn sync_editor_buffer_to_source(
 #[on_command(SaveDocument)]
 pub fn on_save_document(
     trigger: On<SaveDocument>,
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
 ) {
@@ -232,7 +232,7 @@ pub fn on_save_document(
 #[on_command(SaveAsDocument)]
 pub fn on_save_as_document(
     trigger: On<SaveAsDocument>,
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
     mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
@@ -350,7 +350,7 @@ pub fn on_save_as_document(
 pub fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
     let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
-        use crate::document::ModelicaOp;
+        use lunco_modelica_document::ModelicaOp;
         let doc = if raw.is_unassigned() {
             super::resolve_active_doc(world)
         } else {
@@ -360,12 +360,12 @@ pub fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
             bevy::log::warn!("[FormatDocument] no active document");
             return;
         };
-        let workbench_read_only = crate::state::read_only_for(world, doc);
+        let workbench_read_only = crate::ui::document_context::read_only_for(world, doc);
         if workbench_read_only {
             bevy::log::info!("[FormatDocument] tab is read-only — skipping");
             return;
         }
-        let Some(registry) = world.get_resource::<ModelicaDocumentRegistry>() else {
+        let Some(registry) = world.get_resource::<ModelicaDocuments>() else {
             return;
         };
         let Some(host) = registry.host(doc) else {
@@ -428,7 +428,7 @@ pub fn on_save_active_document_as(trigger: On<SaveActiveDocumentAs>, mut command
         };
         let path = std::path::PathBuf::from(&ev.path);
         let source = {
-            let registry = world.resource::<ModelicaDocumentRegistry>();
+            let registry = world.resource::<ModelicaDocuments>();
             let Some(host) = registry.host(doc) else {
                 return;
             };
@@ -445,7 +445,7 @@ pub fn on_save_active_document_as(trigger: On<SaveActiveDocumentAs>, mut command
             );
             return;
         }
-        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
+        let mut registry = world.resource_mut::<ModelicaDocuments>();
         if let Some(host) = registry.host_mut(doc) {
             host.document_mut()
                 .set_origin(lunco_doc::DocumentOrigin::File {

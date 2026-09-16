@@ -1698,6 +1698,10 @@ impl lunco_doc::FileBacked for UsdDocument {
         UsdDocument::is_dirty(self)
     }
 
+    fn mark_saved(&mut self) {
+        UsdDocument::mark_saved(self);
+    }
+
     fn reload_base(&mut self, source: &str) -> bool {
         UsdDocument::reload_base(self, source)
     }

@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench_core::PanelCtx;
 
-use crate::document::ModelicaOp;
+use lunco_modelica_document::ModelicaOp;
 
 use super::ops::{op_add_component_with_name, pick_add_instance_name};
 use super::CanvasDiagramState;

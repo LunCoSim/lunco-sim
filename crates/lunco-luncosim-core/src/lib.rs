@@ -488,7 +488,8 @@ fn replay_scenario_journal(
 /// leg is per-domain. Selects the merged, not-yet-applied `Modelica` op entries via
 /// [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
 /// (`DomainKind::Modelica`) — so a scripted merge policy reorders Modelica replay
-/// identically to USD — and applies each through `ModelicaDocumentRegistry::replay_op`
+/// identically to USD — and applies each through the generic Modelica document
+/// registry's `replay_op`
 /// (no re-recording).
 ///
 /// Resources are `Option`: the Modelica registry / journal aren't present in every
@@ -501,7 +502,9 @@ fn replay_scenario_journal_modelica(
     role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    registry: Option<ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>>,
+    registry: Option<
+        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
+    >,
     // Modelica-domain entry ids already projected (its own once-per-entry guard,
     // independent of the USD driver's applied-set).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,

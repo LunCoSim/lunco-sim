@@ -189,8 +189,8 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// an error so the canvas can show the actual cause.
 ///
 /// All callers must source the AST from
-/// [`ModelicaDocument::ast`](crate::document::ModelicaDocument::ast)
-/// or [`ModelicaDocument::syntax`](crate::document::ModelicaDocument::syntax)
+/// [`ModelicaDocument::ast`](lunco_modelica_document::ModelicaDocument::ast)
+/// or [`ModelicaDocument::syntax`](lunco_modelica_document::ModelicaDocument::syntax)
 /// — this function never parses. The Document's off-thread refresh
 /// in [`crate::ui::ast_refresh`] is the single source of truth for
 /// parsed Modelica trees in the workbench.

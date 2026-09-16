@@ -31,7 +31,7 @@
 //! ## What's deferred (next commits)
 //!
 //! - Auto-sync system: a Bevy `Update` system that mirrors changes
-//!   from `ModelicaDocumentRegistry` into the session. Today callers
+//!   from the generic Modelica document registry into the session. Today callers
 //!   call `upsert_document` explicitly.
 //! - Library-parent session for source library (`Session::with_library_parent`)
 //!   so cross-Twin source library state is shared once multi-Twin lands.

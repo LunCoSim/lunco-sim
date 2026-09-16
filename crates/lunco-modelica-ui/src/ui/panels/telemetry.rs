@@ -152,7 +152,7 @@ impl Panel for TelemetryPanel {
             let input_rows: Vec<InputRow> = {
                 let mut sorted: Vec<(String, f64)> = inputs.into_iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));
-                let registry = ctx.resource::<crate::state::ModelicaDocumentRegistry>();
+                let registry = ctx.resource::<crate::ui::document_context::ModelicaDocuments>();
                 let index_ref = registry
                     .and_then(|r| r.host(doc_id))
                     .map(|h| h.document().index());
@@ -486,7 +486,7 @@ impl Panel for TelemetryPanel {
                 let mut all_names: Vec<_> = model_vars;
                 all_names.extend(model_inputs);
                 all_names.extend(exp_vars.iter().cloned());
-                let registry = ctx.resource::<crate::state::ModelicaDocumentRegistry>();
+                let registry = ctx.resource::<crate::ui::document_context::ModelicaDocuments>();
                 let index_ref = registry
                     .and_then(|r| r.host(doc_id))
                     .map(|h| h.document().index());
@@ -656,10 +656,10 @@ fn render_selected_components_inspector(
     ctx: &mut PanelCtx,
     muted: egui::Color32,
 ) {
-    use crate::document::ModelicaOp;
     use crate::ui::panels::canvas_diagram::{
         active_class_for_doc_ctx, active_doc_from_world_ctx, CanvasDiagramState, IconNodeData,
     };
+    use lunco_modelica_document::ModelicaOp;
 
     let Some(doc_id) = active_doc_from_world_ctx(ctx) else {
         return;
@@ -708,7 +708,7 @@ fn render_selected_components_inspector(
     // type's parameter description-comments from the index for hover
     // help on the rows below.
     {
-        if let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() {
+        if let Some(registry) = ctx.resource::<crate::ui::document_context::ModelicaDocuments>() {
             if let Some(host) = registry.host(doc_id) {
                 let index = host.document().index();
                 for row in &mut rows {
@@ -956,7 +956,7 @@ pub fn populate_telemetry_view_model(world: &mut World) {
         return;
     };
     let Some(generation) = world
-        .get_resource::<crate::state::ModelicaDocumentRegistry>()
+        .get_resource::<crate::ui::document_context::ModelicaDocuments>()
         .and_then(|r| r.host(doc_id))
         .map(|h| h.document().index().generation)
     else {
@@ -970,7 +970,7 @@ pub fn populate_telemetry_view_model(world: &mut World) {
     }
 
     let (rows, read_only) = {
-        let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
+        let registry = world.resource::<crate::ui::document_context::ModelicaDocuments>();
         let Some(host) = registry.host(doc_id) else {
             return;
         };
@@ -1188,8 +1188,8 @@ fn format_param_value(raw: &str) -> String {
 }
 
 fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: egui::Color32) {
-    use crate::document::ModelicaOp;
     use crate::ui::panels::canvas_diagram::active_doc_from_world_ctx;
+    use lunco_modelica_document::ModelicaOp;
 
     let Some(doc_id) = active_doc_from_world_ctx(ctx) else {
         return;

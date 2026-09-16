@@ -1,12 +1,12 @@
 //! Periodic update/sync systems: StatusBar and UnsavedDocs.
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::workbench_state::WorkbenchState;
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentDiagnostics;
 
 pub fn publish_unsaved_modelica_docs(
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<ModelicaDocuments>,
     unsaved: Option<ResMut<lunco_workbench_browser::UnsavedDocs>>,
 ) {
     let Some(mut unsaved) = unsaved else { return };
@@ -38,7 +38,7 @@ pub fn update_status_bar(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     compile_states: Res<DocumentDiagnostics>,
     bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<ModelicaDocuments>,
     mut last_status: Local<Option<String>>,
 ) {
     let Some(mut bus) = bus else { return };
@@ -116,7 +116,7 @@ mod tests {
     use lunco_doc_bevy::DocumentDiagnostics;
     use lunco_status_core::status_bus::StatusBus;
 
-    use crate::state::ModelicaDocumentRegistry;
+    use crate::ui::document_context::ModelicaDocuments;
     use crate::ui::workbench_state::WorkbenchState;
 
     #[test]
@@ -145,7 +145,7 @@ mod tests {
     fn status_publishes_ready_files_once_until_the_text_changes() {
         let mut app = App::new();
         app.insert_resource(WorkbenchState::default())
-            .insert_resource(ModelicaDocumentRegistry::default())
+            .insert_resource(ModelicaDocuments::default())
             .insert_resource(DocumentDiagnostics::default())
             .insert_resource(StatusBus::default())
             .add_systems(Update, update_status_bar);
@@ -156,10 +156,10 @@ mod tests {
 
         let doc = app
             .world_mut()
-            .resource_mut::<ModelicaDocumentRegistry>()
-            .allocate_with_origin(
+            .resource_mut::<ModelicaDocuments>()
+            .allocate(
                 "model A end A;".into(),
-                DocumentOrigin::bundled("lander.mo"),
+                lunco_doc::PathlessOrigin::bundled("lander.mo"),
             );
         app.world_mut()
             .resource_mut::<DocumentDiagnostics>()

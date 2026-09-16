@@ -7,9 +7,10 @@
 
 use crate::model_tabs::ModelTabs;
 use crate::model_tabs_types::TabRenderContext;
-use crate::state::ModelicaDocumentRegistry;
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_modelica_document::ModelicaDocument;
 use std::collections::HashMap;
 
 /// Read-only resource access for contexts that resolve run-target precedence.
@@ -69,7 +70,7 @@ pub fn drilled_class_for_doc_in<R: ResourceRead>(ctx: &R, doc: DocumentId) -> Op
 /// candidates (e.g. open a picker modal) layer that on top.
 pub fn default_simulation_class_in<R: ResourceRead>(ctx: &R, doc: DocumentId) -> Option<String> {
     let candidates = ctx
-        .read_resource::<ModelicaDocumentRegistry>()
+        .read_resource::<DocumentRegistry<ModelicaDocument>>()
         .and_then(|r| r.host(doc))
         .map(|h| h.document().index().simulation_candidates())
         .unwrap_or_default();

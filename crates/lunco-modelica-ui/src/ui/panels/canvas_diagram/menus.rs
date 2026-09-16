@@ -9,7 +9,7 @@
 use bevy_egui::egui;
 use lunco_workbench_core::PanelCtx;
 
-use crate::document::ModelicaOp;
+use lunco_modelica_document::ModelicaOp;
 
 use super::ops::{component_headers, op_remove_component, op_remove_edge};
 use super::palette::{self, PaletteSettings};
@@ -139,7 +139,7 @@ pub(super) fn render_node_menu(
 fn collect_varying_signals(ctx: &PanelCtx) -> Vec<(bevy::prelude::Entity, String)> {
     use bevy::prelude::Entity;
     // A document's variables are registered in `SignalRegistry` under TWO
-    // entities: the live cosim entity (`ModelicaDocumentRegistry`) and the
+    // entities: the live cosim entity (`ModelicaDocuments`) and the
     // batch / Fast-Run playback entity (`PlaybackEntities`). Enumerating the
     // whole registry therefore lists every path once per entity — the
     // duplicate-variables bug. Resolve the active doc to its single canonical
@@ -149,7 +149,7 @@ fn collect_varying_signals(ctx: &PanelCtx) -> Vec<(bevy::prelude::Entity, String
     // signals so the picker matches exactly what a doc-bound plot will show.
     let bound_entity: Option<Entity> = active_doc_from_world_ctx(ctx).and_then(|d| {
         let live = ctx
-            .resource::<crate::state::ModelicaDocumentRegistry>()
+            .resource::<crate::ui::document_context::ModelicaDocuments>()
             .and_then(|reg| {
                 reg.iter_doc_for_entity()
                     .filter(|(_, dd)| *dd == d)

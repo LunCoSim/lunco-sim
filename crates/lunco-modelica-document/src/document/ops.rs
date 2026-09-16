@@ -120,7 +120,8 @@ pub enum ModelicaChange {
 /// The op type for [`crate::document::ModelicaDocument`].
 ///
 /// Derives `Serialize`/`Deserialize` so the canonical Twin journal records the
-/// **real op** (lossless, replayable) via `record_op` — see [`crate::journal`].
+/// **real op** (lossless, replayable) via `record_op` — see the
+/// `lunco-twin-journal` operation payload contract.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ModelicaOp {

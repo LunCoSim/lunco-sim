@@ -25,7 +25,7 @@ use bevy_egui::egui;
 use lunco_ui::log::{render_log_view, LogEntry, LogLevel, SourceLoc};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 
 /// Panel id.
 pub const DIAGNOSTICS_PANEL_ID: PanelId = PanelId("modelica_diagnostics");
@@ -196,7 +196,7 @@ fn hash_str(s: Option<&str>) -> u64 {
 pub fn refresh_diagnostics(
     // error lives on `CompileStates`.
     workspace: Res<lunco_workspace::WorkspaceResource>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<ModelicaDocuments>,
     compile_states: Res<lunco_doc_bevy::DocumentDiagnostics>,
     mut diagnostics: ResMut<DiagnosticsLog>,
     mut cursor: bevy::prelude::Local<DiagnosticsCursor>,

@@ -83,7 +83,8 @@ pub struct ScriptRegistry {
     /// appears (see [`wire_scripting_journal_handle`]). When set, every host gets
     /// a [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) so edits —
     /// including hot-reload `SetSource` and undo/redo — auto-record. `None` → no
-    /// recording (the pre-journal / test path). Mirrors `ModelicaDocumentRegistry`.
+    /// recording (the pre-journal / test path). Mirrors the generic document
+    /// registry's journal wiring.
     journal: Option<lunco_doc_bevy::JournalResource>,
 }
 
@@ -179,7 +180,7 @@ impl ScriptRegistry {
 impl ScriptRegistry {
     /// Apply a **journal op** to `doc` for replay (journal→document projection —
     /// the networked-edit consume path) **without recording it**. Mirror of
-    /// [`ModelicaDocumentRegistry::replay_op`](lunco_modelica_core::state::ModelicaDocumentRegistry::replay_op).
+    /// [`lunco_doc_bevy::DocumentRegistry::replay_op`].
     /// The op is already in the journal (arrived via `append_remote`), so applying
     /// straight to the document bypasses the recorder to avoid a duplicate entry.
     /// `op` is the entry's serialized [`doc::ScriptOp`]. Returns `false` (logged,

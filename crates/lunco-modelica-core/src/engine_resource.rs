@@ -1,5 +1,5 @@
 //! Long-lived [`ModelicaEngine`] exposed as a Bevy resource and
-//! kept in lockstep with [`crate::state::ModelicaDocumentRegistry`].
+//! kept in lockstep with the generic Modelica document registry.
 //!
 //! ## Why a long-lived engine
 //!
@@ -305,7 +305,7 @@ impl ModelicaEngineHandle {
             let diags: Vec<lunco_doc::Diagnostic> = recovery
                 .parse_errors()
                 .iter()
-                .map(|e| crate::document::parse_diag_from_error(e, &source))
+                .map(|e| lunco_modelica_document::parse_diag_from_error(e, &source))
                 .collect();
             let ast = recovery.best_effort().clone();
             let t_install = web_time::Instant::now();
@@ -388,7 +388,7 @@ impl Default for ParsePacing {
 /// since last tick are dropped from the engine session via
 /// [`ModelicaEngine::close_document`].
 ///
-/// Runs only when `ModelicaDocumentRegistry` or an async engine completion
+/// Runs only when the Modelica document registry or an async engine completion
 /// changes. Reads the registry, mutates the engine, and advances the cursor.
 /// Edit-debounce window before re-parsing a document that was
 /// previously parsed. New docs (never parsed) spawn immediately —
@@ -418,7 +418,7 @@ pub fn ast_debounce_for_size(src_len: usize) -> u128 {
 
 fn engine_sync_is_due(
     handle: &ModelicaEngineHandle,
-    registry: &crate::state::ModelicaDocumentRegistry,
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
     cursor: &EngineSyncCursor,
     pacing: &ParsePacing,
 ) -> bool {
@@ -432,7 +432,7 @@ fn engine_sync_is_due(
 
 fn engine_sync_due(
     handle: Res<ModelicaEngineHandle>,
-    registry: Res<crate::state::ModelicaDocumentRegistry>,
+    registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
     cursor: Res<EngineSyncCursor>,
     pacing: Res<ParsePacing>,
 ) -> bool {
@@ -442,7 +442,9 @@ fn engine_sync_due(
 pub fn drive_engine_sync(
     mut commands: Commands,
     handle: Res<ModelicaEngineHandle>,
-    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<
+        lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
+    >,
     mut cursor: ResMut<EngineSyncCursor>,
     pacing: Res<ParsePacing>,
 ) {
@@ -515,7 +517,7 @@ pub fn drive_engine_sync(
         match (parsed_ast, registry.host_mut(doc_id)) {
             (Some(ast), Some(host)) => {
                 let arc_ast = std::sync::Arc::new(ast);
-                let syntax = crate::document::SyntaxCache {
+                let syntax = lunco_modelica_document::SyntaxCache {
                     generation: parse_gen,
                     ast: arc_ast,
                     // Located parse diagnostics captured at spawn time.
@@ -543,7 +545,7 @@ pub fn drive_engine_sync(
                     } else {
                         parse_diags
                     };
-                    let syntax = crate::document::SyntaxCache {
+                    let syntax = lunco_modelica_document::SyntaxCache {
                         generation: parse_gen,
                         ast: std::sync::Arc::new(
                             rumoca_compile::parsing::ast::StoredDefinition::default(),
@@ -798,7 +800,7 @@ pub fn drive_engine_sync(
                     let t_engine = t0.elapsed().as_secs_f64() * 1000.0;
                     let t1 = web_time::Instant::now();
                     if let Some(host) = registry.host_mut(doc_id) {
-                        let syntax = crate::document::SyntaxCache {
+                        let syntax = lunco_modelica_document::SyntaxCache {
                             generation: gen,
                             ast: std::sync::Arc::new(ast),
                             errors: Vec::new(),
@@ -888,9 +890,11 @@ pub fn drive_engine_sync(
 #[cfg(target_arch = "wasm32")]
 pub fn drain_worker_parse_results(
     handle: Res<ModelicaEngineHandle>,
-    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<
+        lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
+    >,
 ) {
-    use crate::document::SyntaxCache;
+    use lunco_modelica_document::SyntaxCache;
     use std::sync::Arc;
     while let Some(env) = crate::worker_transport::try_recv_parse_failed() {
         handle.finish_worker_parse_failed(env.doc_id, env.gen, env.error.clone());
@@ -994,7 +998,9 @@ mod tests {
     #[test]
     fn engine_sync_due_waits_for_registry_or_engine_work() {
         let handle = ModelicaEngineHandle::default();
-        let mut registry = crate::state::ModelicaDocumentRegistry::default();
+        let mut registry = lunco_doc_bevy::DocumentRegistry::<
+            lunco_modelica_document::ModelicaDocument,
+        >::default();
         let mut cursor = EngineSyncCursor::default();
         let pacing = ParsePacing::default();
 
@@ -1016,7 +1022,9 @@ mod tests {
     #[test]
     fn engine_sync_due_wakes_after_edit_debounce() {
         let handle = ModelicaEngineHandle::default();
-        let registry = crate::state::ModelicaDocumentRegistry::default();
+        let registry =
+            lunco_doc_bevy::DocumentRegistry::<lunco_modelica_document::ModelicaDocument>::default(
+            );
         let cursor = EngineSyncCursor {
             next_debounce_at: Some(web_time::Instant::now() - std::time::Duration::from_millis(1)),
             ..Default::default()

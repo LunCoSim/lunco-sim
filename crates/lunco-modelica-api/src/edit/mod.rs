@@ -14,7 +14,7 @@ use lunco_modelica_ast::pretty::{
     GraphicSpec, Line, LinePattern, LunCoPlotNodeSpec, Placement, PortRef, VariabilitySpec,
     VariableDecl,
 };
-use lunco_modelica_core::document::ModelicaOp;
+use lunco_modelica_document::ModelicaOp;
 use util::{resolve_doc, strip_same_package_prefix};
 
 /// Plugin that registers the Modelica edit events + observers.

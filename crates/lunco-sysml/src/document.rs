@@ -90,6 +90,11 @@ impl SysmlDocument {
         &self.origin
     }
 
+    /// Mark the current source as the persisted baseline.
+    pub fn mark_saved(&mut self) {
+        self.last_saved_generation = Some(self.generation);
+    }
+
     /// Whether this source has semantic/parser diagnostics.
     pub fn has_diagnostics(&self) -> bool {
         self.analysis.has_errors()
@@ -177,6 +182,10 @@ impl FileBacked for SysmlDocument {
             Some(saved) => saved != self.generation,
             None => true,
         }
+    }
+
+    fn mark_saved(&mut self) {
+        SysmlDocument::mark_saved(self);
     }
 
     fn reload_base(&mut self, source: &str) -> bool {

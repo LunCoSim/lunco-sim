@@ -15,6 +15,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-experiments = { path = "../lunco-experiments" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-solver = { path = "../lunco-modelica-solver" }

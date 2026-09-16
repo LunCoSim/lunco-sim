@@ -1,6 +1,6 @@
 //! Intent resolvers: translate abstract EditorIntent into concrete Modelica commands.
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use bevy::prelude::*;
 use lunco_doc_bevy::NewDocument;
 use lunco_doc_bevy::{EditorIntent, RedoDocument, SaveAsDocument, SaveDocument, UndoDocument};
@@ -10,7 +10,7 @@ use lunco_doc_bevy::{EditorIntent, RedoDocument, SaveAsDocument, SaveDocument, U
 pub fn resolve_editor_intent(
     trigger: On<EditorIntent>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<ModelicaDocuments>,
     mut pending_closes: ResMut<lunco_workbench_core::tabs::PendingTabCloses>,
     mut commands: Commands,
 ) {

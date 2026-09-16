@@ -16,7 +16,8 @@ use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, Command, O
 use lunco_doc::DocumentId;
 use lunco_modelica_runtime::ModelicaModel;
 
-use crate::state::ModelicaDocumentRegistry;
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_modelica_document::ModelicaDocument;
 
 /// Push a runtime input value into a compiled model's stepper.
 ///
@@ -187,7 +188,7 @@ pub fn apply_set_model_input(
         doc_raw
     };
     let entity = {
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<DocumentRegistry<ModelicaDocument>>();
         let entities = registry.entities_linked_to(doc);
         match entities.first().copied() {
             Some(e) => e,
@@ -252,7 +253,7 @@ pub(crate) fn bounds_from_annotation_in<R: crate::sim_default::ResourceRead>(
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
 ) -> Option<lunco_experiments::RunBounds> {
-    let reg = ctx.read_resource::<crate::state::ModelicaDocumentRegistry>()?;
+    let reg = ctx.read_resource::<DocumentRegistry<ModelicaDocument>>()?;
     let host = reg.host(doc)?;
     let index = host.document().index();
     let class = index

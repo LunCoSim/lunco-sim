@@ -4,12 +4,12 @@
 //! live here so `lunco-modelica-core` remains usable by servers, workers, and
 //! USD simulation without depending on the workbench crates.
 
+use crate::ui::document_context::ModelicaDocuments;
 use bevy::prelude::{Entity, Resource};
 use lunco_doc::DocumentId;
 use lunco_modelica_core::{
     class_metadata::{self, ClassMetadata},
     sim_default::{self, ResourceRead},
-    state::ModelicaDocumentRegistry,
 };
 use lunco_workbench_core::PanelCtx;
 
@@ -53,20 +53,20 @@ pub fn detected_name_for(ctx: &PanelCtx, doc: DocumentId) -> Option<String> {
 }
 
 pub fn read_only_for(ctx: &PanelCtx, doc: DocumentId) -> bool {
-    ctx.resource::<ModelicaDocumentRegistry>()
+    ctx.resource::<ModelicaDocuments>()
         .and_then(|registry| registry.host(doc))
         .map(|host| host.document().is_read_only())
         .unwrap_or(false)
 }
 
 pub fn display_name_for(ctx: &PanelCtx, doc: DocumentId) -> Option<String> {
-    ctx.resource::<ModelicaDocumentRegistry>()
+    ctx.resource::<ModelicaDocuments>()
         .and_then(|registry| registry.host(doc))
         .map(|host| host.document().origin().display_name())
 }
 
 pub fn simulator_for(ctx: &PanelCtx, doc: DocumentId) -> Option<Entity> {
-    ctx.resource::<ModelicaDocumentRegistry>()
+    ctx.resource::<ModelicaDocuments>()
         .and_then(|registry| registry.simulator_for(doc))
 }
 

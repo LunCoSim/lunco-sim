@@ -1,7 +1,7 @@
 //! Package Browser — Dymola-style library tree.
 
 use crate::class_ref::{ClassRef, Library};
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use std::path::PathBuf;
@@ -219,7 +219,7 @@ pub fn render_root_subtree(
         .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let active_path_str = active_doc.and_then(|d| {
-        ctx.resource::<ModelicaDocumentRegistry>()
+        ctx.resource::<ModelicaDocuments>()
             .and_then(|r| r.host(d))
             .map(|h| h.document().origin().display_name())
     });
@@ -481,7 +481,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
     // Dedup: same bundled file already loaded → reuse the doc, just
     // ensure a tab keyed on the new drill target.
     let already_open = world
-        .resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocuments>()
         .find_bundled(&filename);
     if let Some(doc) = already_open {
         let tab_id = world
@@ -496,9 +496,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
         return;
     }
 
-    let reserved_doc_id = world
-        .resource_mut::<ModelicaDocumentRegistry>()
-        .reserve_id();
+    let reserved_doc_id = world.resource_mut::<ModelicaDocuments>().reserve_id();
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(reserved_doc_id, drilled_for_tab);
@@ -516,7 +514,7 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
             filename: filename_for_task.clone(),
         };
         let result = match crate::models::get_model(&filename_for_task) {
-            Some(source_text) => Ok(crate::document::ModelicaDocument::with_origin(
+            Some(source_text) => Ok(lunco_modelica_document::ModelicaDocument::with_origin(
                 reserved_doc_id,
                 source_text.to_string(),
                 origin,
@@ -575,15 +573,10 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
     } else {
         Some(ModelViewMode::Text)
     };
-    let already_open = world
-        .resource::<ModelicaDocumentRegistry>()
-        .find_by_path(&path);
+    let already_open = world.resource::<ModelicaDocuments>().find_by_path(&path);
     if let Some(doc) = already_open {
         if read_only_library {
-            if let Some(host) = world
-                .resource_mut::<ModelicaDocumentRegistry>()
-                .host_mut(doc)
-            {
+            if let Some(host) = world.resource_mut::<ModelicaDocuments>().host_mut(doc) {
                 host.document_mut()
                     .set_origin(lunco_doc::DocumentOrigin::File {
                         path: path.clone(),
@@ -598,12 +591,12 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         // canvas/plots/compile reproject; skip if the buffer already matches.
         if let Ok(disk) = lunco_modelica_runtime::source_asset::read_text_sync(&path) {
             let differs = world
-                .resource::<ModelicaDocumentRegistry>()
+                .resource::<ModelicaDocuments>()
                 .host(doc)
                 .map(|h| h.document().source() != disk)
                 .unwrap_or(false);
             if differs {
-                use crate::document::ModelicaOp;
+                use lunco_modelica_document::ModelicaOp;
                 match crate::ui::panels::canvas_diagram::apply_one_op_as(
                     world,
                     doc,
@@ -635,9 +628,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         return;
     }
 
-    let reserved_doc_id = world
-        .resource_mut::<ModelicaDocumentRegistry>()
-        .reserve_id();
+    let reserved_doc_id = world.resource_mut::<ModelicaDocuments>().reserve_id();
     let tab_id = world
         .resource_mut::<crate::model_tabs::ModelTabs>()
         .ensure_for(reserved_doc_id, drilled);
@@ -668,7 +659,11 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         // browser storage, and this is the same call site on both targets.
         let result = lunco_modelica_runtime::source_asset::read_text_sync(&path_for_task)
             .map(|source_text| {
-                crate::document::ModelicaDocument::with_origin(reserved_doc_id, source_text, origin)
+                lunco_modelica_document::ModelicaDocument::with_origin(
+                    reserved_doc_id,
+                    source_text,
+                    origin,
+                )
             })
             .map_err(|e| format!("Failed to read {}: {e}", path_for_task.display()));
         crate::package_tree::cache::FileLoadResult {

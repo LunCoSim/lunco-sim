@@ -3,7 +3,7 @@
 //! ## What it shows
 //!
 //! 1. Modelica documents in the active Twin scope from the
-//!    [`crate::state::ModelicaDocumentRegistry`] — drafts and files currently
+//!    [`crate::ui::document_context::ModelicaDocuments`] — drafts and files currently
 //!    associated with that Twin.
 //! 2. Shared read-only library roots from the package-tree provider.
 //!
@@ -16,7 +16,7 @@
 //! ## Single source of truth
 //!
 //! This panel **does not parse**. It reads
-//! [`ModelicaDocument::syntax`](crate::document::ModelicaDocument::syntax)
+//! [`ModelicaDocument::syntax`](lunco_modelica_document::ModelicaDocument::syntax)
 //! — the lenient parse cache that the off-thread refresh in
 //! [`crate::ui::ast_refresh`] keeps up to date — and derives the
 //! class tree from it on each render. The browser sees exactly the
@@ -35,7 +35,7 @@ use rumoca_compile::parsing::ClassType;
 
 // `DrilledInClassNames` reads migrated to
 // `crate::sim_default::drilled_class_for_doc`.
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 
 /// One Modelica class entry rendered in the tree.
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ struct ClassEntry {
 
 /// The Modelica Twin-Browser section. Stateless — every render
 /// derives the class tree from
-/// [`ModelicaDocument::syntax`](crate::document::ModelicaDocument::syntax),
+/// [`ModelicaDocument::syntax`](lunco_modelica_document::ModelicaDocument::syntax),
 /// which is kept up to date off-thread by [`crate::ui::ast_refresh`].
 #[derive(Default)]
 pub struct ModelicaSection;
@@ -80,7 +80,7 @@ impl BrowserSection for ModelicaSection {
         // writable workspace documents. Both source-of-truth reads:
         //   * libraries come from `PackageTreeCache::roots` (the
         //     same tree the Package Browser panel renders);
-        //   * workspace docs come from `ModelicaDocumentRegistry`
+        //   * workspace docs come from `ModelicaDocuments`
         //     filtered for writable / untitled origins.
         // The cache plus document registry are the complete read sources for
         // this section; there is no separate UI-owned class list.
@@ -142,7 +142,7 @@ impl BrowserSection for ModelicaSection {
         // (mid-parse, empty draft).
         let workspace = ctx.resource::<lunco_workspace::WorkspaceResource>();
         let workspace_docs: Vec<(DocumentId, String)> = ctx
-            .resource::<ModelicaDocumentRegistry>()
+            .resource::<ModelicaDocuments>()
             .map(|registry| {
                 registry
                     .iter()
@@ -583,7 +583,7 @@ fn render_workspace_doc_row(
         // the origin once before the header so we don't re-borrow
         // the registry inside the closure.
         let icon: &'static str = ctx
-            .resource::<ModelicaDocumentRegistry>()
+            .resource::<ModelicaDocuments>()
             .and_then(|r| r.host(doc_id))
             .map(|h| {
                 if h.document().origin().is_untitled() {
@@ -675,7 +675,7 @@ fn render_workspace_doc_row(
         }
         let target = {
             let origin = ctx
-                .resource::<ModelicaDocumentRegistry>()
+                .resource::<ModelicaDocuments>()
                 .and_then(|r| r.host(doc_id))
                 .map(|h| h.document().origin().clone());
             match origin {
@@ -734,7 +734,7 @@ fn render_workspace_doc_row(
             }
             RenameTarget::UntitledOrigin => {
                 if !new_name.is_empty() {
-                    let _ = ctx.resource_scope::<ModelicaDocumentRegistry, _>(|_, registry| {
+                    let _ = ctx.resource_scope::<ModelicaDocuments, _>(|_, registry| {
                         if let Some(host) = registry.host_mut(doc_id) {
                             host.document_mut()
                                 .set_origin(lunco_doc::DocumentOrigin::untitled(new_name));
@@ -768,7 +768,7 @@ fn render_workspace_doc_row(
 /// the outer tree branch carrying this doc's name has
 /// already been drawn; we just paint the children inline.
 ///
-/// Source-of-truth read of [`crate::state::ModelicaDocumentRegistry`] via the doc's
+/// Source-of-truth read of [`crate::ui::document_context::ModelicaDocuments`] via the doc's
 /// [`lunco_modelica_index::index::ModelicaIndex`]. Stateless; the registry's
 /// off-thread refresh + per-op optimistic patches keep the Index current.
 pub(crate) fn render_workspace_doc(
@@ -777,7 +777,7 @@ pub(crate) fn render_workspace_doc(
     doc_id: DocumentId,
 ) {
     let (classes, has_parse_errors) = match ctx
-        .resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocuments>()
         .and_then(|reg| reg.host(doc_id))
         .map(|host| classes_from_index(host.document().index()))
     {
@@ -813,7 +813,7 @@ pub(crate) fn render_workspace_doc(
     // classes (Airframe, Engine, FluidPort, …) sit directly under
     // the doc header.
     let doc_display_name: Option<String> = ctx
-        .resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocuments>()
         .and_then(|reg| reg.host(doc_id))
         .map(|host| host.document().origin().display_name());
     let classes: Vec<ClassEntry> = if classes.len() == 1
@@ -944,7 +944,7 @@ fn classes_from_index(
 #[cfg(test)]
 fn parse_classes(source: &str) -> (Vec<ClassEntry>, bool) {
     use lunco_doc::{DocumentId, DocumentOrigin};
-    let mut doc = crate::document::ModelicaDocument::with_origin(
+    let mut doc = lunco_modelica_document::ModelicaDocument::with_origin(
         DocumentId::new(1),
         source.to_string(),
         DocumentOrigin::untitled("test"),

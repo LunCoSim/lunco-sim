@@ -6,7 +6,7 @@
 //! per-Twin `workspace-state` file and recreate it on next launch — the
 //! buffer is the source of truth, so unsaved edits survive a restart.
 //!
-//! Restore replays [`ModelicaDocumentRegistry::allocate_with_origin`],
+//! Restore replays [`ModelicaDocuments::restore`],
 //! which pushes `pending_opened` → the existing open pipeline registers
 //! the Workspace entry and opens the tab. So this codec stays tiny: read
 //! buffers out, push buffers back in, let the normal machinery do the
@@ -22,7 +22,7 @@ use lunco_workbench_state::{
 };
 
 use crate::model_tabs::ModelTabs;
-use crate::state::{is_generated_document, ModelicaDocumentRegistry};
+use crate::ui::document_context::{is_generated_document, ModelicaDocuments};
 use crate::ui::panels::canvas_diagram::CanvasDiagramState;
 use crate::ui::MODEL_VIEW_KIND;
 use lunco_modelica_runtime::generated_source::is_generated_origin;
@@ -56,7 +56,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
     }
 
     fn revision(&self, world: &World) -> u64 {
-        let Some(reg) = world.get_resource::<ModelicaDocumentRegistry>() else {
+        let Some(reg) = world.get_resource::<ModelicaDocuments>() else {
             return 0;
         };
         // Order-independent fold of (id, generation) so the gate fires on
@@ -104,7 +104,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
             .map(|cds| {
                 cds.iter_doc_ids()
                     .filter_map(|d| {
-                        let registry = world.get_resource::<ModelicaDocumentRegistry>()?;
+                        let registry = world.get_resource::<ModelicaDocuments>()?;
                         let host = registry.host(d)?;
                         if is_generated_document(host.document()) {
                             return None;
@@ -124,7 +124,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
             .get_resource::<ModelTabs>()
             .map(|tabs| {
                 world
-                    .get_resource::<ModelicaDocumentRegistry>()
+                    .get_resource::<ModelicaDocuments>()
                     .map(|reg| {
                         reg.iter()
                             .filter_map(|(id, host)| {
@@ -138,7 +138,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
             })
             .unwrap_or_default();
 
-        let Some(reg) = world.get_resource::<ModelicaDocumentRegistry>() else {
+        let Some(reg) = world.get_resource::<ModelicaDocuments>() else {
             return Vec::new();
         };
         reg.iter()
@@ -172,7 +172,7 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
         if !is_persistable_snapshot(snap) {
             return None;
         }
-        // `allocate_with_origin` registers the document and fires
+        // `restore` registers the document and fires
         // `DocumentOpened` — which adds the Workspace entry — but it does
         // NOT open a model-view tab. In normal use the package browser
         // opens the tab via `OpenTab` after a click (see
@@ -182,8 +182,8 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
         // Welcome. The saved camera is applied in `apply_view_state`.
         let origin = restore_origin(&snap.origin);
         let new_id = world
-            .get_resource_mut::<ModelicaDocumentRegistry>()?
-            .allocate_with_origin(snap.source.clone(), origin);
+            .get_resource_mut::<ModelicaDocuments>()?
+            .restore(snap.source.clone(), origin);
         let tab_id = world.resource_mut::<ModelTabs>().ensure_for(new_id, None);
         world.commands().trigger(OpenTab {
             kind: MODEL_VIEW_KIND,
@@ -274,9 +274,9 @@ mod tests {
         assert!(is_persistable_snapshot(&authored));
 
         let mut world = World::new();
-        let mut registry = ModelicaDocumentRegistry::default();
-        registry.allocate_with_origin(generated.source.clone(), generated.origin);
-        registry.allocate_with_origin(authored.source.clone(), authored.origin.clone());
+        let mut registry = ModelicaDocuments::default();
+        registry.restore(generated.source.clone(), generated.origin);
+        registry.restore(authored.source.clone(), authored.origin.clone());
         world.insert_resource(registry);
 
         let captured = ModelicaSessionCodec.capture(&mut world);

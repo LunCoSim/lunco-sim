@@ -13,10 +13,12 @@ lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-hash = { path = "../lunco-hash" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-usd-actuation = { path = "../lunco-usd-actuation" }

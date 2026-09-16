@@ -1,10 +1,10 @@
 //! User interaction handlers: menus, DND, and clicks.
 
 use super::super::{menus, ops, CanvasDiagramState, ContextMenuTarget, PendingContextMenu, ICON_W};
-use crate::document::ModelicaOp;
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use bevy_egui::egui;
 use lunco_canvas::{Pos as CanvasPos, Rect as CanvasRect};
+use lunco_modelica_document::ModelicaOp;
 use lunco_workbench_core::PanelCtx;
 
 pub(crate) fn handle_context_menu(
@@ -232,7 +232,7 @@ pub(crate) fn handle_drag_and_drop(
                         ctx.resource::<crate::model_tabs::ModelTabs>()
                             .and_then(|t| t.drilled_class_for_doc(doc_id))
                             .or_else(|| {
-                                let registry = ctx.resource::<ModelicaDocumentRegistry>()?;
+                                let registry = ctx.resource::<ModelicaDocuments>()?;
                                 let host = registry.host(doc_id)?;
                                 let ast = host.document().strict_ast()?;
                                 lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast)

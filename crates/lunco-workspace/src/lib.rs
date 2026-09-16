@@ -133,7 +133,7 @@ impl TwinId {
 /// Workspace-level metadata for one open Document.
 ///
 /// The actual Document (AST, source, undo stack) lives in a domain
-/// registry (e.g. `ModelicaDocumentRegistry`); the Workspace only
+/// registry (e.g. `DocumentRegistry<ModelicaDocument>`); the Workspace only
 /// tracks what's open and how it relates to Twins. That separation
 /// keeps the Workspace type free of per-format generics.
 ///
@@ -318,7 +318,7 @@ impl Workspace {
             }
         }
         // Document-entry assumption: caller already chose an id; no
-        // conflict check here, same as how ModelicaDocumentRegistry
+        // conflict check here, same as how a domain document registry
         // trusts its own allocator.
         self.documents.push(entry);
     }

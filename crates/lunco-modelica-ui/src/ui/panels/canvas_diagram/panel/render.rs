@@ -175,9 +175,9 @@ pub(crate) fn render_diagram_canvas(
     {
         let generated_document = active_doc
             .and_then(|doc| {
-                ctx.resource::<crate::state::ModelicaDocumentRegistry>()
+                ctx.resource::<crate::ui::document_context::ModelicaDocuments>()
                     .and_then(|registry| registry.host(doc))
-                    .map(|host| crate::state::is_generated_document(host.document()))
+                    .map(|host| crate::ui::document_context::is_generated_document(host.document()))
             })
             .unwrap_or(false);
         let library_state = ctx.resource::<lunco_assets_core::library::LibraryLoadState>();

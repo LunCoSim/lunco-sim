@@ -185,7 +185,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | :--- | :--- |
 | **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, generated-source metadata, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
 | **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
-| **`lunco-modelica-core`** | Headless Modelica compiler host: authored document editing, Rumoca compilation, worker implementation, and source-library access. It consumes `lunco-modelica-runtime`, `lunco-modelica-solver`, and `lunco-modelica-index`; it does not own editor indexing, pure annotation values, solver implementation, API query registration, the shared runtime protocol, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-core`** | Headless Modelica compiler host: Rumoca compilation, worker implementation, simulation resources, and source-library access. It consumes the `lunco-modelica-document`, `lunco-modelica-runtime`, `lunco-modelica-solver`, and `lunco-modelica-index` contracts; it does not own document editing, editor indexing, pure annotation values, solver implementation, API query registration, the shared runtime protocol, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
 | **`lunco-modelica-solver`** | Renderer-free Modelica solver capability: Rumoca backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session. The compiler host supplies lowered solve models and owns document/worker lifecycle; this package owns numerical integration construction and solver-specific dependencies. |
 | **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, and run query providers plus document edit commands. It depends on the headless Modelica core but is not part of the compiler core's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui-core`** | Render-independent Modelica UI contracts: shared command/event payloads (`OpenClass`, `FocusDocumentByName`, `SetModelicaParameter`) and stable plot identities. It has no Modelica compiler, workbench shell, panel, or renderer dependency; observers remain in the owning UI package. |
@@ -893,7 +893,24 @@ Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco
 ### Scripting & Modeling
 
 **`lunco-modelica-core`**
-Modelica language integration. Provides AST-based editing and compilation via Rumoca while coordinating worker execution, allowing complex industrial models to drive simulation entities and vessel subsystems. Numerical solver construction is owned by `lunco-modelica-solver`. On wasm, compiles/Fast-Runs are dispatched off the main thread to the `lunica_worker` companion binary; its `worker_transport` composes the generic `lunco-worker-transport::WorkerPool` (spawn/handshake/post/respawn) and layers source-library readiness and per-run routing on top. The worker's prepared solve-IR cache is isolated in `worker/cache.rs` and persists through `lunco-storage`; native command lanes live in `worker/scheduling.rs`. API commands are opt-in, and API query providers are owned by `lunco-modelica-api`.
+Modelica compiler, worker, and simulation integration. It consumes the
+headless `ModelicaDocument` contract from `lunco-modelica-document` but does
+not own document editing or source-file identity. Numerical solver construction
+is owned by `lunco-modelica-solver`. On wasm, compiles/Fast-Runs are dispatched
+off the main thread to the `lunica_worker` companion binary; its
+`worker_transport` composes the generic `lunco-worker-transport::WorkerPool`
+(spawn/handshake/post/respawn) and layers source-library readiness and per-run
+routing on top. The worker's prepared solve-IR cache is isolated in
+`worker/cache.rs` and persists through `lunco-storage`; native command lanes
+live in `worker/scheduling.rs`. API commands are opt-in, and API query providers
+are owned by `lunco-modelica-api`.
+
+**`lunco-modelica-document`**
+Headless, render-free Modelica document package. It owns the canonical source
+buffer, recovering AST/index cache, typed document operations, source patching,
+document-origin/file-backed contract, and low-level document tests. It has no
+Bevy, compiler worker, UI, or simulation lifecycle; hosts install its
+`ModelicaDocument` through the generic `lunco-doc-bevy::DocumentRegistry`.
 
 **`lunco-modelica-solver`**
 Renderer-free Rumoca solver capability. It owns backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session; the compiler host supplies lowered solve models and owns document/worker lifecycle. This keeps solver-specific numerical dependencies and low-level integration tests out of the compiler host's source boundary.

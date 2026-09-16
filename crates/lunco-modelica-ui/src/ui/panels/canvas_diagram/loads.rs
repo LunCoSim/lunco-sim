@@ -4,13 +4,13 @@
 //! duplicate creates an editable Untitled copy. Both reserve a doc
 //! id eagerly, spawn an off-thread loader on
 //! `AsyncComputeTaskPool`, and install the prebuilt
-//! [`crate::document::ModelicaDocument`] via
-//! [`crate::state::ModelicaDocumentRegistry::install_prebuilt`]
+//! [`lunco_modelica_document::ModelicaDocument`] via
+//! [`crate::ui::document_context::ModelicaDocuments::install_prebuilt`]
 //! when the load completes. The in-flight task and metadata live
 //! in [`crate::ui::document_openings::DocumentOpenings`]; the
 //! per-frame drivers below poll their own variant.
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::document_openings::{DocumentOpenings, OpeningState};
 use bevy::prelude::*;
 
@@ -43,11 +43,11 @@ pub(crate) fn on_drill_into_class_requested(
 pub struct DrillInBinding {
     pub qualified: String,
     /// Off-thread document load. Built via
-    /// [`crate::document::ModelicaDocument::load_library_file`] which
-    /// hits rumoca's content-hash artifact cache, so a class whose
+    /// [`lunco_modelica_core::library_documents::load_library_class`] which
+    /// hits the source-library parsed bundle, so a class whose
     /// containing file the engine session has already parsed
     /// installs in milliseconds. Driven by [`drive_drill_in_loads`].
-    pub task: bevy::tasks::Task<Result<crate::document::ModelicaDocument, String>>,
+    pub task: bevy::tasks::Task<Result<lunco_modelica_document::ModelicaDocument, String>>,
     /// RAII guard registered with [`lunco_status_core::status_bus::StatusBus`].
     /// Dropped together with the binding (on install or on document
     /// removal) — the bus then clears the
@@ -59,13 +59,13 @@ pub struct DrillInBinding {
 
 /// Tab-to-task binding for duplicate-to-workspace operations whose
 /// bg parse hasn't finished yet. The parse goes off the UI thread
-/// because a naïve `allocate_with_origin` on a multi-KB source
+/// because naïve synchronous construction of a multi-KB source
 /// re-runs rumoca synchronously — locked the workbench for seconds
 /// in debug builds, which users (correctly) called a bug:
 /// *"no operations like that must be in UI thread"*.
 ///
 /// Same shape as [`DrillInBinding`]: the bg task returns a fully-
-/// built [`crate::document::ModelicaDocument`], the driver
+/// built [`lunco_modelica_document::ModelicaDocument`], the driver
 /// [`drive_duplicate_loads`] installs it into the registry via
 /// `install_prebuilt`. Stored in
 /// [`crate::ui::document_openings::DocumentOpenings`] under
@@ -73,7 +73,7 @@ pub struct DrillInBinding {
 pub struct DuplicateBinding {
     pub display_name: String,
     pub origin_short: String,
-    pub task: bevy::tasks::Task<crate::document::ModelicaDocument>,
+    pub task: bevy::tasks::Task<lunco_modelica_document::ModelicaDocument>,
     /// RAII guard registered with [`lunco_status_core::status_bus::StatusBus`].
     /// Same lifecycle as [`DrillInBinding::busy`] — clears the
     /// `(BusyScope::Document, "duplicate")` slot on Drop.
@@ -86,7 +86,7 @@ pub struct DuplicateBinding {
 /// Workspace` flow.
 pub fn drive_duplicate_loads(
     mut openings: bevy::prelude::ResMut<DocumentOpenings>,
-    mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
+    mut registry: bevy::prelude::ResMut<ModelicaDocuments>,
     mut probe: Option<bevy::prelude::ResMut<crate::FrameTimeProbe>>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
     mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
@@ -110,7 +110,7 @@ pub fn drive_duplicate_loads(
     let mut had_install = false;
     for doc_id in doc_ids {
         let t_poll = web_time::Instant::now();
-        let polled: Option<crate::document::ModelicaDocument> =
+        let polled: Option<lunco_modelica_document::ModelicaDocument> =
             if let Some(OpeningState::Duplicate(b)) = openings.get_mut(doc_id) {
                 bevy::tasks::futures_lite::future::block_on(
                     bevy::tasks::futures_lite::future::poll_once(&mut b.task),
@@ -134,7 +134,12 @@ pub fn drive_duplicate_loads(
         let dup_display_name = b.display_name;
         let origin_short = b.origin_short;
         let t_install = web_time::Instant::now();
-        registry.install_prebuilt(doc_id, doc);
+        if let Err(error) = registry.install_prebuilt(doc_id, doc) {
+            bevy::log::warn!(
+                "[CanvasDiagram] duplicate document {doc_id} could not be installed: {error}"
+            );
+            continue;
+        }
         let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
         info!(
             "[CanvasDiagram] duplicate: installed `{}` (from `{}`) — poll={poll_ms:.1}ms install={install_ms:.1}ms",
@@ -224,7 +229,7 @@ pub fn drive_duplicate_loads(
 
 pub fn drive_drill_in_loads(
     mut openings: bevy::prelude::ResMut<DocumentOpenings>,
-    mut registry: bevy::prelude::ResMut<ModelicaDocumentRegistry>,
+    mut registry: bevy::prelude::ResMut<ModelicaDocuments>,
     mut tabs: bevy::prelude::ResMut<crate::model_tabs::ModelTabs>,
     mut egui_q: bevy::prelude::Query<&mut bevy_egui::EguiContext>,
     mut canvas_state: bevy::prelude::ResMut<super::CanvasDiagramState>,
@@ -240,7 +245,7 @@ pub fn drive_drill_in_loads(
     }
     let doc_ids = openings.doc_ids();
     for doc_id in doc_ids {
-        let polled: Option<Result<crate::document::ModelicaDocument, String>> =
+        let polled: Option<Result<lunco_modelica_document::ModelicaDocument, String>> =
             if let Some(OpeningState::DrillIn(b)) = openings.get_mut(doc_id) {
                 bevy::tasks::futures_lite::future::block_on(
                     bevy::tasks::futures_lite::future::poll_once(&mut b.task),
@@ -298,7 +303,12 @@ pub fn drive_drill_in_loads(
             });
             (path, has_components)
         };
-        registry.install_prebuilt(doc_id, doc);
+        if let Err(error) = registry.install_prebuilt(doc_id, doc) {
+            bevy::log::warn!(
+                "[CanvasDiagram] drill-in document {doc_id} could not be installed: {error}"
+            );
+            continue;
+        }
         // by the upstream `drill_into_class` call before this
         // driver runs.
         let land_in_icon_view = crate::ui::class_display::is_icon_only_class(&qualified)
@@ -448,7 +458,7 @@ fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::
     // showing the requested class.
     let model_path_id = format!("library://{qualified}");
     let existing_doc = {
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         let tabs = world.resource::<crate::model_tabs::ModelTabs>();
         // A tab whose `(doc.file, drilled_class)` matches the new
         // request — re-focus it instead of allocating a duplicate.
@@ -476,7 +486,7 @@ fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::
         // panels render the "Loading resource…" overlay via
         // `StatusBus::is_busy(BusyScope::Document(doc.0))` — the
         // `DrillInBinding` minted at spawn keeps the bus entry alive.
-        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
+        let registry = world.resource_mut::<ModelicaDocuments>();
         let id = registry.reserve_id();
         (id, true)
     };
@@ -492,7 +502,7 @@ fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::
         let path_for_task = file_path.to_path_buf();
         let qualified_for_task = qualified.to_string();
         let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-            crate::document::ModelicaDocument::load_library_class(
+            lunco_modelica_core::library_documents::load_library_class(
                 doc_id,
                 &path_for_task,
                 &qualified_for_task,

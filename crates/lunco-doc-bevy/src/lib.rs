@@ -969,6 +969,11 @@ pub struct PendingEvents {
 #[derive(Resource)]
 pub struct DocumentRegistry<D: lunco_doc::Document> {
     hosts: HashMap<DocumentId, lunco_doc::DocumentHost<D>>,
+    /// Optional runtime-entity links for domains whose live projection is
+    /// backed by a document. The link index is generic because the document
+    /// lifecycle and identity rules are generic; a domain still owns the
+    /// meaning of the linked component.
+    by_entity: HashMap<Entity, DocumentId>,
     /// Twin-journal handle, wired once the [`JournalResource`] appears. When
     /// set, every host gets a [`JournalOpRecorder`] so edits — including undo /
     /// redo — auto-record. `None` in headless-without-journal builds.
@@ -991,17 +996,22 @@ pub struct DocumentRegistry<D: lunco_doc::Document> {
     /// decides. Per the collaboration doc, an external change while a sim runs
     /// must **badge, never auto-reload** — a silent reload restarts the world.
     watermarks: HashMap<DocumentId, HashMap<std::path::PathBuf, std::time::SystemTime>>,
+    /// Monotonic change signal for consumers that need to avoid scanning all
+    /// hosts on an unchanged frame.
+    revision: u64,
 }
 
 impl<D: lunco_doc::Document> Default for DocumentRegistry<D> {
     fn default() -> Self {
         Self {
             hosts: HashMap::new(),
+            by_entity: HashMap::new(),
             journal: None,
             pending_opened: Vec::new(),
             pending_changes: Vec::new(),
             pending_closed: Vec::new(),
             watermarks: HashMap::new(),
+            revision: 0,
         }
     }
 }
@@ -1024,6 +1034,7 @@ where
         // subscriber that only listens to changes still sees the initial source.
         self.pending_opened.push(id);
         self.pending_changes.push(id);
+        self.revision = self.revision.wrapping_add(1);
         id
     }
 
@@ -1069,9 +1080,124 @@ where
         self.hosts.keys().copied()
     }
 
+    /// Monotonic revision of document membership and source state.
+    ///
+    /// This is a change-detection input, not a replacement for each
+    /// document's generation. Callers still compare the generation of the
+    /// individual document they are about to process.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Queue a `Changed` event for `doc` after a direct `host_mut` mutation.
     pub fn mark_changed(&mut self, doc: DocumentId) {
         self.pending_changes.push(doc);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// Reserve a fresh document identity for work that constructs a document
+    /// off the ECS thread. The identity is not live until
+    /// [`install_prebuilt`](Self::install_prebuilt) succeeds.
+    pub fn reserve_id(&self) -> DocumentId {
+        DocumentId::fresh()
+    }
+
+    /// Install a document built for a previously reserved id.
+    ///
+    /// A mismatched or already-live id is rejected instead of silently
+    /// replacing a document and losing its history.
+    pub fn install_prebuilt(
+        &mut self,
+        id: DocumentId,
+        document: D,
+    ) -> Result<(), lunco_doc::DocumentError> {
+        if document.id() != id {
+            return Err(lunco_doc::DocumentError::ValidationFailed(format!(
+                "prebuilt document id {} does not match reserved id {}",
+                document.id(),
+                id
+            )));
+        }
+        if self.hosts.contains_key(&id) {
+            return Err(lunco_doc::DocumentError::ValidationFailed(format!(
+                "document id {id} is already installed"
+            )));
+        }
+        self.hosts
+            .insert(id, lunco_doc::DocumentHost::new(document));
+        self.attach_recorder(id);
+        self.pending_opened.push(id);
+        self.pending_changes.push(id);
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Link a live runtime entity to an existing document.
+    ///
+    /// The registry stores the relationship but does not infer ownership or
+    /// remove the document when the entity disappears. Those are domain
+    /// lifecycle decisions.
+    pub fn link(
+        &mut self,
+        entity: Entity,
+        doc: DocumentId,
+    ) -> Result<(), lunco_doc::DocumentError> {
+        if !self.hosts.contains_key(&doc) {
+            return Err(lunco_doc::DocumentError::ValidationFailed(format!(
+                "cannot link entity {entity} to unknown document {doc}"
+            )));
+        }
+        self.by_entity.insert(entity, doc);
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Remove the link for `entity` while leaving the document live.
+    pub fn unlink_entity(&mut self, entity: Entity) -> Option<DocumentId> {
+        let removed = self.by_entity.remove(&entity);
+        if removed.is_some() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+        removed
+    }
+
+    /// Look up the document linked to `entity`.
+    pub fn document_of(&self, entity: Entity) -> Option<DocumentId> {
+        self.by_entity.get(&entity).copied()
+    }
+
+    /// Iterate all live entity/document links.
+    pub fn iter_doc_for_entity(&self) -> impl Iterator<Item = (Entity, DocumentId)> + '_ {
+        self.by_entity.iter().map(|(entity, doc)| (*entity, *doc))
+    }
+
+    /// Return all entities linked to `doc` in stable entity order.
+    pub fn entities_linked_to(&self, doc: DocumentId) -> Vec<Entity> {
+        let mut entities: Vec<_> = self
+            .by_entity
+            .iter()
+            .filter_map(|(entity, linked)| (*linked == doc).then_some(*entity))
+            .collect();
+        entities.sort_unstable();
+        entities
+    }
+
+    /// Return the lowest linked entity for deterministic singleton views.
+    pub fn simulator_for(&self, doc: DocumentId) -> Option<Entity> {
+        self.by_entity
+            .iter()
+            .filter_map(|(entity, linked)| (*linked == doc).then_some(*entity))
+            .min()
+    }
+
+    /// Alias for callers that need to scan every document host.
+    pub fn docs(&self) -> impl Iterator<Item = (DocumentId, &lunco_doc::DocumentHost<D>)> {
+        self.hosts.iter().map(|(id, host)| (*id, host))
+    }
+
+    /// Iterate every live document host.
+    pub fn iter(&self) -> impl Iterator<Item = (DocumentId, &lunco_doc::DocumentHost<D>)> {
+        self.docs()
     }
 
     /// Apply an op via the host and queue a Changed notification. Convenience
@@ -1098,7 +1224,7 @@ where
             .get_mut(&doc)
             .ok_or_else(|| lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}")))?;
         let ack = host.apply(mutation)?;
-        self.pending_changes.push(doc);
+        self.mark_changed(doc);
         Ok(ack)
     }
 
@@ -1133,15 +1259,23 @@ where
             .get_mut(&doc)
             .ok_or_else(|| lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}")))?;
         let ack = host.apply_group_against(parent_gen, ops)?;
-        self.pending_changes.push(doc);
+        self.mark_changed(doc);
         Ok(ack)
     }
 
     /// Drop `doc` and queue its `Closed` event.
     pub fn remove(&mut self, doc: DocumentId) -> Option<lunco_doc::DocumentHost<D>> {
         let host = self.hosts.remove(&doc)?;
+        self.by_entity.retain(|_, linked| *linked != doc);
+        self.watermarks.remove(&doc);
         self.pending_closed.push(doc);
+        self.revision = self.revision.wrapping_add(1);
         Some(host)
+    }
+
+    /// Drop a document and all entity links to it.
+    pub fn remove_document(&mut self, doc: DocumentId) {
+        let _ = self.remove(doc);
     }
 
     /// Drain the pending-events rings.
@@ -1189,7 +1323,7 @@ where
         };
         match host.document_mut().apply(parsed) {
             Ok(_) => {
-                self.pending_changes.push(doc);
+                self.mark_changed(doc);
                 true
             }
             Err(e) => {
@@ -1200,10 +1334,18 @@ where
     }
 }
 
-impl<D: lunco_doc::FileBacked> DocumentRegistry<D>
+impl<D: lunco_doc::FileBacked + lunco_doc::Document> DocumentRegistry<D>
 where
     D::Op: lunco_twin_journal::OpPayload,
 {
+    /// Mark a successfully persisted document clean without creating an edit
+    /// or lifecycle event.
+    pub fn mark_document_saved(&mut self, doc: DocumentId) {
+        if let Some(host) = self.hosts.get_mut(&doc) {
+            host.document_mut().mark_saved();
+        }
+    }
+
     /// Allocate a new document that is **not** backed by a file: File→New
     /// (untitled) or a bundled example.
     ///
@@ -1219,6 +1361,19 @@ where
     /// [`restore`](Self::restore).
     pub fn allocate(&mut self, source: String, origin: lunco_doc::PathlessOrigin) -> DocumentId {
         self.install(|id| D::with_origin(id, source, origin.into()))
+    }
+
+    /// Allocate a fresh untitled document with a stable display name derived
+    /// from its identity. This is the common path for in-memory documents and
+    /// cannot accidentally mint a file-backed identity.
+    pub fn allocate_untitled(&mut self, source: String) -> DocumentId {
+        self.install(|id| {
+            D::with_origin(
+                id,
+                source,
+                lunco_doc::DocumentOrigin::untitled(format!("Untitled-{}", id.raw())),
+            )
+        })
     }
 
     /// Reinstate a document from persisted session state, origin and all.
@@ -1266,6 +1421,7 @@ where
         self.attach_recorder(new_id);
         self.pending_opened.push(new_id);
         self.pending_changes.push(new_id);
+        self.revision = self.revision.wrapping_add(1);
         Ok(new_id)
     }
 
@@ -1282,6 +1438,36 @@ where
                 })
                 .unwrap_or(false)
         })
+    }
+
+    /// Resolve an open document by its file identity.
+    pub fn find_by_path(&self, path: &std::path::Path) -> Option<DocumentId> {
+        self.doc_for_file(path)
+    }
+
+    /// Look up a bundled, pathless document by its source filename.
+    pub fn find_bundled(&self, filename: &str) -> Option<DocumentId> {
+        self.hosts.iter().find_map(|(id, host)| {
+            matches!(
+                host.document().origin(),
+                lunco_doc::DocumentOrigin::Bundled { filename: current }
+                    if current == filename
+            )
+            .then_some(*id)
+        })
+    }
+
+    /// Refresh a document from an authoritative external source without
+    /// creating an editor undo/journal entry.
+    pub fn reload_external_source(&mut self, doc: DocumentId, source: &str) -> bool {
+        let Some(host) = self.hosts.get_mut(&doc) else {
+            return false;
+        };
+        if !host.document_mut().reload_base(source) {
+            return false;
+        }
+        self.mark_changed(doc);
+        true
     }
 
     /// Open `path` backed by `source` (its current on-disk text), returning the
@@ -1308,6 +1494,18 @@ where
         path: impl Into<std::path::PathBuf>,
         source: String,
     ) -> (DocumentId, lunco_doc::OpenOutcome) {
+        self.open_file_with_writable(path, source, true)
+    }
+
+    /// Open a file-backed document while preserving whether its source is
+    /// writable. Library files use the same path identity and reload policy as
+    /// user files, but remain read-only at the document boundary.
+    pub fn open_file_with_writable(
+        &mut self,
+        path: impl Into<std::path::PathBuf>,
+        source: String,
+        writable: bool,
+    ) -> (DocumentId, lunco_doc::OpenOutcome) {
         use lunco_doc::OpenOutcome;
         let path = path.into();
         let Some(id) = self.doc_for_file(&path) else {
@@ -1315,7 +1513,11 @@ where
             // file-backed document, and it earns that by having just proved the
             // path isn't open. `allocate` can no longer express a `File` origin.
             let id = self.install(|id| {
-                D::with_origin(id, source, lunco_doc::DocumentOrigin::writable_file(path))
+                D::with_origin(
+                    id,
+                    source,
+                    lunco_doc::DocumentOrigin::File { path, writable },
+                )
             });
             // Baseline the watermark off the origin we just wrote — one stamping
             // path for open, reload, and save. The domain adds its dependency
@@ -1341,7 +1543,7 @@ where
         self.watch_files(id, []);
         // The content moved — same ring the mutating ops feed, so views rebuild
         // off an open exactly as they would off an edit.
-        self.pending_changes.push(id);
+        self.mark_changed(id);
         (id, OpenOutcome::Refreshed)
     }
 
@@ -1367,7 +1569,7 @@ where
         }
         host.discard_history();
         self.watch_files(id, []);
-        self.pending_changes.push(id);
+        self.mark_changed(id);
         (id, OpenOutcome::Refreshed)
     }
 
@@ -1532,7 +1734,86 @@ fn on_document_closed(trigger: On<DocumentClosed>, canonical: Res<JournalResourc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_doc::{
+        Document, DocumentError, DocumentOp, DocumentOrigin, FileBacked, PathlessOrigin,
+    };
     use lunco_twin_journal::{AuthorId, EntryKind, TwinId};
+
+    #[derive(Clone)]
+    struct RegistryDocument {
+        id: DocumentId,
+        source: String,
+        generation: u64,
+        origin: DocumentOrigin,
+        saved_generation: Option<u64>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    enum RegistryOp {
+        Replace(String),
+    }
+
+    impl DocumentOp for RegistryOp {}
+
+    impl Document for RegistryDocument {
+        type Op = RegistryOp;
+
+        fn id(&self) -> DocumentId {
+            self.id
+        }
+
+        fn generation(&self) -> u64 {
+            self.generation
+        }
+
+        fn apply(&mut self, op: Self::Op) -> Result<Self::Op, DocumentError> {
+            if !self.origin.accepts_mutations() {
+                return Err(DocumentError::ReadOnly);
+            }
+            let RegistryOp::Replace(source) = op;
+            let previous = std::mem::replace(&mut self.source, source);
+            self.generation += 1;
+            Ok(RegistryOp::Replace(previous))
+        }
+    }
+
+    impl FileBacked for RegistryDocument {
+        fn with_origin(id: DocumentId, source: String, origin: DocumentOrigin) -> Self {
+            let saved_generation = (!origin.is_untitled()).then_some(0);
+            Self {
+                id,
+                source,
+                generation: 0,
+                origin,
+                saved_generation,
+            }
+        }
+
+        fn origin(&self) -> &DocumentOrigin {
+            &self.origin
+        }
+
+        fn is_dirty(&self) -> bool {
+            self.saved_generation != Some(self.generation)
+        }
+
+        fn mark_saved(&mut self) {
+            self.saved_generation = Some(self.generation);
+        }
+
+        fn reload_base(&mut self, source: &str) -> bool {
+            self.source = source.to_string();
+            self.generation += 1;
+            self.saved_generation = Some(self.generation);
+            true
+        }
+    }
+
+    impl lunco_twin_journal::OpPayload for RegistryOp {
+        fn domain(&self) -> lunco_twin_journal::DomainKind {
+            lunco_twin_journal::DomainKind::Other("document-registry-test".into())
+        }
+    }
 
     #[test]
     fn journal_resource_records_lifecycle_entries() {
@@ -1551,5 +1832,33 @@ mod tests {
                 .any(|e| matches!(e.kind, EntryKind::Lifecycle(LifecycleKind::Saved)))
         });
         assert!(saved);
+    }
+
+    #[test]
+    fn document_registry_owns_identity_links_and_change_events() {
+        let mut registry = DocumentRegistry::<RegistryDocument>::default();
+        let doc = registry.allocate("one".into(), PathlessOrigin::untitled("one"));
+
+        let initial = registry.drain_pending();
+        assert_eq!(initial.opened, vec![doc]);
+        assert_eq!(initial.changed, vec![doc]);
+        assert!(initial.closed.is_empty());
+
+        let entity = Entity::from_raw_u32(1).expect("valid test entity");
+        registry.link(entity, doc).expect("document exists");
+        assert_eq!(registry.document_of(entity), Some(doc));
+        assert_eq!(registry.entities_linked_to(doc), vec![entity]);
+        assert_eq!(registry.simulator_for(doc), Some(entity));
+
+        registry
+            .apply(doc, RegistryOp::Replace("two".into()))
+            .expect("owned document accepts the operation");
+        assert_eq!(registry.host(doc).unwrap().document().source, "two");
+        assert_eq!(registry.drain_pending().changed, vec![doc]);
+
+        registry.remove_document(doc);
+        assert!(!registry.contains(doc));
+        assert!(registry.document_of(entity).is_none());
+        assert_eq!(registry.drain_pending().closed, vec![doc]);
     }
 }

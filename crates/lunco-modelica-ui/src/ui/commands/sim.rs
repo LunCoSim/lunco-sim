@@ -1,5 +1,6 @@
 //! Simulation-specific commands: SetModelInput.
 
+use crate::ui::document_context::ModelicaDocuments;
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_modelica_ui_core::SetModelicaParameter;
@@ -39,8 +40,7 @@ pub(crate) fn on_set_model_input_requested(
 pub fn on_set_modelica_parameter(trigger: On<SetModelicaParameter>, mut commands: Commands) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        use lunco_modelica_core::document::ModelicaOp;
-        use lunco_modelica_core::state::ModelicaDocumentRegistry;
+        use lunco_modelica_document::ModelicaOp;
         use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
         let mut session_id = 0u64;
@@ -56,7 +56,7 @@ pub fn on_set_modelica_parameter(trigger: On<SetModelicaParameter>, mut commands
         }
 
         let (doc_id, class_name) = {
-            let registry = world.resource::<ModelicaDocumentRegistry>();
+            let registry = world.resource::<ModelicaDocuments>();
             let doc = registry.document_of(request.entity);
             let class = doc.and_then(|doc| registry.host(doc)).and_then(|host| {
                 lunco_modelica_ast::ast_extract::extract_model_name_from_ast(
@@ -80,7 +80,7 @@ pub fn on_set_modelica_parameter(trigger: On<SetModelicaParameter>, mut commands
             lunco_twin_journal::AuthorTag::local_user(),
         );
         let new_source = world
-            .resource::<ModelicaDocumentRegistry>()
+            .resource::<ModelicaDocuments>()
             .host(doc_id)
             .map(|host| host.document().source().to_string());
         if let (Some(new_source), Some(channels)) =

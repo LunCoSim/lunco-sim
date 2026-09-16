@@ -4279,18 +4279,12 @@ mod tests {
 
     #[test]
     fn rhai_unsigned_values_use_native_int_or_lossless_text() {
-        let small = lunco_scripting_bridge_core::build_from_reflect(
-            &super::RhaiBuilder,
-            &42_u64,
-        )
-        .expect("small unsigned value");
+        let small = lunco_scripting_bridge_core::build_from_reflect(&super::RhaiBuilder, &42_u64)
+            .expect("small unsigned value");
         assert_eq!(small.as_int().expect("small value stays native"), 42);
 
-        let wide = lunco_scripting_bridge_core::build_from_reflect(
-            &super::RhaiBuilder,
-            &u64::MAX,
-        )
-        .expect("wide unsigned value");
+        let wide = lunco_scripting_bridge_core::build_from_reflect(&super::RhaiBuilder, &u64::MAX)
+            .expect("wide unsigned value");
         assert_eq!(
             wide.into_string().expect("wide value uses explicit text"),
             u64::MAX.to_string()

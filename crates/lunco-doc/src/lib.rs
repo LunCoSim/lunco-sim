@@ -607,6 +607,10 @@ pub trait FileBacked: Document + Sized {
     /// is the stale copy. Everything about reload policy follows from this.
     fn is_dirty(&self) -> bool;
 
+    /// Mark the current in-memory state as the persisted baseline after a
+    /// successful save.
+    fn mark_saved(&mut self);
+
     /// Replace the content with `source` re-read from disk — a RE-OPEN, not an
     /// edit. Returns `false` (leaving content untouched) if `source` doesn't
     /// parse: a half-applied document is worse than a stale one.
@@ -1363,6 +1367,8 @@ mod tests {
             fn is_dirty(&self) -> bool {
                 true
             }
+
+            fn mark_saved(&mut self) {}
 
             fn reload_base(&mut self, source: &str) -> bool {
                 self.document.text = source.to_string();

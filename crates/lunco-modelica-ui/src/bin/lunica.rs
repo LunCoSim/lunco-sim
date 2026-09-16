@@ -406,7 +406,9 @@ fn setup_web_workbench(
     mut commands: Commands,
     channels: Res<lunco_modelica_runtime::ModelicaChannels>,
     mut workbench_state: ResMut<lunco_modelica_ui::ui::workbench_state::WorkbenchState>,
-    mut doc_registry: ResMut<lunco_modelica_ui::state::ModelicaDocumentRegistry>,
+    mut doc_registry: ResMut<
+        lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
+    >,
     compile_states: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
     mut model_tabs: ResMut<lunco_modelica_ui::model_tabs::ModelTabs>,
     model_info: Res<BundledModelInfo>,
@@ -420,13 +422,9 @@ fn setup_web_workbench(
 
     workbench_state.editor_buffer = source.clone();
 
-    // Allocate the Document up-front so the entity spawns with a valid
-    // `document` id. Record the bundled-asset origin for read-only
-    // classification.
-    let doc_id = doc_registry.allocate_with_origin(
-        source.clone(),
-        lunco_doc::DocumentOrigin::readonly_file(model_path.clone()),
-    );
+    // Open the initial source through the generic file identity boundary so
+    // the entity spawns with a valid document id and read-only origin.
+    let (doc_id, _) = doc_registry.open_file_with_writable(model_path, source, false);
 
     let entity = commands
         .spawn((
@@ -443,7 +441,9 @@ fn setup_web_workbench(
         ))
         .id();
 
-    doc_registry.link(entity, doc_id);
+    doc_registry
+        .link(entity, doc_id)
+        .expect("initial Modelica document link");
     // Leave CompileStates at Idle — setting Compiling here without a
     // matching `Compile` send would stick the toolbar on the sandglass.
     let _ = compile_states;

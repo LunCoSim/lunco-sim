@@ -30,7 +30,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use lunco_core::{on_command, register_commands, Command};
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::workbench_state::WorkbenchState;
 use lunco_doc_bevy::DocumentDiagnostics;
 
@@ -654,7 +654,7 @@ pub(crate) fn render_compile_class_picker(
 /// — i.e. run the loaded example in place, never a temp copy. User documents
 /// (Untitled scratch, writable files) and bundled examples are NOT in the
 /// session, so they overlay their full source as before.
-fn is_library_document(document: &crate::document::ModelicaDocument) -> bool {
+fn is_library_document(document: &lunco_modelica_document::ModelicaDocument) -> bool {
     match document.origin() {
         lunco_doc::DocumentOrigin::File { path, writable } => {
             !writable || lunco_assets_core::library::owns_filesystem_path(path)
@@ -663,7 +663,7 @@ fn is_library_document(document: &crate::document::ModelicaDocument) -> bool {
     }
 }
 
-fn compile_overlay_source(document: &crate::document::ModelicaDocument) -> String {
+fn compile_overlay_source(document: &lunco_modelica_document::ModelicaDocument) -> String {
     if is_library_document(document) {
         String::new()
     } else {
@@ -677,7 +677,7 @@ fn compile_overlay_source(document: &crate::document::ModelicaDocument) -> Strin
 pub fn on_compile_model(
     trigger: On<CompileModel>,
     mut commands: Commands,
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     workbench: ResMut<WorkbenchState>,
     mut compile_states: ResMut<DocumentDiagnostics>,
     mut console: ResMut<lunco_ui::log::LogBuffer>,
@@ -1042,7 +1042,11 @@ pub fn on_compile_model(
                 },
             ))
             .id();
-        registry.link(entity, doc);
+        if let Err(error) = registry.link(entity, doc) {
+            bevy::log::warn!(
+                "[ModelicaCompile] failed to link entity {entity} to document {doc}: {error}"
+            );
+        }
         // Intentionally NOT setting `workbench.selected_entity` here.
         // Side panels resolve their target entity via
         // `active_simulator(world)` (= active doc → linked entity),
@@ -1418,7 +1422,7 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
         };
         // Document generation for the staleness check.
         let doc_generation = world
-            .get_resource::<ModelicaDocumentRegistry>()
+            .get_resource::<ModelicaDocuments>()
             .and_then(|r| r.host(doc))
             .map(|h| h.document().generation_owned())
             .unwrap_or(0);
@@ -1631,7 +1635,7 @@ fn dispatch_experiment(
         // models (AnnotatedRocketStage etc.) fail with "no compilable
         // top-level class".
         let (source, filename, candidates, experiment_map) = {
-            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
+            let registry = world.resource::<crate::ui::document_context::ModelicaDocuments>();
             let host = match registry.host(doc) {
                 Some(h) => h,
                 None => {

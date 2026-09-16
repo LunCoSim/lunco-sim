@@ -148,10 +148,11 @@ collects evidence.
 
 `lunco-modelica-ast` is a pure leaf crate. It owns source normalization,
 strict/recovered parsing, AST extraction, and lint facts without Bevy, storage,
-workers, or UI. The runtime crate (`lunco-modelica-core`) then owns:
+workers, or UI. The document package (`lunco-modelica-document`) owns the
+editable source contract, while `lunco-modelica-core` owns:
 
 - `ModelicaSource` and its `.mo` `AssetLoader`;
-- `ModelicaDocument` plus `DocumentHost` state and generation counters;
+- compiler/runtime integration around the generic `DocumentRegistry<ModelicaDocument>`;
 - a long-lived `ModelicaEngine`/Rumoca session;
 - async parsing with stale-generation rejection and bounded completion work;
 - source-root discovery and demand-driven library loading;

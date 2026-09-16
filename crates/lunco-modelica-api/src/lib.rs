@@ -24,9 +24,15 @@ use lunco_modelica_core::models::bundled_models;
 // `lunco_modelica_core::sim_default::drilled_class_for_doc`.
 use lunco_doc::CompileState;
 use lunco_doc::DocumentId;
-use lunco_doc_bevy::DocumentDiagnostics;
-use lunco_modelica_core::state::{is_generated_document, ModelicaDocumentRegistry};
+use lunco_doc_bevy::{DocumentDiagnostics, DocumentRegistry};
+use lunco_modelica_document::ModelicaDocument;
 use lunco_modelica_index::visual_diagram::library_class_library;
+
+type ModelicaDocuments = DocumentRegistry<ModelicaDocument>;
+
+fn is_generated_document(document: &ModelicaDocument) -> bool {
+    lunco_modelica_runtime::generated_source::is_generated_origin(document.origin())
+}
 
 /// Plugin that registers the Modelica query providers and edit commands. Hosts
 /// add this capability alongside the Modelica compiler plugin when they expose
@@ -290,7 +296,7 @@ impl ApiQueryProvider for ListCompileCandidatesProvider {
         let Some(doc_id) = parse_doc_id(params, "doc_id") else {
             return err_missing_field("doc_id");
         };
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         let Some(host) = registry.host(doc_id) else {
             return err_doc_not_found(doc_id);
         };
@@ -355,7 +361,7 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
         // registry borrow before calling the resolve helpers — they take
         // `&World` and would otherwise alias the registry borrow.
         let class_list: Vec<(String, bool)> = {
-            let registry = world.resource::<ModelicaDocumentRegistry>();
+            let registry = world.resource::<ModelicaDocuments>();
             let Some(host) = registry.host(doc_id) else {
                 return err_doc_not_found(doc_id);
             };
@@ -471,7 +477,7 @@ impl ApiQueryProvider for CompileStatusProvider {
         // would be in the picker branch if no class is pinned and the
         // doc has 2+ non-package classes. Easier to recompute than to
         // expose CompileClassPickerState which is a UI concern.
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         let (candidates, preferred_count, has_ast) = match registry.host(doc_id) {
             Some(host) => {
                 let doc_ref = host.document();
@@ -515,10 +521,10 @@ impl ApiQueryProvider for CompileStatusProvider {
         // entity (if one exists yet). Lets a single CompileStatus call
         // answer "is it compiled / running / stale?" without a second
         // entity query. Defaults (no entity) report uncompiled + stale.
-        // One `ModelicaDocumentRegistry` borrow yields both the doc
+        // One `ModelicaDocuments` borrow yields both the doc
         // generation and the linked run entity (CQ-216 — was two fetches).
         let (doc_generation, run_entity) = world
-            .get_resource::<ModelicaDocumentRegistry>()
+            .get_resource::<ModelicaDocuments>()
             .map(|r| {
                 let generation = r
                     .host(doc_id)
@@ -940,7 +946,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
             return err_missing_field("doc_id");
         };
 
-        // Modelica docs are the only kind in the `ModelicaDocumentRegistry`
+        // Modelica docs are the only kind in the `ModelicaDocuments`
         // today; future kinds (USD, SysML) will need their own registries
         // and a fan-out by `DocumentKindId` here. The cross-domain
         // workspace entry tells us which registry to query, so this
@@ -948,7 +954,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
         let ws = world.resource::<WorkspaceResource>();
         let entry = ws.document(doc_id).cloned();
         if entry.is_none() {
-            let registry = world.resource::<ModelicaDocumentRegistry>();
+            let registry = world.resource::<ModelicaDocuments>();
             let Some(host) = registry.host(doc_id) else {
                 return err_doc_not_found(doc_id);
             };
@@ -970,7 +976,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
 
         match entry.kind.as_str() {
             "modelica" => {
-                let registry = world.resource::<ModelicaDocumentRegistry>();
+                let registry = world.resource::<ModelicaDocuments>();
                 let Some(host) = registry.host(doc_id) else {
                     return err_doc_not_found(doc_id);
                 };
@@ -1027,7 +1033,7 @@ impl ApiQueryProvider for GetShareLinkProvider {
                 "GetShareLink: no `doc_id` given and no active document".to_string(),
             );
         };
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         let Some(host) = registry.host(doc_id) else {
             return err_doc_not_found(doc_id);
         };
@@ -1077,7 +1083,7 @@ impl ApiQueryProvider for DescribeModelProvider {
         // API queries run off-render).
         let drilled_in = lunco_modelica_core::sim_default::drilled_class_for_doc(world, doc_id);
 
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         let Some(host) = registry.host(doc_id) else {
             return err_doc_not_found(doc_id);
         };
@@ -1254,7 +1260,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
         // no linked entity (compile not run yet) is not an error per
         // spec 033 US 4 #3 — return an empty payload with `t: null` so
         // the agent can detect the gap programmatically.
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         if registry.host(doc_id).is_none() {
             return err_doc_not_found(doc_id);
         }

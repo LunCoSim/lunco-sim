@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
 use lunco_modelica_ast::pretty::ConnectEquation;
-use lunco_modelica_core::document::ModelicaOp;
+use lunco_modelica_document::ModelicaOp;
 
 /// Add a `connect(a.p, b.q)` equation to a class.
 #[Command(default)]

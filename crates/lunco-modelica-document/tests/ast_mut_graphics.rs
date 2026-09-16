@@ -16,7 +16,7 @@ use std::sync::Arc;
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica_ast::parse_to_ast;
 use lunco_modelica_ast::pretty::{FillPattern, GraphicSpec, LunCoPlotNodeSpec};
-use lunco_modelica_core::document::{ModelicaDocument, ModelicaOp, SyntaxCache};
+use lunco_modelica_document::{ModelicaDocument, ModelicaOp, SyntaxCache};
 use rumoca_compile::parsing::ast::Expression;
 
 fn host(source: &str) -> DocumentHost<ModelicaDocument> {

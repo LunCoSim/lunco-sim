@@ -530,7 +530,10 @@ mod tests {
         let report = report_dynamic(&analysis);
         let report = report.cast::<Map>();
         assert_eq!(
-            report["source_revision"].clone().into_immutable_string().unwrap(),
+            report["source_revision"]
+                .clone()
+                .into_immutable_string()
+                .unwrap(),
             u64::MAX.to_string()
         );
         assert_eq!(

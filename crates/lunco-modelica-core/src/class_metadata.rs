@@ -113,7 +113,7 @@ pub fn resolve_metadata_for_doc_in<R: ResourceRead>(
     doc_id: lunco_doc::DocumentId,
     drilled: Option<&str>,
 ) -> Option<ClassMetadata> {
-    let registry = ctx.read_resource::<crate::state::ModelicaDocumentRegistry>()?;
+    let registry = ctx.read_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()?;
     let host = registry.host(doc_id)?;
     resolve_metadata_from_index(host.document().index(), drilled)
 }
@@ -163,7 +163,7 @@ fn resolve_metadata_from_index(
 /// non-pre-baked branch and as a fallback for system libraries
 /// whose backing doc happens to be open.
 fn workspace_doc_metadata(world: &World, class: &ClassRef) -> Option<ClassMetadata> {
-    let registry = world.get_resource::<crate::state::ModelicaDocumentRegistry>()?;
+    let registry = world.get_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()?;
     let target_doc = match &class.library {
         Library::UserFile { path } => registry.find_by_path(path),
         Library::Untitled(doc_id) => Some(*doc_id),

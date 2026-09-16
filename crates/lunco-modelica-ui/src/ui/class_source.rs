@@ -21,7 +21,7 @@
 //! rewrite it (duplicate). Both sit on the same path building blocks so
 //! they cannot disagree about a class's home.
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use bevy::prelude::World;
 
 /// A class's source text plus the metadata an extract/rewrite pass needs.
@@ -48,7 +48,7 @@ pub(crate) fn find_open_doc_with_class(
     world: &World,
     qualified: &str,
 ) -> Option<lunco_doc::DocumentId> {
-    let registry = world.resource::<ModelicaDocumentRegistry>();
+    let registry = world.resource::<ModelicaDocuments>();
     registry.iter().find_map(|(doc_id, host)| {
         host.document().strict_ast().and_then(|ast| {
             lunco_modelica_index::class_lookup::find_class_by_qualified_name(&ast, qualified)
@@ -92,7 +92,7 @@ pub(crate) fn resolve_class_source(world: &World, qualified: &str) -> Option<Res
     //    workspace document.
     if let Some(doc) = find_open_doc_with_class(world, qualified) {
         if let Some(source) = world
-            .resource::<ModelicaDocumentRegistry>()
+            .resource::<ModelicaDocuments>()
             .host(doc)
             .map(|h| h.document().source_arc().to_string())
         {

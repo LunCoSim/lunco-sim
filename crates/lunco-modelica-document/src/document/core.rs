@@ -10,7 +10,7 @@ use lunco_doc::{Diagnostic, Document, DocumentError, DocumentId, DocumentOrigin}
 use lunco_modelica_ast::parse_to_syntax;
 use rumoca_compile::parsing::ast::StoredDefinition;
 
-use super::ops::{FreshAst, ModelicaChange, ModelicaOp, CHANGE_HISTORY_CAPACITY};
+use super::ops::{CHANGE_HISTORY_CAPACITY, FreshAst, ModelicaChange, ModelicaOp};
 use lunco_modelica_index::index::ModelicaIndex;
 
 // ---------------------------------------------------------------------------
@@ -52,9 +52,9 @@ pub fn parse_diag_from_error(e: &rumoca_phase_parse::ParseError, source: &str) -
 
 /// Convert a 0-based byte offset into a 1-based (line, column) of
 /// **char** positions over `source`. Char-based (not byte / UTF-16) so
-/// the column lines up with the editor's char-indexed caret jump
-/// ([`crate::ui::panels::code_editor`]). Clamped to the buffer end.
-pub(crate) fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (u32, u32) {
+/// editor caret navigation can use the same coordinate contract. Clamped to
+/// the buffer end.
+pub fn byte_offset_to_line_col(source: &str, byte_offset: usize) -> (u32, u32) {
     let clamped = byte_offset.min(source.len());
     let mut line = 1u32;
     let mut col = 1u32;
@@ -102,10 +102,10 @@ impl SyntaxCache {
     /// the async worker (via `install_parse_results`) and the synchronous
     /// `refresh_ast_now`. Do NOT add a second editable source→cache path that
     /// parses strictly: that reintroduces the "broken edit empties the whole
-    /// class tree" regression. (Read-only source library *library* files are the lone
-    /// exception — `load_library_file` eager-parses them once via rumoca's
-    /// multi-file `parse_files_parallel`; they can't be edited into a broken
-    /// state, so recovery doesn't apply.)
+    /// class tree" regression. (Read-only source-library files are the lone
+    /// exception — the compiler's prepared bundle or native library loader
+    /// parses them before they reach this document; they cannot be edited into
+    /// a broken state, so recovery does not apply.)
     pub fn from_source(source: &str, generation: u64) -> Self {
         if std::env::var_os("LUNCO_NO_PARSE").is_some() {
             return Self::empty(generation);
@@ -225,169 +225,6 @@ impl ModelicaDocument {
         doc
     }
 
-    pub fn load_library_class(
-        id: DocumentId,
-        path: &Path,
-        qualified: &str,
-    ) -> Result<Self, String> {
-        // On wasm the source tree is untarred lazily (boot no longer unpacks
-        // it, to avoid a startup freeze). Materialise it before reading source.
-        #[cfg(target_arch = "wasm32")]
-        crate::library_remote::ensure_library_source_unpacked();
-
-        let full_source = if let Some(bytes) = lunco_assets_core::library::library_read(path) {
-            String::from_utf8(bytes)
-                .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
-        } else {
-            lunco_modelica_runtime::source_asset::read_text_sync(path)?
-        };
-
-        let short_name = qualified.rsplit('.').next().unwrap_or(qualified);
-        let parent_pkg: String = {
-            let mut parts: Vec<&str> = qualified.split('.').collect();
-            parts.pop();
-            parts.join(".")
-        };
-
-        // Unified source library-class AST source: prefer the pre-parsed bundle —
-        // `parsed_source_bundle` lazily materialises it from `parsed-library.bin`
-        // on native (one ~1–3 s decode, then every drill-in is an in-memory
-        // hit), and the worker transfer fills it on wasm. Keyed by the file
-        // path exactly as the indexer wrote it (`indexer::ingest_file`).
-        // Native may repair a bundle miss by parsing this one source file;
-        // wasm reports the miss and waits for the worker-owned bundle instead.
-        let key = path.to_string_lossy().to_string();
-        let bundle_hit = crate::library_remote::parsed_source_bundle()
-            .map(|b| b.iter().any(|(k, _)| *k == key))
-            .unwrap_or(false);
-        // A native bundle miss can be a slow package-wrapper parse; keep the
-        // breadcrumb so a stale or missing generated artifact is diagnosable.
-        if !bundle_hit {
-            bevy::log::warn!(
-                "[load_library_class] parsed-bundle MISS for `{key}` ({} bytes) — \
-                 native source repair or worker retry required",
-                full_source.len()
-            );
-        }
-        let bundled_ast = crate::library_remote::parsed_source_bundle()
-            .and_then(|b| b.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone()));
-        #[cfg(target_arch = "wasm32")]
-        let ast: StoredDefinition = bundled_ast.ok_or_else(|| {
-            format!(
-                "parsed source library AST unavailable for `{key}`; wait for the Web Worker source library load and retry"
-            )
-        })?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let ast: StoredDefinition = match bundled_ast {
-            Some(ast) => ast,
-            None => lunco_modelica_ast::parse_to_ast(&full_source, &key)
-                .map_err(|e| format!("parse failed `{}`: {e}", path.display()))?,
-        };
-
-        let class_def = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, short_name)
-            .ok_or_else(|| format!("class `{qualified}` not found in `{}`", path.display()))?;
-        // `ClassDef.location` omits the prefix keyword and trailing `;` (see
-        // `class_full_text_span`); slicing by it alone drops both and yields
-        // invalid Modelica. Use the canonical full-declaration span.
-        let (full_start, full_end) =
-            lunco_modelica_ast::ast_extract::class_full_text_span(class_def, &full_source);
-        // Defensive: the AST may come from the pre-parsed bundle while
-        // `full_source` was re-read separately (library_read). If their byte
-        // offsets ever disagree (different line endings, a stale bundle, a
-        // wrong-file resolution), slicing would panic — and on wasm that
-        // panic happens inside the AsyncComputeTaskPool task, which dies
-        // SILENTLY (no install, no error log), leaving the drill-in tab
-        // stuck on "loading" forever. Validate the span and surface a real
-        // error instead so the failure is visible and recoverable.
-        if full_start > full_end
-            || full_end > full_source.len()
-            || !full_source.is_char_boundary(full_start)
-            || !full_source.is_char_boundary(full_end)
-        {
-            return Err(format!(
-                "class `{qualified}` span {full_start}..{full_end} invalid for \
-                 source of {} bytes in `{}` (bundle_hit={bundle_hit}) — likely a \
-                 stale/mismatched parsed bundle or wrong-file resolution",
-                full_source.len(),
-                path.display()
-            ));
-        }
-        let class_slice = &full_source[full_start..full_end];
-
-        let source = if parent_pkg.is_empty() {
-            class_slice.to_string()
-        } else {
-            format!("within {parent_pkg};\n{class_slice}")
-        };
-
-        let origin = DocumentOrigin::File {
-            path: path.to_path_buf(),
-            writable: false,
-        };
-        Ok(Self::with_origin(id, source, origin))
-    }
-
-    pub fn load_library_file(id: DocumentId, path: &Path) -> Result<Self, String> {
-        // Lazily untar the source tree on first drill-in (see load_library_class).
-        #[cfg(target_arch = "wasm32")]
-        crate::library_remote::ensure_library_source_unpacked();
-
-        let source = if let Some(bytes) = lunco_assets_core::library::library_read(path) {
-            String::from_utf8(bytes)
-                .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
-        } else {
-            lunco_modelica_runtime::source_asset::read_text_sync(path)?
-        };
-
-        let parsed: Result<Arc<StoredDefinition>, String> = if std::env::var_os("LUNCO_NO_PARSE")
-            .is_some()
-        {
-            Err("LUNCO_NO_PARSE diagnostic — parse skipped".into())
-        } else {
-            #[cfg(target_arch = "wasm32")]
-            {
-                let key = path.to_string_lossy().to_string();
-                crate::library_remote::global_parsed_source_bundle()
-                    .and_then(|b| {
-                        b.iter()
-                            .find(|(k, _)| k == &key)
-                            .map(|(_, a)| Arc::new(a.clone()))
-                    })
-                    .ok_or_else(|| format!("load_library_file: pre-parsed AST missing for `{key}`"))
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                match rumoca_compile::parsing::parse_files_parallel(&[path.to_path_buf()]) {
-                    Ok(mut pairs) if !pairs.is_empty() => {
-                        let (_, stored) = pairs.remove(0);
-                        Ok(Arc::new(stored))
-                    }
-                    Ok(_) => Err("rumoca returned no parse result".into()),
-                    Err(e) => Err(e.to_string()),
-                }
-            }
-        };
-
-        let syntax = Arc::new(match parsed {
-            Ok(strict) => SyntaxCache {
-                generation: 0,
-                ast: strict,
-                errors: Vec::new(),
-            },
-            Err(msg) => SyntaxCache {
-                generation: 0,
-                ast: Arc::new(StoredDefinition::default()),
-                errors: vec![Diagnostic::message_only(msg)],
-            },
-        });
-
-        let origin = DocumentOrigin::File {
-            path: path.to_path_buf(),
-            writable: false,
-        };
-        Ok(Self::from_parts(id, source, origin, syntax))
-    }
-
     pub fn from_parts(
         id: DocumentId,
         source: String,
@@ -456,11 +293,10 @@ impl ModelicaDocument {
     }
 
     pub fn waive_ast_debounce(&mut self) {
-        if self.last_source_edit_at.is_some() {
-            let backdate_ms = (crate::engine_resource::AST_DEBOUNCE_MS as u64).saturating_add(1);
-            self.last_source_edit_at =
-                Some(web_time::Instant::now() - std::time::Duration::from_millis(backdate_ms));
-        }
+        // `None` is the engine-sync contract for an edit that is ready to
+        // process immediately. The debounce duration belongs to the engine
+        // scheduler, so the document must not duplicate that policy.
+        self.last_source_edit_at = None;
     }
 
     pub fn syntax(&self) -> &SyntaxCache {
@@ -638,58 +474,16 @@ impl ModelicaDocument {
     /// diff is a no-op (the source structure already matches the index), so no
     /// spurious `ClassAdded`/`Removed` is emitted.
     fn reparse_source_ast(&mut self) {
-        // The global engine is only needed for cross-file resolution
-        // (it learns about this doc's AST so other docs can `extends` it).
-        // A standalone / headless doc — and unit tests — can still refresh
-        // their OWN AST + index without it, so the handle is best-effort
-        // rather than a hard precondition. (Previously a missing handle
-        // returned early, leaving the doc permanently stale in any context
-        // that hadn't installed the global engine.)
-        let handle = crate::engine_resource::global_engine_handle();
-
         // There is exactly ONE way to turn live source into a SyntaxCache:
         // `SyntaxCache::from_source`, which parses with error RECOVERY so a
         // broken class never wipes its healthy siblings. refresh_ast_now MUST
         // NOT parse the source any other way — the old divergence here was a
         // strict `parse_to_ast` that returned an empty AST on any error,
         // silently emptying the class tree (browser/index) while the async
-        // worker path (`from_source` → `install_parse_results`) kept it. The
-        // only shortcut is a pre-parsed source library bundle AST for file-backed docs,
-        // which is trusted and needs no reparse.
-        let bundle_ast: Option<Arc<StoredDefinition>> = match &self.origin {
-            DocumentOrigin::File { path, .. } => {
-                let key = path.to_string_lossy().to_string();
-                crate::library_remote::global_parsed_source_bundle().and_then(|b| {
-                    b.iter()
-                        .find(|(k, _)| k == &key)
-                        .map(|(_, ast)| Arc::new(ast.clone()))
-                })
-            }
-            _ => None,
-        };
-
-        let syntax = match bundle_ast {
-            Some(ast) => SyntaxCache {
-                generation: self.generation,
-                ast,
-                errors: Vec::new(),
-            },
-            None => SyntaxCache::from_source(&self.source, self.generation),
-        };
-
-        // Teach the global engine about a CLEAN AST so other docs can `extends`
-        // it. Skip on parse error: never feed the shared session a partial
-        // recovery AST (matches the prior behaviour, which upserted only a
-        // fully successful parse). Best-effort — a headless context / unit
-        // test may have no engine installed, which is fine.
-        if !syntax.has_errors() {
-            if let Some(h) = handle.as_ref() {
-                h.lock()
-                    .upsert_document_with_ast(self.id, (*syntax.ast).clone());
-            }
-        }
-
-        self.syntax = Arc::new(syntax);
+        // worker path (`from_source` → `install_parse_results`) kept it. Source
+        // library bundle adoption is an engine concern; this document package
+        // intentionally has one local parser path.
+        self.syntax = Arc::new(SyntaxCache::from_source(&self.source, self.generation));
         self.rebuild_index();
         self.last_source_edit_at = None;
     }
@@ -901,6 +695,10 @@ impl lunco_doc::FileBacked for ModelicaDocument {
 
     fn is_dirty(&self) -> bool {
         ModelicaDocument::is_dirty(self)
+    }
+
+    fn mark_saved(&mut self) {
+        ModelicaDocument::mark_saved(self);
     }
 
     fn reload_base(&mut self, source: &str) -> bool {

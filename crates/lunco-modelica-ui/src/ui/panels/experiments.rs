@@ -467,7 +467,7 @@ impl Panel for ExperimentsPanel {
             let has_class = active_doc
                 .and_then(|doc| {
                     ctx
-                        .resource::<crate::state::ModelicaDocumentRegistry>()
+                        .resource::<crate::ui::document_context::ModelicaDocuments>()
                         .and_then(|r| r.host(doc))
                         .map(|h| {
                             h.document().index().classes.values().any(|c| {
@@ -926,7 +926,7 @@ impl ExperimentsPanel {
             return;
         };
         let (model_name, candidates) = match ctx
-            .resource::<crate::state::ModelicaDocumentRegistry>()
+            .resource::<crate::ui::document_context::ModelicaDocuments>()
             .and_then(|r| r.host(doc))
         {
             Some(h) => {
@@ -958,7 +958,7 @@ impl ExperimentsPanel {
         // Inputs come from the parsed AST of the resolved model class —
         // no per-frame source scan (WP-8 / CQ-205).
         let detected_inputs = ctx
-            .resource::<crate::state::ModelicaDocumentRegistry>()
+            .resource::<crate::ui::document_context::ModelicaDocuments>()
             .and_then(|r| r.host(doc))
             .and_then(|h| {
                 lunco_modelica_ast::ast_extract::find_class_by_short_name(
@@ -1456,7 +1456,7 @@ impl ExperimentsPanel {
         let Some(doc) = crate::ui::doc_pin::resolved_experiments_doc_ctx(ctx) else {
             return;
         };
-        let registry = match ctx.resource::<crate::state::ModelicaDocumentRegistry>() {
+        let registry = match ctx.resource::<crate::ui::document_context::ModelicaDocuments>() {
             Some(r) => r,
             None => return,
         };
@@ -2628,7 +2628,7 @@ fn active_doc_units(
     else {
         return out;
     };
-    let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() else {
+    let Some(registry) = ctx.resource::<crate::ui::document_context::ModelicaDocuments>() else {
         return out;
     };
     let Some(host) = registry.host(doc) else {

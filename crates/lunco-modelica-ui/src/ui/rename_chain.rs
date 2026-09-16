@@ -26,7 +26,7 @@ use lunco_modelica_api::edit::class::RenameModelicaClass;
 pub fn on_rename_open_document_chain_to_modelica(
     trigger: On<lunco_doc_bevy::rename::RenameOpenDocument>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
-    registry: Res<crate::state::ModelicaDocumentRegistry>,
+    registry: Res<crate::ui::document_context::ModelicaDocuments>,
     mut commands: Commands,
 ) {
     use lunco_doc::DocumentOrigin;
