@@ -1006,7 +1006,7 @@ mod tests {
 
         assert!(!engine_sync_is_due(&handle, &registry, &cursor, &pacing));
 
-        registry.allocate("model A end A;".to_string());
+        registry.allocate_untitled("model A end A;".to_string());
         assert!(engine_sync_is_due(&handle, &registry, &cursor, &pacing));
         cursor.registry_revision = registry.revision();
         assert!(!engine_sync_is_due(&handle, &registry, &cursor, &pacing));
