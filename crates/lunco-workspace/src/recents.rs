@@ -180,13 +180,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn existing_symlink_aliases_deduplicate_and_reopen_canonical_file() {
-        use std::os::unix::fs::symlink;
-
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("Rover.mo");
         let alias = dir.path().join("alias.mo");
         lunco_storage::write_file_sync(&real, b"model Rover end Rover;").unwrap();
-        symlink(&real, &alias).unwrap();
+        lunco_storage::create_file_symlink_sync(&real, &alias).unwrap();
 
         let mut r = Recents::default();
         r.push_loose(real.clone());
@@ -206,13 +204,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn loaded_alias_cleanup_preserves_most_recent_entry() {
-        use std::os::unix::fs::symlink;
-
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("Rover.mo");
         let alias = dir.path().join("alias.mo");
         lunco_storage::write_file_sync(&real, b"model Rover end Rover;").unwrap();
-        symlink(&real, &alias).unwrap();
+        lunco_storage::create_file_symlink_sync(&real, &alias).unwrap();
 
         let mut r = Recents {
             twin_paths: Vec::new(),

@@ -1539,7 +1539,8 @@ default_scene = "../outside.usda"
     fn symlinked_child_cannot_escape_the_parent_twin() {
         let tmp = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(outside.path(), tmp.path().join("linked")).unwrap();
+        lunco_storage::create_directory_symlink_sync(outside.path(), &tmp.path().join("linked"))
+            .unwrap();
         write_manifest(
             &tmp.path().join("twin.toml"),
             r#"

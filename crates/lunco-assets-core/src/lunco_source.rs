@@ -322,7 +322,8 @@ mod tests {
         let outside = tempfile::tempdir().expect("temporary outside root");
         let secret = outside.path().join("secret.txt");
         lunco_storage::write_file_sync(&secret, b"must not be read").expect("secret");
-        std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
+        lunco_storage::create_file_symlink_sync(&secret, &root.path().join("linked.txt"))
+            .expect("symlink");
 
         assert!(
             existing_path_within_root(root.path(), Path::new("linked.txt"))
@@ -343,7 +344,8 @@ mod tests {
         let outside = tempfile::tempdir().expect("temporary outside root");
         let secret = outside.path().join("secret.txt");
         lunco_storage::write_file_sync(&secret, b"must not be read").expect("secret");
-        std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
+        lunco_storage::create_file_symlink_sync(&secret, &root.path().join("linked.txt"))
+            .expect("symlink");
 
         let cache = crate::twin_cache_dir(root.path());
         lunco_storage::ensure_directory_sync(&cache).expect("cache root");

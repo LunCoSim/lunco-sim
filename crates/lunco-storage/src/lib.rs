@@ -341,6 +341,37 @@ pub fn ensure_directory_sync(_path: &Path) -> StorageResult<()> {
     Ok(())
 }
 
+/// Create a file symlink through the native storage boundary.
+///
+/// Symlinks are a native filesystem security concern, so higher-level tests
+/// and path-owning crates use this helper instead of importing an OS-specific
+/// filesystem module themselves. Browser storage has no symlink primitive and
+/// therefore does not expose this operation.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+pub fn create_file_symlink_sync(target: &Path, link: &Path) -> StorageResult<()> {
+    std::os::unix::fs::symlink(target, link).map_err(StorageError::Io)
+}
+
+/// Create a directory symlink through the native storage boundary.
+///
+/// See [`create_file_symlink_sync`] for why this operation belongs here.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+pub fn create_directory_symlink_sync(target: &Path, link: &Path) -> StorageResult<()> {
+    std::os::unix::fs::symlink(target, link).map_err(StorageError::Io)
+}
+
+/// Create a file symlink through the native storage boundary on Windows.
+#[cfg(windows)]
+pub fn create_file_symlink_sync(target: &Path, link: &Path) -> StorageResult<()> {
+    std::os::windows::fs::symlink_file(target, link).map_err(StorageError::Io)
+}
+
+/// Create a directory symlink through the native storage boundary on Windows.
+#[cfg(windows)]
+pub fn create_directory_symlink_sync(target: &Path, link: &Path) -> StorageResult<()> {
+    std::os::windows::fs::symlink_dir(target, link).map_err(StorageError::Io)
+}
+
 /// List the direct children of a directory through the active storage
 /// backend. The returned paths are sorted to make source scanners and tests
 /// deterministic.

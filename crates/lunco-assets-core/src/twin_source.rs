@@ -860,7 +860,7 @@ mod tests {
         lunco_storage::ensure_directory_sync(&cached.join("materials/textures"))
             .expect("cached processed directory");
         lunco_storage::write_file_sync(
-            cached.join("materials/textures/heightmap.tif"),
+            &cached.join("materials/textures/heightmap.tif"),
             b"processed terrain",
         )
         .expect("cached processed asset");
@@ -981,7 +981,8 @@ mod tests {
         let outside = tempfile::tempdir().expect("temporary outside root");
         let secret = outside.path().join("secret.usda");
         lunco_storage::write_file_sync(&secret, b"#usda 1.0").expect("secret");
-        std::os::unix::fs::symlink(&secret, root.path().join("linked.usda")).expect("symlink");
+        lunco_storage::create_file_symlink_sync(&secret, &root.path().join("linked.usda"))
+            .expect("symlink");
 
         let roots = TwinRoots::default();
         let name = roots
