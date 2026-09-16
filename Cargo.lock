@@ -7282,6 +7282,7 @@ dependencies = [
  "big_space",
  "lunco-camera-core",
  "lunco-celestial-spatial",
+ "lunco-core",
  "lunco-environment",
  "lunco-time",
 ]

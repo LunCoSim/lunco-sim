@@ -42,9 +42,8 @@ use lunco_avatar_policy::{
 };
 use lunco_camera_core::{
     math::{
-        adaptive_clip_planes, apply_scroll_zoom, camera_decay_alpha, camera_decay_rate,
-        camera_move_direction, resolve_camera_arm_length, surface_camera_angles,
-        surface_camera_rotation, zoom_factor,
+        apply_scroll_zoom, camera_decay_alpha, camera_decay_rate, camera_move_direction,
+        resolve_camera_arm_length, surface_camera_angles, surface_camera_rotation, zoom_factor,
     },
     AdaptiveNearPlane, CameraDefaults, CameraRigIntent, CameraRigMode, CameraUpdateSet,
     CameraZoomInput, FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera,
@@ -579,15 +578,6 @@ impl Plugin for LunCoAvatarPlugin {
                 .chain()
                 .after(lunco_time::InteractionRenderSet)
                 .before(TransformSystems::Propagate),
-        );
-        // Clip distances are measured from origin-relative GlobalTransforms,
-        // so consume them only after BigSpace has propagated the camera and
-        // bodies for this frame. The former pre-propagation registration read
-        // stale poses and compensated with distance heuristics; switching
-        // grids then made those heuristics visibly clip or unclip a globe.
-        app.add_systems(
-            PostUpdate,
-            update_avatar_clip_planes_system.after(TransformSystems::Propagate),
         );
         // Every avatar gets easing only for incremental stepped camera modes.
         // Surface mode derives a complete local pose from gravity and spring-arm
@@ -4296,56 +4286,6 @@ fn avatar_init_system(
     }
     for entity in q_proj.iter() {
         commands.entity(entity).try_insert(AdaptiveNearPlane);
-    }
-}
-
-// ─── Clip Planes ─────────────────────────────────────────────────────────────
-
-fn update_avatar_clip_planes_system(
-    mut q_camera: Query<
-        (&mut Projection, &GlobalTransform),
-        (With<Camera>, With<AdaptiveNearPlane>),
-    >,
-    q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
-) {
-    for (mut projection, cam_gt) in q_camera.iter_mut() {
-        // Camera↔body distances come from `GlobalTransform`s: BigSpace rebases
-        // them around the floating origin, so both sides share one frame.
-        let cam_pos = cam_gt.translation().as_dvec3();
-        // Read through `&*` and mutate only when a plane really moved so a
-        // parked camera does not dirty the projection every frame.
-        let Projection::Perspective(current) = &*projection else {
-            continue;
-        };
-        let mut min_dist = f64::INFINITY;
-        let mut max_far = 0.0_f64;
-        for (body, b_gt) in q_bodies.iter() {
-            let center_d = cam_pos.distance(b_gt.translation().as_dvec3());
-            let near_edge = center_d - body.radius_m;
-            let far_edge = center_d + body.radius_m;
-            if near_edge < min_dist {
-                min_dist = near_edge;
-            }
-            if far_edge > max_far {
-                max_far = far_edge;
-            }
-        }
-        let Some((near, far)) = adaptive_clip_planes(min_dist, max_far) else {
-            error!("[camera] cannot derive finite clip planes from celestial body bounds");
-            continue;
-        };
-
-        // Relative epsilon keeps a parked camera byte-stable while allowing
-        // meaningful changes as BigSpace moves through astronomical distances.
-        let moved = (current.near - near).abs() > near.abs() * 1e-4
-            || (current.far - far).abs() > far.abs() * 1e-4;
-        if !moved {
-            continue;
-        }
-        if let Projection::Perspective(perspective) = &mut *projection {
-            perspective.near = near;
-            perspective.far = far;
-        }
     }
 }
 

@@ -12,6 +12,7 @@ use lunco_camera_core::{
     CameraPoseLock, CameraRig, CameraUpdateSet, SurfaceCamera, SurfaceCameraFrame,
 };
 use lunco_celestial_spatial::surface_axes_for_grid_position;
+use lunco_core::CelestialBody;
 use lunco_environment::GravityBody;
 
 /// Publishes body-fixed surface frames for cameras bound to a celestial body.
@@ -26,6 +27,50 @@ impl Plugin for CelestialSurfaceCameraPlugin {
             lunco_time::InteractionSchedule,
             publish_surface_camera_frames.before(CameraUpdateSet),
         );
+        app.add_systems(
+            PostUpdate,
+            update_celestial_clip_planes.after(TransformSystems::Propagate),
+        );
+    }
+}
+
+/// Update perspective precision from the celestial bounds visible to a camera.
+///
+/// Distances are measured from propagated origin-relative transforms, so both
+/// camera and body share the same BigSpace frame. The generic math stays in
+/// `lunco-camera-core`; this adapter owns only the celestial-body query.
+fn update_celestial_clip_planes(
+    mut q_camera: Query<
+        (&mut Projection, &GlobalTransform),
+        (With<Camera>, With<lunco_camera_core::AdaptiveNearPlane>),
+    >,
+    q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
+) {
+    for (mut projection, cam_gt) in q_camera.iter_mut() {
+        let Projection::Perspective(current) = &*projection else {
+            continue;
+        };
+        let cam_pos = cam_gt.translation().as_dvec3();
+        let mut min_dist = f64::INFINITY;
+        let mut max_far = 0.0_f64;
+        for (body, body_gt) in q_bodies.iter() {
+            let center_distance = cam_pos.distance(body_gt.translation().as_dvec3());
+            min_dist = min_dist.min(center_distance - body.radius_m);
+            max_far = max_far.max(center_distance + body.radius_m);
+        }
+        let Some((near, far)) = lunco_camera_core::math::adaptive_clip_planes(min_dist, max_far)
+        else {
+            error!("[camera] cannot derive finite clip planes from celestial body bounds");
+            continue;
+        };
+        let moved = (current.near - near).abs() > near.abs() * 1e-4
+            || (current.far - far).abs() > far.abs() * 1e-4;
+        if moved {
+            if let Projection::Perspective(perspective) = &mut *projection {
+                perspective.near = near;
+                perspective.far = far;
+            }
+        }
     }
 }
 

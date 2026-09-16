@@ -8,6 +8,7 @@ description = "Celestial spatial adapter for generic surface camera frames"
 [dependencies]
 bevy = { workspace = true }
 big_space = { workspace = true }
+lunco-core = { path = "../lunco-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-environment = { path = "../lunco-environment" }

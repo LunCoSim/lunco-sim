@@ -431,10 +431,10 @@ operators; source-specific frame production remains with the calling runtime,
 while Rhai can author presentation policy through the command surface.
 
 **`lunco-camera-celestial`**
-Celestial spatial adapter for the generic `SurfaceCameraFrame` contract. It
-resolves a camera's body-fixed ENU basis from its live BigSpace pose and
-`GravityBody` binding, keeping that conversion out of generic camera and
-avatar interaction packages.
+Celestial spatial adapter for the generic `SurfaceCameraFrame` contract and
+adaptive perspective clip planes. It resolves a camera's body-fixed ENU basis
+and celestial bounds from live BigSpace poses, keeping those conversions out of
+generic camera and avatar interaction packages.
 
 **`lunco-avatar-ui`**
 Optional egui presentation adapter for `lunco-camera-core`,

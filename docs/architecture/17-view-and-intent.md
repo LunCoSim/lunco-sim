@@ -226,6 +226,8 @@ camera's rig without changing which camera the viewport shows.
 The celestial surface adapter is `lunco-camera-celestial`. It resolves the
 camera's body-fixed ENU frame from its own live BigSpace pose and
 `GravityBody` binding, then publishes the backend-neutral `SurfaceCameraFrame`.
+It also owns the celestial-body query used for adaptive perspective clip
+planes; the avatar runtime does not write projection precision.
 The generic runtime consumes that contract without importing celestial or
 BigSpace types, and avatar interaction does not own this conversion.
 
