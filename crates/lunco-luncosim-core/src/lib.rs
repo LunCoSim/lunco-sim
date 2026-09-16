@@ -28,6 +28,9 @@ use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
 use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
 use lunco_usd_avian_filters::filtered_pairs::UsdCollisionFilter;
+use lunco_usd_bevy_core::program::{
+    ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
+};
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime::UsdPlugins;
@@ -1321,15 +1324,27 @@ fn project_usd_policies(
         .iter()
         .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
         .collect();
-    let desired_synthesizers: std::collections::HashSet<String> = desired
+    lunco_scripting::policy::project_policies(desired, &mut registry, journal.as_deref());
+    // `desired` contains only the highest-precedence USD layer.  The policy
+    // projector then restores the active application/Twin layers, so using
+    // `desired` as the synthesizer set would unregister the shipped adapters
+    // whenever a Twin has no USD override.  Reconcile against the complete
+    // active registry instead; built-in adapters remain registered while a
+    // removed custom adapter is still retired.  If its hook is absent, the
+    // adapter now reports the explicit hook error at synthesis time rather
+    // than degrading into an "unknown synthesizer" path.
+    let active_synthesizers: std::collections::HashSet<String> = registry
+        .policies
         .iter()
         .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
         .collect();
-    lunco_scripting::policy::project_policies(desired, &mut registry, journal.as_deref());
-    for name in previous_synthesizers.difference(&desired_synthesizers) {
+    for name in previous_synthesizers.difference(&active_synthesizers) {
+        if name == DEFAULT_DOMAIN_SYNTHESIZER || name == ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER {
+            continue;
+        }
         lunco_usd_sim_domain::synthesis::unregister_hook_synthesizer(&mut synthesizers, name);
     }
-    for name in desired_synthesizers {
+    for name in active_synthesizers {
         lunco_usd_sim_domain::synthesis::register_hook_synthesizer(&mut synthesizers, name);
     }
 }
