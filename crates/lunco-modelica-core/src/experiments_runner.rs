@@ -896,16 +896,17 @@ pub fn drive_run(
             run_batch_sim(dae, &batch_opts, started, sink);
         }
         lunco_experiments::RuntimeMode::Interactive => {
-            let mut stepper = match crate::simulation_session::interactive(dae, stepper_opts) {
-                Ok(s) => s,
-                Err(e) => {
-                    sink.emit(RunUpdate::Failed {
-                        error: format!("stepper init failed: {e:?}"),
-                        partial: None,
-                    });
-                    return;
-                }
-            };
+            let mut stepper =
+                match lunco_modelica_solver::simulation_session::interactive(dae, stepper_opts) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        sink.emit(RunUpdate::Failed {
+                            error: format!("stepper init failed: {e:?}"),
+                            partial: None,
+                        });
+                        return;
+                    }
+                };
             bevy::log::info!(
                 "[runner] simulate begin (interactive): t={}..{} dt={:?}",
                 bounds.t_start,
@@ -1191,7 +1192,7 @@ pub fn stepper_options_from_bounds(
     bounds: &RunBounds,
 ) -> Result<rumoca_sim::SimOptions, lunco_experiments::solver::SolverError> {
     use lunco_experiments::solver;
-    crate::solver_backends::ensure_builtin_solvers();
+    lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
 
     let request = solver::SolverRequest {
         // Batch owns its own time loop and drives no predicted body, so the
@@ -1213,7 +1214,7 @@ pub fn stepper_options_from_bounds(
     };
 
     let spec = solver::resolve(&request)?;
-    crate::solver_backends::rumoca_options(&spec, &params)
+    lunco_modelica_solver::solver_backends::rumoca_options(&spec, &params)
 }
 
 /// Emit a `Failed` update carrying everything sampled so far as a partial

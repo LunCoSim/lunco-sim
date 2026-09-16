@@ -110,12 +110,8 @@ pub mod doc_extract;
 /// Egui-free Modelica document ops application
 /// (was `ui::panels::canvas_diagram::ops::apply_one_op_as` & helpers).
 pub mod doc_ops;
-pub mod fixed_step;
 /// Default-simulation-class resolution + run-target overrides
 /// (was `ui::panels::model_view::context::default_simulation_class` & friends).
-/// The rumoca backends, registered into `lunco_experiments::solver`. Solver
-/// selection itself lives there; this module is only where rumoca's two-axis
-/// option shape is expressed, once.
 /// `ModelTabs` registry (was `ui::panels::model_view::tabs`).
 pub mod model_tabs;
 /// Modelica tab registry data types (was `ui::panels::model_view::types`).
@@ -123,7 +119,6 @@ pub mod model_tabs_types;
 /// Package-tree backend: egui-free data + scanning logic for the library /
 /// package browser (was `ui::panels::package_browser::{types,scanner,cache,library_tree}`).
 pub mod package_tree;
-pub mod solver_backends;
 
 pub mod sim_default;
 /// Document registry and generated-source state shared by all Modelica hosts.
@@ -1200,15 +1195,13 @@ fn diagnostics_from_sim_error(
     }
 }
 
+/// Profile-aware run configuration and experiment execution for rumoca.
+pub mod experiments_runner;
 pub mod library_remote;
+pub mod modelica_library_settings;
 /// Bundled Modelica models for web deployment.
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
-/// Profile-aware construction boundary for rumoca simulation sessions.
-pub mod simulation_session;
-
-pub mod experiments_runner;
-pub mod modelica_library_settings;
 pub mod worker;
 
 /// Bevy resource wrapping the singleton [`experiments_runner::ModelicaRunner`].

@@ -124,7 +124,7 @@ pub fn rumoca_options(
                 why: "registered, but no rumoca backend implements it — a solver \
                       outside the rumoca family needs its own options builder"
                     .into(),
-            })
+            });
         }
     };
 

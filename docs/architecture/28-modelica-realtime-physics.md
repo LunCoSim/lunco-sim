@@ -365,7 +365,7 @@ The way to make predicted physics describable in Modelica is **not** to make rum
 general adaptive solver deterministic. It is to use a **restricted profile** — a
 fixed-step deterministic solver **plus limitations on the model**, with the model
 still authored in plain Modelica code. The current profile is implemented by
-`lunco_modelica_core::fixed_step::FixedStepSession`; it is a deliberately small first
+`lunco_modelica_solver::fixed_step::FixedStepSession`; it is a deliberately small first
 profile, not a claim that every Modelica construct is prediction-safe. A model is
 admitted only when the backend can establish this profile at construction and is
 rejected with a diagnostic otherwise.

@@ -1,0 +1,20 @@
+[package]
+name = "lunco-modelica-solver"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Renderer-free Modelica solver backends and live integration sessions"
+
+[dependencies]
+indexmap = { workspace = true }
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
+lunco-experiments = { path = "../lunco-experiments" }
+rumoca-compile = { workspace = true }
+rumoca-eval-solve = { workspace = true }
+rumoca-ir-solve = { workspace = true }
+rumoca-sim = { workspace = true }
+rumoca-solver-rk45 = { workspace = true }
+web-time = { workspace = true }
+
+[lints]
+workspace = true

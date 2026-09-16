@@ -137,7 +137,7 @@ impl ApiQueryProvider for ListSolversProvider {
         // The builtin backends register on first use rather than at plugin
         // build, so a query that arrives before any run would otherwise see an
         // empty registry and report "no solvers exist".
-        lunco_modelica_core::solver_backends::ensure_builtin_solvers();
+        lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
         let items: Vec<serde_json::Value> = lunco_experiments::solver::registered()
             .into_iter()
             .map(|s| {

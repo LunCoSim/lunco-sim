@@ -50,7 +50,8 @@ fn code_only(source: &str) -> String {
 /// `SimOptions` parks the model clock at t=1s and reports a frozen model as a
 /// successful run (a 60 s rocket burn once drained exactly 1 s of propellant).
 ///
-/// `solver_backends::rumoca_options` is the only place that builds one: it turns
+/// `lunco_modelica_solver::solver_backends::rumoca_options` is the only place
+/// that builds one: it turns
 /// a resolved `SolverSpec` plus `SolverParams` into rumoca's options. The two
 /// policy entry points state parameters and delegate to it, never construct:
 /// * `experiments_runner::stepper_options_from_bounds` — batch / offline / FastRun
@@ -59,28 +60,29 @@ fn code_only(source: &str) -> String {
 /// Everything else — including `src/bin/` — must take options from one of those.
 #[test]
 fn sim_options_are_built_only_by_the_canonical_builders() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let allowed = ["solver_backends.rs"];
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source_roots = [root.join("src"), root.join("../lunco-modelica-solver/src")];
 
     let mut offenders = Vec::new();
-    for file in rust_files(&src) {
-        let name = file.file_name().unwrap().to_string_lossy().to_string();
-        if allowed.contains(&name.as_str()) {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-        for (i, line) in code_only(&text).lines().enumerate() {
-            if line.contains("SimOptions::default()") || line.contains("SimOptions {") {
-                offenders.push(format!("{}:{}: {}", file.display(), i + 1, line.trim()));
+    for source_root in source_roots {
+        for file in rust_files(&source_root) {
+            if file.ends_with("solver_backends.rs") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for (i, line) in code_only(&text).lines().enumerate() {
+                if line.contains("SimOptions::default()") || line.contains("SimOptions {") {
+                    offenders.push(format!("{}:{}: {}", file.display(), i + 1, line.trim()));
+                }
             }
         }
     }
 
     assert!(
         offenders.is_empty(),
-        "SimOptions is built only by `solver_backends::rumoca_options`, reached \
+        "SimOptions is built only by `lunco_modelica_solver::solver_backends::rumoca_options`, reached \
          through `stepper_options_from_bounds` (batch) or `live_stepper_options` (live) — \
          a hand-rolled one inherits t_end=1.0 and silently freezes the model \
          clock. See docs/architecture/29-rumoca-workarounds.md §1.\n\

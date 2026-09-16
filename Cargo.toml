@@ -32,6 +32,7 @@ members = [
     "crates/lunco-modelica-icon-ui",
     "crates/lunco-modelica-docs-ui",
     "crates/lunco-modelica-core",
+    "crates/lunco-modelica-solver",
     "crates/lunco-modelica-api",
     "crates/lunco-modelica-ast",
     "crates/lunco-sysml-ast",

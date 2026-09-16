@@ -97,7 +97,7 @@ mod native {
             };
         opts.atol = atol;
         opts.rtol = rtol;
-        let mut stepper = match lunco_modelica_core::simulation_session::cli(&result.dae, opts) {
+        let mut stepper = match lunco_modelica_solver::simulation_session::cli(&result.dae, opts) {
             Ok(s) => {
                 println!("Stepper built OK.");
                 s

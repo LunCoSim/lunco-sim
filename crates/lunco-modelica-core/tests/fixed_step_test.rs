@@ -1,8 +1,9 @@
 use lunco_experiments::solver::{self, RuntimeProfile, SolverParams, SolverRequest};
-use lunco_modelica_core::{
+use lunco_modelica_core::ModelicaCompiler;
+use lunco_modelica_solver::{
     fixed_step::FixedStepSession,
     simulation_session::{self, LiveStepper},
-    solver_backends, ModelicaCompiler,
+    solver_backends,
 };
 use rumoca_sim::{SimOptions, SimSolverMode};
 

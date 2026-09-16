@@ -1535,7 +1535,7 @@ fn parse_solver_arg(s: Option<&str>) -> Result<Option<lunco_experiments::SolverI
     if t.is_empty() || t.eq_ignore_ascii_case("auto") {
         return Ok(None);
     }
-    crate::solver_backends::ensure_builtin_solvers();
+    lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
     let id = lunco_experiments::SolverId::from(t);
     if lunco_experiments::solver::get(&id).is_some() {
         return Ok(Some(id));

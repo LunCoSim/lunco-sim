@@ -25,7 +25,7 @@ pub fn solver_picker(
     // Both entry points also resolve through the registry, but a picker can be
     // drawn before either has run — an empty combo box would read as "no solvers
     // exist" rather than "nothing registered yet".
-    crate::solver_backends::ensure_builtin_solvers();
+    lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
 
     let selected_text = selection
         .as_ref()

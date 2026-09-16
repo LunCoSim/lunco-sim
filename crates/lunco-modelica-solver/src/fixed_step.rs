@@ -181,7 +181,9 @@ impl FixedStepSession {
         if !steps.is_finite() || (represented - (target_time - self.time())).abs() > tolerance {
             return Err(SimulationDiagnosticError::Solver(format!(
                 "fixed-rk4 cannot advance from {} to {}: target is not on the configured step lattice ({:?})",
-                self.time(), target_time, self.fixed_dt,
+                self.time(),
+                target_time,
+                self.fixed_dt,
             )));
         }
         for _ in 0..steps as usize {

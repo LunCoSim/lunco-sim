@@ -15,6 +15,7 @@ lunco-experiments = { path = "../lunco-experiments" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-modelica-solver = { path = "../lunco-modelica-solver" }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 web-time = { workspace = true }

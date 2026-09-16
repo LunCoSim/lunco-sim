@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_core::modelica_dir;
 
-use crate::simulation_session::LiveStepper;
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
 use lunco_modelica_ast::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
@@ -31,6 +30,7 @@ use lunco_modelica_runtime::{
     ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaResult, NoticeLevel, SimSampleBatch,
     SimSampleStream, MAX_MACRO_STEP_DT,
 };
+use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -57,7 +57,7 @@ const PREPARED_SOLVE_CACHE_VERSION: u32 = 4;
 fn live_stepper_options(
     profile: solver::RuntimeProfile,
 ) -> Result<(solver::SolverSpec, rumoca_sim::SimOptions), solver::SolverError> {
-    crate::solver_backends::ensure_builtin_solvers();
+    lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
 
     let spec = solver::resolve(&solver::SolverRequest {
         profile,
@@ -67,7 +67,7 @@ fn live_stepper_options(
         authored: None,
     })?;
 
-    let options = crate::solver_backends::rumoca_options(
+    let options = lunco_modelica_solver::solver_backends::rumoca_options(
         &spec,
         &solver::SolverParams {
             atol: LIVE_TOL,
@@ -382,7 +382,10 @@ fn build_stepper(
             model
         } else {
             let lower_started = web_time::Instant::now();
-            let model = crate::simulation_session::lower_for_live(&comp_res.dae, &plan.options)?;
+            let model = lunco_modelica_solver::simulation_session::lower_for_live(
+                &comp_res.dae,
+                &plan.options,
+            )?;
             let lower_elapsed = lower_started.elapsed();
             bevy::log::info!(
                 "[modelica-runtime] prepared solver IR for `{}`: lower={lower_elapsed:?} cache=miss",
@@ -409,7 +412,11 @@ fn build_stepper(
         .models
         .get(&plan.key)
         .expect("prepared solver model inserted or found above");
-    crate::simulation_session::live_from_solve_model(model, &plan.spec, plan.options)
+    lunco_modelica_solver::simulation_session::live_from_solve_model(
+        model,
+        &plan.spec,
+        plan.options,
+    )
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -464,7 +471,7 @@ impl SolvePreparationPool {
         self.pool.spawn(move || {
             let lower_started = web_time::Instant::now();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::simulation_session::lower_for_live(&dae, &options)
+                lunco_modelica_solver::simulation_session::lower_for_live(&dae, &options)
             }))
             .unwrap_or_else(|payload| {
                 let message = payload
@@ -728,7 +735,7 @@ use std::sync::Arc;
 /// M3: this holds the ACTUAL compiled artifact, not just the source. rumoca's
 /// `DaeCompilationResult` is `Clone` and carries the DAE behind an `Arc`; a
 /// fresh `SimulationSession` is built from `&dae` alone
-/// ([`crate::simulation_session::live`]), so Reset and Step auto-init rebuild
+/// ([`lunco_modelica_solver::simulation_session::live`]), so Reset and Step auto-init rebuild
 /// steppers from `compiled` WITHOUT touching the compiler — instant, where the
 /// old source-only cache recompiled for seconds on source library-heavy models.
 ///
@@ -3838,7 +3845,7 @@ pub fn handle_modelica_responses(
                         // needs) rather than being carried as a free string that
                         // some later layer parses differently.
                         solver: result.experiment_solver.as_deref().and_then(|s| {
-                            crate::solver_backends::ensure_builtin_solvers();
+                            lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
                             let id = lunco_experiments::SolverId::from(s);
                             lunco_experiments::solver::get(&id).map(|spec| spec.id)
                         }),
