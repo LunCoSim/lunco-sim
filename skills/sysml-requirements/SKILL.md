@@ -326,8 +326,9 @@ The result contains `ok`, `results`, `failures`, `check_count`,
 transform or attribute on one repeated part); `requirement_count` is the
 number of unique SysML requirement usages represented by those observations.
 Use `requirement_summary` for a compact per-requirement `{ checks, failures }`
-view and keep the complete result table as evidence. A missing observation is
-a failure, not a passing empty set.
+view and keep the complete result table as evidence. A missing observation is a
+failure, not a passing empty set. The next performance seam is a native batch
+USD query; do not implement an ad-hoc Rhai cache that outlives one evaluation.
 
 ## Select and run a verification case
 

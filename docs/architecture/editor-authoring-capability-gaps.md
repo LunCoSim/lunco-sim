@@ -115,6 +115,13 @@ in the generic report: `pass`, `fail`, `planned`, and `not_run` must be
 separate outcomes. A report containing planned checks must not be presented as
 complete acceptance merely because its executable subset passed.
 
+The evaluator's local query cache reduces duplicate reads, but large
+assemblies still cross the Rhai→Rust query boundary once per distinct path and
+attribute shape. A native `QueryUsdPrims`/measurement batch provider should
+read one composed stage snapshot and return typed records in canonical path
+order. Rhai should retain the check table and policy; Rust should own only the
+bounded traversal and value conversion.
+
 ## Deliberately not a feature
 
 Do not add model-specific Rust builders, hidden fallback dimensions, direct
