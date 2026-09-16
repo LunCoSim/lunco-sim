@@ -8,6 +8,33 @@ use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_environment::GravityBody;
 
+/// Authored attitude policy for a target-following camera.
+///
+/// This is a camera contract, not a general engine component. USD projection
+/// may attach it to a vessel, while a camera realization chooses the matching
+/// pose calculation. An omitted value uses the stable heading behavior.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[reflect(Component)]
+pub enum CameraFollow {
+    /// Track the target's yaw heading while keeping its surface up direction.
+    #[default]
+    Heading,
+    /// Track the target position in a stable external frame.
+    Orbit,
+    /// Follow the target's complete attitude.
+    Chase,
+}
+
+/// Parse the authored `lunco:cameraFollow` token.
+pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "heading" => Some(CameraFollow::Heading),
+        "orbit" => Some(CameraFollow::Orbit),
+        "chase" => Some(CameraFollow::Chase),
+        _ => None,
+    }
+}
+
 /// Authored parameters for a free-flight camera rig.
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
 #[reflect(Component)]
@@ -135,6 +162,16 @@ impl CameraZoomInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_follow_accepts_only_canonical_tokens() {
+        assert_eq!(parse_camera_follow("heading"), Some(CameraFollow::Heading));
+        assert_eq!(parse_camera_follow("orbit"), Some(CameraFollow::Orbit));
+        assert_eq!(parse_camera_follow("CHASE"), Some(CameraFollow::Chase));
+        for token in ["springarm", "yaw", "stable", "external", "cockpit", "full"] {
+            assert_eq!(parse_camera_follow(token), None, "{token}");
+        }
+    }
 
     #[test]
     fn mode_transition_consumes_until_neutral() {

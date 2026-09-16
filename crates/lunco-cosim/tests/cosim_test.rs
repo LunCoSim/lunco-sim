@@ -6,9 +6,9 @@
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_core::ports::PortRegistry;
 use lunco_cosim::*;
 use lunco_cosim_core::*;
+use lunco_port_core::ports::PortRegistry;
 
 /// A standalone port registry carrying the engine's builtin backends, so a test
 /// can list/read/write ports without standing up a full `CoSimPlugin`. Mirrors

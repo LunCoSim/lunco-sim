@@ -86,13 +86,13 @@
 //! `inputs:loadFrac` and `inputs:load_frac` both reach `load_frac`.
 
 use bevy::prelude::*;
-use lunco_core::ports::{
-    port_name_set_key, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
-    PortTopologyRevision, PortTopologyState,
-};
 use lunco_materials::dyn_params::ParamValue;
 use lunco_materials::look::ShaderLook;
 use lunco_materials::naming::to_snake_case;
+use lunco_port_core::ports::{
+    port_name_set_key, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
+    PortTopologyRevision, PortTopologyState,
+};
 
 /// Does this entity drive a shader parameter called `key`?
 ///
@@ -239,10 +239,10 @@ fn check_shader_port_structure(
 /// so there is nothing for it to shadow.
 pub fn build(app: &mut App) {
     app.init_resource::<PortRegistry>()
-        .init_resource::<lunco_core::PortTopologyRevision>()
-        .init_resource::<lunco_core::ports::PortTopologyState>()
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ShaderLook>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ShaderLook>)
+        .init_resource::<lunco_port_core::ports::PortTopologyRevision>()
+        .init_resource::<lunco_port_core::ports::PortTopologyState>()
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ShaderLook>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<ShaderLook>)
         .add_systems(PostUpdate, check_shader_port_structure)
         .world_mut()
         .resource_mut::<PortRegistry>()

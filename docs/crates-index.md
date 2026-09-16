@@ -9,7 +9,8 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Dependency-light engine primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), typed scene transitions, `SceneMountState` and the `SceneTeardown` schedule, the `SceneViewport` (active-camera binding), canonical diagram data types, shared human-readable entity labels, and shared terminal runtime faults/fixed-step coupling state. Core carries no BigSpace dependency, session/authority policy, or vehicle-specific motion policy. |
+| **`lunco-core`** | Dependency-light engine primitives (the typed `Mutation<P>` command substrate, `SimTick`), typed scene transitions, `SceneMountState` and the `SceneTeardown` schedule, the `SceneViewport` (active-camera binding), canonical diagram data types, shared human-readable entity labels, and shared terminal runtime faults/fixed-step coupling state. Core carries no port-registry, BigSpace, session/authority, or vehicle-specific motion policy. |
+| **`lunco-port-core`** | Shared co-simulation port registry: `PortRegistry`, backend registration and resolution, topology invalidation state, metadata, collision reporting, and resolved fast-path handles. Endpoint/control-surface components remain with the general ECS contract in `lunco-core`; this package owns discovery and access. |
 | **`lunco-spatial`** | BigSpace spatial substrate: f64 coordinate/frame helpers, the persistent `WorldRoot`/`WorldGrid` shell, atomic grid migration, hierarchy invariants, spatial markers, and the vehicle-neutral navigation law. It depends on `lunco-core` for the shared runtime-diagnostic resource, but core does not depend on spatial. |
 | **`lunco-core-session`** | Always-on session and authority substrate: network role/status, `SessionRegistry`, generic `ClaimControl`/`ReleaseControlClaim` transitions, `ControlAuthorityChanged`, RBAC policy, prediction markers/input watermarks, and session-dependent identity admission. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
@@ -236,7 +237,10 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 ### Core Foundation
 
 **`lunco-core`**
-The bedrock of the simulation. Defines the shared scalar port substrate (`PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). It owns generic engine lifecycle and runtime state but has no BigSpace dependency and does not assign celestial semantics.
+The bedrock of the simulation. It defines the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). It owns generic engine lifecycle and runtime state but has no port-registry, BigSpace, or celestial semantics.
+
+**`lunco-port-core`**
+Owns the shared scalar port registry (`PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction. Endpoint and control-surface components remain in `lunco-core`; this package only discovers and accesses registered backends.
 
 **`lunco-spatial`**
 Owns the BigSpace-specific boundary: arbitrary-grid f64 pose composition/conversion, the persistent world shell, atomic grid migration, `ActivePhysicsFrame`, spatial markers, hierarchy invariants, and the vehicle-neutral navigation law. It depends on `lunco-core` for shared runtime diagnostics; the dependency direction is one-way, so changing spatial code does not rebuild core.

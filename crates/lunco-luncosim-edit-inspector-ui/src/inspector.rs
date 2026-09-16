@@ -14,10 +14,10 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::OpId;
-use lunco_core::ports::PortRegistry;
 use lunco_cosim::{JOINT_ANGLE_PORT, joint_angle_holder};
 use lunco_doc::Document;
 use lunco_modelica_ui_core::SetModelicaParameter;
+use lunco_port_core::ports::PortRegistry;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
 // material asset — see `material_pbr_section`.

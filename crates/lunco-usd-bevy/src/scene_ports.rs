@@ -60,7 +60,7 @@
 
 use bevy::light::{PointLight, SpotLight};
 use bevy::prelude::*;
-use lunco_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
+use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
 
 /// The light ports, in `list` order.
 const LIGHT_PORTS: [&str; 5] = [
@@ -307,15 +307,15 @@ impl Plugin for ScenePortsPlugin {
 pub fn build(app: &mut App) {
     app.add_observer(mark_point_light_surface_ready)
         .add_observer(mark_spot_light_surface_ready)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<PointLight>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<PointLight>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<SpotLight>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SpotLight>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Transform>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Transform>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<PointLight>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<PointLight>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SpotLight>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<SpotLight>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<Transform>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Transform>)
         .init_resource::<PortRegistry>()
-        .init_resource::<lunco_core::PortTopologyRevision>()
-        .init_resource::<lunco_core::ports::PortTopologyState>()
+        .init_resource::<lunco_port_core::ports::PortTopologyRevision>()
+        .init_resource::<lunco_port_core::ports::PortTopologyState>()
         .world_mut()
         .resource_mut::<PortRegistry>()
         .register(SCENE_PROPERTY_BACKEND);

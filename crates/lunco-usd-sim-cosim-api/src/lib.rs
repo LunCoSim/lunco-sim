@@ -52,16 +52,16 @@ impl Plugin for UsdSimCosimApiPlugin {
 // owns it. These are the canonical port verbs; they are not aliases of
 // `CosimStatus` (which stays as richer per-entity cosim introspection).
 
-/// Map a [`lunco_core::ports::PortDirection`] to a stable wire string.
-fn port_dir_str(d: lunco_core::ports::PortDirection) -> &'static str {
+/// Map a [`lunco_port_core::ports::PortDirection`] to a stable wire string.
+fn port_dir_str(d: lunco_port_core::ports::PortDirection) -> &'static str {
     match d {
-        lunco_core::ports::PortDirection::In => "in",
-        lunco_core::ports::PortDirection::Out => "out",
-        lunco_core::ports::PortDirection::InOut => "inout",
+        lunco_port_core::ports::PortDirection::In => "in",
+        lunco_port_core::ports::PortDirection::Out => "out",
+        lunco_port_core::ports::PortDirection::InOut => "inout",
     }
 }
 
-fn port_to_json(p: &lunco_core::ports::PortInfo) -> serde_json::Value {
+fn port_to_json(p: &lunco_port_core::ports::PortInfo) -> serde_json::Value {
     let range = match (p.metadata.min, p.metadata.max) {
         (Some(min), Some(max)) => serde_json::json!({ "min": min, "max": max }),
         (Some(min), None) => serde_json::json!({ "min": min }),
@@ -106,7 +106,9 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
         "ListPorts"
     }
     fn execute(&self, world: &World, params: &serde_json::Value) -> lunco_api::ApiResponse {
-        let ports_reg = world.resource::<lunco_core::ports::PortRegistry>().clone();
+        let ports_reg = world
+            .resource::<lunco_port_core::ports::PortRegistry>()
+            .clone();
         // Single-entity form.
         if let Some(e) = resolve_param_entity(world, params) {
             let ports: Vec<_> = ports_reg
@@ -160,7 +162,9 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
                 "GetPort requires a `name`",
             );
         };
-        let ports_reg = world.resource::<lunco_core::ports::PortRegistry>().clone();
+        let ports_reg = world
+            .resource::<lunco_port_core::ports::PortRegistry>()
+            .clone();
         match ports_reg.read_port(world, e, name) {
             Some(value) => {
                 lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value }))
@@ -182,7 +186,7 @@ fn causal_binding_status(binding: Option<&ConnectionBinding>) -> &'static str {
     }
 }
 
-fn causal_port_owner_json(owner: &lunco_core::ports::PortOwnerInfo) -> serde_json::Value {
+fn causal_port_owner_json(owner: &lunco_port_core::ports::PortOwnerInfo) -> serde_json::Value {
     serde_json::json!({
         "precedence": owner.precedence,
         "direction": port_dir_str(owner.direction),
@@ -292,7 +296,9 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let ports = world.resource::<lunco_core::ports::PortRegistry>().clone();
+            let ports = world
+                .resource::<lunco_port_core::ports::PortRegistry>()
+                .clone();
             let owners = ports.entity_port_owners(world, entity);
             let mut names = binding_entries
                 .iter()
@@ -313,8 +319,8 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                         .find(|owner| {
                             matches!(
                                 owner.direction,
-                                lunco_core::ports::PortDirection::In
-                                    | lunco_core::ports::PortDirection::InOut
+                                lunco_port_core::ports::PortDirection::In
+                                    | lunco_port_core::ports::PortDirection::InOut
                             )
                         })
                         .map(|owner| causal_port_owner_json(owner));

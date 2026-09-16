@@ -7075,6 +7075,7 @@ dependencies = [
  "bevy",
  "lunco-control-core",
  "lunco-core",
+ "lunco-port-core",
  "lunco-readiness",
  "serde",
  "serde_json",
@@ -7344,6 +7345,7 @@ dependencies = [
  "lunco-input-core",
  "lunco-materials",
  "lunco-obstacle-field",
+ "lunco-port-core",
  "lunco-render",
  "lunco-settings",
  "lunco-spatial",
@@ -7426,6 +7428,7 @@ dependencies = [
  "lunco-core-session",
  "lunco-cosim-core",
  "lunco-physics",
+ "lunco-port-core",
  "lunco-spatial",
  "lunco-time",
 ]
@@ -7738,6 +7741,7 @@ dependencies = [
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
  "lunco-obstacle-field",
+ "lunco-port-core",
  "lunco-render",
  "lunco-scene-authoring",
  "lunco-scene-catalog",
@@ -7783,6 +7787,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
+ "lunco-port-core",
  "lunco-render",
  "lunco-scene-camera",
  "lunco-scene-catalog",
@@ -8045,6 +8050,7 @@ dependencies = [
  "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
+ "lunco-port-core",
  "lunco-settings",
  "lunco-signal",
  "lunco-storage",
@@ -8248,6 +8254,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-hash",
  "lunco-physics",
+ "lunco-port-core",
  "lunco-scripting",
  "lunco-settings",
  "lunco-spatial",
@@ -8298,6 +8305,14 @@ dependencies = [
  "lunco-spatial",
  "lunco-time",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-port-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-core",
 ]
 
 [[package]]
@@ -8511,6 +8526,7 @@ dependencies = [
  "lunco-lint",
  "lunco-materials",
  "lunco-modelica-ast",
+ "lunco-port-core",
  "lunco-storage",
  "lunco-sysml-ast",
  "lunco-sysml-report",
@@ -8583,6 +8599,7 @@ dependencies = [
  "lunco-api",
  "lunco-core",
  "lunco-core-session",
+ "lunco-port-core",
  "lunco-time",
  "lunco-workspace",
  "serde_json",
@@ -8737,6 +8754,7 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-core",
+ "lunco-port-core",
  "lunco-settings",
  "lunco-signal",
  "lunco-time",
@@ -9015,8 +9033,10 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "big_space",
+ "lunco-camera-core",
  "lunco-control-core",
  "lunco-core",
+ "lunco-port-core",
  "lunco-render",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
@@ -9203,6 +9223,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-port-core",
  "lunco-storage",
  "lunco-twin",
  "lunco-twin-journal",
@@ -9335,6 +9356,7 @@ dependencies = [
  "lunco-materials",
  "lunco-mobility",
  "lunco-physics",
+ "lunco-port-core",
  "lunco-render",
  "lunco-spatial",
  "lunco-usd-actuation",
@@ -9423,6 +9445,7 @@ dependencies = [
  "lunco-cosim-core",
  "lunco-modelica-runtime",
  "lunco-physics",
+ "lunco-port-core",
  "lunco-render",
  "lunco-signal",
  "lunco-usd-avian",

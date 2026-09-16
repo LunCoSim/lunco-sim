@@ -1799,7 +1799,7 @@ fn live_runtime_port_exists(
     else {
         return false;
     };
-    let Some(registry) = world.get_resource::<lunco_core::ports::PortRegistry>() else {
+    let Some(registry) = world.get_resource::<lunco_port_core::ports::PortRegistry>() else {
         return false;
     };
     for entity in world.iter_entities() {

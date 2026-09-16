@@ -16,7 +16,7 @@ and fixed-step propagation that realize that contract.
 Every participant — Modelica/FMU model, Avian rigid body, joint, raw physics
 query, or
 hardware signal — exposes its state as **named scalar ports** through one shared
-surface, the **`PortRegistry`** (defined in `lunco-core::ports`, *below* every
+surface, the **`PortRegistry`** (defined in `lunco-port-core::ports`, *below* every
 participant so wires, the HTTP API, the inspector, rhai, and Python all read/write
 through it without depending "up" into this engine). `lunco-cosim` owns and
 registers the built-in backends (`ports::register_builtin_port_backends`):

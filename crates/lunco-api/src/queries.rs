@@ -133,7 +133,7 @@ use crate::schema::ApiErrorCode;
 /// `{ api_id, ports: [{ name, value, direction, metadata }] }`
 pub struct ReadPortsProvider;
 
-fn port_info_to_json(port: &lunco_core::ports::PortInfo) -> serde_json::Value {
+fn port_info_to_json(port: &lunco_port_core::ports::PortInfo) -> serde_json::Value {
     let range = match (port.metadata.min, port.metadata.max) {
         (Some(min), Some(max)) => serde_json::json!({ "min": min, "max": max }),
         (Some(min), None) => serde_json::json!({ "min": min }),
@@ -144,9 +144,9 @@ fn port_info_to_json(port: &lunco_core::ports::PortInfo) -> serde_json::Value {
         "name": port.name,
         "value": port.value,
         "direction": match port.direction {
-            lunco_core::ports::PortDirection::In => "in",
-            lunco_core::ports::PortDirection::Out => "out",
-            lunco_core::ports::PortDirection::InOut => "inout",
+            lunco_port_core::ports::PortDirection::In => "in",
+            lunco_port_core::ports::PortDirection::Out => "out",
+            lunco_port_core::ports::PortDirection::InOut => "inout",
         },
         "metadata": {
             "type": port.metadata.value_type,
@@ -185,7 +185,7 @@ impl ApiQueryProvider for ReadPortsProvider {
         // to release the immutable world borrow before `entity_ports` reborrows
         // `&World` to read component values.
         let Some(registry) = world
-            .get_resource::<lunco_core::ports::PortRegistry>()
+            .get_resource::<lunco_port_core::ports::PortRegistry>()
             .cloned()
         else {
             return ApiResponse::error(
@@ -497,12 +497,12 @@ mod tests {
 
     #[test]
     fn read_ports_json_preserves_owner_metadata() {
-        let port = lunco_core::ports::PortInfo {
+        let port = lunco_port_core::ports::PortInfo {
             name: "throttle".into(),
-            direction: lunco_core::ports::PortDirection::In,
+            direction: lunco_port_core::ports::PortDirection::In,
             value: 0.5,
-            metadata: lunco_core::ports::PortMetadata::scalar(
-                lunco_core::ports::PortDirection::In,
+            metadata: lunco_port_core::ports::PortMetadata::scalar(
+                lunco_port_core::ports::PortDirection::In,
                 Some("m/s"),
                 Some(-1.0),
                 Some(1.0),

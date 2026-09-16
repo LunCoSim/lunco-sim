@@ -3,7 +3,7 @@
 //! Follows the FMI/SSP ontology: [`crate::SimConnection`] is a link between two
 //! ports (SSP: Connection). The PORTS themselves are not declared by a component
 //! here — every participant's port surface is answered by
-//! [`lunco_core::ports::PortRegistry`], live, from whatever backend owns the
+//! [`lunco_port_core::ports::PortRegistry`], live, from whatever backend owns the
 //! value. (A `SimPort`/`SimPorts` metadata pair used to declare them alongside;
 //! nothing attached it and nothing read it once the registry landed.)
 //!

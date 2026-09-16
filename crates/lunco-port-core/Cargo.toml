@@ -1,0 +1,13 @@
+[package]
+name = "lunco-port-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Shared ECS port surfaces and registry for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+
+[lints]
+workspace = true

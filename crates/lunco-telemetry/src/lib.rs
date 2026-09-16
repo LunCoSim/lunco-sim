@@ -55,9 +55,9 @@
 mod api;
 
 use bevy::prelude::*;
-use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::telemetry::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
 use lunco_core::{on_command, register_commands, Command};
+use lunco_port_core::ports::{PortRegistry, ResolvedPort};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_signal::TelemetryDeadband;
 use lunco_time::{domain_time, ResolvedDomains, TimeBinding, WorldTime};
@@ -1048,7 +1048,7 @@ mod tests {
     use super::*;
     use bevy::time::TimeUpdateStrategy;
     use lunco_core::architecture::Port;
-    use lunco_core::ports::PortDirection;
+    use lunco_port_core::ports::PortDirection;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -1067,9 +1067,13 @@ mod tests {
         }
     }
 
-    fn list_test_output(world: &World, entity: Entity, out: &mut Vec<lunco_core::ports::PortRef>) {
+    fn list_test_output(
+        world: &World,
+        entity: Entity,
+        out: &mut Vec<lunco_port_core::ports::PortRef>,
+    ) {
         if let Some(source) = world.get::<TestOutput>(entity) {
-            out.push(lunco_core::ports::PortRef {
+            out.push(lunco_port_core::ports::PortRef {
                 name: "value".to_string(),
                 direction: PortDirection::Out,
                 value: source.0,
@@ -1081,27 +1085,28 @@ mod tests {
         (name == "value").then(|| world.get::<TestOutput>(entity).map(|source| source.0))?
     }
 
-    const TEST_OUTPUT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
-        list_entities: |_world, _out| {},
-        topology_key: |_world, _entity| 0,
-        list: list_test_output,
-        metadata: None,
-        read_output: read_test_output,
-        read_input: |_, _, _| None,
-        write_input: |_, _, _, _| false,
-        resolve_output: None,
-        resolve_input: None,
-        read_slot: None,
-        write_slot: None,
-    };
+    const TEST_OUTPUT_BACKEND: lunco_port_core::ports::PortBackend =
+        lunco_port_core::ports::PortBackend {
+            list_entities: |_world, _out| {},
+            topology_key: |_world, _entity| 0,
+            list: list_test_output,
+            metadata: None,
+            read_output: read_test_output,
+            read_input: |_, _, _| None,
+            write_input: |_, _, _, _| false,
+            resolve_output: None,
+            resolve_input: None,
+            read_slot: None,
+            write_slot: None,
+        };
 
     fn list_test_declared_output(
         world: &World,
         entity: Entity,
-        out: &mut Vec<lunco_core::ports::PortRef>,
+        out: &mut Vec<lunco_port_core::ports::PortRef>,
     ) {
         if world.get::<TestDeclaredOutput>(entity).is_some() {
-            out.push(lunco_core::ports::PortRef {
+            out.push(lunco_port_core::ports::PortRef {
                 name: "value".to_string(),
                 direction: PortDirection::Out,
                 value: world.get::<TestOutput>(entity).map_or(0.0, |value| value.0),
@@ -1115,8 +1120,8 @@ mod tests {
             .flatten()
     }
 
-    const TEST_DECLARED_OUTPUT_BACKEND: lunco_core::ports::PortBackend =
-        lunco_core::ports::PortBackend {
+    const TEST_DECLARED_OUTPUT_BACKEND: lunco_port_core::ports::PortBackend =
+        lunco_port_core::ports::PortBackend {
             list_entities: |_world, _out| {},
             topology_key: |_world, _entity| 0,
             list: list_test_declared_output,

@@ -159,6 +159,6 @@ fn test_balloon_connection_accumulation() {
 
 fn read_input_port(world: &World, entity: Entity, name: &str) -> Option<f64> {
     world
-        .resource::<lunco_core::ports::PortRegistry>()
+        .resource::<lunco_port_core::ports::PortRegistry>()
         .read_input_port(world, entity, name)
 }

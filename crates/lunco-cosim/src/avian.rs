@@ -27,8 +27,8 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
 use crate::ports::{AvianGroup, AvianPort};
-use lunco_core::ports::PortDirection;
 use lunco_cosim_core::{ForceActuator, TorqueActuator};
+use lunco_port_core::ports::PortDirection;
 
 /// The avian input ports that sink into [`PendingForces`] — i.e. **writing one
 /// pushes a rigid body around**. Declared here, beside the port table that
@@ -535,10 +535,12 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
 };
 
 fn register_collider_contact_topology(app: &mut App) {
-    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<Collider>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Collider>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ColliderMassProperties>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ColliderMassProperties>);
+    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<Collider>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Collider>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ColliderMassProperties>)
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_remove::<ColliderMassProperties>,
+        );
 }
 
 fn collider_contact_topology_key(world: &World, entity: Entity) -> u64 {
@@ -570,8 +572,8 @@ pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
 };
 
 fn register_force_actuator_topology(app: &mut App) {
-    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<ForceActuator>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ForceActuator>);
+    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ForceActuator>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<ForceActuator>);
 }
 
 /// A USD-authored torque actuator. Its command is scalar torque; its axis and
@@ -596,8 +598,8 @@ pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
 };
 
 fn register_torque_actuator_topology(app: &mut App) {
-    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<TorqueActuator>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<TorqueActuator>);
+    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<TorqueActuator>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<TorqueActuator>);
 }
 
 /// The rigid-body port group: position/velocity outputs + force inputs.
@@ -917,27 +919,33 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
 };
 
 fn register_rigid_body_topology(app: &mut App) {
-    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<RigidBody>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<RigidBody>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Position>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Position>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<LinearVelocity>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<LinearVelocity>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Rotation>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Rotation>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<AngularVelocity>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<AngularVelocity>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<SolvedLinearAcceleration>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SolvedLinearAcceleration>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ComputedMass>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ComputedMass>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ComputedAngularInertia>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ComputedAngularInertia>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ComputedCenterOfMass>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ComputedCenterOfMass>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<lunco_core::PhysicsStateReady>)
+    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<RigidBody>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<RigidBody>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<Position>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Position>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<LinearVelocity>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<LinearVelocity>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<Rotation>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Rotation>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<AngularVelocity>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<AngularVelocity>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SolvedLinearAcceleration>)
         .add_observer(
-            lunco_core::ports::bump_port_topology_on_remove::<lunco_core::PhysicsStateReady>,
+            lunco_port_core::ports::bump_port_topology_on_remove::<SolvedLinearAcceleration>,
+        )
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ComputedMass>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<ComputedMass>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ComputedAngularInertia>)
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_remove::<ComputedAngularInertia>,
+        )
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<ComputedCenterOfMass>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<ComputedCenterOfMass>)
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_add::<lunco_core::PhysicsStateReady>,
+        )
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_remove::<lunco_core::PhysicsStateReady>,
         );
 }
 
@@ -1022,8 +1030,8 @@ pub const KINEMATIC_POSITION_GROUP: AvianGroup = AvianGroup {
 };
 
 fn register_kinematic_position_topology(app: &mut App) {
-    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<lunco_core::Mobility>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<lunco_core::Mobility>)
+    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<lunco_core::Mobility>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<lunco_core::Mobility>)
         .add_systems(PostUpdate, check_kinematic_position_structure);
 }
 
@@ -1042,8 +1050,8 @@ fn kinematic_position_topology_key(world: &World, entity: Entity) -> u64 {
 /// from the group, so transitions between those two values do not invalidate.
 fn check_kinematic_position_structure(
     changed: Query<(Entity, &lunco_core::Mobility), Changed<lunco_core::Mobility>>,
-    mut state: ResMut<lunco_core::ports::PortTopologyState>,
-    mut revision: ResMut<lunco_core::PortTopologyRevision>,
+    mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
 ) {
     for (entity, mobility) in &changed {
         let key = u64::from(*mobility == lunco_core::Mobility::Kinematic);

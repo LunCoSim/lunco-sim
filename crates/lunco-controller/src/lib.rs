@@ -32,7 +32,7 @@
 //! Both share stage 1 ([`intent_held`]) and stage 2 ([`ControlBinding::resolve`]).
 //! Because control is keyed by *intent*, anything internal (rhai, mission logic, AI)
 //! can drive a vessel by naming intents — the same consistent vocabulary. All writes
-//! land through the same [`lunco_core::ports::PortRegistry`].
+//! land through the same [`lunco_port_core::ports::PortRegistry`].
 
 use bevy::input::{
     keyboard::{Key, KeyCode, KeyboardInput, NativeKey},

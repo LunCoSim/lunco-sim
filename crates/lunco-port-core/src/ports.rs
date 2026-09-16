@@ -1,4 +1,4 @@
-//! Co-simulation **port substrate** — the FMI/SSP scalar-exchange surface shared
+//! Shared **port registry** — the FMI/SSP scalar-exchange surface shared
 //! by every participant so they all read/write exposed values through ONE path.
 //!
 //! A *port* is a named scalar (`f64`) on a participant entity. Modelica variables,
@@ -7,7 +7,7 @@
 //! the API (`ListPorts` / `GetPort` / `SetPorts`), the UI inspector, and every
 //! scripting runtime (rhai/python) treat them uniformly — the FMI/SSP contract.
 //!
-//! ## Why this lives in `lunco-core`
+//! ## Ownership
 //!
 //! Ports are co-sim *substrate*, not an engine or API concern: the wire engine
 //! (`lunco-cosim`) runs ON them, the API and scripts merely consume them. Putting
@@ -26,7 +26,7 @@
 //! its boundary. We deliberately do **not** model `Bool`/`Enum`/`String` ports
 //! until a concrete need appears.
 //!
-//! [`Port`]: crate::architecture::Port
+//! [`Port`]: lunco_core::architecture::Port
 //!
 //! ## One registry, one discovery path and four thin access operations
 //!
@@ -42,7 +42,7 @@ use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
-use crate::InputPorts;
+use lunco_core::InputPorts;
 
 /// Durable invalidation generation for the shared runtime port surface.
 ///
@@ -949,8 +949,8 @@ mod tests {
     use super::{
         PortBackend, PortCollisionDirection, PortDirection, PortMetadata, PortRef, PortRegistry,
     };
-    use crate::InputPorts;
     use bevy::prelude::*;
+    use lunco_core::InputPorts;
 
     fn duplicate_input_list(_world: &World, _entity: Entity, out: &mut Vec<PortRef>) {
         out.push(PortRef {
@@ -1086,9 +1086,11 @@ mod tests {
         );
 
         let ports = registry.entity_ports(&world, entity);
-        assert!(ports
-            .iter()
-            .any(|port| port.name == "arm" && port.direction == super::PortDirection::In));
+        assert!(
+            ports
+                .iter()
+                .any(|port| port.name == "arm" && port.direction == super::PortDirection::In)
+        );
     }
 
     #[test]

@@ -4146,7 +4146,13 @@ fn on_possess_command(
     q_parents: Query<&ChildOf>,
     // Used ONLY for the heading-follow camera decision below. Possession is
     // gated by a non-avatar public input endpoint, then authority.
-    q_vessel: Query<(Option<&lunco_core::CameraFollow>, Option<&GravityBody>), Controllable>,
+    q_vessel: Query<
+        (
+            Option<&lunco_camera_core::CameraFollow>,
+            Option<&GravityBody>,
+        ),
+        Controllable,
+    >,
     q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mut possession_authority: PossessionAuthority,
@@ -4324,12 +4330,12 @@ fn on_possess_command(
     replace_avatar_diagnostic(&mut diagnostics, None);
 
     // Camera-follow mode is authored on the vessel's control profile
-    // (`lunco_core::CameraFollow`) — that, not any hardcoded marker, decides
+    // (`lunco_camera_core::CameraFollow`) — that, not any hardcoded marker, decides
     // whether the camera tracks the body's attitude. `Heading` follows yaw only
     // (surface vehicles); `Orbit` keeps a stable external frame a 6-DOF flyer
     // rotates inside of; `Chase` copies full orientation. A vessel with no
     // authored mode (or no control profile) defaults to `Heading`.
-    use lunco_core::CameraFollow;
+    use lunco_camera_core::CameraFollow;
     let follow = q_vessel
         .get(cmd.target)
         .ok()
@@ -4429,7 +4435,7 @@ fn on_possess_command(
     // solver; reusing it for a fast-flying vessel was the source of the old
     // frame-stale target sampling jitter. Strip the celestial orbit component in
     // case a prior focus left it on the avatar.
-    use lunco_core::CameraFollow as CF;
+    use lunco_camera_core::CameraFollow as CF;
     let (attitude, track_heading, damping) = match follow {
         // Stable external frame: track position, keep world up, ignore attitude.
         // The right frame for a lander that pitches/rolls — the craft tumbles

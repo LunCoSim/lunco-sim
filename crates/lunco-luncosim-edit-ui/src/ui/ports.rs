@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_core::ports::{
+use lunco_port_core::ports::{
     PortDirection, PortHandle, PortInfo, PortMetadata, PortRegistry, PortTopologyRevision,
 };
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchSnapshot};

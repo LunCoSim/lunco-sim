@@ -135,7 +135,7 @@ fn live_port_collision_findings(
     world: &World,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
 ) -> Vec<lunco_lint::LintFinding> {
-    let Some(registry) = world.get_resource::<lunco_core::ports::PortRegistry>() else {
+    let Some(registry) = world.get_resource::<lunco_port_core::ports::PortRegistry>() else {
         return Vec::new();
     };
 
@@ -157,19 +157,19 @@ fn live_port_collision_findings(
     for (entity_path, entity) in entities {
         for collision in registry.entity_port_collisions(world, entity) {
             let direction = match collision.direction {
-                lunco_core::ports::PortCollisionDirection::Input => "input",
-                lunco_core::ports::PortCollisionDirection::Output => "output",
-                lunco_core::ports::PortCollisionDirection::InOut => "inout",
+                lunco_port_core::ports::PortCollisionDirection::Input => "input",
+                lunco_port_core::ports::PortCollisionDirection::Output => "output",
+                lunco_port_core::ports::PortCollisionDirection::InOut => "inout",
             };
-            let property_path = |owner: &lunco_core::ports::PortOwnerInfo| {
+            let property_path = |owner: &lunco_port_core::ports::PortOwnerInfo| {
                 let namespace = match owner.direction {
-                    lunco_core::ports::PortDirection::In => "inputs",
-                    lunco_core::ports::PortDirection::Out => "outputs",
-                    lunco_core::ports::PortDirection::InOut => "inputs/outputs",
+                    lunco_port_core::ports::PortDirection::In => "inputs",
+                    lunco_port_core::ports::PortDirection::Out => "outputs",
+                    lunco_port_core::ports::PortDirection::InOut => "inputs/outputs",
                 };
                 format!("{entity_path}.{namespace}:{}", collision.name)
             };
-            let owner_text = |owner: &lunco_core::ports::PortOwnerInfo| {
+            let owner_text = |owner: &lunco_port_core::ports::PortOwnerInfo| {
                 let source = if owner.metadata.source.is_empty() {
                     "unknown backend"
                 } else {
@@ -188,13 +188,13 @@ fn live_port_collision_findings(
                 .collect::<Vec<_>>()
                 .join("\n");
             let access = match collision.direction {
-                lunco_core::ports::PortCollisionDirection::Input => {
+                lunco_port_core::ports::PortCollisionDirection::Input => {
                     "writes may be routed to the winner"
                 }
-                lunco_core::ports::PortCollisionDirection::Output => {
+                lunco_port_core::ports::PortCollisionDirection::Output => {
                     "reads may be routed to the winner"
                 }
-                lunco_core::ports::PortCollisionDirection::InOut => {
+                lunco_port_core::ports::PortCollisionDirection::InOut => {
                     "reads and writes may be routed to the winner"
                 }
             };
@@ -229,7 +229,7 @@ fn live_runtime_connection_facts(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     view: &StageView<'_>,
 ) -> Vec<H> {
-    let Some(registry) = world.get_resource::<lunco_core::ports::PortRegistry>() else {
+    let Some(registry) = world.get_resource::<lunco_port_core::ports::PortRegistry>() else {
         return Vec::new();
     };
     let mut entities = BTreeMap::new();
@@ -830,7 +830,7 @@ mod tests {
     use super::live_port_collision_findings;
     use bevy::asset::Handle;
     use bevy::prelude::*;
-    use lunco_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
+    use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
     use lunco_usd_bevy_core::{canonical::CanonicalStage, UsdRead, UsdStageAsset};
     use lunco_usd_bevy_scene::UsdPrimPath;
     use lunco_usd_compose::recipe::StageRecipe;

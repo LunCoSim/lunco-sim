@@ -24,5 +24,5 @@ pub use contract::*;
 pub use control::ControlLink;
 pub use diagnostics::{AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics};
 
-/// The fixed port name exposed by a generic scalar [`lunco_core::Port`].
+/// The fixed port name exposed by a generic scalar port endpoint.
 pub const PORT_NAME: &str = "value";

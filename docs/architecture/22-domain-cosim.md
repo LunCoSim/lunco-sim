@@ -43,7 +43,7 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   DECLARATION, not from its solution (see *Interface before solution* below).
 - **`SimConnection`** — links a source port to a target port (FMI/SSP Connection)
 - **`SimPort`** — metadata for a connectable interface point
-- **`PortRegistry`** — the unified scalar-port surface (in `lunco-core::ports`) every
+- **`PortRegistry`** — the unified scalar-port surface (in `lunco-port-core::ports`) every
   participant reads/writes through; the cosim engine registers the built-in backends.
   `entity_port_infos` adds the same live values with owner-supplied type, unit,
   bounds, source, authority, and writability for `ReadPorts` and the native

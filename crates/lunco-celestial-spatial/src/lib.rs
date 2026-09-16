@@ -187,8 +187,8 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<CelestialConfig>();
-        app.init_resource::<lunco_core::PortTopologyRevision>()
-            .init_resource::<lunco_core::ports::PortTopologyState>();
+        app.init_resource::<lunco_port_core::ports::PortTopologyRevision>()
+            .init_resource::<lunco_port_core::ports::PortTopologyState>();
         // Globe LOD consumes the shared presentation binding, not Bevy's
         // render activation flag. Keep the binding substrate available in
         // standalone celestial hosts as well as the full USD application.
@@ -222,8 +222,8 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<link::LinkConfig>();
         app.init_resource::<link::LinkSolverState>();
         app.init_resource::<link::LinkClassCatalog>();
-        app.init_resource::<lunco_core::PortTopologyRevision>();
-        app.init_resource::<lunco_core::ports::PortTopologyState>();
+        app.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
+        app.init_resource::<lunco_port_core::ports::PortTopologyState>();
         app.register_type::<link::LinkConfig>();
         app.register_type::<link::LinkNode>();
         app.register_type::<link::LinkOccluder>();
@@ -232,10 +232,10 @@ impl Plugin for CelestialPlugin {
         app.register_type::<wifi::WifiNode>();
         app.register_type::<wifi::WifiState>();
         link::register_all_commands(app);
-        app.add_observer(lunco_core::ports::bump_port_topology_on_add::<link::LinkNode>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<link::LinkNode>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<link::LinkState>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<link::LinkState>);
+        app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<link::LinkNode>)
+            .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<link::LinkNode>)
+            .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<link::LinkState>)
+            .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<link::LinkState>);
         app.add_systems(PreUpdate, link::refresh_link_class_catalog);
         app.add_systems(PostUpdate, link::check_link_state_structure);
         // `update_links` is a REGULAR (non-exclusive) system — it writes through
@@ -268,7 +268,7 @@ impl Plugin for CelestialPlugin {
         // first) are already in by now, so a model that authors its own `link_*`
         // variable keeps it.
         app.world_mut()
-            .get_resource_or_init::<lunco_core::ports::PortRegistry>()
+            .get_resource_or_init::<lunco_port_core::ports::PortRegistry>()
             .register(link::LINK_PORT_BACKEND);
         // Keep a host-app gravity choice (e.g. the sandbox's flat gravity);
         // default to surface gravity for the full client.

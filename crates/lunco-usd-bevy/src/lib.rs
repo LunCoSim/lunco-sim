@@ -158,6 +158,7 @@ impl Plugin for UsdVisualPlugin {
             .register_asset_loader(UsdSourceTextLoader)
             .register_type::<UsdPrimPath>()
             .register_type::<lunco_core::UsdPrimKind>()
+            .register_type::<lunco_camera_core::CameraFollow>()
             .register_type::<UsdAnimated>()
             .register_type::<UsdResetXformStack>()
             // The retained NurbsPatch definition + its parametric layer. Registered
@@ -1094,7 +1095,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             // and consumed by `on_possess_command`; absent → the `Heading` default.
             if let Some(mode) = reader
                 .text(&controls, "lunco:cameraFollow")
-                .and_then(|t| lunco_core::parse_camera_follow(&t))
+                .and_then(|t| lunco_camera_core::parse_camera_follow(&t))
             {
                 commands.entity(entity).try_insert(mode);
             }

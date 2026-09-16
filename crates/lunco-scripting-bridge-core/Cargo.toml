@@ -13,6 +13,7 @@ workspace = ["dep:lunco-workspace"]
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-time = { path = "../lunco-time" }
 lunco-workspace = { path = "../lunco-workspace", optional = true }

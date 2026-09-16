@@ -6,7 +6,7 @@
 //! master without making synchronous hardware ports pretend to be async.
 
 use bevy::prelude::*;
-use lunco_core::ports::PortRegistry;
+use lunco_port_core::ports::PortRegistry;
 
 use lunco_cosim_core::{
     BoundConnection, BrokenConnection, ConnectionBinding, CosimDiagnostics, SimComponent,

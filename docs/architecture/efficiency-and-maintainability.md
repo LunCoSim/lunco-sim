@@ -256,7 +256,7 @@ read a body that is transiently `Kinematic` during settling.
 
 ## Substrate D — Ports: resolve → handle (runtime data-plane)
 
-*The port substrate itself is documented in `lunco_core::ports`.*
+*The port substrate itself is documented in `lunco_port_core::ports`.*
 
 ### The cost
 

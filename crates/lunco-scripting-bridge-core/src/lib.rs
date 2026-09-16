@@ -807,7 +807,7 @@ pub fn query<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B
 
 // ── Verbs: ports ──────────────────────────────────────────────────────────────
 //
-// The co-sim **port registry** ([`lunco_core::ports::PortRegistry`]) is the one
+// The co-sim **port registry** ([`lunco_port_core::ports::PortRegistry`]) is the one
 // surface every participant exchanges scalars through — the wire engine, the API
 // (`GetPort`/`SetPorts`), the inspector, and (here) scripts. A script reaches
 // Modelica variables, avian rigid-body state (`mass`, `inertia_*`, `com_*`,
@@ -820,7 +820,7 @@ pub fn query<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B
 pub fn read_port(gid: u64, name: &str) -> Option<f64> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let registry = world.get_resource::<lunco_core::ports::PortRegistry>()?;
+        let registry = world.get_resource::<lunco_port_core::ports::PortRegistry>()?;
         registry.read_port(world, entity, name)
     })
     .flatten()
@@ -838,7 +838,7 @@ pub fn write_port(gid: u64, name: &str, value: f64) -> bool {
             return false;
         };
         let Some(registry) = world
-            .get_resource::<lunco_core::ports::PortRegistry>()
+            .get_resource::<lunco_port_core::ports::PortRegistry>()
             .cloned()
         else {
             return false;

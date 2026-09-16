@@ -224,7 +224,7 @@ pub(crate) fn refresh_link_class_catalog(
     nodes: Query<(Entity, &LinkNode)>,
     changed: Query<(), Or<(Added<LinkNode>, Changed<LinkNode>)>>,
     mut removed: RemovedComponents<LinkNode>,
-    mut topology: Option<ResMut<lunco_core::PortTopologyRevision>>,
+    mut topology: Option<ResMut<lunco_port_core::ports::PortTopologyRevision>>,
 ) {
     let topology_changed =
         !catalog.initialized || changed.iter().next().is_some() || removed.read().count() > 0;
@@ -451,7 +451,7 @@ pub(crate) fn update_links(
     mut q_geometry: Query<&mut LinkGeometryState>,
     mut state: ResMut<LinkSolverState>,
     mut commands: Commands,
-    mut topology: Option<ResMut<lunco_core::PortTopologyRevision>>,
+    mut topology: Option<ResMut<lunco_port_core::ports::PortTopologyRevision>>,
 ) {
     let (Some(config), Some(world_time)) = (config, world_time) else {
         return;
@@ -1054,7 +1054,7 @@ fn link_state_topology_key_with_authored_classes(
     authored_classes: &HashSet<String>,
 ) -> u64 {
     let rows = link_port_rows_from_state(Some(state), authored_classes);
-    lunco_core::ports::port_name_set_key(rows.iter().map(|(name, _)| name))
+    lunco_port_core::ports::port_name_set_key(rows.iter().map(|(name, _)| name))
 }
 
 /// Return the identity of the exact names emitted for one link entity.
@@ -1066,7 +1066,7 @@ fn link_state_topology_key_with_authored_classes(
 fn link_port_topology_key(world: &World, entity: Entity) -> u64 {
     let authored_classes = authored_peer_classes(world, entity);
     let rows = link_port_rows_from_state(world.get::<LinkState>(entity), &authored_classes);
-    lunco_core::ports::port_name_set_key(rows.iter().map(|(name, _)| name))
+    lunco_port_core::ports::port_name_set_key(rows.iter().map(|(name, _)| name))
 }
 
 /// Build the exact names and values exposed for one link entity.
@@ -1120,8 +1120,8 @@ fn link_topology_key(world: &World, entity: Entity) -> u64 {
 pub(crate) fn check_link_state_structure(
     changed: Query<(Entity, &LinkState, Option<&LinkNode>), Changed<LinkState>>,
     catalog: Option<Res<LinkClassCatalog>>,
-    mut state: ResMut<lunco_core::ports::PortTopologyState>,
-    mut revision: ResMut<lunco_core::PortTopologyRevision>,
+    mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
 ) {
     for (entity, link_state, node) in &changed {
         let authored_classes = catalog
@@ -1165,63 +1165,64 @@ pub(crate) fn check_link_state_structure(
 /// Outputs only: link geometry is computed by the solver and is not writable. The
 /// per-class reduction (connected beats nearer, then nearest) is unchanged — it is
 /// what lets a scalar Modelica port see an N-peer graph.
-pub const LINK_PORT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
-    list_entities: |world, out| {
-        out.extend(world.query_filtered::<Entity, With<LinkNode>>().iter(world));
-        out.extend(
-            world
-                .query_filtered::<Entity, With<LinkState>>()
-                .iter(world),
-        );
-    },
-    topology_key: link_topology_key,
-    list: |world, entity, out| {
-        for (name, value) in link_port_rows(world, entity) {
-            out.push(lunco_core::ports::PortRef {
-                name,
-                direction: lunco_core::ports::PortDirection::Out,
-                value,
-            });
-        }
-    },
-    metadata: Some(|_world, _entity, name, direction| {
-        let unit = if name.ends_with("_m") {
-            Some("m")
-        } else if name.ends_with("_s") {
-            Some("s")
-        } else {
-            None
-        };
-        lunco_core::ports::PortMetadata::scalar(
-            direction,
-            unit,
-            None,
-            None,
-            "celestial link",
-            "ephemeris",
-            false,
-        )
-    }),
-    read_output: |world, entity, name| {
-        let state = world.get::<LinkState>(entity)?;
-        let rest = name.strip_prefix("link_")?;
-        best_per_class(state).into_iter().find_map(|(class, p)| {
-            let suffix = rest.strip_prefix(&class)?.strip_prefix('_')?;
-            class_ports(p)
-                .into_iter()
-                .find_map(|(s, v)| (s == suffix).then_some(v))
-        })
-    },
-    // Link geometry is solver-derived: there is no input to read and nothing to
-    // write. Returning `None`/`false` is what lets the registry fall through to a
-    // backend that DOES own the name.
-    read_input: |_, _, _| None,
-    write_input: |_, _, _, _| false,
-    resolve_output: None,
-    resolve_input: None,
-    read_slot: None,
-    write_slot: None,
-};
+pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
+    lunco_port_core::ports::PortBackend {
+        list_entities: |world, out| {
+            out.extend(world.query_filtered::<Entity, With<LinkNode>>().iter(world));
+            out.extend(
+                world
+                    .query_filtered::<Entity, With<LinkState>>()
+                    .iter(world),
+            );
+        },
+        topology_key: link_topology_key,
+        list: |world, entity, out| {
+            for (name, value) in link_port_rows(world, entity) {
+                out.push(lunco_port_core::ports::PortRef {
+                    name,
+                    direction: lunco_port_core::ports::PortDirection::Out,
+                    value,
+                });
+            }
+        },
+        metadata: Some(|_world, _entity, name, direction| {
+            let unit = if name.ends_with("_m") {
+                Some("m")
+            } else if name.ends_with("_s") {
+                Some("s")
+            } else {
+                None
+            };
+            lunco_port_core::ports::PortMetadata::scalar(
+                direction,
+                unit,
+                None,
+                None,
+                "celestial link",
+                "ephemeris",
+                false,
+            )
+        }),
+        read_output: |world, entity, name| {
+            let state = world.get::<LinkState>(entity)?;
+            let rest = name.strip_prefix("link_")?;
+            best_per_class(state).into_iter().find_map(|(class, p)| {
+                let suffix = rest.strip_prefix(&class)?.strip_prefix('_')?;
+                class_ports(p)
+                    .into_iter()
+                    .find_map(|(s, v)| (s == suffix).then_some(v))
+            })
+        },
+        // Link geometry is solver-derived: there is no input to read and nothing to
+        // write. Returning `None`/`false` is what lets the registry fall through to a
+        // backend that DOES own the name.
+        read_input: |_, _, _| None,
+        write_input: |_, _, _, _| false,
+        resolve_output: None,
+        resolve_input: None,
+        read_slot: None,
+        write_slot: None,
+    };
 
 /// A `class` is authored free text but a port name is an identifier, so fold anything
 /// that is not `[a-z0-9_]` to `_`. `"earth"` → `link_earth_range_m`; `"Deep Space"` →
@@ -1321,7 +1322,7 @@ mod tests {
         assert_eq!(listed.len(), 3, "range + verdict + elevation, enumerable");
         assert!(listed
             .iter()
-            .all(|p| p.direction == lunco_core::ports::PortDirection::Out));
+            .all(|p| p.direction == lunco_port_core::ports::PortDirection::Out));
     }
 
     #[test]
@@ -1437,18 +1438,23 @@ mod tests {
         );
 
         let mut app = App::new();
-        app.init_resource::<lunco_core::ports::PortTopologyState>();
-        app.init_resource::<lunco_core::PortTopologyRevision>();
+        app.init_resource::<lunco_port_core::ports::PortTopologyState>();
+        app.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         app.add_systems(Update, check_link_state_structure);
         let entity = app.world_mut().spawn(first.clone()).id();
         app.update();
-        let seeded = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        let seeded = app
+            .world()
+            .resource::<lunco_port_core::ports::PortTopologyRevision>()
+            .0;
 
         first.peers[0].range_m = 500.0;
         *app.world_mut().get_mut::<LinkState>(entity).unwrap() = first;
         app.update();
         assert_eq!(
-            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            app.world()
+                .resource::<lunco_port_core::ports::PortTopologyRevision>()
+                .0,
             seeded,
             "live geometry changes must remain on the value-refresh path"
         );
@@ -1456,7 +1462,9 @@ mod tests {
         app.world_mut().get_mut::<LinkState>(entity).unwrap().peers[0].elevation_deg = None;
         app.update();
         assert_ne!(
-            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            app.world()
+                .resource::<lunco_port_core::ports::PortTopologyRevision>()
+                .0,
             seeded,
             "a change in optional port presence must invalidate the projection"
         );
@@ -1472,8 +1480,8 @@ mod tests {
         relay.elevation_deg = None;
         let mut app = App::new();
         app.insert_resource(catalog);
-        app.init_resource::<lunco_core::ports::PortTopologyState>();
-        app.init_resource::<lunco_core::PortTopologyRevision>();
+        app.init_resource::<lunco_port_core::ports::PortTopologyState>();
+        app.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         app.add_systems(Update, check_link_state_structure);
         let entity = app
             .world_mut()
@@ -1488,7 +1496,10 @@ mod tests {
             ))
             .id();
         app.update();
-        let seeded = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        let seeded = app
+            .world()
+            .resource::<lunco_port_core::ports::PortTopologyRevision>()
+            .0;
 
         // The authored catalog already declares relay's range/connected rows;
         // receiving that live sample must not invalidate the same surface.
@@ -1500,7 +1511,9 @@ mod tests {
             .push(relay.clone());
         app.update();
         assert_eq!(
-            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            app.world()
+                .resource::<lunco_port_core::ports::PortTopologyRevision>()
+                .0,
             seeded,
             "a live class that only fills an authored fallback must not rebuild"
         );
@@ -1518,7 +1531,9 @@ mod tests {
             .push(relay);
         app.update();
         assert_ne!(
-            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            app.world()
+                .resource::<lunco_port_core::ports::PortTopologyRevision>()
+                .0,
             seeded,
             "a live optional elevation row must invalidate the projection"
         );

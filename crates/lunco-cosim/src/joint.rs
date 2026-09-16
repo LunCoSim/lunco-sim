@@ -56,7 +56,7 @@ use bevy::prelude::*;
 use std::collections::HashSet;
 
 use crate::ports::{AvianGroup, AvianPort};
-use lunco_core::ports::PortDirection;
+use lunco_port_core::ports::PortDirection;
 
 /// The port name a revolute joint exposes in both directions.
 pub const JOINT_ANGLE_PORT: &str = "angle";
@@ -135,8 +135,8 @@ pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
 };
 
 fn register_revolute_joint_topology(app: &mut App) {
-    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<RevoluteJoint>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<RevoluteJoint>)
+    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<RevoluteJoint>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<RevoluteJoint>)
         .add_systems(PostUpdate, check_revolute_joint_structure);
 }
 
@@ -153,8 +153,8 @@ fn revolute_joint_topology_key(world: &World, entity: Entity) -> u64 {
 fn check_revolute_joint_structure(
     changed: Query<(Entity, &RevoluteJoint), Changed<RevoluteJoint>>,
     rotations: Query<(), With<Rotation>>,
-    mut state: ResMut<lunco_core::ports::PortTopologyState>,
-    mut revision: ResMut<lunco_core::PortTopologyRevision>,
+    mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
 ) {
     for (entity, joint) in &changed {
         let measured = rotations.get(joint.body1).is_ok()
@@ -252,10 +252,10 @@ pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
 };
 
 fn register_prismatic_joint_topology(app: &mut App) {
-    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<PrismaticJoint>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<PrismaticJoint>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Mass>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Mass>)
+    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<PrismaticJoint>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<PrismaticJoint>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<Mass>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Mass>)
         .add_systems(PostUpdate, check_prismatic_joint_structure);
 }
 
@@ -284,8 +284,8 @@ fn check_prismatic_joint_structure(
     rotations: Query<(), With<Rotation>>,
     positions: Query<(), With<Position>>,
     masses: Query<&Mass>,
-    mut state: ResMut<lunco_core::ports::PortTopologyState>,
-    mut revision: ResMut<lunco_core::PortTopologyRevision>,
+    mut state: ResMut<lunco_port_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_port_core::ports::PortTopologyRevision>,
 ) {
     let changed_mass_entities: HashSet<_> = changed_masses.iter().collect();
     for (entity, joint) in changed_joints.iter() {

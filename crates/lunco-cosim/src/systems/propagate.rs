@@ -26,8 +26,8 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::RebuildOnChange;
+use lunco_port_core::ports::{PortRegistry, ResolvedPort};
 
 use lunco_cosim_core::{
     AlgebraicLoopDiagnostic, BoundConnection, BrokenConnection, CosimDiagnostics, PortHolds,

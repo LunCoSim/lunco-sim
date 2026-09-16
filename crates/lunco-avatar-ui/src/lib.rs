@@ -9,10 +9,11 @@ use lunco_avatar_core::notifications::ScreenNotifications;
 use lunco_avatar_policy::{
     avatar_soil_collision_policy, AvatarSoilCollisionPolicy, AVATAR_ALLOW_THROUGH_SOIL_SETTING,
 };
+use lunco_camera_core::CameraFollow;
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, LocalGravityField, SurfacePoseQuery};
 use lunco_control_core::{ControlBinding, UserIntent};
-use lunco_core::{Avatar, CameraFollow, GlobalEntityId, LocalAvatar};
+use lunco_core::{Avatar, GlobalEntityId, LocalAvatar};
 use lunco_core_session::{SessionProfiles, SessionRegistry};
 use lunco_cosim_core::ControlLink;
 use lunco_input_core::{resolved_input_label, InputBindingsSettings};

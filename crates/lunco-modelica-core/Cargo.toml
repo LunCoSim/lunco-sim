@@ -32,6 +32,7 @@ bevy.workspace = true
 # egui→winit. The GUI/lunica build keeps `default = [..., "ui"]`.
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }

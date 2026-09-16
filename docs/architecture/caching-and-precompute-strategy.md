@@ -330,7 +330,7 @@ the integrator state.
 **High-value, low-risk:**
 
 1. **Compiled connection table** — compiles connection topology into a flat index table rebuilt only on connection change (in `lunco-cosim/src/systems/propagate.rs`). Replaces per-tick string cloning and map accumulation with direct index offsets.
-2. **Avian port resolution index** — resolves name-based ports once during compile (`lunco-core/src/ports.rs:180` `ResolvedPort`) instead of scanning const tables on every tick read/write.
+2. **Avian port resolution index** — resolves name-based ports once during compile (`lunco-port-core/src/ports.rs` `ResolvedPort`) instead of scanning const tables on every tick read/write.
 3. **`sync_collider` volume-dirty gate** — gates `Collider::sphere` rebuilds on volume change (`Changed<>`), eliminating per-frame allocations during steady-state.
 4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica-core/src/worker.rs` owns
    worker execution, while `worker/cache.rs` owns the prepared-solve cache

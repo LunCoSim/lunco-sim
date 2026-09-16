@@ -154,8 +154,8 @@ pub fn trigger_error(commands: &mut Commands, name: impl Into<String>, message: 
 #[reflect(Debug, PartialEq, Default)]
 pub enum ChannelSource {
     /// **Fast path.** A named port on this entity, resolved ONCE to a
-    /// [`ResolvedPort`](crate::ports::ResolvedPort) and thereafter read by slot with
-    /// no name lookup. Uniformly covers every simulated subsystem that exposes ports
+    /// `ResolvedPort` and thereafter read by slot with no name lookup. Uniformly
+    /// covers every simulated subsystem that exposes ports
     /// — Modelica variables, Avian rigid bodies, joints, FSW signals, and the USD
     /// raw Avian query observations and Modelica sensor conversions, which are
     /// already ordinary ports.

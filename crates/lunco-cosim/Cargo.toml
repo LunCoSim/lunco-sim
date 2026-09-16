@@ -9,6 +9,7 @@ license.workspace = true
 bevy.workspace = true
 avian3d.workspace = true
 lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }

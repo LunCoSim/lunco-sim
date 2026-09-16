@@ -29,7 +29,6 @@ pub mod log;
 /// Architectural marker components shared by engine subsystems.
 pub mod markers;
 pub mod mocks;
-pub mod ports;
 pub mod programs;
 /// M4 — pure predict-own reconciliation decision (input-replay, D2). The
 /// dependency-free geometry the spawn-domain `reconcile_owned_prediction` system
@@ -72,7 +71,6 @@ pub use model_state::ModelStateRevision;
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };
-pub use ports::PortTopologyRevision;
 pub use telemetry::*;
 // Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
 // crate-root `use bevy::prelude::*` below shadows the glob above for external
@@ -414,8 +412,8 @@ pub struct Spacecraft {
 
 // NOTE: there is intentionally NO `Vessel` / `RoverVessel` / `LanderVessel`
 // marker. "Possessable / controllable" is derived from TOPOLOGY: an entity is
-// controllable iff it exposes writable control ports — an `InputPorts`
-// command surface, declared by its authored `Controls` scope (→ a control binding),
+// controllable iff it exposes writable control ports — an authored command
+// surface, declared by its authored `Controls` scope (→ a control binding),
 // or a Modelica `SimComponent`. The components a body already carries ARE its
 // definition; possession, control routing, prediction membership, and UI
 // labels read those capabilities directly instead of a redundant taxonomy tag.
@@ -434,7 +432,7 @@ pub struct SelectableRoot;
 /// This shared capability lets mobility, networking, and USD projection agree
 /// on the vehicle owner without overloading an actuator-value registry. It is
 /// not a vehicle taxonomy: the applied USD mobility schema is the authority,
-/// and `OutputPorts` remains only the produced-value surface.
+/// while produced port values remain a separate surface.
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component)]
 pub struct MobilityRoot;
@@ -795,7 +793,7 @@ impl SimTick {
 }
 
 /// Control-signal propagation set: values move along `SimConnection`s from
-/// source [`Port`] to target. Runs on the **fixed** clock so the actuation path
+/// source port to target. Runs on the **fixed** clock so the actuation path
 /// is frame-rate-independent and identical on every peer.
 ///
 /// This is load-bearing for client-prediction determinism. Propagation must not
@@ -807,7 +805,7 @@ impl SimTick {
 /// client's prediction would never match the host, and every snapshot ack would
 /// correct — showing up as steering jitter.
 ///
-/// The set is the ordering ANCHOR: actuators that read a [`Port`] order `.after`
+/// The set is the ordering ANCHOR: actuators that read a port order `.after`
 /// it, and `lunco_cosim`'s `CosimSet::Propagate` is nested INSIDE it so those
 /// orderings keep their meaning. Adding a propagation system elsewhere without
 /// putting it in this set silently breaks that contract.
@@ -898,7 +896,6 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<MobilityRoot>()
             .register_type::<GlobalEntityId>()
             .register_type::<Provenance>()
-            .register_type::<CameraFollow>()
             .register_type::<SimTick>();
 
         // All always-on core/substrate resources live in one function so a
@@ -946,11 +943,6 @@ pub(crate) fn register_core_resources(app: &mut App) {
         // LunCoCoreSessionPlugin for the session layer).
         .init_resource::<CommandResults>()
         .init_resource::<ActiveCommandId>()
-        // Port identity is a core substrate shared by every provider and UI
-        // consumer. Keeping the invalidation generation and its structural
-        // state here removes plugin-order dependence from lifecycle observers.
-        .init_resource::<PortTopologyRevision>()
-        .init_resource::<ports::PortTopologyState>()
         .init_resource::<exposure::EngineExposures>()
         .init_resource::<exposure::ExposureRefresh>()
         .init_resource::<RuntimeFaults>()

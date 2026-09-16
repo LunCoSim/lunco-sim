@@ -7,6 +7,7 @@ description = "Transport-agnostic command, query, discovery, and response contra
 
 [dependencies]
 lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-readiness = { path = "../lunco-readiness" }
 bevy = { workspace = true }

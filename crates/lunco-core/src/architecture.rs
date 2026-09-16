@@ -1,19 +1,18 @@
-//! # Simulation Control & Communication Fabric
+//! # Simulation Control and Communication Fabric
 //!
-//! This module defines the "Nervous System" of the LunCoSim architecture.
-//! It implements a multi-tier hierarchy that separates high-level user
-//! intent from low-level physical actuation.
+//! This module defines the shared ECS components at the boundary between
+//! authored control surfaces and runtime scalar endpoints.
 //!
-//! ## Why this lives in `lunco-core` (substrate justification)
+//! ## Ownership
 //!
 //! The port/command fabric is consumed by every domain that exchanges a
 //! signal: `lunco-cosim` (SimConnection endpoints ARE [`Port`]s),
 //! `lunco-mobility` (wheel drive/steer ports), `lunco-hardware` (actuators),
 //! `lunco-telemetry` (sampled channels), `lunco-usd-sim`
 //! (port authoring from USD). No domain crate can own it without inverting
-//! the dependency graph — the same argument recorded for `mobility.rs`'s
-//! avian-free classifier. Domain LOGIC does not belong here; only the shared
-//! currency types and the command registry those domains meet on.
+//! the dependency graph. Domain logic does not belong here; only the shared
+//! endpoint and lifecycle components those domains meet on. The registry that
+//! discovers and accesses these surfaces lives in `lunco-port-core`.
 //!
 //! ## The "Why": Fidelity-Driven Emulation
 //! Signals move between subsystems through **[Port]**: one `f64` value — a
@@ -23,72 +22,7 @@
 //! with factor and offset), which is where a unit conversion belongs when two
 //! ports are authored in different units.
 //!
-//! ## Typed Commands
-//!
-//! All simulation commands are **typed structs** that derive `#[derive(Command)]`.
-//! This replaces the old string-based `CommandMessage` system.
-//!
-//! ```ignore
-//! #[derive(Command)]
-//! pub struct SetPorts {
-//!     pub target: Entity,
-//!     pub writes: Vec<(String, f64)>,
-//!     pub seq: u32,
-//!     pub tick: u64,
-//! }
-//! ```
-//!
-//! Domain crates define their own commands and register them with one line:
-//! ```ignore
-//! app.register_command::<SetPorts>(on_set_ports);
-//! ```
-//!
-//! The API layer discovers all registered commands via `AppTypeRegistry`
-//! reflection — zero hardcoding.
-
 use bevy::prelude::*;
-
-/// How the possession/follow camera treats a vessel's **attitude** — the
-/// authored answer to "should the camera rotate with the body?". It is a
-/// property of how the vehicle MOVES, so it is authored on the vessel's control
-/// profile (its `Controls` scope, `uniform token lunco:cameraFollow`) right
-/// beside the intent→port binding, and read into this component during USD
-/// projection.
-///
-/// The distinction matters because "follow the heading" is right for a surface
-/// vehicle — a stable up and a meaningful forward — but wrong for a 6-DOF flyer:
-/// extracting a yaw-heading from a body that is pitching and rolling swings the
-/// camera wildly (it chases the tumble). A flyer wants a STABLE external frame
-/// it rotates INSIDE of (`Orbit`), or — for a pilot who wants the body frame —
-/// the FULL orientation (`Chase`). Absent an authored value a vessel defaults to
-/// `Heading`, the historical surface-vehicle behavior.
-#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[reflect(Component)]
-pub enum CameraFollow {
-    /// Track the body's position; follow its YAW heading only, up = surface
-    /// normal. Ground vehicles (rovers): the camera turns as the vehicle steers.
-    #[default]
-    Heading,
-    /// Track the body's position with a STABLE world/gravity up; do NOT rotate
-    /// with the body. A 6-DOF flyer (lander) tumbles inside a steady view.
-    Orbit,
-    /// Follow the body's FULL orientation (yaw+pitch+roll) — a cockpit/chase
-    /// frame that rolls with the craft. Opt-in for pilots who want it.
-    Chase,
-}
-
-/// Parse a `lunco:cameraFollow` token into a [`CameraFollow`]. Unknown/empty →
-/// `None`, so the caller keeps the default (`Heading`).
-pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "heading" => Some(CameraFollow::Heading),
-        "orbit" => Some(CameraFollow::Orbit),
-        "chase" => Some(CameraFollow::Chase),
-        _ => None,
-    }
-}
-
-// ── Ports ─────────────────────────────────────────────────────────────────────
 
 /// A named signal value exchanged between subsystems.
 ///
@@ -423,23 +357,5 @@ mod tests {
         assert_eq!(world.get::<Port>(left).unwrap().value, 0.0);
         assert_eq!(world.get::<Port>(right).unwrap().value, 0.0);
         assert_eq!(world.get::<Port>(brake).unwrap().value, 1.0);
-    }
-
-    #[test]
-    fn camera_follow_accepts_only_canonical_tokens() {
-        assert_eq!(parse_camera_follow("heading"), Some(CameraFollow::Heading));
-        assert_eq!(parse_camera_follow("orbit"), Some(CameraFollow::Orbit));
-        assert_eq!(parse_camera_follow("CHASE"), Some(CameraFollow::Chase));
-        for old_spelling in [
-            "springarm",
-            "yaw",
-            "stable",
-            "external",
-            "cockpit",
-            "attitude",
-            "full",
-        ] {
-            assert_eq!(parse_camera_follow(old_spelling), None, "{old_spelling}");
-        }
     }
 }

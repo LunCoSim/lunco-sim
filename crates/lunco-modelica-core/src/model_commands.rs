@@ -204,7 +204,7 @@ pub fn apply_set_model_input(
     // input owner is the direct `ModelicaModel.inputs` state below (which also
     // owns the friendly `UnknownInput` validation for the no-cosim case).
     if let Some(registry) = world
-        .get_resource::<lunco_core::ports::PortRegistry>()
+        .get_resource::<lunco_port_core::ports::PortRegistry>()
         .cloned()
     {
         if registry.write_port(world, entity, name, value) {

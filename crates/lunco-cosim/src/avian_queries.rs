@@ -16,7 +16,7 @@ use crate::ports::{AvianGroup, AvianPort};
 use avian3d::prelude::{Physics, Position, RigidBody, Rotation, SpatialQueryFilter};
 use bevy::math::{DVec3, Dir3};
 use bevy::prelude::*;
-use lunco_core::ports::PortDirection;
+use lunco_port_core::ports::PortDirection;
 
 /// A raw, single-ray observation authored on a mounted USD prim.
 ///
@@ -172,8 +172,8 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
 };
 
 fn register_raycast_topology(app: &mut App) {
-    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<RaycastObservation>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<RaycastObservation>);
+    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<RaycastObservation>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<RaycastObservation>);
 }
 
 /// Sample every mounted ray after Avian has written back the completed physics

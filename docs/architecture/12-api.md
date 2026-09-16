@@ -105,7 +105,7 @@ hosts whenever the API and Workspace plugins are enabled. Modelica registers
 only Modelica-specific queries; a USD document does not depend on the Modelica
 UI to appear in `ListOpenDocuments`.
 
-`ReadPorts` is the read-only projection of the shared `lunco-core::ports::PortRegistry`.
+`ReadPorts` is the read-only projection of the shared `lunco-port-core::ports::PortRegistry`.
 Each returned port has `metadata.type` (currently `scalar`), optional `unit`,
 optional inclusive `range` bounds, the owning `source`, the current control
 `authority`, and `writable`. Consumers must use `writable` and the declared

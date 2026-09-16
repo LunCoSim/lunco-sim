@@ -1029,7 +1029,7 @@ fn apply_buffered_client_inputs(
     role: Res<lunco_core_session::NetworkRole>,
     mut buf: ResMut<lunco_core_session::BufferedClientInputs>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    ports: Res<lunco_core::ports::PortRegistry>,
+    ports: Res<lunco_port_core::ports::PortRegistry>,
     // The reconcile ack is stamped HERE, from the seq this tick actually integrated
     // (review N2) — see the comment in the loop.
     sessions: Res<lunco_core_session::SessionRegistry>,
@@ -1323,7 +1323,7 @@ fn collect_assembly_links(
 /// (`RollbackReplay`), then step `PhysicsSchedule` by the fixed delta.
 fn replay_one_tick(
     world: &mut World,
-    ports: &lunco_core::ports::PortRegistry,
+    ports: &lunco_port_core::ports::PortRegistry,
     chassis: Entity,
     input: &lunco_core_session::InputFrame,
 ) {
@@ -1512,7 +1512,9 @@ pub fn rollback_owned_prediction(world: &mut World) {
             }
 
             let steps = unacked.len().min(MAX_REPLAY_STEPS);
-            let ports = world.resource::<lunco_core::ports::PortRegistry>().clone();
+            let ports = world
+                .resource::<lunco_port_core::ports::PortRegistry>()
+                .clone();
             let saved_time = *world.resource::<Time>();
 
             world.resource_mut::<lunco_core::RollbackInProgress>().0 = true;

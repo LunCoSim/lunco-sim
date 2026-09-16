@@ -681,7 +681,7 @@ impl Plugin for SceneEditUiPlugin {
         // emits SetPorts/ReleasePort.
         app.init_resource::<ports::PortView>()
             .init_resource::<ports::PortInspectionRequest>()
-            .init_resource::<lunco_core::PortTopologyRevision>();
+            .init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         app.add_view_model(ports::populate_port_view, ports::port_view_due);
 
         // USD connection canvas: the scene is derived from the live composed

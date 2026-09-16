@@ -337,7 +337,7 @@ from Q/E movement.
 `LanderControls` is body-relative. Its forward/back, left/right, and yaw
 intents write the authored lander's body `pitch`, `roll`, and `yaw` ports; thrust
 and release write their corresponding vehicle ports. It selects
-`CameraFollow::Orbit`, which keeps a stable external/gravity frame while a
+`lunco_camera_core::CameraFollow::Orbit`, which keeps a stable external/gravity frame while a
 6-DOF lander rotates inside it. Camera yaw, pitch, or roll therefore never
 changes the signs or axes of the physical command. An authored `Chase` camera
 may follow the full vehicle attitude for presentation, but it still does not

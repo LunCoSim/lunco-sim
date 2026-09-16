@@ -11,7 +11,7 @@
 //!
 //! `lunco-core` owns the classifier (no avian dependency, so every source and
 //! reader can set it downward); the avian-aware crate projects it onto a
-//! `RigidBody`. This is the same substrate shape as [`crate::ports`]: a neutral
+//! `RigidBody`. This is the same substrate shape as the shared port registry: a neutral
 //! declaration below every participant, projected by the engine above.
 
 use bevy::prelude::*;

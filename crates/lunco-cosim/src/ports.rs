@@ -3,7 +3,7 @@
 //!
 //! The registry itself, its discovery/access operations, and the value types
 //! ([`PortRef`], [`PortBackend`], [`PortDirection`]) live in
-//! [`lunco_core::ports`] — the neutral substrate *below* every participant — so
+//! [`lunco_port_core::ports`] — the neutral substrate *below* every participant — so
 //! that wires, the API, the inspector, and every scripting runtime read/write
 //! through one surface without depending "up" into this engine. This module only
 //! supplies the cosim-owned backends and registers them via
@@ -24,7 +24,7 @@ use bevy::prelude::*;
 use std::hash::{Hash, Hasher};
 
 use lunco_core::architecture::{InputPorts, OutputPorts, Port, PortSurface};
-use lunco_core::ports::{
+use lunco_port_core::ports::{
     port_entity_map_key, port_name_set_key, push_map, PortBackend, PortDirection, PortMetadata,
     PortRef, PortRegistry, PortTopologyRevision, PortTopologyState,
 };
@@ -216,8 +216,8 @@ fn avian_metadata(
 }
 
 /// Encode an avian slot: `(group index << 16) | port index` into [`AVIAN`]. The
-/// slot is a process-local [`lunco_core::ports::ResolvedPort`] locator — never
-/// serialized (see the value model note in `lunco_core::ports`).
+/// slot is a process-local [`lunco_port_core::ports::ResolvedPort`] locator — never
+/// serialized (see the value model note in `lunco_port_core::ports`).
 fn avian_slot(group_index: usize, port_index: usize) -> u64 {
     ((group_index as u64) << 16) | (port_index as u64)
 }
@@ -689,20 +689,20 @@ pub(crate) fn check_connection_structure(
 /// composed from [`AvianGroup`] declarations, each of which installs its own
 /// component watchers and any value-to-membership check it requires.
 pub(crate) fn register_builtin_port_topology(app: &mut App) {
-    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<InputPorts>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<InputPorts>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<OutputPorts>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<OutputPorts>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<PortSurface>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<PortSurface>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Port>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Port>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<SimComponent>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SimComponent>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<DeclaredOutputPorts>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<DeclaredOutputPorts>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<SimConnection>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SimConnection>);
+    app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<InputPorts>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<InputPorts>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<OutputPorts>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<OutputPorts>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<PortSurface>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<PortSurface>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<Port>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<Port>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SimComponent>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<SimComponent>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<DeclaredOutputPorts>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<DeclaredOutputPorts>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<SimConnection>)
+        .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<SimConnection>);
     register_avian_port_topology(app);
 }
 
