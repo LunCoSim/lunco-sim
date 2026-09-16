@@ -210,6 +210,7 @@ no manual hunt.
 | `lunco-usd-sim-cosim/src/lib.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
 | `lunco-usd-ui/src/ui/browser_dispatch.rs` twin browser open | ✅ routed through the shared `OpenFile` USD document command |
 | `lunco-usd-commands/src/lib.rs` usd document load | ✅ reads through the storage abstraction |
+| `lunco-modelica-core` source-root traversal | ✅ delegated to `lunco-assets-core::discovery::read_files_with_extension`; the compiler only parses and seats returned source files |
 | `lunco-modelica-core/library_remote.rs` source-library fetch | ⚠️ uses the generic browser fetch primitives but remains coupled to Modelica's parsed-bundle protocol; move the protocol boundary to the asset/source package when the web worker contract is next revised |
 | `lunco-modelica-core::models::bundled_models()` `include_str!` | ⚠️ candidate for `EmbeddedAssetSource` registration so it looks like every other asset path |
 

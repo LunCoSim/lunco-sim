@@ -42,7 +42,6 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 #[cfg(feature = "api")]
 use lunco_api::executor::DeferredCommandAppExt;
-use lunco_assets_core::source_library_dir;
 use lunco_modelica_runtime::{
     CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet, SimSampleStream,
 };
@@ -348,42 +347,21 @@ impl ModelicaCompiler {
         if self.installed_roots.contains(root) {
             return true;
         }
-        if let Some(dir) = lunco_assets_core::models_package_root_path(root) {
-            let files = Self::read_package_dir(&dir);
-            if !files.is_empty() {
-                let report = self.seat_library_files(root, &dir.display().to_string(), files);
-                if !report.diagnostics.is_empty() || report.inserted_file_count == 0 {
-                    log::error!(
-                        "[ModelicaCompiler] source root `{root}` failed from {}: {}",
-                        dir.display(),
-                        if report.diagnostics.is_empty() {
-                            "no Modelica definitions were inserted".to_string()
-                        } else {
-                            report.diagnostics.join("; ")
-                        },
-                    );
-                    return false;
-                }
-                log::info!(
-                    "[ModelicaCompiler] seated library `{root}` from {} ({} docs)",
-                    dir.display(),
-                    report.parsed_file_count,
-                );
-                self.installed_roots.insert(root.to_string());
-                return true;
-            }
-        }
+        let live_dir = lunco_assets_core::models_package_root_path(root);
         let files = lunco_assets_core::models::package_files_live(root);
         if !files.is_empty() {
+            let (label, source) = match live_dir {
+                Some(dir) => (dir.display().to_string(), "the live asset tree"),
+                None => (format!("embedded:{root}"), "the embedded snapshot"),
+            };
             log::info!(
-                "[ModelicaCompiler] seated library `{root}` from the embedded snapshot \
-                 ({} docs) — no on-disk `assets/models/{root}`",
+                "[ModelicaCompiler] seated library `{root}` from {source} ({})",
                 files.len(),
             );
-            let report = self.seat_library_files(root, root, files);
+            let report = self.seat_library_files(root, &label, files);
             if !report.diagnostics.is_empty() || report.inserted_file_count == 0 {
                 log::error!(
-                    "[ModelicaCompiler] embedded source root `{root}` failed: {}",
+                    "[ModelicaCompiler] source root `{root}` failed: {}",
                     if report.diagnostics.is_empty() {
                         "no Modelica definitions were inserted".to_string()
                     } else {
@@ -427,45 +405,6 @@ impl ModelicaCompiler {
         }
         self.installed_roots.insert(root.to_string());
         true
-    }
-
-    /// Every `.mo` under a shipped library directory, as `(uri, source)` pairs.
-    ///
-    /// The URI is the file's path, which is what rumoca reports diagnostics
-    /// against — the same string `info:sourceAsset` resolution produces, so a
-    /// failure in a library member points at the file the author edits.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn read_package_dir(dir: &std::path::Path) -> Vec<(String, String)> {
-        fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(&path, out);
-                } else if path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("mo"))
-                {
-                    if let Ok(text) = std::fs::read_to_string(&path) {
-                        out.push((path.display().to_string(), text));
-                    }
-                }
-            }
-        }
-        let mut out = Vec::new();
-        walk(dir, &mut out);
-        // Deterministic seating order: rumoca resolves a package from its members'
-        // own `within` clauses, but a stable order keeps diagnostics reproducible.
-        out.sort_by(|a, b| a.0.cmp(&b.0));
-        out
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn read_package_dir(_dir: &std::path::Path) -> Vec<(String, String)> {
-        Vec::new()
     }
 
     /// Seat a whole library's members as documents, each through the
@@ -860,40 +799,18 @@ impl ModelicaCompiler {
         // member trap: rumoca demotes a bound input to an algebraic, the
         // model loses its runtime input slots and every wire is dropped),
         // so read the tree here and seat it through the in-memory path.
-        let mut files = Vec::new();
-        let mut read_diagnostics = Vec::new();
-        let mut stack = vec![root_dir.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(e) => e,
-                Err(e) => {
-                    let message = format!("source root `{id}`: cannot read {}: {e}", dir.display());
-                    log::warn!("[ModelicaCompiler] {message}");
-                    read_diagnostics.push(message);
-                    continue;
-                }
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.extension().is_some_and(|ext| ext == "mo") {
-                    match std::fs::read_to_string(&path) {
-                        Ok(text) => files.push((path.display().to_string(), text)),
-                        Err(e) => {
-                            let message =
-                                format!("source root `{id}`: cannot read {}: {e}", path.display());
-                            log::warn!("[ModelicaCompiler] {message}");
-                            read_diagnostics.push(message);
-                        }
-                    }
-                }
-            }
+        let (files, read_diagnostics) =
+            lunco_assets_core::discovery::read_files_with_extension(root_dir, "mo");
+        for diagnostic in &read_diagnostics {
+            log::warn!("[ModelicaCompiler] source root `{id}`: {diagnostic}");
         }
-        files.sort_by(|a, b| a.0.cmp(&b.0));
         let mut report =
             self.load_source_root_in_memory(id, &root_dir.display().to_string(), files);
-        report.diagnostics.extend(read_diagnostics);
+        report.diagnostics.extend(
+            read_diagnostics
+                .into_iter()
+                .map(|diagnostic| format!("source root `{id}`: {diagnostic}")),
+        );
         report
     }
 
@@ -1351,11 +1268,8 @@ fn build_modelica_core(app: &mut App) {
         app.add_plugins(lunco_modelica_runtime::ModelicaSourceAssetPlugin);
     }
 
-    let library = source_library_dir("library");
-    if library.exists() {
-        if let Ok(abs_path) = std::fs::canonicalize(&library) {
-            std::env::set_var("MODELICAPATH", abs_path.to_string_lossy().to_string());
-        }
+    if let Some(library) = lunco_assets_core::source_library_root_path("library") {
+        std::env::set_var("MODELICAPATH", library.to_string_lossy().to_string());
     }
 
     // Point rumoca at the workspace's shared `.cache/rumoca/`, the

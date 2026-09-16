@@ -248,6 +248,69 @@ pub fn scan_library(dir: &Path) -> Vec<String> {
     rels
 }
 
+/// Read all files with `extension` below a caller-selected native source root.
+///
+/// Asset consumers use this instead of implementing another recursive
+/// filesystem walk. The returned paths are stable and absolute on native so
+/// diagnostics retain the same URI that the source-root owner supplied. A
+/// read failure is reported separately from the files that did load; callers
+/// can therefore keep the source-root admission atomic while still surfacing
+/// every failed path.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_files_with_extension(
+    root: &Path,
+    extension: &str,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut files = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                diagnostics.push(format!("cannot read {}: {error}", dir.display()));
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+            {
+                match crate::read_asset_file_string(&path) {
+                    Ok(source) => files.push((path.display().to_string(), source)),
+                    Err(error) => {
+                        diagnostics.push(format!("cannot read {}: {error}", path.display()));
+                    }
+                }
+            }
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    diagnostics.sort();
+    (files, diagnostics)
+}
+
+/// A filesystem source root is unavailable on wasm. Callers receive a
+/// terminal diagnostic rather than entering a native filesystem path.
+#[cfg(target_arch = "wasm32")]
+pub fn read_files_with_extension(
+    root: &Path,
+    _extension: &str,
+) -> (Vec<(String, String)>, Vec<String>) {
+    (
+        Vec::new(),
+        vec![format!(
+            "cannot read source root {} on wasm",
+            root.display()
+        )],
+    )
+}
+
 /// Web: fetch the manifest the bundle ships alongside the assets it describes.
 #[cfg(target_arch = "wasm32")]
 mod wasm_manifest {
