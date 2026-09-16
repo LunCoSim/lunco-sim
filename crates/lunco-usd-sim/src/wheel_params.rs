@@ -52,6 +52,7 @@ use lunco_mobility::{JointedWheelTire, Suspension, TireLateralStiffnessGraph, Wh
 use lunco_usd_bevy_core::read::{read_vec3_f64, UsdReadObject};
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_sim_core::PhysicalWheel;
 use openusd::sdf::Path as SdfPath;
 use std::collections::{HashMap, HashSet};
 
@@ -858,7 +859,7 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             Entity,
             &UsdPrimPath,
             Option<&WheelRaycast>,
-            Option<&crate::PhysicalWheel>,
+            Option<&PhysicalWheel>,
         )>();
         for (e, prim, rc, pw) in q.iter(world) {
             if prim.stage_handle.id() != id || (rc.is_none() && pw.is_none()) {
@@ -995,11 +996,11 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
         }
 
         // Physical wheel: body-side numbers…
-        let (old_radius, old_width, axis_rot) = match world.get::<crate::PhysicalWheel>(u.entity) {
+        let (old_radius, old_width, axis_rot) = match world.get::<PhysicalWheel>(u.entity) {
             Some(pw) => (pw.wheel_radius, pw.wheel_width, pw.axis_rot),
             None => continue,
         };
-        if let Some(mut pw) = world.get_mut::<crate::PhysicalWheel>(u.entity) {
+        if let Some(mut pw) = world.get_mut::<PhysicalWheel>(u.entity) {
             pw.wheel_radius = u.params.radius as f32;
             pw.wheel_width = u.params.width as f32;
         }

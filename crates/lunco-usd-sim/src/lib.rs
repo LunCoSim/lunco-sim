@@ -75,7 +75,9 @@ use lunco_mobility::{
 use lunco_port_core::{Port, PortSurface};
 use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
-use lunco_usd_sim_core::{GroundColliderPending, PendingDifferential, UsdSimProcessed, UsdSimSet};
+use lunco_usd_sim_core::{
+    GroundColliderPending, PendingDifferential, PhysicalWheel, UsdSimProcessed, UsdSimSet,
+};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
@@ -361,52 +363,50 @@ impl Plugin for UsdSimPlugin {
         .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_runtime_safety);
         app.add_systems(lunco_core::SceneTeardown, retire_scene_cameras);
-        app.register_type::<PhysicalWheel>()
-            // Client-only: reconstruct a remote rover's wheels from its chassis
-            // (kinematic followers — wheels are no longer replicated), then re-derive
-            // the cosmetic visual roll. Chained so the visual spin layers on the
-            // freshly-placed body. Same `relative_speed > 0` gate as raycast wheels.
-            .add_systems(
-                FixedUpdate,
-                (reconstruct_proxy_wheels, animate_proxy_physical_wheels)
-                    .chain()
-                    .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
-            )
-            .add_systems(
-                FixedPostUpdate,
-                lunco_usd_sim_telemetry::retain_physics_telemetry
-                    .after(PhysicsSystems::StepSimulation),
-            )
-            .add_observer(on_add_usd_sim_prim)
-            .add_systems(PreUpdate, resolve_differential_coupling)
-            // USD → ShaderMaterial authoring. Ordered AFTER the bounded visual
-            // projection and BEFORE `process_usd_sim_prims` consumes the prims,
-            // so the material is present before a wheel is split onto its visual
-            // child. The completed projection boundary also prevents the visual
-            // projector from restoring a cylinder-axis rotation after the
-            // simulator has established the wheel's identity physics frame.
-            // See `lunco-usd-sim-shader`.
-            .add_systems(
-                Update,
-                lunco_usd_sim_shader::apply_usd_shader_materials
-                    .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
-                    .before(process_usd_sim_prims),
-            )
-            // `process_usd_sim_prims` does a per-stage joint scan + per-
-            // entity dispatch — too coupled to fit cleanly into a single
-            // `OnAdd<UsdSceneProjected>` observer. Gating with `run_if`
-            // skips the system entirely on frames with no unprocessed
-            // USD prim (archetype-level check, near-zero cost).
-            .init_resource::<GroundColliderPending>()
-            .init_resource::<JointTopologyIndex>()
-            .init_resource::<lunco_usd_sim_telemetry::PhysicsTelemetryState>()
-            .add_systems(
-                Update,
-                (process_usd_sim_prims
-                    .run_if(any_unprocessed_usd_sim)
-                    .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),)
-                    .in_set(UsdSimSet::Projection),
-            );
+        // Client-only: reconstruct a remote rover's wheels from its chassis
+        // (kinematic followers — wheels are no longer replicated), then re-derive
+        // the cosmetic visual roll. Chained so the visual spin layers on the
+        // freshly-placed body. Same `relative_speed > 0` gate as raycast wheels.
+        app.add_systems(
+            FixedUpdate,
+            (reconstruct_proxy_wheels, animate_proxy_physical_wheels)
+                .chain()
+                .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
+        )
+        .add_systems(
+            FixedPostUpdate,
+            lunco_usd_sim_telemetry::retain_physics_telemetry.after(PhysicsSystems::StepSimulation),
+        )
+        .add_observer(on_add_usd_sim_prim)
+        .add_systems(PreUpdate, resolve_differential_coupling)
+        // USD → ShaderMaterial authoring. Ordered AFTER the bounded visual
+        // projection and BEFORE `process_usd_sim_prims` consumes the prims,
+        // so the material is present before a wheel is split onto its visual
+        // child. The completed projection boundary also prevents the visual
+        // projector from restoring a cylinder-axis rotation after the
+        // simulator has established the wheel's identity physics frame.
+        // See `lunco-usd-sim-shader`.
+        .add_systems(
+            Update,
+            lunco_usd_sim_shader::apply_usd_shader_materials
+                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
+                .before(process_usd_sim_prims),
+        )
+        // `process_usd_sim_prims` does a per-stage joint scan + per-
+        // entity dispatch — too coupled to fit cleanly into a single
+        // `OnAdd<UsdSceneProjected>` observer. Gating with `run_if`
+        // skips the system entirely on frames with no unprocessed
+        // USD prim (archetype-level check, near-zero cost).
+        .init_resource::<GroundColliderPending>()
+        .init_resource::<JointTopologyIndex>()
+        .init_resource::<lunco_usd_sim_telemetry::PhysicsTelemetryState>()
+        .add_systems(
+            Update,
+            (process_usd_sim_prims
+                .run_if(any_unprocessed_usd_sim)
+                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),)
+                .in_set(UsdSimSet::Projection),
+        );
         // Dynamic admission must happen before the fixed loop. The body remains
         // kinematic until the initialization policy has accepted its composed
         // authored state; no terrain system can move it across this boundary.
@@ -442,41 +442,6 @@ pub mod lint;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
-/// A joint-based wheel: a full rigid body that interacts with terrain through
-/// collision, not raycast suspension. It gets `RigidBody`, `Collider`, and a
-/// solved `JointTorqueActuator` boundary instead of `WheelRaycast` + `RayCaster`.
-///
-/// On the host (and the rover this client owns) the visible spin comes from the
-/// avian joint motor rotating the wheel **body**; the visual mesh is a child and
-/// inherits that rotation. On a networked **client proxy** the chassis is
-/// kinematic and the joint motor is held at zero, so the body never spins — the
-/// fields below let [`animate_proxy_physical_wheels`] re-derive the roll from the
-/// replicated chassis motion and author the visual child directly, mirroring how
-/// raycast wheels are animated on the client.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct PhysicalWheel {
-    /// The visual mesh child (the entity whose local rotation we author on a
-    /// client proxy). `None` if the wheel prim carried no mesh.
-    pub visual_entity: Option<Entity>,
-    /// Rolling radius (m); the proxy roll rate is `ω = v_long / r`.
-    pub wheel_radius: f32,
-    /// Authored wheel width (m), retained so a live width edit can rebuild the
-    /// collider instead of changing density while leaving the old shape in place.
-    pub wheel_width: f32,
-    /// Visual base orientation (the USD cylinder `axis`). The roll axle is
-    /// `axis_rot · Y` and the visual base composes as `roll · axis_rot`, exactly
-    /// reconstructing the host's `body_spin · axis_rot`.
-    pub axis_rot: Quat,
-    /// Integrated roll angle (rad), wrapped to `[0, 2π)`. Client display state;
-    /// unused on the host (the body carries the real rotation there).
-    pub spin_angle: f32,
-    /// Wheel mount offset in the enclosing vehicle frame. A client proxy can
-    /// reconstruct the wheel's position as `chassis_pos + chassis_rot · mount_local`
-    /// instead of replicating a static mount offset.
-    pub mount_local: Vec3,
-}
-
 /// Process USD prims for sim mapping AFTER their assets are loaded.
 ///
 /// This is the core system that maps USD schemas to LunCoSim components. It runs in the

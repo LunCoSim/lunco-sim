@@ -489,6 +489,7 @@ multihash-codetable = { version = "0.2", default-features = false, features = ["
 # "0.19" resolving ahead of bevy "0.19.1") risks subtle ABI/derive
 # breakage. Keep every entry == the `bevy` pin.
 bevy_reflect = "0.19.1"
+bevy_math = "0.19.1"
 bevy_mesh = "0.19.1"
 bevy_shader = "0.19.1"
 bevy_asset = "0.19.1"

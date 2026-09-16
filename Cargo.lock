@@ -7913,6 +7913,7 @@ dependencies = [
  "lunco-usd-document",
  "lunco-usd-geometry",
  "lunco-usd-sim",
+ "lunco-usd-sim-core",
  "lunco-usd-ui",
  "lunco-usd-viewport-core",
  "lunco-usd-viewport-ui",
@@ -9596,6 +9597,7 @@ name = "lunco-usd-sim-core"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "bevy_math",
  "lunco-mobility",
 ]
 
