@@ -22,6 +22,10 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
   driver** (`scenario.rs`, `ScenarioRuntime` trait) over a **native world bridge**
   (`lunco-scripting-bridge-core`, `ValueBuilder` — no JSON on the read path); rhai is one
   backend, Python can implement the same traits.
+  Domain-specific verbs are installed by the production spatial, time, and USD
+  bridge adapters, keeping their physics/celestial/time-domain and document
+  closures out of the neutral mechanism package while preserving the public
+  script surface.
 - **Introspection** — `ScriptStatus` (compile/runtime health) + `ScriptInspect`
   (live `this` state, defined hooks, generation, running/paused).
 - **Authoring catalog** — `ScriptingCatalog` aggregates the full callable surface

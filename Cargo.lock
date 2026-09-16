@@ -8518,6 +8518,9 @@ dependencies = [
  "lunco-readiness",
  "lunco-render-recovery",
  "lunco-scripting-bridge-core",
+ "lunco-scripting-bridge-spatial",
+ "lunco-scripting-bridge-time",
+ "lunco-scripting-bridge-usd",
  "lunco-spatial",
  "lunco-storage",
  "lunco-time",
@@ -8536,22 +8539,52 @@ name = "lunco-scripting-bridge-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-api",
+ "lunco-core",
+ "lunco-core-session",
+ "lunco-time",
+ "lunco-workspace",
+ "serde_json",
+]
+
+[[package]]
+name = "lunco-scripting-bridge-spatial"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
  "big_space",
  "lunco-api",
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-control-core",
  "lunco-core",
- "lunco-core-session",
+ "lunco-physics",
+ "lunco-scripting-bridge-core",
+ "lunco-spatial",
+]
+
+[[package]]
+name = "lunco-scripting-bridge-time"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "lunco-physics",
+ "lunco-scripting-bridge-core",
+ "lunco-time",
+]
+
+[[package]]
+name = "lunco-scripting-bridge-usd"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-api",
  "lunco-doc",
  "lunco-doc-bevy",
- "lunco-physics",
- "lunco-spatial",
- "lunco-time",
+ "lunco-scripting-bridge-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-document",
- "lunco-workspace",
- "serde_json",
 ]
 
 [[package]]

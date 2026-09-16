@@ -65,6 +65,9 @@ use crate::doc::ScriptLanguage;
 use lunco_doc::Diagnostic;
 use lunco_scripting_bridge_core as bridge_core;
 use lunco_scripting_bridge_core::ValueBuilder;
+use lunco_scripting_bridge_spatial as spatial_bridge;
+use lunco_scripting_bridge_time as time_bridge;
+use lunco_scripting_bridge_usd as usd_bridge;
 
 // ── Native value builder (rhai) ────────────────────────────────────────────
 //
@@ -851,7 +854,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
 
     // world_pos(id) -> [x, y, z] in the active simulation frame, or () on miss.
     engine.register_fn("world_pos", |id: i64| -> Dynamic {
-        match bridge_core::world_pos(id as u64) {
+        match spatial_bridge::world_pos(id as u64) {
             Some(v) => RhaiBuilder.array(vec![
                 Dynamic::from_float(v.x),
                 Dynamic::from_float(v.y),
@@ -866,7 +869,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // code opts in explicitly and lowers with `vec3_array` only at a report or
     // command boundary.
     engine.register_fn("world_pos3", |id: i64| -> Dynamic {
-        bridge_core::world_pos(id as u64)
+        spatial_bridge::world_pos(id as u64)
             .map(crate::rhai_math::to_native)
             .unwrap_or(Dynamic::UNIT)
     });
@@ -881,7 +884,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // two of them would report a plausible WRONG place — the same class of
     // mistake `DZZ_HANDOFF.md` §5 warns about for the Y↔Z flip.
     engine.register_fn("geolocation", |id: i64| -> Dynamic {
-        match bridge_core::geolocation(id as u64) {
+        match spatial_bridge::geolocation(id as u64) {
             Some(g) => {
                 let mut m = rhai::Map::new();
                 m.insert("lat".into(), Dynamic::from_float(g.lat_deg));
@@ -899,7 +902,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // language-neutral `nav_command`; this just exposes the heading vector,
     // like world_pos exposes position.
     engine.register_fn("world_forward", |id: i64| -> Dynamic {
-        match bridge_core::world_forward(id as u64) {
+        match spatial_bridge::world_forward(id as u64) {
             Some(v) => RhaiBuilder.array(vec![
                 Dynamic::from_float(v.x),
                 Dynamic::from_float(v.y),
@@ -910,7 +913,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     });
 
     engine.register_fn("world_forward3", |id: i64| -> Dynamic {
-        bridge_core::world_forward(id as u64)
+        spatial_bridge::world_forward(id as u64)
             .map(crate::rhai_math::to_native)
             .unwrap_or(Dynamic::UNIT)
     });
@@ -927,7 +930,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
                 return Dynamic::UNIT;
             };
             let Some(command) =
-                bridge_core::navigation_command(id as u64, target, speed, radius as f32)
+                spatial_bridge::navigation_command(id as u64, target, speed, radius as f32)
             else {
                 return Dynamic::UNIT;
             };
@@ -946,7 +949,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // one host fn covers every axis and feeds tilt/tip-over checks — no per-axis
     // Rust. Same typed active-frame pose source as world_forward.
     engine.register_fn("world_rotation", |id: i64| -> Dynamic {
-        match bridge_core::world_rotation(id as u64) {
+        match spatial_bridge::world_rotation(id as u64) {
             Some(q) => RhaiBuilder.array(vec![
                 Dynamic::from_float(q[0]),
                 Dynamic::from_float(q[1]),
@@ -958,7 +961,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     });
 
     engine.register_fn("world_rotation_quat", |id: i64| -> Dynamic {
-        bridge_core::world_rotation_quat(id as u64)
+        spatial_bridge::world_rotation_quat(id as u64)
             .map(Dynamic::from)
             .unwrap_or(Dynamic::UNIT)
     });
@@ -1526,7 +1529,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // `catalog_id` is authored identity, never a name guess; `input_surface`
     // is the authoritative InputPorts readiness bit.
     engine.register_fn("list_entities", || -> Dynamic {
-        bridge_core::list_entities(&RhaiBuilder)
+        spatial_bridge::list_entities(&RhaiBuilder)
     });
 
     // ── Structural mutation: the C/D twin of get/set's R/U ───────────────────
@@ -1602,7 +1605,7 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // scenario policy uses it as an invalidation clock; it must not pay for
     // the full InspectUsdDocument JSON snapshot on every fixed tick.
     engine.register_fn("usd_document_generation", |doc_id: i64| -> Dynamic {
-        bridge_core::usd_document_generation(doc_id as u64)
+        usd_bridge::usd_document_generation(doc_id as u64)
             .map(|generation| Dynamic::from_int(generation as i64))
             .unwrap_or(Dynamic::UNIT)
     });
@@ -1638,13 +1641,13 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // identity used by Twin route/program relations; no name convention is
     // involved.
     engine.register_fn("find_path", |path: ImmutableString| -> i64 {
-        bridge_core::find_path(path.as_str())
+        usd_bridge::find_path(path.as_str())
     });
     // usd_path(id) -> exact composed USD path, or (). This is the generic
     // identity inverse used by scene-level programs; no domain name is encoded
     // in the lookup.
     engine.register_fn("usd_path", |id: i64| -> Dynamic {
-        bridge_core::usd_path_of(id as u64)
+        usd_bridge::usd_path_of(id as u64)
             .map(Dynamic::from)
             .unwrap_or(Dynamic::UNIT)
     });
@@ -1733,26 +1736,26 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     });
 
     // sim_tick() -> i64 — current FixedUpdate tick.
-    engine.register_fn("sim_tick", || -> i64 { bridge_core::sim_tick() });
+    engine.register_fn("sim_tick", || -> i64 { time_bridge::sim_tick() });
 
     // dt() -> f64 — the fixed-step integration delta in seconds (1/FIXED_HZ).
     // The per-tick `dt` an on_tick hook should multiply rates by for
     // frame-rate-independent integration. The fixed clock is mandatory in a
     // running simulation; a missing or invalid clock raises RuntimeFaults.
-    engine.register_fn("dt", || -> f64 { bridge_core::dt() });
+    engine.register_fn("dt", || -> f64 { time_bridge::dt() });
     // elapsed_seconds() -> f64 — admitted simulation seconds derived from the
     // deterministic SimTick, for second-based timeouts / rate limits
     // (`this.t0`-relative dwell, etc.). Scheduler overstep accumulated while a
     // causal barrier is held is excluded.
     engine.register_fn("elapsed_seconds", || -> f64 {
-        bridge_core::elapsed_seconds()
+        time_bridge::elapsed_seconds()
     });
     // clock_snapshot() -> #{...} — read every installed clock domain and the
     // synchronization barrier.  `sim_tick`/`world_sim_s` are deterministic;
     // `wall_*` values are diagnostics/interaction only and are marked
     // `wall_time_deterministic: false` in the returned map.
     engine.register_fn("clock_snapshot", || -> Dynamic {
-        bridge_core::clock_snapshot(&RhaiBuilder)
+        time_bridge::clock_snapshot(&RhaiBuilder)
     });
 
     // twin_root() -> String — absolute path of the ACTIVE twin's folder, i.e. the
@@ -2281,7 +2284,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             SUBS_ACCUM.with(|s| *s.borrow_mut() = Some(SubsAccum::default()));
         }
         // Seed the deterministic RNG for this hook: (entity, tick, hook).
-        bridge_core::rng_begin(self_gid as u64, bridge_core::sim_tick() as u64, salt);
+        bridge_core::rng_begin(self_gid as u64, time_bridge::sim_tick() as u64, salt);
         // Only enter the VM if the program defines this lifecycle hook (cached
         // mask bit — no AST scan). The built-in drivers below run regardless.
         let (hook_ast, eval_ast) = st.program.hook_target();
@@ -2368,7 +2371,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // in the same tick draw distinct streams.
         bridge_core::rng_begin(
             self_gid as u64,
-            bridge_core::sim_tick() as u64,
+            time_bridge::sim_tick() as u64,
             bridge_core::hash_str(&event.name),
         );
         let st = self.states.get_mut(&entity)?;
@@ -2641,7 +2644,7 @@ impl crate::task_tree::TaskCtx for RhaiTaskCtx {
         &self.events
     }
     fn resolve(&mut self, path: &str) -> i64 {
-        bridge_core::find_path(path)
+        usd_bridge::find_path(path)
     }
     fn call_action(&mut self, f: &FnPtr) -> Result<(), crate::task_tree::TaskCallbackError> {
         match self.call_fn(f) {
@@ -2753,7 +2756,7 @@ fn tick_native_task(
         scope,
         this,
         me: self_gid,
-        now: bridge_core::elapsed_seconds(),
+        now: time_bridge::elapsed_seconds(),
         events: events.to_vec(),
         error: None,
     };

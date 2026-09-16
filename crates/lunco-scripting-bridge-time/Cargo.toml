@@ -1,0 +1,16 @@
+[package]
+name = "lunco-scripting-bridge-time"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Simulation clock projections for LunCoSim scripting backends"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
+lunco-time = { path = "../lunco-time" }
+
+[lints]
+workspace = true

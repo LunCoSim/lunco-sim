@@ -126,7 +126,7 @@ Arrows point at dependencies, and two edges deserve calling out explicitly:
 We are moving from a **Sandbox** (physics validation) toward a **Mission Stack**:
 1. **Core Co-Sim (Built)**: USD + Modelica + Physics integration.
 2. **Native Collab (Built/Active)**: WebTransport + Replication (`lunco-networking` landed, RBAC policy substrate in place).
-3. **Scripting (Built)**: `rhai` world-bridge + op-graph generators (`lunco-scripting`, `lunco-tools-rhai`).
+3. **Scripting (Built)**: interpreter-neutral bridge mechanism plus Rhai/Python hosts and op-graph generators (`lunco-scripting-bridge-core`, `lunco-scripting`, `lunco-tools-rhai`). Spatial, time, and USD bridge adapters remain domain-specific edges.
 4. **Experiments (Built)**: parameter sweeps + parallel runs (`lunco-experiments`).
 5. **Mission Timeline (Planned)**: Scheduling, event graphs, and automated CONOPS rehearsal.
 6. **HIL/SIL (Planned)**: Hardware/Software-in-the-loop validation for physical flight controllers.

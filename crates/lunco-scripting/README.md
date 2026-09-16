@@ -17,8 +17,8 @@ command/query API the HTTP API, MCP, and UI use.
 
 The language-neutral core means a backend supplies only the interpreter
 mechanics; lifecycle, scheduling, hot-reload, pause, teardown, diagnostics, and
-the world verbs are shared (see [`scenario.rs`](src/scenario.rs) and
-[`lunco-scripting-bridge-core`](../lunco-scripting-bridge-core)).
+the generic world mechanism is shared. Domain-specific world verbs are provided
+by the spatial, time, and USD bridge adapters (see the package layout below).
 
 ## Model
 
@@ -90,7 +90,10 @@ never on a networked client (which receives behaviour via replication).
 | Path | What |
 |---|---|
 | [`src/world_bridge.rs`](src/world_bridge.rs) | the rhai backend (verbs + `RhaiScenarioRuntime`) |
-| [`lunco-scripting-bridge-core`](../lunco-scripting-bridge-core) | language-neutral world bridge (`ValueBuilder`) |
+| [`lunco-scripting-bridge-core`](../lunco-scripting-bridge-core) | language-neutral world mechanism (`ValueBuilder`) |
+| [`lunco-scripting-bridge-spatial`](../lunco-scripting-bridge-spatial) | pose, navigation, geolocation, and entity projections |
+| [`lunco-scripting-bridge-time`](../lunco-scripting-bridge-time) | deterministic simulation-clock projections |
+| [`lunco-scripting-bridge-usd`](../lunco-scripting-bridge-usd) | USD document and prim-path projections |
 | [`src/scenario.rs`](src/scenario.rs) | language-neutral lifecycle driver |
 | [`src/commands.rs`](src/commands.rs) | the `#[Command]` entry points |
 | [`src/catalog.rs`](src/catalog.rs) · [`src/diagnostics.rs`](src/diagnostics.rs) | discovery + introspection queries |

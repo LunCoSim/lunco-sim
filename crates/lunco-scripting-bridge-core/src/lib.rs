@@ -3,16 +3,17 @@
 //!
 //! # Why this exists
 //!
-//! The verbs a script gets (`cmd` / `get` / `query` / `world_pos` / hierarchy /
-//! `emit` / clock) are identical regardless of language. This module owns that
-//! logic *once*, free of any interpreter type, so rhai and Python are thin
-//! bindings over it rather than parallel reimplementations.
+//! The generic verbs a script gets (`cmd` / `get` / `query` / hierarchy /
+//! `emit`) are identical regardless of language. This module owns that
+//! mechanism *once*, free of any interpreter type or domain projection, so
+//! Rhai and Python are thin bindings over it rather than parallel
+//! reimplementations.
 //!
 //! # Native, not JSON-everywhere
 //!
 //! Two kinds of boundary, only one inherently JSON:
 //!
-//! - **Reads** ([`get_field`], [`list_entities`], hierarchy, `world_pos`) read
+//! - **Reads** ([`get_field`], resource fields, and hierarchy) read
 //!   live reflect data. They build the *native* value in ONE hop via the
 //!   [`ValueBuilder`] trait — `reflect → Dynamic` for rhai, `reflect → PyObject`
 //!   for Python — never through an intermediate `serde_json::Value`. The
@@ -31,10 +32,8 @@
 //! and never re-entrant while a borrow is outstanding, so no aliasing occurs.
 
 use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
-use bevy::ecs::system::SystemState;
-use bevy::math::{DQuat, DVec3};
+use bevy::math::DVec3;
 use bevy::prelude::*;
-use big_space::prelude::*;
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
@@ -48,16 +47,9 @@ use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_core::{
-    CelestialBody, CommandResults, GlobalEntityId, OpId, SessionId, Severity, SimTick,
-    TelemetryEvent, TelemetryValue,
+    CommandResults, GlobalEntityId, OpId, SessionId, Severity, TelemetryEvent, TelemetryValue,
 };
 use lunco_core_session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
-use lunco_physics::PhysicsTime;
-use lunco_spatial::{
-    NavigationCommand, SteeringGeometry,
-    coords::{GridPos, VehicleFrame},
-};
-use lunco_time::{Clocks, MissionClock, ResolvedDomains, TimeTransport, WorldTime};
 
 // ── Native value construction ──────────────────────────────────────────────
 
@@ -275,7 +267,7 @@ pub fn build_from_json<B: ValueBuilder>(b: &B, v: &serde_json::Value) -> B::Valu
 }
 
 /// Build a `[x, y, z]` array value.
-fn vec3_value<B: ValueBuilder>(b: &B, x: f64, y: f64, z: f64) -> B::Value {
+pub fn vec3_value<B: ValueBuilder>(b: &B, x: f64, y: f64, z: f64) -> B::Value {
     b.array(vec![b.float(x), b.float(y), b.float(z)])
 }
 
@@ -529,25 +521,6 @@ pub fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
     world
         .get_resource::<ApiEntityRegistry>()?
         .resolve(&GlobalEntityId::from_raw(gid))
-}
-
-/// Read the authoritative USD document generation without constructing the
-/// full `InspectUsdDocument` JSON response.
-///
-/// A fixed-step policy may use this as its structural invalidation clock, then
-/// perform its expensive topology read only when the generation changes. The
-/// registry/document pair is the owner of this fact; this helper is only the
-/// native language-neutral bridge to that owner.
-pub fn usd_document_generation(doc_id: u64) -> Option<u64> {
-    with_world(|world| {
-        let registry = world.get_resource::<
-            lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
-        >()?;
-        registry
-            .host(lunco_doc::DocumentId::new(doc_id))
-            .map(|host| host.generation())
-    })
-    .flatten()
 }
 
 /// The session id currently controlling `gid`, or `None` if nobody owns it. Reads the same
@@ -877,119 +850,6 @@ pub fn write_port(gid: u64, name: &str, value: f64) -> bool {
 
 // ── Verbs: reads ────────────────────────────────────────────────────────────
 
-/// `world_pos(id)` — f64 position in the active simulation frame, or `None`.
-///
-/// For a surface scene this is the authored site frame used by Avian, terrain,
-/// routes, and spawn commands. Celestial/root transforms are an implementation
-/// detail and cannot leak into ordinary script navigation.
-pub fn world_pos(gid: u64) -> Option<DVec3> {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-        state
-            .get(world)
-            .ok()?
-            .position(entity)
-            .map(|position| position.0)
-    })
-    .flatten()
-}
-
-/// `geolocation(id)` — where on the body an entity actually is, as
-/// `(lat_deg, lon_deg, height_m)`. `None` when the scene is not site-anchored
-/// (no `SiteAnchor`) or the anchor's body is not present.
-///
-/// Works for any positioned entity — route point, mast, marker — through
-/// the same explicit site/body-fixed frame query used by HUDs and billboards.
-/// Root-world position is deliberately not a fallback: celestial ancestors
-/// move with ephemeris time and are not site ENU coordinates.
-pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<(
-            Query<&ChildOf>,
-            Query<&Grid>,
-            Query<(Option<&CellCoord>, &Transform)>,
-            Query<(Entity, &lunco_celestial::GeodeticAnchor), With<lunco_celestial::SiteAnchor>>,
-            Res<lunco_celestial::CelestialBodyRegistry>,
-            Res<lunco_celestial_spatial::ReferenceFrameIndex>,
-        )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial, q_site, bodies, frame_index) = state.get(world).ok()?;
-        lunco_celestial_spatial::resolve_surface_pose(
-            entity,
-            &q_site,
-            &bodies,
-            &frame_index,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        )
-        .map(|pose| pose.geodetic)
-    })
-    .flatten()
-}
-
-/// `world_forward(id)` — unit heading in the active simulation frame, or `None`.
-pub fn world_forward(gid: u64) -> Option<DVec3> {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-        let rotation = state.get(world).ok()?.rotation(entity)?;
-        Some(rotation.0 * DVec3::NEG_Z)
-    })
-    .flatten()
-}
-
-/// Compute one navigation command through the shared core law for a live vessel.
-/// This is the language-neutral scripting seam: Rhai and any future backend
-/// pass the same target/speed/radius contract and receive the same authored
-/// steering-capability result. Missing pose, geometry, or invalid input is a
-/// miss; callers must hold the vehicle brake rather than invent a fallback.
-pub fn navigation_command(
-    vessel_gid: u64,
-    target: DVec3,
-    speed: f64,
-    radius: f32,
-) -> Option<NavigationCommand> {
-    with_world(|world| {
-        let entity = resolve_entity(world, vessel_gid)?;
-        let geometry = *world.get::<SteeringGeometry>(entity)?;
-        let (pos, rotation) = {
-            let mut pose: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-            pose.get(world).ok()?.pose(entity)?
-        };
-        let target = GridPos(target);
-        let fwd = VehicleFrame::forward(rotation).as_vec3();
-        lunco_spatial::nav_setpoint(pos, fwd, target, speed, radius, geometry)
-    })
-    .flatten()
-}
-
-/// `world_rotation(id)` — orientation in the active simulation frame as a
-/// quaternion `[x, y, z, w]`, or `None`. The GENERAL orientation accessor: every axis
-/// (`up`, `forward`, `right`) is `quat * unit_axis`, derived rhai-side, so this
-/// one host fn subsumes `world_forward` and unblocks tilt/tip-over logic (a rover
-/// is tipped when its up-vector's `y` drops below `cos(θ)`) without a per-axis
-/// Rust fn each. It uses the same active-frame hierarchy sample as
-/// `world_forward`, so surface-up remains +Y below a rotated celestial branch.
-pub fn world_rotation(gid: u64) -> Option<[f64; 4]> {
-    world_rotation_quat(gid).map(|q| [q.x, q.y, q.z, q.w])
-}
-
-/// Native counterpart of [`world_rotation`]. Backends that can retain glam
-/// values should use this path so the pose query does not lower to an array and
-/// immediately reconstruct the same quaternion. Invalid/non-finite samples are
-/// unavailable rather than entering a control calculation.
-pub fn world_rotation_quat(gid: u64) -> Option<DQuat> {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-        let q = state.get(world).ok()?.rotation(entity)?.0;
-        (q.is_finite() && q.length_squared() >= 1.0e-24).then_some(q.normalize())
-    })
-    .flatten()
-}
-
 /// Split `"Type.field.sub"` into the type's short name and a reflect sub-path
 /// (`".field.sub"`). A bare `"Type"` yields an empty sub-path (the whole value).
 fn split_type_path(path: &str) -> (&str, String) {
@@ -1245,73 +1105,6 @@ pub fn despawn_entity(gid: u64) -> Result<(), String> {
     .unwrap_or_else(|| Err("no world in scope".into()))
 }
 
-/// `list_entities()` — `[{ id, name, type, pos, catalog_id, input_surface,
-/// control_bound, celestial_body }]` for every registered entity. `type` comes
-/// from the projected USD `kind`; it is never inferred from control or physics
-/// components. `catalog_id` is present only for catalog-spawned entities, and
-/// `input_surface` is the authoritative `InputPorts` readiness bit. `name` is
-/// the shared human-readable label; the full USD path remains available through
-/// `QueryEntity` for callers that need canonical addressing.
-pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
-    with_world(|world| {
-        let Some(pairs) = world
-            .get_resource::<ApiEntityRegistry>()
-            .map(ApiEntityRegistry::entities)
-        else {
-            return b.array(Vec::new());
-        };
-        // One SystemState carries every per-entity read so the loop never
-        // re-borrows the World.
-        let mut state: SystemState<(
-            lunco_physics::SimulationPoseQuery,
-            Query<(
-                Option<&Name>,
-                Option<&lunco_core::markers::Callsign>,
-                Has<lunco_control_core::ControlBinding>,
-                Has<lunco_core::InputPorts>,
-                Option<&CelestialBody>,
-                Option<&lunco_core::CatalogEntryId>,
-                Option<&lunco_core::UsdPrimKind>,
-            )>,
-        )> = SystemState::new(world);
-        let Some((poses, q_meta)) = state.get(world).ok() else {
-            return b.array(Vec::new());
-        };
-        let items = pairs
-            .into_iter()
-            .map(|(gid, entity)| {
-                let (name, callsign, accepts_commands, input_surface, body, catalog_id, usd_kind) =
-                    q_meta
-                        .get(entity)
-                        .unwrap_or((None, None, false, false, None, None, None));
-                let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
-                let pos = poses
-                    .position(entity)
-                    .map(|v| vec3_value(b, v.0.x, v.0.y, v.0.z))
-                    .unwrap_or_else(|| b.unit());
-                b.map(vec![
-                    ("id".to_string(), b.int(gid.get() as i64)),
-                    (
-                        "name".to_string(),
-                        b.string(&lunco_core::entity_display_name(name, callsign, catalog_id)),
-                    ),
-                    ("type".to_string(), b.string(kind)),
-                    ("input_surface".to_string(), b.bool(input_surface)),
-                    ("control_bound".to_string(), b.bool(accepts_commands)),
-                    ("celestial_body".to_string(), b.bool(body.is_some())),
-                    (
-                        "catalog_id".to_string(),
-                        b.string(catalog_id.map(|id| id.0.as_str()).unwrap_or("")),
-                    ),
-                    ("pos".to_string(), pos),
-                ])
-            })
-            .collect();
-        b.array(items)
-    })
-    .unwrap_or_else(|| b.array(Vec::new()))
-}
-
 /// `find(name)` — first entity gid with that canonical `Name`, or `-1`.
 pub fn find(name: &str) -> i64 {
     with_world(|world| {
@@ -1327,41 +1120,6 @@ pub fn find(name: &str) -> i64 {
         -1
     })
     .unwrap_or(-1)
-}
-
-/// `find_path(path)` — first entity gid with the exact composed USD prim path,
-/// or `-1`. Paths are the authored identity; this is intentionally separate
-/// from `find`, whose name lookup is only a display convenience.
-pub fn find_path(path: &str) -> i64 {
-    with_world(|world| {
-        let pairs = world.get_resource::<ApiEntityRegistry>()?.entities();
-        pairs
-            .into_iter()
-            .find(|(_, entity)| {
-                world
-                    .get::<lunco_usd_bevy_scene::UsdPrimPath>(*entity)
-                    .is_some_and(|prim| prim.path == path)
-            })
-            .map(|(id, _)| id.get() as i64)
-    })
-    .flatten()
-    .unwrap_or(-1)
-}
-
-/// `usd_path(id)` — the exact composed USD path carried by an entity, or `()`.
-/// This is the inverse of `find_path` and is the generic identity primitive
-/// authored programs use to inspect their own scene-level ownership.
-pub fn usd_path_of(gid: u64) -> Option<String> {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        Some(
-            world
-                .get::<lunco_usd_bevy_scene::UsdPrimPath>(entity)?
-                .path
-                .clone(),
-        )
-    })
-    .flatten()
 }
 
 /// `name(id)` — the entity's shared human-readable label, or `None`.
@@ -1407,336 +1165,6 @@ pub fn children_of(gid: u64) -> Vec<i64> {
             .collect()
     })
     .unwrap_or_default()
-}
-
-// ── Verbs: clock ────────────────────────────────────────────────────────────
-
-/// `sim_tick()` — current admitted FixedUpdate tick. A missing core tick is a
-/// terminal clock-contract fault; `-1` is returned only as an explicit invalid
-/// sentinel so the Rhai callback cannot invent a valid tick.
-pub fn sim_tick() -> i64 {
-    with_world(|world| {
-        world
-            .get_resource::<SimTick>()
-            .map(|tick| tick.0 as i64)
-            .unwrap_or_else(|| {
-                report_clock_contract_fault(world, "sim-tick-missing", "SimTick is absent");
-                -1
-            })
-    })
-    .unwrap_or_else(|| {
-        error!("[scripting] deterministic clock contract violated: sim_tick() called outside a WorldScope");
-        -1
-    })
-}
-
-/// `dt()` — fixed-step integration delta in seconds. The production clock
-/// spine is mandatory; absence is a terminal contract fault, never a default.
-pub fn dt() -> f64 {
-    with_world(|world| {
-        let Some(time) = world.get_resource::<Time<bevy::time::Fixed>>() else {
-            report_clock_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
-            return f64::NAN;
-        };
-        let delta = time.delta_secs_f64();
-        if !delta.is_finite() || delta <= 0.0 {
-            report_clock_contract_fault(
-                world,
-                "fixed-clock-invalid",
-                format!("Time<Fixed>.delta must be finite and positive, got {delta:?}"),
-            );
-            return f64::NAN;
-        }
-        delta
-    })
-    .unwrap_or_else(|| {
-        error!(
-            "[scripting] deterministic clock contract violated: dt() called outside a WorldScope"
-        );
-        f64::NAN
-    })
-}
-
-/// `elapsed_seconds()` — deterministic simulation seconds derived from the
-/// integer [`SimTick`], not Bevy's accumulated fixed-clock bookkeeping. The
-/// latter can include a paused barrier's scheduler overstep, while `SimTick`
-/// advances only for admitted causal simulation steps. The core tick and fixed
-/// clock are mandatory; absence is a terminal contract fault.
-pub fn elapsed_seconds() -> f64 {
-    with_world(|world| {
-        let Some(tick) = world.get_resource::<SimTick>().map(|tick| tick.0) else {
-            report_clock_contract_fault(world, "sim-tick-missing", "SimTick is absent");
-            return f64::NAN;
-        };
-        let Some(time) = world.get_resource::<Time<bevy::time::Fixed>>() else {
-            report_clock_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
-            return f64::NAN;
-        };
-        let dt = time.timestep().as_secs_f64();
-        if !dt.is_finite() || dt <= 0.0 {
-            report_clock_contract_fault(
-                world,
-                "fixed-clock-invalid",
-                format!("Time<Fixed>.timestep must be finite and positive, got {dt:?}"),
-            );
-            return f64::NAN;
-        }
-        tick as f64 * dt
-    })
-    .unwrap_or_else(|| {
-        error!("[scripting] deterministic clock contract violated: elapsed_seconds() called outside a WorldScope");
-        f64::NAN
-    })
-}
-
-/// Surface a missing/invalid mandatory clock as a terminal simulation fault.
-/// The scripting bridge never substitutes wall time or a nominal tick: a
-/// production host that omitted the core time spine must stop loudly.
-fn report_clock_contract_fault(world: &mut World, kind: &'static str, detail: impl Into<String>) {
-    let detail = detail.into();
-    if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
-        if faults.raise(kind, None, "scripting-clock", detail.clone()) {
-            error!("[scripting] deterministic clock contract violated: {detail}");
-        }
-    } else {
-        error!(
-            "[scripting] deterministic clock contract violated: {detail} (RuntimeFaults missing)"
-        );
-    }
-}
-
-/// Read the complete simulation clock snapshot exposed to every scripting
-/// backend.  The integer [`SimTick`] is the deterministic master; all other
-/// simulation-domain values are derived or projected from it.  Wall time is
-/// included for diagnostics and interaction only and is explicitly labelled
-/// non-deterministic so a scenario cannot accidentally use it as physics input.
-///
-/// The returned map is intentionally a stable, flat schema. Optional clocks
-/// (for example Avian's physics clock in a script-free test world) remain
-/// explicitly optional. The mandatory `SimTick` + `Time<Fixed>` +
-/// `Time<Virtual>` spine is never substituted: a missing/invalid spine raises
-/// `RuntimeFaults` and sets `clock_contract_ok` false. The `domains` array
-/// contains the resolved T5 clock-tree samples when the time domain plugin is
-/// installed.
-pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
-    with_world(|world| {
-        // Copy the mandatory spine before raising a fault. A fault is a
-        // mutable resource write; retaining `&SimTick`/`&Time` borrows while
-        // reporting it would make the contract checker itself fail to
-        // compile. The snapshot below is therefore a value-level view of the
-        // clocks, not a set of live ECS references.
-        let tick = world.get_resource::<SimTick>().map(|value| value.0);
-        let fixed_snapshot = world.get_resource::<Time<bevy::time::Fixed>>().map(|time| {
-            (
-                time.delta_secs_f64(),
-                time.elapsed_secs_f64(),
-                time.timestep().as_secs_f64(),
-            )
-        });
-        let virtual_snapshot = world.get_resource::<Time<Virtual>>().map(|time| {
-            (
-                time.delta_secs_f64(),
-                time.elapsed_secs_f64(),
-                time.relative_speed_f64(),
-                time.is_paused(),
-            )
-        });
-        let mut clock_contract_error = String::new();
-        if tick.is_none() {
-            clock_contract_error.push_str("SimTick is absent; ");
-        }
-        if fixed_snapshot.is_none() {
-            clock_contract_error.push_str("Time<Fixed> is absent; ");
-        }
-        if virtual_snapshot.is_none() {
-            clock_contract_error.push_str("Time<Virtual> is absent; ");
-        }
-        if !clock_contract_error.is_empty() {
-            report_clock_contract_fault(
-                world,
-                "simulation-clock-missing",
-                clock_contract_error.clone(),
-            );
-        }
-        let tick = tick.unwrap_or(0);
-        let fixed_dt = fixed_snapshot.map_or(f64::NAN, |(_, _, timestep)| timestep);
-        let admitted_sim_elapsed = (tick as f64) * fixed_dt;
-        let real_snapshot = world
-            .get_resource::<Time<Real>>()
-            .map(|time| (time.delta_secs_f64(), time.elapsed_secs_f64()));
-        let physics_snapshot = world
-            .get_resource::<Time<lunco_physics::Physics>>()
-            .map(|time| {
-                (
-                    time.delta_secs_f64(),
-                    time.elapsed_secs_f64(),
-                    time.is_paused(),
-                )
-            });
-        let physics_contract = world
-            .get_resource::<lunco_physics::PhysicsDeterminism>()
-            .copied();
-        let physics_contract_error = if physics_contract.is_none() {
-            let error = "PhysicsDeterminism is absent; physics admission is not enforceable";
-            report_clock_contract_fault(world, "physics-determinism-missing", error.to_owned());
-            error
-        } else {
-            ""
-        };
-        let world_time = world
-            .get_resource::<WorldTime>()
-            .copied()
-            .unwrap_or_default();
-        let mission = world
-            .get_resource::<MissionClock>()
-            .copied()
-            .unwrap_or_default();
-        let transport = world
-            .get_resource::<TimeTransport>()
-            .copied()
-            .unwrap_or_default();
-        let barrier = world
-            .get_resource::<lunco_core::SimulationBarrier>()
-            .copied()
-            .unwrap_or_default();
-
-        let running = virtual_snapshot.is_some_and(|(_, _, rate, paused)| !paused && rate > 0.0);
-        let mut entries = vec![
-            ("sim_tick".to_owned(), b.int(tick as i64)),
-            (
-                "admitted_sim_elapsed_s".to_owned(),
-                b.float(admitted_sim_elapsed),
-            ),
-            ("fixed_dt_s".to_owned(), b.float(fixed_dt)),
-            (
-                "fixed_elapsed_s".to_owned(),
-                b.float(fixed_snapshot.map_or(f64::NAN, |(_, elapsed, _)| elapsed)),
-            ),
-            (
-                "virtual_dt_s".to_owned(),
-                b.float(virtual_snapshot.map_or(f64::NAN, |(delta, _, _, _)| delta)),
-            ),
-            (
-                "virtual_elapsed_s".to_owned(),
-                b.float(virtual_snapshot.map_or(f64::NAN, |(_, elapsed, _, _)| elapsed)),
-            ),
-            (
-                "virtual_rate".to_owned(),
-                b.float(virtual_snapshot.map_or(f64::NAN, |(_, _, rate, _)| rate)),
-            ),
-            (
-                "virtual_paused".to_owned(),
-                b.bool(virtual_snapshot.is_some_and(|(_, _, _, paused)| paused)),
-            ),
-            ("simulation_is_running".to_owned(), b.bool(running)),
-            (
-                "wall_dt_s".to_owned(),
-                b.float(real_snapshot.map_or(0.0, |(delta, _)| delta)),
-            ),
-            (
-                "wall_elapsed_s".to_owned(),
-                b.float(real_snapshot.map_or(0.0, |(_, elapsed)| elapsed)),
-            ),
-            (
-                "physics_dt_s".to_owned(),
-                b.float(physics_snapshot.map_or(0.0, |(delta, _, _)| delta)),
-            ),
-            (
-                "physics_elapsed_s".to_owned(),
-                b.float(physics_snapshot.map_or(0.0, |(_, elapsed, _)| elapsed)),
-            ),
-            (
-                "physics_paused".to_owned(),
-                b.bool(physics_snapshot.is_some_and(|(_, _, paused)| paused)),
-            ),
-            (
-                "physics_deterministic".to_owned(),
-                b.bool(physics_contract.is_some_and(|contract| contract.deterministic)),
-            ),
-            (
-                "physics_compute_threads".to_owned(),
-                b.int(
-                    physics_contract
-                        .and_then(|contract| contract.compute_threads)
-                        .map_or(-1, |value| value as i64),
-                ),
-            ),
-            (
-                "physics_contract_ok".to_owned(),
-                b.bool(physics_contract.is_some_and(|contract| contract.deterministic)),
-            ),
-            (
-                "physics_contract_error".to_owned(),
-                b.string(physics_contract_error),
-            ),
-            ("world_sim_s".to_owned(), b.float(world_time.sim_secs)),
-            ("world_met_s".to_owned(), b.float(world_time.met_secs)),
-            ("epoch_jd".to_owned(), b.float(world_time.epoch_jd)),
-            (
-                "mission_tick0".to_owned(),
-                b.int(mission.mission_tick0 as i64),
-            ),
-            (
-                "mission_epoch0_jd".to_owned(),
-                b.float(mission.mission_epoch0_jd),
-            ),
-            (
-                "transport_playing".to_owned(),
-                b.bool(transport.is_running()),
-            ),
-            ("transport_rate".to_owned(), b.float(transport.rate)),
-            ("barrier_held".to_owned(), b.bool(barrier.held)),
-            (
-                "barrier_active_participants".to_owned(),
-                b.int(barrier.active_participants as i64),
-            ),
-            (
-                "barrier_shared_clock_participants".to_owned(),
-                b.int(barrier.shared_clock_participants as i64),
-            ),
-            (
-                "barrier_worst_lag_s".to_owned(),
-                b.float(barrier.worst_lag_secs),
-            ),
-            // Wall time is useful for UI/capture diagnostics only. Keeping the
-            // flag beside the value makes accidental use in authored physics
-            // scripts easy to spot in review and replay logs.
-            ("wall_time_deterministic".to_owned(), b.bool(false)),
-            ("deterministic_master".to_owned(), b.string("sim_tick")),
-            (
-                "clock_contract_ok".to_owned(),
-                b.bool(clock_contract_error.is_empty()),
-            ),
-            (
-                "clock_contract_error".to_owned(),
-                b.string(&clock_contract_error),
-            ),
-        ];
-
-        let mut domains = Vec::new();
-        if let (Some(clocks), Some(resolved)) = (
-            world.get_resource::<Clocks>(),
-            world.get_resource::<ResolvedDomains>(),
-        ) {
-            for (name, entity) in [
-                ("real", clocks.real),
-                ("sim", clocks.sim),
-                ("interaction", clocks.interaction),
-                ("celestial", clocks.celestial),
-            ] {
-                if let Some(sample) = resolved.sample(entity) {
-                    domains.push(b.map(vec![
-                        ("name".to_owned(), b.string(name)),
-                        ("t_s".to_owned(), b.float(sample.t)),
-                        ("dt_s".to_owned(), b.float(sample.dt)),
-                    ]));
-                }
-            }
-        }
-        entries.push(("domains".to_owned(), b.array(domains)));
-        b.map(entries)
-    })
-    .unwrap_or_else(|| b.map(Vec::new()))
 }
 
 /// `twin_root()` — absolute path of the ACTIVE twin's folder, or `""` if none.
@@ -1998,74 +1426,8 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::math::DQuat;
     use lunco_api::queries::ApiQueryProvider;
     use lunco_core_session::{AuthorityRole, CommandPolicy, UserSession};
-
-    #[test]
-    fn script_pose_reads_are_empty_before_a_simulation_frame_exists() {
-        let mut world = World::new();
-        world.init_resource::<ApiEntityRegistry>();
-        let entity = world.spawn_empty().id();
-        world
-            .resource_mut::<ApiEntityRegistry>()
-            .assign(entity, GlobalEntityId::from_raw(42));
-
-        let _scope = WorldScope::enter(&mut world);
-        assert_eq!(world_pos(42), None);
-        assert_eq!(world_forward(42), None);
-        assert_eq!(world_rotation(42), None);
-    }
-
-    #[test]
-    fn script_pose_reads_share_the_active_frame_below_rotating_ancestors() {
-        let mut world = World::new();
-        let world_grid = lunco_spatial::ensure_world_root(&mut world);
-        world.insert_resource(lunco_spatial::ActivePhysicsFrame(world_grid));
-        world.init_resource::<ApiEntityRegistry>();
-        let root = world.resource::<lunco_spatial::ActivePhysicsFrame>().0;
-        let body = world
-            .spawn((
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::new(100_000, -2_000, 40_000),
-                Transform::from_rotation(Quat::from_rotation_x(0.9)),
-                ChildOf(root),
-            ))
-            .id();
-        let site = world
-            .spawn((
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::new(800, -950, 300),
-                Transform::from_rotation(Quat::from_rotation_z(-0.7)),
-                ChildOf(body),
-            ))
-            .id();
-        world.insert_resource(lunco_spatial::ActivePhysicsFrame(site));
-        let local_position = DVec3::new(14.0, -1_901.5, -8.0);
-        let local_rotation = DQuat::from_rotation_y(0.35);
-        let entity = world
-            .spawn((
-                Transform::from_translation(local_position.as_vec3())
-                    .with_rotation(local_rotation.as_quat()),
-                ChildOf(site),
-            ))
-            .id();
-        world
-            .resource_mut::<ApiEntityRegistry>()
-            .assign(entity, GlobalEntityId::from_raw(42));
-
-        let _scope = WorldScope::enter(&mut world);
-        let position = world_pos(42).expect("position");
-        let forward = world_forward(42).expect("forward");
-        let rotation = world_rotation(42).expect("rotation");
-        let native_rotation = world_rotation_quat(42).expect("native rotation");
-
-        assert!((position - local_position).length() < 1.0e-4);
-        assert!((forward - local_rotation * DVec3::NEG_Z).length() < 1.0e-6);
-        let rotation = DQuat::from_array(rotation);
-        assert!(rotation.angle_between(local_rotation).abs() < 1.0e-6);
-        assert!(native_rotation.angle_between(local_rotation).abs() < 1.0e-6);
-    }
 
     /// §3.4: a `cmd()` from a script launched by a remote session is
     /// re-authorized against that session (same gate as the networked path);

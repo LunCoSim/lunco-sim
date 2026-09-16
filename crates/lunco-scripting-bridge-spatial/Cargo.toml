@@ -1,0 +1,21 @@
+[package]
+name = "lunco-scripting-bridge-spatial"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Spatial and physics projections for LunCoSim scripting backends"
+
+[dependencies]
+bevy = { workspace = true }
+big_space = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-control-core = { path = "../lunco-control-core" }
+lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
+lunco-spatial = { path = "../lunco-spatial" }
+
+[lints]
+workspace = true

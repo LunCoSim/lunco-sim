@@ -77,6 +77,9 @@ whose dependency closure can express the contract:
 | `lunco-luncosim-core` | simulation composition, physics, USD load/projection, and the headless execution plugin | windows, GPU resources, egui, or render policy |
 | `lunco-luncosim` | process/CLI shell and windowed composition | simulation rules or a second headless loop |
 | `lunco-scripting-bridge-core` | interpreter-free language-neutral world bridge mechanism | authored policy, language runtimes, or render/UI dependencies |
+| `lunco-scripting-bridge-spatial` | active-frame pose, navigation, geolocation, and entity projections | generic reflection, language runtime, or render/UI policy |
+| `lunco-scripting-bridge-time` | deterministic simulation-clock and clock-domain projections | spatial pose, authored policy, language runtime, or render/UI dependencies |
+| `lunco-scripting-bridge-usd` | composed USD document-generation and prim-path projections | authored policy, language runtime, or render/UI dependencies |
 | `lunco-scripting` | Rhai/Python bindings and authored policy seams | unconditional render/UI dependencies |
 | `lunco-usd-queries` | UI-free document/query providers | egui defaults or workbench state |
 | `lunco-doc-bevy` | ECS document/journal lifecycle | presentation widgets (its egui bridge is opt-in) |

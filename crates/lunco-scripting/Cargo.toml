@@ -15,6 +15,9 @@ lunco-behavior = { path = "../lunco-behavior" }
 # feature so headless / wasm scripting builds don't pull bevy_egui→winit.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core", optional = true }
+lunco-scripting-bridge-spatial = { path = "../lunco-scripting-bridge-spatial", optional = true }
+lunco-scripting-bridge-time = { path = "../lunco-scripting-bridge-time", optional = true }
+lunco-scripting-bridge-usd = { path = "../lunco-scripting-bridge-usd", optional = true }
 # `ScriptOp` implements `OpPayload` (DomainKind::Script) so live script edits
 # auto-record into the canonical Twin journal — same "sync by default" bridge
 # Modelica/USD use. `attach_journal_recorder` (in lunco-doc-bevy) needs the trait.
@@ -24,7 +27,7 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # lunco-core. The API discovers it by reflection (AppTypeRegistry) — no direct
 # lunco-api dep. Lua remains only a reserved language id; it has no command.
 lunco-core = { path = "../lunco-core" }
-lunco-spatial = { path = "../lunco-spatial" }
+lunco-spatial = { path = "../lunco-spatial", optional = true }
 lunco-core-session = { path = "../lunco-core-session" }
 # Render recovery is an application-edge policy provider. Keep it optional and
 # out of the default Rhai/world bridge so headless hosts do not acquire Bevy's
@@ -33,7 +36,7 @@ lunco-render-recovery = { path = "../lunco-render-recovery", optional = true }
 # The Rhai tutorial bridge reads the controller-owned resolved keymap. Optional
 # so Python-only and script-free builds do not acquire the input projection.
 lunco-controller = { path = "../lunco-controller", optional = true }
-lunco-physics = { path = "../lunco-physics" }
+lunco-physics = { path = "../lunco-physics", optional = true }
 # For the readiness policy hook id registered in `register_builtin_policies`.
 lunco-readiness = { workspace = true }
 # `fnv1a64` — content-address a scenario's source to a cache key for the
@@ -58,7 +61,7 @@ rhai = { workspace = true, optional = true }
 # ApiEntityRegistry are needed here. Application roots add the outward
 # transport package separately.
 lunco-api = { path = "../lunco-api", optional = true }
-lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false, optional = true }
 # Tool libraries: the runtime-agnostic registry (lunco-tools) + its rhai binding
 # (lunco-tools-rhai). Gated on `rhai` since the binding + scenario runtime are
 # rhai; the registry itself is dependency-light.
@@ -84,7 +87,7 @@ lunco-workspace = { path = "../lunco-workspace", optional = true }
 # rhai on by default — the browser-capable backend. Turn it off
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
-rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-controller", "dep:lunco-scripting-bridge-core", "lunco-scripting-bridge-core/workspace", "lunco-twin-journal/hooks"]
+rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-controller", "dep:lunco-scripting-bridge-core", "lunco-scripting-bridge-core/workspace", "dep:lunco-scripting-bridge-spatial", "dep:lunco-scripting-bridge-time", "dep:lunco-scripting-bridge-usd", "dep:lunco-celestial-spatial", "dep:lunco-physics", "dep:lunco-spatial", "lunco-twin-journal/hooks"]
 # Opt-in bridge for the GUI's render-shadow policy. This edge belongs to the
 # application composition root, never to the generic scripting/runtime crate.
 render-policy = ["dep:lunco-render-recovery"]
