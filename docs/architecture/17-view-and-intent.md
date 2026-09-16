@@ -15,6 +15,9 @@ components. The reusable implementation is split across four owners:
 `lunco-avatar-core` carries avatar lifecycle/command contracts, `lunco-scene-camera`
 exposes script/API camera transactions, and `lunco-avatar` is the specialized
 owner of raw input translation, possession, and BigSpace-specific pose solvers.
+Generic input response and clip precision policy live in
+`lunco-camera-runtime`/`lunco-camera-core`; Rhai selects and tunes presentation
+policy through the reflected command surface.
 Camera selection and the viewport follow the single-authority design in §6.
 
 This document provides a technical guide to the modular, action-oriented, and headless-safe camera and intent systems in LunCoSim.
@@ -40,8 +43,8 @@ LunCoSim decouples human interaction from physical execution using five distinct
 > still a design vocabulary, not a reason to add a marker to `lunco-core`.
 > Today the concrete rig components (`SpringArmCamera`, `OrbitCamera`,
 > `FreeFlightCamera`, `SurfaceCamera`) are backend-neutral contracts in
-> `lunco-camera-core`; `lunco-camera-runtime` supplies the generic free-flight
-> and surface pose writers, while `lunco-avatar` supplies source-specific
+> `lunco-camera-core`; `lunco-camera-runtime` supplies the generic free-flight,
+> surface, input-policy, and clip-plane mechanisms, while `lunco-avatar` supplies source-specific
 > possession, orbit, spring-arm, and BigSpace solvers. Standard
 > USD projection, mounted cameras, camera paths, and selection live in
 > `lunco-usd-bevy-camera`. `lunco-render-bevy` binds render intent to a
@@ -211,7 +214,8 @@ hierarchy. A nested camera with `cameraPose =
 The *behavior contracts* of the free/possession cameras — `SpringArmCamera`,
 `OrbitCamera`, `FreeFlightCamera`, `SurfaceCamera` — live in
 `lunco-camera-core`. Generic mode exclusivity, free-flight orientation, and
-surface-frame pose writing live in `lunco-camera-runtime`; avatar-owned
+surface-frame pose writing, validated input response, and clip precision live in
+`lunco-camera-runtime`/`lunco-camera-core`; avatar-owned
 BigSpace solvers and transitions stay in `lunco-avatar`; the avatar-only orbit
 return snapshot is in `lunco-avatar-camera-core`. Avatar lifecycle and
 possession commands remain in
@@ -321,6 +325,8 @@ commit the claim, installs the local `ControlLink`, and optionally performs the
 camera transaction. `FocusTarget` and `FollowTarget` are likewise reachable
 high-level avatar camera commands; Rhai selects when and which target to request,
 while Rust enforces the local-avatar boundary and the BigSpace-safe pose update.
+Rhai can also call `set_camera_input(...)` to tune the generic camera response
+without a Rust rebuild; Rust retains only the validated hot-path mechanism.
 The generic command/value surface remains `SetPorts` for a controller that does
 not need an avatar camera. `PossessVessel` uses the same `SessionRegistry`
 transaction rather than maintaining a parallel ownership path.

@@ -7202,6 +7202,7 @@ dependencies = [
  "lunco-avatar-core",
  "lunco-avatar-policy",
  "lunco-camera-core",
+ "lunco-camera-runtime",
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-control-core",
@@ -7220,7 +7221,6 @@ dependencies = [
  "lunco-time",
  "lunco-usd-bevy-scene",
  "lunco-workspace",
- "serde",
 ]
 
 [[package]]
@@ -7298,9 +7298,13 @@ name = "lunco-camera-runtime"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-avatar-core",
  "lunco-camera-core",
+ "lunco-core",
  "lunco-interaction-core",
+ "lunco-settings",
  "lunco-time",
+ "serde",
 ]
 
 [[package]]

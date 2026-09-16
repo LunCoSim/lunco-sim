@@ -10,6 +10,34 @@ use bevy::prelude::Transform;
 const ZOOM_FACTOR_MIN: f64 = 0.75;
 const ZOOM_FACTOR_MAX: f64 = 1.25;
 
+const CAMERA_NEAR_SURFACE_RATIO: f64 = 0.001;
+const CAMERA_NEAR_MIN_M: f64 = 0.1;
+const CAMERA_NEAR_MAX_M: f64 = 10_000.0;
+const CAMERA_FAR_MIN_M: f64 = 10_000_000.0;
+
+/// Derive perspective clip planes from the nearest surface and farthest body.
+///
+/// This is a camera precision policy, not a celestial or avatar policy. The
+/// caller supplies distances measured in its authoritative spatial frame.
+pub fn adaptive_clip_planes(
+    nearest_surface_distance_m: f64,
+    farthest_body_distance_m: f64,
+) -> Option<(f32, f32)> {
+    if farthest_body_distance_m <= 0.0 {
+        if !farthest_body_distance_m.is_finite() {
+            return None;
+        }
+        return Some((CAMERA_NEAR_MIN_M as f32, CAMERA_FAR_MIN_M as f32));
+    }
+    if !nearest_surface_distance_m.is_finite() || !farthest_body_distance_m.is_finite() {
+        return None;
+    }
+    let near = (nearest_surface_distance_m * CAMERA_NEAR_SURFACE_RATIO)
+        .clamp(CAMERA_NEAR_MIN_M, CAMERA_NEAR_MAX_M);
+    let far = (farthest_body_distance_m * 1.05).max(CAMERA_FAR_MIN_M);
+    (near.is_finite() && far.is_finite() && far > near).then_some((near as f32, far as f32))
+}
+
 /// Resolve the shared camera decay rate from an authored base rate and
 /// per-camera damping.
 #[inline]
@@ -125,6 +153,33 @@ fn orthonormal_surface_axes(east: Vec3, north: Vec3, up: Vec3) -> (Vec3, Vec3, V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_surface_approach_keeps_a_submetre_near_plane() {
+        let (near, far) = adaptive_clip_planes(5.0, 1_000_000.0).unwrap();
+
+        assert_eq!(near, 0.1);
+        assert_eq!(far, CAMERA_FAR_MIN_M as f32);
+    }
+
+    #[test]
+    fn orbital_distance_scales_near_plane_with_a_precision_ceiling() {
+        let (near, _) = adaptive_clip_planes(5_000_000.0, 100_000_000.0).unwrap();
+        assert_eq!(near, 5_000.0);
+
+        let (near, _) = adaptive_clip_planes(20_000_000.0, 100_000_000.0).unwrap();
+        assert_eq!(near, CAMERA_NEAR_MAX_M as f32);
+    }
+
+    #[test]
+    fn bodyless_and_invalid_bounds_have_explicit_results() {
+        assert_eq!(
+            adaptive_clip_planes(f64::INFINITY, 0.0),
+            Some((CAMERA_NEAR_MIN_M as f32, CAMERA_FAR_MIN_M as f32))
+        );
+        assert_eq!(adaptive_clip_planes(f64::NAN, 1_000.0), None);
+        assert_eq!(adaptive_clip_planes(1.0, f64::INFINITY), None);
+    }
 
     #[test]
     fn scroll_zoom_limits_one_frame_to_a_safe_factor() {

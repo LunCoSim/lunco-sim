@@ -28,13 +28,11 @@ use bevy::math::{DQuat, DVec3, StableInterpolate};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use leafwing_input_manager::prelude::*;
-use serde::{Deserialize, Serialize};
-
 use lunco_avatar_camera_core::{
     CurrentRegionArrival, OrbitReturnBehavior, OrbitViewReturn, RadialArrival,
 };
 use lunco_avatar_core::commands::{
-    FocusTarget, FollowTarget, PossessVessel, ReleaseVessel, ReturnFromOrbit, SetCameraInput,
+    FocusTarget, FollowTarget, PossessVessel, ReleaseVessel, ReturnFromOrbit,
 };
 use lunco_avatar_core::lifecycle::AvatarSceneHandoffSet;
 use lunco_avatar_core::notifications::{ScreenNotifications, ShowNotification, Toast};
@@ -44,13 +42,15 @@ use lunco_avatar_policy::{
 };
 use lunco_camera_core::{
     math::{
-        apply_scroll_zoom, camera_decay_alpha, camera_decay_rate, camera_move_direction,
-        resolve_camera_arm_length, surface_camera_angles, surface_camera_rotation, zoom_factor,
+        adaptive_clip_planes, apply_scroll_zoom, camera_decay_alpha, camera_decay_rate,
+        camera_move_direction, resolve_camera_arm_length, surface_camera_angles,
+        surface_camera_rotation, zoom_factor,
     },
     AdaptiveNearPlane, CameraDefaults, CameraRigIntent, CameraRigMode, CameraUpdateSet,
     CameraZoomInput, FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera,
     SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
+use lunco_camera_runtime::{body_orbit_look_scale, CameraInputSettings};
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
 use lunco_core::{on_command, register_commands, CelestialBody, Spacecraft};
 use lunco_core_session::commands::UpdateProfile;
@@ -77,7 +77,7 @@ use lunco_celestial_spatial::{
     LocalGravityField, TeleportToSurface,
 };
 use lunco_environment::{GravityBody, GravityProvider};
-use lunco_settings::{AppSettingsExt, ProfileSettings, SettingsSection};
+use lunco_settings::{AppSettingsExt, ProfileSettings};
 use lunco_spatial::attach::migrate_to_grid;
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
@@ -97,150 +97,6 @@ fn report_avatar_policy_error(error: &str, last_error: &mut Option<String>) {
     if last_error.as_deref() != Some(error) {
         warn!("[avatar] collision policy unavailable: {error}");
         *last_error = Some(error.to_string());
-    }
-}
-
-// ─── Resources ───────────────────────────────────────────────────────────────
-
-/// Persisted camera-input response.
-///
-/// Pointer deltas and Bevy camera angles are f32 presentation values. Distances
-/// that choose an orbit response remain f64, matching the BigSpace/celestial
-/// coordinate boundary; only the resulting dimensionless scale is cast at the
-/// final camera-angle write.
-#[derive(Resource, Reflect, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
-#[reflect(Resource)]
-#[serde(default)]
-pub struct CameraInputSettings {
-    /// Camera radians per pointer-motion unit before behavior-specific scaling.
-    pub look_radians_per_pointer_unit: f32,
-    /// Lower bound for orbital rotation at the body's surface.
-    pub orbit_surface_min_scale: f64,
-    /// Shapes the geometric visible-horizon response. `1` is physically linear;
-    /// larger values retain slower rotation farther from the surface.
-    pub orbit_distance_curve_exponent: f64,
-}
-
-impl Default for CameraInputSettings {
-    fn default() -> Self {
-        Self {
-            look_radians_per_pointer_unit: 0.001125,
-            orbit_surface_min_scale: 0.04,
-            orbit_distance_curve_exponent: 0.75,
-        }
-    }
-}
-
-impl SettingsSection for CameraInputSettings {
-    const KEY: &'static str = "camera_input";
-}
-
-#[on_command(SetCameraInput)]
-fn on_set_camera_input(trigger: On<SetCameraInput>, mut settings: ResMut<CameraInputSettings>) {
-    apply_camera_input(trigger.event(), &mut settings);
-}
-
-fn apply_camera_input(command: &SetCameraInput, settings: &mut CameraInputSettings) {
-    if let Some(value) = command.look_radians_per_pointer_unit {
-        if value.is_finite() && value >= 0.0 {
-            settings.look_radians_per_pointer_unit = value;
-        } else {
-            warn!("SetCameraInput rejected non-finite/negative look sensitivity: {value}");
-        }
-    }
-    if let Some(value) = command.orbit_surface_min_scale {
-        if value.is_finite() && (0.0..=1.0).contains(&value) {
-            settings.orbit_surface_min_scale = value;
-        } else {
-            warn!("SetCameraInput rejected surface scale outside [0, 1]: {value}");
-        }
-    }
-    if let Some(value) = command.orbit_distance_curve_exponent {
-        if value.is_finite() && value > 0.0 {
-            settings.orbit_distance_curve_exponent = value;
-        } else {
-            warn!("SetCameraInput rejected non-positive distance exponent: {value}");
-        }
-    }
-}
-
-/// Scale an orbit gesture from the target body's apparent geometry.
-///
-/// `sqrt(1 - (r/d)^2)` is the cosine of the body's apparent angular radius:
-/// zero at the surface and asymptotically one far away. This gives a continuous,
-/// body-size-independent response without altitude bands or scene heuristics.
-fn body_orbit_look_scale(distance_m: f64, radius_m: f64, settings: &CameraInputSettings) -> f64 {
-    let min_scale = settings.orbit_surface_min_scale.clamp(0.0, 1.0);
-    let exponent = settings.orbit_distance_curve_exponent.max(f64::EPSILON);
-    if !distance_m.is_finite() || !radius_m.is_finite() || radius_m <= 0.0 {
-        return 1.0;
-    }
-    let ratio = (radius_m / distance_m.max(radius_m)).clamp(0.0, 1.0);
-    let visible_horizon = (1.0 - ratio * ratio).max(0.0).sqrt();
-    min_scale + (1.0 - min_scale) * visible_horizon.powf(exponent)
-}
-
-#[cfg(test)]
-mod camera_input_settings_tests {
-    use super::*;
-
-    #[test]
-    fn orbit_look_scale_is_continuous_monotonic_and_body_size_independent() {
-        let settings = CameraInputSettings::default();
-        let moon = 1_737_400.0;
-        let surface = body_orbit_look_scale(moon, moon, &settings);
-        let low = body_orbit_look_scale(moon + 100.0, moon, &settings);
-        let high = body_orbit_look_scale(moon + 100_000.0, moon, &settings);
-        let far = body_orbit_look_scale(moon * 100.0, moon, &settings);
-
-        assert_eq!(surface, settings.orbit_surface_min_scale);
-        assert!(
-            surface < low && low < high && high < far,
-            "{surface} {low} {high} {far}"
-        );
-        assert!(far < 1.0);
-
-        let same_ratio_on_earth = body_orbit_look_scale(6_378_137.0 * 2.0, 6_378_137.0, &settings);
-        let same_ratio_on_moon = body_orbit_look_scale(moon * 2.0, moon, &settings);
-        assert!((same_ratio_on_earth - same_ratio_on_moon).abs() < 1.0e-12);
-    }
-
-    #[test]
-    fn orbit_look_scale_honours_the_configured_surface_floor() {
-        let settings = CameraInputSettings {
-            orbit_surface_min_scale: 0.125,
-            ..default()
-        };
-        assert_eq!(body_orbit_look_scale(10.0, 10.0, &settings), 0.125);
-    }
-
-    #[test]
-    fn runtime_camera_input_update_is_partial_and_rejects_invalid_values() {
-        let mut settings = CameraInputSettings::default();
-        let original_floor = settings.orbit_surface_min_scale;
-        apply_camera_input(
-            &SetCameraInput {
-                look_radians_per_pointer_unit: Some(0.0005),
-                orbit_surface_min_scale: None,
-                orbit_distance_curve_exponent: Some(1.25),
-            },
-            &mut settings,
-        );
-        assert_eq!(settings.look_radians_per_pointer_unit, 0.0005);
-        assert_eq!(settings.orbit_surface_min_scale, original_floor);
-        assert_eq!(settings.orbit_distance_curve_exponent, 1.25);
-
-        apply_camera_input(
-            &SetCameraInput {
-                look_radians_per_pointer_unit: Some(-1.0),
-                orbit_surface_min_scale: Some(2.0),
-                orbit_distance_curve_exponent: Some(0.0),
-            },
-            &mut settings,
-        );
-        assert_eq!(settings.look_radians_per_pointer_unit, 0.0005);
-        assert_eq!(settings.orbit_surface_min_scale, original_floor);
-        assert_eq!(settings.orbit_distance_curve_exponent, 1.25);
     }
 }
 
@@ -397,62 +253,6 @@ fn register_orbit_history_hook(app: &mut App) {
         .on_remove(remember_orbit_camera_on_remove);
 }
 
-const CAMERA_NEAR_SURFACE_RATIO: f64 = 0.001;
-const CAMERA_NEAR_MIN_M: f64 = 0.1;
-const CAMERA_NEAR_MAX_M: f64 = 10_000.0;
-const CAMERA_FAR_MIN_M: f64 = 10_000_000.0;
-
-fn adaptive_camera_clip_planes(
-    nearest_surface_distance_m: f64,
-    farthest_body_distance_m: f64,
-) -> Option<(f32, f32)> {
-    if farthest_body_distance_m <= 0.0 {
-        if !farthest_body_distance_m.is_finite() {
-            return None;
-        }
-        return Some((CAMERA_NEAR_MIN_M as f32, CAMERA_FAR_MIN_M as f32));
-    }
-    if !nearest_surface_distance_m.is_finite() || !farthest_body_distance_m.is_finite() {
-        return None;
-    }
-    let near = (nearest_surface_distance_m * CAMERA_NEAR_SURFACE_RATIO)
-        .clamp(CAMERA_NEAR_MIN_M, CAMERA_NEAR_MAX_M);
-    let far = (farthest_body_distance_m * 1.05).max(CAMERA_FAR_MIN_M);
-    (near.is_finite() && far.is_finite() && far > near).then_some((near as f32, far as f32))
-}
-
-#[cfg(test)]
-mod camera_clip_tests {
-    use super::*;
-
-    #[test]
-    fn close_surface_approach_keeps_a_submetre_near_plane() {
-        let (near, far) = adaptive_camera_clip_planes(5.0, 1_000_000.0).unwrap();
-
-        assert_eq!(near, 0.1);
-        assert_eq!(far, CAMERA_FAR_MIN_M as f32);
-    }
-
-    #[test]
-    fn orbital_distance_scales_near_plane_with_a_precision_ceiling() {
-        let (near, _) = adaptive_camera_clip_planes(5_000_000.0, 100_000_000.0).unwrap();
-        assert_eq!(near, 5_000.0);
-
-        let (near, _) = adaptive_camera_clip_planes(20_000_000.0, 100_000_000.0).unwrap();
-        assert_eq!(near, CAMERA_NEAR_MAX_M as f32);
-    }
-
-    #[test]
-    fn bodyless_and_invalid_bounds_have_explicit_results() {
-        assert_eq!(
-            adaptive_camera_clip_planes(f64::INFINITY, 0.0),
-            Some((CAMERA_NEAR_MIN_M as f32, CAMERA_FAR_MIN_M as f32))
-        );
-        assert_eq!(adaptive_camera_clip_planes(f64::NAN, 1_000.0), None);
-        assert_eq!(adaptive_camera_clip_planes(1.0, f64::INFINITY), None);
-    }
-}
-
 /// Tunable thresholds for entering/exiting surface-relative camera mode.
 ///
 /// Hysteresis prevents rapid toggling at boundary altitude:
@@ -592,6 +392,9 @@ impl Plugin for LunCoAvatarPlugin {
         if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
             app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
         }
+        if !app.is_plugin_added::<lunco_camera_runtime::CameraRuntimePlugin>() {
+            app.add_plugins(lunco_camera_runtime::CameraRuntimePlugin);
+        }
         register_orbit_history_hook(app);
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
@@ -649,10 +452,8 @@ impl Plugin for LunCoAvatarPlugin {
         app.register_type::<AdaptiveNearPlane>()
             .register_type::<SurfaceRelativeMode>()
             .register_type::<SurfaceModeThreshold>()
-            .register_type::<CameraInputSettings>()
             .register_type::<AvatarCollisionSettings>();
 
-        app.register_settings_section::<CameraInputSettings>();
         app.register_settings_section::<ProfileSettings>();
         // On-screen notifications (rhai `notify(...)` → `ShowNotification`). The
         // command itself is registered as a REAL command via `register_commands!`
@@ -4529,7 +4330,7 @@ fn update_avatar_clip_planes_system(
                 max_far = far_edge;
             }
         }
-        let Some((near, far)) = adaptive_camera_clip_planes(min_dist, max_far) else {
+        let Some((near, far)) = adaptive_clip_planes(min_dist, max_far) else {
             error!("[camera] cannot derive finite clip planes from celestial body bounds");
             continue;
         };
@@ -6879,7 +6680,6 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
 // `lunco-capture` with the renderer that owns their implementation.
 register_commands!(
     on_show_notification,
-    on_set_camera_input,
     on_surface_teleport_command,
     on_leave_surface_command,
     on_possess_command,
