@@ -1119,18 +1119,17 @@ mod tests {
     #[test]
     fn list_for_twin_probes_twin_root() {
         // Build a throwaway twin folder with an Assets.toml.
-        let tmp = std::env::temp_dir().join(format!("lunco-assets-twin-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&tmp);
-        std::fs::write(
-            tmp.join("Assets.toml"),
-            "[x]\nname = \"X\"\nurl = \"http://x/x\"\ndest = \"terrain/x.tif\"\n",
+        let tmp_dir = tempfile::tempdir().expect("temporary Twin directory");
+        let tmp = tmp_dir.path();
+        lunco_storage::write_file_sync(
+            &tmp.join("Assets.toml"),
+            b"[x]\nname = \"X\"\nurl = \"http://x/x\"\ndest = \"terrain/x.tif\"\n",
         )
         .unwrap();
         // Not downloaded yet → "not installed", but the function must not
         // panic and must complete (i.e. dest_root was accepted).
-        let res = list_manifest(&tmp.join("Assets.toml"), "twin", Some(&tmp));
+        let res = list_manifest(&tmp.join("Assets.toml"), "twin", Some(tmp));
         assert!(res.is_ok());
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1138,10 +1137,12 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary install root");
         let staged = root.path().join(".download-stage");
         let destination = root.path().join("library");
-        std::fs::create_dir(&staged).expect("create staging directory");
-        std::fs::write(staged.join("package.mo"), "new").expect("write staged payload");
-        std::fs::create_dir(&destination).expect("create old destination");
-        std::fs::write(destination.join("package.mo"), "old").expect("write old payload");
+        lunco_storage::ensure_directory_sync(&staged).expect("create staging directory");
+        lunco_storage::write_file_sync(&staged.join("package.mo"), b"new")
+            .expect("write staged payload");
+        lunco_storage::ensure_directory_sync(&destination).expect("create old destination");
+        lunco_storage::write_file_sync(&destination.join("package.mo"), b"old")
+            .expect("write old payload");
 
         install_staged_path(
             &staged,
@@ -1153,23 +1154,26 @@ mod tests {
         .expect("install staged directory");
 
         assert_eq!(
-            std::fs::read_to_string(destination.join("package.mo")).expect("read installed"),
+            lunco_storage::read_text_file_sync(&destination.join("package.mo"))
+                .expect("read installed"),
             "new"
         );
         assert_eq!(
-            std::fs::read_to_string(destination.join(".version")).expect("read version"),
+            lunco_storage::read_text_file_sync(&destination.join(".version"))
+                .expect("read version"),
             "4.1.0"
         );
-        assert!(!staged.exists(), "staging tree must be moved, not copied");
-        assert!(root
-            .path()
-            .read_dir()
+        assert!(
+            matches!(
+                lunco_storage::entry_kind_file_sync(&staged),
+                Err(lunco_storage::StorageError::NotFound)
+            ),
+            "staging tree must be moved, not copied"
+        );
+        assert!(lunco_storage::read_directory_sync(root.path())
             .expect("list install root")
-            .all(|entry| !entry
-                .expect("read install entry")
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".lunco-install-backup-")));
+            .iter()
+            .all(|entry| !entry.display_name().starts_with(".lunco-install-backup-")));
     }
 
     #[test]
@@ -1177,8 +1181,8 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary install root");
         let staged = root.path().join(".download-stage");
         let destination = root.path().join("asset.bin");
-        std::fs::write(&staged, "new").expect("write staged payload");
-        std::fs::write(&destination, "old").expect("write old payload");
+        lunco_storage::write_file_sync(&staged, b"new").expect("write staged payload");
+        lunco_storage::write_file_sync(&destination, b"old").expect("write old payload");
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let control = DownloadControl {
             cancel: Some(cancel),
@@ -1190,11 +1194,11 @@ mod tests {
             Err(DownloadError::Cancelled)
         ));
         assert_eq!(
-            std::fs::read_to_string(&destination).expect("read old payload"),
+            lunco_storage::read_text_file_sync(&destination).expect("read old payload"),
             "old"
         );
         assert!(
-            staged.exists(),
+            lunco_storage::entry_kind_file_sync(&staged).is_ok(),
             "the caller-owned staging guard must retain the cancelled payload until it drops"
         );
     }

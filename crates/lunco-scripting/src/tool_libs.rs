@@ -431,13 +431,12 @@ mod tests {
     /// installation is a separate scoped operation.
     #[test]
     fn tool_library_file_save_load_roundtrip() {
-        // Unique temp root (no tempfile dep; pid keeps parallel runs disjoint).
-        let root = std::env::temp_dir().join(format!("lunco_tl_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let temp = tempfile::tempdir().expect("tool library test directory");
+        let root = temp.path();
 
         let src = "fn double(x) { x * 2 }";
         let path = save_tool_library_file(&root, "persist_probe", src).unwrap();
-        assert!(path.exists());
+        assert!(lunco_storage::read_file_sync(&path).is_ok());
         assert_eq!(path, root.join("tools").join("persist_probe.rhai"));
 
         let loaded = load_tool_libraries_from_dir(&root);
@@ -453,17 +452,13 @@ mod tests {
         assert_eq!(tool.source(), Some(src));
         assert!(scoped.wind_down_for(twin));
         assert!(lunco_tools::get("persist_probe").is_none());
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A missing `tools/` dir is the common case — yields no libraries, no error.
     #[test]
     fn missing_tools_dir_is_empty_not_error() {
-        let root = std::env::temp_dir().join(format!("lunco_tl_none_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let temp = tempfile::tempdir().expect("tool library test directory");
+        let root = temp.path();
         assert!(load_tool_libraries_from_dir(&root).is_empty());
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

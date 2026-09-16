@@ -7108,7 +7108,9 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-api-contracts",
+ "lunco-storage",
  "serde_json",
+ "tempfile",
  "tokio",
  "wasm-bindgen",
 ]
@@ -7177,6 +7179,7 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-assets-transport",
  "lunco-settings",
+ "lunco-storage",
  "rayon",
  "sha2 0.11.0",
  "tar",
@@ -7193,6 +7196,7 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-core",
  "lunco-geotiff",
+ "lunco-storage",
  "resvg",
  "tempfile",
  "tiff",
@@ -8363,6 +8367,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "uuid",
  "wasm-bindgen-futures",
  "web-sys",
@@ -8415,6 +8420,7 @@ version = "0.1.0"
 dependencies = [
  "lunco-hash",
  "lunco-storage",
+ "tempfile",
 ]
 
 [[package]]
@@ -8542,9 +8548,11 @@ dependencies = [
  "lunco-scene-validation",
  "lunco-settings",
  "lunco-spatial",
+ "lunco-storage",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "serde_json",
+ "tempfile",
  "wasm-bindgen-futures",
 ]
 
@@ -8834,6 +8842,7 @@ dependencies = [
  "futures-lite",
  "js-sys",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -9097,6 +9106,7 @@ dependencies = [
  "lunco-environment",
  "lunco-physics",
  "lunco-spatial",
+ "lunco-storage",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
  "lunco-usd-avian-filters",
@@ -9151,9 +9161,11 @@ dependencies = [
  "lunco-core",
  "lunco-hooks",
  "lunco-physics",
+ "lunco-storage",
  "lunco-usd-avian-reader",
  "lunco-usd-bevy-core",
  "openusd",
+ "tempfile",
 ]
 
 [[package]]
@@ -9392,6 +9404,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "lunco-assets-core",
+ "lunco-storage",
  "openusd",
  "tempfile",
 ]
@@ -9933,6 +9946,7 @@ dependencies = [
  "lunco-workspace",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

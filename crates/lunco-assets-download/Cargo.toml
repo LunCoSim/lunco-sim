@@ -20,6 +20,7 @@ rayon = { workspace = true }
 tar = { workspace = true }
 
 [dev-dependencies]
+lunco-storage = { path = "../lunco-storage" }
 tempfile = { workspace = true }
 
 [lints]

@@ -128,11 +128,7 @@ async fn serve_asset(
     }
 }
 
-// Test fixtures live on disk and run natively only — the workspace ban on
-// `std::fs` guards *wasm runtime* code paths, not tests (clippy.toml says so;
-// cargo has no path-scoped lint config, so the exemption is written out here).
 #[cfg(test)]
-#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
@@ -151,10 +147,10 @@ mod tests {
     #[tokio::test]
     async fn crafted_cids_can_only_miss_the_map_never_traverse() {
         // The map advertises exactly one blob, under its CID key.
-        let dir = std::env::temp_dir().join("lunco-asset-serve-test");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
         let blob = dir.join("blob.bin");
-        std::fs::write(&blob, b"real blob").unwrap();
+        lunco_storage::write_file_sync(&blob, b"real blob").unwrap();
         let index = index_with(&[("bafkreirealcid", blob.clone())]);
 
         // A traversal string and an absolute path to a genuinely existing file are
@@ -179,8 +175,6 @@ mod tests {
             .await
             .into_response();
         assert_eq!(ok.status(), StatusCode::OK);
-
-        let _ = std::fs::remove_file(&blob);
     }
 
     /// A key present in the map but whose backing file has gone missing degrades

@@ -270,13 +270,13 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary Twin root");
         let scene = temp.path().join("sim/scenes/entry.usda");
         let world = temp.path().join("sim/scenes/traverse.usda");
-        std::fs::create_dir_all(scene.parent().expect("scene parent"))
+        lunco_storage::ensure_directory_sync(scene.parent().expect("scene parent"))
             .expect("create scene parent");
-        std::fs::create_dir_all(world.parent().expect("world parent"))
+        lunco_storage::ensure_directory_sync(world.parent().expect("world parent"))
             .expect("create world parent");
-        std::fs::write(
+        lunco_storage::write_file_sync(
             &scene,
-            r#"#usda 1.0
+            br#"#usda 1.0
 (
     subLayers = [
         @twin://SummerSpaceSchool\sim\scenes\traverse.usda@
@@ -285,7 +285,8 @@ mod tests {
 "#,
         )
         .expect("write scene");
-        std::fs::write(&world, "#usda 1.0\ndef Scope \"Traverse\" {}\n").expect("write world");
+        lunco_storage::write_file_sync(&world, b"#usda 1.0\ndef Scope \"Traverse\" {}\n")
+            .expect("write world");
 
         compose_file_to_stage_with_roots(&scene, None, Some(temp.path()))
             .expect("a Windows-authored Twin URI composes on this OS");
@@ -296,11 +297,11 @@ mod tests {
     fn external_twin_composition_reads_authored_engine_layers() {
         let temp = tempfile::tempdir().expect("temporary Twin root");
         let scene = temp.path().join("scenes/external_twin_surface_ops.usda");
-        std::fs::create_dir_all(scene.parent().expect("scene parent"))
+        lunco_storage::ensure_directory_sync(scene.parent().expect("scene parent"))
             .expect("create scene parent");
-        std::fs::write(
+        lunco_storage::write_file_sync(
             &scene,
-            r#"#usda 1.0
+            br#"#usda 1.0
 (
     subLayers = [
         @lunco://scenes\base\lunar_surface.usda@

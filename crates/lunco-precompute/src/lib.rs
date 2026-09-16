@@ -193,8 +193,8 @@ mod tests {
 
     #[test]
     fn bakes_once_then_hits_cache_across_calls() {
-        let root = std::env::temp_dir().join("lunco-precompute-test-repeat");
-        let _ = std::fs::remove_dir_all(&root); // clean slate
+        let temp = tempfile::tempdir().expect("precompute test directory");
+        let root = temp.path();
 
         let bakes = Cell::new(0);
         let first = bake_or_load(
@@ -229,7 +229,5 @@ mod tests {
             &root,
         );
         assert_eq!(bakes.get(), 2);
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

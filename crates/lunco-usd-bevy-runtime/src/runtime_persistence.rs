@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentChanged, DocumentOpened};
-use lunco_storage::{Storage, StorageHandle};
+use lunco_storage::{Storage, StorageEntryKind, StorageHandle};
 use lunco_usd_core::runtime::runtime_persistence_for_twin;
 use lunco_workspace::WorkspaceResource;
 use openusd::sdf::SpecType;
@@ -333,7 +333,7 @@ mod tests {
             lunco_twin::TwinSettingValue::Bool(true),
         ));
         let scene_abs = dir.path().join("scene.usda");
-        std::fs::write(&scene_abs, TINY).unwrap();
+        write_bytes(&scene_abs, TINY.as_bytes()).unwrap();
         let path = dir.path().join(".lunco/runtime/scene.usda");
         write_bytes(&path, b"not valid USDA").unwrap();
 
@@ -351,7 +351,7 @@ mod tests {
         let mut ws = WorkspaceResource::new();
         ws.add_twin(open_twin(dir.path()));
         let scene_abs = dir.path().join("scene.usda");
-        std::fs::write(&scene_abs, TINY).unwrap();
+        write_bytes(&scene_abs, TINY.as_bytes()).unwrap();
 
         let mut source = UsdDocument::with_origin(
             DocumentId::new(11),
@@ -425,7 +425,10 @@ mod tests {
         // 2. Persist the runtime layer to its `.lunco` file.
         let text = lunco_usd_authoring::author::data_to_usda(src.runtime_data()).unwrap();
         write_bytes(&rt_file, text.as_bytes()).unwrap();
-        assert!(rt_file.exists());
+        assert!(matches!(
+            lunco_storage::entry_kind_file_sync(&rt_file),
+            Ok(StorageEntryKind::File)
+        ));
 
         // 3. A FRESH document (base only, empty runtime) — then restore.
         let mut reopened = UsdDocument::with_origin(
@@ -480,7 +483,7 @@ mod tests {
         ));
 
         let scene_abs = dir.path().join("scene.usda");
-        std::fs::write(&scene_abs, TINY).unwrap();
+        write_bytes(&scene_abs, TINY.as_bytes()).unwrap();
 
         // Persist a runtime overlay with one spawn (same shape the app writes).
         let mut src = UsdDocument::with_origin(

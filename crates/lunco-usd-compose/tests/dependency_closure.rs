@@ -11,17 +11,17 @@ fn follows_composition_and_asset_attribute_dependencies() {
     let scene = dir.path().join("scene.usda");
     let rover = dir.path().join("rover.usda");
     let model = dir.path().join("Drive.mo");
-    std::fs::write(
+    lunco_storage::write_file_sync(
         &scene,
-        "#usda 1.0\ndef Xform \"R\" (prepend references = @rover.usda@) {}\n",
+        b"#usda 1.0\ndef Xform \"R\" (prepend references = @rover.usda@) {}\n",
     )
     .unwrap();
-    std::fs::write(
+    lunco_storage::write_file_sync(
         &rover,
-        "#usda 1.0\ndef Xform \"P\" { asset info:sourceAsset = @Drive.mo@ }\n",
+        b"#usda 1.0\ndef Xform \"P\" { asset info:sourceAsset = @Drive.mo@ }\n",
     )
     .unwrap();
-    std::fs::write(&model, "model Drive end Drive;\n").unwrap();
+    lunco_storage::write_file_sync(&model, b"model Drive end Drive;\n").unwrap();
 
     let closure = transitive_file_closure(&[scene], is_usd_layer, layer_dependency_arcs);
     assert!(closure.contains(&normalize(&rover)), "{closure:?}");
@@ -34,13 +34,13 @@ fn delegates_schemed_reference_resolution_to_the_asset_caller() {
     let assets = dir.path().join("assets");
     let scene = dir.path().join("scene.usda");
     let rover = assets.join("vessels/rover.usda");
-    std::fs::create_dir_all(rover.parent().unwrap()).unwrap();
-    std::fs::write(
+    lunco_storage::ensure_directory_sync(rover.parent().unwrap()).unwrap();
+    lunco_storage::write_file_sync(
         &scene,
-        "#usda 1.0\ndef Xform \"R\" (prepend references = @lunco://vessels/rover.usda@) {}\n",
+        b"#usda 1.0\ndef Xform \"R\" (prepend references = @lunco://vessels/rover.usda@) {}\n",
     )
     .unwrap();
-    std::fs::write(&rover, "#usda 1.0\n").unwrap();
+    lunco_storage::write_file_sync(&rover, b"#usda 1.0\n").unwrap();
 
     let closure = transitive_file_closure_with(
         &[PathBuf::from(&scene)],

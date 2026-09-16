@@ -220,10 +220,12 @@ mod tests {
     #[test]
     fn synchronous_twin_reads_share_the_canonical_traversal_guard() {
         let root = tempfile::tempdir().expect("temporary Twin root");
-        std::fs::write(root.path().join("lesson.rhai"), "40 + 2").expect("lesson");
+        lunco_storage::write_file_sync(&root.path().join("lesson.rhai"), b"40 + 2")
+            .expect("lesson");
         let cached = crate::twin_cache_dir(root.path());
-        std::fs::create_dir_all(&cached).expect("cache root");
-        std::fs::write(cached.join("downloaded.rhai"), "20 + 22").expect("cached lesson");
+        lunco_storage::ensure_directory_sync(&cached).expect("cache root");
+        lunco_storage::write_file_sync(&cached.join("downloaded.rhai"), b"20 + 22")
+            .expect("cached lesson");
 
         let id = "twin://example/lesson.rhai";
         assert_eq!(
@@ -284,8 +286,8 @@ mod tests {
     fn library_reads_an_explicit_package_cache_before_the_shared_cache() {
         let package_assets = tempfile::tempdir().expect("temporary package assets root");
         let packed = package_assets.path().join(".cache/scenes/base");
-        std::fs::create_dir_all(&packed).expect("packed cache directory");
-        std::fs::write(packed.join("lunar_surface.usda"), b"packed package asset")
+        lunco_storage::ensure_directory_sync(&packed).expect("packed cache directory");
+        lunco_storage::write_file_sync(&packed.join("lunar_surface.usda"), b"packed package asset")
             .expect("packed asset");
 
         assert_eq!(
@@ -302,8 +304,9 @@ mod tests {
     fn library_reads_normalize_windows_separators_before_lookup() {
         let root = tempfile::tempdir().expect("temporary asset root");
         let scene = root.path().join("scenes/base/lunar_surface.usda");
-        std::fs::create_dir_all(scene.parent().expect("scene parent")).expect("scene directory");
-        std::fs::write(&scene, b"windows-authored path").expect("scene");
+        lunco_storage::ensure_directory_sync(scene.parent().expect("scene parent"))
+            .expect("scene directory");
+        lunco_storage::write_file_sync(&scene, b"windows-authored path").expect("scene");
 
         assert_eq!(
             read_asset_bytes(r"lunco://scenes\base\lunar_surface.usda", Some(root.path()))
@@ -318,7 +321,7 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary Twin root");
         let outside = tempfile::tempdir().expect("temporary outside root");
         let secret = outside.path().join("secret.txt");
-        std::fs::write(&secret, "must not be read").expect("secret");
+        lunco_storage::write_file_sync(&secret, b"must not be read").expect("secret");
         std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
 
         assert!(
@@ -339,12 +342,13 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary Twin root");
         let outside = tempfile::tempdir().expect("temporary outside root");
         let secret = outside.path().join("secret.txt");
-        std::fs::write(&secret, "must not be read").expect("secret");
+        lunco_storage::write_file_sync(&secret, b"must not be read").expect("secret");
         std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
 
         let cache = crate::twin_cache_dir(root.path());
-        std::fs::create_dir_all(&cache).expect("cache root");
-        std::fs::write(cache.join("linked.txt"), "cache shadow").expect("cache file");
+        lunco_storage::ensure_directory_sync(&cache).expect("cache root");
+        lunco_storage::write_file_sync(&cache.join("linked.txt"), b"cache shadow")
+            .expect("cache file");
 
         let error =
             read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
@@ -556,9 +560,9 @@ mod windows_uri_tests {
     fn reads_a_windows_authored_twin_uri_below_its_registered_root() {
         let root = tempfile::tempdir().expect("temporary Twin root");
         let scene = root.path().join("sim/scenes/traverse.usda");
-        std::fs::create_dir_all(scene.parent().expect("scene parent"))
+        lunco_storage::ensure_directory_sync(scene.parent().expect("scene parent"))
             .expect("create scene parent");
-        std::fs::write(&scene, "#usda 1.0\n").expect("write scene");
+        lunco_storage::write_file_sync(&scene, b"#usda 1.0\n").expect("write scene");
 
         assert_eq!(
             read_asset_bytes_with_twin_root(

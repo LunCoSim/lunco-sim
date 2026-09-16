@@ -830,8 +830,9 @@ mod tests {
     fn resolve_file_finds_downloaded_twin_assets_without_exposing_cache_in_authored_paths() {
         let twin = tempfile::tempdir().expect("temporary Twin root");
         let cached = crate::twin_cache_dir(twin.path()).join("terrain/luna2");
-        std::fs::create_dir_all(cached.parent().expect("cached parent")).expect("cache directory");
-        std::fs::write(&cached, b"cached terrain").expect("cached asset");
+        lunco_storage::ensure_directory_sync(cached.parent().expect("cached parent"))
+            .expect("cache directory");
+        lunco_storage::write_file_sync(&cached, b"cached terrain").expect("cached asset");
         let roots = TwinRoots::default();
         let name = roots.register("luna2", twin.path()).expect("register root");
 
@@ -842,9 +843,9 @@ mod tests {
         );
 
         let authored = twin.path().join("terrain/luna2");
-        std::fs::create_dir_all(authored.parent().expect("authored parent"))
+        lunco_storage::ensure_directory_sync(authored.parent().expect("authored parent"))
             .expect("authored directory");
-        std::fs::write(&authored, b"authored terrain").expect("authored asset");
+        lunco_storage::write_file_sync(&authored, b"authored terrain").expect("authored asset");
         assert_eq!(
             roots.resolve_file(&name, Path::new("terrain/luna2")),
             Ok(Some(authored)),
@@ -856,9 +857,9 @@ mod tests {
     fn resolve_directory_finds_processed_twin_assets_without_reconstructing_cache_paths() {
         let twin = tempfile::tempdir().expect("temporary Twin root");
         let cached = crate::twin_cache_dir(twin.path()).join("terrain/luna2");
-        std::fs::create_dir_all(cached.join("materials/textures"))
+        lunco_storage::ensure_directory_sync(&cached.join("materials/textures"))
             .expect("cached processed directory");
-        std::fs::write(
+        lunco_storage::write_file_sync(
             cached.join("materials/textures/heightmap.tif"),
             b"processed terrain",
         )
@@ -880,9 +881,9 @@ mod tests {
         let shared = tempfile::tempdir().expect("temporary global cache");
         let relative = Path::new("terrain/shared/heightmap.tif");
         let shared_file = shared.path().join(relative);
-        std::fs::create_dir_all(shared_file.parent().expect("shared parent"))
+        lunco_storage::ensure_directory_sync(shared_file.parent().expect("shared parent"))
             .expect("shared directory");
-        std::fs::write(&shared_file, b"shared terrain").expect("shared asset");
+        lunco_storage::write_file_sync(&shared_file, b"shared terrain").expect("shared asset");
 
         assert_eq!(
             resolve_twin_relative_path_with_cache(twin.path(), relative, shared.path())
@@ -979,7 +980,7 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary Twin root");
         let outside = tempfile::tempdir().expect("temporary outside root");
         let secret = outside.path().join("secret.usda");
-        std::fs::write(&secret, "#usda 1.0").expect("secret");
+        lunco_storage::write_file_sync(&secret, b"#usda 1.0").expect("secret");
         std::os::unix::fs::symlink(&secret, root.path().join("linked.usda")).expect("symlink");
 
         let roots = TwinRoots::default();

@@ -110,6 +110,12 @@ impl Storage for WebStorage {
         Ok(())
     }
 
+    async fn read_directory(&self, _handle: &StorageHandle) -> StorageResult<Vec<StorageHandle>> {
+        Err(StorageError::Unsupported(
+            "WebStorage has no directory listing".into(),
+        ))
+    }
+
     async fn rename(&self, from: &StorageHandle, to: &StorageHandle) -> StorageResult<()> {
         let from_key = Self::key(from)?;
         let to_key = Self::key(to)?;

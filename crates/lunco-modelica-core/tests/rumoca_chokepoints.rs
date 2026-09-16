@@ -16,12 +16,14 @@ use std::path::{Path, PathBuf};
 /// Every `.rs` file under a crate-relative directory.
 fn rust_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = lunco_storage::read_directory_sync(dir) else {
         return out;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
+    for path in entries {
+        if matches!(
+            lunco_storage::entry_kind_file_sync(&path),
+            Ok(lunco_storage::StorageEntryKind::Directory)
+        ) {
             out.extend(rust_files(&path));
         } else if path.extension().is_some_and(|e| e == "rs") {
             out.push(path);
@@ -69,7 +71,7 @@ fn sim_options_are_built_only_by_the_canonical_builders() {
             if file.ends_with("solver_backends.rs") {
                 continue;
             }
-            let Ok(text) = std::fs::read_to_string(&file) else {
+            let Ok(text) = lunco_storage::read_text_file_sync(&file) else {
                 continue;
             };
             for (i, line) in code_only(&text).lines().enumerate() {
@@ -109,7 +111,7 @@ fn source_is_never_regenerated_through_the_rumoca_emitter() {
 
     let mut offenders = Vec::new();
     for file in rust_files(&src) {
-        let Ok(text) = std::fs::read_to_string(&file) else {
+        let Ok(text) = lunco_storage::read_text_file_sync(&file) else {
             continue;
         };
         for (i, line) in code_only(&text).lines().enumerate() {
@@ -144,7 +146,7 @@ fn source_is_never_regenerated_through_the_rumoca_emitter() {
 #[test]
 fn user_source_is_seated_only_through_the_strip_chokepoint() {
     let lib_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
-    let text = std::fs::read_to_string(&lib_rs).expect("lib.rs readable");
+    let text = lunco_storage::read_text_file_sync(&lib_rs).expect("lib.rs readable");
 
     let seats: Vec<String> = code_only(&text)
         .lines()

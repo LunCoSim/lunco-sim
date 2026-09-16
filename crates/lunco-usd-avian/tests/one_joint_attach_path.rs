@@ -41,12 +41,14 @@ fn crates_dir() -> PathBuf {
 }
 
 fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = lunco_storage::read_directory_sync(dir) else {
         return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
+    for path in entries {
+        if matches!(
+            lunco_storage::entry_kind_file_sync(&path),
+            Ok(lunco_storage::StorageEntryKind::Directory)
+        ) {
             if path.file_name().is_some_and(|n| n == "target") {
                 continue;
             }
@@ -78,7 +80,7 @@ fn only_lunco_usd_avian_constructs_avian_joints() {
         if file.components().any(|c| c.as_os_str() == "tests") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&file) else {
+        let Ok(text) = lunco_storage::read_text_file_sync(&file) else {
             continue;
         };
         // Everything from the first `#[cfg(test)]` on is that file's test module

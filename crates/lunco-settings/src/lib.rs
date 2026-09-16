@@ -424,8 +424,8 @@ pub fn isolate_config_dir_for_tests(tag: &str) {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let dir = std::env::temp_dir().join(format!("lunco-test-config-{tag}"));
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::remove_file(dir.join("settings.json"));
+        let _ = lunco_storage::ensure_directory_sync(&dir);
+        let _ = lunco_storage::delete_file_sync(&dir.join("settings.json"));
         // `user_config_dir()` reads this first — see its docs.
         std::env::set_var("LUNCOSIM_CONFIG", &dir);
     });

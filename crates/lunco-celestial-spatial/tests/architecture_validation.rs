@@ -4,8 +4,8 @@
 
 // One-time test scene construction, which `clippy.toml` already names as exempt
 // for `set_parent_in_place` ("bootstrap code — runs before any observer is
-// registered") and for `std::fs` in tests. Cargo has no path-scoped lint config,
-// so that exemption has to be written here rather than in clippy.toml.
+// registered"). Cargo has no path-scoped lint config, so that exemption has to
+// be written here rather than in clippy.toml.
 #![allow(clippy::disallowed_methods)]
 //!
 //! Production rotates the body-fixed Grid. Terrain, site roots, avatars and

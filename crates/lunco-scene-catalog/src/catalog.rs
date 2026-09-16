@@ -1459,12 +1459,12 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn read_asset_meta_hides_spawnable_assets_that_fail_load_preflight() {
-        let dir = std::env::temp_dir().join("lunco-spawn-catalog-preflight");
-        std::fs::create_dir_all(&dir).expect("temporary preflight directory");
+        let temp = tempfile::tempdir().expect("temporary preflight directory");
+        let dir = temp.path();
         let path = dir.join("broken_wheel.usda");
-        std::fs::write(
+        lunco_storage::write_file_sync(
             &path,
-            "#usda 1.0\n( defaultPrim = \"BrokenWheel\" )\n\
+            b"#usda 1.0\n( defaultPrim = \"BrokenWheel\" )\n\
 def Xform \"BrokenWheel\" (\n\
     prepend apiSchemas = [\"LunCoCatalogAPI\", \"PhysxVehicleWheelAPI\"]\n\
 )\n{\n    uniform bool lunco:spawnable = true\n}\n",

@@ -1151,28 +1151,25 @@ pub fn register(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// Write a `.usda` under the temp dir and hand back its path — the control
-    /// checks run on a COMPOSED stage, so they can only be exercised through the
-    /// real `validate_asset` entry point.
-    fn temp_usda(name: &str, body: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("lunco-validate-controls");
-        lunco_storage::ensure_directory_sync(&dir).expect("temp dir");
-        let path = dir.join(name);
+    /// Write an authored fixture through storage and retain its temporary
+    /// directory for the duration of the validation call.
+    fn temp_usda(name: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(name);
         lunco_storage::write_file_sync(&path, body.as_bytes()).expect("write temp usda");
-        path
+        (dir, path)
     }
 
-    fn temp_sysml(name: &str, body: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("lunco-validate-sysml");
-        lunco_storage::ensure_directory_sync(&dir).expect("temp dir");
-        let path = dir.join(name);
+    fn temp_sysml(name: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(name);
         lunco_storage::write_file_sync(&path, body.as_bytes()).expect("write temp sysml");
-        path
+        (dir, path)
     }
 
     #[test]
     fn external_twin_scene_resolves_lunco_references_for_preflight() {
-        let path = temp_usda(
+        let (_dir, path) = temp_usda(
             "external_twin.usda",
             "#usda 1.0\n\
 def Xform \"Battery\" (\n\
@@ -1195,7 +1192,7 @@ def Xform \"Battery\" (\n\
 
     #[test]
     fn valid_sysml_produces_elements_and_no_diagnostics() {
-        let path = temp_sysml(
+        let (_dir, path) = temp_sysml(
             "example.sysml",
             "package Example { requirement def MassRequirement {} }",
         );
@@ -1209,7 +1206,7 @@ def Xform \"Battery\" (\n\
 
     #[test]
     fn sysml_attribute_projection_keeps_qualified_names_and_collisions() {
-        let path = temp_sysml(
+        let (_dir, path) = temp_sysml(
             "qualified_attributes.sysml",
             "package Example {
                 private import ScalarValues::Real;
@@ -1234,7 +1231,7 @@ def Xform \"Battery\" (\n\
 
     #[test]
     fn compact_sysml_projection_keeps_typed_source_identity() {
-        let path = temp_sysml(
+        let (_dir, path) = temp_sysml(
             "compact_attributes.sysml",
             "package Example {
                 private import ScalarValues::Real;
@@ -1252,7 +1249,7 @@ def Xform \"Battery\" (\n\
 
     #[test]
     fn compact_sysml_projection_does_not_duplicate_short_attribute_map() {
-        let path = temp_sysml(
+        let (_dir, path) = temp_sysml(
             "compact_colliding_attributes.sysml",
             "package Example {
                 private import ScalarValues::Real;
@@ -1274,7 +1271,7 @@ def Xform \"Battery\" (\n\
 
     #[test]
     fn compact_sysml_projection_can_select_one_qualified_literal() {
-        let path = temp_sysml(
+        let (_dir, path) = temp_sysml(
             "selected_attributes.sysml",
             "package Example {
                 private import ScalarValues::Real;

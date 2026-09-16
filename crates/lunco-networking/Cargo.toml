@@ -200,5 +200,8 @@ getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"]
 # calls the owning crates' APIs rather than these packages directly.
 ignored = ["getrandom_v02", "getrandom_v04"]
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

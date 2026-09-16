@@ -1075,19 +1075,15 @@ fn is_sysml_path(path: &Path) -> bool {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Test fixtures live on disk and run natively only — the workspace ban on
-// `std::fs` guards *wasm runtime* code paths, not tests (clippy.toml says so;
-// cargo has no path-scoped lint config, so the exemption is written out here).
 #[cfg(test)]
-#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
+            lunco_storage::ensure_directory_sync(parent).unwrap();
         }
-        std::fs::write(path, contents).unwrap();
+        lunco_storage::write_file_sync(path, contents.as_bytes()).unwrap();
     }
 
     #[test]
@@ -1380,7 +1376,10 @@ version = "0.1.0"
         };
         twin.promote_to_twin(manifest).unwrap();
         assert!(twin.has_manifest());
-        assert!(tmp.path().join("twin.toml").is_file());
+        assert!(matches!(
+            lunco_storage::entry_kind_file_sync(&tmp.path().join("twin.toml")),
+            Ok(lunco_storage::StorageEntryKind::File)
+        ));
 
         // Re-opening picks up the manifest → now in Twin mode.
         let TwinMode::Twin(twin2) = TwinMode::open(tmp.path()).unwrap() else {
@@ -1496,7 +1495,7 @@ path = "does_not_exist"
     fn child_path_cannot_escape_the_parent_twin() {
         let tmp = tempfile::tempdir().unwrap();
         let outside = tmp.path().join("outside");
-        std::fs::create_dir_all(&outside).unwrap();
+        lunco_storage::ensure_directory_sync(&outside).unwrap();
         write_manifest(
             &tmp.path().join("twin.toml"),
             r#"

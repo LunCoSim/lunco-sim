@@ -270,7 +270,8 @@ Foundation for structured, mutable artifacts (Modelica, USD, etc.) with built-in
 
 **`lunco-storage`**
 I/O abstraction layer providing a unified `Storage` trait for reading, writing,
-renaming, entry-kind inspection, and directory preparation through handles.
+renaming, entry-kind inspection, directory listing/preparation, and backend
+selection through handles.
 Supports native FS and memory (for tests), with the browser localStorage
 backend and architectural stubs for future OPFS/IndexedDB and remote backends.
 

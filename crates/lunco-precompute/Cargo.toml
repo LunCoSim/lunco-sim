@@ -20,5 +20,8 @@ default = []
 # cache stays dependency-light.
 cid = ["lunco-hash/cid"]
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

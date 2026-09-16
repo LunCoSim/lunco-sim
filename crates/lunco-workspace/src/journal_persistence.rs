@@ -366,7 +366,7 @@ mod tests {
         write_journal_bytes(root, &j.to_bytes().unwrap()).unwrap();
 
         // The file landed at the documented twin-relative path.
-        assert!(journal_path(root).exists());
+        assert!(lunco_storage::entry_kind_file_sync(&journal_path(root)).is_ok());
 
         // Read it back.
         let bytes = read_journal_bytes(root).expect("journal file present");
@@ -429,8 +429,8 @@ mod tests {
         write_journal_bytes(&root, &j.to_bytes().unwrap()).unwrap();
 
         // A got the journal; B's folder is untouched.
-        assert!(journal_path(dir_a.path()).exists());
-        assert!(!journal_path(dir_b.path()).exists());
+        assert!(lunco_storage::entry_kind_file_sync(&journal_path(dir_a.path())).is_ok());
+        assert!(lunco_storage::entry_kind_file_sync(&journal_path(dir_b.path())).is_err());
     }
 
     /// The default. A Twin that has not opted in offers no destination at all,

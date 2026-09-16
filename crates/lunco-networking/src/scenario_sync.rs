@@ -1270,7 +1270,8 @@ mod tests {
     #[test]
     fn read_and_chunk_slices_and_preserves_offsets() {
         // A file bigger than one chunk → multiple ordered chunks, contiguous offsets.
-        let tmp = std::env::temp_dir().join("lunco_asset_chunk_test.bin");
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let tmp = tmp_dir.path().join("asset.bin");
         let data = vec![0xABu8; ASSET_CHUNK_SIZE + 123];
         lunco_storage::write_file_sync(&tmp, &data).unwrap();
         let cid = cid_for_content(&data).to_bytes();

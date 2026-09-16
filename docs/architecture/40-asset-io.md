@@ -91,7 +91,7 @@ backend owner separate:
 | Manifest verification, extraction, and atomic installation | `lunco-assets-download` | none |
 | Native image/DEM/glTF decoding and baking | `lunco-assets-processing` | none |
 | Bevy worker lifecycle and CLI composition | `lunco-assets` | none |
-| Read/write/rename/delete, entry metadata, directory preparation, and backend selection | `lunco-storage` | dispatch a typed command; never call the backend directly |
+| Read/write/rename/delete, entry metadata, directory listing/preparation, and backend selection | `lunco-storage` | dispatch a typed command; never call the backend directly |
 | Twin manifest semantics and recursive file index | `lunco-twin` | render the index and send intents |
 | Open-root/session policy and async Twin admission | `lunco-workspace` | provide the picker seam only |
 | Picker requests and native/wasm dialog backends | `lunco-workbench-file-dialog` | no storage ownership |
