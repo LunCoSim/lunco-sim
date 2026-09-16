@@ -24,6 +24,10 @@ require(sysml.lifecycle[0] == "open", "SysML lifecycle must start with explicit 
 let rhai = authoring_session::capabilities("rhai");
 require(rhai.ok && rhai.generation_checked && rhai.source_checkpoint,
     "Rhai authoring capabilities must expose generation and source checks");
+require(rhai.twin_authored_source && rhai.lifecycle.len() == 4
+    && rhai.lifecycle[0] == "inspect" && rhai.lifecycle[1] == "edit"
+    && rhai.lifecycle[2] == "undo" && rhai.lifecycle[3] == "redo",
+    "Rhai must expose only its Twin-owned source lifecycle");
 
 let unsupported = authoring_session::capabilities("python");
 require(!unsupported.ok && unsupported.stage == "domain",

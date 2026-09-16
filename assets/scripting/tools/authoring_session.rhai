@@ -44,13 +44,19 @@ fn capabilities(domain) {
         return #{ ok: true, domain: domain, dry_plan: true,
             grouped_apply: true, generation_checked: true, undoable: true,
             preview: false, source_checkpoint: true,
-            lifecycle: ["open", "new", "save", "save_as"],
+            // Rhai source is owned by the Twin and loaded through its indexed
+            // source boundary. It has no standalone file-document lifecycle;
+            // advertising open/new/save here would make the Editor offer
+            // commands that the owner intentionally rejects.
+            lifecycle: ["inspect", "edit", "undo", "redo"],
+            twin_authored_source: true,
             operations: ["replace_source", "edit_text"] };
     }
     #{ ok: true, domain: domain, dry_plan: true,
         grouped_apply: true, generation_checked: true, undoable: true,
         preview: false, source_checkpoint: true,
         lifecycle: ["open", "new", "save", "save_as"],
+        twin_authored_source: false,
         operations: ["replace_source", "edit_text"] }
 }
 
