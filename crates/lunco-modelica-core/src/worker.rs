@@ -13,9 +13,6 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 
-#[cfg(not(target_arch = "wasm32"))]
-use lunco_assets_core::modelica_dir;
-
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
 use lunco_modelica_ast::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
@@ -422,14 +419,6 @@ fn finish_compile_work(
             apply_input_defaults_validated(&mut stepper, &unit.input_defaults, "Compile");
             let input_names = stepper.input_names().to_vec();
             let symbols = collect_stepper_observables(&stepper);
-            let dir_name = format!("{}_{}", entity.index(), entity.generation());
-            // M11: a reused entity index leaves `<index>_<older-gen>` dirs behind.
-            prune_entity_temp_dirs(&modelica_dir(), entity.index(), Some(&dir_name));
-            let temp_dir = modelica_dir().join(&dir_name);
-            let _ = std::fs::create_dir_all(&temp_dir);
-            let temp_path = temp_dir.join("model.mo");
-            let _ = std::fs::write(&temp_path, &source);
-
             let unit_hash = compile_unit_hash(&model_name, &doc_uri, &unit);
             cached_models.insert(
                 entity,
@@ -1532,53 +1521,15 @@ fn set_input_or_warn(
     }
 }
 
-/// M11 — prune this entity index's on-disk compile temp dirs
-/// (`modelica_dir()/<index>_<generation>/model.mo`).
-///
-/// Bevy reuses entity indices across generations, so `<index>_<old-gen>` can
-/// never be stepped again once a newer generation writes its dir — and a
-/// despawned entity's dir is dead outright. Called with `keep = Some(dir)`
-/// when a Compile writes generation `dir`, and `keep = None` on Despawn.
-/// Only names of the exact `<index>_<digits>` shape are touched.
-#[cfg(not(target_arch = "wasm32"))]
-fn prune_entity_temp_dirs(
-    base: &std::path::Path,
-    entity_index: impl std::fmt::Display,
-    keep: Option<&str>,
-) {
-    let prefix = format!("{entity_index}_");
-    let Ok(entries) = std::fs::read_dir(base) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let Some(rest) = name.strip_prefix(&prefix) else {
-            continue;
-        };
-        if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-        if keep == Some(name) {
-            continue;
-        }
-        if entry.path().is_dir() {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
-    }
-}
-
 /// The background worker that owns the !Send SimulationSessions and the
 /// per-entity compiled-artifact cache, scheduling commands over the two-lane
-/// policy documented on [`enqueue_command`].
+/// policy documented in the native scheduling module.
 ///
 /// **Native only.** It is spawned on a real `std::thread` (see
-/// `ModelicaPlugin::build`) and reads/writes the model file on disk. The browser
-/// has neither: wasm dispatches the *same* commands through
+/// `ModelicaPlugin::build`) and persists cache entries through the storage
+/// boundary. The browser dispatches the *same* commands through
 /// [`process_worker_command`] in the `lunica_worker` Web Worker bundle with the
-/// source carried in the message instead of read from a path.
-/// Gating it native-only is what keeps `std::fs` out of the wasm bundle rather
-/// than shipping calls that always `Err` in a browser.
+/// source carried in the message.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
     let mut steppers: HashMap<Entity, (u64, String, LiveStepper)> = HashMap::default();
@@ -2352,9 +2303,6 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 work.cancelled = true;
                             }
                         }
-                        // M11: this entity's compile temp dirs are dead —
-                        // delete every generation of its index.
-                        prune_entity_temp_dirs(&modelica_dir(), entity.index(), None);
                     }
                     ModelicaCommand::LoadSourceRoot { id, payload } => {
                         // M3: a new root can change what every cached source
@@ -4449,73 +4397,3 @@ mod artifact_cache_tests {
 }
 
 // ===========================================================================
-// M11 — compile temp dir pruning
-// ===========================================================================
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod temp_dir_tests {
-    use super::*;
-
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "lunco_modelica_temp_dir_test_{tag}_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create scratch dir");
-        dir
-    }
-
-    fn mk(base: &std::path::Path, name: &str) {
-        std::fs::create_dir_all(base.join(name).join("inner")).expect("mkdir");
-    }
-
-    /// Writing generation N prunes the same index's older generations and
-    /// nothing else — other indices, and names that merely share a prefix,
-    /// are untouched.
-    #[test]
-    fn newer_generation_prunes_older_same_index_only() {
-        let base = scratch("gen");
-        mk(&base, "3_1");
-        mk(&base, "3_2");
-        mk(&base, "31_1"); // different index sharing a string prefix
-        mk(&base, "4_1"); // different entity
-        mk(&base, "3_notagen"); // not this scheme's shape
-
-        prune_entity_temp_dirs(&base, 3, Some("3_2"));
-
-        assert!(!base.join("3_1").exists(), "older generation pruned");
-        assert!(base.join("3_2").exists(), "current generation kept");
-        assert!(base.join("31_1").exists(), "index 31 is not index 3");
-        assert!(base.join("4_1").exists(), "other entities untouched");
-        assert!(
-            base.join("3_notagen").exists(),
-            "non-scheme names untouched"
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// Despawn (`keep = None`) removes every generation of the index.
-    #[test]
-    fn despawn_prunes_all_generations_of_the_index() {
-        let base = scratch("despawn");
-        mk(&base, "5_1");
-        mk(&base, "5_2");
-        mk(&base, "6_1");
-
-        prune_entity_temp_dirs(&base, 5, None);
-
-        assert!(!base.join("5_1").exists());
-        assert!(!base.join("5_2").exists());
-        assert!(base.join("6_1").exists());
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// A missing base dir is a no-op, not a panic (fresh install, nothing
-    /// compiled yet).
-    #[test]
-    fn missing_base_dir_is_a_noop() {
-        let base = std::env::temp_dir().join("lunco_modelica_temp_dir_test_nonexistent");
-        let _ = std::fs::remove_dir_all(&base);
-        prune_entity_temp_dirs(&base, 1, None);
-    }
-}

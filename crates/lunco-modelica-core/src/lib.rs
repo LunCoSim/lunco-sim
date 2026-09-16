@@ -23,8 +23,8 @@
 //! - **Instant Reset**: Rebuilds the SimulationSession from the cached DAE without recompilation
 //! - **Fast Step auto-init**: If the stepper was lost, rebuilds from cached DAE instead of
 //!   recompiling from the file on disk
-//! - **Parameter updates**: After UpdateParameters, the modified source is written to the
-//!   temp file and the new DAE replaces the old cache entry
+//! - **Parameter updates**: After UpdateParameters, the modified source is
+//!   compiled and the new DAE replaces the old cache entry
 //!
 //! ## Worker Panic Recovery
 //!

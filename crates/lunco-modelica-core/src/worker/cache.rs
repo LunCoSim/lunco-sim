@@ -1,8 +1,12 @@
 //! In-memory and persistent prepared-solve cache for the Modelica worker.
 
+use super::solver;
 #[cfg(not(target_arch = "wasm32"))]
 use super::PREPARED_SOLVE_CACHE_VERSION;
-use super::{modelica_dir, solver};
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_assets_core::modelica_dir;
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_storage::{read_file_sync, write_file_sync};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -113,7 +117,7 @@ impl PreparedSolveCache {
         parameter_overrides: &[(String, u64)],
     ) -> Option<rumoca_ir_solve::SolveModel> {
         let path = Self::disk_path(source_key, library_revision, parameter_overrides);
-        let compressed = std::fs::read(&path).ok()?;
+        let compressed = read_file_sync(&path).ok()?;
         let bytes = zstd::stream::decode_all(compressed.as_slice()).ok()?;
         let (record, _): (PreparedSolveDiskRecord, usize) =
             bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).ok()?;
@@ -146,10 +150,6 @@ impl PreparedSolveCache {
         model: &rumoca_ir_solve::SolveModel,
     ) {
         let path = Self::disk_path(source_key, library_revision, parameter_overrides);
-        let Some(parent) = path.parent() else { return };
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
         let record = PreparedSolveDiskRecord {
             version: PREPARED_SOLVE_CACHE_VERSION,
             source_key,
@@ -163,12 +163,9 @@ impl PreparedSolveCache {
         let Ok(compressed) = zstd::stream::encode_all(bytes.as_slice(), 3) else {
             return;
         };
-        // Write beside the final path and rename so an interrupted recording
-        // can leave at most an ignored .tmp file, never a partial cache hit.
-        let tmp = path.with_extension("bin.zst.tmp");
-        if std::fs::write(&tmp, compressed).is_ok() {
-            let _ = std::fs::rename(tmp, path);
-        }
+        // Storage performs the native atomic replacement and owns the
+        // platform-specific persistence path.
+        let _ = write_file_sync(&path, &compressed);
     }
 
     #[cfg(target_arch = "wasm32")]
