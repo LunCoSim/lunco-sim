@@ -20,7 +20,7 @@ pub mod sun;
 
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, ProceduralSkybox, SurfaceAlpha};
 pub use camera::{
-    scene_camera_look_with_profile, usd_default_perspective_projection, BloomLook,
+    scene_camera_look_with_profile, usd_default_perspective_projection, BloomLook, CameraRetiring,
     GraphicsCameraDefaults, MsaaLevel, SceneCamera, ToneMap, WorldLabel,
 };
 pub use quality::{

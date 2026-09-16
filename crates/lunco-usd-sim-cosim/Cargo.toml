@@ -23,14 +23,14 @@ lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
-lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-readiness = { workspace = true }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-time = { path = "../lunco-time" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
-lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }

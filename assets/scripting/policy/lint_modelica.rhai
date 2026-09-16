@@ -1,11 +1,11 @@
 // ── Modelica lint policy — the rules, in rhai ───────────────────────────────
 //
 // Hook `lint.modelica`, entry `lint_modelica(facts)`. Registered at startup from
-// this file (`lunco_scripting::register_builtin_policies`) and REPLACEABLE AT
+// this file (the authored application policy manifest) and REPLACEABLE AT
 // RUNTIME:
 //
-//     register_hook("lint.modelica", "lint_modelica", my_source)
-//     unregister_hook("lint.modelica")            // back to no Modelica rules
+//     bind_policy("lint.modelica", "lint_modelica", my_source)
+//     unbind_policy("lint.modelica")               // remove the active rules
 //
 // so a rule can be written, tried and tightened with no rebuild.
 //

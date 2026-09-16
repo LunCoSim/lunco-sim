@@ -38,6 +38,7 @@
 //!    refuses the broken non-HDR combination rather than wasting post-process work.
 
 use bevy::camera::Exposure;
+use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::prelude::*;
 
 /// Projection used by the interactive camera when no authored USD camera
@@ -142,6 +143,25 @@ pub struct SceneCamera {
     /// Bloom. **Ignored (with a warning) unless `hdr` is true** — bloom on an LDR
     /// target is a no-op that still pays for the downsample/upsample chain.
     pub bloom: Option<BloomLook>,
+}
+
+/// Marks a concrete camera whose presentation ownership has ended.
+///
+/// Retirement is a transition state, not a replacement camera contract. The
+/// viewport reconciler excludes this entity before it considers any authored
+/// or operator request, so a stale camera can never win while a replacement
+/// camera is still being projected. The marker remains on the entity because
+/// the render components may have to survive until the render world releases
+/// them.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+#[component(on_insert = retire_camera)]
+#[reflect(Component)]
+pub struct CameraRetiring;
+
+fn retire_camera(mut world: DeferredWorld, context: HookContext) {
+    if let Some(mut camera) = world.get_mut::<Camera>(context.entity) {
+        camera.is_active = false;
+    }
 }
 
 /// Opts an engine-owned camera into live persisted Graphics look settings.

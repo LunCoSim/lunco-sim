@@ -681,10 +681,7 @@ fn query_record_json(
                     "projected_generation": generation,
                 }),
             );
-            object.insert(
-                "binding".to_string(),
-                runtime_binding_json(world, spawned),
-            );
+            object.insert("binding".to_string(), runtime_binding_json(world, spawned));
         }
         out["topology"] = topology;
     }
@@ -761,12 +758,14 @@ fn execute_query_paths(
     let mut poses = if spawned.is_empty() {
         None
     } else {
-        Some(lunco_physics::SimulationPoseReadState::try_new(world).ok_or_else(|| {
-            ApiResponse::error(
-                ApiErrorCode::InternalError,
-                "QueryUsdPrim: active physics frame is unavailable",
-            )
-        })?)
+        Some(
+            lunco_physics::SimulationPoseReadState::try_new(world).ok_or_else(|| {
+                ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    "QueryUsdPrim: active physics frame is unavailable",
+                )
+            })?,
+        )
     };
 
     let mut read_paths = |view: &StageView<'_>| -> Result<Vec<serde_json::Value>, ApiResponse> {
@@ -1010,15 +1009,16 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 format!("QueryUsdPrim: `{path}` is not a valid USD prim path"),
             );
         };
-        let records = match execute_query_paths(
-            world,
-            params,
-            &[(path.to_string(), prim)],
-        ) {
+        let records = match execute_query_paths(world, params, &[(path.to_string(), prim)]) {
             Ok(records) => records,
             Err(error) => return error,
         };
-        ApiResponse::ok(records.into_iter().next().expect("one query path produces one record"))
+        ApiResponse::ok(
+            records
+                .into_iter()
+                .next()
+                .expect("one query path produces one record"),
+        )
     }
 }
 

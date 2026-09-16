@@ -888,19 +888,11 @@ fn scene_keyboard_active(focus: Res<lunco_control_core::EguiFocus>) -> bool {
 /// Local avatars are command endpoints with an authored-equivalent
 /// `ControlBinding` and `InputPorts` surface. The shared controller translates
 /// intents into ports, and the flight realization consumes only those ports.
-fn demote_former_avatar(
-    trigger: On<Remove, LocalAvatar>,
-    mut commands: Commands,
-    mut q_cameras: Query<&mut Camera>,
-) {
+fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands) {
     let entity = trigger.entity;
-    // Deactivate before queuing removal of the render-free marker. The marker
-    // removal is deferred, while Bevy's render extraction can observe the
-    // existing `Camera3d` in the same frame. Keeping an orphan active would
-    // let it render after its LocalAvatar claim has moved to the replacement.
-    if let Ok(mut camera) = q_cameras.get_mut(entity) {
-        camera.is_active = false;
-    }
+    // Retirement is a presentation contract consumed by the one viewport
+    // reconciler. Do not write Camera::is_active here: avatar role lifecycle
+    // and viewport activation are separate ownership boundaries.
     commands.entity(entity).try_remove::<(
         Avatar,
         FreeFlightCamera,
@@ -934,6 +926,7 @@ fn demote_former_avatar(
     // `Camera3d`, so it deactivates this orphan in the same PostUpdate pass.
     commands
         .entity(entity)
+        .try_insert(lunco_render::CameraRetiring)
         .try_remove::<lunco_render::SceneCamera>();
 }
 
@@ -4616,6 +4609,7 @@ fn on_update_profile(
 
 #[on_command(ShowNotification)]
 pub fn on_show_notification(trigger: On<ShowNotification>, mut notes: ResMut<ScreenNotifications>) {
+    let cmd = trigger.event();
     let secs = if cmd.secs > 0.0 { cmd.secs } else { 4.5 };
     let kind = if cmd.kind.is_empty() {
         "info"
@@ -6390,10 +6384,11 @@ mod tests {
     /// **A retired avatar camera must leave the viewport candidate pool.**
     ///
     /// A host-created camera can outlive a scene load because it is not owned by a
-    /// USD prim. When an incoming scene claims `LocalAvatar`, this observer makes
-    /// the previous camera inactive synchronously and removes its `SceneCamera`
-    /// intent marker. Camera selection therefore cannot render two viewport
-    /// candidates while the replacement's render components are attached.
+    /// USD prim. When an incoming scene claims `LocalAvatar`, this observer adds
+    /// the render-owned retirement marker to the former camera and removes its
+    /// `SceneCamera` intent marker. The marker hook makes it inactive
+    /// synchronously, while camera selection excludes it before the replacement's
+    /// render components are attached.
     ///
     /// `Camera` must SURVIVE: stripping it from a live extracted window camera
     /// crashes the render app on the shadow cascade unwrap.

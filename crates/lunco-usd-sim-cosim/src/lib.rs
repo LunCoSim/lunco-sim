@@ -3207,7 +3207,7 @@ impl Plugin for UsdSimCosimPlugin {
         // initializes them, but minimal USD/physics apps intentionally omit
         // that plugin; keeping the resources here makes the projection
         // plugin's system contract complete and idempotent.
-        app.init_resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
+        app.init_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
             .init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .init_resource::<lunco_cosim::BindingRevision>()
             .init_resource::<lunco_core::SimulationBarrierParticipants>()
@@ -3545,7 +3545,6 @@ mod tests {
         copy_modelica_input_values, event_rising_edge, fire_connected_events, modelica_status,
         parse_event_severity, EventBinding,
     };
-    use lunco_usd_bevy_camera::camera_switch::CameraContractStatus;
 
     #[derive(Resource, Default)]
     struct WiringRuns(usize);
@@ -4281,11 +4280,6 @@ mod tests {
             .init_resource::<SceneTransitionCoordinator>()
             .init_resource::<PendingSceneStageOutcome>()
             .init_resource::<CompletedTransitions>()
-            .insert_resource(CameraContractStatus {
-                required: true,
-                ready: false,
-                errors: vec!["presentation is still being validated".to_owned()],
-            })
             .add_observer(on_scene_transition_completed)
             .add_observer(
                 |trigger: On<SceneTransitionCompleted>,

@@ -488,7 +488,8 @@ fn replay_scenario_journal(
 /// leg is per-domain. Selects the merged, not-yet-applied `Modelica` op entries via
 /// [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
 /// (`DomainKind::Modelica`) — so a scripted merge policy reorders Modelica replay
-/// identically to USD — and applies each through `ModelicaDocumentRegistry::replay_op`
+/// identically to USD — and applies each through the generic Modelica document
+/// registry's `replay_op`
 /// (no re-recording).
 ///
 /// Resources are `Option`: the Modelica registry / journal aren't present in every
@@ -501,7 +502,9 @@ fn replay_scenario_journal_modelica(
     role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    registry: Option<ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>>,
+    registry: Option<
+        ResMut<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
+    >,
     // Modelica-domain entry ids already projected (its own once-per-entry guard,
     // independent of the USD driver's applied-set).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -1207,13 +1210,13 @@ fn resolve_policy_source_file(
 }
 
 /// **Policy projection** — activation half of "policy is a USD prim". On any
-/// composed-stage change, read the `LunCoPolicy` prims and project them into the
-/// live hook registry via
-/// [`lunco_scripting::policy::project_policies`]: a new prim registers its rhai
-/// hook (and, at [`lunco_scripting::policy::MERGE_SEAM`],
-/// flips the journal merge strategy); a removed prim retracts it. Because a policy
-/// prim rides the USD doc-op journal, cross-peer propagation is (journal sync →
-/// each peer recomposes → each peer's projector re-registers) — no bespoke policy
+/// composed-stage change, read the `LunCoPolicy` prims and project the USD-owned
+/// policy layer into the live hook registry via
+/// [`lunco_scripting::policy::project_policies`]. USD policies have precedence
+/// over application and Twin manifest layers; a removed prim restores the
+/// lower layer without recompiling it. Because a policy prim rides the USD
+/// doc-op journal, cross-peer propagation is (journal sync → each peer
+/// recomposes → each peer's projector re-registers) — no bespoke policy
 /// broadcast.
 ///
 /// A policy's rhai source may be authored inline (`info:sourceCode`, journal
@@ -2109,17 +2112,15 @@ impl Plugin for LunCoSimHeadlessPlugin {
         // the explicit presentation surface as no-ops so one scenario works in
         // interactive and acceptance modes; every other unknown command still
         // fails loudly through the normal reflection dispatcher.
-        app.insert_resource(lunco_scripting_bridge_core::IgnoredScenarioCommands::new(
-            [
-                "SetHint",
-                "SetObjectives",
-                "Spotlight",
-                "ClearSpotlight",
-                "FocusPanel",
-                "SetTourStep",
-                "ClearTour",
-            ],
-        ));
+        app.insert_resource(lunco_scripting_bridge_core::IgnoredScenarioCommands::new([
+            "SetHint",
+            "SetObjectives",
+            "Spotlight",
+            "ClearSpotlight",
+            "FocusPanel",
+            "SetTourStep",
+            "ClearTour",
+        ]));
 
         // Modelica COMPILE CORE only (channels + worker thread + `.mo` asset
         // loader + compile-dispatch systems) — NO egui/viz/workbench. Windowed

@@ -1449,7 +1449,10 @@ fn log_parse_failures(label: &str, issues: &[InputDefaultIssue]) {
 fn located_default_diagnostic(source: &str, issue: &InputDefaultIssue) -> lunco_doc::Diagnostic {
     match issue {
         InputDefaultIssue::Unresolvable { byte_offset, .. } => {
-            let (line, col) = crate::document::core::byte_offset_to_line_col(source, *byte_offset);
+            let (line, col) = lunco_modelica_document::document::core::byte_offset_to_line_col(
+                source,
+                *byte_offset,
+            );
             lunco_doc::Diagnostic::warning(default_issue_message(issue), Some(line), Some(col))
         }
         // Warning severity ON PURPOSE even though this is the worst of the
@@ -3421,7 +3424,9 @@ pub fn handle_modelica_responses(
     // the registry available as the authoritative generation source for a
     // late-linked model too; a successful compile must never be marked stale
     // merely because its document generation was assigned after dispatch.
-    documents: Option<Res<crate::state::ModelicaDocumentRegistry>>,
+    documents: Option<
+        Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
+    >,
     // Lifecycle messages leave as core events; the reactive UI console observer
     // projects them. Core no longer references the console panel.
     mut notices: MessageWriter<ModelicaNotice>,

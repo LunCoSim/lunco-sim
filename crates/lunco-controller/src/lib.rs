@@ -43,7 +43,7 @@ use bevy::input::{
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
 use leafwing_input_manager::prelude::ActionState;
-use lunco_control_core::{ControlBinding, UserIntent, ensure_control_plugin};
+use lunco_control_core::{ensure_control_plugin, ControlBinding, UserIntent};
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 use lunco_cosim_core::ControlLink;
 use lunco_input_core::InputBindingsSettings;

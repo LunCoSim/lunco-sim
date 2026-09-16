@@ -1,11 +1,11 @@
 //! API handlers for document-level operations.
 
 use super::util::resolve_doc;
+use crate::ModelicaDocuments;
 use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
-use lunco_modelica_core::document::ModelicaOp;
-use lunco_modelica_core::state::ModelicaDocumentRegistry;
+use lunco_modelica_document::ModelicaOp;
 
 /// Replace an open document's entire source text.
 #[Command(default)]
@@ -82,7 +82,7 @@ pub fn on_set_document_source(trigger: On<SetDocumentSource>, mut commands: Comm
             return;
         };
         let unchanged = world
-            .get_resource::<ModelicaDocumentRegistry>()
+            .get_resource::<ModelicaDocuments>()
             .and_then(|r| r.host(doc))
             .map(|h| h.document().source() == source)
             .unwrap_or(false);

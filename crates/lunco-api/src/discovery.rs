@@ -1,7 +1,7 @@
 //! Schema discovery — tells API clients what commands exist.
 
 use crate::queries::{ApiQueryRegistry, ApiVisibility};
-use crate::schema::{ApiSchema, CommandSchema, FieldSchema};
+use crate::schema::{ApiSchema, CommandSchema, FieldSchema, HookParameterSchema, HookSchema};
 use bevy::prelude::*;
 use bevy::reflect::std_traits::ReflectDefault;
 use bevy::reflect::{TypeInfo, TypeRegistration, TypeRegistry};
@@ -168,6 +168,35 @@ pub fn discover_queries(registry: Option<&ApiQueryRegistry>) -> Vec<String> {
     queries
 }
 
+/// Discover every link-collected hook contract and its active policy state.
+pub fn discover_hooks() -> Vec<HookSchema> {
+    lunco_hooks::catalog()
+        .into_iter()
+        .map(|hook| HookSchema {
+            id: hook.id,
+            owner: hook.owner,
+            description: hook.description,
+            parameters: hook
+                .parameters
+                .into_iter()
+                .map(|parameter| HookParameterSchema {
+                    name: parameter.name,
+                    type_name: parameter.value_type.as_str().into(),
+                })
+                .collect(),
+            output: hook.output.as_str().into(),
+            policy_file: hook.policy_file,
+            policy_entry: hook.policy_entry,
+            deterministic: hook.deterministic,
+            required: hook.required,
+            installable: hook.installable,
+            declared: hook.declared,
+            installed: hook.installed,
+            backend: hook.backend,
+        })
+        .collect()
+}
+
 /// Builds the API schema by introspecting the ECS world.
 pub fn discover_schema(world: &World) -> ApiSchema {
     let type_registry = world.resource::<AppTypeRegistry>();
@@ -175,7 +204,12 @@ pub fn discover_schema(world: &World) -> ApiSchema {
     let visibility = world.get_resource::<ApiVisibility>();
     let commands = discover_commands(&registry_read, visibility);
     let queries = discover_queries(world.get_resource::<ApiQueryRegistry>());
-    ApiSchema { commands, queries }
+    let hooks = discover_hooks();
+    ApiSchema {
+        commands,
+        queries,
+        hooks,
+    }
 }
 
 /// Plugin that registers schema discovery (no runtime systems needed).

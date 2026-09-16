@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica_ast::pretty::{self, Placement, PortRef};
-use lunco_modelica_core::document::{ModelicaDocument, ModelicaOp, SyntaxCache};
+use lunco_modelica_document::{ModelicaDocument, ModelicaOp, SyntaxCache};
 
 /// A class carrying everything the old emitter destroyed: a multi-modifier
 /// declaration with a binding *and* a description, a plain bound parameter,

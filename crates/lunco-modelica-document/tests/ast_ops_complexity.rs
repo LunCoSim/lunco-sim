@@ -7,7 +7,7 @@
 
 use lunco_doc::{DocumentHost, DocumentId};
 use lunco_modelica_ast::pretty::{ComponentDecl, ConnectEquation, Line, Placement, PortRef};
-use lunco_modelica_core::document::{ModelicaChange, ModelicaDocument, ModelicaOp};
+use lunco_modelica_document::{ModelicaChange, ModelicaDocument, ModelicaOp};
 
 fn doc(source: &str) -> DocumentHost<ModelicaDocument> {
     DocumentHost::new(ModelicaDocument::new(
@@ -882,7 +882,7 @@ fn consumer_polls_only_new_changes() {
 fn too_far_behind_returns_none() {
     let mut host = doc("model M\nend M;\n");
     // Push more than CHANGE_HISTORY_CAPACITY changes.
-    let cap = lunco_modelica_core::document::CHANGE_HISTORY_CAPACITY;
+    let cap = lunco_modelica_document::CHANGE_HISTORY_CAPACITY;
     for i in 0..(cap + 10) {
         host.apply(ModelicaOp::AddComponent {
             class: "M".into(),

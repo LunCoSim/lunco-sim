@@ -8,10 +8,10 @@
 
 use bevy::prelude::*;
 
-use crate::document::ModelicaOp;
-use crate::state::ModelicaDocumentRegistry;
 use crate::ui::commands::AutoArrangeDiagram;
+use crate::ui::document_context::ModelicaDocuments;
 use lunco_modelica_ast::pretty::{self, Placement};
+use lunco_modelica_document::ModelicaOp;
 
 use super::coords::{canvas_to_modelica, ModelicaPos};
 use super::projection::projection_relevant_source_hash;
@@ -73,7 +73,7 @@ pub(super) fn resolve_doc_context(
     let drilled_in = crate::ui::context::drilled_class_for_doc(ctx, doc_id);
     let class = drilled_in
         .or_else(|| {
-            ctx.resource::<ModelicaDocumentRegistry>()
+            ctx.resource::<ModelicaDocuments>()
                 .and_then(|r| r.host(doc_id))
                 .and_then(|h| {
                     h.document().strict_ast().and_then(|ast| {
@@ -667,12 +667,12 @@ pub(super) fn apply_ops(
     // other panel (code editor, breadcrumb, inspector) sees the update
     // immediately through the document host.
     let fresh = world
-        .get_resource::<ModelicaDocumentRegistry>()
+        .get_resource::<ModelicaDocuments>()
         .and_then(|r| r.host(doc_id))
         .map(|h| {
             (
                 h.document().source_arc(),
-                <crate::document::ModelicaDocument as lunco_doc::Document>::generation(
+                <lunco_modelica_document::ModelicaDocument as lunco_doc::Document>::generation(
                     h.document(),
                 ),
             )
@@ -903,7 +903,7 @@ pub fn active_class_for_doc(world: &mut World, doc_id: lunco_doc::DocumentId) ->
             return Some(class);
         }
     }
-    crate::state::detected_name_for(world, doc_id)
+    crate::ui::document_context::detected_name_for(world, doc_id)
 }
 
 /// `PanelCtx` sibling of [`active_class_for_doc`] — same precedence,

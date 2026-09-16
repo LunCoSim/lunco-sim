@@ -1,0 +1,104 @@
+# Application policy bindings. The hook id and Rhai entry point are authored
+# here so changing policy selection does not require a Rust rebuild.
+#
+# Every entry is optional. A hook owner decides whether an absent policy is a
+# valid unconfigured state; `required = true` is reserved for seams that cannot
+# operate safely without an implementation.
+
+[startup]
+source = "startup.rhai"
+entry = "install_policies"
+
+[[policies]]
+hook = "control.authority.take"
+source = "control_authority.rhai"
+entry = "may_take_control"
+
+[[policies]]
+hook = "readiness.action"
+source = "readiness.rhai"
+entry = "readiness_action"
+deterministic = true
+
+[[policies]]
+hook = "assets.provision"
+source = "dataset_provisioning.rhai"
+entry = "dataset_provisioning"
+
+[[policies]]
+hook = "render.shadow_quality"
+source = "render_shadow_quality.rhai"
+entry = "shadow_quality"
+
+[[policies]]
+hook = "runtime.ui.visibility"
+source = "runtime_ui_surface.rhai"
+entry = "runtime_ui_surface"
+
+[[policies]]
+hook = "runtime.ui.properties"
+source = "runtime_ui_properties.rhai"
+entry = "runtime_ui_properties"
+
+[[policies]]
+hook = "runtime.ui.recording"
+source = "runtime_ui_recording.rhai"
+entry = "runtime_ui_recording"
+
+[[policies]]
+hook = "camera.default_presentation"
+source = "camera_presentation.rhai"
+entry = "default_presentation"
+
+[[policies]]
+hook = "twin.lifecycle"
+source = "twin_lifecycle.rhai"
+entry = "twin_lifecycle"
+
+[[policies]]
+hook = "link.connected"
+source = "link.rhai"
+entry = "link_connected"
+deterministic = true
+
+[[policies]]
+hook = "synth.acausal-network"
+source = "synth_acausal_network.rhai"
+entry = "synthesize"
+deterministic = true
+
+[[policies]]
+hook = "synth.actuator-wrench"
+source = "synth_actuator_wrench.rhai"
+entry = "synthesize"
+deterministic = true
+
+[[policies]]
+hook = "lint.usd"
+source = "lint_usd.rhai"
+entry = "lint_usd"
+deterministic = true
+
+[[policies]]
+hook = "lint.rhai"
+source = "lint_rhai.rhai"
+entry = "lint_rhai"
+deterministic = true
+
+[[policies]]
+hook = "lint.modelica"
+source = "lint_modelica.rhai"
+entry = "lint_modelica"
+deterministic = true
+
+[[policies]]
+hook = "lint.sysml"
+source = "lint_sysml.rhai"
+entry = "lint_sysml"
+deterministic = true
+
+[[policies]]
+hook = "lint.twin"
+source = "lint_twin.rhai"
+entry = "lint_twin"
+deterministic = true

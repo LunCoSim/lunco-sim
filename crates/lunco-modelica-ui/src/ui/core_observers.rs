@@ -136,7 +136,7 @@ pub fn drain_sim_samples_to_viz(
     mut stream: ResMut<lunco_modelica_runtime::SimSampleStream>,
     mut signals: Option<ResMut<SignalRegistry>>,
     mut viz_registry: Option<ResMut<VisualizationRegistry>>,
-    doc_registry: Option<Res<crate::state::ModelicaDocumentRegistry>>,
+    doc_registry: Option<Res<crate::ui::document_context::ModelicaDocuments>>,
     telemetry_settings: Option<Res<TelemetrySettings>>,
     owners: Query<Option<&lunco_core::GlobalEntityId>>,
 ) {

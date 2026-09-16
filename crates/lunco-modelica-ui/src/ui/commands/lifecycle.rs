@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::model_tabs::ModelTabs;
 use crate::package_tree::PackageTreeCache;
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::duplicate::{
     build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
 };
@@ -153,7 +153,7 @@ pub fn request_app_close(world: &mut World) {
     // Cross-domain dirty list — `UnsavedDocs` is the shared bus every
     // domain registry pushes into (Modelica today; USD/Python/etc.
     // when they land). Reading from it instead of
-    // `ModelicaDocumentRegistry` directly means future domains' dirty
+    // `ModelicaDocuments` directly means future domains' dirty
     // docs are automatically picked up by the close prompt with no
     // change here.
     let dirty_tabs: Vec<(DocumentId, u64)> = {
@@ -277,7 +277,7 @@ pub fn finalize_app_close(
     close_dialogs: Option<Res<CloseDialogState>>,
     pending_save_close: Option<Res<PendingCloseAfterSave>>,
     pending_tab_closes: Option<Res<lunco_workbench_core::tabs::PendingTabCloses>>,
-    registry: Option<Res<ModelicaDocumentRegistry>>,
+    registry: Option<Res<ModelicaDocuments>>,
     pending_runs: Option<Res<crate::experiments_runner::PendingHandles>>,
     mut exit_events: bevy::ecs::message::MessageWriter<bevy::app::AppExit>,
 ) {
@@ -390,7 +390,7 @@ fn close_model_tab(world: &mut World, tab_id: u64) {
 #[on_command(CreateNewScratchModel)]
 pub fn on_create_new_scratch_model(
     trigger: On<CreateNewScratchModel>,
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     mut cache: ResMut<PackageTreeCache>,
     mut model_tabs: ResMut<ModelTabs>,
     mut workbench: ResMut<WorkbenchState>,
@@ -414,8 +414,10 @@ pub fn on_create_new_scratch_model(
 
     let source = req_source.unwrap_or_else(|| format!("model {name}\nend {name};\n"));
     let mem_id = format!("mem://{name}");
-    let doc_id =
-        registry.allocate_with_origin(source.clone(), DocumentOrigin::untitled(name.clone()));
+    let doc_id = registry.allocate(
+        source.clone(),
+        lunco_doc::PathlessOrigin::untitled(name.clone()),
+    );
 
     cache.in_memory_models.retain(|e| e.id != mem_id);
     cache
@@ -441,7 +443,7 @@ pub fn on_create_new_scratch_model(
 #[on_command(DuplicateModelFromReadOnly)]
 pub fn on_duplicate_model_from_read_only(
     trigger: On<DuplicateModelFromReadOnly>,
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    registry: ResMut<ModelicaDocuments>,
     mut cache: ResMut<PackageTreeCache>,
     mut model_tabs: ResMut<ModelTabs>,
     mut openings: ResMut<crate::ui::document_openings::DocumentOpenings>,
@@ -546,7 +548,7 @@ pub fn on_duplicate_model_from_read_only(
             origin_fqn_for_task.as_deref(),
             &imports,
         );
-        crate::document::ModelicaDocument::with_origin(
+        lunco_modelica_document::ModelicaDocument::with_origin(
             doc_id,
             copy_src,
             DocumentOrigin::untitled(name_for_task),
@@ -606,9 +608,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
     };
     let name = unique_in_memory_name(world.resource::<PackageTreeCache>(), &base_name);
 
-    let doc_id = world
-        .resource_mut::<ModelicaDocumentRegistry>()
-        .reserve_id();
+    let doc_id = world.resource_mut::<ModelicaDocuments>().reserve_id();
     let mem_id = format!("mem://{name}");
     {
         let mut cache = world.resource_mut::<PackageTreeCache>();
@@ -654,7 +654,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             origin_path,
         }) = resolved
         else {
-            return crate::document::ModelicaDocument::with_origin(
+            return lunco_modelica_document::ModelicaDocument::with_origin(
                 doc_id,
                 format!("// Could not locate source for {qualified_for_task}\n"),
                 DocumentOrigin::untitled(name_for_task),
@@ -693,7 +693,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             Some(&qualified_for_task),
             &imports,
         );
-        crate::document::ModelicaDocument::with_origin(
+        lunco_modelica_document::ModelicaDocument::with_origin(
             doc_id,
             copy_src,
             DocumentOrigin::untitled(name_for_task),
@@ -874,11 +874,11 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
             .and_then(|s| s.to_str())
             .unwrap_or("Opened")
             .to_string();
-        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
+        let mut registry = world.resource_mut::<ModelicaDocuments>();
         // ONE DOCUMENT PER FILE. The path IS the identity: re-opening a `.mo`
         // reuses its document and refreshes the content from what we just read.
         //
-        // This used to `allocate_with_origin` unconditionally, so opening the
+        // This used to allocate a second document unconditionally, so opening the
         // same file twice minted a SECOND document — two tabs, two undo stacks,
         // both saving over each other, last writer silently winning. The rule
         // already existed (`find_by_path`, used by the package browser); this
@@ -920,13 +920,11 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
                 }
                 doc
             }
-            None => registry.allocate_with_origin(
-                source,
-                DocumentOrigin::File {
-                    path: path.clone(),
-                    writable: !read_only_library,
-                },
-            ),
+            None => {
+                registry
+                    .open_file_with_writable(path.clone(), source, !read_only_library)
+                    .0
+            }
         };
         let mut tabs = world.resource_mut::<ModelTabs>();
         let tab_id = tabs.ensure_for(doc_id, None);
@@ -1000,7 +998,7 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
 #[on_command(CloseDocument)]
 pub fn on_close_document(
     trigger: On<CloseDocument>,
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     mut commands: Commands,
 ) {
     let doc = trigger.event().doc_id;
@@ -1104,7 +1102,7 @@ pub fn finish_close_after_save(
 pub fn resolve_tab_close_scopes(
     mut scopes: ResMut<PendingTabCloseScopes>,
     layout: Res<lunco_workbench_core::WorkbenchSnapshot>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<ModelicaDocuments>,
     model_tabs: Res<ModelTabs>,
     mut pending: ResMut<lunco_workbench_core::tabs::PendingTabCloses>,
 ) {
@@ -1146,7 +1144,7 @@ pub fn resolve_tab_close_scopes(
 
 pub fn drain_pending_tab_closes(
     mut pending: ResMut<lunco_workbench_core::tabs::PendingTabCloses>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<ModelicaDocuments>,
     mut model_tabs: ResMut<ModelTabs>,
     mut dialogs: ResMut<CloseDialogState>,
     mut commands: Commands,
@@ -1222,7 +1220,7 @@ const DONT_SAVE_LABEL: &str = "Don't save";
 const CANCEL_LABEL: &str = "Cancel";
 
 pub fn render_close_dialogs(
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<ModelicaDocuments>,
     mut dialogs: ResMut<CloseDialogState>,
     mut modals: ResMut<lunco_ui::modal::ModalQueue>,
     mut pending_save_close: Option<ResMut<PendingCloseAfterSave>>,

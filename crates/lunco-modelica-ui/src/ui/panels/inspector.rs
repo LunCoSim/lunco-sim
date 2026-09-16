@@ -131,7 +131,7 @@ impl Panel for InspectorPanel {
         // would reject it. The defensive guard before firing
         // `ApplyModelicaOps` is a belt-and-braces gesture.
         let read_only = ctx
-            .resource::<crate::state::ModelicaDocumentRegistry>()
+            .resource::<crate::ui::document_context::ModelicaDocuments>()
             .and_then(|registry| registry.host(doc_id))
             .map(|h| h.document().is_read_only())
             .unwrap_or(false);
@@ -198,7 +198,8 @@ impl Panel for InspectorPanel {
         // `ModelicaDocument::apply_patch`) so this read sees fresh
         // state even during the 2.5 s AST-reparse debounce.
         let (component_info, class, param_desc) = {
-            let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() else {
+            let Some(registry) = ctx.resource::<crate::ui::document_context::ModelicaDocuments>()
+            else {
                 placeholder(ui, "Document not in registry.");
                 return;
             };
@@ -495,7 +496,7 @@ fn apply_plot_title(
     node_id: lunco_canvas::NodeId,
     title: &str,
 ) {
-    use crate::document::ModelicaOp;
+    use lunco_modelica_document::ModelicaOp;
     use lunco_viz::kinds::canvas_plot_node::PlotNodeData;
 
     // Snapshot the plot's signal path — that's the op key. Skip
@@ -543,7 +544,7 @@ fn apply_plot_title(
         .or_else(|| {
             world
                 .get_resource::<crate::ui::workbench_state::WorkbenchState>()
-                .and_then(|_s| crate::state::detected_name_for(world, doc_id))
+                .and_then(|_s| crate::ui::document_context::detected_name_for(world, doc_id))
         })
         .unwrap_or_default();
     if class.is_empty() {
@@ -567,7 +568,7 @@ fn apply_plot_binding(
     entity_bits: u64,
     signal_path: &str,
 ) {
-    use crate::document::ModelicaOp;
+    use lunco_modelica_document::ModelicaOp;
     use lunco_viz::kinds::canvas_plot_node::PlotNodeData;
 
     // Snapshot the previous binding, mode, and rect so we can build
@@ -637,7 +638,7 @@ fn apply_plot_binding(
         .or_else(|| {
             world
                 .get_resource::<crate::ui::workbench_state::WorkbenchState>()
-                .and_then(|_s| crate::state::detected_name_for(world, doc_id))
+                .and_then(|_s| crate::ui::document_context::detected_name_for(world, doc_id))
         })
         .unwrap_or_default();
     if class.is_empty() {
@@ -754,8 +755,8 @@ fn apply_diagram_text_string(
     index: usize,
     text: &str,
 ) {
-    use crate::document::ModelicaOp;
     use crate::ui::text_node::TextNodeData;
+    use lunco_modelica_document::ModelicaOp;
 
     // Optimistic in-memory swap so the visual updates this frame.
     {
@@ -778,7 +779,7 @@ fn apply_diagram_text_string(
         .or_else(|| {
             world
                 .get_resource::<crate::ui::workbench_state::WorkbenchState>()
-                .and_then(|_s| crate::state::detected_name_for(world, doc_id))
+                .and_then(|_s| crate::ui::document_context::detected_name_for(world, doc_id))
         })
         .unwrap_or_default();
     if class.is_empty() {

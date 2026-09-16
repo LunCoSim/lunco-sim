@@ -107,7 +107,7 @@ pub fn drain_browser_actions(world: &mut World) {
                 // OpenFile / new-doc paths. `ensure_preview_for_with_default`
                 // dedups them so both paths converge on one tab.
                 let default_class: Option<String> = world
-                    .get_resource::<crate::state::ModelicaDocumentRegistry>()
+                    .get_resource::<crate::ui::document_context::ModelicaDocuments>()
                     .and_then(|r| r.host(doc))
                     .and_then(|h| {
                         h.document()

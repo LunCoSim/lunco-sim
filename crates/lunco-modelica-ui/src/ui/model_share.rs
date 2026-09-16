@@ -40,7 +40,7 @@ fn active_share_url(world: &mut World) -> Option<String> {
         .get_resource::<lunco_workspace::WorkspaceResource>()?
         .active_document?;
     let source = world
-        .get_resource::<crate::state::ModelicaDocumentRegistry>()?
+        .get_resource::<crate::ui::document_context::ModelicaDocuments>()?
         .host(doc_id)?
         .document()
         .source()

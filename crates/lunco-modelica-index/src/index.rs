@@ -44,9 +44,9 @@ pub struct ConnectionKey(pub u32);
 
 /// Per-document projection that UI consumes.
 ///
-/// Patched optimistically by `apply_patch` (see [`crate::document::ModelicaDocument`])
-/// in response to structural [`crate::document::ModelicaChange`] events, so panels
-/// see edits in the same frame. Reconciled to the AST on every parse-success.
+/// Patched optimistically by the Modelica document's source-edit operation in
+/// response to structural changes, so panels see edits in the same frame.
+/// Reconciled to the AST on every parse-success.
 #[derive(Debug, Default, Clone)]
 pub struct ModelicaIndex {
     /// Bumped on every patch. Panels can fingerprint to skip rerender.
@@ -87,10 +87,9 @@ pub struct ModelicaIndex {
     /// Within-clause path, if any (e.g. `"Modelica.Mechanics"`).
     pub within_path: Option<String>,
 
-    /// Whether the lenient parse reported any errors. Mirrors
-    /// [`crate::document::SyntaxCache::has_errors`] so panels can
-    /// surface a "broken file" badge without reaching for the
-    /// syntax cache directly.
+    /// Whether the lenient parse reported any errors. Mirrors the document
+    /// syntax cache so panels can surface a "broken file" badge without
+    /// reaching for document internals directly.
     pub has_errors: bool,
 }
 
@@ -389,8 +388,7 @@ impl ModelicaIndex {
     }
 
     /// Same as [`Self::rebuild_from_ast`] but also records the
-    /// lenient-parse error flag. Use when caller is rebuilding from
-    /// a [`crate::document::SyntaxCache`] (which carries the flag).
+    /// lenient-parse error flag supplied by the document syntax cache.
     pub fn rebuild_with_errors(
         &mut self,
         ast: &ast::StoredDefinition,
@@ -416,9 +414,8 @@ impl ModelicaIndex {
         key
     }
 
-    /// Optimistic component-add. Called from
-    /// [`crate::document::ModelicaDocument::apply_patch`] in response
-    /// to a [`crate::document::ModelicaChange::ComponentAdded`].
+    /// Optimistic component-add. Called by the Modelica document source-edit
+    /// path in response to a structural component addition.
     /// Returns the assigned key.
     ///
     /// `class` is fully qualified (e.g. `"Rocket.Engine"`). The Index

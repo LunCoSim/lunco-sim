@@ -387,7 +387,7 @@ fn stash_compressed_source(bytes: Vec<u8>, meta: lunco_assets_core::library::Lib
 
 /// Untar the source bundle into the process-wide `LibraryAssetSource` on first
 /// use (idempotent). Called by the drill-in paths (`Document::load_library_class` /
-/// `load_library_file`) before they read source text. No-op if already
+/// compiler-owned library document loader before it reads source text. No-op if already
 /// unpacked or if no compressed source was stashed.
 #[cfg(target_arch = "wasm32")]
 pub fn ensure_library_source_unpacked() {

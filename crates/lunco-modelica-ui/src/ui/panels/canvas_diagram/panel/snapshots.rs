@@ -1,6 +1,6 @@
 //! Data snapshots for canvas-visual consumption.
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use bevy_egui::egui;
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_workbench_core::PanelCtx;
@@ -115,7 +115,7 @@ pub(crate) fn stash_snapshots(
         // stable. When real cosim plot scenarios land, extend
         // `PlotBinding::Doc` with a role/index and resolve
         // `(doc, role) → entity` instead.
-        if let Some(reg) = ctx.resource::<ModelicaDocumentRegistry>() {
+        if let Some(reg) = ctx.resource::<ModelicaDocuments>() {
             for (e, d) in reg.iter_doc_for_entity() {
                 doc_to_entity
                     .entry(d.raw())
@@ -180,7 +180,7 @@ pub(crate) fn stash_snapshots(
         if let Some(entity) = canvas_sim {
             if let Some(model) = ctx.get::<ModelicaModel>(entity) {
                 let host = ctx
-                    .resource::<ModelicaDocumentRegistry>()
+                    .resource::<ModelicaDocuments>()
                     .and_then(|r| r.host(model.document));
                 let index_ref = host.map(|h| h.document().index());
                 // A standalone `within P;` duplicate's own index can't see

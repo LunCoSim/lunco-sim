@@ -44,8 +44,9 @@ The Modelica runtime is **rumoca**, our fork:
 The reusable parse boundary is [`lunco-modelica-ast`](../../crates/lunco-modelica-ast/).
 It owns BOM-preserving normalization, strict/recovering Rumoca parse wrappers,
 AST interface projections, and parse-time lint facts. It has no Bevy, document,
-worker, UI, or solver state. `lunco-modelica-core` owns the headless document,
-compiler, worker, and simulation seams; `lunco-modelica-ui` owns workbench
+worker, UI, or solver state. `lunco-modelica-document` owns the headless
+document and source-editing seams; `lunco-modelica-core` owns the compiler,
+worker, and simulation seams; `lunco-modelica-ui` owns workbench
  presentation and the `lunica` application facade. The reusable egui graphics
 renderer is isolated in [`lunco-modelica-icon-ui`](../../crates/lunco-modelica-icon-ui/);
 the diagram canvas and model preview consume that package directly.
@@ -64,9 +65,10 @@ It owns `ModelicaModel`, the serialized worker command/result messages, source
 assets, generated USD-document metadata, communication scheduling, notices,
 samples, and telemetry layout. The compiler host consumes that contract; USD
 projection and UI adapters depend on the runtime package directly when they do
-not need Rumoca compilation. The authored document registry remains in
-`lunco-modelica-core`; generated-document metadata is a separate runtime
-resource because it follows projection lifecycle rather than authored editing.
+not need Rumoca compilation. The generic `DocumentRegistry<ModelicaDocument>`
+from `lunco-doc-bevy` is installed by each Modelica host; generated-document
+metadata is a separate runtime resource because it follows projection lifecycle
+rather than authored editing.
 
 ## 2. Architecture in layers
 
@@ -671,7 +673,7 @@ rules:
 See
 [`../../crates/lunco-modelica-ui/src/ui/panels/canvas_projection.rs`](../../crates/lunco-modelica-ui/src/ui/panels/canvas_projection.rs)
 (`import_model_to_diagram`) for the call site, and
-[`../../crates/lunco-modelica-core/src/document/core.rs`](../../crates/lunco-modelica-core/src/document/core.rs)
+[`../../crates/lunco-modelica-document/src/document/core.rs`](../../crates/lunco-modelica-document/src/document/core.rs)
 (`resolve_class`) for the class-path resolver used by AST ops.
 
 ## 6. The `output` convention (rumoca workaround)
@@ -796,7 +798,7 @@ just controls the default.
 
 - `WorkspaceResource.DocumentEntry.title` becomes a derived field —
   the system that maintains it reads from
-  `(ModelicaDocumentRegistry, drilled_in_class, dirty)` and writes
+  `(DocumentRegistry<ModelicaDocument>, drilled_in_class, dirty)` and writes
   the entry. No call site sets `entry.title` directly any more; that
   was the source of the drift.
 - The italic + dirty-dot styling is handled by the tab renderer
@@ -885,7 +887,7 @@ editor's debounced commit (≈ 350 ms idle or focus-loss) calls
 `last_seen_gen`, and the diagram rebuilds on its next frame.
 
 That path is only for user-owned edits. Disk reloads and generated Modelica
-projections use `ModelicaDocumentRegistry::reload_external_source`, which
+projections use `DocumentRegistry<ModelicaDocument>::reload_external_source`, which
 funnels through the shared `FileBacked::reload_base` contract. The external
 source replaces the resident text and advances the normal invalidation
 generation, but it does not enter the editor undo stack or Twin journal: the
@@ -1268,10 +1270,11 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 
 ### Source
 
-- [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — crate root
+- [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — compiler, worker, and simulation crate root
+- [`../../crates/lunco-modelica-document/`](../../crates/lunco-modelica-document/) — `ModelicaDocument`, op set, apply pipeline, and source-editing seams
 - [`../../crates/lunco-modelica-api/`](../../crates/lunco-modelica-api/) — transport-free Modelica queries and document edit commands
 - [`../../crates/lunco-modelica-ast/`](../../crates/lunco-modelica-ast/) — normalized Rumoca parse boundary, AST projections, and Modelica lint facts
-- [`../../crates/lunco-modelica-core/src/document/core.rs`](../../crates/lunco-modelica-core/src/document/core.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
+- [`../../crates/lunco-modelica-document/src/document/core.rs`](../../crates/lunco-modelica-document/src/document/core.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
 - [`../../crates/lunco-modelica-core/src/pretty.rs`](../../crates/lunco-modelica-core/src/pretty.rs) — subset pretty-printer, `PrettyOptions`
 - [`../../crates/lunco-modelica-ui/src/ui/panels/canvas_projection.rs`](../../crates/lunco-modelica-ui/src/ui/panels/canvas_projection.rs) — diagram panel, sync-from-document, wire/position diffing, scope-aware type lookup
 - [`../../crates/lunco-modelica-ui/src/ui/panels/code_editor.rs`](../../crates/lunco-modelica-ui/src/ui/panels/code_editor.rs) — code editor, debounced commit (`EDIT_DEBOUNCE_SEC`), word-wrap toggle

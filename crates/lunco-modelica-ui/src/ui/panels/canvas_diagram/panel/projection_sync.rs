@@ -9,7 +9,7 @@ use super::super::{
     DiagramProjectionLimits, ProjectionTask,
 };
 use crate::model_tabs::ModelTabs;
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use bevy_egui::egui;
 use lunco_canvas::Scene;
 use lunco_doc::Document;
@@ -23,7 +23,7 @@ pub(crate) fn poll_and_swap_projection(
 ) {
     let active_doc = active_doc_from_world_ctx(ctx);
     let current_gen_for_deadline = active_doc.and_then(|d| {
-        ctx.resource::<ModelicaDocumentRegistry>()
+        ctx.resource::<ModelicaDocuments>()
             .and_then(|r| r.host(d))
             .map(|h| h.document().generation())
     });
@@ -251,13 +251,13 @@ pub(crate) fn trigger_projection_if_needed(
         return;
     };
     let gen = ctx
-        .resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocuments>()
         .and_then(|r| r.host(doc_id))
         .map(|h| h.document().generation())
         .unwrap_or(0);
 
     let current_source = ctx
-        .resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocuments>()
         .and_then(|r| r.host(doc_id))
         .map(|h| h.document().source_arc())
         .unwrap_or_else(|| std::sync::Arc::<str>::from(""));
@@ -283,7 +283,7 @@ pub(crate) fn trigger_projection_if_needed(
             .or_else(|| crate::ui::context::default_simulation_class(ctx, doc_id));
         let target_changed = live_target != docstate.last_seen_target;
         let ast_stale = ctx
-            .resource::<ModelicaDocumentRegistry>()
+            .resource::<ModelicaDocuments>()
             .and_then(|r| r.host(doc_id))
             .map(|h| h.document().ast_is_stale())
             .unwrap_or(false);
@@ -326,7 +326,7 @@ fn spawn_projection_task(
     render_tab_id: Option<crate::model_tabs_types::TabId>,
 ) {
     let resolved = {
-        let registry = match ctx.resource::<ModelicaDocumentRegistry>() {
+        let registry = match ctx.resource::<ModelicaDocuments>() {
             Some(r) => r,
             None => return,
         };

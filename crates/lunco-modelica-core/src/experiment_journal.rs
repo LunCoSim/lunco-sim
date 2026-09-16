@@ -1,4 +1,4 @@
-//! Experiment-*definition* journaling — the experiment twin of [`crate::journal`].
+//! Experiment-definition journaling for the Modelica experiment registry.
 //!
 //! `ExperimentRegistry` (in the deliberately lean, backend-agnostic
 //! `lunco-experiments` crate) is a plain Bevy resource, **not** a

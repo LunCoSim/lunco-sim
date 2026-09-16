@@ -70,7 +70,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-interaction-core`** | Small cross-runtime cursor-interaction contract: editor drag state and the affected-entity marker consumed by camera, possession, and follow runtimes. It contains no editor implementation. |
 | **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |
 | **`lunco-input-ui`** | Optional egui presentation for the shared input state: the recording/observation input overlay and its typed visibility command. It does not translate input or own vessel control. |
-| **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, smoothing defaults, pose-transition state, adaptive clip-plane math, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
+| **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, smoothing defaults, pose-transition state, adaptive clip-plane math, camera input accumulators, and the `camera.default_presentation` policy-hook contract. Device translation, rendering, and UI adapters consume these contracts. |
 | **`lunco-camera-runtime`** | Generic interactive camera realization: camera-mode exclusivity, frame-handoff rebasing, free-flight/surface pose writers, persisted camera-input settings, and the typed `SetCameraInput` command over the camera-core contracts. Rhai authors presentation policy through the generic command surface. |
 | **`lunco-avatar-core`** | Backend-neutral avatar contracts: ECS role markers and the derived local-avatar index, possession/focus command payloads, transient notification command/queue types, and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
 | **`lunco-avatar-camera-core`** | Avatar-specific camera transition contracts: BigSpace orbit-return state and arrival markers. It depends on the generic camera contracts without making generic camera consumers carry avatar frame state. |
@@ -98,7 +98,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, visual-split markers, preview/ancestry ownership, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, projection cursors, user-ownership events, and the live-projection wake signal. It owns no stage loading, composition, rendering, or UI. |
-| **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection/look-at intent, camera roles/pose, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It contains no avatar behavior parser or raw input mapping and does not own geometry math or visual projection. |
+| **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection/look-at intent, camera roles/pose, mounted/cinematic camera pose, camera-track selection, the `camera.default_presentation` fact/decision boundary, and the single-authority viewport-camera reconciler. It contains no avatar behavior parser or raw input mapping and does not own geometry math or visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdVisualPlugin`): projects USD hierarchy, shapes, transforms, and material intent into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns async projection orchestration while consuming mesh geometry from `lunco-usd-bevy-mesh` and installing the independent camera and light adapters. |
 | **`lunco-usd-bevy-mesh`** | Render-free USD visual mesh projection for built-in primitives, native `UsdGeomMesh`, `BasisCurves`/`NurbsCurves`, and `NurbsPatch`, including quality invalidation and low-level geometry tests. |
@@ -185,7 +185,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | :--- | :--- |
 | **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, generated-source metadata, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
 | **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
-| **`lunco-modelica-core`** | Headless Modelica compiler host: authored document editing, Rumoca compilation, worker implementation, and source-library access. It consumes `lunco-modelica-runtime`, `lunco-modelica-solver`, and `lunco-modelica-index`; it does not own editor indexing, pure annotation values, solver implementation, API query registration, the shared runtime protocol, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-core`** | Headless Modelica compiler host: Rumoca compilation, worker implementation, simulation resources, and source-library access. It consumes the `lunco-modelica-document`, `lunco-modelica-runtime`, `lunco-modelica-solver`, and `lunco-modelica-index` contracts; it does not own document editing, editor indexing, pure annotation values, solver implementation, API query registration, the shared runtime protocol, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
 | **`lunco-modelica-solver`** | Renderer-free Modelica solver capability: Rumoca backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session. The compiler host supplies lowered solve models and owns document/worker lifecycle; this package owns numerical integration construction and solver-specific dependencies. |
 | **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, and run query providers plus document edit commands. It depends on the headless Modelica core but is not part of the compiler core's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui-core`** | Render-independent Modelica UI contracts: shared command/event payloads (`OpenClass`, `FocusDocumentByName`, `SetModelicaParameter`) and stable plot identities. It has no Modelica compiler, workbench shell, panel, or renderer dependency; observers remain in the owning UI package. |
@@ -205,7 +205,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-tools`** | Backend-agnostic, dependency-free tool trait + registry: a *tool* is a named, reusable bundle of callable functions whose implementation is pluggable (rhai/native/future). Owns the bevy-free `Tool` trait (discovery + `as_any` downcast) + global registry + discovery. Behaviour-tree execution lives in `lunco-tools-bevy`. |
 | **`lunco-tools-rhai`** | rhai adapter binding for the `lunco-tools` registry: `RhaiTool` (source) + `NativeRhaiTool` (native Rust), and `bind_registered_tools`, which binds every registered tool into a rhai `Engine` as a static module callable as `name::fn(...)`. |
 | **`lunco-tools-bevy`** | Bevy dispatch adapter for `lunco-tools` — the behaviour-tree execution half. Defines a bevy-aware `ExecutableTool` supertrait + `ClosureTool` (a closure that triggers its typed command directly via `&mut World`, no JSON/reflect). Observes `ToolFired`, downcasts to `ExecutableTool`, runs it. Instruments register via `register_closure_tool`. |
-| **`lunco-hooks`** | Language-agnostic hook registry: a *hook* is a named, deterministic-flagged decision point (`HookValue` in/out) whose implementation is pluggable. Backs first-class policies — journal **merge** order, RBAC **authorize** gate, and authored actuation policies — as data, not Rust branches. Dependency-free (no rhai/bevy). |
+| **`lunco-hooks`** | Language-agnostic hook registry: a *hook* is a named, link-collected decision point with a reflected typed function signature and `HookValue` in/out; its implementation is pluggable. Backs first-class policies — journal **merge** order, RBAC **authorize** gate, and authored actuation policies — as data, not Rust branches. It depends only on the small `inventory` registration substrate, not rhai, Bevy, serialization, or domain crates. |
 | **`lunco-hooks-rhai`** | rhai backend for `lunco-hooks`: compiles a rhai `source` + `entry` fn and registers it under a hook id (`register_rhai_hook`), so any hook point can be authored in rhai and hot-replaced. |
 | **`lunco-lint`** | Universal lint substrate: `LintFinding`/`LintReport` and `run_lint(domain, facts)`, which asks the `lint.<domain>` hook what is wrong with a domain's FACTS. Rules are authored (`assets/scripting/policy/lint_<domain>.rhai`), never compiled here — this crate names no domain and knows nothing about USD, Rhai, Modelica, or SysML. Nothing lints on load; `RunLint` and `ValidateAsset` in `lunco-scene-validation` are the two entry points. See `docs/architecture/lint-substrate.md`. |
 | **`lunco-behavior`** | Dependency-free task-tree kernel (mechanism, no bevy/avian/rhai): `Ctx`-driven composites (`Sequence`/`Selector`/`Parallel`), reactive composites, loops, decorators, and timed/event leaves. `lunco-scripting` authors and owns the Rhai-facing task programs. Node catalogue: [docs/behaviour-trees.md](./behaviour-trees.md). |
@@ -419,8 +419,9 @@ read this package directly; it has no dependency on the avatar implementation.
 **`lunco-camera-core`**
 Backend-neutral camera contract package. Owns reusable camera behavior
 components, shared smoothing defaults, pure frame/zoom/movement/clip-plane
-math, camera-mode transition state, and pose-input accumulators. It does not
-choose an avatar, a camera source, or an authored behavior policy.
+math, camera-mode transition state, pose-input accumulators, and the
+`camera.default_presentation` hook identifier. It does not choose an avatar, a
+camera source, or an authored behavior policy.
 
 **`lunco-camera-runtime`**
 Generic interactive camera realization package. Owns the exclusive camera-mode
@@ -892,7 +893,24 @@ Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco
 ### Scripting & Modeling
 
 **`lunco-modelica-core`**
-Modelica language integration. Provides AST-based editing and compilation via Rumoca while coordinating worker execution, allowing complex industrial models to drive simulation entities and vessel subsystems. Numerical solver construction is owned by `lunco-modelica-solver`. On wasm, compiles/Fast-Runs are dispatched off the main thread to the `lunica_worker` companion binary; its `worker_transport` composes the generic `lunco-worker-transport::WorkerPool` (spawn/handshake/post/respawn) and layers source-library readiness and per-run routing on top. The worker's prepared solve-IR cache is isolated in `worker/cache.rs` and persists through `lunco-storage`; native command lanes live in `worker/scheduling.rs`. API commands are opt-in, and API query providers are owned by `lunco-modelica-api`.
+Modelica compiler, worker, and simulation integration. It consumes the
+headless `ModelicaDocument` contract from `lunco-modelica-document` but does
+not own document editing or source-file identity. Numerical solver construction
+is owned by `lunco-modelica-solver`. On wasm, compiles/Fast-Runs are dispatched
+off the main thread to the `lunica_worker` companion binary; its
+`worker_transport` composes the generic `lunco-worker-transport::WorkerPool`
+(spawn/handshake/post/respawn) and layers source-library readiness and per-run
+routing on top. The worker's prepared solve-IR cache is isolated in
+`worker/cache.rs` and persists through `lunco-storage`; native command lanes
+live in `worker/scheduling.rs`. API commands are opt-in, and API query providers
+are owned by `lunco-modelica-api`.
+
+**`lunco-modelica-document`**
+Headless, render-free Modelica document package. It owns the canonical source
+buffer, recovering AST/index cache, typed document operations, source patching,
+document-origin/file-backed contract, and low-level document tests. It has no
+Bevy, compiler worker, UI, or simulation lifecycle; hosts install its
+`ModelicaDocument` through the generic `lunco-doc-bevy::DocumentRegistry`.
 
 **`lunco-modelica-solver`**
 Renderer-free Rumoca solver capability. It owns backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session; the compiler host supplies lowered solve models and owns document/worker lifecycle. This keeps solver-specific numerical dependencies and low-level integration tests out of the compiler host's source boundary.

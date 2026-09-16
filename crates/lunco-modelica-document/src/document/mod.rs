@@ -4,8 +4,8 @@ pub mod apply;
 pub mod core;
 pub mod ops;
 
-pub use core::{parse_diag_from_error, AstCache, ModelicaDocument, SyntaxCache};
-pub use ops::{FreshAst, ModelicaChange, ModelicaOp, OpKind, CHANGE_HISTORY_CAPACITY};
+pub use core::{AstCache, ModelicaDocument, SyntaxCache, parse_diag_from_error};
+pub use ops::{CHANGE_HISTORY_CAPACITY, FreshAst, ModelicaChange, ModelicaOp, OpKind};
 
 #[cfg(test)]
 mod tests {

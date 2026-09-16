@@ -10,6 +10,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-readiness = { path = "../lunco-readiness" }
+lunco-hooks = { path = "../lunco-hooks" }
 bevy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

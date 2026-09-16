@@ -1,7 +1,7 @@
 //! Code panel — shows the source for the currently-selected entity.
 //!
 //! Reads `SelectedEntities`, then queries:
-//!   - `lunco_modelica_ui::ui::ModelicaDocumentRegistry` for `.mo` source
+//!   - the generic Modelica document registry for `.mo` source
 //!     attached to a `ModelicaModel` entity (e.g. the Red Balloon).
 //!   - `lunco_scripting::ScriptRegistry` + `ScriptedModel` component for
 //!     scripted source (e.g. the Green Balloon).
@@ -13,7 +13,8 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_modelica_core::state::ModelicaDocumentRegistry;
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_modelica_document::ModelicaDocument;
 use lunco_scene_selection::SelectedEntities;
 use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_scripting::ScriptRegistry;
@@ -54,10 +55,12 @@ fn code_panel_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     };
 
     // Try Modelica first — resolve entity → DocumentId → source.
-    let modelica = ctx.resource::<ModelicaDocumentRegistry>().and_then(|r| {
-        let doc = r.document_of(entity)?;
-        r.host(doc).map(|h| h.document().source().to_string())
-    });
+    let modelica = ctx
+        .resource::<DocumentRegistry<ModelicaDocument>>()
+        .and_then(|r| {
+            let doc = r.document_of(entity)?;
+            r.host(doc).map(|h| h.document().source().to_string())
+        });
 
     if let Some(source) = modelica {
         ui.label(egui::RichText::new("Modelica").small().weak());

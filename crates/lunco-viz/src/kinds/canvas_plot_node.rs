@@ -155,7 +155,7 @@ pub type SamplePoint = [f64; 2];
 pub struct SignalSnapshot {
     pub samples: HashMap<(Entity, String), Arc<Vec<SamplePoint>>>,
     /// Document → currently-bound sim entity. Populated by the host
-    /// from `ModelicaDocumentRegistry`. Per-doc plot tiles
+    /// from the Modelica `DocumentRegistry`. Per-doc plot tiles
     /// (`PlotNodeData.doc_id = Some(_)`) use this to recover the
     /// runtime sim entity at fetch time instead of baking it in at
     /// projection. Survives sim restart and tab switches without a

@@ -436,6 +436,10 @@ impl lunco_doc::FileBacked for ScriptDocument {
         ScriptDocument::is_dirty(self)
     }
 
+    fn mark_saved(&mut self) {
+        ScriptDocument::mark_saved(self);
+    }
+
     fn reload_base(&mut self, source: &str) -> bool {
         if self.source == source {
             // The external source and resident document agree. Re-baseline the

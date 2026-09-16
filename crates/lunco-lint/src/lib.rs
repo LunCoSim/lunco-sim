@@ -63,6 +63,61 @@ pub fn hook_id(domain: &str) -> String {
     format!("lint.{domain}")
 }
 
+lunco_hooks::declare_hook! {
+    id: "lint.usd",
+    owner: "lunco-lint",
+    description: "Evaluate authored USD facts with the active USD lint rules.",
+    signature: [facts: Map],
+    output: ArrayOfMap,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
+lunco_hooks::declare_hook! {
+    id: "lint.rhai",
+    owner: "lunco-lint",
+    description: "Evaluate authored Rhai facts with the active Rhai lint rules.",
+    signature: [facts: Map],
+    output: ArrayOfMap,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
+lunco_hooks::declare_hook! {
+    id: "lint.modelica",
+    owner: "lunco-lint",
+    description: "Evaluate authored Modelica facts with the active Modelica lint rules.",
+    signature: [facts: Map],
+    output: ArrayOfMap,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
+lunco_hooks::declare_hook! {
+    id: "lint.sysml",
+    owner: "lunco-lint",
+    description: "Evaluate authored SysML facts with the active SysML lint rules.",
+    signature: [facts: Map],
+    output: ArrayOfMap,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
+lunco_hooks::declare_hook! {
+    id: "lint.twin",
+    owner: "lunco-lint",
+    description: "Evaluate authored Twin facts with the active Twin lint rules.",
+    signature: [facts: Map],
+    output: ArrayOfMap,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
 /// How much a finding matters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Reflect)]
 pub enum LintSeverity {

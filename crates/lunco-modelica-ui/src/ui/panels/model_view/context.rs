@@ -1,7 +1,7 @@
 //! Helpers for syncing tab state with global workspace state.
 
 use crate::model_tabs::ModelTabs;
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::panels::code_editor::EditorBufferState;
 use crate::ui::workbench_state::WorkbenchState;
 use bevy::prelude::*;
@@ -42,7 +42,7 @@ pub fn resolve_tab_title(
     }
 
     if let Some(host) = world
-        .get_resource::<ModelicaDocumentRegistry>()
+        .get_resource::<ModelicaDocuments>()
         .and_then(|r| r.host(doc))
     {
         let document = host.document();
@@ -77,8 +77,12 @@ pub fn resolve_tab_title(
         .get_resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     if active_doc == Some(doc) {
-        if let Some(name) = crate::state::display_name_for(world, doc) {
-            return (name, false, crate::state::read_only_for(world, doc));
+        if let Some(name) = crate::ui::document_context::display_name_for(world, doc) {
+            return (
+                name,
+                false,
+                crate::ui::document_context::read_only_for(world, doc),
+            );
         }
     }
     (format!("Model #{}", doc.raw()), false, false)
@@ -92,7 +96,7 @@ pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class
     // Fast-path: if we're already active AND the buffer is already bound
     // to this doc with the same generation, nothing to do.
     let buffer_matches = {
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         let live_gen = registry.host(doc).map(|h| h.generation()).unwrap_or(0);
         let buf = world.get_resource::<EditorBufferState>();
         let buf_doc = buf.and_then(|b| b.bound_doc);
@@ -105,7 +109,7 @@ pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class
     }
 
     let snapshot = {
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         registry.host(doc).map(|h| {
             let document = h.document();
             let display_name = document.origin().display_name();
@@ -220,7 +224,7 @@ pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class
 
 pub fn refresh_selected_entity_for(world: &mut World, doc: DocumentId) {
     let entity = world
-        .resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocuments>()
         .entities_linked_to(doc)
         .into_iter()
         .next();

@@ -36,12 +36,15 @@
 //! reusable diagram graph are provided by `lunco-modelica-ast`. This crate
 //! owns the document lifecycle, compiler session, worker orchestration,
 //! simulation resources, and Modelica-specific runtime integration around
-//! those source contracts.
-use crate::state::ModelicaDocumentRegistry;
+//! those source contracts. Headless document and source-editing mechanics live
+//! in `lunco-modelica-document`, so compiler consumers do not compile this
+//! crate's document implementation merely to use that lower-level contract.
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 #[cfg(feature = "api")]
 use lunco_api::executor::DeferredCommandAppExt;
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_modelica_document::ModelicaDocument;
 use lunco_modelica_runtime::{
     CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet, SimSampleStream,
 };
@@ -72,12 +75,6 @@ pub mod class_ref;
 /// and inspector title all read through one path.
 pub mod class_metadata;
 
-/// `ModelicaDocument` — the Document System representation of a `.mo` file.
-///
-/// Introduced dormant (no panels use it yet). See the module-level docstring
-/// for migration order.
-pub mod document;
-
 /// Shared parse + I/O cache for Modelica classes. Drill-in, AddComponent
 /// preload, and compile dep-walk all funnel through here so every class file is
 /// read once, parsed once, and shared as an `Arc` across tabs and compile jobs.
@@ -87,6 +84,7 @@ pub mod document;
 /// [`ClassLookupMode::Cached`] exists — off-thread callers must never block on a
 /// cold parse, so they take the peek-only path and miss rather than stall.
 pub mod class_cache;
+pub mod library_documents;
 pub mod library_fs;
 
 /// Modelica-to-diagram graph builder — converts AST into DiagramGraph.
@@ -111,9 +109,6 @@ pub mod model_tabs_types;
 pub mod package_tree;
 
 pub mod sim_default;
-/// Document registry and generated-source state shared by all Modelica hosts.
-pub mod state;
-
 /// Pure simulation-target & run-configuration resolution (which class to
 /// run, what bounds to run it with). No `World`/UI deps — the `ui/` layer
 /// gathers inputs and calls down. See [`sim_target`].
@@ -137,12 +132,6 @@ pub mod engine_resource;
 /// experiment setups sync + persist. Run results ride the content plane; run
 /// status rides presence.
 pub mod experiment_journal;
-/// Modelica adapter to the canonical Twin journal in
-/// `lunco-twin-journal`. Records each applied [`crate::document::ModelicaOp`] as a
-/// summary entry alongside its inverse. See module docs for the
-/// "summary, not full Serialize" rationale.
-pub mod journal;
-
 /// Minimal byte-range diff helper. Used by the code-editor commit path
 /// to convert a debounced full-buffer snapshot into a single
 /// `ModelicaOp::EditText` splice — finer undo granularity and
@@ -1050,7 +1039,9 @@ fn diagnostics_from_strict_report(
             match resolved {
                 Some((name, content, start)) if name == user_uri => {
                     let (line, column) =
-                        crate::document::core::byte_offset_to_line_col(&content, start);
+                        lunco_modelica_document::document::core::byte_offset_to_line_col(
+                            &content, start,
+                        );
                     Diagnostic::error(message, Some(line), Some(column))
                 }
                 // Diagnostic in another file — name it so the user knows
@@ -1090,8 +1081,10 @@ fn diagnostics_from_sim_error(
         // lands inside the buffer we're resolving against (guards against a
         // span rooted in a library/compiler-generated source).
         Some(span) if span.start.0 <= source.len() => {
-            let (line, column) =
-                crate::document::core::byte_offset_to_line_col(source, span.start.0);
+            let (line, column) = lunco_modelica_document::document::core::byte_offset_to_line_col(
+                source,
+                span.start.0,
+            );
             vec![Diagnostic::error(message, Some(line), Some(column))]
         }
         _ => vec![Diagnostic::message_only(message)],
@@ -1154,7 +1147,7 @@ impl Plugin for ModelicaCorePlugin {
 /// session query as file-backed editor documents in headless and offscreen runs.
 fn sync_workspace_on_doc_opened(
     trigger: On<lunco_doc_bevy::DocumentOpened>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<DocumentRegistry<ModelicaDocument>>,
     workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
     mut source_roots: Option<ResMut<source_roots::SourceRootRegistry>>,
 ) {
@@ -1207,7 +1200,7 @@ fn sync_workspace_on_doc_closed(
 
 fn sync_workspace_on_doc_changed(
     trigger: On<lunco_doc_bevy::DocumentChanged>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<DocumentRegistry<ModelicaDocument>>,
     workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
 ) {
     let Some(mut workspace) = workspace else {
@@ -1224,7 +1217,7 @@ fn sync_workspace_on_doc_changed(
 
 fn sync_workspace_on_doc_saved(
     trigger: On<lunco_doc_bevy::DocumentSaved>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<DocumentRegistry<ModelicaDocument>>,
     workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
 ) {
     let Some(mut workspace) = workspace else {
@@ -1327,7 +1320,7 @@ fn build_modelica_core(app: &mut App) {
     // adds core first, so the GUI still gets them. The transport-free edit
     // command plugin is owned by `lunco-modelica-api` and installed by API
     // hosts. Guarded/idempotent so hosts can compose the packages independently.
-    app.init_resource::<crate::state::ModelicaDocumentRegistry>();
+    app.init_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>();
     app.add_systems(Update, crate::doc_ops::drain_document_changes);
     app.add_systems(
         Update,

@@ -14,8 +14,8 @@ use lunco_modelica_ast::pretty::{
     GraphicSpec, Line, LinePattern, LunCoPlotNodeSpec, Placement, PortRef, VariabilitySpec,
     VariableDecl,
 };
-use lunco_modelica_core::document::ModelicaOp;
-use lunco_modelica_core::state::ModelicaDocumentRegistry;
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_modelica_document::{ModelicaDocument, ModelicaOp};
 use util::strip_same_package_prefix;
 
 /// Plugin that registers the Modelica edit events + observers.
@@ -432,7 +432,7 @@ pub struct ApplyModelicaOps {
 #[on_command(ApplyModelicaOps)]
 pub fn on_apply_modelica_ops(
     trigger: On<ApplyModelicaOps>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<DocumentRegistry<ModelicaDocument>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let raw = trigger.event().doc_id;
@@ -486,7 +486,7 @@ pub fn on_apply_modelica_ops(
         let doc = raw;
         if let Some(parent) = parent_generation {
             let current = world
-                .get_resource::<ModelicaDocumentRegistry>()
+                .get_resource::<DocumentRegistry<ModelicaDocument>>()
                 .and_then(|registry| registry.host(doc))
                 .map(|host| host.document().generation());
             if current != Some(parent) {

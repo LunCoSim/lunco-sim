@@ -57,17 +57,16 @@
 //! - **Telemetry** (right dock) — parameters, inputs, variable toggles
 //! - **Graphs** (bottom dock) — time-series plots of simulation variables
 
+use crate::ui::document_context::ModelicaDocuments;
+use crate::ui::workbench_state::WorkbenchState;
 use bevy::prelude::*;
+use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_ui::log::{LogBuffer, LogLevel};
 use lunco_workbench::WorkbenchAppExt;
 use lunco_workbench_core::{
     MenuCtx, PanelId, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
     UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchPanelAppExt,
 };
-// Core document/library/compile state moved out of `ui` into `crate::state`.
-use crate::state::ModelicaDocumentRegistry;
-use crate::ui::workbench_state::WorkbenchState;
-use lunco_doc_bevy::DocumentDiagnostics;
 
 /// The [`PanelId`] under which `ModelViewPanel` is registered. Lives in the
 /// `ui` module because `PanelId` is a workbench (UI) panel-registry key — the
@@ -91,6 +90,7 @@ pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod class_display;
 pub mod context;
+pub(crate) mod document_context;
 /// Debounced AST reparse driver — see module docs.
 pub mod input_activity;
 pub mod panels;
@@ -156,7 +156,7 @@ struct ClassRemovedWatermark(std::collections::HashMap<lunco_doc::DocumentId, u6
 /// changes) rather than O(history).
 fn close_drilled_tabs_on_class_removed(
     trigger: On<lunco_doc_bevy::DocumentChanged>,
-    registry: Res<crate::state::ModelicaDocumentRegistry>,
+    registry: Res<crate::ui::document_context::ModelicaDocuments>,
     mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut watermark: ResMut<ClassRemovedWatermark>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
@@ -184,10 +184,10 @@ fn close_drilled_tabs_on_class_removed(
     for (gen, change) in changes {
         highest_gen = highest_gen.max(*gen);
         match change {
-            crate::document::ModelicaChange::ClassRemoved { qualified } => {
+            lunco_modelica_document::ModelicaChange::ClassRemoved { qualified } => {
                 to_close.push(qualified.clone());
             }
-            crate::document::ModelicaChange::ClassRenamed { old, new } => {
+            lunco_modelica_document::ModelicaChange::ClassRenamed { old, new } => {
                 to_rename.push((old.clone(), new.clone()));
             }
             _ => {}
@@ -296,7 +296,7 @@ fn close_drilled_tabs_on_class_removed(
 struct DocTitleGenCache(std::collections::HashMap<lunco_doc::DocumentId, u64>);
 
 fn derive_doc_title(
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<ModelicaDocuments>,
     mut ws: ResMut<lunco_workspace::WorkspaceResource>,
     mut cache: ResMut<DocTitleGenCache>,
 ) {
@@ -332,7 +332,7 @@ fn derive_doc_title(
 /// fall back to the origin's display name. Kept separate so future
 /// drilled-in / multi-class logic plugs in without re-deriving the
 /// fallback chain.
-fn derive_title_from_doc(doc: &crate::document::ModelicaDocument) -> String {
+fn derive_title_from_doc(doc: &lunco_modelica_document::ModelicaDocument) -> String {
     if let Some(name) = doc.index().classes.keys().next() {
         if !name.is_empty() {
             return name.clone();
@@ -420,7 +420,7 @@ fn clear_modelica_state_on_twin_closed(
 /// done with the source.
 fn cleanup_removed_simulators(
     mut removed: RemovedComponents<ModelicaModel>,
-    registry: Option<ResMut<ModelicaDocumentRegistry>>,
+    registry: Option<ResMut<ModelicaDocuments>>,
     signals: Option<ResMut<lunco_viz::SignalRegistry>>,
     viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
 ) {
@@ -446,10 +446,10 @@ fn cleanup_removed_simulators(
 }
 
 /// Link any freshly-spawned `ModelicaModel` into the
-/// [`ModelicaDocumentRegistry`] doc→entity map. The mirror image of
+/// [`ModelicaDocuments`] doc→entity map. The mirror image of
 /// [`cleanup_removed_simulators`]: removal is centralised via
 /// `RemovedComponents`, so addition is too. The Interactive Live row,
-/// [`crate::state::simulator_for`], and every doc-scoped panel resolve their
+/// [`crate::ui::document_context::simulator_for`], and every doc-scoped panel resolve their
 /// entity through this map, so a spawn path that forgets the explicit
 /// `registry.link()` would silently drop the live sim from those surfaces —
 /// this closes that gap structurally. Idempotent with the explicit links the
@@ -457,7 +457,7 @@ fn cleanup_removed_simulators(
 /// entity→doc pair is a no-op).
 fn link_added_simulators(
     added: Query<(Entity, &ModelicaModel), Added<ModelicaModel>>,
-    registry: Option<ResMut<ModelicaDocumentRegistry>>,
+    registry: Option<ResMut<ModelicaDocuments>>,
 ) {
     let Some(mut registry) = registry else { return };
     for (entity, model) in &added {
@@ -469,7 +469,12 @@ fn link_added_simulators(
         if model.document != lunco_doc::DocumentId::default()
             && registry.host(model.document).is_some()
         {
-            registry.link(entity, model.document);
+            if let Err(error) = registry.link(entity, model.document) {
+                bevy::log::warn!(
+                    "[ModelicaUi] failed to link entity {entity} to document {}: {error}",
+                    model.document
+                );
+            }
         }
     }
 }
@@ -596,7 +601,7 @@ impl Plugin for ModelicaUiPlugin {
         app.register_document_session_codec(session_codec::ModelicaSessionCodec);
 
         // Long-lived workspace `ModelicaEngine` mirrored from
-        // `ModelicaDocumentRegistry`. Panel render code, API
+        // `ModelicaDocuments`. Panel render code, API
         // observers, and async tasks query the same warm session
         // instead of rebuilding one per call.
         app.add_plugins(crate::engine_resource::ModelicaEnginePlugin);
@@ -629,7 +634,7 @@ impl Plugin for ModelicaUiPlugin {
         // supplied by `lunco-modelica-api` and installed by `ModelicaPlugin`.
 
         app.init_resource::<WorkbenchState>()
-            .init_resource::<ModelicaDocumentRegistry>()
+            .init_resource::<ModelicaDocuments>()
             .init_resource::<DocumentDiagnostics>()
             .init_resource::<crate::model_tabs::ModelTabs>()
             .init_resource::<browser_section::DocRenameState>()
@@ -861,7 +866,7 @@ impl Plugin for ModelicaUiPlugin {
         app.init_resource::<lunco_workbench_browser::BrowserSectionRegistry>();
         // One section per domain — `ModelicaSection` reads system
         // libraries straight from `PackageTreeCache::roots` and
-        // workspace docs from `ModelicaDocumentRegistry`. No parallel
+        // workspace docs from `ModelicaDocuments`. No parallel
         // registry to keep in sync. Adding a new library is a one-line
         // `roots.push(...)` in `PackageTreeCache::new`; future domain
         // crates (`UsdSection`, `SysmlSection`, ...) follow the same
@@ -1243,7 +1248,7 @@ fn register_edit_menu(world: &mut World) {
             .resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|workspace| workspace.0.active_document)?;
         let host = ctx
-            .resource::<crate::state::ModelicaDocumentRegistry>()?
+            .resource::<crate::ui::document_context::ModelicaDocuments>()?
             .host(doc)?;
         Some((host.can_undo(), host.can_redo()))
     });
@@ -1379,14 +1384,15 @@ mod tests {
     #[test]
     fn despawning_a_simulator_keeps_its_document() {
         let mut app = App::new();
-        app.init_resource::<ModelicaDocumentRegistry>();
+        app.init_resource::<ModelicaDocuments>();
         app.add_systems(Update, cleanup_removed_simulators);
 
         let entity = app.world_mut().spawn(ModelicaModel::default()).id();
         let doc = {
-            let mut reg = app.world_mut().resource_mut::<ModelicaDocumentRegistry>();
+            let mut reg = app.world_mut().resource_mut::<ModelicaDocuments>();
             let doc = reg.allocate("model M end M;".into());
-            reg.link(entity, doc);
+            reg.link(entity, doc)
+                .expect("Modelica UI test document link");
             doc
         };
 
@@ -1394,7 +1400,7 @@ mod tests {
         app.world_mut().entity_mut(entity).despawn();
         app.update();
 
-        let reg = app.world().resource::<ModelicaDocumentRegistry>();
+        let reg = app.world().resource::<ModelicaDocuments>();
         assert!(
             reg.host(doc).is_some(),
             "a scene reload despawned the entity and took the user's document with it"

@@ -1,6 +1,6 @@
 //! Inspection commands for Modelica documents.
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 
@@ -19,7 +19,7 @@ pub fn on_inspect_active_doc(_trigger: On<InspectActiveDoc>, mut commands: Comma
             bevy::log::warn!("[InspectActiveDoc] no active document");
             return;
         };
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         let Some(host) = registry.host(doc) else {
             bevy::log::warn!("[InspectActiveDoc] doc {} not in registry", doc.raw());
             return;

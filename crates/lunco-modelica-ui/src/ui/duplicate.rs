@@ -74,7 +74,7 @@ pub(crate) fn extract_class_spans_via_path(
 /// returns the splice spans needed by `rewrite_inject_in_one_pass`.
 /// Use when the caller has source text but no on-disk URI — e.g.,
 /// duplicating a workspace doc whose source lives in
-/// `ModelicaDocumentRegistry`.
+/// `ModelicaDocuments`.
 pub(crate) fn extract_class_spans_inline(
     source: &str,
     class_name: &str,

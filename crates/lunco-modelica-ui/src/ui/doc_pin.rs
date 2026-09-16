@@ -111,7 +111,7 @@ pub fn resolved_experiments_doc_ctx(ctx: &lunco_workbench_core::PanelCtx) -> Opt
 
 /// `PanelCtx` sibling of [`doc_display_name`].
 pub fn doc_display_name_ctx(ctx: &lunco_workbench_core::PanelCtx, doc: DocumentId) -> String {
-    ctx.resource::<crate::state::ModelicaDocumentRegistry>()
+    ctx.resource::<crate::ui::document_context::ModelicaDocuments>()
         .and_then(|reg| reg.host(doc))
         .map(|host| host.document().origin().display_name())
         .unwrap_or_else(|| format!("doc#{:?}", doc))
@@ -200,7 +200,7 @@ pub fn render_pin_header(
 
 pub fn doc_display_name(world: &World, doc: DocumentId) -> String {
     world
-        .get_resource::<crate::state::ModelicaDocumentRegistry>()
+        .get_resource::<crate::ui::document_context::ModelicaDocuments>()
         .and_then(|reg| reg.host(doc))
         .map(|host| host.document().origin().display_name())
         .unwrap_or_else(|| format!("doc#{:?}", doc))

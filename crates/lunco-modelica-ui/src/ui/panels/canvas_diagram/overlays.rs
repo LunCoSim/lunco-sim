@@ -9,7 +9,7 @@ use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
 use lunco_workbench_core::PanelCtx;
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::theme::ModelicaThemeExt;
 
 use super::active_doc_from_world_ctx;
@@ -108,7 +108,7 @@ pub(super) fn render_empty_diagram_overlay(
         .resource::<lunco_workspace::WorkspaceResource>()
         .and_then(|ws| ws.active_document);
     let Some(doc) = active else { return };
-    let Some(registry) = ctx.resource::<crate::state::ModelicaDocumentRegistry>() else {
+    let Some(registry) = ctx.resource::<crate::ui::document_context::ModelicaDocuments>() else {
         return;
     };
     let Some(host) = registry.host(doc) else {
@@ -131,7 +131,7 @@ pub(super) fn render_empty_diagram_overlay(
         let active_doc = active_doc_from_world_ctx(ctx);
         let drilled =
             active_doc.and_then(|doc| crate::ui::context::drilled_class_for_doc(ctx, doc));
-        let registry = match ctx.resource::<ModelicaDocumentRegistry>() {
+        let registry = match ctx.resource::<ModelicaDocuments>() {
             Some(r) => r,
             None => return,
         };
@@ -286,7 +286,7 @@ pub(super) fn empty_overlay_class_info(
     let Some(doc) = doc_id else {
         return (None, None, None, vec![], vec![], vec![]);
     };
-    let Some(registry) = ctx.resource::<ModelicaDocumentRegistry>() else {
+    let Some(registry) = ctx.resource::<ModelicaDocuments>() else {
         return (None, None, None, vec![], vec![], vec![]);
     };
     let Some(host) = registry.host(doc) else {

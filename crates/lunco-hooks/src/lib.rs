@@ -24,9 +24,10 @@
 //!   so the one extra conversion hop is irrelevant.
 //! - [`ScriptHook`] — the single interface a language backend implements *once*
 //!   (`HookValue in → HookValue out`); one impl then services **every** hook.
-//! - The global [`register`]/[`invoke`] registry — dependency-free, headless-safe
+//! - The global [`register`]/[`invoke`] registry — dependency-light, headless-safe
 //!   (works deep inside a pure crate like the journal, with no Bevy/ECS), keyed by
-//!   a `HookId` string.
+//!   a `HookId` string. Owner-side declarations use [`declare_hook!`], whose
+//!   inventory submission is collected automatically across crates.
 //!
 //! # Determinism contract
 //!
@@ -116,6 +117,19 @@ impl HookValue {
             _ => None,
         }
     }
+
+    /// Stable ABI spelling for the runtime value kind.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            HookValue::Unit => HookValueType::Unit.as_str(),
+            HookValue::Int(_) => HookValueType::Int.as_str(),
+            HookValue::Float(_) => HookValueType::Float.as_str(),
+            HookValue::Bool(_) => HookValueType::Bool.as_str(),
+            HookValue::Str(_) => HookValueType::String.as_str(),
+            HookValue::Array(_) => HookValueType::Array.as_str(),
+            HookValue::Map(_) => HookValueType::Map.as_str(),
+        }
+    }
 }
 
 // ── The one interface every language implements ──────────────────────────────
@@ -145,7 +159,48 @@ pub trait ScriptHook: Send + Sync + 'static {
     fn invoke(&self, args: &[HookValue]) -> HookResult;
 }
 
-// ── Registry (mirrors lunco-tools: global, dependency-free, generation-tracked)
+/// Declare one hook contract with a small, repeatable owner-side syntax.
+///
+/// The macro is intentionally only for the Rust-owned seam contract. Policy
+/// source and entry-point metadata are loaded from authored manifests at
+/// runtime with [`bind_policy`]. The declaration is submitted to the global
+/// catalog at link time, so the owner writes it exactly where the hook id and
+/// ABI are defined; no application-composition list is required.
+#[macro_export]
+macro_rules! declare_hook {
+    (
+        id: $id:expr,
+        owner: $owner:expr,
+        description: $description:expr,
+        signature: [$($parameter:ident : $parameter_type:ident),* $(,)?],
+        output: $output:ident,
+        deterministic: $deterministic:expr,
+        required: $required:expr,
+        installable: $installable:expr $(,)?
+    ) => {
+        $crate::__inventory::submit! {
+            $crate::HookDeclaration {
+                id: $id,
+                owner: $owner,
+                description: $description,
+                parameters: &[
+                    $(
+                        $crate::HookParameterDeclaration {
+                            name: stringify!($parameter),
+                            value_type: $crate::HookValueType::$parameter_type,
+                        }
+                    ),*
+                ],
+                output: $crate::HookValueType::$output,
+                deterministic: $deterministic,
+                required: $required,
+                installable: $installable,
+            }
+        }
+    };
+}
+
+// ── Registry (global, generation-tracked; declarations are link-collected) ───
 
 /// A registered hook: its id, which backend authored it, whether it is safe for
 /// convergent/replicated use (see the crate-level determinism contract), and the
@@ -171,9 +226,194 @@ pub struct HookInfo {
     pub deterministic: bool,
 }
 
+/// A type in the closed `HookValue` ABI.
+///
+/// The variants intentionally describe the boundary, rather than a Rhai or
+/// serde representation. `ArrayOfString`, `ArrayOfMap`, and `StringOrUnit`
+/// capture the compound shapes used by current hooks without falling back to
+/// an unstructured signature string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookValueType {
+    /// No value (`()` in Rhai).
+    Unit,
+    /// Signed integer.
+    Int,
+    /// 64-bit floating-point number.
+    Float,
+    /// Boolean.
+    Bool,
+    /// UTF-8 string.
+    String,
+    /// Ordered array with an unspecified element type.
+    Array,
+    /// String-keyed map.
+    Map,
+    /// Ordered array of strings.
+    ArrayOfString,
+    /// Ordered array of maps.
+    ArrayOfMap,
+    /// A string or the unit value.
+    StringOrUnit,
+    /// An unconstrained value, used only where a future extension has no
+    /// closed ABI yet.
+    Any,
+}
+
+impl HookValueType {
+    /// Stable lower-case spelling used by API and Rhai reflection.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unit => "unit",
+            Self::Int => "int",
+            Self::Float => "float",
+            Self::Bool => "bool",
+            Self::String => "string",
+            Self::Array => "array",
+            Self::Map => "map",
+            Self::ArrayOfString => "array<string>",
+            Self::ArrayOfMap => "array<map>",
+            Self::StringOrUnit => "string|unit",
+            Self::Any => "any",
+        }
+    }
+}
+
+/// One named positional parameter in a hook function signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookParameterDeclaration {
+    /// Rhai-facing parameter name.
+    pub name: &'static str,
+    /// Closed type accepted at the hook boundary.
+    pub value_type: HookValueType,
+}
+
+/// One owned hook parameter for runtime reflection consumers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookParameter {
+    /// Rhai-facing parameter name.
+    pub name: String,
+    /// Closed type accepted at the hook boundary.
+    pub value_type: HookValueType,
+}
+
+/// A link-collected hook contract submitted by [`declare_hook!`].
+///
+/// Static string fields keep the declaration link-time friendly and avoid
+/// allocating or initializing a Bevy/serde value in every owner crate. The
+/// runtime catalog converts these to owned records for API/Rhai consumers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookDeclaration {
+    /// Stable hook id used by [`invoke`].
+    pub id: &'static str,
+    /// Crate or subsystem that owns the decision point.
+    pub owner: &'static str,
+    /// Human-readable purpose of the decision point.
+    pub description: &'static str,
+    /// Named positional inputs and their closed ABI types.
+    pub parameters: &'static [HookParameterDeclaration],
+    /// Returned closed ABI type.
+    pub output: HookValueType,
+    /// Whether the contract may be used on a convergent/replicated path.
+    pub deterministic: bool,
+    /// Whether an implementation is required for operation.
+    pub required: bool,
+    /// Whether a runtime policy may install or replace the implementation.
+    pub installable: bool,
+}
+
+#[doc(hidden)]
+pub use inventory as __inventory;
+
+inventory::collect!(HookDeclaration);
+
+/// The contract of a hook point, independent of whether an implementation is
+/// currently installed.
+///
+/// This intentionally uses only owned strings and primitive values. The hook
+/// substrate remains usable by headless and low-level crates, so it does not
+/// depend on Bevy, serde, a scripting language, or a domain crate. The
+/// owner crate supplies these declarations next to the hook definition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookDescriptor {
+    /// Stable hook id used by [`invoke`].
+    pub id: String,
+    /// Crate or subsystem that owns the decision point.
+    pub owner: String,
+    /// Human-readable purpose of the decision point.
+    pub description: String,
+    /// Named positional inputs and their closed ABI types.
+    pub parameters: Vec<HookParameter>,
+    /// Returned closed ABI type.
+    pub output: HookValueType,
+    /// Whether the contract may be used on a convergent/replicated path.
+    pub deterministic: bool,
+    /// Whether an implementation is required for this seam to operate.
+    ///
+    /// Keep this false unless the owning mechanism genuinely cannot make
+    /// progress without a policy. A missing optional policy is a visible
+    /// unconfigured state, not a reason to invent a Rust fallback.
+    pub required: bool,
+    /// Whether a runtime policy may install or replace the implementation.
+    pub installable: bool,
+}
+
+/// Active authored policy metadata associated with a hook seam.
+///
+/// This is separate from [`HookDescriptor`] because policy source is loaded
+/// from the application or Twin asset set at runtime; it is not a Rust-owned
+/// property of the low-level hook contract.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookPolicyBinding {
+    /// Relative source asset used by the active policy.
+    pub policy_file: String,
+    /// Entry function compiled from [`policy_file`].
+    pub policy_entry: String,
+}
+
+/// One row in the complete hook reflection catalog.
+///
+/// A declared hook with no backend is still a real hook point: its owner has
+/// exposed the seam, but no implementation is active. An installed hook with
+/// `declared == false` is an explicitly dynamic extension and is reported as
+/// such instead of being made to look like a documented built-in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookCatalogEntry {
+    /// Stable hook id.
+    pub id: String,
+    /// Declared owner, or `runtime` for an undeclared dynamic extension.
+    pub owner: String,
+    /// Contract description, or an explicit undeclared-extension description.
+    pub description: String,
+    /// Declared named positional parameters, or an empty list for a dynamic extension.
+    pub parameters: Vec<HookParameter>,
+    /// Declared output type, or [`HookValueType::Any`] for a dynamic extension.
+    pub output: HookValueType,
+    /// Authored policy source, when one is associated with the seam.
+    pub policy_file: Option<String>,
+    /// Authored policy entry function, when one is associated with the seam.
+    pub policy_entry: Option<String>,
+    /// Determinism contract of the declared or installed implementation.
+    pub deterministic: bool,
+    /// Whether the owner says an implementation is required for operation.
+    pub required: bool,
+    /// Whether this seam can be installed through the policy registration API.
+    pub installable: bool,
+    /// Whether the owner declared this hook contract.
+    pub declared: bool,
+    /// Whether an implementation is installed now.
+    pub installed: bool,
+    /// Backend of the installed implementation, if any.
+    pub backend: Option<String>,
+}
+
 fn registry() -> &'static RwLock<HashMap<String, Arc<RegisteredHook>>> {
     static R: OnceLock<RwLock<HashMap<String, Arc<RegisteredHook>>>> = OnceLock::new();
     R.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn policy_bindings() -> &'static RwLock<HashMap<String, HookPolicyBinding>> {
+    static P: OnceLock<RwLock<HashMap<String, HookPolicyBinding>>> = OnceLock::new();
+    P.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 fn generation_cell() -> &'static AtomicU64 {
@@ -206,6 +446,50 @@ pub fn unregister(id: &str) {
     }
 }
 
+/// The declared contract under `id`, if any.
+pub fn descriptor(id: &str) -> Option<HookDescriptor> {
+    inventory::iter::<HookDeclaration>
+        .into_iter()
+        .find(|declaration| declaration.id == id)
+        .map(|declaration| HookDescriptor {
+            id: declaration.id.into(),
+            owner: declaration.owner.into(),
+            description: declaration.description.into(),
+            parameters: declaration
+                .parameters
+                .iter()
+                .map(|parameter| HookParameter {
+                    name: parameter.name.into(),
+                    value_type: parameter.value_type,
+                })
+                .collect(),
+            output: declaration.output,
+            deterministic: declaration.deterministic,
+            required: declaration.required,
+            installable: declaration.installable,
+        })
+}
+
+/// Associate the active authored policy source with a hook seam.
+///
+/// Policy loading is dynamic and may replace this binding when a Twin opens or
+/// a policy source is reloaded. It does not alter the hook implementation or
+/// its generation; [`register`] and [`unregister`] own that state transition.
+pub fn bind_policy(id: impl Into<String>, binding: HookPolicyBinding) {
+    policy_bindings()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(id.into(), binding);
+}
+
+/// Remove active policy metadata for a seam.
+pub fn unbind_policy(id: &str) {
+    policy_bindings()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(id);
+}
+
 /// The registered hook under `id`, if any (clones the `Arc`; cheap).
 pub fn get(id: &str) -> Option<Arc<RegisteredHook>> {
     registry()
@@ -215,12 +499,68 @@ pub fn get(id: &str) -> Option<Arc<RegisteredHook>> {
         .cloned()
 }
 
-/// Invoke the hook registered under `id`. `None` if no such hook is registered
-/// (so the caller can fall back to its built-in behaviour); `Some(Err)` if the
-/// hook ran but faulted.
+/// Invoke the hook registered under `id`. `None` means that the implementation
+/// is unavailable; the owning seam decides whether that is a valid state or a
+/// visible diagnostic. `Some(Err)` means the installed hook faulted.
 pub fn invoke(id: &str, args: &[HookValue]) -> Option<HookResult> {
     let hook = get(id)?;
-    Some(hook.hook.invoke(args))
+    if let Some(contract) = descriptor(id) {
+        if args.len() != contract.parameters.len() {
+            return Some(Err(HookError(format!(
+                "hook '{id}' expects {} argument(s), received {}",
+                contract.parameters.len(),
+                args.len()
+            ))));
+        }
+        for (index, (argument, parameter)) in args.iter().zip(&contract.parameters).enumerate() {
+            if !matches_value_type(parameter.value_type, argument) {
+                return Some(Err(HookError(format!(
+                    "hook '{id}' argument {} ('{}') expects {}, received {}",
+                    index,
+                    parameter.name,
+                    parameter.value_type.as_str(),
+                    argument.type_name()
+                ))));
+            }
+        }
+    }
+    let result = hook.hook.invoke(args);
+    Some(result.and_then(|value| {
+        let Some(contract) = descriptor(id) else {
+            return Ok(value);
+        };
+        if matches_value_type(contract.output, &value) {
+            Ok(value)
+        } else {
+            Err(HookError(format!(
+                "hook '{id}' must return {}, received {}",
+                contract.output.as_str(),
+                value.type_name()
+            )))
+        }
+    }))
+}
+
+fn matches_value_type(expected: HookValueType, value: &HookValue) -> bool {
+    match (expected, value) {
+        (HookValueType::Unit, HookValue::Unit)
+        | (HookValueType::Int, HookValue::Int(_))
+        | (HookValueType::Float, HookValue::Float(_))
+        | (HookValueType::Bool, HookValue::Bool(_))
+        | (HookValueType::String, HookValue::Str(_))
+        | (HookValueType::Array, HookValue::Array(_))
+        | (HookValueType::Map, HookValue::Map(_))
+        | (HookValueType::StringOrUnit, HookValue::Unit)
+        | (HookValueType::StringOrUnit, HookValue::Str(_))
+        | (HookValueType::Any, _) => true,
+        (HookValueType::ArrayOfString, HookValue::Array(values)) => values
+            .iter()
+            .all(|value| matches!(value, HookValue::Str(_))),
+        (HookValueType::ArrayOfMap, HookValue::Array(values)) => values
+            .iter()
+            .all(|value| matches!(value, HookValue::Map(_))),
+        _ => false,
+    }
 }
 
 /// Monotonic registry generation — changes on every [`register`]/[`unregister`].
@@ -243,6 +583,126 @@ pub fn index() -> Vec<HookInfo> {
         .collect();
     v.sort_by(|a, b| a.id.cmp(&b.id));
     v
+}
+
+/// Complete reflection catalog of declared seams and installed extensions,
+/// sorted by id.
+pub fn catalog() -> Vec<HookCatalogEntry> {
+    let declared = inventory::iter::<HookDeclaration>
+        .into_iter()
+        .map(|declaration| {
+            (
+                declaration.id.to_owned(),
+                HookDescriptor {
+                    id: declaration.id.into(),
+                    owner: declaration.owner.into(),
+                    description: declaration.description.into(),
+                    parameters: declaration
+                        .parameters
+                        .iter()
+                        .map(|parameter| HookParameter {
+                            name: parameter.name.into(),
+                            value_type: parameter.value_type,
+                        })
+                        .collect(),
+                    output: declaration.output,
+                    deterministic: declaration.deterministic,
+                    required: declaration.required,
+                    installable: declaration.installable,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let policies = policy_bindings()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let installed = registry()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+
+    let mut ids = declared.keys().cloned().collect::<Vec<_>>();
+    ids.extend(
+        policies
+            .keys()
+            .filter(|id| !declared.contains_key(*id))
+            .cloned(),
+    );
+    ids.extend(
+        installed
+            .keys()
+            .filter(|id| !declared.contains_key(*id))
+            .cloned(),
+    );
+    ids.sort_unstable();
+
+    ids.into_iter()
+        .map(|id| match (declared.get(&id), installed.get(&id)) {
+            (Some(descriptor), hook) => HookCatalogEntry {
+                id: id.clone(),
+                owner: descriptor.owner.clone(),
+                description: descriptor.description.clone(),
+                parameters: descriptor.parameters.clone(),
+                output: descriptor.output,
+                policy_file: policies.get(&id).map(|p| p.policy_file.clone()),
+                policy_entry: policies.get(&id).map(|p| p.policy_entry.clone()),
+                deterministic: hook
+                    .map(|hook| hook.deterministic)
+                    .unwrap_or(descriptor.deterministic),
+                required: descriptor.required,
+                installable: descriptor.installable,
+                declared: true,
+                installed: hook.is_some(),
+                backend: hook.map(|hook| hook.backend.clone()),
+            },
+            (None, Some(hook)) => HookCatalogEntry {
+                id: id.clone(),
+                owner: if policies.contains_key(&id) {
+                    "policy"
+                } else {
+                    "runtime"
+                }
+                .into(),
+                description: if policies.contains_key(&id) {
+                    "Runtime policy has no declared hook contract"
+                } else {
+                    "Undeclared runtime hook extension"
+                }
+                .into(),
+                parameters: Vec::new(),
+                output: HookValueType::Any,
+                policy_file: policies.get(&id).map(|p| p.policy_file.clone()),
+                policy_entry: policies.get(&id).map(|p| p.policy_entry.clone()),
+                deterministic: hook.deterministic,
+                required: false,
+                installable: true,
+                declared: false,
+                installed: true,
+                backend: Some(hook.backend.clone()),
+            },
+            (None, None) => {
+                let policy = policies
+                    .get(&id)
+                    .expect("hook catalog id came from one registry");
+                HookCatalogEntry {
+                    id,
+                    owner: "policy".into(),
+                    description: "Runtime policy has no declared hook contract".into(),
+                    parameters: Vec::new(),
+                    output: HookValueType::Any,
+                    policy_file: Some(policy.policy_file.clone()),
+                    policy_entry: Some(policy.policy_entry.clone()),
+                    deterministic: false,
+                    required: false,
+                    installable: true,
+                    declared: false,
+                    installed: false,
+                    backend: None,
+                }
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -271,7 +731,8 @@ mod tests {
         });
         assert!(generation() > gen0, "register must bump the generation");
 
-        // Absent hook → None (caller falls back to built-in).
+        // An absent implementation is observable as None; the owning seam
+        // decides whether that is valid.
         assert!(invoke("test.missing", &[]).is_none());
 
         // Present hook runs.

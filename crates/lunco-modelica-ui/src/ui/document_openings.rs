@@ -2,7 +2,7 @@
 //!
 //! Holds one [`OpeningState`] per [`DocumentId`] until the parse
 //! resolves and the driver hands the document to
-//! [`crate::state::ModelicaDocumentRegistry`]. Each variant
+//! [`crate::ui::document_context::ModelicaDocuments`]. Each variant
 //! owns its own typed `Task<...>` plus a [`lunco_status_core::status_bus::BusyHandle`]
 //! that keeps a `(BusyScope::Document, "opening"|"drill-in"|"duplicate")`
 //! entry on the bus for the parse lifetime.
@@ -138,7 +138,7 @@ pub struct AstReparseBusyHandles {
 /// `bus.lifecycle(Document(d), ...)` alone without an ast-stale
 /// fallback predicate.
 pub fn track_ast_reparse_busy(
-    registry: Res<crate::state::ModelicaDocumentRegistry>,
+    registry: Res<crate::ui::document_context::ModelicaDocuments>,
     mut handles: ResMut<AstReparseBusyHandles>,
     mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
 ) {
@@ -189,7 +189,7 @@ pub struct CompileBusyHandles {
 /// the terminal state is `Error`) when it transitions out.
 pub fn track_compile_busy(
     compile_states: Res<lunco_doc_bevy::DocumentDiagnostics>,
-    registry: Res<crate::state::ModelicaDocumentRegistry>,
+    registry: Res<crate::ui::document_context::ModelicaDocuments>,
     mut handles: ResMut<CompileBusyHandles>,
     mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
 ) {
@@ -275,7 +275,7 @@ pub fn track_simulate_busy(
 /// drain that lived in `handle_package_loading_tasks`.
 pub fn drive_file_load_openings(
     mut openings: ResMut<DocumentOpenings>,
-    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<crate::ui::document_context::ModelicaDocuments>,
     mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut canvas_state: ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>,
     mut tabs: ResMut<crate::model_tabs::ModelTabs>,
@@ -300,7 +300,13 @@ pub fn drive_file_load_openings(
                 // projection boundary; the projection spawn releases
                 // it via `complete_projection_handoff`.
                 canvas_state.stash_projection_handoff(ready.doc_id, busy);
-                registry.install_prebuilt(ready.doc_id, doc);
+                if let Err(error) = registry.install_prebuilt(ready.doc_id, doc) {
+                    bevy::log::warn!(
+                        "[ModelicaOpen] failed to install prebuilt document {}: {error}",
+                        ready.doc_id
+                    );
+                    continue;
+                }
                 workspace.active_document = Some(ready.doc_id);
             }
             Err(msg) => {

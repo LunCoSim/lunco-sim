@@ -6,7 +6,7 @@ use lunco_workbench_core::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::state::ModelicaDocumentRegistry;
+use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::workbench_state::WorkbenchState;
 
 /// Per-tab editor buffer snapshot. Stashed in `EditorBufferState.per_doc`
@@ -331,7 +331,7 @@ impl EditorBufferState {
 /// requires per-keystroke ops, out of scope here.
 pub fn editor_on_doc_changed(
     trigger: On<lunco_doc_bevy::DocumentChanged>,
-    registry: Res<ModelicaDocumentRegistry>,
+    registry: Res<ModelicaDocuments>,
     mut buf_state: ResMut<EditorBufferState>,
 ) {
     let doc = trigger.event().doc;
@@ -429,10 +429,9 @@ impl Panel for CodeEditorPanel {
             // Pull display fields from the registry directly — this
             // bypasses the the registry-by-doc lookup snapshot which is
             // a singleton stamped by whichever tab rendered last.
-            let (display_name, is_read_only, source_len) = match tab_target.and_then(|d| {
-                ctx.resource::<ModelicaDocumentRegistry>()
-                    .and_then(|r| r.host(d))
-            }) {
+            let (display_name, is_read_only, source_len) = match tab_target
+                .and_then(|d| ctx.resource::<ModelicaDocuments>().and_then(|r| r.host(d)))
+            {
                 Some(host) => {
                     let document = host.document();
                     let display = document.origin().display_name();
@@ -513,7 +512,7 @@ impl Panel for CodeEditorPanel {
                     // they diverge. New-tab path falls straight through
                     // to the same sync.
                     let external_gen = ctx
-                        .resource::<ModelicaDocumentRegistry>()
+                        .resource::<ModelicaDocuments>()
                         .and_then(|r| r.host(doc))
                         .map(|h| h.generation())
                         .unwrap_or(0);
@@ -523,7 +522,7 @@ impl Panel for CodeEditorPanel {
                         // `&mut World`): read the doc source + detected name through
                         // `ctx` and write into `buf`.
                         if let Some((source, detected, generation)) = ctx
-                            .resource::<ModelicaDocumentRegistry>()
+                            .resource::<ModelicaDocuments>()
                             .and_then(|r| r.host(doc))
                             .map(|host| {
                                 let document = host.document();
@@ -1198,7 +1197,7 @@ impl Panel for CodeEditorPanel {
 pub fn commit_pending_buffer(world: &mut World, doc: lunco_doc::DocumentId) -> bool {
     let committed = world.resource::<EditorBufferState>().text.clone();
     let prior = world
-        .get_resource::<ModelicaDocumentRegistry>()
+        .get_resource::<ModelicaDocuments>()
         .and_then(|r| r.host(doc))
         .map(|h| h.document().source().to_string());
     let mut wrote = false;
@@ -1215,7 +1214,7 @@ pub fn commit_pending_buffer(world: &mut World, doc: lunco_doc::DocumentId) -> b
             let result = crate::ui::panels::canvas_diagram::apply_one_op_as(
                 world,
                 doc,
-                crate::document::ModelicaOp::EditText { range, replacement },
+                lunco_modelica_document::ModelicaOp::EditText { range, replacement },
                 lunco_twin_journal::AuthorTag::for_tool("code-editor"),
             );
             // Surface the actual rejection reason on failure (was logged as a
@@ -1233,7 +1232,7 @@ pub fn commit_pending_buffer(world: &mut World, doc: lunco_doc::DocumentId) -> b
                 // same-tab divergence check doesn't fire on our own
                 // op and resync over still-uncommitted typing the
                 // user added between this flush and the next render.
-                if let Some(host) = world.resource::<ModelicaDocumentRegistry>().host(doc) {
+                if let Some(host) = world.resource::<ModelicaDocuments>().host(doc) {
                     let new_gen = host.generation();
                     world.resource_mut::<EditorBufferState>().generation = new_gen;
                 }

@@ -15,9 +15,10 @@ use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
 use std::collections::{HashMap, HashSet};
 
-use crate::state::ModelicaDocumentRegistry;
+use lunco_doc_bevy::DocumentRegistry;
 #[cfg(test)]
 use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
+use lunco_modelica_document::ModelicaDocument;
 #[cfg(test)]
 use lunco_modelica_runtime::ModelicaSignalProvenance;
 use lunco_modelica_runtime::{ModelicaModel, ModelicaSignalLayout};
@@ -60,7 +61,7 @@ pub fn retain_modelica_runtime_state(
     mut commands: Commands,
     settings: Option<Res<TelemetrySettings>>,
     mut signals: Option<ResMut<SignalRegistry>>,
-    documents: Option<Res<ModelicaDocumentRegistry>>,
+    documents: Option<Res<DocumentRegistry<ModelicaDocument>>>,
     mut sessions: ResMut<RuntimeTelemetrySessions>,
     models: Query<(
         Entity,
@@ -186,7 +187,7 @@ pub fn retain_modelica_runtime_state(
 }
 
 fn model_signal_meta(
-    documents: Option<&ModelicaDocumentRegistry>,
+    documents: Option<&DocumentRegistry<ModelicaDocument>>,
     model: &ModelicaModel,
     layout: Option<&ModelicaSignalLayout>,
     name: &str,

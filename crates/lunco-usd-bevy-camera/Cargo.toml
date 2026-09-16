@@ -11,6 +11,7 @@ big_space = { workspace = true }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-hooks = { path = "../lunco-hooks" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-render = { path = "../lunco-render" }
 lunco-time = { path = "../lunco-time" }

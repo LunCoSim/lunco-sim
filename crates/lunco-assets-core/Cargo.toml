@@ -14,6 +14,7 @@ lunco-twin = { path = "../lunco-twin" }
 lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 thiserror = { workspace = true }
 include_dir = "0.7"
 dirs = "5"
@@ -21,6 +22,9 @@ dirs = "5"
 [[bin]]
 name = "build_asset_manifest"
 path = "src/bin/build_asset_manifest.rs"
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }
@@ -39,9 +43,6 @@ web-sys = { workspace = true, features = [
 ] }
 ruzstd = "0.7"
 tar = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

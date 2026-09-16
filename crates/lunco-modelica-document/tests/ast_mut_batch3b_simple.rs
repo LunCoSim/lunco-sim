@@ -10,7 +10,7 @@ use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica_ast::ast_mut;
 use lunco_modelica_ast::parse_to_ast;
 use lunco_modelica_ast::pretty::{ClassKindSpec, EquationDecl};
-use lunco_modelica_core::document::{ModelicaDocument, ModelicaOp, SyntaxCache};
+use lunco_modelica_document::{ModelicaDocument, ModelicaOp, SyntaxCache};
 
 fn host(source: &str) -> DocumentHost<ModelicaDocument> {
     let syntax = Arc::new(SyntaxCache::from_source(source, 0));

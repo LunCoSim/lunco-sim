@@ -31,6 +31,17 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::io;
 
+lunco_hooks::declare_hook! {
+    id: "runtime.ui.recording",
+    owner: "lunco-workbench-runtime-ui",
+    description: "Select visible runtime UI surface ids for an active recording.",
+    signature: [facts: Map],
+    output: ArrayOfString,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
 /// A semantic action emitted by an authored runtime surface.
 ///
 /// The runtime transports the authored identifier without interpreting its

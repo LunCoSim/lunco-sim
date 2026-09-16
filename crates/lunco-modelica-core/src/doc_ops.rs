@@ -10,8 +10,9 @@
 
 use bevy::prelude::*;
 
-use crate::document::ModelicaOp;
-use crate::state::ModelicaDocumentRegistry;
+use lunco_modelica_document::{ModelicaDocument, ModelicaOp};
+
+type ModelicaDocuments = lunco_doc_bevy::DocumentRegistry<ModelicaDocument>;
 
 /// Drain the registry's pending doc-lifecycle rings into the canonical
 /// `lunco_doc_bevy` triggers each frame (Opened → Changed → Closed).
@@ -25,16 +26,17 @@ use crate::state::ModelicaDocumentRegistry;
 /// subscribers that key on "docs I've seen Opened for" can safely skip Changed
 /// events for unknown ids.
 pub(crate) fn drain_document_changes(
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     mut commands: Commands,
 ) {
-    for doc in registry.drain_pending_opened() {
+    let pending = registry.drain_pending();
+    for doc in pending.opened {
         commands.trigger(lunco_doc_bevy::DocumentOpened::local(doc));
     }
-    for doc in registry.drain_pending_changes() {
+    for doc in pending.changed {
         commands.trigger(lunco_doc_bevy::DocumentChanged::local(doc));
     }
-    for doc in registry.drain_pending_closed() {
+    for doc in pending.closed {
         commands.trigger(lunco_doc_bevy::DocumentClosed::local(doc));
     }
 }
@@ -95,7 +97,7 @@ pub(crate) fn op_needs_fresh_ast_pre_apply(op: &ModelicaOp) -> bool {
 /// itself — the kernel and its callers no longer touch the journal. Caller is
 /// still responsible for `registry.mark_changed(doc)` (it needs the registry).
 pub(crate) fn apply_one_op_kernel(
-    host: &mut lunco_doc::DocumentHost<crate::document::ModelicaDocument>,
+    host: &mut lunco_doc::DocumentHost<ModelicaDocument>,
     op: ModelicaOp,
     author: &lunco_twin_journal::AuthorTag,
 ) -> Result<lunco_doc::Ack, lunco_doc::Reject> {
@@ -150,7 +152,7 @@ fn deferred_ack() -> lunco_doc::Ack {
 pub fn drain_pending_structural_ops(world: &mut bevy::prelude::World) {
     // Phase 1: identify docs whose cache is fresh and have a non-empty queue.
     let fresh_docs: Vec<lunco_doc::DocumentId> = {
-        let Some(registry) = world.get_resource::<ModelicaDocumentRegistry>() else {
+        let Some(registry) = world.get_resource::<ModelicaDocuments>() else {
             return;
         };
         let Some(pending) = world.get_resource::<PendingStructuralOps>() else {
@@ -215,7 +217,7 @@ pub fn drain_pending_structural_ops(world: &mut bevy::prelude::World) {
 /// is true on the system's first run even if the journal was inserted earlier,
 /// so plugin order doesn't matter.
 pub(crate) fn wire_modelica_journal_handle(
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     journal: Res<lunco_doc_bevy::JournalResource>,
 ) {
     registry.set_journal(journal.clone());
@@ -255,12 +257,12 @@ pub fn apply_one_op_as(
 ) -> Result<lunco_doc::Ack, lunco_doc::Reject> {
     if op_needs_fresh_ast_pre_apply(&op) {
         let stale = world
-            .get_resource::<ModelicaDocumentRegistry>()
+            .get_resource::<ModelicaDocuments>()
             .and_then(|r| r.host(doc_id))
             .map(|h| h.document().syntax_is_stale())
             .unwrap_or(false);
         if stale {
-            if let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() {
+            if let Some(mut registry) = world.get_resource_mut::<ModelicaDocuments>() {
                 if let Some(host) = registry.host_mut(doc_id) {
                     host.document_mut().waive_ast_debounce();
                 }
@@ -275,9 +277,9 @@ pub fn apply_one_op_as(
         }
     }
 
-    let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
+    let Some(mut registry) = world.get_resource_mut::<ModelicaDocuments>() else {
         return Err(lunco_doc::Reject::InvalidOp(
-            "ModelicaDocumentRegistry resource missing".into(),
+            "Modelica document registry resource missing".into(),
         ));
     };
     let Some(host) = registry.host_mut(doc_id) else {
@@ -320,12 +322,12 @@ pub fn apply_ops_as(
     // and the syntax cache is stale (keeps intra-batch ops on one fresh tree).
     if ops.iter().any(op_needs_fresh_ast_pre_apply) {
         let stale = world
-            .get_resource::<ModelicaDocumentRegistry>()
+            .get_resource::<ModelicaDocuments>()
             .and_then(|r| r.host(doc_id))
             .map(|h| h.document().syntax_is_stale())
             .unwrap_or(false);
         if stale {
-            if let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() {
+            if let Some(mut registry) = world.get_resource_mut::<ModelicaDocuments>() {
                 if let Some(host) = registry.host_mut(doc_id) {
                     host.document_mut().waive_ast_debounce();
                 }
@@ -361,7 +363,7 @@ pub fn apply_ops_as(
     let mut any_applied = false;
     let mut hit_read_only = false;
     {
-        let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() else {
+        let Some(mut registry) = world.get_resource_mut::<ModelicaDocuments>() else {
             bevy::log::warn!("[doc_ops] apply_ops: registry missing ({n} op(s))");
             return false;
         };

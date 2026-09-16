@@ -313,7 +313,7 @@ renaming a folder mid-session doesn't invalidate references.
 Workspace-level metadata for one open Document: `{ id, kind, origin,
 context_twin, title, dirty }`. Does NOT hold the parsed source + ops + undo
 stack — those live in domain registries (e.g.
-`ModelicaDocumentRegistry`).
+`DocumentRegistry<ModelicaDocument>` in `lunco-doc-bevy`).
 
 ### Twin-Document association rule
 The **deepest** registered Twin whose folder contains the document's

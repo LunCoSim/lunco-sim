@@ -140,7 +140,6 @@ ui = [
     "dep:lunco-capture",
     "lunco-capture/api",
     "dep:lunco-render-bevy",
-    "lunco-scripting/render-policy",
     "lunco-luncosim-ui/avatar-ui",
     "dep:lunco-luncosim-edit-ui",
     "dep:lunco-luncosim-ui",

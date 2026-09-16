@@ -7075,6 +7075,7 @@ dependencies = [
  "bevy",
  "lunco-control-core",
  "lunco-core",
+ "lunco-hooks",
  "lunco-port-core",
  "lunco-readiness",
  "serde",
@@ -7130,6 +7131,7 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.18",
+ "toml 1.1.2+spec-1.1.0",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -7293,6 +7295,7 @@ name = "lunco-camera-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-hooks",
 ]
 
 [[package]]
@@ -7561,6 +7564,9 @@ dependencies = [
 [[package]]
 name = "lunco-hooks"
 version = "0.1.0"
+dependencies = [
+ "inventory",
+]
 
 [[package]]
 name = "lunco-hooks-rhai"
@@ -7686,6 +7692,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-modelica-api",
  "lunco-modelica-core",
+ "lunco-modelica-document",
  "lunco-modelica-runtime",
  "lunco-networking",
  "lunco-obstacle-field",
@@ -7944,6 +7951,7 @@ dependencies = [
  "lunco-luncosim-edit-inspector-ui",
  "lunco-luncosim-edit-ui",
  "lunco-modelica-core",
+ "lunco-modelica-document",
  "lunco-modelica-runtime",
  "lunco-modelica-ui",
  "lunco-modelica-ui-core",
@@ -8036,6 +8044,7 @@ dependencies = [
  "lunco-experiments",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-document",
  "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
@@ -8105,6 +8114,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-experiments",
  "lunco-modelica-ast",
+ "lunco-modelica-document",
  "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
@@ -8121,7 +8131,6 @@ dependencies = [
  "rayon",
  "rumoca-compile",
  "rumoca-ir-solve",
- "rumoca-phase-parse",
  "rumoca-sim",
  "ruzstd 0.7.3",
  "serde",
@@ -8142,6 +8151,21 @@ dependencies = [
  "egui_commonmark",
  "htmd",
  "lunco-workbench-core",
+]
+
+[[package]]
+name = "lunco-modelica-document"
+version = "0.1.0"
+dependencies = [
+ "lunco-doc",
+ "lunco-modelica-ast",
+ "lunco-modelica-index",
+ "lunco-twin-journal",
+ "rumoca-compile",
+ "rumoca-phase-parse",
+ "serde",
+ "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -8230,6 +8254,7 @@ dependencies = [
  "lunco-modelica-ast",
  "lunco-modelica-core",
  "lunco-modelica-docs-ui",
+ "lunco-modelica-document",
  "lunco-modelica-icon-ui",
  "lunco-modelica-index",
  "lunco-modelica-runtime",
@@ -8620,7 +8645,6 @@ dependencies = [
  "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-behavior",
- "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8632,7 +8656,6 @@ dependencies = [
  "lunco-physics",
  "lunco-port-core",
  "lunco-readiness",
- "lunco-render-recovery",
  "lunco-scripting-bridge-core",
  "lunco-scripting-bridge-spatial",
  "lunco-scripting-bridge-time",
@@ -9133,6 +9156,7 @@ dependencies = [
  "lunco-avatar-core",
  "lunco-camera-core",
  "lunco-core",
+ "lunco-hooks",
  "lunco-render",
  "lunco-spatial",
  "lunco-time",
@@ -9477,9 +9501,10 @@ dependencies = [
  "lunco-cosim",
  "lunco-cosim-core",
  "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-environment",
  "lunco-modelica-ast",
- "lunco-modelica-core",
+ "lunco-modelica-document",
  "lunco-modelica-runtime",
  "lunco-physics",
  "lunco-port-core",
@@ -9488,7 +9513,6 @@ dependencies = [
  "lunco-spatial",
  "lunco-time",
  "lunco-usd-avian-contracts",
- "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
@@ -9533,11 +9557,13 @@ dependencies = [
  "lunco-core",
  "lunco-cosim-core",
  "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-hash",
  "lunco-hooks",
  "lunco-hooks-rhai",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-document",
  "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-port-core",

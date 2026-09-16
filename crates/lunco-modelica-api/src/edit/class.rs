@@ -1,11 +1,11 @@
 //! API handlers for class-level operations (Rename, etc).
 
 use super::util::resolve_doc;
+use crate::ModelicaDocuments;
 use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
-use lunco_modelica_core::document::ModelicaOp;
-use lunco_modelica_core::state::ModelicaDocumentRegistry;
+use lunco_modelica_document::ModelicaOp;
 
 /// Rename a top-level class within an open Modelica document.
 #[Command(default)]
@@ -35,7 +35,7 @@ pub fn on_rename_modelica_class(trigger: On<RenameModelicaClass>, mut commands: 
             return;
         }
 
-        let registry = world.resource::<ModelicaDocumentRegistry>();
+        let registry = world.resource::<ModelicaDocuments>();
         let Some(host) = registry.host(doc) else {
             return;
         };
@@ -69,7 +69,7 @@ pub fn on_rename_modelica_class(trigger: On<RenameModelicaClass>, mut commands: 
             }
         }
 
-        if let Some(mut registry) = world.get_resource_mut::<ModelicaDocumentRegistry>() {
+        if let Some(mut registry) = world.get_resource_mut::<ModelicaDocuments>() {
             if let Some(host) = registry.host_mut(doc) {
                 let doc_obj = host.document_mut();
                 if doc_obj.origin().is_untitled() {
@@ -165,7 +165,7 @@ fn is_ident_byte(b: u8) -> bool {
 pub fn on_file_renamed_chain_to_modelica(
     trigger: On<lunco_workspace::FileRenamed>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
-    mut registry: ResMut<ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocuments>,
     mut commands: Commands,
 ) {
     use lunco_doc::DocumentOrigin;

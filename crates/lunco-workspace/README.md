@@ -54,7 +54,8 @@ ceremonial moves.
   "unassigned" sentinel; actual ids start at 1.
 - **`DocumentEntry`** — `{ id, kind, origin, context_twin, title, dirty }`.
   Workspace-level metadata only; the parsed source + ops + undo stack
-  live in domain registries (e.g. `ModelicaDocumentRegistry`). Domain
+  live in generic domain registries (e.g. `DocumentRegistry<ModelicaDocument>`).
+  Domain
   registries mirror the authoritative dirty state on document events.
 - **`Recents`** — bounded lists (10 twin folders, 20 loose files),
   most-recent-first, deduplicated by canonical filesystem identity. Existing

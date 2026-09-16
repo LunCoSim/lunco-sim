@@ -10,7 +10,7 @@ use lunco_workbench_core::{InstancePanel, Panel, PanelCtx, PanelId, PanelScrollP
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
 use crate::model_tabs::ModelTabs;
 use crate::model_tabs_types::{ModelViewMode, TabId, TabRenderContext};
-use crate::state::{is_generated_document, ModelicaDocumentRegistry};
+use crate::ui::document_context::{is_generated_document, ModelicaDocuments};
 use crate::ui::panels::canvas_diagram::CanvasDiagramPanel;
 use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
 use crate::ui::MODEL_VIEW_KIND;
@@ -61,7 +61,7 @@ pub(crate) fn on_fast_run_setup_requested(
                 .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))
                 .unwrap_or(0);
             let detected = world
-                .get_resource::<ModelicaDocumentRegistry>()
+                .get_resource::<ModelicaDocuments>()
                 .and_then(|r| r.host(doc))
                 .and_then(|h| {
                     lunco_modelica_ast::ast_extract::find_class_by_short_name(
@@ -97,7 +97,7 @@ pub(crate) fn on_fast_run_setup_requested(
                 })
                 .collect();
             let candidates = world
-                .get_resource::<ModelicaDocumentRegistry>()
+                .get_resource::<ModelicaDocuments>()
                 .and_then(|r| r.host(doc))
                 .map(|h| h.document().index().simulation_candidates())
                 .unwrap_or_default();
@@ -226,7 +226,7 @@ impl InstancePanel for ModelViewPanel {
         let tab_read_only = crate::ui::context::read_only_for(ctx, doc);
         if tab_read_only {
             let generated_document = ctx
-                .resource::<ModelicaDocumentRegistry>()
+                .resource::<ModelicaDocuments>()
                 .and_then(|registry| registry.host(doc))
                 .is_some_and(|host| is_generated_document(host.document()));
             let theme = ctx
@@ -396,12 +396,12 @@ fn render_unified_toolbar(
         .resource::<DocumentDiagnostics>()
         .and_then(|cs| cs.error_message(doc).map(str::to_string));
     let undo_redo = ctx
-        .resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocuments>()
         .and_then(|r| r.host(doc))
         .map(|h| (h.can_undo(), h.can_redo(), h.undo_depth(), h.redo_depth()));
 
     let sim_state: Option<(bool, f64)> = ctx
-        .resource::<ModelicaDocumentRegistry>()
+        .resource::<ModelicaDocuments>()
         .and_then(|r| r.entities_linked_to(doc).into_iter().next())
         .and_then(|e| {
             ctx.get::<lunco_modelica_runtime::ModelicaModel>(e)
@@ -743,7 +743,7 @@ fn render_unified_toolbar(
                 // Inputs from the parsed AST of the resolved model class — no
                 // source scan (WP-8 / CQ-205).
                 let detected = world
-                    .get_resource::<ModelicaDocumentRegistry>()
+                    .get_resource::<ModelicaDocuments>()
                     .and_then(|r| r.host(doc))
                     .and_then(|h| {
                         lunco_modelica_ast::ast_extract::find_class_by_short_name(
@@ -785,7 +785,7 @@ fn render_unified_toolbar(
                     })
                     .collect();
                 let candidates = world
-                    .get_resource::<ModelicaDocumentRegistry>()
+                    .get_resource::<ModelicaDocuments>()
                     .and_then(|r| r.host(doc))
                     .map(|h| h.document().index().simulation_candidates())
                     .unwrap_or_default();
@@ -899,7 +899,7 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     };
 
     let (qualified, authored_icon, parameters) = {
-        let Some(registry) = ctx.resource::<ModelicaDocumentRegistry>() else {
+        let Some(registry) = ctx.resource::<ModelicaDocuments>() else {
             return;
         };
         let Some(host) = registry.host(doc) else {

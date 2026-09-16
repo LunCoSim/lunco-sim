@@ -612,7 +612,7 @@ pub(crate) fn place_component(
             // Fallback to the document's first non-package class, read
             // via the per-doc Index (sees optimistic structural patches
             // and avoids walking the AST every palette click).
-            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
+            let registry = world.resource::<crate::ui::document_context::ModelicaDocuments>();
             let host = registry.host(doc_id)?;
             host.document()
                 .index()

@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
 use lunco_modelica_ast::pretty::{ComponentDecl, Placement};
-use lunco_modelica_core::document::ModelicaOp;
+use lunco_modelica_document::ModelicaOp;
 
 /// Add a sub-component to a class.
 #[Command(default)]
