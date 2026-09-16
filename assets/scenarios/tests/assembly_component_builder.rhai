@@ -567,7 +567,7 @@ fn on_tick(me) {
             "twin://ExampleTwin/components/mobility/wheel.usda",
             (), (), (), (), (),
         );
-        if !plan.ok || plan.kind != "referenced_instance" || plan.ops.len() != 3
+        if !plan.ok || plan.kind != "referenced_instance" || plan.ops.len() != 4
             || missing_parent.ok || invalid_asset.ok || !twin_asset.ok
             || twin_asset.ops.len() != 1 {
             fail(this, "component-instance plan did not build or reject its explicit contract");

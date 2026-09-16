@@ -133,7 +133,7 @@ fn seat_pairs(doc, pairs) {
 
 fn query_prim(doc, path, attrs, rels, children) {
     let request = #{ path: path };
-    if doc != () { request.doc = doc; }
+    if doc != () { request.doc_id = doc; }
     if attrs != () { request.attrs = attrs; }
     if rels != () { request.rels = rels; }
     if children != () { request.children = children; }
@@ -146,7 +146,7 @@ fn query_prim(doc, path, attrs, rels, children) {
 /// dimensions in Rhai.
 fn collision_bounds_record(doc, path) {
     let request = #{ path: path, collision_bounds: true };
-    if doc != () { request.doc = doc; }
+    if doc != () { request.doc_id = doc; }
     query("QueryUsdPrim", request)
 }
 
@@ -260,7 +260,12 @@ fn standard_component_report(doc, spec) {
     let errors = [];
     let records = [];
     if !query_ok(root) {
-        return #{ ok: false, records: [], errors: [spec.path + ": root prim is missing"] };
+        let detail = if root == () || root.error == () {
+            "root prim is missing"
+        } else {
+            "root query failed: " + root.error
+        };
+        return #{ ok: false, records: [], errors: [spec.path + ": " + detail] };
     }
     let expected_type = if spec.expected_type == () { "Xform" } else { spec.expected_type };
     if root.type_name != expected_type {

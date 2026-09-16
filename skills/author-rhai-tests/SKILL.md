@@ -100,6 +100,10 @@ the observer through the API as described by
 ## Review checklist
 
 - Is this observable behavior or an authored asset? If yes, it is Rhai-owned.
+- If a test loads, composes, edits, or inspects a USD/Modelica asset, author it
+  as a Twin Rhai scenario. Keep Rust tests for pure, asset-free engine
+  primitives and routing predicates; do not embed fixture documents or asset
+  identifiers in core tests.
 - Does the test load the real Twin/USD/Modelica source rather than recreate it?
 - Are requirements and dimensions read from SysML/USD instead of duplicated?
 - Is the component independently scoped and its evidence structured?

@@ -617,6 +617,9 @@ impl CanonicalStage {
         prim: &SdfPath,
         schemas: &[String],
     ) -> anyhow::Result<()> {
+        self.stage
+            .override_prim(prim.clone())
+            .map_err(|e| anyhow::anyhow!("override prim before authoring apiSchemas at {prim}: {e}"))?;
         let tokens: Vec<openusd::tf::Token> = schemas
             .iter()
             .cloned()
@@ -630,6 +633,34 @@ impl CanonicalStage {
             )
             .map(|_| ())
             .map_err(|e| anyhow::anyhow!("author apiSchemas at {prim}: {e}"))
+    }
+
+    /// Author the USD `kind` metadata on the live stage.  Kind is identity
+    /// metadata, not composition, so it can be replayed without rebuilding the
+    /// entire scene.  Passing `None` clears the local opinion and reveals the
+    /// weaker composed value.
+    pub(crate) fn author_kind(&self, prim: &SdfPath, kind: Option<&str>) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        self.stage
+            .override_prim(prim.clone())
+            .map_err(|e| anyhow!("override prim before authoring kind at {prim}: {e}"))?;
+        let prim_spec = self.stage.prim(prim.clone());
+        match kind {
+            Some(kind) => prim_spec
+                .set_kind(kind)
+                .map(|_| ())
+                .map_err(|e| anyhow!("author kind `{kind}` at {prim}: {e}")),
+            None => self
+                .stage
+                .batch_edit(&[self.scene_layer.as_str()], |edits| {
+                    edits[0]
+                        .data_mut()
+                        .erase_field(prim, openusd::sdf::FieldKey::Kind.as_str());
+                    Ok(())
+                })
+                .map(|_| ())
+                .map_err(|e| anyhow!("clear kind at {prim}: {e}")),
+        }
     }
 
     /// Author `active` onto the prim's spec on the root edit target. This is the
@@ -836,6 +867,11 @@ impl StageProjector<'_> {
     /// schema can be reconciled without rebuilding physical ECS topology.
     pub fn author_api_schemas(&self, prim: &SdfPath, schemas: &[String]) -> anyhow::Result<()> {
         self.0.author_api_schemas(prim, schemas)
+    }
+
+    /// Replay a `SetPrimKind` op on the live stage.
+    pub fn author_kind(&self, prim: &SdfPath, kind: Option<&str>) -> anyhow::Result<()> {
+        self.0.author_kind(prim, kind)
     }
 
     /// Replay a `SetActive` op — see [`CanonicalStage::author_active`]. Callers
@@ -1606,11 +1642,9 @@ mod authoring_tests {
         assert!(cs.view().is_active(&chassis), "reactivation is symmetric");
     }
 
-    // SetApiSchemas has no incremental consumer on purpose: its ECS effect
-    // (physics component set) can't be reconciled by the structural refresh,
-    // so it takes the projector's rebuild path (except for the
-    // `LunCoProgramAPI` metadata case). Active-state authoring and structural
-    // reconciliation are covered by the generic canonical-stage and projection
-    // tests above; document-level authoring + inverse remain in
+    // API schema and kind authoring are replayed by the runtime's scoped live
+    // projector. Active-state authoring and structural reconciliation are
+    // covered by the generic canonical-stage and projection tests above;
+    // document-level authoring + inverse remain in
     // `lunco_usd_document::document::tests`.
 }
