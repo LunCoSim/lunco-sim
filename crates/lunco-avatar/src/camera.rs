@@ -81,7 +81,7 @@ pub(super) fn spring_arm_system(
         apply_scroll_zoom(
             &mut arm.distance,
             &mut zoom.delta,
-            ZOOM_SENSITIVITY,
+            CAMERA_ZOOM_SENSITIVITY,
             5.0,
             200.0,
         );
@@ -236,7 +236,7 @@ pub(super) fn spring_arm_system(
 /// `SurfaceCamera` owns the surface-relative rotation policy; this system owns
 /// only the ecliptic free-flight rotation.
 /// Free-flight scroll transit — the ENTRY half of the scroll loop (the exit
-/// half is the ORBITAL SCROLL-THROUGH in `orbit_system`). On a site-anchored
+/// half is the ORBITAL SCROLL-THROUGH in `AvatarCelestialCameraPlugin`). On a site-anchored
 /// celestial scene, the wheel DOLLIES the free-flight camera along its LOOK
 /// direction with an exponential step scaled by altitude (approach slows near
 /// the ground, retreat accelerates with height) — "scroll toward what you
@@ -349,7 +349,7 @@ pub(super) fn freeflight_scroll_transit_system(
         // to the altitude scale: factor > 1 on scroll-out, < 1 on scroll-in.
         // Clamped to ±25% per FRAME: wheel events batch, and an accumulated
         // delta must never become a teleport-sized step.
-        let factor = zoom_factor(zoom.delta, ZOOM_SENSITIVITY);
+        let factor = zoom_factor(zoom.delta, CAMERA_ZOOM_SENSITIVITY);
         let transition_direction = zoom.delta;
         let scroll_out = zoom.delta < 0.0;
         zoom.delta = 0.0;
@@ -395,7 +395,7 @@ pub(super) fn freeflight_scroll_transit_system(
         // Past the orbital floor going OUT → hand over to the celestial
         // OrbitCamera. A first entry derives the arm from the exact transit pose;
         // a later entry restores the avatar's saved body presentation pose.
-        if scroll_out && (next - center).length() - radius_m > SCROLL_EXIT_ALTITUDE_M {
+        if scroll_out && (next - center).length() - radius_m > SURFACE_ORBIT_HANDOFF_ALTITUDE_M {
             let Ok((_, body)) = q_bodies.get(body_ent) else {
                 warn!(
                     target = ?body_ent,
@@ -444,310 +444,5 @@ pub(super) fn freeflight_scroll_transit_system(
                 "SURFACE SCROLL-OUT: entering orbital view"
             );
         }
-    }
-}
-
-/// OrbitCamera system: positions the camera at a fixed offset from a target,
-/// locked to the ecliptic (star-fixed) reference frame.
-///
-/// Only runs when `OrbitCamera` is the active camera mode.
-/// The camera does NOT rotate with the target — stars stay still.
-pub(super) fn orbit_angles_from_arm(direction: DVec3) -> (f32, f32) {
-    let direction = direction.normalize_or(DVec3::Z);
-    (
-        direction.x.atan2(direction.z) as f32,
-        (-direction.y.clamp(-1.0, 1.0).asin()) as f32,
-    )
-}
-
-/// Resolve a first body-view pose from the camera's current physical region.
-/// The direction is measured in the target's inertial grid, then the camera is
-/// placed at the normal body-view distance along that same radial line.
-pub(super) fn apply_current_region_arrival(
-    orbit: &mut OrbitCamera,
-    target_orbit: DVec3,
-    camera_orbit: DVec3,
-    body_radius: f64,
-) -> bool {
-    let arm = camera_orbit - target_orbit;
-    if !arm.is_finite() || arm.length_squared() <= 1.0 || !body_radius.is_finite() {
-        return false;
-    }
-    let distance = body_radius * 3.0;
-    if distance <= 0.0 || !distance.is_finite() {
-        return false;
-    }
-    (orbit.yaw, orbit.pitch) = orbit_angles_from_arm(arm);
-    orbit.distance = distance;
-    true
-}
-
-pub(super) fn orbit_system(
-    // Wall-rooted render clock: orbit is presentation and must neither rate-scale
-    // with simulation time nor be quantized to the fixed interaction cadence.
-    time: Res<Time<Real>>,
-    mut q_avatar: Query<
-        (
-            Entity,
-            &mut Transform,
-            &mut CellCoord,
-            &mut OrbitCamera,
-            &ChildOf,
-            &mut CameraZoomInput,
-            Has<CurrentRegionArrival>,
-            Has<RadialArrival>,
-        ),
-        (
-            With<Avatar>,
-            With<LocalAvatar>,
-            Without<SpringArmCamera>,
-            Without<FreeFlightCamera>,
-            Without<SurfaceCamera>,
-            Without<lunco_camera_core::CameraPoseLock>,
-        ),
-    >,
-    q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
-    frame_index: Res<lunco_celestial_spatial::ReferenceFrameIndex>,
-    q_grids: Query<&Grid>,
-    q_parents: Query<&ChildOf>,
-    q_bodies: Query<(Entity, &CelestialBody)>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    q_sc: Query<&Spacecraft>,
-    q_dragging: Query<(), With<lunco_interaction_core::GizmoDragging>>,
-    defaults: Res<CameraDefaults>,
-    keys: Res<ButtonInput<KeyCode>>,
-    q_children: Query<&Children>,
-    mut commands: Commands,
-    mut log_countdown: Local<u32>,
-    mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
-) {
-    if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
-        return;
-    }
-
-    let Ok(root_grid) = q_world_grid.single() else {
-        return;
-    };
-    let dt = time.delta_secs();
-
-    for (
-        avatar_ent,
-        mut tf,
-        mut cell,
-        mut orbit,
-        child_of,
-        mut zoom,
-        wants_current_region,
-        wants_radial,
-    ) in q_avatar.iter_mut()
-    {
-        if q_dragging.get(orbit.target).is_ok() {
-            continue;
-        }
-
-        let physical_target = get_physical_body(orbit.target, &q_children, &q_bodies);
-        let body = q_bodies.get(physical_target).ok().map(|(_, body)| body);
-        // Celestial bodies own an explicit star-fixed camera grid. This is the
-        // same nested-grid shape as big_space's planets example: body-fixed
-        // terrain/vehicles stay under the rotating frame while the camera
-        // lives in a co-located inertial sibling. Non-celestial targets use the
-        // canonical world grid.
-        let orbit_grid = if let Some(body) = body {
-            let Some(entity) =
-                frame_index.resolve(lunco_celestial::ReferenceFrame::EclipticJ2000 {
-                    center: body.ephemeris_id,
-                })
-            else {
-                warn!(
-                    "ORBIT: body {} has no inertial reference frame; refusing an ambiguous camera frame",
-                    body.ephemeris_id
-                );
-                continue;
-            };
-            entity
-        } else {
-            root_grid
-        };
-        let Ok(orbit_grid_ref) = q_grids.get(orbit_grid) else {
-            continue;
-        };
-        let centre_entity = body.map_or(orbit.target, |_| physical_target);
-        let Some((target_orbit, _)) = lunco_spatial::coords::pose_in_grid(
-            centre_entity,
-            orbit_grid,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            continue;
-        };
-        // The avatar is mutably borrowed, so seed the canonical cross-grid
-        // conversion with its live cell/local pair. Orbit math stays directly
-        // in the selected inertial body grid; no subtraction of ~AU root-frame
-        // coordinates can consume local precision.
-        let Some((cam_orbit, _)) = lunco_spatial::coords::pose_in_grid_seeded(
-            avatar_ent,
-            orbit_grid,
-            Some(&*cell),
-            &tf,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            continue;
-        };
-
-        // Resolve arrival directions in the same authoritative inertial grid
-        // used by the steady-state writer.
-        if wants_radial {
-            let arm = cam_orbit - target_orbit;
-            if arm.length_squared() > 1.0 {
-                (orbit.yaw, orbit.pitch) = orbit_angles_from_arm(arm);
-                orbit.distance = arm.length();
-                info!(
-                    "ORBIT ARRIVAL: radial yaw={:.2} pitch={:.2} dist={:.3e}",
-                    orbit.yaw, orbit.pitch, orbit.distance
-                );
-            }
-            commands.entity(avatar_ent).remove::<RadialArrival>();
-        } else if wants_current_region {
-            if let Some(body) = body {
-                if apply_current_region_arrival(&mut orbit, target_orbit, cam_orbit, body.radius_m)
-                {
-                    info!(
-                        "ORBIT ARRIVAL: current region yaw={:.2} pitch={:.2} dist={:.3e}",
-                        orbit.yaw, orbit.pitch, orbit.distance
-                    );
-                } else {
-                    warn!(
-                        target = ?orbit.target,
-                        "ORBIT ARRIVAL: current camera region is not finite; refusing arrival"
-                    );
-                }
-            }
-            commands.entity(avatar_ent).remove::<CurrentRegionArrival>();
-        }
-
-        let min_dist = if let Some(body) = body {
-            body.radius_m + SCROLL_EXIT_ALTITUDE_M
-        } else if let Ok(spacecraft) = q_sc.get(orbit.target) {
-            (spacecraft.hit_radius_m as f64).max(10.0)
-        } else {
-            10.0
-        };
-
-        let current_len = cam_orbit.distance(target_orbit);
-
-        let surface_exit = body.is_some()
-            && orbital_pin.as_ref().is_some_and(|pin| {
-                pin.active
-                    && zoom.delta > 0.0
-                    && orbit.distance <= min_dist * 1.0005
-                    && current_len <= min_dist * 1.02
-            });
-        if surface_exit {
-            // The threshold-crossing wheel gesture is consumed by the orbit
-            // owner. The restored surface owner starts only after the source
-            // has returned to neutral, so residual packets cannot dolly it
-            // away from the authoritative saved pose.
-            let transition_direction = zoom.delta;
-            zoom.begin_mode_transition(Some(transition_direction));
-            commands.trigger(ReturnFromOrbit { target: avatar_ent });
-            info!("ORBITAL SCROLL-THROUGH: exiting to surface at current pose");
-            continue;
-        }
-
-        let zoomed = zoom.delta != 0.0;
-        apply_scroll_zoom(
-            &mut orbit.distance,
-            &mut zoom.delta,
-            ZOOM_SENSITIVITY,
-            min_dist,
-            1.0e11,
-        );
-        if zoomed {
-            commands.entity(avatar_ent).try_insert(OrbitUserInput);
-        }
-
-        if let (Some(body), Some(pin)) = (body, orbital_pin.as_mut()) {
-            let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
-            let direction = rotation.mul_vec3(Vec3::Z).as_dvec3();
-            let next_pin = lunco_celestial_spatial::OrbitalViewPin {
-                active: true,
-                body: body.ephemeris_id,
-                dir: direction,
-                distance: orbit.distance,
-            };
-            if **pin != next_pin {
-                **pin = next_pin;
-            }
-        } else if let Some(pin) = orbital_pin.as_mut() {
-            if pin.active {
-                pin.active = false;
-            }
-        }
-
-        // Yaw/pitch are local to the explicit star-fixed orbit grid. Nested
-        // `LocalFloatingOrigin` propagation rebases every ancestor grid; the
-        // camera's Transform therefore stays cell-local even at lunar/solar
-        // distances. The persistent OriginAnchor owns FloatingOrigin.
-        let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
-        let desired_offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * orbit.distance
-            + DVec3::Y * orbit.vertical_offset as f64;
-        let direction_orbit = desired_offset.normalize_or(DVec3::Z);
-        let desired_len = desired_offset.length();
-
-        // Rotation responds immediately. Only radial zoom distance is eased,
-        // using the shared camera time constant.
-        let final_len = if child_of.parent() != orbit_grid || current_len < 1e-3 {
-            desired_len
-        } else {
-            let damping = orbit.damping.unwrap_or(defaults.damping);
-            let alpha = camera_decay_alpha(defaults.position_rate, damping, dt);
-            let next = current_len + (desired_len - current_len) * alpha;
-            if (next - desired_len).abs() <= desired_len * 1e-9 {
-                desired_len
-            } else {
-                next
-            }
-        };
-        let next_orbit = target_orbit + direction_orbit * final_len;
-        let (new_cell, new_translation) = orbit_grid_ref.translation_to_grid(next_orbit);
-        let next_transform = Transform::from_translation(new_translation).with_rotation(rotation);
-
-        if child_of.parent() != orbit_grid {
-            migrate_to_grid(
-                &mut commands,
-                avatar_ent,
-                orbit_grid,
-                new_cell,
-                next_transform,
-            );
-        } else {
-            cell.set_if_neq(new_cell);
-            if tf.translation != new_translation {
-                tf.translation = new_translation;
-            }
-            if tf.rotation != rotation {
-                tf.rotation = rotation;
-            }
-        }
-
-        if *log_countdown == 0 {
-            *log_countdown = 240;
-            debug!(
-                "ORBIT: arm {:.4e}→{:.4e} (cmd {:.3e}) cell=({},{},{}) target=({:.4e},{:.4e},{:.4e})",
-                current_len,
-                final_len,
-                orbit.distance,
-                new_cell.x,
-                new_cell.y,
-                new_cell.z,
-                target_orbit.x,
-                target_orbit.y,
-                target_orbit.z,
-            );
-        }
-        *log_countdown = log_countdown.saturating_sub(1);
     }
 }

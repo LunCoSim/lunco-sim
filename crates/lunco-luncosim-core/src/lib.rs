@@ -1762,6 +1762,7 @@ impl Plugin for LunCoSimCorePlugin {
             })
             .add_plugins(lunco_celestial_spatial::CelestialPlugin)
             .add_plugins(lunco_camera_celestial::CelestialSurfaceCameraPlugin)
+            .add_plugins(lunco_avatar_camera::AvatarCelestialCameraPlugin)
             // Real VSOP2013/ELP body positions on ALL platforms (wasm too) —
             // this is the explicit provider required by orbital scenes.
             .add_plugins(lunco_celestial_ephemeris::EphemerisPlugin)

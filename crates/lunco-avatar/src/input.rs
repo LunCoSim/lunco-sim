@@ -191,7 +191,9 @@ pub(super) fn avatar_behavior_input_system(
             (arm.yaw, arm.pitch) = look_angles(arm.yaw, arm.pitch, look_delta, &settings, 1.0);
         }
         if let Some((entity, mut orbit)) = q_orbit.iter_mut().next() {
-            let physical_target = get_physical_body(orbit.target, &q_children, &q_bodies);
+            let physical_target =
+                lunco_spatial::find_descendant_or_self(orbit.target, &q_children, &q_bodies)
+                    .unwrap_or(orbit.target);
             let scale = q_bodies.get(physical_target).map_or(1.0, |(_, body)| {
                 body_orbit_look_scale(orbit.distance, body.radius_m, &settings)
             }) as f32;

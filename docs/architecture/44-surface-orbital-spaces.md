@@ -51,8 +51,9 @@ body-fixed frame; it does not introduce a second semantic identity.
    grid is re-posed and no next-frame correction is scheduled.
 
 Scene replacement clears the scene-scoped `OrbitalViewPin` before the outgoing
-celestial hierarchy is retired. The avatar owns the matching orbital return
-transaction, so the replacement scene cannot inherit an orbital presentation
+celestial hierarchy is retired. `lunco-avatar-camera` owns orbital placement
+while the avatar owns the matching return transaction, so the replacement scene
+cannot inherit an orbital presentation
 fact without a valid surface-camera return state.
 
 Site placement owns only the authored site root and its physical descendants.
