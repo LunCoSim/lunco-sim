@@ -49,7 +49,10 @@ use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_usd_avian::{AuthoredInitialVelocity, PendingJointAdmission, ShouldBeDynamic};
+use lunco_usd_avian_contracts::{
+    AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
+    ShouldBeDynamic,
+};
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
 use lunco_usd_bevy_camera::avatar::read_avatar_camera_intent;
 use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
@@ -2418,7 +2421,7 @@ fn setup_physical_wheel(
         // bookkeeping — a `joint_count` underflow that corrupted the solver. Owning it here
         // makes that structurally impossible: no orphans, no reaper, no mask.
         ChildOf(carrier),
-        lunco_usd_avian::ScenePhysicsOwned,
+        ScenePhysicsOwned,
         // Avian writes the solved revolute reaction here. The editor's wheel
         // gizmo reads this explicit boundary; it must not infer a per-wheel
         // force from the body's integration accumulator.
@@ -2919,14 +2922,11 @@ fn activate_dynamic_bodies(
             Without<lunco_physics::PhysicsInitializationInvalid>,
         ),
     >,
-    q_pending_joints: Query<
-        (&UsdPrimPath, &lunco_usd_avian::PendingUsdJoint),
-        With<lunco_usd_avian::PendingUsdJoint>,
-    >,
+    q_pending_joints: Query<(&UsdPrimPath, &PendingUsdJoint), With<PendingUsdJoint>>,
     q_pending_admissions: Query<&PendingJointAdmission>,
     q_joint_states: Query<(
         &UsdPrimPath,
-        Option<&lunco_usd_avian::PendingUsdJoint>,
+        Option<&PendingUsdJoint>,
         Option<&PendingJointAdmission>,
         Has<RevoluteJoint>,
         Has<PrismaticJoint>,

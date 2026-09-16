@@ -378,7 +378,7 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                 Entity,
                 Option<&UsdPrimPath>,
                 Option<&lunco_physics::PhysicsJointLink>,
-                Option<&lunco_usd_avian::PendingJointAdmission>,
+                Option<&lunco_usd_avian_contracts::PendingJointAdmission>,
                 Has<avian3d::prelude::RevoluteJoint>,
                 Has<avian3d::prelude::PrismaticJoint>,
                 Has<avian3d::prelude::FixedJoint>,
@@ -650,12 +650,12 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             (
                 Entity,
                 &UsdPrimPath,
-                &lunco_usd_avian::PendingUsdJoint,
+                &lunco_usd_avian_contracts::PendingUsdJoint,
                 Option<&lunco_core::Provenance>,
                 Option<&lunco_core::GlobalEntityId>,
                 Has<UsdInstanceRoot>,
             ),
-            With<lunco_usd_avian::PendingUsdJoint>,
+            With<lunco_usd_avian_contracts::PendingUsdJoint>,
         >::try_new(world) else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::InternalError,
@@ -859,10 +859,10 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         let Some(mut pending_admission_query) = QueryState::<
             (
                 Entity,
-                &lunco_usd_avian::PendingJointAdmission,
+                &lunco_usd_avian_contracts::PendingJointAdmission,
                 Option<&UsdPrimPath>,
             ),
-            With<lunco_usd_avian::PendingJointAdmission>,
+            With<lunco_usd_avian_contracts::PendingJointAdmission>,
         >::try_new(world) else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::InternalError,

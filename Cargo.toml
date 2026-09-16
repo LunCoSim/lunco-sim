@@ -41,6 +41,7 @@ members = [
     "crates/lunco-sysml",
     "crates/lunco-sysml-rhai",
     "crates/lunco-usd-avian",
+    "crates/lunco-usd-avian-contracts",
     "crates/lunco-usd-avian-core",
     "crates/lunco-usd-avian-filters",
     "crates/lunco-usd-avian-lint",

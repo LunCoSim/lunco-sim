@@ -321,7 +321,7 @@ pub struct SceneEntities<'w, 's> {
     /// Physics-created joint entities and world-anchor bodies have no USD prim
     /// path, so their explicit scene-ownership marker is the authoritative
     /// reclamation key.
-    physics_owned: Query<'w, 's, Entity, With<lunco_usd_avian::ScenePhysicsOwned>>,
+    physics_owned: Query<'w, 's, Entity, With<lunco_usd_avian_contracts::ScenePhysicsOwned>>,
 }
 
 pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {

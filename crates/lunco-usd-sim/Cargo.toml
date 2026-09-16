@@ -21,6 +21,7 @@ lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial" }
 lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
 lunco-usd-sim-telemetry = { path = "../lunco-usd-sim-telemetry" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-usd-actuation = { path = "../lunco-usd-actuation" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }

@@ -2181,7 +2181,7 @@ pub fn modelica_models_terminal<'a>(
 /// available.
 fn settle_binding_epoch(
     awaiting: Query<(), With<UsdSceneAwaitingStage>>,
-    joints: Query<(), With<lunco_usd_avian::PendingUsdJoint>>,
+    joints: Query<(), With<lunco_usd_avian_contracts::PendingUsdJoint>>,
     differentials: Query<(), With<PendingDifferential>>,
     // `UsdSourcedCosim` marks the USD projection domain, not a solver.  It is
     // intentionally also present on native endpoints such as a revolute joint
@@ -3240,8 +3240,10 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurface>)
             .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurfaceReady>)
             .add_observer(forget_binding_model_status)
-            .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
-            .add_observer(request_binding_epoch_on_remove::<lunco_usd_avian::PendingUsdJoint>)
+            .add_observer(request_binding_epoch::<lunco_usd_avian_contracts::PendingUsdJoint>)
+            .add_observer(
+                request_binding_epoch_on_remove::<lunco_usd_avian_contracts::PendingUsdJoint>,
+            )
             .add_observer(request_binding_epoch::<PendingDifferential>)
             .add_observer(request_binding_epoch_on_remove::<PendingDifferential>)
             .add_observer(request_binding_epoch::<SimConnection>)

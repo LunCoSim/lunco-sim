@@ -434,7 +434,7 @@ fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Va
         "rigid_body": world.get::<avian3d::prelude::RigidBody>(entity).is_some(),
         "collider": world.get::<avian3d::prelude::Collider>(entity).is_some(),
         "pending_joint": world
-            .get::<lunco_usd_avian::PendingUsdJoint>(entity)
+            .get::<lunco_usd_avian_contracts::PendingUsdJoint>(entity)
             .is_some(),
         "physics_joint_pending": world
             .get::<lunco_physics::PhysicsJointPending>(entity)

@@ -76,18 +76,13 @@ use openusd::schemas::physics::tokens as ptok;
 // re-spelling `"force"`/`"acceleration"` here.
 pub use openusd::schemas::physics::DriveType;
 
+use lunco_usd_avian_contracts::{
+    AuthoredInitialVelocity, JointDrive, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
+    ShouldBeDynamic,
+};
+
 mod material;
 use material::read_physics_material;
-
-/// Marks an Avian entity synthesized for the currently mounted USD scene.
-///
-/// Authored physics prims carry [`UsdPrimPath`] and are owned by that stage.
-/// Synthesized wheel joints and world-anchor bodies have no authored prim path,
-/// so they need this explicit ownership marker for the same teardown transaction
-/// to disable and reclaim them. It is not a physics mode or a second lifecycle;
-/// it is the ownership fact that the scene boundary cannot infer from hierarchy.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct ScenePhysicsOwned;
 
 /// Runtime evidence for one joint-shaped entity, consumed by the generic Rhai
 /// USD lint. The fact is deliberately read-only; it does not create or repair
@@ -591,172 +586,6 @@ fn enforce_kinematic_on_animated(
 #[derive(Component)]
 struct UsdAvianProcessed;
 
-/// Marker for USD prims awaiting joint creation.
-///
-/// Inserted when a `PhysicsPrismaticJoint` (or other joint type) is detected in USD
-/// but the referenced body entities haven't been spawned yet. The `build_usd_physics_joints`
-/// system checks for these markers and creates Avian3D joints once both bodies exist.
-#[derive(Component)]
-pub struct PendingUsdJoint {
-    /// USD path to body0 (the anchor/chassis).
-    pub body0_path: String,
-    /// USD path to body1 (the driven body/wheel).
-    pub body1_path: String,
-    /// Joint axis in local space of body0.
-    pub axis: DVec3,
-    /// Anchor point on body0 in body0's local frame
-    /// (UsdPhysics `physics:localPos0`). Defaults to origin.
-    pub local_pos0: DVec3,
-    /// Anchor point on body1 in body1's local frame
-    /// (UsdPhysics `physics:localPos1`). Defaults to origin.
-    pub local_pos1: DVec3,
-    /// Basis of the joint frame on body0, in body0's local frame (UsdPhysics
-    /// `physics:localRot0`). Identity when unauthored. [`axis`](Self::axis) is
-    /// read IN this basis, and every joint but the spherical constrains
-    /// `rot0 · local_rot0` to `rot1 · local_rot1` — so a pair of bodies that rest
-    /// at different orientations is expressed here, not by tilting the axis.
-    pub local_rot0: DQuat,
-    /// Basis of the joint frame on body1 (UsdPhysics `physics:localRot1`).
-    /// Identity when unauthored. See [`local_rot0`](Self::local_rot0).
-    pub local_rot1: DQuat,
-    /// Lower travel limit along the axis (meters for prismatic, radians for revolute).
-    pub limit_lower: f64,
-    /// Upper travel limit.
-    pub limit_upper: f64,
-    /// The joint kind from USD (e.g., `PhysicsPrismaticJoint`).
-    pub joint_type: String,
-    /// Spherical-joint swing cone half-angles `(angle0, angle1)` from
-    /// `physics:coneAngle0Limit`/`physics:coneAngle1Limit`, or `None` for a free
-    /// (unlimited) cone. `limit_lower/upper` carry the *twist* limit for a
-    /// spherical joint.
-    pub swing_limit: Option<(f64, f64)>,
-    /// Authored `UsdPhysicsDriveAPI` drive (the `linear` instance for prismatic,
-    /// `angular` for revolute), or `None` when the joint carries no drive — it
-    /// then stays passive until a cosim wire commands its `displacement`/`angle`
-    /// port.
-    pub drive: Option<JointDrive>,
-    /// Passive relative-velocity damping explicitly classified by
-    /// `LunCoJointDampingAPI`, or `None` when the joint is lossless. This maps
-    /// directly to Avian's native `JointDamping`; it is not a drive or a
-    /// rigid-body world-damping approximation.
-    pub damping: Option<JointDamping>,
-}
-
-/// The `UsdPhysicsJoint` base reads every joint type shares: the two bodies and
-/// the two joint frames (`physics:localPos0/1` + `physics:localRot0/1`).
-struct JointBaseRead {
-    body0: String,
-    body1: String,
-    local_pos0: DVec3,
-    local_pos1: DVec3,
-    local_rot0: DQuat,
-    local_rot1: DQuat,
-}
-
-/// A `UsdPhysicsDriveAPI` joint drive, read at load. Configures the Avian joint
-/// motor so an Omniverse-authored mechanism seeks its target out of the box; a
-/// cosim wire targeting the joint's port overrides `target_position` per tick.
-#[derive(Clone, Copy, Default)]
-pub struct JointDrive {
-    /// `drive:{angular,linear}:physics:targetPosition` (rad or m).
-    pub target_position: Option<f64>,
-    /// `drive:{angular,linear}:physics:targetVelocity` (rad/s or m/s).
-    pub target_velocity: Option<f64>,
-    /// `drive:{angular,linear}:physics:maxForce` — the motor's torque (N·m) or
-    /// force (N) saturation. Replaces the cosim default when authored.
-    pub max_force: Option<f64>,
-    /// `drive:{angular,linear}:physics:stiffness` — N/m (linear) or N·m/rad
-    /// (angular).
-    pub stiffness: Option<f64>,
-    /// `drive:{angular,linear}:physics:damping` — N·s/m (linear) or N·m·s/rad
-    /// (angular).
-    pub damping: Option<f64>,
-    /// `drive:{angular,linear}:physics:type` — whether the coefficients above
-    /// produce a force directly or an acceleration the solver scales by mass.
-    /// `None` = unauthored, and the schema's own fallback for that is
-    /// [`DriveType::Force`].
-    pub drive_type: Option<DriveType>,
-    /// The authored generalized inertia of the driven coordinate: kilograms for
-    /// a linear drive, or kg·m² for an angular drive. A force-type spring is
-    /// realised as a stable [`MotorModel::SpringDamper`], whose frequency is
-    /// `sqrt(stiffness / generalized_inertia)`; see [`JointDrive::motor_model`].
-    /// `None` means USD left the value to Avian's computed mass-property path;
-    /// runtime joint construction resolves it from the participating bodies'
-    /// attached geometry, density, mass and inertia.
-    pub generalized_inertia: Option<f64>,
-}
-
-impl JointDrive {
-    /// The avian motor model this drive asks for.
-    ///
-    /// `UsdPhysicsDriveAPI` defines the drive law —
-    /// `force = stiffness * (targetPosition - position) + damping * (targetVelocity -
-    /// velocity)` — and its one axis of variation, `physics:type`: `"force"` applies
-    /// that as a force, `"acceleration"` applies it mass-normalised so the response
-    /// does not depend on what the joint is carrying.
-    ///
-    /// `"acceleration"` maps straight onto [`MotorModel::AccelerationBased`], same
-    /// coefficients, same units. `"force"` does NOT map onto
-    /// [`MotorModel::ForceBased`]: avian's `ForceBased` is an EXPLICIT integrator
-    /// that is unstable for a stiff, damped drive on a heavy body at a sim tick —
-    /// the landing leg (k = 4000 N/m, c = 2200 N·s/m, m = 500 kg, 60 Hz) freezes at
-    /// its rest offset and never bears load. avian's own docs say to use
-    /// [`MotorModel::SpringDamper`] (the IMPLICIT form) for stability.
-    ///
-    /// SpringDamper is parameterised by `frequency` and `damping_ratio`, and
-    /// `omega = sqrt(stiffness / mass)`, `zeta = damping / (2*sqrt(stiffness*mass))`
-    /// recover EXACTLY the authored law: SpringDamper's per-substep correction is an
-    /// acceleration `omega^2*pos_err + 2*zeta*omega*vel_err`, so the force it
-    /// develops is `mass * that = stiffness*pos_err + damping*vel_err` — `force =
-    /// k*x + c*v`, unchanged, but integrated stably. The conversion needs the driven
-    /// coordinate's generalized inertia ([`Self::generalized_inertia`]), which is
-    /// the mass for a LINEAR drive and the effective moment about the hinge for an
-    /// ANGULAR drive; the runtime resolver supplies Avian's computed value when
-    /// USD left it unauthored. If neither authored nor computed properties can
-    /// certify it, the drive is rejected rather than silently reverting to an
-    /// uncertified explicit motor.
-    ///
-    /// An unauthored `physics:type` takes the schema's own fallback, `"force"`
-    /// (`usdPhysics` declares `uniform token physics:type = "force"`).
-    ///
-    /// A drive with neither coefficient is not a spring but a positioner: it seeks a
-    /// setpoint, and how fast it converges is a tuning choice rather than a property
-    /// of the mechanism. That one gets [`MotorModel::SpringDamper`] at a fixed
-    /// frequency, which is unconditionally stable under XPBD substepping at any mass.
-    pub fn motor_model(&self) -> Result<MotorModel, lunco_physics::ForceDriveMotorError> {
-        if self.stiffness.is_none() && self.damping.is_none() {
-            return Ok(JOINT_DRIVE_MOTOR_MODEL);
-        }
-        let stiffness = self.stiffness.unwrap_or(0.0);
-        let damping = self.damping.unwrap_or(0.0);
-        if stiffness == 0.0 && damping == 0.0 {
-            return Ok(JOINT_DRIVE_MOTOR_MODEL);
-        }
-        match self.drive_type.unwrap_or(DriveType::Force) {
-            DriveType::Acceleration => Ok(MotorModel::AccelerationBased { stiffness, damping }),
-            DriveType::Force => lunco_physics::force_drive_motor_model(
-                stiffness,
-                damping,
-                self.generalized_inertia.unwrap_or(0.0),
-            ),
-        }
-    }
-
-    /// Whether the motor should start enabled.
-    ///
-    /// A spring IS an active motor whose target is its own rest position, so a
-    /// drive with `targetPosition` left at its default is still live: it must push
-    /// back the moment the joint leaves that rest offset. Activation therefore
-    /// keys on authored stiffness/damping as well as on targets, never on a
-    /// setpoint alone.
-    pub fn is_active(&self) -> bool {
-        self.target_position.is_some()
-            || self.target_velocity.is_some()
-            || self.stiffness.is_some()
-            || self.damping.is_some()
-    }
-}
-
 /// Mass properties needed to turn a USD force drive into Avian's implicit
 /// spring-damper model. These are the live, composed properties after Avian has
 /// combined the body's own collider tree and any authored mass overrides.
@@ -972,16 +801,6 @@ fn resolve_joint_drive_motor_model(
         Err(error) => ResolvedJointDrive::Invalid(error),
     }
 }
-
-/// Overdamped spring-damper for a joint drive that authors no stiffness or
-/// damping — mirrors `lunco_cosim::joint`'s motor model so a USD-driven joint and
-/// a wire-driven one track their setpoint identically (≈3 Hz, ζ=2, no overshoot
-/// under XPBD substepping). A drive that DOES author them is a physical spring;
-/// see [`JointDrive::motor_model`].
-const JOINT_DRIVE_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
-    frequency: 3.0,
-    damping_ratio: 2.0,
-};
 
 /// Force (N) / torque (N·m) saturation a USD-driven joint motor gets when its
 /// `physics:maxForce` is left unauthored — generous enough to hold the target
@@ -2389,6 +2208,16 @@ fn joint_targets_simulated_wheel(
     }
     nearest_body_path(reader, &targets[0])
         .is_some_and(|body| reader.has_api_schema(&body, "PhysxVehicleWheelAPI"))
+}
+
+/// The USD joint base fields shared by every concrete joint reader.
+struct JointBaseRead {
+    body0: String,
+    body1: String,
+    local_pos0: DVec3,
+    local_pos1: DVec3,
+    local_rot0: DQuat,
+    local_rot1: DQuat,
 }
 
 /// Read the STANDARD UsdPhysics joint at `path` through the shared composed
@@ -4061,22 +3890,6 @@ pub struct PendingJoint<J: Component + Clone> {
     seat: Option<JointSeat>,
 }
 
-/// Cross-kind lifecycle marker for a joint parked by [`attach_joint`].
-///
-/// [`PendingJoint`] carries the typed constraint, so a consumer that needs to
-/// ask whether *any* native joint is still waiting would otherwise have to
-/// duplicate the complete list of Avian joint types. The endpoints are kept on
-/// this marker so the dynamic-admission gate can hold only the bodies belonging
-/// to this still-pending constraint; already-admitted parts of an articulated
-/// assembly must not drift while an unrelated joint catches up.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct PendingJointAdmission {
-    /// First jointed body.
-    pub body0: Entity,
-    /// Second jointed body.
-    pub body1: Entity,
-}
-
 /// Install every [`PendingJoint<J>`] whose two bodies avian has admitted into
 /// its island graph, as one bundle with [`JointCollisionDisabled`].
 ///
@@ -4528,29 +4341,6 @@ fn apply_physics_material(
 /// UsdPhysics namespace with an attribute that spec does not define.
 const PHYSX_LINEAR_DAMPING: &str = "physxRigidBody:linearDamping";
 const PHYSX_ANGULAR_DAMPING: &str = "physxRigidBody:angularDamping";
-
-/// Marker component to hold a rigid body as Kinematic until all joints
-/// and constraints are fully resolved in the stage, preventing 1-frame
-/// physics separation explosions.
-#[derive(Component, Reflect, Default)]
-#[reflect(Component, Default)]
-pub struct ShouldBeDynamic;
-
-/// Initial velocity authored on a USD body that is waiting for joint admission.
-///
-/// Avian integrates a kinematic body's `LinearVelocity` as a commanded motion,
-/// so merely changing the body type to `Kinematic` does not freeze a body that
-/// already received `physics:velocity`. Dynamic bodies therefore keep their
-/// authored initial condition here until the USD simulation projector promotes
-/// them. This component is the lifecycle contract between USD extraction and
-/// dynamic admission; it is not a model-specific workaround.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct AuthoredInitialVelocity {
-    /// World-frame linear velocity, if authored.
-    pub linear: Option<DVec3>,
-    /// World-frame angular velocity, if authored.
-    pub angular: Option<DVec3>,
-}
 
 #[cfg(test)]
 mod collider_parity_tests {

@@ -99,6 +99,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, and environment-camera binding. It is independent from the visual mesh projector. |
 | **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `lunco-usd-bevy-runtime`; kept separate from the visual projector. |
 | **`lunco-usd-avian-filters`** | Render-free USD/Avian collision-filter boundary: interprets standard `PhysicsFilteredPairsAPI` and `PhysicsCollisionGroup`, owns transient joint-pair suppression, and installs the single Avian collision/contact hook. |
+| **`lunco-usd-avian-contracts`** | Shared USD/Avian ECS carriers and normalized joint-drive contract used by physics projection, readiness, queries, and co-simulation; contains no stage traversal or projection systems. |
 | **`lunco-usd-avian`** | Physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. Its USD physics-material reader is isolated from the main projection module. It consumes the independent collision-filter package; lint fact production is in `lunco-usd-avian-lint`. |
 | **`lunco-usd-actuation`** | Render-free composed USD force/torque actuator reader. It converts authored actuator geometry and limits into generic co-simulation components without depending on the Avian runtime projection. |
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
@@ -556,6 +557,12 @@ rootless collider propagation, active-frame transport/reset, backend admission
 validation, and `BridgeShadow`; it does not read USD stages or contain UI
 policy. Its bridge tests live with this production package so changing the USD
 reader does not rebuild the bridge implementation.
+
+**`lunco-usd-avian-contracts`**
+Shared ECS carriers crossing the USD physics, vehicle, readiness, query, and
+co-simulation packages. It owns `PendingUsdJoint`, joint-drive data, scene
+ownership, dynamic-admission, and authored-velocity markers, while the runtime
+projector remains the owner of stage traversal and joint construction.
 
 **`lunco-usd-avian`**
 Physics projection for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas —

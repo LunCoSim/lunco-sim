@@ -426,7 +426,7 @@ fn relative_anchor_velocity_along_axis(axis: DVec3, body1: DVec3, body2: DVec3) 
 ///   solver's own state. Exact.
 /// - [`MotorModel::SpringDamper`] — the stable realisation a `physics:type =
 ///   "force"` spring is loaded as (avian's `ForceBased` is unstable for a stiff,
-///   damped, heavy drive; see `lunco_usd_avian::JointDrive::motor_model`). It
+///   damped, heavy drive; see the shared `JointDrive::motor_model` conversion). It
 ///   carries the SAME force law, expressed as `frequency`/`damping_ratio` scaled
 ///   by the driven body's mass: `stiffness = m*(2*pi*f)^2`, `damping =
 ///   m*2*zeta*(2*pi*f)`. Recovering `m` from the driven body ([`Mass`]) yields

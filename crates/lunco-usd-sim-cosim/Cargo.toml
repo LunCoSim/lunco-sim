@@ -28,7 +28,7 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-readiness = { workspace = true }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-time = { path = "../lunco-time" }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }

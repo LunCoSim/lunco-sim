@@ -32,7 +32,7 @@ use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 
 use crate::SceneLoadInFlight;
 use lunco_cosim_core::{SimComponent, UsdSourcedCosim};
-use lunco_usd_avian::ShouldBeDynamic;
+use lunco_usd_avian_contracts::ShouldBeDynamic;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
 
 /// The open world-scoped scene-load wait, if a scene is loading.

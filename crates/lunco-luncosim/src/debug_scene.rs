@@ -825,7 +825,7 @@ fn participants_ready(world: &mut World) -> bool {
     }
 
     let mut q_pending = world.query_filtered::<(), Or<(
-        With<lunco_usd_avian::PendingUsdJoint>,
+        With<lunco_usd_avian_contracts::PendingUsdJoint>,
         With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
         With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
         With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
@@ -850,9 +850,9 @@ fn physics_admission_ready(world: &mut World) -> bool {
     }
 
     let mut q_pending = world.query_filtered::<(), Or<(
-        With<lunco_usd_avian::ShouldBeDynamic>,
+        With<lunco_usd_avian_contracts::ShouldBeDynamic>,
         With<lunco_core::PhysicsStatePending>,
-        With<lunco_usd_avian::PendingUsdJoint>,
+        With<lunco_usd_avian_contracts::PendingUsdJoint>,
         With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
         With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
         With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
@@ -954,7 +954,7 @@ fn log_participant_readiness_blockers(world: &mut World) {
     }
     let mut pending_joints = world
         .query_filtered::<(Entity, Option<&lunco_usd_bevy_scene::UsdPrimPath>), Or<(
-            With<lunco_usd_avian::PendingUsdJoint>,
+            With<lunco_usd_avian_contracts::PendingUsdJoint>,
             With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
             With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
             With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
@@ -969,8 +969,8 @@ fn log_participant_readiness_blockers(world: &mut World) {
         );
     }
     let mut pending_usd = world.query_filtered::<
-        (Entity, &lunco_usd_avian::PendingUsdJoint),
-        With<lunco_usd_avian::PendingUsdJoint>,
+        (Entity, &lunco_usd_avian_contracts::PendingUsdJoint),
+        With<lunco_usd_avian_contracts::PendingUsdJoint>,
     >();
     let describe_target = |path: &str| {
         let found = world.iter_entities().find(|entity| {
@@ -1002,8 +1002,8 @@ fn log_participant_readiness_blockers(world: &mut World) {
         );
     }
     let mut pending_admissions = world.query_filtered::<
-        (Entity, &lunco_usd_avian::PendingJointAdmission),
-        With<lunco_usd_avian::PendingJointAdmission>,
+        (Entity, &lunco_usd_avian_contracts::PendingJointAdmission),
+        With<lunco_usd_avian_contracts::PendingJointAdmission>,
     >();
     for (entity, pending) in pending_admissions.iter(world) {
         let describe_body = |body: Entity| {
