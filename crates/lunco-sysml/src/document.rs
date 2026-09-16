@@ -90,6 +90,17 @@ impl SysmlDocument {
         &self.origin
     }
 
+    /// Rebind this document to a new origin after a successful Save-As.
+    pub fn set_origin(&mut self, origin: DocumentOrigin) {
+        self.origin = origin;
+        self.refresh_analysis();
+    }
+
+    /// Mark the current generation as persisted.
+    pub fn mark_saved(&mut self) {
+        self.last_saved_generation = Some(self.generation);
+    }
+
     /// Whether this source has semantic/parser diagnostics.
     pub fn has_diagnostics(&self) -> bool {
         self.analysis.has_errors()

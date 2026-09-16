@@ -8767,14 +8767,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "lunco-api",
  "lunco-assets-core",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-storage",
  "lunco-sysml-ast",
  "lunco-twin-journal",
  "lunco-workspace",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

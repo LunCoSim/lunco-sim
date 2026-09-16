@@ -23,6 +23,18 @@ fn modelica_apply(doc, ops) {
     cmd("ApplyModelicaOps", #{ doc_id: doc, ops: ops })
 }
 
+/// Apply one Modelica batch against an inspected generation. This is the
+/// preferred editor path; the two-argument form above remains for authored
+/// scripts that intentionally do not use optimistic concurrency.
+fn modelica_apply_against(doc, ops, parent_generation) {
+    if doc == () || doc == 0 { return __missing_document("Modelica"); }
+    cmd("ApplyModelicaOps", #{
+        doc_id: doc,
+        ops: ops,
+        parent_generation: parent_generation,
+    })
+}
+
 // Each constructor below returns one `ApiOp` payload. Keep these constructors
 // in Rhai so authored tools and tutorials can describe Modelica edits without
 // depending on Rust enum constructors. `modelica_apply` remains the only

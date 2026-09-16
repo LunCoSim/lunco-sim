@@ -58,6 +58,26 @@ The native shared-library probe is lazy: the scripting plugin keeps Python
 runtime. A Python participant then resolves availability at the USD bind seam;
 an unavailable interpreter is reported as a terminal participant error.
 
+### Unified document authoring
+
+Interactive source/assembly edits use one `lunco-doc` document contract rather
+than a separate editor state per format. `authoring_session.rhai` is the
+policy-facing facade: it discovers capabilities, validates a pure dry plan,
+submits one generation-checked group, and runs a domain checkpoint. USD,
+Modelica, SysML/KerML, and Rhai each provide a thin typed adapter for their
+parser/projection semantics; the adapters share identity, journaling,
+undo/redo, save, and lifecycle commands. This keeps high-level policy and
+requirement decisions hot-reloadable in Twin Rhai files while Rust retains the
+small invariant kernel (identity, UTF-8/range checks, atomic history and
+storage). WGSL remains renderer-owned until it receives the same document
+adapter; generic tools must not write shader files directly.
+
+`InspectScriptDocument` and `ApplyScriptOps` provide the source-backed Rhai
+adapter; `InspectSysmlDocument` and `ApplySysmlOps` provide the corresponding
+SysML/KerML adapter. Both accept only explicit document ids and optional
+generation cursors, so a script policy cannot accidentally edit the active tab
+or apply to a stale snapshot.
+
 ### Native math values and boundary lowering
 
 The common Rhai engine registers the simulator's existing `bevy::math` values

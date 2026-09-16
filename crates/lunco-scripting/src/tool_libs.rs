@@ -412,6 +412,16 @@ mod tests {
                 "embedded {stem}.rhai not registered"
             );
         }
+
+        // Compile every discovered source tool through the same registry
+        // resolver used by the production engine. This catches a malformed
+        // or missing imported tool at the boundary where it would otherwise
+        // become an Editor menu with no callable implementation.
+        let mut engine = Engine::new();
+        lunco_hooks_rhai::rhai_limits::apply(&mut engine);
+        engine.set_module_resolver(lunco_tools_rhai::ToolModuleResolver::new());
+        let errors = lunco_tools_rhai::bind_registered_tools(&mut engine);
+        assert!(errors.is_empty(), "built-in tool binding errors: {errors:?}");
     }
 
     /// `save_tool_library_file` → `load_tool_libraries_from_dir` round-trips;

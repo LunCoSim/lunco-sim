@@ -8,14 +8,15 @@ pub mod util;
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
-use lunco_doc::DocumentId;
+use lunco_doc::{Document, DocumentId};
 use lunco_modelica_ast::pretty::{
     CausalitySpec, ClassKindSpec, ComponentDecl, ConnectEquation, EquationDecl, FillPattern,
     GraphicSpec, Line, LinePattern, LunCoPlotNodeSpec, Placement, PortRef, VariabilitySpec,
     VariableDecl,
 };
 use lunco_modelica_core::document::ModelicaOp;
-use util::{resolve_doc, strip_same_package_prefix};
+use lunco_modelica_core::state::ModelicaDocumentRegistry;
+use util::strip_same_package_prefix;
 
 /// Plugin that registers the Modelica edit events + observers.
 pub struct ModelicaApiEditPlugin;
@@ -417,22 +418,58 @@ impl ApiLinePattern {
 /// for the Modelica document; it does not attach a simulation program to USD.
 #[Command(default)]
 pub struct ApplyModelicaOps {
-    /// Document to edit; unassigned (`0` over the API) = active.
+    /// Explicit document to edit.
     pub doc_id: DocumentId,
     /// Ops to apply, in order.
     pub ops: Vec<ApiOp>,
+    /// Optional optimistic-concurrency cursor from `InspectModelicaDocument`
+    /// or `GetDocumentSource`. When present, the whole batch is rejected
+    /// before any operation is queued if the document generation changed.
+    #[serde(default)]
+    pub parent_generation: Option<u64>,
 }
 
 #[on_command(ApplyModelicaOps)]
 pub fn on_apply_modelica_ops(
     trigger: On<ApplyModelicaOps>,
+    registry: Res<ModelicaDocumentRegistry>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let raw = trigger.event().doc_id;
+    if raw.is_unassigned() {
+        return Err("ApplyModelicaOps requires an explicit doc_id".to_owned());
+    }
+    let Some(host) = registry.host(raw) else {
+        return Err(format!("ApplyModelicaOps: unknown Modelica document {raw}"));
+    };
+    if let Some(parent) = trigger.event().parent_generation {
+        let current = host.document().generation();
+        if current != parent {
+            return Err(format!(
+                "ApplyModelicaOps: stale parent generation for doc {raw}: expected {parent}, current {current}"
+            ));
+        }
+    }
     let api_ops = trigger.event().ops.clone();
+    let parent_generation = trigger.event().parent_generation;
     let mut internal = Vec::with_capacity(api_ops.len());
     let mut invalid = Vec::new();
     for (index, op) in api_ops.iter().enumerate() {
+        if let ApiOp::EditText {
+            range_start,
+            range_end,
+            ..
+        } = op
+        {
+            if usize::try_from(*range_start).is_err()
+                || usize::try_from(*range_end).is_err()
+                || range_start > range_end
+            {
+                return Err(format!(
+                    "ApplyModelicaOps: invalid text range at index {index}; offsets must be ordered and fit usize"
+                ));
+            }
+        }
         match api_op_to_internal(op) {
             Some(op) => internal.push(op),
             None if matches!(op, ApiOp::Noop) => {}
@@ -446,10 +483,22 @@ pub fn on_apply_modelica_ops(
     }
     let count = internal.len();
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc(world, raw) else {
-            bevy::log::warn!("[ApplyModelicaOps] no doc for id {}", raw);
-            return;
-        };
+        let doc = raw;
+        if let Some(parent) = parent_generation {
+            let current = world
+                .get_resource::<ModelicaDocumentRegistry>()
+                .and_then(|registry| registry.host(doc))
+                .map(|host| host.document().generation());
+            if current != Some(parent) {
+                bevy::log::error!(
+                    "[ApplyModelicaOps] stale parent generation for doc {}: expected {}, current {:?}",
+                    raw,
+                    parent,
+                    current
+                );
+                return;
+            }
+        }
         if internal.is_empty() {
             return;
         }
@@ -1360,5 +1409,6 @@ pub fn trigger_apply_ops(world: &mut World, doc: lunco_doc::DocumentId, ops: Vec
     world.commands().trigger(ApplyModelicaOps {
         doc_id: doc,
         ops: api_ops,
+        parent_generation: None,
     });
 }

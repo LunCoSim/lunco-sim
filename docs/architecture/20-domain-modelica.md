@@ -559,7 +559,7 @@ GUI panels (per AGENTS.md §4.1):
 | `RemoveModelicaComponent { doc_id, class, name }` | `RemoveComponent` | Delete a component declaration |
 | `ConnectComponents { doc_id, class, from, to }` | `AddConnection` | Add a `connect(a.p, b.q);` equation; `from`/`to` are dot-paths |
 | `DisconnectComponents { doc_id, class, from, to }` | `RemoveConnection` | Drop the matching connect equation |
-| `ApplyModelicaOps { doc_id, ops: Vec<ApiOp> }` | All structural variants | Batch fan-out: `AddComponent / RemoveComponent / AddConnection / RemoveConnection / SetPlacement / SetParameter` in order |
+| `ApplyModelicaOps { doc_id, ops: Vec<ApiOp>, parent_generation? }` | All structural variants | Batch fan-out: `AddComponent / RemoveComponent / AddConnection / RemoveConnection / SetPlacement / SetParameter / EditText` in order; an optional generation cursor rejects stale groups |
 | `RenameModelicaClass { doc_id, old_name, new_name }` | string-level rewrite | Rename a top-level class declaration + its `end OLD;` closer; if the doc origin is `Untitled`, the origin name is updated too so the tab title follows |
 
 `ApplyModelicaOps` is the primary path for agent / canvas drag-drop —
@@ -576,8 +576,9 @@ waiting out the keystroke debounce window — see § 5.7.
 via `ApplyModelicaOps` or planned as standalones:
 
 - `SetPlacement` / `SetParameter` — only via `ApplyModelicaOps`
-- `EditText { range, replacement }` — no API surface (use
-  `SetDocumentSource` for now); needed for granular LSP-style edits
+- `EditText { range, replacement }` — available through `ApplyModelicaOps`; the
+  Rust owner validates UTF-8 boundaries and schedules the parse without
+  blocking the editor
 - `RenameModelicaComponent`, `RenameModelicaPort` — not implemented
 - `AddClass` / `RemoveClass` / `MoveClass` (between packages) — not
   implemented; `RenameModelicaClass` covers in-place rename only

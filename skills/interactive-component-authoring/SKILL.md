@@ -66,6 +66,59 @@ assembly integration gate that checks placement, symmetry, clearances,
 references, joints and cross-component wiring; an isolated component pass does
 not prove its mounting.
 
+## Unified editing substrate and format adapters
+
+All editable artifacts use the same lower contract in `lunco-doc` and
+`lunco-doc-bevy`: a stable `DocumentId`, monotonically increasing generation,
+typed reversible `DocumentOp`, an atomic grouped-apply boundary, optimistic
+parent-generation checking, journal provenance, lifecycle notifications, and
+generic undo/redo/save/fork/close verbs. This substrate is the source of
+shared Editor behaviour; a format must not grow a private history stack,
+active-tab fallback, or second document identity.
+
+Each format adapter implements only what is format-specific:
+
+| Format | Adapter owns | Rhai facade owns |
+|---|---|---|
+| USD | OpenUSD composition, EditTarget/layer opinions, typed ops, projection and viewport readiness | target resolution, dry plans, proposal/review, component workflow, visual checkpoint |
+| Modelica | source/AST/diagram lowering, parse scheduling, compile state and runtime projection | operation constructors, generation cursor, compile checkpoint, model/diagram UX |
+| SysML/KerML | UTF-8 source ranges, parser/resolver snapshot and source-set validation | source edit plans, requirement/verification policy, traceability checkpoint |
+| Rhai | script document source, UTF-8 edits and hook lifecycle | authored scenario/tool policy and test verdicts |
+| Shaders/other text domains | existing parser/compiler and resource owner (WGSL currently `CreateShader`/`ImportShader`) | add a source-edit facade only after a document adapter; never write shader files from a generic tool |
+
+The dynamic tool boundary is `assets/scripting/tools/*.rhai`. A tool is
+discoverable and hot-reloadable by name; it may call only the public `cmd` /
+`query` surface and reusable prelude helpers. New format support should add a
+small adapter plus a Rhai facade, not a vehicle-specific Rust builder or a
+copy of the USD/Modelica history machinery. `authoring_session` is the common
+facade for capability discovery, dry planning, grouped apply, checkpoint,
+undo and redo.
+
+Every adapter must expose the same interaction invariants:
+
+1. **Inspect first:** return document identity, origin, edit target (when
+   applicable), generation/source revision, dirty/read-only state and
+   diagnostics.
+2. **Plan before mutate:** validate the complete operation list in Rhai and
+   return a deterministic summary. A dry plan never calls `cmd`.
+3. **One intent, one group:** submit the reviewed list through the owner's
+   atomic grouped operation. The owner rejects stale generations, invalid
+   ranges/paths, read-only origins and unsupported schemas with a structured
+   error.
+4. **Verify the owner projection:** wait for the matching generation and use
+   the format's typed readback (USD composed stage, Modelica parse/compile,
+   SysML semantic snapshot). A screenshot is an additional visual checkpoint,
+   never the source of truth.
+5. **Recover explicitly:** `undo`/`redo` target the same document id; save is a
+   separate approval. There is no implicit active document, alternate writer,
+   silent retry, or fallback format.
+
+For Editor UX, keep a single session visible while this cycle runs. The user
+should see the dry operation count and affected identities, then one coherent
+change, the projection result, diagnostics and the undo affordance. Selection,
+camera and view state are presentation state and must survive a source edit;
+they are never encoded as an extra authored operation.
+
 ## Source and requirements gate before geometry
 
 Before opening an Editor document for a component, perform a short written

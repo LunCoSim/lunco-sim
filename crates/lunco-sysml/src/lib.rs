@@ -7,10 +7,12 @@
 //! in [`lunco_sysml_ast`], keeping the expensive language implementation out
 //! of consumers that only need the document contract.
 
+mod api;
 mod document;
 mod source_asset;
 mod twin_source;
 
+pub use api::{ApplySysmlOps, SysmlApiOp, SysmlApiPlugin};
 pub use document::{SysmlDocument, SysmlOp};
 pub use source_asset::{SysmlSource, SysmlSourceAssetPlugin, SysmlSourceLoader};
 pub use twin_source::{PendingSysmlSources, SYSML_TWIN_SOURCE_LOAD_FAILED};
@@ -28,6 +30,7 @@ pub struct SysmlPlugin;
 impl Plugin for SysmlPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(SysmlSourceAssetPlugin)
+            .add_plugins(SysmlApiPlugin)
             .init_resource::<lunco_doc_bevy::DocumentRegistry<SysmlDocument>>()
             .init_resource::<PendingSysmlSources>()
             .add_observer(twin_source::request_twin_sysml_sources)

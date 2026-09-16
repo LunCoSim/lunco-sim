@@ -8,14 +8,17 @@ description = "Headless SysML v2 document, asset, and Bevy integration"
 [dependencies]
 anyhow = { workspace = true }
 bevy = { workspace = true }
+lunco-api = { path = "../lunco-api" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-core = { path = "../lunco-core" }
 lunco-sysml-ast = { path = "../lunco-sysml-ast" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-storage = { path = "../lunco-storage" }
 lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

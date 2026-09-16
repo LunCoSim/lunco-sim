@@ -132,12 +132,18 @@ diagnostics; the upstream model remains private to the AST boundary.
 - Allocations, refinements
 - Analysis/verification execution
 
-The runtime currently accepts source-level replace/range edits. Structured
+The runtime accepts source-level replace/range edits through the
+`ApplySysmlOps { doc_id, ops, parent_generation? }` command. The command uses
+the generic document host, so one reviewed batch is atomic, journaled and one
+undo group; stale generations, invalid UTF-8 ranges and read-only origins are
+returned as explicit errors. `InspectSysmlDocument` supplies source identity,
+generation, origin and diagnostics for the Editor. Structured
 requirement/part operations and verification execution remain follow-up work;
-the read-only Rhai adapter reports requirements without mutating the model.
-For production checks, the scene-validation plugin registers the compact
-`ValidateSysml { path }` query. A filesystem path or `twin://name/relative`
-validates one source; `twin://name` loads the manifest-declared, indexed Twin
+the Rhai adapter reports requirements and owns verification policy without
+mutating the semantic model directly. For production checks, the
+scene-validation plugin registers the compact `ValidateSysml { path }` query. A
+filesystem path or `twin://name/relative` validates one source; `twin://name`
+loads the manifest-declared, indexed Twin
 source set. The query returns typed attributes, requirement/verification
 records, source files, diagnostics, and a deterministic source revision. The
 compact Rhai projection uses one lossless map keyed by qualified SysML names;

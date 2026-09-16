@@ -346,7 +346,11 @@ impl Panel for InspectorPanel {
                     value,
                 })
                 .collect();
-            ctx.trigger(ApplyModelicaOps { doc_id, ops });
+            ctx.trigger(ApplyModelicaOps {
+                doc_id,
+                ops,
+                parent_generation: None,
+            });
         }
     }
 }

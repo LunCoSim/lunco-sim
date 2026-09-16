@@ -22,7 +22,7 @@ use crate::backend::ScriptBackends;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use crate::doc::ScriptLanguage;
 #[cfg(feature = "rhai")]
-use crate::doc::{ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
+use crate::doc::{ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptOp, ScriptedModel};
 #[cfg(feature = "rhai")]
 use crate::world_bridge::{PendingWorldScript, PendingWorldScripts};
 #[cfg(any(feature = "rhai", feature = "python"))]
@@ -97,6 +97,115 @@ pub struct RunRhaiToolHook {
     pub hook: String,
     /// Structured argument passed to the hook.
     pub args: TelemetryValue,
+}
+
+/// One source-level edit for a script document. The document host performs
+/// UTF-8/range validation and records the inverse operation for undo.
+#[cfg(feature = "rhai")]
+#[derive(Reflect, Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum ScriptApiOp {
+    /// Replace the complete source buffer.
+    ReplaceSource {
+        /// New UTF-8 source text.
+        source: String,
+    },
+    /// Replace one UTF-8 byte range.
+    EditText {
+        /// Inclusive-start byte offset.
+        range_start: u64,
+        /// Exclusive-end byte offset.
+        range_end: u64,
+        /// Replacement UTF-8 source.
+        replacement: String,
+    },
+}
+
+/// Apply one grouped source edit to an explicit script document.
+#[cfg(feature = "rhai")]
+#[Command(default)]
+pub struct ApplyScriptOps {
+    /// Explicit script document id.
+    pub doc_id: DocumentId,
+    /// Ordered source operations committed as one undo/journal group.
+    pub ops: Vec<ScriptApiOp>,
+    /// Optional optimistic cursor from `InspectScriptDocument`.
+    #[serde(default)]
+    pub parent_generation: Option<u64>,
+}
+
+#[cfg(feature = "rhai")]
+#[on_command(ApplyScriptOps)]
+fn on_apply_script_ops(
+    trigger: On<ApplyScriptOps>,
+    mut registry: ResMut<ScriptRegistry>,
+) -> Result<Ack, String> {
+    let request = trigger.event();
+    if request.doc_id.is_unassigned() {
+        return Err("ApplyScriptOps requires an explicit doc_id".to_owned());
+    }
+    let Some(host) = registry.documents.get_mut(&request.doc_id) else {
+        return Err(format!(
+            "ApplyScriptOps: unknown script document {}",
+            request.doc_id
+        ));
+    };
+    if host.document().language != ScriptLanguage::Rhai {
+        return Err(format!(
+            "ApplyScriptOps: document {} is not a Rhai source",
+            request.doc_id
+        ));
+    }
+    if let Some(parent) = request.parent_generation {
+        let current = host.generation();
+        if current != parent {
+            return Err(format!(
+                "ApplyScriptOps: stale parent generation for doc {}: expected {}, current {}",
+                request.doc_id, parent, current
+            ));
+        }
+    }
+    let mut ops = Vec::with_capacity(request.ops.len());
+    for (index, op) in request.ops.iter().enumerate() {
+        let op = match op {
+            ScriptApiOp::ReplaceSource { source } => ScriptOp::SetSource(source.clone()),
+            ScriptApiOp::EditText {
+                range_start,
+                range_end,
+                replacement,
+            } => {
+                let start = usize::try_from(*range_start).map_err(|_| {
+                    format!("ApplyScriptOps: start offset at index {index} exceeds usize")
+                })?;
+                let end = usize::try_from(*range_end).map_err(|_| {
+                    format!("ApplyScriptOps: end offset at index {index} exceeds usize")
+                })?;
+                if start > end {
+                    return Err(format!(
+                        "ApplyScriptOps: text range at index {index} is not ordered"
+                    ));
+                }
+                ScriptOp::EditText {
+                    range: start..end,
+                    replacement: replacement.clone(),
+                }
+            }
+        };
+        ops.push(op);
+    }
+    if ops.is_empty() {
+        return Err("ApplyScriptOps requires at least one operation".to_owned());
+    }
+    let count = ops.len();
+    let ack = host
+        .apply_group_against(request.parent_generation, ops)
+        .map_err(|reject| format!("ApplyScriptOps: {reject}"))?;
+    Ok(Ack {
+        data: Some(serde_json::json!({
+            "doc_id": request.doc_id.raw(),
+            "operations": count,
+        })),
+        ..ack
+    })
 }
 
 // rhai runs with full World access (`cmd`/`world_pos`/`get`/...), which an
@@ -1434,6 +1543,7 @@ pub(crate) fn register_command_policies(app: &mut App) {
         reg.register("RunRhai", EXEC);
         reg.register("RunRhaiTool", EXEC);
         reg.register("RunRhaiToolHook", EXEC);
+        reg.register("ApplyScriptOps", EXEC);
         reg.register("RunScenario", EXEC);
         reg.register("RunScenarioAsset", EXEC);
         reg.register("RunTimeline", EXEC);
@@ -1488,6 +1598,7 @@ pub(crate) fn register_command_policies(app: &mut App) {
 // `register_all_commands` is emitted (covers the script-free build too).
 #[cfg(all(feature = "rhai", feature = "python"))]
 register_commands!(
+    on_apply_script_ops,
     on_undo_script_document,
     on_redo_script_document,
     on_run_rhai,
@@ -1505,6 +1616,7 @@ register_commands!(
 );
 #[cfg(all(feature = "rhai", not(feature = "python")))]
 register_commands!(
+    on_apply_script_ops,
     on_undo_script_document,
     on_redo_script_document,
     on_run_rhai,

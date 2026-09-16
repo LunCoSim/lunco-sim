@@ -5,6 +5,7 @@ use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 
 /// Supported scripting languages for Digital Twin integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect, Default)]
@@ -353,6 +354,13 @@ impl ScriptDocument {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ScriptOp {
     SetSource(String),
+    /// Replace one UTF-8 byte range in the source buffer.
+    EditText {
+        /// Inclusive-start, exclusive-end byte range.
+        range: Range<usize>,
+        /// Replacement UTF-8 text.
+        replacement: String,
+    },
     AddInput(String),
     RemoveInput(String),
     AddOutput(String),
@@ -488,6 +496,30 @@ impl Document for ScriptDocument {
                 self.source = new_source;
                 ScriptOp::SetSource(old)
             }
+            ScriptOp::EditText { range, replacement } => {
+                if range.start > range.end || range.end > self.source.len() {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "text range {}..{} out of bounds (len={})",
+                        range.start,
+                        range.end,
+                        self.source.len()
+                    )));
+                }
+                if !self.source.is_char_boundary(range.start)
+                    || !self.source.is_char_boundary(range.end)
+                {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "text range {}..{} not on UTF-8 boundaries",
+                        range.start, range.end
+                    )));
+                }
+                let old = self.source[range.clone()].to_owned();
+                self.source.replace_range(range.clone(), &replacement);
+                ScriptOp::EditText {
+                    range: range.start..range.start + replacement.len(),
+                    replacement: old,
+                }
+            }
             ScriptOp::AddInput(name) => {
                 if self.inputs.contains(&name) {
                     return Err(DocumentError::ValidationFailed(format!(
@@ -571,6 +603,22 @@ mod tests {
         assert_eq!(doc.source, "print(2);");
         assert_eq!(doc.generation, 1);
         assert!(matches!(inv, ScriptOp::SetSource(s) if s == "print(1);"));
+    }
+
+    #[test]
+    fn text_edit_is_utf8_safe_and_reversible() {
+        let mut doc = ScriptDocument::new(3, ScriptLanguage::Rhai, "α = 1;");
+        let inverse = doc
+            .apply(ScriptOp::EditText {
+                range: "α".len().."α = 1".len(),
+                replacement: "value".into(),
+            })
+            .unwrap();
+        assert_eq!(doc.source, "αvalue;");
+        assert_eq!(doc.generation, 1);
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source, "α = 1;");
+        assert_eq!(doc.generation, 2);
     }
 
     #[test]

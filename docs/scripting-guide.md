@@ -533,9 +533,36 @@ registered tool with ordinary Rhai syntax (`import "other_tool" as other_tool`);
 the tool resolver uses the registry and does not read dependency files.
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (generic frame/shape construction, placement, alignment, composed collision-clearance, geometry, parameter, retrofit, and socket mating plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`editor_workflow.rhai`](../assets/scripting/tools/editor_workflow.rhai) (explicit inspect/projection/lint checkpoints and opt-in authored autosave), [`physics_acceptance.rhai`](../assets/scripting/tools/physics_acceptance.rhai) (generic contact, motion, settling, joint, and runtime-evidence checks), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (generic frame/shape construction, placement, alignment, composed collision-clearance, geometry, parameter, retrofit, and socket mating plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`editor_workflow.rhai`](../assets/scripting/tools/editor_workflow.rhai) (explicit inspect/projection/lint checkpoints and opt-in authored autosave), [`modelica_editor.rhai`](../assets/scripting/tools/modelica_editor.rhai) (generation-checked AST/diagram/text batches and compile checkpoints), [`sysml_editor.rhai`](../assets/scripting/tools/sysml_editor.rhai) (source-range edits and semantic checkpoints), [`rhai_editor.rhai`](../assets/scripting/tools/rhai_editor.rhai) (generation-checked script source edits and compile checkpoints), [`authoring_session.rhai`](../assets/scripting/tools/authoring_session.rhai) (cross-domain capability discovery, dry plan, grouped apply, checkpoint, undo, and redo), [`physics_acceptance.rhai`](../assets/scripting/tools/physics_acceptance.rhai) (generic contact, motion, settling, joint, and runtime-evidence checks), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
+
+### One editing contract across formats
+
+Use `authoring_session::capabilities(domain)` to discover the common editing
+verbs, then `inspect` → `plan` → `apply` → `checkpoint`. The `plan` call is
+pure and returns the affected operation kinds, count, label and parent
+generation. `apply` sends one reviewed group to the format owner; it never
+chooses an active tab or writes a source file directly. `checkpoint` reads the
+owner's current generation and diagnostics, and `undo`/`redo` use the same
+explicit document id.
+
+```rhai
+let state = authoring_session::inspect("sysml", sysml_doc);
+let dry = authoring_session::plan("sysml", ops, "update contract", state.generation);
+let applied = authoring_session::apply(
+    "sysml", sysml_doc, ops, dry.label, dry.parent_generation);
+let checked = authoring_session::checkpoint("sysml", sysml_doc);
+```
+
+The domain adapters intentionally differ only in their format semantics:
+`assembly_edit` sends OpenUSD typed operations/proposals and waits for
+projection readiness; `modelica_editor` uses AST/diagram/text operations and
+the compiler state; `sysml_editor` edits UTF-8 source ranges and reads the
+semantic requirement snapshot; `rhai_editor` uses the same contract for
+source-backed Rhai tools and scenarios. Shader source remains renderer-owned
+until it receives a document adapter. See the [unified authoring tooling review](reviews/authoring-tooling-review.md)
+for the Editor UX and the remaining infrastructure gaps.
 
 ### Explicit USD assembly editing
 

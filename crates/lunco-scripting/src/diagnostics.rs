@@ -13,10 +13,10 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::GlobalEntityId;
-use lunco_doc::{status_json, DocumentId};
+use lunco_doc::{status_json, Document, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 
-use crate::doc::ScriptedModel;
+use crate::doc::{ScriptLanguage, ScriptedModel};
 use crate::scenario::ScenarioDriver;
 use crate::world_bridge::RhaiScenarioRuntime;
 use lunco_scripting_bridge_core::JsonBuilder;
@@ -63,6 +63,71 @@ impl ApiQueryProvider for ScriptStatusProvider {
             .get_resource::<DocumentDiagnostics>()
             .and_then(|s| s.get(doc));
         ApiResponse::ok(status_json(entry))
+    }
+}
+
+/// `InspectScriptDocument { doc_id }` → source identity, generation, origin
+/// and the shared compile/diagnostic snapshot for one explicit script file.
+struct InspectScriptDocumentProvider;
+
+impl ApiQueryProvider for InspectScriptDocumentProvider {
+    fn name(&self) -> &'static str {
+        "InspectScriptDocument"
+    }
+
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+        let Some(raw) = params
+            .get("doc_id")
+            .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+        else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "InspectScriptDocument requires an explicit numeric `doc_id`".to_owned(),
+            );
+        };
+        let doc_id = DocumentId::new(raw);
+        if doc_id.is_unassigned() {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "InspectScriptDocument requires an assigned `doc_id`".to_owned(),
+            );
+        }
+        let Some(host) = world
+            .get_resource::<crate::ScriptRegistry>()
+            .and_then(|registry| registry.documents.get(&doc_id))
+        else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                format!("script document {doc_id} is not open"),
+            );
+        };
+        let document = host.document();
+        let origin = document.origin();
+        let status = world
+            .get_resource::<DocumentDiagnostics>()
+            .and_then(|diagnostics| diagnostics.get(doc_id));
+        let kind = match document.language {
+            ScriptLanguage::Rhai => "rhai",
+            ScriptLanguage::Python => "python",
+        };
+        ApiResponse::ok(serde_json::json!({
+            "doc_id": raw,
+            "kind": kind,
+            "language": format!("{:?}", document.language),
+            "source": document.source,
+            "generation": document.generation(),
+            "dirty": document.is_dirty(),
+            "read_only": origin.is_read_only(),
+            "origin": {
+                "uri": origin.session_uri(),
+                "title": origin.display_name(),
+                "writable": origin.is_writable(),
+            },
+            "asset_id": document.asset_id,
+            "inputs": document.inputs,
+            "outputs": document.outputs,
+            "status": status_json(status),
+        }))
     }
 }
 
@@ -156,4 +221,5 @@ pub fn register_queries(app: &mut App) {
     let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
     reg.register(ScriptStatusProvider);
     reg.register(ScriptInspectProvider);
+    reg.register(InspectScriptDocumentProvider);
 }
