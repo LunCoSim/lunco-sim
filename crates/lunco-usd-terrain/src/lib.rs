@@ -24,6 +24,7 @@
 //! [`TerrainLayerStack`]: lunco_terrain_surface::TerrainLayerStack
 
 use bevy::prelude::*;
+use lunco_terrain_globe::TerrainTile;
 // Two read planes, two traits: `UsdRead` = the live COMPOSED stage (what the terrain
 // projects from); `UsdDataExt` = a raw authored `sdf::Data` layer, which is what the
 // document registry hands back for the authoring tier's child walks.
@@ -1726,6 +1727,9 @@ fn bridge_dem_prim_read(
     // layer supplies the heightmap source + window; the rest stamp/scatter/shade.
     let asset_mode = reader.text(sdf, "lunco:assetMode");
     let has_terrain_api = reader.has_api_schema(sdf, "LunCoTerrainAPI");
+    if has_terrain_api {
+        commands.entity(entity).try_insert(TerrainTile);
+    }
     match reader.text(sdf, "lunco:terrain:surfaceRole").as_deref() {
         Some("flat-site") if asset_mode.is_none() && has_terrain_api => {
             project_flat_site_surface(reader, entity, prim_path, sdf, commands);

@@ -2063,7 +2063,7 @@ fn extract_avian_prim(
     let has_rigid_body_api = reader.has_api_schema(sdf_path, ptok::API_RIGID_BODY);
     let has_collision_api = reader.has_api_schema(sdf_path, ptok::API_COLLISION);
     let has_terrain_api = reader.has_api_schema(sdf_path, "LunCoTerrainAPI");
-    // ── TERRAIN ── static collider + TerrainTile; mesh DEMs defer their collider.
+    // ── TERRAIN ── static collider; the terrain projection owns its marker.
     if has_terrain_api {
         if apply_physics_material(commands, entity, reader, sdf_path).is_err() {
             error!(
@@ -2072,11 +2072,9 @@ fn extract_avian_prim(
             commands.entity(entity).try_insert(UsdAvianProcessed);
             return;
         }
-        commands.entity(entity).try_insert((
-            RigidBody::Static,
-            lunco_core::Mobility::Static,
-            lunco_terrain_globe::TerrainTile,
-        ));
+        commands
+            .entity(entity)
+            .try_insert((RigidBody::Static, lunco_core::Mobility::Static));
         // Terrain is a static body, but it is still a USD physics surface.
         // Apply the authored material before its collider is admitted so the
         // solver combines the ground's friction/restitution with the touching

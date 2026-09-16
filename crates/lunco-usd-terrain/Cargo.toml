@@ -25,6 +25,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }

@@ -11,8 +11,9 @@
 //! **The systems that drive it live in [`lunco_celestial_spatial::globe_lod`]** —
 //! `update_globe_lod`, which is registered and runs every frame — because scene
 //! integration (spawn/despawn, grids, textures, appearance intent) needs the
-//! bodies, and `lunco-celestial` owns those. `lunco-usd-avian` also queries
-//! `TerrainTile`. So: **the tiles you see on a globe from orbit come from here.**
+//! bodies, and `lunco-celestial` owns those. `lunco-usd-terrain` stamps
+//! `TerrainTile` for authored terrain prims. So: **the tiles you see on a globe
+//! from orbit come from here.**
 //!
 //! Do not confuse this with the **surface**-scale terrain
 //! (`lunco-terrain-core` / `-surface` / `-bake`): that is the CDLOD heightfield you
