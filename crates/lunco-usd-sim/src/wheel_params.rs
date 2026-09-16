@@ -918,7 +918,9 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                             ));
                             continue;
                         }
-                        match lunco_usd_avian::authored_collider_from_usd(&view, &sp) {
+                        match lunco_usd_avian_reader::collider::authored_collider_from_usd(
+                            &view, &sp,
+                        ) {
                             Ok(collider) => {
                                 Some(crate::oriented_wheel_collider(collider, params.axle_axis))
                             }

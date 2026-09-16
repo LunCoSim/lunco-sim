@@ -364,7 +364,7 @@ fn vehicle_part_facts(
             let collision_attribute_authored =
                 reader.has_authored_attribute(path, ptok::A_COLLISION_ENABLED);
             let collision_state = if collision_api {
-                match lunco_usd_avian::read_authored_bool_or_default(
+                match lunco_usd_avian_reader::read_authored_bool_or_default(
                     reader,
                     path,
                     ptok::A_COLLISION_ENABLED,
@@ -394,7 +394,7 @@ fn vehicle_part_facts(
                 wheel_projector || (collision_api && collision_state == "enabled" && !visual_only);
             let shape_valid = if covered && collision_api {
                 matches!(
-                    lunco_usd_avian::build_collider_from_usd(reader, path),
+                    lunco_usd_avian_reader::collider::build_collider_from_usd(reader, path),
                     Ok(Some(_))
                 )
             } else {
@@ -512,7 +512,8 @@ fn telemetry_declaration_facts(reader: &StageView<'_>, paths: &[SdfPath]) -> Vec
 fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
     let mut drives = Vec::new();
     for path in joint_paths {
-        let Some(spec) = lunco_usd_avian::read_joint_spec_for_lint(reader, path) else {
+        let Some(spec) = lunco_usd_avian_reader::joint::read_joint_spec_for_lint(reader, path)
+        else {
             continue;
         };
         let Some(drive) = spec.drive else {

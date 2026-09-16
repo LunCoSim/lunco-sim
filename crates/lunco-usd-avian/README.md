@@ -8,8 +8,10 @@ OpenUSD (Universal Scene Description) is the industry standard for 3D scene exch
 By separating this into its own crate, we allow other Bevy + Avian projects to benefit from standard USD physics support without pulling in LunCo-specific simulation logic.
 
 Runtime physics projection is isolated from authored lint fact extraction.
-`lunco-usd-avian-lint` owns the composed-stage facts consumed by the Rhai USD
-lint policy and calls the authoritative geometry and joint readers exposed here.
+`lunco-usd-avian-reader` owns the shared composed-stage geometry, joint, and
+physics-attribute readers. `lunco-usd-avian-lint` uses that reader package for
+facts consumed by the Rhai USD lint policy, while this package owns runtime
+entity construction and lifecycle.
 
 ## Key Functions & Features
 

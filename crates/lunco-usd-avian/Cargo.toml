@@ -12,6 +12,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
+lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-environment = { path = "../lunco-environment" }

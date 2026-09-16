@@ -120,7 +120,7 @@ pub(super) fn read_physics_material(
     }
     let read_coefficient =
         |attr: &str, upper: Option<f64>| -> Result<Option<f32>, PhysicsMaterialReadError> {
-            match super::read_authored_real(reader, &mat, attr)
+            match lunco_usd_avian_reader::read_authored_real(reader, &mat, attr)
                 .map_err(|_| PhysicsMaterialReadError::new(attr))?
             {
                 None => Ok(None),

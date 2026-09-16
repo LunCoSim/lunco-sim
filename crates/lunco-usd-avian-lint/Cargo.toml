@@ -11,7 +11,7 @@ bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-physics = { path = "../lunco-physics" }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 openusd = { workspace = true }
 

@@ -1630,7 +1630,9 @@ fn process_usd_sim_prim_read(
                 commands.entity(entity).try_insert(UsdSimProcessed);
                 return;
             }
-            let collider = match lunco_usd_avian::authored_collider_from_usd(reader, &sdf_path) {
+            let collider = match lunco_usd_avian_reader::collider::authored_collider_from_usd(
+                reader, &sdf_path,
+            ) {
                 Ok(collider) => collider,
                 Err(error) => {
                     error!(
