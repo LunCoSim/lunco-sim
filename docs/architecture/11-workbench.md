@@ -61,7 +61,9 @@ the 3D world. The `lunco-workbench-core` crate defines the stable panel,
 perspective, menu, read-model, scheduling-label, and command-payload
 contracts. The `lunco-workbench` crate owns
 the concrete `egui_dock`/`bevy_egui` shell that materializes those contracts,
-including persistence and viewport integration. The
+including persistence and viewport integration. Its dock resource and
+perspective materialization live in the focused `src/layout.rs` module; menu,
+status, and viewport code consume that private shell boundary. The
 `lunco-workbench-widgets` crate owns reusable icons, text-editor builders, and
 hierarchy-row presentation without depending on the shell. The optional
 `lunco-workbench-guided-ui` crate owns guided HUD, spotlight, coach-mark, and

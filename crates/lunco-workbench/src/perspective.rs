@@ -1,6 +1,6 @@
 //! Concrete-shell perspective integration.
 
-use crate::WorkbenchLayout;
+use crate::layout::WorkbenchLayout;
 use bevy::prelude::{Res, ResMut};
 
 impl WorkbenchLayout {

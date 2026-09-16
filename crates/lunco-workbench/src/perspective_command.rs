@@ -11,7 +11,7 @@
 //! 3D `ViewportPanel`) that a stale persisted workspace-state had dropped — the
 //! persisted restore only runs at load, so a runtime re-activation wins.
 
-use crate::WorkbenchLayout;
+use crate::layout::WorkbenchLayout;
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands};
 use lunco_workbench_core::commands::{
