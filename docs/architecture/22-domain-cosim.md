@@ -471,6 +471,13 @@ soon as `ModelicaModel` exists, carrying the AST's inputs, with
 step that state). `modelica_status()` is the single place that decides
 Compiling / Running / Paused, so the bind and the per-tick sync cannot disagree.
 
+The fixed-step exchange implementation lives in
+[`lunco-usd-sim-cosim::sync`](../../crates/lunco-usd-sim-cosim/src/sync.rs): it
+copies Modelica and scripted participant values through the shared
+`SimComponent` surface and projects authored event edges. USD participant
+discovery, connection derivation, and scene lifecycle remain separate owners in
+the parent package.
+
 It used to wait for `variables`. For the few hundred milliseconds until the
 worker answered, the prim existed with **no ports at all** — so every wire into
 it hit `write_port → false` and the propagation master reported a *dangling
