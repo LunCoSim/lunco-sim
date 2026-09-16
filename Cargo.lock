@@ -7999,7 +7999,6 @@ dependencies = [
  "lunco-modelica-solver",
  "lunco-settings",
  "lunco-signal",
- "lunco-storage",
  "lunco-telemetry",
  "lunco-time",
  "lunco-twin",

@@ -239,18 +239,7 @@ impl ModelicaDocument {
             String::from_utf8(bytes)
                 .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
         } else {
-            {
-                // Native-disk fallback when the bundled source doesn't
-                // hold this path. Routed through lunco-storage — `std::fs`
-                // is clippy-banned in domain crates and absent on wasm
-                // (where `global_library_source` is the primary path above).
-                use lunco_storage::Storage;
-                let bytes = lunco_storage::FileStorage::new()
-                    .read_sync(&lunco_storage::StorageHandle::File(path.to_path_buf()))
-                    .map_err(|e| format!("read failed `{}`: {e}", path.display()))?;
-                String::from_utf8(bytes)
-                    .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
-            }
+            lunco_modelica_runtime::source_asset::read_text_sync(path)?
         };
 
         let short_name = qualified.rsplit('.').next().unwrap_or(qualified);
@@ -347,18 +336,7 @@ impl ModelicaDocument {
             String::from_utf8(bytes)
                 .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
         } else {
-            {
-                // Native-disk fallback when the bundled source doesn't
-                // hold this path. Routed through lunco-storage — `std::fs`
-                // is clippy-banned in domain crates and absent on wasm
-                // (where `global_library_source` is the primary path above).
-                use lunco_storage::Storage;
-                let bytes = lunco_storage::FileStorage::new()
-                    .read_sync(&lunco_storage::StorageHandle::File(path.to_path_buf()))
-                    .map_err(|e| format!("read failed `{}`: {e}", path.display()))?;
-                String::from_utf8(bytes)
-                    .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
-            }
+            lunco_modelica_runtime::source_asset::read_text_sync(path)?
         };
 
         let parsed: Result<Arc<StoredDefinition>, String> = if std::env::var_os("LUNCO_NO_PARSE")

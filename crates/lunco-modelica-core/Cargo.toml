@@ -43,7 +43,6 @@ lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
-lunco-storage = { path = "../lunco-storage" }
 # base64url encode/decode for shareable model links (see `model_share.rs`).
 # Already resolved transitively (0.22.x) — no new download.
 base64 = { workspace = true }

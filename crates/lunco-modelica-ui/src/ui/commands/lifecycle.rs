@@ -794,10 +794,7 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
         {
             let read_result = match lunco_workbench_file_dialog::take_picked_content(&path) {
                 Some(content) => Ok(content),
-                None => Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "no picked content for this path (wasm has no filesystem)",
-                )),
+                None => Err("no picked content for this path (wasm has no filesystem)".to_string()),
             };
             let _ = open_file_result_tx().send(OpenFileResult {
                 path: path_buf,
@@ -812,8 +809,9 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let path_for_task = path_buf.clone();
-            let task = bevy::tasks::AsyncComputeTaskPool::get()
-                .spawn(async move { std::fs::read_to_string(&path_for_task) });
+            let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
+                lunco_modelica_runtime::source_asset::read_text_sync(&path_for_task)
+            });
             bevy::tasks::AsyncComputeTaskPool::get()
                 .spawn(async move {
                     let read_result = task.await;
@@ -840,7 +838,7 @@ fn open_file_result_tx() -> &'static std::sync::mpsc::Sender<OpenFileResult> {
 
 struct OpenFileResult {
     path: std::path::PathBuf,
-    read_result: std::io::Result<String>,
+    read_result: Result<String, String>,
 }
 
 static OPEN_FILE_RESULT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<OpenFileResult>> =

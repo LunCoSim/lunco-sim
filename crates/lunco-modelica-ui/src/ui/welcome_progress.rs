@@ -11,30 +11,28 @@
 //!    inventing a telemetry pipeline — compile/run/step tracking can
 //!    hook later observers in the same way.
 //!
-//!  * **Persistence** is a single JSON file under the assets cache
-//!    (`<cache>/welcome_progress.json`). Saved inline on every bump;
-//!    cheap at 15-entry scale and means a crash can't eat the
-//!    progress.
+//!  * **Persistence** is the `welcome_progress` section of the central
+//!    `settings.json` document. The settings owner handles the portable
+//!    storage backend and atomic flush, so this UI state does not create a
+//!    second per-feature file.
 //!
-//!  * **Storage location** matches `library_index.json` — both live in
-//!    the workspace cache so power-users can reset by deleting the
-//!    cache dir, and so CI/test runs don't pollute a user's real
-//!    home directory.
+//!  * The section is loaded and flushed by `lunco-settings`, which also
+//!    isolates test settings from the user's real configuration.
 //!
 //! Kept in `ui/` rather than `state.rs` so the Welcome panel owns
 //! its own concern; `ExampleProgress` is a normal Bevy `Resource`
 //! and any panel can read it.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use bevy::prelude::*;
+use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 
 /// Persistent open-count ledger keyed by the fully-qualified class
 /// name (e.g. `"Modelica.Blocks.Examples.PID_Controller"`). Missing
 /// entries are treated as zero — don't insert on read.
-#[derive(Resource, Default, Serialize, Deserialize, Clone, Debug)]
+#[derive(Resource, Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ExampleProgress {
     #[serde(default)]
     pub opens: HashMap<String, u32>,
@@ -61,48 +59,8 @@ impl ExampleProgress {
     }
 }
 
-fn progress_file_path() -> PathBuf {
-    lunco_assets_core::cache_dir().join("welcome_progress.json")
-}
-
-/// Load the ledger from disk at startup. Missing file / parse error
-/// → fresh empty ledger. Logged at debug so test runs don't spam.
-pub fn load_progress() -> ExampleProgress {
-    let path = progress_file_path();
-    // Through `lunco-storage`: a small user-progress ledger is exactly what the
-    // portable backend is for — a JSON file on native, a localStorage key on
-    // the web. With `std::fs` the web build silently lost the user's progress.
-    match lunco_modelica_runtime::source_asset::read_text_sync(&path) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
-            bevy::log::debug!(
-                "welcome_progress: couldn't parse {:?} ({e}) — starting fresh",
-                path
-            );
-            ExampleProgress::default()
-        }),
-        Err(_) => ExampleProgress::default(),
-    }
-}
-
-/// Write the ledger back to disk. Best-effort — failure is logged
-/// and swallowed, since this is UX polish, not data-of-record.
-pub fn save_progress(progress: &ExampleProgress) {
-    let path = progress_file_path();
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    match serde_json::to_string_pretty(progress) {
-        Ok(s) => {
-            // `lunco-storage` write: atomic tmp+rename on native, localStorage
-            // on wasm. Same call, both targets — the web now actually persists
-            // "example opened" state across reloads instead of dropping it.
-            if let Err(e) = lunco_modelica_runtime::source_asset::write_text_sync(&path, &s) {
-                bevy::log::warn!("welcome_progress: couldn't write {:?}: {e}", path);
-            }
-        }
-        Err(e) => bevy::log::warn!("welcome_progress: serialize failed: {e}"),
-    }
+impl SettingsSection for ExampleProgress {
+    const KEY: &'static str = "welcome_progress";
 }
 
 /// Observer registered in the Modelica commands plugin that bumps
@@ -110,8 +68,8 @@ pub fn save_progress(progress: &ExampleProgress) {
 /// user opens a class via `OpenClass` (drill-in, source library palette click,
 /// Welcome card click all route through this event).
 ///
-/// Saves to disk inline — there's no in-memory ledger worth
-/// batching at this volume (one write per click).
+/// The central settings persister flushes the changed section at the end of
+/// the frame through the configured storage backend.
 pub fn on_open_class_for_progress(
     trigger: On<lunco_modelica_ui_core::OpenClass>,
     mut progress: ResMut<ExampleProgress>,
@@ -121,7 +79,6 @@ pub fn on_open_class_for_progress(
         return;
     }
     *progress.opens.entry(qualified).or_insert(0) += 1;
-    save_progress(&progress);
 }
 
 /// Plugin stub: inserts the resource and registers the observer.
@@ -131,7 +88,7 @@ pub struct WelcomeProgressPlugin;
 
 impl Plugin for WelcomeProgressPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(load_progress())
+        app.register_settings_section::<ExampleProgress>()
             .add_observer(on_open_class_for_progress);
     }
 }

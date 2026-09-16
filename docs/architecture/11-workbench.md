@@ -771,6 +771,7 @@ crates):
 | `modelica.canvas.add` | `lunco-modelica-ui` | Auto-focus behaviour on AddComponent (None / Center / FitVisible), batch debounce window |
 | `modelica.canvas.collab` | `lunco-modelica-ui` | Remote cursor + selection visibility, user color, follow-user camera (multi-user precursor; deferred) |
 | `modelica.editor` | `lunco-modelica-ui` | Source editor word-wrap, tab width, auto-format-on-save |
+| `welcome_progress` | `lunco-modelica-ui` | Open-count progress for the Welcome learning paths |
 | `perf_hud` | `lunco-workbench` | Performance HUD visibility and live status-bar diagnostics |
 | `input_overlay` | `lunco-workbench` | Input HUD visibility for recording and observation |
 | `download` | `lunco-settings` | Shared download concurrency, attempt budget, exponential backoff, and delay cap |
