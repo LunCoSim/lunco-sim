@@ -3,8 +3,8 @@
 ## Camera smoothing
 
 Baseline (shipped): frame-rate-stable exponential-decay follow with per-camera
-`damping` — see `spring_arm_system` in `src/camera.rs` and
-`AvatarCelestialCameraPlugin`. Quaternion
+`damping` — see `spring_arm_system` in `lunco-avatar-camera/src/spring_arm.rs`.
+Quaternion
 follow reuses Bevy's `StableInterpolate`; the position path keeps the same decay
 law in f64 so BigSpace coordinates are not rounded through f32.
 

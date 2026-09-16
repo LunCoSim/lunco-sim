@@ -76,7 +76,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-avatar-core`** | Backend-neutral avatar contracts: ECS role markers and the derived local-avatar index, possession/focus command payloads, transient notification command/queue types, and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
 | **`lunco-avatar-camera-core`** | Avatar-specific camera transition contracts: BigSpace orbit-return state, transient orbit history, arrival/input markers, and surface/orbit handoff constants. It depends on the generic camera contracts without making generic camera consumers carry avatar frame state. |
 | **`lunco-avatar-policy`** | Twin-scoped avatar safety policy and physical collision-controller settings. It is shared directly by the runtime and UI, so the UI does not depend on the monolithic avatar implementation. |
-| **`lunco-avatar-camera`** | Avatar-specific celestial camera realization: explicit inertial BigSpace orbital placement, bounded body resolution, and the orbital side of the surface/orbit handoff. It consumes avatar camera contracts as a focused runtime package. |
+| **`lunco-avatar-camera`** | Avatar-specific camera realization: explicit inertial BigSpace orbital placement, bounded body resolution, vessel spring-arm follow, and the orbital side of the surface/orbit handoff. It consumes avatar camera contracts as a focused runtime package. |
 | **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: possession/focus systems, local input-to-intent translation, and avatar-side camera transitions. Generic camera realization lives in `lunco-camera-runtime`, avatar celestial orbital placement in `lunco-avatar-camera`, and optional egui presentation in `lunco-avatar-ui`. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
 | **`lunco-avatar-ui`** | Optional egui presentation adapter for `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`: avatar status panel, camera/name-tag and notification overlays, and the Avatar settings row. It does not depend on the avatar runtime implementation. |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
@@ -425,10 +425,10 @@ frame and restoration types.
 
 **`lunco-avatar-camera`**
 Avatar-specific camera realization package. Its `AvatarCelestialCameraPlugin`
-owns the BigSpace orbital placement and orbital side of the surface/orbit
-handoff for avatar entities. Generic celestial surface-frame publication remains in
-`lunco-camera-celestial`, while possession and focus transitions remain in
-`lunco-avatar`.
+owns BigSpace orbital placement, vessel spring-arm follow, and the orbital side
+of the surface/orbit handoff for avatar entities. Generic celestial surface-frame
+publication remains in `lunco-camera-celestial`, while possession and focus
+transitions remain in `lunco-avatar`.
 
 **`lunco-avatar-policy`**
 Owns the generic workspace-setting interpretation for avatar soil collision and

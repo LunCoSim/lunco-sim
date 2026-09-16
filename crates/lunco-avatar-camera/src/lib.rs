@@ -2,7 +2,8 @@
 //!
 //! Generic camera contracts and camera-mode policy live in
 //! [`lunco_camera_core`] and [`lunco_camera_runtime`]. This package realizes
-//! the avatar's celestial orbital mode in an explicit BigSpace inertial frame.
+//! the avatar's celestial orbital mode and spring-arm mode in explicit BigSpace
+//! frames.
 //! Possession, focus, and transition commands remain in `lunco-avatar`; the
 //! generic celestial surface adapter remains in `lunco-camera-celestial`.
 
@@ -21,8 +22,14 @@ use lunco_camera_core::{
 };
 use lunco_core::{CelestialBody, Spacecraft};
 
-/// Realizes avatar orbital cameras in the target body's explicit inertial
-/// BigSpace frame.
+mod collision;
+mod spring_arm;
+
+/// Realizes avatar camera modes that need source-specific spatial adaptation.
+///
+/// The orbital mode uses the target body's explicit inertial BigSpace frame;
+/// the spring arm follows a vessel in its active local frame and filters the
+/// followed assembly from its collision query.
 pub struct AvatarCelestialCameraPlugin;
 
 impl Plugin for AvatarCelestialCameraPlugin {
@@ -32,7 +39,8 @@ impl Plugin for AvatarCelestialCameraPlugin {
             .init_resource::<lunco_celestial_spatial::OrbitalViewPin>()
             .add_systems(
                 PostUpdate,
-                orbit_system
+                (spring_arm::spring_arm_system, orbit_system)
+                    .chain()
                     .after(lunco_time::InteractionRenderSet)
                     .before(TransformSystems::Propagate),
             );

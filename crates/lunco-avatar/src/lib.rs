@@ -25,7 +25,7 @@ use avian3d::prelude::{
 };
 use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
-use bevy::math::{DQuat, DVec3, StableInterpolate};
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use leafwing_input_manager::prelude::*;
@@ -43,13 +43,9 @@ use lunco_avatar_policy::{
     avatar_soil_collision_policy, AvatarCollisionSettings, AvatarSoilCollisionPolicy,
 };
 use lunco_camera_core::{
-    math::{
-        apply_scroll_zoom, camera_decay_rate, camera_move_direction, resolve_camera_arm_length,
-        surface_camera_angles, surface_camera_rotation, zoom_factor,
-    },
-    AdaptiveNearPlane, CameraDefaults, CameraUpdateSet, CameraZoomInput, FollowAttitude,
-    FreeFlightCamera, FreeFlightSettings, OrbitCamera, SpringArmCamera, SurfaceCamera,
-    SurfaceRelativeMode,
+    math::{camera_move_direction, surface_camera_angles, surface_camera_rotation, zoom_factor},
+    AdaptiveNearPlane, CameraUpdateSet, CameraZoomInput, FollowAttitude, FreeFlightCamera,
+    FreeFlightSettings, OrbitCamera, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
 use lunco_camera_runtime::{body_orbit_look_scale, CameraInputSettings};
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
@@ -85,7 +81,7 @@ use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOn
 
 mod camera;
 mod input;
-use camera::{freeflight_scroll_transit_system, spring_arm_system};
+use camera::freeflight_scroll_transit_system;
 use input::{
     avatar_behavior_input_system, avatar_global_hotkeys, capture_avatar_intent, collect_camera_zoom,
 };
@@ -499,27 +495,18 @@ impl Plugin for LunCoAvatarPlugin {
                 .after(lunco_controller::InteractionControlSet)
                 .before(lunco_time::InteractionRecordSet),
         );
-        // Direct presentation cameras derive their complete pose from the final
-        // render-time target state. They do not belong in the fixed interaction
-        // cadence and must not interpolate cell-local Transforms across BigSpace
-        // cell changes. Orbit is especially sensitive: a camera rotating millions
-        // of metres from a body crosses 2 km cells continually.
-        app.add_systems(
-            PostUpdate,
-            spring_arm_system
-                .after(lunco_time::InteractionRenderSet)
-                .before(TransformSystems::Propagate),
-        );
+        // Source-specific camera realizations are installed by their focused
+        // camera packages. This crate retains the transition and input edges;
+        // the application composition root installs their writers explicitly.
         // Every avatar gets easing only for incremental stepped camera modes.
         // Surface mode derives a complete local pose from gravity and spring-arm
         // mode follows the final rendered body pose; neither may have a second
         // Transform writer.
         app.add_systems(Update, sync_avatar_easing);
 
-        // Camera drag and avatar camera-mode transitions remain here. The
-        // celestial surface-frame adapter publishes the generic frame consumed
-        // by the camera runtime; celestial placement only mounts authored site
-        // roots and their physical descendants.
+        // Camera drag and avatar camera-mode transitions remain here. Focused
+        // camera packages realize source-specific spatial placement after the
+        // avatar has selected a mode and target.
     }
 }
 
@@ -959,274 +946,6 @@ fn migrate_avatar_to_target_grid(
 }
 
 // ─── Behavior Systems ────────────────────────────────────────────────────────
-
-/// Unified vessel-follow solver (all three [`FollowAttitude`] modes).
-///
-/// Appends every descendant of `root` to `out` (the root itself is the caller's).
-/// Used to exclude a followed vessel's own colliders — which live on child prims,
-/// not the root — from the spring arm's collision cast.
-fn collect_subtree(root: Entity, q_children: &Query<&Children>, out: &mut Vec<Entity>) {
-    if let Ok(children) = q_children.get(root) {
-        for &c in children {
-            out.push(c);
-            collect_subtree(c, q_children, out);
-        }
-    }
-}
-
-/// Every avian joint type as one connectivity view — the spring arm needs to know
-/// what is *attached* to the vessel, not merely what is parented under it.
-#[derive(bevy::ecs::system::SystemParam)]
-pub struct VesselJoints<'w, 's> {
-    revolute: Query<'w, 's, &'static avian3d::prelude::RevoluteJoint>,
-    fixed: Query<'w, 's, &'static avian3d::prelude::FixedJoint>,
-    prismatic: Query<'w, 's, &'static avian3d::prelude::PrismaticJoint>,
-    spherical: Query<'w, 's, &'static avian3d::prelude::SphericalJoint>,
-    distance: Query<'w, 's, &'static avian3d::prelude::DistanceJoint>,
-}
-
-impl VesselJoints<'_, '_> {
-    /// Undirected adjacency over every joint edge in the world.
-    ///
-    /// Built once per call and indexed, not rescanned per BFS step — the walk is
-    /// then O(edges + members) instead of O(members × edges).
-    fn adjacency(&self) -> bevy::platform::collections::HashMap<Entity, Vec<Entity>> {
-        let mut adj: bevy::platform::collections::HashMap<Entity, Vec<Entity>> =
-            bevy::platform::collections::HashMap::default();
-        let mut link = |a: Entity, b: Entity| {
-            adj.entry(a).or_default().push(b);
-            adj.entry(b).or_default().push(a);
-        };
-        self.revolute.iter().for_each(|j| link(j.body1, j.body2));
-        self.fixed.iter().for_each(|j| link(j.body1, j.body2));
-        self.prismatic.iter().for_each(|j| link(j.body1, j.body2));
-        self.spherical.iter().for_each(|j| link(j.body1, j.body2));
-        self.distance.iter().for_each(|j| link(j.body1, j.body2));
-        adj
-    }
-}
-
-/// Structural inputs for the spring-arm self-collision filter.
-///
-/// Joint motor/frame updates are observed as well, but the cache compares their
-/// endpoint pairs before rebuilding. This keeps a frequently driven joint from
-/// turning a structure cache back into per-frame work.
-#[derive(bevy::ecs::system::SystemParam)]
-struct VesselCollisionTopology<'w, 's> {
-    children: Query<'w, 's, (), Or<(Added<Children>, Changed<Children>)>>,
-    parents: Query<'w, 's, (), Or<(Added<ChildOf>, Changed<ChildOf>)>>,
-    revolute: Query<
-        'w,
-        's,
-        (Entity, &'static avian3d::prelude::RevoluteJoint),
-        Or<(
-            Added<avian3d::prelude::RevoluteJoint>,
-            Changed<avian3d::prelude::RevoluteJoint>,
-        )>,
-    >,
-    fixed: Query<
-        'w,
-        's,
-        (Entity, &'static avian3d::prelude::FixedJoint),
-        Or<(
-            Added<avian3d::prelude::FixedJoint>,
-            Changed<avian3d::prelude::FixedJoint>,
-        )>,
-    >,
-    prismatic: Query<
-        'w,
-        's,
-        (Entity, &'static avian3d::prelude::PrismaticJoint),
-        Or<(
-            Added<avian3d::prelude::PrismaticJoint>,
-            Changed<avian3d::prelude::PrismaticJoint>,
-        )>,
-    >,
-    spherical: Query<
-        'w,
-        's,
-        (Entity, &'static avian3d::prelude::SphericalJoint),
-        Or<(
-            Added<avian3d::prelude::SphericalJoint>,
-            Changed<avian3d::prelude::SphericalJoint>,
-        )>,
-    >,
-    distance: Query<
-        'w,
-        's,
-        (Entity, &'static avian3d::prelude::DistanceJoint),
-        Or<(
-            Added<avian3d::prelude::DistanceJoint>,
-            Changed<avian3d::prelude::DistanceJoint>,
-        )>,
-    >,
-    removed_children: RemovedComponents<'w, 's, Children>,
-    removed_parents: RemovedComponents<'w, 's, ChildOf>,
-    removed_revolute: RemovedComponents<'w, 's, avian3d::prelude::RevoluteJoint>,
-    removed_fixed: RemovedComponents<'w, 's, avian3d::prelude::FixedJoint>,
-    removed_prismatic: RemovedComponents<'w, 's, avian3d::prelude::PrismaticJoint>,
-    removed_spherical: RemovedComponents<'w, 's, avian3d::prelude::SphericalJoint>,
-    removed_distance: RemovedComponents<'w, 's, avian3d::prelude::DistanceJoint>,
-}
-
-/// Render-rate cache for spring-arm self-collision filters.
-///
-/// The exclusion set is a function of hierarchy and joint topology, not of the
-/// followed body's pose. Keep the derived filter in RAM and invalidate it only
-/// when one of those structural inputs changes.
-#[derive(Default)]
-struct VesselCollisionFilterCache {
-    adjacency: bevy::platform::collections::HashMap<Entity, Vec<Entity>>,
-    joint_bodies: bevy::ecs::entity::EntityHashMap<[Entity; 2]>,
-    filters: bevy::ecs::entity::EntityHashMap<avian3d::prelude::SpatialQueryFilter>,
-    initialized: bool,
-}
-
-impl VesselCollisionFilterCache {
-    fn observe_joint(&mut self, entity: Entity, bodies: [Entity; 2]) -> bool {
-        let changed = self.joint_bodies.get(&entity) != Some(&bodies);
-        self.joint_bodies.insert(entity, bodies);
-        changed
-    }
-
-    fn remove_joint(&mut self, entity: Entity) -> bool {
-        self.joint_bodies.remove(&entity).is_some()
-    }
-
-    fn refresh(&mut self, joints: &VesselJoints, topology: &mut VesselCollisionTopology) {
-        let mut dirty = !self.initialized;
-        dirty |= !topology.children.is_empty() || !topology.parents.is_empty();
-        dirty |= topology.removed_children.read().next().is_some();
-        dirty |= topology.removed_parents.read().next().is_some();
-
-        for (entity, joint) in &topology.revolute {
-            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
-        }
-        for (entity, joint) in &topology.fixed {
-            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
-        }
-        for (entity, joint) in &topology.prismatic {
-            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
-        }
-        for (entity, joint) in &topology.spherical {
-            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
-        }
-        for (entity, joint) in &topology.distance {
-            dirty |= self.observe_joint(entity, [joint.body1, joint.body2]);
-        }
-
-        for entity in topology.removed_revolute.read() {
-            self.remove_joint(entity);
-            dirty = true;
-        }
-        for entity in topology.removed_fixed.read() {
-            self.remove_joint(entity);
-            dirty = true;
-        }
-        for entity in topology.removed_prismatic.read() {
-            self.remove_joint(entity);
-            dirty = true;
-        }
-        for entity in topology.removed_spherical.read() {
-            self.remove_joint(entity);
-            dirty = true;
-        }
-        for entity in topology.removed_distance.read() {
-            self.remove_joint(entity);
-            dirty = true;
-        }
-
-        if !dirty {
-            return;
-        }
-
-        self.adjacency = joints.adjacency();
-        self.filters.clear();
-        self.initialized = true;
-    }
-
-    fn filter_for(
-        &mut self,
-        target: Entity,
-        q_children: &Query<&Children>,
-    ) -> &avian3d::prelude::SpatialQueryFilter {
-        if !self.filters.contains_key(&target) {
-            let excluded =
-                vessel_collision_exclusions_from_adjacency(target, q_children, &self.adjacency);
-            let mut filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(excluded);
-            filter.mask = avian3d::prelude::LayerMask(!lunco_core::NON_PHYSICAL_QUERY_LAYERS);
-            self.filters.insert(target, filter);
-        }
-        self.filters
-            .get(&target)
-            .expect("spring-arm filter inserted above")
-    }
-}
-
-/// [`vessel_collision_exclusions`] against a `&mut World`, for tests.
-///
-/// The system form takes `SystemParam` queries, which a test would otherwise have
-/// to build a whole schedule to obtain; this runs the identical code path through a
-/// one-shot system so the test pins the real behaviour, not a re-implementation.
-pub fn vessel_collision_exclusions_for_test(world: &mut World, target: Entity) -> Vec<Entity> {
-    let mut sys = bevy::ecs::system::IntoSystem::into_system(
-        move |q_children: Query<&Children>, joints: VesselJoints| {
-            vessel_collision_exclusions(target, &q_children, &joints)
-        },
-    );
-    sys.initialize(world);
-    sys.run((), world)
-        .expect("exclusion query cannot fail — it only reads")
-}
-
-/// Everything the spring arm must NOT collide with while following `target`: the
-/// possessed vessel itself, its ECS subtree, and every body joined to it —
-/// transitively — plus each of those bodies' own subtrees.
-///
-/// The subtree alone is not the vessel. A physical rover is a JOINTED ASSEMBLY:
-/// the chassis carries the `RigidBody` the camera follows, and each wheel is its
-/// own dynamic body held on by a revolute + prismatic pair. Whether a wheel ends
-/// up parented under the chassis or as a sibling under the grid is a physics
-/// detail (a dynamic body's `Transform` is a writeback target), and it changed
-/// per drivetrain — so a subtree-only exclusion let the arm's ray hit the
-/// vessel's own wheels. The hit pulled `target_len` to nearly zero and the camera
-/// dropped inside the rover it was meant to be looking at.
-///
-/// Joint connectivity is what "part of this vehicle" actually means, and it is
-/// the same set `RecoverVessel` moves as a unit for the same reason.
-fn vessel_collision_exclusions(
-    target: Entity,
-    q_children: &Query<&Children>,
-    joints: &VesselJoints,
-) -> Vec<Entity> {
-    let adj = joints.adjacency();
-    vessel_collision_exclusions_from_adjacency(target, q_children, &adj)
-}
-
-fn vessel_collision_exclusions_from_adjacency(
-    target: Entity,
-    q_children: &Query<&Children>,
-    adj: &bevy::platform::collections::HashMap<Entity, Vec<Entity>>,
-) -> Vec<Entity> {
-    // BFS the joint-connected component containing the target.
-    let mut members = vec![target];
-    let mut seen = bevy::platform::collections::HashSet::from([target]);
-    let mut queue = std::collections::VecDeque::from([target]);
-    while let Some(e) = queue.pop_front() {
-        for &n in adj.get(&e).into_iter().flatten() {
-            if seen.insert(n) {
-                members.push(n);
-                queue.push_back(n);
-            }
-        }
-    }
-    // Each member's own descendants carry the actual collider prims.
-    let mut out = members.clone();
-    for m in members {
-        collect_subtree(m, q_children, &mut out);
-    }
-    out
-}
 
 // ─── Locomotion ──────────────────────────────────────────────────────────────
 

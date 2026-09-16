@@ -37,7 +37,6 @@ lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
-lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }

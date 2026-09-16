@@ -7236,7 +7236,6 @@ dependencies = [
  "lunco-environment",
  "lunco-input-core",
  "lunco-interaction-core",
- "lunco-physics",
  "lunco-port-core",
  "lunco-render",
  "lunco-settings",
@@ -7250,6 +7249,7 @@ dependencies = [
 name = "lunco-avatar-camera"
 version = "0.1.0-dev"
 dependencies = [
+ "avian3d",
  "bevy",
  "big_space",
  "lunco-avatar-camera-core",
@@ -7258,8 +7258,8 @@ dependencies = [
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-core",
- "lunco-environment",
  "lunco-interaction-core",
+ "lunco-physics",
  "lunco-spatial",
  "lunco-time",
 ]

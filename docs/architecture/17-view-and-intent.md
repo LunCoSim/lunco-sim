@@ -15,7 +15,8 @@ components. The reusable implementation is split across focused owners:
 `lunco-avatar-core` carries avatar lifecycle/command contracts, `lunco-scene-camera`
 exposes script/API camera transactions, `lunco-avatar` is the specialized owner
 of raw input translation and possession, and `lunco-avatar-camera` owns
-celestial BigSpace orbital placement. Avatar transition state is in
+celestial BigSpace orbital placement and vessel spring-arm realization. Avatar
+transition state is in
 `lunco-avatar-camera-core`.
 Generic input response and clip precision policy live in
 `lunco-camera-runtime`/`lunco-camera-core`; Rhai selects and tunes presentation
@@ -69,7 +70,7 @@ Representing a sensing hardware unit.
 The rendering bridge.
 - **Crates**: `lunco-camera-runtime` (generic camera-mode realization),
   `lunco-avatar` (`LunCoAvatarPlugin`, avatar input and transition logic),
-  `lunco-avatar-camera` (celestial camera placement), the optional
+  `lunco-avatar-camera` (celestial and vessel camera placement), the optional
   `lunco-avatar-ui` egui adapter, and the focused
   `lunco-avatar-core`/`lunco-avatar-policy` contracts. Sun/shadow in
   `lunco-render`.
@@ -236,9 +237,9 @@ The *behavior contracts* of the free/possession cameras — `SpringArmCamera`,
 `lunco-camera-core`. Generic mode exclusivity, free-flight orientation, and
 surface-frame pose writing, validated input response, and clip precision live in
 `lunco-camera-runtime`/`lunco-camera-core`; avatar-owned input and transitions
-stay in `lunco-avatar`, while celestial BigSpace orbital placement is in
-`lunco-avatar-camera`; the avatar-only orbit return snapshot and history are
-in `lunco-avatar-camera-core`. Avatar lifecycle and
+stay in `lunco-avatar`, while celestial BigSpace orbital placement and vessel
+spring-arm realization are in `lunco-avatar-camera`; avatar-only orbit return
+state is in `lunco-avatar-camera-core`. Avatar lifecycle and
 possession commands remain in
 `lunco-avatar-core`. The viewport reconciler decides *which* camera is shown; a rig
 decides *how* its pose is solved. They compose: possession changes the avatar
