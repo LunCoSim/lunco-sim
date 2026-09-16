@@ -63,7 +63,8 @@ OpenUSD physics projection and translates authored joint facts into that generic
 boundary;
 `lunco-usd-actuation` owns the render-free composed USD force/torque actuator
 reader used by the simulation projectors;
-`lunco-usd-sim-core` owns the small shared USD-simulation protocol;
+`lunco-usd-sim-core` owns the small shared USD-simulation protocol and the
+ground-collider readiness contract observed by scene runners;
 `lunco-usd-sim-domain` owns composed component-network and Modelica projection;
 `lunco-usd-sim-domain-api` owns optional generated-source API queries;
 `lunco-usd-sim` owns vehicle projection; `lunco-usd-sim-cosim` owns participant

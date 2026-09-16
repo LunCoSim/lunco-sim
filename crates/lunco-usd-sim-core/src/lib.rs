@@ -50,3 +50,12 @@ pub struct PendingDifferential {
     /// Authored drive type.
     pub drive_type: lunco_mobility::DifferentialDriveType,
 }
+
+/// Set while a ground provider's static collider is still building.
+///
+/// The application-level terrain coordinator owns the flag, while the USD
+/// simulation projector consumes it at the dynamic-body admission boundary.
+/// Keeping this readiness contract here lets scene runners observe the same
+/// state without depending on the full vehicle projector.
+#[derive(Resource, Default)]
+pub struct GroundColliderPending(pub bool);

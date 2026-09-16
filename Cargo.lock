@@ -7760,7 +7760,7 @@ dependencies = [
  "lunco-usd-bevy-twin",
  "lunco-usd-core",
  "lunco-usd-document",
- "lunco-usd-sim",
+ "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
  "lunco-usd-sim-domain",
  "lunco-usd-terrain",
@@ -8672,7 +8672,6 @@ dependencies = [
  "lunco-usd-avian-joints",
  "lunco-usd-bevy-scene",
  "lunco-usd-document",
- "lunco-usd-sim",
  "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
 ]

@@ -75,7 +75,7 @@ use lunco_mobility::{
 use lunco_port_core::{Port, PortSurface};
 use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
-use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
+use lunco_usd_sim_core::{GroundColliderPending, PendingDifferential, UsdSimProcessed, UsdSimSet};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
@@ -2935,14 +2935,6 @@ fn resolve_differential_coupling(
         );
     }
 }
-
-/// Set while a ground provider's static collider is still building (the DEM
-/// terrain build — tracked by the assembly crate that sees both worlds, e.g.
-/// `lunco-luncosim`). While `true`, [`activate_dynamic_bodies`] holds bodies
-/// kinematic so a rover spawned over not-yet-collidable terrain doesn't
-/// free-fall through the surface during the multi-second collider bake.
-#[derive(Resource, Default)]
-pub struct GroundColliderPending(pub bool);
 
 fn activate_dynamic_bodies(
     mut commands: Commands,

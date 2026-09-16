@@ -159,8 +159,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use lunco_core::SimTick;
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
+use lunco_core::SimTick;
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_core::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
@@ -987,7 +987,7 @@ fn log_scene_readiness_blockers(world: &mut World) {
         .get_resource::<lunco_usd_sim_cosim::SceneLoadInFlight>()
         .is_some();
     let ground_pending = world
-        .get_resource::<lunco_usd_sim::GroundColliderPending>()
+        .get_resource::<lunco_usd_sim_core::GroundColliderPending>()
         .is_some_and(|pending| pending.0);
     let mut prims = world.query::<(
         &lunco_usd_bevy_scene::UsdPrimPath,
@@ -1269,7 +1269,7 @@ pub fn run() -> u8 {
                 .is_none();
             let gate_clear = !app
                 .world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0;
             if load_finished
                 && all_processed
@@ -1311,7 +1311,7 @@ pub fn run() -> u8 {
             .is_none()
         && !app
             .world()
-            .resource::<lunco_usd_sim::GroundColliderPending>()
+            .resource::<lunco_usd_sim_core::GroundColliderPending>()
             .0
         && modelica_sources_terminal(app.world_mut());
     if !scene_ready {
@@ -1528,7 +1528,7 @@ pub fn run() -> u8 {
         #[cfg(feature = "ui")]
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
-                use lunco_luncosim_edit_ui::selection::{Selected, compute_selection_aabb};
+                use lunco_luncosim_edit_ui::selection::{compute_selection_aabb, Selected};
                 use lunco_usd_bevy_scene::UsdPrimPath;
 
                 let target_ent = {
