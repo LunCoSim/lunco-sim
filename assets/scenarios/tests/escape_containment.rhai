@@ -6,12 +6,12 @@
 // cleanly. The luncosim test harness owns the terminal verdict because
 // RuntimeFaults is an engine boundary, not a mutable scenario blackboard.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     expect_runtime_fault("physics-body-escaped");
     print("[escape] expecting terminal physics-body-escaped for the authored Escapee");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     // Intentionally no pose correction and no recovery command. The fixture
     // verifies containment by stopping physics at the root fault boundary.
 }

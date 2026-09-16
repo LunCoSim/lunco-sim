@@ -23,7 +23,7 @@ fn find_usd_document() {
     -1
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.doc = -1;
     this.phase = "discover";
     this.elapsed = 0.0;
@@ -31,7 +31,7 @@ fn on_start(me) {
     this.checks = [];
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 30.0 {

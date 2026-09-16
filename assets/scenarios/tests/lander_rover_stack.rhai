@@ -22,7 +22,7 @@
 // Do not paste private copies of them into a new test.
 
 /// A body must be finite and inside the scene. The "still an assembly" check.
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 8.0;
     this.sample_s = 1.0;
@@ -39,7 +39,7 @@ fn on_start(me) {
     print("[stack] hull gid=" + this.hull + "  rover gid=" + this.rover);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.hull == () || this.hull < 0 || this.rover == () || this.rover < 0 {

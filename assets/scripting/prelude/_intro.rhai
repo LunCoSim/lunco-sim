@@ -38,7 +38,7 @@
 //   emit(name, value)             event: fire a TelemetryEvent
 //   input_key/input_click/...     UI automation: enqueue native Bevy window
 //                                        input; compose gestures in Rhai
-//   on_event(me, evt)             event: receives emit()s AND physics
+//   on_event(me, evt, ctx)        event: receives emit()s AND physics
 //                                        COLLISION_START / COLLISION_END pulses
 //
 // Everything below is POLICY, authored here (hot-reloadable), never compiled

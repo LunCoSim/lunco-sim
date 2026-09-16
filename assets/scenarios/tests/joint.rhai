@@ -22,7 +22,7 @@ const SPAWN_Y = 5.0;        // both cubes' authored height
 const SEPARATION = 4.0;     // A at x=-2, B at x=+2
 const GROUND_TOP = 0.0;     // ground surface; a landed 1 m cube rests at y=0.5
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 4.0;    // free fall from 5 m under lunar gravity is ~2.5 s
     this.drop_s = 3.0;      // enough time for B to land after detachment
@@ -40,7 +40,7 @@ fn on_start(me) {
     print("[joint] ── a fixed joint holds a body up ────────────────────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.a == () || this.a < 0 || this.b == () || this.b < 0 ||

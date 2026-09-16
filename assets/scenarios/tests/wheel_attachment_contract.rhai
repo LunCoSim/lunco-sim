@@ -46,7 +46,7 @@ fn authored_contract() {
         && near(suspension.attrs["physxVehicleSuspension:springDamperRate"], 3000.0, 0.1)
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.wheel = find(WHEEL);
@@ -55,7 +55,7 @@ fn on_start(me) {
     this.runtime_ok = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     this.authored_ok = authored_contract();

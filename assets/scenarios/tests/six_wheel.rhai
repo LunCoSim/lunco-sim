@@ -63,7 +63,7 @@ fn authored_asset_contract(rover) {
         && look_at == [0.0, 0.75, -12.0]
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.readiness_elapsed = 0.0;
     this.readiness_timeout = 10.0;
@@ -113,7 +113,7 @@ fn on_start(me) {
           " headlight controller gid=" + this.controller + " light gid=" + this.light);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     this.readiness_elapsed += dt();

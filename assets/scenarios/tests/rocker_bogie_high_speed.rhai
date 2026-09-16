@@ -22,7 +22,7 @@ fn vdist(a, b) {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
     this.rover = find("/RockerBogieHighSpeed/Rover");
@@ -51,7 +51,7 @@ fn finish_failure(state, message) {
     fail_fast(message, "ROCKER BOGIE HIGH SPEED", "ROCKER_BOGIE_HIGH_SPEED");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     if this.rover == () || this.rover < 0 {
         finish_failure(this, "rocker-bogie rover was not composed");

@@ -26,7 +26,7 @@ fn high(id, port) {
     scalar_ok(value) && value >= 0.5
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
     this.engine_cutoff = false;
@@ -76,7 +76,7 @@ fn on_start(me) {
           " rover=" + this.rover);
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if this.done { return; }
     if evt.name == "lander_engine_cutoff" {
         if evt.source != this.gnc { this.event_sources_ok = false; }
@@ -111,7 +111,7 @@ fn on_event(me, evt) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.main < 0 || this.rcs < 0 || this.lander < 0 || this.rover < 0 || this.goal < 0 {
@@ -295,7 +295,7 @@ fn finish(me) {
     verdict(true, "");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         finish(this);

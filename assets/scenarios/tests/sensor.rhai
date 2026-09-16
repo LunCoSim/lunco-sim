@@ -11,7 +11,7 @@
 const EXPECT_RANGE = 0.8;    // box centre 0.5 + altimeter mount translation 0.3
 const EXPECT_FORCE = 162.0;  // 100 kg * 1.62 m/s^2 lunar gravity
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 4.0;
     this.box = find("/SandboxScene/Box");
@@ -21,7 +21,7 @@ fn on_start(me) {
     print("[sensors] ── raw Avian + Modelica ─────────────────────────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.box == () || this.box < 0 || this.imu == () || this.imu < 0

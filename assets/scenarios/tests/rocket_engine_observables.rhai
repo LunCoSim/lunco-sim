@@ -4,7 +4,7 @@
 // source resolution, Modelica worker lifecycle, and output collection all
 // remain in the same path used by a real authored scene.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.phase = 0;
     this.done = false;
@@ -19,7 +19,7 @@ fn on_start(me) {
     this.command_ok = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

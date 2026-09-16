@@ -189,6 +189,13 @@ defer_to = ["validate-assets", "inspect-simulation"]
 evidence = "skills/test-via-api/SKILL.md"
 
 [[skills]]
+name = "author-rhai-tests"
+category = "verify"
+primary_for = ["authored behavioral tests", "asset-backed tests", "Rhai verification"]
+defer_to = ["test-via-api", "sysml-requirements", "validate-assets"]
+evidence = "skills/author-rhai-tests/SKILL.md"
+
+[[skills]]
 name = "validate-assets"
 category = "verify"
 primary_for = ["asset preflight", "parse and lint"]

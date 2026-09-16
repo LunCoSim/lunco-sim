@@ -1,7 +1,7 @@
 // Fast production regression for route sensor events whose entrant is a
 // nested collider rather than the logical rigid-body subject.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.sensor_seen = false;
     this.nested_payload = false;
@@ -12,7 +12,7 @@ fn on_start(me) {
     print("[route-nested] rover=" + this.rover + " chassis=" + this.chassis);
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if this.done { return; }
     if evt.name == "enter:route_nested" {
         this.sensor_seen = true;
@@ -27,7 +27,7 @@ fn on_event(me, evt) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.sensor_seen && this.route_seen {

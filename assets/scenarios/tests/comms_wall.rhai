@@ -30,7 +30,7 @@
 // `emit("COMMS_WALL", "PASS"|"FAIL")` — the telemetry verdict `scene_test` reads
 // for its exit code. Link queries come from `prelude/links.rhai`.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     // The graph is rebuilt on its own cadence and the poses have to settle first;
     // a verdict taken on tick one measures a graph that has not been built.
@@ -39,7 +39,7 @@ fn on_start(me) {
     print("[wall] ── connectivity is occlusion, not distance ───────────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
     if this.t < this.settle_s { return; }

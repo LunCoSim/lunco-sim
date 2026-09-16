@@ -13,6 +13,16 @@ const P3 = ROUTE + "/P3";
 
 fn query_ok(value) { value != () && value.ok != false }
 
+fn is_route_point(doc, path) {
+    let trigger = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: path + "/Trigger",
+        attrs: ["lunco:triggerZone"],
+    });
+    trigger != () && trigger.ok != false && trigger.attrs != ()
+        && trigger.attrs["lunco:triggerZone"] != ()
+}
+
 fn point(doc, path) {
     query("QueryUsdPrim", #{
         doc_id: doc,
@@ -30,8 +40,7 @@ fn active_points(doc) {
     let count = 0;
     if route == () || route.ok == false || route.children == () { return count; }
     for path in route.children {
-        let leaf = path.split("/")[path.split("/").len() - 1];
-        if leaf == "Program" || leaf == "RouteRibbon" { continue; }
+        if !is_route_point(doc, path) { continue; }
         let record = query("QueryUsdPrim", #{ doc_id: doc, path: path });
         if record != () && record.ok != false && record.active == true { count += 1; }
     }
@@ -72,7 +81,7 @@ fn finish(me, checks) {
 
 fn fail(me, message) { finish(me, [t_true(false, message)]); }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
     this.phase = 0;
     this.elapsed = 0.0;
@@ -82,7 +91,7 @@ fn on_start(me) {
     this.checks = [];
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 30.0 {
@@ -212,6 +221,6 @@ fn on_tick(me) {
     }
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done { fail(this, "variant route lifecycle stopped before its verdict"); }
 }

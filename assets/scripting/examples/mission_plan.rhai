@@ -15,7 +15,7 @@ fn waypoint(wp, index, drive_speed, radius) {
     ])
 }
 
-fn task(me) {
+fn task(me, ctx) {
     // Keep mission data in the directly-called task function. Rhai does not
     // resolve top-level constants from an indirect task invocation.
     let plan = [

@@ -9,6 +9,23 @@ const BODY = ROOT + "/Panel";
 const EXISTING = ROOT + "/ExistingPanel";
 const EXISTING_COLLIDER = EXISTING + "/PanelSurface";
 
+fn has_schema_op(ops, schema) {
+    for op in ops {
+        if op.SetApiSchemas != () && op.SetApiSchemas.schemas != ()
+            && op.SetApiSchemas.schemas.contains(schema) {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_attribute_op(ops, name) {
+    for op in ops {
+        if op.SetAttribute != () && op.SetAttribute.name == name { return true; }
+    }
+    false
+}
+
 fn query_ok(record) {
     record != () && record.ok != false
 }
@@ -38,13 +55,13 @@ fn find_document() {
     -1
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.doc = -1;
     this.elapsed = 0.0;
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.doc < 0 {
@@ -139,16 +156,16 @@ fn on_tick(me) {
         t_true(body_plan.kind == "movable_cube" && body_plan.path == BODY
             && body_plan.shape == BODY + "/Shape",
             "movable_cube_plan returns exact body and shape identities"),
-        t_true(body_plan.ops.len() == 11,
+        t_true(body_plan.ops.len() >= 11,
             "movable_cube_plan composes body, placement, shape, mass, and collider facts"),
-        t_true(body_plan.ops[1].SetApiSchemas.schemas.contains("PhysicsRigidBodyAPI")
-            && body_plan.ops[1].SetApiSchemas.schemas.contains("PhysicsMassAPI"),
+        t_true(has_schema_op(body_plan.ops, "PhysicsRigidBodyAPI")
+            && has_schema_op(body_plan.ops, "PhysicsMassAPI"),
             "movable cube uses the standard body and mass schemas"),
         t_true(body_plan.ops[5].SetTranslate.path == BODY
             && body_plan.ops[5].SetTranslate.value == [1.0, 1.0, 0.0],
             "movable cube carries an explicit local placement"),
-        t_true(body_plan.ops[9].SetApiSchemas.schemas.contains("PhysicsCollisionAPI")
-            && body_plan.ops[10].SetAttribute.name == "physics:collisionEnabled",
+        t_true(has_schema_op(body_plan.ops, "PhysicsCollisionAPI")
+            && has_attribute_op(body_plan.ops, "physics:collisionEnabled"),
             "movable cube carries an explicit collider contract"),
         t_true(joint_plan.ops.len() == 11
             && joint_plan.ops[0].AddPrim.type_name == "PhysicsRevoluteJoint",

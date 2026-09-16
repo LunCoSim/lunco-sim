@@ -692,27 +692,27 @@ impl ApiQueryProvider for ScriptCompleteProvider {
 const HOOKS: &[(&str, &str)] = &[
     (
         "task",
-        "fn task(me) — returns the native task tree; action/predicate leaves are anonymous |me| closures, and the behavior kernel binds this and advances the tree every fixed step.",
+        "fn task(me, ctx) — returns the native task tree; action/predicate leaves are anonymous |me| closures, and the behavior kernel binds this and advances the tree every fixed step.",
     ),
     (
         "mission",
-        "fn mission(me) — returns declarative objectives evaluated alongside the task tree.",
+        "fn mission(me, ctx) — returns declarative objectives evaluated alongside the task tree.",
     ),
     (
         "on_start",
-        "fn on_start(me) — called once after (re)compile; `me` is the host entity id and `this` is persistent scenario state.",
+        "fn on_start(me, ctx) — called once after (re)compile; `me` is the host entity id, `ctx` is the typed launch context, and `this` is persistent scenario state.",
     ),
     (
         "on_tick",
-        "fn on_tick(me) — test-only fixed-step observer for sampling state and publishing a bounded verdict; production missions use task/events.",
+        "fn on_tick(me, ctx) — test-only fixed-step observer for sampling state and publishing a bounded verdict; production missions use task/events.",
     ),
     (
         "on_stop",
-        "fn on_stop(me) — teardown: called before a hot-reload swaps in a new compile, and when the scenario is detached/despawned (StopScenario). Stop actuators / release here.",
+        "fn on_stop(me, ctx) — teardown: called before a hot-reload swaps in a new compile, and when the scenario is detached/despawned (StopScenario). Stop actuators / release here.",
     ),
     (
         "on_event",
-        "fn on_event(me, evt) — a TelemetryEvent arrived; evt is #{ name, source, value, severity, timestamp }. `source` = emitter gid (WHICH sensor/script fired — branch on it), `value` = payload (e.g. a zone enter's entrant gid).",
+        "fn on_event(me, evt, ctx) — a TelemetryEvent arrived; evt is #{ name, source, value, severity, timestamp }, and ctx is the typed launch context. `source` = emitter gid (WHICH sensor/script fired — branch on it), `value` = payload (e.g. a zone enter's entrant gid).",
     ),
 ];
 

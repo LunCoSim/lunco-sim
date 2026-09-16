@@ -56,7 +56,7 @@ const PERIGEE_M = 330000000.0;
 const APOGEE_M = 410000000.0;
 const C_M_S = 299792458.0;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     // Ephemeris and the CR3BP solve run on the world clock; the graph is built on
     // its own cadence. A verdict on tick one measures a graph nobody has filled in.
@@ -65,7 +65,7 @@ fn on_start(me) {
     print("[link] ── placement kinds resolve to real geometry ──────────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
     if this.t < this.settle_s { return; }

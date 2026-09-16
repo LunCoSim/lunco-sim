@@ -5,9 +5,9 @@
 // others (branching/unlock), dwell (hold the condition N seconds), fail on a
 // condition, and fire on_complete. The engine emits OBJECTIVE_COMPLETE(id) /
 // OBJECTIVE_FAILED(id) and MISSION_COMPLETE / MISSION_FAILED. Declare by defining
-// `fn mission(me)` (sugar, auto-run) or assigning `this.mission` in on_start:
+// `fn mission(me, ctx)` (sugar, auto-run) or assigning `this.mission` in on_start:
 //
-//   fn mission(me) {
+//   fn mission(me, ctx) {
 //       [
 //           objective("reach_base", #{ done: |m| arrived(m, BASE), dwell: 3.0,
 //                                      on_complete: |m| emit("AT_BASE", 1) }),
@@ -121,7 +121,7 @@ fn __mission_status(m) {
 /// name/source projection from the native scenario event buffer; it is not copied
 /// into persistent `this` state. Emits MISSION_COMPLETE / MISSION_FAILED once
 /// when the mission resolves.
-fn __run_mission(me, evs) {
+fn __run_mission(me, evs, ctx) {
     if this.mission == () { return; }
     let now = elapsed_seconds();
     let m = this.mission;
@@ -131,7 +131,7 @@ fn __run_mission(me, evs) {
     }
     this.mission = m;
     // Auto-publish the objectives checklist to the tutorial HUD when it changes,
-    // so a declarative `mission(me)` renders on screen with no extra scripting.
+    // so a declarative `mission(me, ctx)` renders on screen with no extra scripting.
     let hud = __mission_hud(m);
     if this.__hud_obj != hud { this.__hud_obj = hud; cmd("SetObjectives", #{ text: hud }); }
     let s = __mission_status(m);
@@ -164,14 +164,14 @@ fn __restore_mission(me, m) {
 }
 
 /// Engine driver — called once after setup; seeds `this.mission` from a user
-/// `mission(me)` if defined and not already set. A mission may define
+/// `mission(me, ctx)` if defined and not already set. A mission may define
 /// `mission_document(me)` to identify the USD document used for checkpoints.
-fn __init_mission(me) {
+fn __init_mission(me, ctx) {
     if this.__mission_restored == true { return; }
     this.__mission_doc = if is_def_fn("mission_document", 1) {
         mission_document(me)
     } else { () };
-    if this.mission == () && is_def_fn("mission", 1) { this.mission = mission(me); }
+    if this.mission == () && is_def_fn("mission", 2) { this.mission = mission(me, ctx); }
     if this.mission != () {
         if this.__mission_doc != () {
             this.mission = __restore_mission(me, this.mission);
@@ -292,5 +292,5 @@ fn timeline_step(s) {
 }
 
 /// Lower a whole data timeline (array of data steps) to task leaves. Call ONCE
-/// in `task(me)` and return the tree to the native task kernel.
+/// in `task(me, ctx)` and return the tree to the native task kernel.
 fn compile_timeline(steps) { steps.map(|s| timeline_step(s)) }

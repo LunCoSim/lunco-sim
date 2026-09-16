@@ -15,7 +15,7 @@ fn patrol_leg(wp, index, radius) {
     ])
 }
 
-fn task(me) {
+fn task(me, ctx) {
     // Configuration is local to the directly-called task function. Rhai does
     // not resolve top-level constants from an indirect task invocation.
     let waypoints = [

@@ -347,6 +347,28 @@ impl TwinRoots {
         Ok(())
     }
 
+    /// Return the live in-memory bytes for a Twin-relative file, when an
+    /// Editor composition has projected an overlay for it.
+    ///
+    /// Native validators must check this boundary before reading a resolved
+    /// filesystem path. Otherwise a dirty Editor document is silently replaced
+    /// by its last saved bytes and validation can approve a stale revision.
+    pub fn overlay_bytes(
+        &self,
+        name: &str,
+        relative: &Path,
+    ) -> Result<Option<Arc<Vec<u8>>>, TwinRootsError> {
+        if !crate::asset_path::is_safe_relative_path(name)
+            || !crate::asset_path::is_safe_relative_components(relative)
+        {
+            return Err(TwinRootsError::InvalidOverlayPath(format!(
+                "{name}/{}",
+                crate::asset_path::slashed(relative)
+            )));
+        }
+        self.overlay_for(&overlay_key(name, &crate::asset_path::slashed(relative)))
+    }
+
     /// Overlay bytes registered for the reader-facing relative `path`
     /// (`<name>/<rel>`), if any.
     fn overlay_for(&self, path: &Path) -> Result<Option<Arc<Vec<u8>>>, TwinRootsError> {
@@ -678,6 +700,15 @@ mod tests {
             .set_overlay("moonbase", "scenes/luncosim.usda", bytes.clone())
             .expect("set overlay");
 
+        assert_eq!(
+            roots
+                .overlay_bytes("moonbase", Path::new("scenes/luncosim.usda"))
+                .expect("read named overlay")
+                .as_deref(),
+            Some(&*bytes),
+            "native consumers use the same overlay key as the AssetReader"
+        );
+
         // The reader receives `moonbase/scenes/luncosim.usda` (scheme stripped).
         assert_eq!(
             roots
@@ -724,6 +755,10 @@ mod tests {
         ));
         assert!(matches!(
             roots.set_overlay("../outside", "scene.usda", Arc::new(b"secret".to_vec())),
+            Err(TwinRootsError::InvalidOverlayPath(_))
+        ));
+        assert!(matches!(
+            roots.overlay_bytes("moonbase", Path::new("../outside.usda")),
             Err(TwinRootsError::InvalidOverlayPath(_))
         ));
 

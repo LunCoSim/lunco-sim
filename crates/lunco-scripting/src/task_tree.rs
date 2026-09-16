@@ -264,23 +264,19 @@ impl Node<dyn TaskCtx> for Leaf {
     }
 }
 
-/// Extract an anonymous closure field, erroring on a present-but-wrong type or
-/// a named `Fn("...")` pointer. Task callbacks need the method-bound `this`
-/// state, so accepting a named pointer would create a second callback contract
-/// and fail later with a misleading arity error.
+/// Extract a task callback, erroring on a present-but-wrong type. Both an
+/// anonymous closure and a named script function use the same method-bound
+/// `this` state at invocation, so they share one callback contract.
 fn fnptr_field(m: &Map, key: &str) -> Result<Option<FnPtr>, String> {
     match m.get(key) {
         None => Ok(None),
         Some(v) if v.is_unit() => Ok(None),
         Some(v) => {
             let pointer = v.clone().try_cast::<FnPtr>().ok_or_else(|| {
-                format!("task leaf `{key}` must be an anonymous closure `|me| ...`")
+                format!(
+                    "task leaf `{key}` must be an anonymous closure `|me| ...` or named script function `Fn(\"name\")`"
+                )
             })?;
-            if !pointer.is_anonymous() {
-                return Err(format!(
-                    "task leaf `{key}` must be an anonymous closure `|me| ...`; named `Fn(\"...\")` callbacks are not task leaves"
-                ));
-            }
             Ok(Some(pointer))
         }
     }
@@ -561,7 +557,7 @@ mod tests {
             "once",
             &[("act", Dynamic::from(FnPtr::new("named_action").unwrap()))],
         ))
-        .is_err()); // named functions are not task callbacks
+        .is_ok()); // named script functions use the same task callback contract
         assert!(compile_node(&tagged(
             "act_for",
             &[
@@ -569,7 +565,7 @@ mod tests {
                 ("secs", Dynamic::from_float(1.0))
             ],
         ))
-        .is_err()); // act_for still requires a closure
+        .is_err()); // act_for still requires a callback
         assert!(compile_node(&tagged("wait", &[("secs", Dynamic::from_float(-1.0))])).is_err());
         assert!(compile_node(&tagged(
             "once",

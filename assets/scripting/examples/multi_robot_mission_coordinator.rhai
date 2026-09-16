@@ -42,7 +42,7 @@ fn assign_next(assigned, next_site, robot, site_count) {
     #{ assigned: assigned, next_site: next_site + 1, assigned_site: next_site }
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     subscribe("ROBOT_READY");
     subscribe("ROBOT_SITE_COMPLETE");
     this.next_site = 0;
@@ -51,7 +51,7 @@ fn on_start(me) {
     print("coordinator: waiting for " + SITES.len() + " site assignments");
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "ROBOT_READY" {
         let result = assign_next(this.assigned, this.next_site, evt.source, SITES.len());
         this.assigned = result.assigned;
@@ -75,7 +75,7 @@ fn on_event(me, evt) {
     }
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     [objective("all_sites", #{
         text: "All assigned sites complete",
         requires_event: "MISSION_COMPLETE",

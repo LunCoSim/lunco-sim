@@ -58,7 +58,7 @@ fn has_no_render_camera(audit) {
     true
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.phase = 0;
     this.done = false;
@@ -96,7 +96,7 @@ fn on_start(me) {
     this.orbit_entered = focused.ok && component_present(this.avatar, "OrbitCamera");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 0.25 { return; }
@@ -180,7 +180,7 @@ fn on_tick(me) {
     }
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         report_verdict(["lander control regression stopped before command ports were observed"],

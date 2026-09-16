@@ -91,6 +91,14 @@ impl ValueBuilder for RhaiBuilder {
     fn int(&self, i: i64) -> Dynamic {
         Dynamic::from_int(i)
     }
+    fn uint(&self, u: u64) -> Dynamic {
+        // Rhai's native integer is signed. Keep the fast native path for the
+        // representable range and make the wider case explicit and lossless;
+        // never route an unsigned identity through f64 or a wrapping cast.
+        i64::try_from(u)
+            .map(Dynamic::from_int)
+            .unwrap_or_else(|_| Dynamic::from(u.to_string()))
+    }
     fn bool(&self, b: bool) -> Dynamic {
         Dynamic::from_bool(b)
     }
@@ -809,11 +817,12 @@ fn build_hoisted_ast(
     Ok(Some(merged))
 }
 
-/// Native task leaves call their closure through the current Rhai evaluation so
-/// imports and the scenario's compiled function set remain available. The
-/// bound state is an explicit round-trip value because `FnPtr` owns its closure
-/// captures; passing the lifecycle map as `this` gives closures a persistent
-/// mutation target without sharing per-entity state through the compiled AST.
+/// Native task leaves call their callback through the current Rhai evaluation so
+/// imports and the scenario's compiled function set remain available. Anonymous
+/// closures and named callbacks receive the persistent lifecycle map as
+/// `this`. Named pointers are resolved against the task AST before invocation;
+/// the state is passed through the same bound receiver and returned in the
+/// envelope because each task entity owns its own map.
 const TASK_INVOKER_FN: &str = "__luncosim_invoke_task";
 
 fn invoke_task(
@@ -822,9 +831,8 @@ fn invoke_task(
     me: i64,
     mut this: Dynamic,
 ) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
-    // Task leaves are anonymous closures with the authored `(me)` contract.
-    // Calling them as methods supplies the persistent lifecycle map as `this`
-    // without changing the positional callback arguments.
+    // Anonymous closures and named `Fn("name")` callbacks both use `(me)` and
+    // read/write the persistent state through the bound `this` pointer.
     let result = f.call_as_method_within_context::<Dynamic>(&context, &mut this, (me,))?;
     let mut out = Map::new();
     out.insert("result".into(), result);
@@ -1959,6 +1967,14 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
             .map(|s| Dynamic::from_int(s as i64))
             .unwrap_or(Dynamic::UNIT)
     });
+    // local_session_id() -> the current peer's generic authority identity.
+    // Scripts compare this with owner_of() without knowing how sessions are
+    // allocated or whether networking is active.
+    engine.register_fn("local_session_id", || -> Dynamic {
+        bridge_core::local_session_id()
+            .map(|session| Dynamic::from_int(session as i64))
+            .unwrap_or(Dynamic::UNIT)
+    });
     // controller(id) -> role string of the controlling session, or () if unowned.
     engine.register_fn("controller", |id: i64| -> Dynamic {
         bridge_core::controller_role(id as u64)
@@ -2045,7 +2061,8 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // profile. It used to be `is_debug()`/`cfg!(debug_assertions)`, which is a
     // different question: every `cargo run` is a debug build, so every tutorial
     // auto-played itself and chained to its successor while the student watched.
-    // Callable from any function (verbs are global, unlike the `params` constant).
+    // Callable from any function; verbs are global, while launch parameters are
+    // passed explicitly as the `ctx` hook argument.
     engine.register_fn("is_unattended", || -> bool { bridge_core::is_unattended() });
 
     // rand() -> f64 in [0,1) — DETERMINISTIC: seeded per hook from (entity, tick,
@@ -2098,7 +2115,7 @@ pub fn validate_tool_library(
 // ── Persistent per-entity scenario runtime (rhai backend) ──────────────────
 //
 // A `ScriptedModel { language: Rhai }` runs its `ScriptDocument` as a persistent
-// program with a native `task(me)`/`mission(me)` policy plus lifecycle hooks,
+// program with a native `task(me, ctx)`/`mission(me, ctx)` policy plus lifecycle hooks,
 // not a one-shot snippet. The lifecycle POLICY (scheduling, hot-reload, pause,
 // teardown, diagnostics) is language-neutral and lives in
 // [`crate::scenario::ScenarioDriver`]. This is the rhai BACKEND: it implements
@@ -2128,19 +2145,19 @@ impl ProgramMask {
         let mut m = ProgramMask::default();
         for f in ast.iter_functions() {
             match (f.name, f.params.len()) {
-                ("task", 1) => m.task = true,
-                ("mission", 1) => m.mission = true,
-                ("on_start", 1) => m.start = true,
-                ("on_tick", 1) => m.tick = true,
-                ("on_stop", 1) => m.stop = true,
-                ("on_event", 2) => m.event = true,
+                ("task", 2) => m.task = true,
+                ("mission", 2) => m.mission = true,
+                ("on_start", 2) => m.start = true,
+                ("on_tick", 2) => m.tick = true,
+                ("on_stop", 2) => m.stop = true,
+                ("on_event", 3) => m.event = true,
                 _ => {}
             }
         }
         m
     }
 
-    /// Whether the one-arg lifecycle hook for `hook` is defined.
+    /// Whether the two-arg lifecycle hook for `hook` is defined.
     fn has(&self, hook: crate::scenario::ScenarioHook) -> bool {
         match hook {
             crate::scenario::ScenarioHook::Start => self.start,
@@ -2306,6 +2323,10 @@ struct RhaiScenarioState {
     scope: rhai::Scope<'static>,
     /// Per-entity mutable state bound as `this` in every hook.
     this: Dynamic,
+    /// Immutable-by-convention launch context passed explicitly to every user
+    /// hook. It is cloned at the call boundary, so a script cannot mutate the
+    /// stored launch parameters or affect another program instance.
+    params: Dynamic,
     /// Which events reach this entity's `on_event` (default: all). Set from
     /// `subscribe()` calls harvested after `on_start`.
     filter: EventFilter,
@@ -2400,7 +2421,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         &mut self,
         entity: Entity,
         source: &str,
-        params: &str,
+        params: &crate::doc::ScenarioParameters,
         asset_id: Option<&str>,
     ) -> crate::scenario::CompileOutcome {
         use crate::scenario::CompileOutcome;
@@ -2491,24 +2512,10 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         };
 
         // ── State: seed a FRESH scope + `this` for THIS entity — never shared.
-        // The top-level seed-run touches the world and depends on `params`, so it
-        // is per-instance; this is the firewall that lets the AST above be shared.
+        // Parameters are instance state, so they stay out of the shared AST and
+        // are passed explicitly to every lifecycle/program hook.
         let mut scope = rhai::Scope::new();
-        // Expose scenario parameters as a read-only `params` constant (native
-        // JSON→Dynamic, one hop). Empty / bad JSON → empty map, so `params` is
-        // always a readable object.
-        let params_value = match (
-            params.is_empty(),
-            serde_json::from_str::<serde_json::Value>(params),
-        ) {
-            (true, _) => RhaiBuilder.map(Vec::new()),
-            (false, Ok(v)) => bridge_core::build_from_json(&RhaiBuilder, &v),
-            (false, Err(e)) => {
-                warn!("[rhai] entity {entity:?} ignoring bad params JSON: {e}");
-                RhaiBuilder.map(Vec::new())
-            }
-        };
-        scope.push_constant_dynamic("params", params_value);
+        let params_value = bridge_core::telemetry_value(&RhaiBuilder, &params.as_telemetry_value());
         // Run the top-level body once to seed `const` globals; a runtime error
         // there is non-fatal (hooks still run) — surface it.
         let top_level = match self.engine.run_ast_with_scope(&mut scope, &program.ast) {
@@ -2524,6 +2531,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 program,
                 scope,
                 this: Dynamic::from_map(Map::new()),
+                params: params_value,
                 filter: EventFilter::default(),
                 task: None,
                 pending_events: Vec::new(),
@@ -2566,13 +2574,14 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 name,
                 self_gid,
                 &mut st.this,
+                &st.params,
             )
         } else {
             None
         };
         // Built-in drivers (prelude fns, called regardless of what the user AST
-        // defines): after on_start, seed `this.task`/`this.mission` from `task(me)`
-        // / `mission(me)` fns if present; after on_tick, advance the declared task
+        // defines): after on_start, seed `this.task`/`this.mission` from
+        // `task(me, ctx)` / `mission(me, ctx)` fns if present; after on_tick, advance the declared task
         // and evaluate the mission. Mission event identities are passed as a
         // transient argument from the native bounded buffer, never stored in
         // `this`. Each driver no-ops when the script declared neither, so a plain
@@ -2598,9 +2607,10 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 vec![
                     Dynamic::from_int(self_gid),
                     build_event_identities(&pending_events),
+                    st.params.clone(),
                 ]
             } else {
-                vec![Dynamic::from_int(self_gid)]
+                vec![Dynamic::from_int(self_gid), st.params.clone()]
             };
             let e = call_prelude_driver(
                 &self.engine,
@@ -2663,6 +2673,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 eval_ast,
                 self_gid,
                 &mut st.this,
+                &st.params,
                 evt,
             )
         } else {
@@ -2747,7 +2758,7 @@ pub fn tick_rhai_scenarios_while_paused(world: &mut World) {
     );
 }
 
-/// Call a one-arg hook (`fn name(self)`), binding `this` to the entity's
+/// Call a two-arg hook (`fn name(self, ctx)`), binding `this` to the entity's
 /// persistent state map. The caller guarantees the hook exists (via the cached
 /// `ProgramMask`), so this does no presence check. `rewind_scope=false` keeps
 /// the `const` globals available across calls. Logs any error.
@@ -2766,10 +2777,11 @@ fn call_hook(
     name: &str,
     self_id: i64,
     this: &mut Dynamic,
+    params: &Dynamic,
 ) -> Option<(String, rhai::Position)> {
     // Presence is the caller's responsibility — the driver gates on the cached
     // `ProgramMask`, so there's no per-call AST scan here.
-    let args = [Dynamic::from_int(self_id)];
+    let args = [Dynamic::from_int(self_id), params.clone()];
     let options = rhai::CallFnOptions::new()
         .eval_ast(eval_ast)
         .rewind_scope(false)
@@ -2784,8 +2796,8 @@ fn call_hook(
     }
 }
 
-/// Call the two-arg event hook (`fn on_event(self, evt)`) if defined, binding
-/// `this`. `evt` is the `#{name,value,...}` map.
+/// Call the three-arg event hook (`fn on_event(self, evt, ctx)`) if defined,
+/// binding `this`. `evt` is the `#{name,value,...}` map.
 fn call_event_hook(
     engine: &Engine,
     scope: &mut rhai::Scope,
@@ -2793,12 +2805,13 @@ fn call_event_hook(
     eval_ast: bool,
     self_id: i64,
     this: &mut Dynamic,
+    params: &Dynamic,
     evt: Dynamic,
 ) -> Option<(String, rhai::Position)> {
     // Presence is the caller's responsibility now — `deliver_event` gates this on
     // the cached `ProgramMask::event` bit, so no per-event AST scan here.
     // `ast`/`eval_ast` are a pair — see [`call_hook`].
-    let args = [Dynamic::from_int(self_id), evt];
+    let args = [Dynamic::from_int(self_id), evt, params.clone()];
     let options = rhai::CallFnOptions::new()
         .eval_ast(eval_ast)
         .rewind_scope(false)
@@ -2861,7 +2874,7 @@ struct RhaiTaskCtx {
     /// Persistent lifecycle `this` map for the scenario entity. Task leaves
     /// are invoked with this binding so state mutations survive each tick.
     this: Dynamic,
-    /// Host gid, passed to every leaf closure (the `|m| …` argument).
+    /// Host gid, passed to every task callback (the `|m| …` argument).
     me: i64,
     now: f64,
     events: Vec<(ImmutableString, i64)>,
@@ -2880,28 +2893,47 @@ impl RhaiTaskCtx {
 
     fn call_fn(&mut self, f: &FnPtr) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
         let (ast, eval_ast) = self.program.task_target();
-        let options = rhai::CallFnOptions::new()
-            .eval_ast(eval_ast)
-            .rewind_scope(false)
-            .in_all_namespaces(true);
-        let envelope: Dynamic = self.engine.call_fn_with_options(
-            options,
+        if f.is_anonymous() {
+            let options = rhai::CallFnOptions::new()
+                .eval_ast(eval_ast)
+                .rewind_scope(false)
+                .in_all_namespaces(true);
+            let envelope: Dynamic = self.engine.call_fn_with_options(
+                options,
+                &mut self.scope,
+                ast,
+                TASK_INVOKER_FN,
+                [
+                    Dynamic::from(f.clone()),
+                    Dynamic::from_int(self.me),
+                    self.this.clone(),
+                ],
+            )?;
+            let mut envelope = envelope.cast::<Map>();
+            self.this = envelope
+                .remove("this")
+                .expect("native task invoker must return the bound state");
+            return Ok(envelope
+                .remove("result")
+                .expect("native task invoker must return the callback result"));
+        }
+
+        // A named `Fn("name")` pointer is intentionally resolved against the
+        // task AST here. Calling it through `NativeCallContext` would only see
+        // the native registry after the callback crossed the Rust boundary;
+        // this direct call preserves the scenario's functions, imports, and
+        // bound state without requiring a generated wrapper.
+        self.engine.call_fn_with_options(
+            rhai::CallFnOptions::new()
+                .eval_ast(eval_ast)
+                .rewind_scope(false)
+                .in_all_namespaces(true)
+                .bind_this_ptr(&mut self.this),
             &mut self.scope,
             ast,
-            TASK_INVOKER_FN,
-            [
-                Dynamic::from(f.clone()),
-                Dynamic::from_int(self.me),
-                self.this.clone(),
-            ],
-        )?;
-        let mut envelope = envelope.cast::<Map>();
-        self.this = envelope
-            .remove("this")
-            .expect("native task invoker must return the bound state");
-        Ok(envelope
-            .remove("result")
-            .expect("native task invoker must return the callback result"))
+            f.fn_name(),
+            [Dynamic::from_int(self.me)],
+        )
     }
 }
 
@@ -3678,7 +3710,7 @@ mod tests {
         let engine = engine_with_sibling("twin://ep1/shot_camera.rhai", "fn framing() { 7 }");
         let src = r#"
             import "shot_camera" as cam;
-            fn on_tick(me) { cam::framing() }
+            fn on_tick(me, ctx) { cam::framing() }
         "#;
 
         let mut full = super::compile_with_script_consts(&engine, src).unwrap();
@@ -3824,7 +3856,7 @@ mod tests {
     #[test]
     fn a_script_without_imports_builds_no_imports_ast() {
         let engine = super::build_world_engine(Default::default());
-        let src = "fn on_tick(me) { 1 }";
+        let src = "fn on_tick(me, ctx) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
         assert!(super::build_hoisted_ast(&engine, src, &full, None)
             .unwrap()
@@ -4243,5 +4275,36 @@ mod tests {
         "#;
         let out = super::eval_with_world(&mut world, code).unwrap();
         assert_eq!(out.trim(), "[true, true]", "got {out}");
+    }
+
+    #[test]
+    fn rhai_unsigned_values_use_native_int_or_lossless_text() {
+        let small = lunco_scripting_bridge_core::build_from_reflect(
+            &super::RhaiBuilder,
+            &42_u64,
+        )
+        .expect("small unsigned value");
+        assert_eq!(small.as_int().expect("small value stays native"), 42);
+
+        let wide = lunco_scripting_bridge_core::build_from_reflect(
+            &super::RhaiBuilder,
+            &u64::MAX,
+        )
+        .expect("wide unsigned value");
+        assert_eq!(
+            wide.into_string().expect("wide value uses explicit text"),
+            u64::MAX.to_string()
+        );
+
+        let json_wide = lunco_scripting_bridge_core::build_from_json(
+            &super::RhaiBuilder,
+            &serde_json::json!(u64::MAX),
+        );
+        assert_eq!(
+            json_wide
+                .into_string()
+                .expect("wide JSON value uses explicit text"),
+            u64::MAX.to_string()
+        );
     }
 }

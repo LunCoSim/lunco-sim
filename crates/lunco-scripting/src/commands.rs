@@ -22,7 +22,7 @@ use crate::backend::ScriptBackends;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use crate::doc::ScriptLanguage;
 #[cfg(feature = "rhai")]
-use crate::doc::{ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
+use crate::doc::{ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
 #[cfg(feature = "rhai")]
 use crate::world_bridge::{PendingWorldScript, PendingWorldScripts};
 #[cfg(any(feature = "rhai", feature = "python"))]
@@ -214,7 +214,7 @@ fn on_run_rhai_tool_hook(
 /// Attach a persistent rhai scenario to an entity — the scenario-loading entry
 /// point for the API / MCP / UI / ROS2. Registers the source as a
 /// `ScriptDocument` and attaches a `ScriptedModel { Rhai }` to `target`, so the
-/// per-entity runtime can build a native `task(me)` tree and run optional
+/// per-entity runtime can build a native `task(me, ctx)` tree and run optional
 /// lifecycle/event hooks.
 ///
 /// Idempotent + HOT-RELOAD: re-running on an entity that already has a scenario
@@ -222,20 +222,20 @@ fn on_run_rhai_tool_hook(
 /// recompiles in place (state reset) instead of leaking documents.
 #[cfg(feature = "rhai")]
 // `reflect_default` registers `ReflectDefault` (+ the manual `Default` below) so
-// the reflect deserializer fills a MISSING `params` from the default — existing
-// `{target,source}` callers keep working when they omit the new field. (Can't use
+// the reflect deserializer fills a missing `params` from the empty object —
+// callers keep working when they omit the field. (Can't use
 // `#[Command(default)]`: it *derives* Default, which `Entity` doesn't implement.)
 #[Command(reflect_default)]
 pub struct RunScenario {
     #[authz_target]
     pub target: Entity,
     pub source: String,
-    /// Optional scenario parameters as a JSON object string (e.g.
-    /// `{"speed":1.5,"target":"rover_b"}`), readable in the script as the
-    /// `params` constant. Omitted → none.
+    /// Optional typed scenario parameters (e.g.
+    /// `{"speed":1.5,"target":"rover_b"}`). Rhai receives them as the
+    /// explicit `ctx` argument of lifecycle/program hooks. Omitted → `{}`.
     #[serde(default)]
     #[reflect(default)]
-    pub params: String,
+    pub params: ScenarioParameters,
     /// Behavior of this scenario when the active scene is replaced. `retain`
     /// keeps a stable orchestration host alive; `restart` runs `on_start` again
     /// after the replacement is ready.
@@ -255,10 +255,11 @@ pub struct RunScenarioAsset {
     pub target: Entity,
     /// Root-qualified script asset (`lunco://...` or `twin://...`).
     pub source_asset: String,
-    /// Optional scenario parameters as a JSON object string.
+    /// Optional typed scenario parameters. Rhai receives them as the explicit
+    /// `ctx` argument of lifecycle/program hooks. Omitted → `{}`.
     #[serde(default)]
     #[reflect(default)]
-    pub params: String,
+    pub params: ScenarioParameters,
     /// Optional scene asset to request before the scenario starts. The scene
     /// transition remains owned by the USD scene command layer; this field
     /// only composes the generic scenario-launch request with that lifecycle.
@@ -277,7 +278,7 @@ impl Default for RunScenarioAsset {
         Self {
             target: Entity::PLACEHOLDER,
             source_asset: String::new(),
-            params: String::new(),
+            params: ScenarioParameters::default(),
             scene_asset: String::new(),
             reload_policy: ScenarioReloadPolicy::Retain,
         }
@@ -290,7 +291,7 @@ impl Default for RunScenario {
         Self {
             target: Entity::PLACEHOLDER,
             source: String::new(),
-            params: String::new(),
+            params: ScenarioParameters::default(),
             reload_policy: ScenarioReloadPolicy::Retain,
         }
     }
@@ -476,7 +477,7 @@ enum ScenarioSourceMode {
 fn attach_rhai_scenario(
     target: Entity,
     source: String,
-    params: String,
+    params: ScenarioParameters,
     // Canonical asset id this source was loaded from (`twin://ep1/main.rhai`), or
     // `None` for a source that is not file-backed — an inline USD `info:sourceCode`,
     // a `RunScenario` string off the wire, a generated timeline executor. `None`
@@ -524,23 +525,27 @@ fn attach_rhai_scenario(
             .documents
             .get_mut(&doc_id)
             .ok_or_else(|| format!("script document {doc_id} disappeared during attach"))?;
-        host.document_mut().params = params;
         host.document_mut().asset_id = asset_id;
     } else {
         let mut doc = ScriptDocument::new(doc_id_raw, ScriptLanguage::Rhai, source);
         // Script IDENTITY is carried on the document because the runtime
         // recompiles from it and uses the asset id as the relative-import
         // anchor. A missing id is meaningful for inline/generated sources.
-        doc.params = params;
         doc.asset_id = asset_id;
         registry.insert_document(DocumentId::new(doc_id_raw), doc);
     }
 
+    let parameters_revision = q_existing
+        .get(target)
+        .map(|model| model.parameters_revision.wrapping_add(1))
+        .unwrap_or(0);
     commands.entity(target).try_insert((
         ScriptedModel {
             document_id: Some(doc_id_raw),
             language: Some(ScriptLanguage::Rhai),
             reload_policy,
+            parameters: params,
+            parameters_revision,
             ..default()
         },
         // §3.4: the session this scenario's cmd()s are gated against. Always
@@ -572,7 +577,7 @@ fn attach_rhai_scenario(
 #[derive(Component, Debug, Clone)]
 pub struct PendingScenarioAsset {
     pub handle: Handle<crate::source_asset::RhaiSource>,
-    pub params: String,
+    pub params: ScenarioParameters,
     pub reload_policy: ScenarioReloadPolicy,
     pub authority: Option<lunco_core::SessionId>,
 }
@@ -668,7 +673,7 @@ pub fn attach_embedded_scenarios(
         match attach_rhai_scenario(
             entity,
             embedded.0.clone(),
-            String::new(),
+            ScenarioParameters::default(),
             // Present only for the FILE-backed path below; inline `info:sourceCode`
             // authored straight into USD legitimately has no asset id.
             asset_id.map(|id| id.0.clone()),
@@ -954,7 +959,7 @@ fn on_register_tool_library(
 /// sequencer. The timeline is pure DATA (`timeline` is a JSON string: either a
 /// `[ ...steps ]` array or `{ "name": ..., "steps": [ ... ] }`), so a mission is
 /// authorable/storable/shippable without writing rhai. The handler lowers it to
-/// a generated `task(me)` source that calls the prelude's `compile_timeline`
+/// a generated `task(me, ctx)` source that calls the prelude's `compile_timeline`
 /// and hands the resulting tree to the native behavior kernel. It attaches via
 /// the same path as `RunScenario` — so hot-reload, per-entity state, and
 /// `TASK_COMPLETE`/`TASK_FAILED` telemetry all come from the native task driver.
@@ -1140,7 +1145,7 @@ impl TimelineOperation {
     }
 }
 
-/// Lower a timeline `steps` array into a generated `task(me)` source. The task
+/// Lower a timeline `steps` array into a generated `task(me, ctx)` source. The task
 /// function owns the data-to-tree lowering; the native behavior kernel owns
 /// fixed-tick progression and event delivery. Attaching the result via
 /// `attach_rhai_scenario` gives the timeline hot-reload, per-entity state, and
@@ -1150,7 +1155,7 @@ fn timeline_executor_source(steps: &serde_json::Value) -> String {
     let mut steps_lit = String::new();
     json_to_rhai_literal(steps, &mut steps_lit);
     format!(
-        "fn task(me) {{\n\
+        "fn task(me, ctx) {{\n\
              let timeline = {steps_lit};\n\
              seq(compile_timeline(timeline))\n\
          }}\n"
@@ -1173,7 +1178,7 @@ fn on_run_timeline(
         cmd.target,
         source,
         // Timelines are pure data; the generated executor doesn't read `params`.
-        String::new(),
+        ScenarioParameters::default(),
         // Generated source — no file, no id, no relative imports.
         None,
         ScenarioSourceMode::Runtime,
@@ -1293,7 +1298,7 @@ fn on_run_stored_timeline(
     let (doc_id_raw, generation) = attach_rhai_scenario(
         cmd.target,
         source,
-        String::new(),
+        ScenarioParameters::default(),
         // Generated source — no file, no id, no relative imports.
         None,
         ScenarioSourceMode::Runtime,
@@ -1576,7 +1581,7 @@ mod tests {
     fn generated_timeline_uses_native_task_entrypoint() {
         let steps = serde_json::json!([{ "wait": 1.0 }, { "wait_event": "GO" }]);
         let source = super::timeline_executor_source(&steps);
-        assert!(source.contains("fn task(me)"), "{source}");
+        assert!(source.contains("fn task(me, ctx)"), "{source}");
         assert!(source.contains("compile_timeline"), "{source}");
         assert!(!source.contains("fn on_tick"), "{source}");
     }
@@ -1634,7 +1639,7 @@ mod tests {
         // The structural mutation verbs share the registry under a capability key,
         // ownership-gated so a remote script only restructures what it owns.
         assert_eq!(
-            reg.policy_for(bridge_core::capability::STRUCTURAL_MUTATE),
+            reg.policy_for(super::bridge_core::capability::STRUCTURAL_MUTATE),
             CommandPolicy::OWNED_CONTROL,
         );
 

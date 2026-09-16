@@ -2,7 +2,7 @@
 // The reusable balloon defaults to vacuum, so this scene proves that the
 // environment inputs still produce buoyancy when a scene authors them.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.balloon = find("/ModelicaBalloonEarth/EarthBalloon");
     this.plant = find("/ModelicaBalloonEarth/EarthBalloon/Plant");
@@ -11,7 +11,7 @@ fn on_start(me) {
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
 

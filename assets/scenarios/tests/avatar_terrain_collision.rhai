@@ -9,7 +9,7 @@ fn fail(message) {
     report_verdict([message], "AVATAR TERRAIN COLLISION", "AVATAR_TERRAIN_COLLISION");
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.avatar = find("/AvatarTerrainCollision/Avatar");
     this.start = ();
@@ -33,7 +33,7 @@ fn on_start(me) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < HOLD_S { return; }

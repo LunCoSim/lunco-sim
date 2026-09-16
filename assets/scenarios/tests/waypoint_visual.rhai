@@ -147,7 +147,7 @@ fn predicted_landing_uses_annotation_material() {
         && annotation_shader_has_no_shader_opacity(PREDICTED_LANDING + "/Looks/Marker_Mat/Surface")
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.rover = find("/WaypointVisual/Rover");
     this.marker = find(ROUTE_POINT);
     this.landing = find(LANDING_LOCATION);
@@ -156,7 +156,7 @@ fn on_start(me) {
     this.t = 0.0;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
     if this.t < 0.5 { return; }

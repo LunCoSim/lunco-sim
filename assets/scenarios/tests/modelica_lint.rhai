@@ -5,12 +5,12 @@
 // the policy assertions at the authored boundary instead of in a Rust test
 // that walks the asset tree.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 0.1 { return; }

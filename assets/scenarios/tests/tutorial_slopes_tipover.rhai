@@ -10,7 +10,7 @@ fn verdict(pass, reason) {
     }
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.possess_count = 0;
     this.port_writes = 0;
     this.edge_seen = false;
@@ -18,7 +18,7 @@ fn on_start(me) {
     this.elapsed = 0.0;
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "cmd:PossessVessel" {
         this.possess_count += 1;
     } else if evt.name == "cmd:SetPorts" && this.possess_count > 0 {
@@ -43,7 +43,7 @@ fn on_event(me, evt) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 120.0 {

@@ -19,7 +19,7 @@
 const AUTHORED_TARGET = -1.5;   // physics:targetPosition on the Lift drive
 const COMMANDED = -0.5;         // what the port is asked for, mid-run
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.hold_s = 5.0;      // let the authored drive settle
     this.command_s = 10.0;  // then command the port and let THAT settle
@@ -36,7 +36,7 @@ fn on_start(me) {
     print("[drive] ── prismatic drive: authored, then commanded ──────────");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.lift == () || this.lift < 0 {

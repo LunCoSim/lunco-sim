@@ -54,7 +54,7 @@ fn have_ports(s) {
     get(s.tracker, "yaw") != () && get(s.hinge, "angle") != ()
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase_started = 0.0;
     this.phase = "await_ports";
@@ -101,7 +101,7 @@ fn finish_failure(s, message) {
     fail_fast(message, "SOLAR ROVER ENERGY CYCLE", "SOLAR_ROVER_ENERGY_CYCLE");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
     let phase_t = this.t - this.phase_started;

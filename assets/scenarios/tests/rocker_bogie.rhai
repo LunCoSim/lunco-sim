@@ -26,7 +26,7 @@
 // landing transient is intentionally not used as its reference.
 const STEP_SETTLED_LOAD_FLOOR_RAD = 0.01;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 10.0;   // drop onto the step, then ring down
     this.sample_s = 1.0;
@@ -44,7 +44,7 @@ fn on_start(me) {
     print("[rb] coupled=" + this.coupled + "  hingeL=" + this.hl + " hingeR=" + this.hr);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.hl == () || this.hl < 0 || this.hr == () || this.hr < 0 {

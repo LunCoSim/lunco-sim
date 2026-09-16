@@ -24,12 +24,12 @@ fn steps() {
     ]
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.i = 0;
     coach_step(steps(), 0);   // `coach_step` (HUD prelude) focuses the panel + draws the card
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     let s = steps();
     if evt.name == "cmd:GuidedNext"      { this.i += 1; }
     else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }

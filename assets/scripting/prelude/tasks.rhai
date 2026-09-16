@@ -2,7 +2,7 @@
 //
 // A task is pure Rhai data. The native `lunco-behavior` kernel owns the cursor,
 // dwell timing, event delivery, and fixed-step progression. Return stateless
-// trees from `task(me)`, or assign a state-capturing tree in `on_start`; do not
+// trees from `task(me, ctx)`, or assign a state-capturing tree in `on_start`; do not
 // implement a second cursor in `on_tick`.
 
 // The constructors below are the only script-side spellings of the task
@@ -12,12 +12,14 @@
 // rather than top-level Rhai constants: indirect prelude calls do not resolve
 // top-level constants in the runtime's separate function-call scope.
 
-// Task leaves take anonymous closures with one positional argument:
-//   |me| ...
-// `me` is the host entity id. The native task driver binds the persistent
-// scenario state map as `this`, so closures may use hook state without a second
-// callback convention. Named `Fn("...")` pointers are not task leaves. A
-// named helper is still valid when called explicitly from an anonymous leaf:
+// Task leaves accept either of these callback forms:
+//   |me| ...                         // anonymous closure; state is `this`
+//   Fn("callback")                   // named function: fn callback(me)
+// `me` is the host entity id. The native task driver supplies the persistent
+// scenario state map as `this` to both forms. The task factory is called
+// without a lifecycle `this`, so closures do not retain the temporary state
+// map used while the tree is constructed. A named helper can still be called
+// explicitly from an anonymous leaf:
 //   once(|me| drive_to(me, GOAL))
 
 /// Step constructors (sugar over the map literals; all optional to use).
@@ -36,7 +38,7 @@ fn wait_for_from(event, src) {
 // This is the built-in "do X, wait until Y, then Z" capability available to
 // every script:
 //
-//   fn task(me) {
+//   fn task(me, ctx) {
 //       seq([
 //           once(|m| drive_to(m, CP1)),         // run an action, advance
 //           wait_until(|m| arrived(m, CP1)),    // suspend until true
@@ -86,7 +88,7 @@ fn wait_for_from(event, src) {
 fn __task_composite(kind, items) { #{ kind: kind, items: items } }
 fn __task_decorator(kind, body) { #{ kind: kind, body: body } }
 
-/// Node constructors (return the root from `task(me)`, or assign it once in
+/// Node constructors (return the root from `task(me, ctx)`, or assign it once in
 /// `on_start` when setup or explicit state capture is needed).
 fn seq(items)      { __task_composite("seq", items) }
 fn par_all(items)  { __task_composite("all", items) }
@@ -104,15 +106,20 @@ fn reactive_sel(items) { __task_composite("reactive_sel", items) }
 /// predicate is true, Failure when false — unlike wait_until, which waits.
 fn check(pred)     { #{ kind: "check", check: pred } }
 
-/// SUGAR — define a `task(me)` function returning a node and the engine runs it
+/// SUGAR — define a `task(me, ctx)` function returning a node and the engine runs it
 /// automatically: no on_start, no `this.task = …`. The whole scenario can be:
 ///
-///   fn task(me) {
+///   fn task(me, ctx) {
 ///       seq([ once(|m| drive_to(m, CP1)), wait_until(|m| arrived(m, CP1)), wait(3.0) ])
 ///   }
 ///
 /// Engine driver — called once after `on_start`; seeds `this.task` from a user
-/// `task(me)` if defined and not already set (an explicit assignment wins).
-fn __init_task(me) {
-    if this.task == () && is_def_fn("task", 1) { this.task = task(me); }
+/// `task(me, ctx)` if defined and not already set (an explicit assignment wins).
+/// The factory is deliberately invoked through an unbound function pointer;
+/// task leaves receive the live lifecycle state only when the native kernel
+/// ticks them.
+fn __init_task(me, ctx) {
+    if this.task == () && is_def_fn("task", 2) {
+        this.task = Fn("task").call(me, ctx);
+    }
 }

@@ -2,7 +2,10 @@
 // contract. The test observes the same public event/task surface used by
 // authored programs; it does not recreate the task cursor in Rust.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
+    this.start_ctx_is_empty = ctx.len() == 0;
+    this.task_ctx_is_empty = false;
+    this.mission_ctx_is_empty = false;
     this.elapsed = 0.0;
     this.go_sent = false;
     this.go2_sent = false;
@@ -17,6 +20,8 @@ fn on_start(me) {
     this.task_complete = false;
     this.mission_complete = false;
     this.done = false;
+    subscribe("TASK_CTX_EMPTY");
+    subscribe("MISSION_CTX_EMPTY");
     subscribe("TASK_SEQ_A");
     subscribe("TASK_SEQ_B");
     subscribe("TASK_BRANCH_A");
@@ -29,7 +34,8 @@ fn on_start(me) {
     subscribe("MISSION_COMPLETE");
 }
 
-fn task(me) {
+fn task(me, ctx) {
+    emit("TASK_CTX_EMPTY", ctx.len() == 0);
     seq([
         once(|m| emit("TASK_SEQ_A", 1)),
         wait_for("TASK_GO"),
@@ -55,7 +61,8 @@ fn task(me) {
     ])
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
+    emit("MISSION_CTX_EMPTY", ctx.len() == 0);
     [
         objective("sequence", #{ requires_event: "TASK_SEQ_B" }),
         objective("branches", #{
@@ -69,7 +76,10 @@ fn mission(me) {
     ]
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
+    this.event_ctx_is_empty = ctx.len() == 0;
+    if evt.name == "TASK_CTX_EMPTY" { this.task_ctx_is_empty = evt.value == true; }
+    if evt.name == "MISSION_CTX_EMPTY" { this.mission_ctx_is_empty = evt.value == true; }
     if evt.name == "TASK_SEQ_A" { this.seq_a += 1; }
     if evt.name == "TASK_SEQ_B" { this.seq_b += 1; }
     if evt.name == "TASK_BRANCH_A" { this.branch_a += 1; }
@@ -82,7 +92,8 @@ fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" { this.mission_complete = true; }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
+    this.tick_ctx_is_empty = ctx.len() == 0;
     if this.done { return; }
     this.elapsed += dt();
 
@@ -98,6 +109,11 @@ fn on_tick(me) {
     if this.mission_complete && this.forever >= 3 {
         this.done = true;
         report_verdict([
+            t_true(this.start_ctx_is_empty, "on_start receives the empty default context"),
+            t_true(this.task_ctx_is_empty, "task receives the empty default context"),
+            t_true(this.mission_ctx_is_empty, "mission receives the empty default context"),
+            t_true(this.event_ctx_is_empty, "on_event receives the empty default context"),
+            t_true(this.tick_ctx_is_empty, "on_tick receives the empty default context"),
             t_true(this.seq_a == 1, "sequence action ran once"),
             t_true(this.seq_b == 1, "sequence advanced after wait_for"),
             t_true(this.branch_a == 1, "par_all first branch ran once"),
@@ -119,7 +135,7 @@ fn on_tick(me) {
     }
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         report_verdict(["task/mission contract stopped before its public observations"],

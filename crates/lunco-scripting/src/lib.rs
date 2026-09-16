@@ -64,7 +64,7 @@ pub mod tool_libs;
 pub mod ui_bridge;
 pub mod world_bridge;
 
-pub use doc::{ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
+pub use doc::{ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
 #[cfg(feature = "rhai")]
 use lunco_api::executor::DeferredCommandAppExt;
 #[cfg(any(feature = "rhai", feature = "python"))]
@@ -296,6 +296,7 @@ impl Plugin for LunCoScriptingPlugin {
         }
 
         app.register_type::<ScriptedModel>()
+            .register_type::<doc::ScenarioParameters>()
             .register_type::<doc::ScriptLanguage>();
 
         app.configure_sets(FixedUpdate, ScriptingSet);

@@ -10,11 +10,11 @@ fn has_schema(record, name) {
     query_ok(record) && record.api_schemas.contains(name)
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
 
     let reflector = query("QueryUsdPrim", #{

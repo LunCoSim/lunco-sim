@@ -3,6 +3,6 @@
 // scenario carries no vehicle-specific or renderer-only behavior.
 const TEST_KIND = "graphics";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     notify_kind("Terrain shader appearance: capturing settled near/middle/far relief.", "info");
 }

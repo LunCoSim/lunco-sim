@@ -26,15 +26,15 @@ if [[ ! -f "$SOURCE_FILE" ]]; then
     exit 2
 fi
 
-if ! jq -e . >/dev/null <<<"$PARAMS"; then
-    echo "params must be valid JSON: $PARAMS" >&2
+if ! PARAMS_JSON=$(jq -ce 'if type == "object" then . else error("params must be a JSON object") end' <<<"$PARAMS"); then
+    echo "params must be a JSON object: $PARAMS" >&2
     exit 2
 fi
 
 request="$({
     jq -Rs \
         --arg target "$TARGET" \
-        --arg params "$PARAMS" \
+        --argjson params "$PARAMS_JSON" \
         '{type:"ExecuteCommand",command:"RunScenario",params:{target:($target | tonumber),source:.,params:$params}}' \
         "$SOURCE_FILE"
 })"

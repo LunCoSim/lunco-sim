@@ -13,13 +13,13 @@ const SITES = [
 const SPEED = 1.0;
 const RADIUS = 2.0;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     subscribe_prefix("MISSION_ASSIGN:");
     emit("ROBOT_READY", true);
     print("worker " + me + ": ready");
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     let prefix = "MISSION_ASSIGN:" + me.to_string() + ":";
     if !evt.name.starts_with(prefix) { return; }
 
@@ -39,4 +39,4 @@ fn on_event(me, evt) {
     ]);
 }
 
-fn on_stop(me) { brake(me); }
+fn on_stop(me, ctx) { brake(me); }

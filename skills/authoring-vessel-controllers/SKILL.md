@@ -119,7 +119,7 @@ supervision and sequencing — **never a control loop**. React to events; don't 
 step.
 
 ```rhai
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "lander_touchdown" { /* advance the mission */ }
     if evt.name == "low_fuel" { notify_kind("Low fuel", "warn"); }
 }

@@ -24,10 +24,10 @@
 
 use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use lunco_core::{Command, on_command, register_commands};
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
-use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
+use lunco_workbench_widgets::{icon_text_button, paint_icon, UiIcon};
 
 /// Shared layer for guided presentation. Workbench menus and window controls
 /// use egui's `Foreground` order, so guided HUDs, rings, coach cards, and
@@ -115,7 +115,7 @@ pub struct SetHint {
 /// Set the persistent objectives checklist. `text` is a pre-formatted block
 /// (one objective per line). Empty clears it. Rhai: `objectives_hud(list)` —
 /// the prelude formats the list into this block and also auto-publishes it from
-/// declarative `mission(me)` state.
+/// declarative `mission(me, ctx)` state.
 #[Command(default)]
 pub struct SetObjectives {
     /// Pre-formatted checklist block; empty hides the objectives card.

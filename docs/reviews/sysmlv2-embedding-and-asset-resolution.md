@@ -1,7 +1,7 @@
 # SysML v2 embedding in the terrain worktree
 
 **Status:** Foundation, Twin verification registry, CLI selection, typed Rhai projections, structured evidence, and automatic Twin source/document loading implemented; full constraint evaluation remains follow-up work
-**Reviewed:** 2026-09-15
+**Reviewed:** 2026-09-16
 **Worktree:** `terrain` (`terrain-streaming`)
 
 ## Executive decision
@@ -50,7 +50,11 @@ and server. A deliberately lean build may still opt out with
   typed attributes/literals, requirement/verification records, diagnostics,
   source files, a lossless source revision, and the Twin-owned verification
   registry; no arbitrary second source walker or product-specific Rust policy
-  is introduced.
+  is introduced. A mounted `twin://name` validation uses the live
+  `WorkspaceResource` Twin index and `TwinRoots` resolver, checking Editor
+  overlays before disk/cache bytes so dirty source cannot be validated against
+  a stale saved revision. Missing lifecycle resources or a mismatched mount are
+  terminal validation errors.
 - `TwinManifest` has an optional `[verification]` registry. Each qualified
   SysML verification maps to one Twin-relative `.usda` scene, `.rhai`
   observer, and optional verdict channel. `luncosim test --verification`

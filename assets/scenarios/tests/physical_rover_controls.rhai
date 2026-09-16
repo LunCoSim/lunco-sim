@@ -4,7 +4,7 @@
 // Modelica owns allocation and actuator math; USD owns the physical topology;
 // Rust realizes the generic ports, contacts, joints, and body state.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
     this.skid = find("/PhysicalRoverControls/SkidPhysical");
@@ -46,7 +46,7 @@ fn on_start(me) {
     print("[physical-controls] settle -> forward -> steer right -> steer left -> reverse -> brake");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     if this.skid == () || this.skid < 0 || this.ack == () || this.ack < 0 {
         fail_fast("physical rover prims were not composed", "PHYSICAL ROVER CONTROLS", "PHYSICAL_ROVER_CONTROLS");
@@ -255,7 +255,7 @@ fn on_tick(me) {
     }
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     let skid = find("/PhysicalRoverControls/SkidPhysical");
     let ack = find("/PhysicalRoverControls/AckermannPhysical");
     if skid >= 0 { brake(skid); }

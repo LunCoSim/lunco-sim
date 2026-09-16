@@ -22,7 +22,7 @@ fn show(s, i) {
     coach(i, s.len(), step.anchor, step.title, step.body);
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // The optional world is selected by the catalog and mounted by the generic
     // launcher before this runs.
     // All three profile references are composed by the scene before
@@ -33,7 +33,7 @@ fn on_start(me) {
     show(steps(), 0);
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     let s = steps();
     if evt.name == "cmd:GuidedNext" { this.i += 1; }
     else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }

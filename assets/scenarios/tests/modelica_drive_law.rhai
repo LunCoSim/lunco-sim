@@ -13,7 +13,7 @@ fn port_value(target, name, direction) {
     ()
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.rover = find("/ModelicaDriveLaw/RoverModelica");
@@ -27,7 +27,7 @@ fn on_start(me) {
     this.start = world_pos(this.rover);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 1.0 {
@@ -52,6 +52,6 @@ fn on_tick(me) {
     report_verdict(checks, "MODELICA DRIVE LAW", "MODELICA_DRIVE_LAW");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if this.rover >= 0 { brake(this.rover); }
 }

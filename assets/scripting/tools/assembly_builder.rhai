@@ -1095,21 +1095,42 @@ fn mesh_shape_plan(edit_target, parent, name, points, face_counts,
     #{ ok: true, kind: "mesh_shape", path: shape, ops: ops }
 }
 
-/// Build a standard Cylinder shape with explicit dimensions, placement, and
-/// collision ownership. Like `cube_shape_plan`, this never creates a body or
-/// a wrapper frame; a caller must choose whether the shape is physical or
-/// explicitly visual-only.
-fn cylinder_shape_plan(edit_target, parent, name, radius, height,
-    translation, rotation, scale, collision_enabled) {
+fn _cylinder_extent_literal(radius, height, axis) {
+    let half_height = height / 2.0;
+    if axis == "X" {
+        return "[(-" + half_height.to_string() + ", -" + radius.to_string()
+            + ", -" + radius.to_string() + "), (" + half_height.to_string()
+            + ", " + radius.to_string() + ", " + radius.to_string() + ")]";
+    }
+    if axis == "Y" {
+        return "[(-" + radius.to_string() + ", -" + half_height.to_string()
+            + ", -" + radius.to_string() + "), (" + radius.to_string()
+            + ", " + half_height.to_string() + ", " + radius.to_string() + ")]";
+    }
+    "[(-" + radius.to_string() + ", -" + radius.to_string() + ", -"
+        + half_height.to_string() + "), (" + radius.to_string() + ", "
+        + radius.to_string() + ", " + half_height.to_string() + ")]"
+}
+
+/// Build a standard Cylinder shape with explicit dimensions, placement,
+/// schema axis, extent, and collision ownership. UsdGeomCylinder declares
+/// `radius` and `height` as `double`; `extent` is the renderer-facing
+/// `float3[]` bound required when either dimension is authored. The caller's
+/// values remain Rhai f64 until this typed USD boundary.
+fn cylinder_shape_plan_axis(edit_target, parent, name, radius, height,
+    translation, rotation, scale, axis, collision_enabled) {
     if edit_target == () || parent == () || name == () || name == ""
         || name.contains("/") {
-        return plan_error("cylinder_shape_plan requires an edit target, parent, and one Cylinder name");
+        return plan_error("cylinder_shape_plan_axis requires an edit target, parent, and one Cylinder name");
     }
     if !parent.starts_with("/") || parent.ends_with("/") && parent != "/" {
-        return plan_error("cylinder_shape_plan parent must be an absolute USD path");
+        return plan_error("cylinder_shape_plan_axis parent must be an absolute USD path");
     }
     if radius == () || radius <= 0.0 || height == () || height <= 0.0 {
-        return plan_error("cylinder_shape_plan requires positive radius and height");
+        return plan_error("cylinder_shape_plan_axis requires positive radius and height");
+    }
+    if axis == () || !cardinal_axis(axis) {
+        return plan_error("cylinder_shape_plan_axis axis must be X, Y, or Z");
     }
     let path = if parent == "/" { "/" + name } else { parent + "/" + name };
     let placement = place_plan(edit_target, path, translation, rotation, scale);
@@ -1148,6 +1169,20 @@ fn cylinder_shape_plan(edit_target, parent, name, radius, height,
         type_name: "double",
         value: height.to_string(),
     }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target,
+        path: path,
+        name: "axis",
+        type_name: "token",
+        value: "\"" + axis + "\"",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target,
+        path: path,
+        name: "extent",
+        type_name: "float3[]",
+        value: _cylinder_extent_literal(radius, height, axis),
+    }});
     ops.push(#{ SetApiSchemas: #{
         edit_target: edit_target,
         path: path,
@@ -1160,7 +1195,14 @@ fn cylinder_shape_plan(edit_target, parent, name, radius, height,
         type_name: "bool",
         value: collision_enabled.to_string(),
     }});
-    #{ ok: true, kind: "cylinder_shape", path: path, ops: ops }
+    #{ ok: true, kind: "cylinder_shape", path: path, axis: axis, ops: ops }
+}
+
+/// Convenience form for the USD default Z axis.
+fn cylinder_shape_plan(edit_target, parent, name, radius, height,
+    translation, rotation, scale, collision_enabled) {
+    cylinder_shape_plan_axis(edit_target, parent, name, radius, height,
+        translation, rotation, scale, "Z", collision_enabled)
 }
 
 // ── Generic component bundles ──────────────────────────────────────────────
@@ -1505,6 +1547,15 @@ fn bundle_geometry_plan(edit_target, parent, shape) {
             edit_target: edit_target, path: path, name: "height",
             type_name: "double", value: shape.height.to_string(),
         }});
+        // UsdGeomCylinder/UsdGeomCone require an authored extent whenever
+        // dimensions are authored.  `extent` is intentionally float3[] at
+        // the USD/render boundary; radius and height remain double above.
+        let axis = if shape.axis == () { "Z" } else { shape.axis };
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "extent",
+            type_name: "float3[]",
+            value: _cylinder_extent_literal(shape.radius, shape.height, axis),
+        }});
     }
     if shape.axis != () {
         ops.push(#{ SetAttribute: #{
@@ -1774,7 +1825,7 @@ fn component_bundle_update_plan(doc, edit_target, path, bundle, bindings) {
         let record = query("QueryUsdPrim", #{
             doc_id: doc,
             path: shape_path,
-            attrs: ["size", "radius", "height", "axis",
+            attrs: ["size", "radius", "height", "axis", "extent",
                 "physics:collisionEnabled", "visibility", "xformOp:translate",
                 "xformOp:rotateXYZ", "xformOp:scale"],
             rels: ["material:binding"],
@@ -1806,12 +1857,14 @@ fn component_bundle_update_plan(doc, edit_target, path, bundle, bindings) {
         let transform_ops = bundle_transform_update_ops(edit_target, shape_path, record,
             shape.translation, shape.rotation, shape.scale);
         for op in transform_ops { ops.push(op); }
+        let dimensions_changed = false;
         if shape.kind == "Cube" {
             if !bundle_value_matches(record.attrs["size"], shape.size) {
                 ops.push(#{ SetAttribute: #{
                     edit_target: edit_target, path: shape_path, name: "size",
                     type_name: "double", value: shape.size.to_string(),
                 }});
+                dimensions_changed = true;
             }
         } else {
             if !bundle_value_matches(record.attrs["radius"], shape.radius) {
@@ -1819,18 +1872,30 @@ fn component_bundle_update_plan(doc, edit_target, path, bundle, bindings) {
                     edit_target: edit_target, path: shape_path, name: "radius",
                     type_name: "double", value: shape.radius.to_string(),
                 }});
+                dimensions_changed = true;
             }
             if !bundle_value_matches(record.attrs["height"], shape.height) {
                 ops.push(#{ SetAttribute: #{
                     edit_target: edit_target, path: shape_path, name: "height",
                     type_name: "double", value: shape.height.to_string(),
                 }});
+                dimensions_changed = true;
             }
         }
+        let axis_changed = false;
         if shape.axis != () && !bundle_value_matches(record.attrs["axis"], shape.axis) {
             ops.push(#{ SetAttribute: #{
                 edit_target: edit_target, path: shape_path, name: "axis",
                 type_name: "token", value: bundle_token_literal(shape.axis),
+            }});
+            axis_changed = true;
+        }
+        if shape.kind != "Cube" && (dimensions_changed || axis_changed) {
+            let axis = if shape.axis == () { "Z" } else { shape.axis };
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: shape_path, name: "extent",
+                type_name: "float3[]",
+                value: _cylinder_extent_literal(shape.radius, shape.height, axis),
             }});
         }
     }

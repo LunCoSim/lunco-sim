@@ -37,7 +37,7 @@ fn mount_ok(path, position, rotation, direction) {
         && close_vec(record.attrs["lunco:forceActuator:direction"], direction, EPS)
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.mounts = [
@@ -62,7 +62,7 @@ fn on_start(me) {
     ];
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 
@@ -116,7 +116,7 @@ fn on_tick(me) {
     report_verdict(failures, "LANDER RCS", "LANDER_RCS");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         report_verdict(["RCS arrangement test stopped before the production source was observed"],

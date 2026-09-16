@@ -14,7 +14,7 @@ fn fail(reason) {
     report_verdict([reason], TITLE, CHANNEL);
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.spawn_requested = false;
     this.balloon = -1;
@@ -24,7 +24,7 @@ fn on_start(me) {
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

@@ -11,13 +11,13 @@ fn verdict(pass, reason) {
     }
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.spawn_count = 0;
     this.done = false;
     this.elapsed = 0.0;
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "cmd:SpawnEntity" {
         this.spawn_count += 1;
     } else if evt.name == "MISSION_FAILED" {
@@ -32,7 +32,7 @@ fn on_event(me, evt) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 30.0 {

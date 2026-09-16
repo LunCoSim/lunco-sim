@@ -9,20 +9,20 @@ fn verdict(pass, reason) {
     }
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     subscribe("MISSION_COMPLETE");
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     [objective("must_not_complete", #{
         text: "Do not complete without the required event",
         requires_event: "event_that_is_not_emitted",
     })]
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "MISSION_COMPLETE" && !this.done {
         this.done = true;
         verdict(false, "an absent event completed the mission");
@@ -30,7 +30,7 @@ fn on_event(me, evt) {
 }
 
 // Test-only liveness verdict for the negative case.
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 1.0 {

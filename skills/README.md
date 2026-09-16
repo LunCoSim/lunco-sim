@@ -100,6 +100,7 @@ parse check into runtime evidence.
 | [**inspect-simulation**](inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
 | [**record-video**](record-video/SKILL.md) | Record deterministic video/PNG takes — windowed or windowless (`--offscreen`), CLI or rhai-sequenced |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
+| [**author-rhai-tests**](author-rhai-tests/SKILL.md) | Author asset-backed and behavioral tests in Twin Rhai with real verdict evidence |
 | [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.sysml`/`.kerml`/`.wgsl`/`.rhai` or an entire Twin namespace — does it parse, resolve, and lint correctly? — in seconds; plus `ValidateSysml`/`RunLint` for Twin and loaded-scene checks |
 | [**performance-profiling**](performance-profiling/SKILL.md) | Diagnose FPS, physics timing, periodic stalls, Builder/View differences, and Tracy evidence without reducing quality or changing BigSpace/substeps |
 

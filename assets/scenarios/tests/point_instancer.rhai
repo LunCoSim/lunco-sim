@@ -4,12 +4,12 @@
 const WAIT_S = 3.0;
 const ROOT = "/PointInstancerTest/Blades";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

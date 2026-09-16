@@ -38,7 +38,7 @@ fn fail(me, message) {
     }
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.doc = -1;
     this.editable = -1;
     this.untouched = -1;
@@ -55,7 +55,7 @@ fn on_start(me) {
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 35.0 {

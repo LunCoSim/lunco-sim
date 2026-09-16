@@ -13,7 +13,7 @@ fn port_value(target, name, direction) {
     ()
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.raycast = find("/AckermannParity/RoverRaycast");
@@ -30,7 +30,7 @@ fn on_start(me) {
     this.physical_start = world_pos(this.physical);
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 1.0 {
@@ -67,7 +67,7 @@ fn on_tick(me) {
     report_verdict(checks, "ACKERMANN CONTROLLER", "ACKERMANN_CONTROLLER");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if this.raycast >= 0 { brake(this.raycast); }
     if this.physical >= 0 { brake(this.physical); }
 }

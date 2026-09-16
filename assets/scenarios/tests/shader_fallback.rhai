@@ -6,12 +6,12 @@ fn query_ok(record) {
     record != () && record.ok != false
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed < 0.5 { return; }
@@ -34,7 +34,7 @@ fn on_tick(me) {
     ], "SHADER STAGE CONTRACT", "SHADER_STAGE_CONTRACT");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         report_verdict(["shader stage contract stopped before its rejection observation"],

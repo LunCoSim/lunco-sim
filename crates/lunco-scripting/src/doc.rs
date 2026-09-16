@@ -1,7 +1,10 @@
 use bevy::prelude::*;
+use lunco_core::TelemetryValue;
 use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
+use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Supported scripting languages for Digital Twin integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect, Default)]
@@ -26,6 +29,221 @@ pub enum ScenarioReloadPolicy {
     Restart,
 }
 
+/// Typed launch parameters for one scenario instance.
+///
+/// The command/API boundary serializes this as one natural JSON object. Once
+/// accepted, the value is kept as [`TelemetryValue`] and converted directly to
+/// the target scripting backend; no JSON string or JSON round-trip is used by
+/// the runtime. The empty object is the only semantic default.
+#[derive(Debug, Clone, Default, PartialEq, Reflect)]
+#[reflect(Serialize, Deserialize)]
+pub struct ScenarioParameters(BTreeMap<String, TelemetryValue>);
+
+impl ScenarioParameters {
+    /// Borrow the validated parameter map for backend conversion or inspection.
+    pub fn as_map(&self) -> &BTreeMap<String, TelemetryValue> {
+        &self.0
+    }
+
+    /// Convert the parameters to the shared typed value used by scripting
+    /// bridges. This clone happens once per program compilation, not per tick.
+    pub fn as_telemetry_value(&self) -> TelemetryValue {
+        TelemetryValue::Map(self.0.clone())
+    }
+}
+
+/// Serialize a telemetry value using the natural object/array/scalar shape
+/// expected at command and storage boundaries. `TelemetryValue` itself keeps
+/// its tagged serde representation for the generic telemetry protocol, so this
+/// adapter is deliberately local to scenario launch parameters.
+struct NaturalTelemetryValue<'a>(&'a TelemetryValue);
+
+impl Serialize for NaturalTelemetryValue<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self.0 {
+            TelemetryValue::F64(value) => serializer.serialize_f64(*value),
+            TelemetryValue::I64(value) => serializer.serialize_i64(*value),
+            TelemetryValue::Bool(value) => serializer.serialize_bool(*value),
+            TelemetryValue::String(value) => serializer.serialize_str(value),
+            TelemetryValue::Array(values) => {
+                let mut seq = serializer.serialize_seq(Some(values.len()))?;
+                for value in values {
+                    seq.serialize_element(&NaturalTelemetryValue(value))?;
+                }
+                seq.end()
+            }
+            TelemetryValue::Map(values) => {
+                let mut map = serializer.serialize_map(Some(values.len()))?;
+                for (key, value) in values {
+                    map.serialize_entry(key, &NaturalTelemetryValue(value))?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
+struct NaturalTelemetryValueVisitor;
+
+impl<'de> Visitor<'de> for NaturalTelemetryValueVisitor {
+    type Value = TelemetryValue;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON scalar, array, or object (null is not supported)")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(TelemetryValue::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(TelemetryValue::I64(value))
+    }
+
+    fn visit_f32<E>(self, value: f32) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.visit_f64(value as f64)
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        i64::try_from(value)
+            .map(TelemetryValue::I64)
+            .map_err(|_| E::custom("unsigned parameter exceeds i64 range"))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value.is_finite() {
+            Ok(TelemetryValue::F64(value))
+        } else {
+            Err(E::custom("scenario parameters must contain finite numbers"))
+        }
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(TelemetryValue::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(TelemetryValue::String(value))
+    }
+
+    fn visit_seq<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = access.next_element::<NaturalTelemetryValueOwned>()? {
+            values.push(value.0);
+        }
+        Ok(TelemetryValue::Array(values))
+    }
+
+    fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = BTreeMap::new();
+        while let Some((key, value)) = access.next_entry::<String, NaturalTelemetryValueOwned>()? {
+            values.insert(key, value.0);
+        }
+        Ok(TelemetryValue::Map(values))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(E::custom("null is not a valid scenario parameter"))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(E::custom("null is not a valid scenario parameter"))
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+}
+
+struct NaturalTelemetryValueOwned(TelemetryValue);
+
+impl<'de> Deserialize<'de> for NaturalTelemetryValueOwned {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer
+            .deserialize_any(NaturalTelemetryValueVisitor)
+            .map(Self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ScenarioParameters {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ParametersVisitor;
+
+        impl<'de> Visitor<'de> for ParametersVisitor {
+            type Value = ScenarioParameters;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an object of scenario parameters")
+            }
+
+            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut values = BTreeMap::new();
+                while let Some((key, value)) =
+                    access.next_entry::<String, NaturalTelemetryValueOwned>()?
+                {
+                    if values.insert(key.clone(), value.0).is_some() {
+                        return Err(de::Error::custom(format!(
+                            "duplicate scenario parameter `{key}`"
+                        )));
+                    }
+                }
+                Ok(ScenarioParameters(values))
+            }
+        }
+
+        deserializer.deserialize_map(ParametersVisitor)
+    }
+}
+
+impl Serialize for ScenarioParameters {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in &self.0 {
+            map.serialize_entry(key, &NaturalTelemetryValue(value))?;
+        }
+        map.end()
+    }
+}
+
 /// A canonical document representing a script in the Digital Twin.
 ///
 /// Mirroring Modelica models, ScriptDocuments are mutable, reversible,
@@ -47,12 +265,6 @@ pub struct ScriptDocument {
     pub inputs: Vec<String>,
     /// Metadata about expected output pins (e.g., "motor_current").
     pub outputs: Vec<String>,
-    /// Scenario parameters as a JSON object string (e.g. `{"speed":1.5}`), empty
-    /// for none. Injected into the runtime so the script reads them as a `params`
-    /// constant (`params.speed`) — lets one scenario be reused across entities /
-    /// missions without baking values into the source. Stored as text so this
-    /// (always-compiled) module needs no `serde_json` dep.
-    pub params: String,
     /// Canonical asset id this script was loaded from (`twin://ep1/main.rhai`),
     /// or `None` when the source is not file-backed (inline USD `info:sourceCode`,
     /// a `RunScenario` string, a generated timeline executor).
@@ -89,7 +301,6 @@ impl ScriptDocument {
             origin: DocumentOrigin::untitled(format!("Untitled-{id}")),
             inputs: Vec::new(),
             outputs: Vec::new(),
-            params: String::new(),
             // Not file-backed until something says otherwise.
             asset_id: None,
             // Untitled = never on disk ⇒ genuinely unsaved.
@@ -333,6 +544,14 @@ pub struct ScriptedModel {
     /// Scene replacement policy for this scenario's lifecycle host.
     pub reload_policy: ScenarioReloadPolicy,
     pub paused: bool,
+    /// Typed launch parameters for this attached program instance. The source
+    /// document stays reusable; this is the instance-specific context exposed
+    /// to Rhai lifecycle hooks.
+    pub parameters: ScenarioParameters,
+    /// Changes whenever the attached program receives a new parameter object.
+    /// The neutral scenario driver uses this cheap revision to invalidate the
+    /// backend instance without cloning the map every tick.
+    pub parameters_revision: u64,
     /// Current input values synced from Bevy ECS to Script.
     pub inputs: HashMap<String, f64>,
     /// Current output values synced from Script to Bevy ECS.

@@ -19,7 +19,7 @@ fn print_metrics(s) {
           " zero_intensity=" + s.zero_intensity + " zero_length=" + s.zero_length);
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.lander = find("/LanderPlumeActivity/Lander");
     this.main = find("/LanderPlumeActivity/Lander/MainPropulsion");
     this.photometry = find("/LanderPlumeActivity/Lander/FlameCore/Photometry");
@@ -62,7 +62,7 @@ fn on_start(me) {
     }
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.phase == 0 {

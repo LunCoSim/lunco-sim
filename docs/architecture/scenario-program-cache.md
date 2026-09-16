@@ -12,7 +12,7 @@ A compiled scenario has three parts, split by the discriminator *"is it in `key(
 |---|---|---|---|
 | `AST` (prelude-merged) | **structure** | `source` only | ✅ one `Arc`, content-addressed |
 | hook mask (`on_start/tick/stop/event` present bits) | **structure** | `AST` | ✅ derived with the AST |
-| `scope` (top-level `const` globals) | **state** | seed-run — **touches the world, varies per `params`** | ❌ never |
+| `scope` (top-level `const` globals) | **state** | seed-run — **touches the world, varies per scenario context** | ❌ never |
 | `this` (per-entity map) | **state** | runtime | ❌ never |
 | event `filter` (`subscribe`) | **state** | `on_start` | ❌ never |
 

@@ -1,7 +1,7 @@
 // Graphics acceptance for the authored multi-rover attachment presentation.
 const TEST_KIND = "graphics";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
     this.paths = [
@@ -21,7 +21,7 @@ fn on_start(me) {
           "/" + this.paths.len());
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
     if this.t < 0.5 { return; }

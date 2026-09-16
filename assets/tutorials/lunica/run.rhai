@@ -10,13 +10,13 @@ fn steps() {
     ]
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     cmd("OpenClass", #{ qualified: "CascadedRCFilter" });
     this.i = 0;
     coach_step(steps(), 0);
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     let s = steps();
     if evt.name == "cmd:GuidedNext"      { this.i += 1; }
     else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }

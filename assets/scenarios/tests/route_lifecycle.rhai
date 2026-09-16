@@ -15,9 +15,14 @@ fn direct_points(doc) {
     let prefix = ROUTE + "/";
     for path in result.children {
         let rest = path.sub_string(prefix.len());
+        let trigger = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: path + "/Trigger",
+            attrs: ["lunco:triggerZone"],
+        });
         if rest != "" && rest.index_of("/") < 0
-            && rest != "Program" && rest != "RouteRibbon"
-            && has_path(doc, path) {
+            && trigger != () && trigger.ok != false && trigger.attrs != ()
+            && trigger.attrs["lunco:triggerZone"] != () && has_path(doc, path) {
             points.push(path);
         }
     }
@@ -195,8 +200,11 @@ fn implicit_route_context(doc, path, position) {
 
 fn selected_route_context(doc, path, position, program) {
     let value = implicit_route_context(doc, path, position);
-    value.selected_path = program + "/Program";
-    value
+    let listed = program_editor::list(doc, program);
+    if listed.ok && listed.programs.len() > 0 {
+        value.selected_path = listed.programs[0]["path"];
+    }
+    return value;
 }
 
 fn invalid_edit_checks(doc) {
@@ -208,7 +216,11 @@ fn invalid_edit_checks(doc) {
         controlled_path: SUBJECT_PATH,
     });
     let missing_position = waypoint_editor::on_move(context(doc, "/RouteLifecycle/NotAPoint", ()));
-    let program_delete = waypoint_editor::on_delete(context(doc, ROUTE + "/Program", ()));
+    let program = program_editor::list(doc, ROUTE);
+    let program_path = if program.ok && program.programs.len() > 0 {
+        program.programs[0]["path"]
+    } else { () };
+    let program_delete = waypoint_editor::on_delete(context(doc, program_path, ()));
     let after = route_revision(doc);
     [
         t_true(missing_context.ok == false, "click without a world position is rejected"),
@@ -218,7 +230,7 @@ fn invalid_edit_checks(doc) {
     ]
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.doc = -1;
     this.phase = 0;
     this.elapsed = 0.0;
@@ -228,7 +240,6 @@ fn on_start(me) {
     this.subject = -1;
     this.started = 0;
     this.stopped = 0;
-    this.possessed = 0;
     this.reached = 0;
     this.reached_index = ();
     this.active_edit = false;
@@ -237,20 +248,21 @@ fn on_start(me) {
     this.route_ready = false;
     this.program_switch_subject = -1;
     this.reached_point_path = ();
+    this.program_path = ();
+    this.alternate_program_path = ();
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     let route_source = find_path(ROUTE);
     if evt.name == "route_started" && evt.source == route_source { this.started += 1; }
     if evt.name == "route_stopped" && evt.source == route_source { this.stopped += 1; }
-    if evt.name == "cmd:PossessVessel" { this.possessed += 1; }
     if evt.name == "route_point_reached" && evt.source == route_source {
         this.reached += 1;
         this.reached_index = evt.value;
     }
     if evt.name == "program_switch_hold_started" { this.hold_started += 1; }
     if evt.name == "program.ready" && this.phase >= 101
-        && evt.value != () && evt.value["path"] == ROUTE {
+        && evt.value != () && evt.value["path"] == this.program_path {
         let current = query("InspectUsdDocument", #{ doc_id: this.doc });
         if current != () && current.ok != false
             && evt.value["generation"] == current.generation {
@@ -264,7 +276,7 @@ fn finish(me) {
     report_verdict(me.checks, "ROUTE LIFECYCLE", "ROUTE_LIFECYCLE");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 45.0 {
@@ -283,9 +295,12 @@ fn on_tick(me) {
             || !ribbon_anchor_matches_point(this.doc, ROUTE + "/P0") {
             return;
         }
+        let listed = program_editor::list(this.doc, ROUTE);
+        if listed == () || !listed.ok || listed.programs.len() == 0 { return; }
+        this.program_path = listed.programs[0]["path"];
         let program = query("QueryUsdPrim", #{
             doc_id: this.doc,
-            path: ROUTE + "/Program",
+            path: this.program_path,
             attrs: ["info:implementationSource", "info:sourceAsset", "info:id", "info:sourceCode"],
         });
         this.checks.push(t_true(program != () && program.ok != false
@@ -302,14 +317,13 @@ fn on_tick(me) {
             "route ribbon is open and never connects the last point to the first"));
         this.checks.push(t_true(ribbon_clearance_matches(this.doc),
             "route ribbon clears the surface along its support normal"));
-        let listed = program_editor::list(this.doc, ROUTE);
         this.checks.push(t_true(listed.ok && listed.programs.len() == 1
-            && listed.programs[0].path == ROUTE + "/Program",
+            && listed.programs[0]["path"] == this.program_path,
             "generic program discovery lists the authored executable"));
         let hud = program_editor::enable_hud(this.doc, ROUTE, "always");
         this.checks.push(t_true(hud.ok, "Rhai can opt any USD program scope into the standard HUD"));
         if !hud.ok { finish(this); return; }
-        let selected = program_editor::select(ROUTE + "/Program");
+        let selected = program_editor::select(this.program_path);
         this.checks.push(t_true(selected.ok,
             "program selection establishes the active route without a Rust route registry"));
         this.phase = 50;
@@ -342,7 +356,7 @@ fn on_tick(me) {
             this.route_ready = false;
             let switched = program_editor::switch_source(
                 this.doc,
-                ROUTE + "/Program",
+                this.program_path,
                 "lunco://scenarios/tests/program_switch_hold.rhai",
             );
             if !switched.ok { this.checks.push(t_true(false, switched.error)); finish(this); return; }
@@ -385,7 +399,7 @@ fn on_tick(me) {
     if this.phase == 100 {
         let program = query("QueryUsdPrim", #{
             doc_id: this.doc,
-            path: ROUTE + "/Program",
+            path: this.program_path,
             attrs: ["info:implementationSource", "info:sourceAsset"],
         });
         if program == () || program.ok == false || program.attrs == ()
@@ -399,7 +413,7 @@ fn on_tick(me) {
             "switching a program preserves the subject entity identity"));
         let restored = program_editor::switch_source(
             this.doc,
-            ROUTE + "/Program",
+            this.program_path,
             "lunco://scenarios/route_follow.rhai",
         );
         if !restored.ok { this.checks.push(t_true(false, restored.error)); finish(this); return; }
@@ -410,7 +424,7 @@ fn on_tick(me) {
     if this.phase == 101 {
         let program = query("QueryUsdPrim", #{
             doc_id: this.doc,
-            path: ROUTE + "/Program",
+            path: this.program_path,
             attrs: ["info:implementationSource", "info:sourceAsset"],
         });
         if program == () || program.ok == false || program.attrs == ()
@@ -669,6 +683,20 @@ fn on_tick(me) {
 
     if this.phase == 90 {
         if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
+        let possession = cmd("PossessVessel", #{
+            target: this.subject,
+            bind_camera: false,
+        });
+        this.checks.push(t_true(possession != () && possession.ok != false,
+            "clicking the rover establishes the human control target"));
+        this.phase = 91;
+        return;
+    }
+
+    if this.phase == 91 {
+        if !is_controlled(this.subject) { return; }
+        this.checks.push(t_true(owner_of(this.subject) == local_session_id(),
+            "the possessed rover is owned by the active session"));
         let edge = intent_pulse(this.subject, "action");
         this.checks.push(t_true(edge != () && edge.ok != false,
             "F is delivered through the generic semantic action edge"));
@@ -691,13 +719,14 @@ fn on_tick(me) {
         }
         if point_count(this.doc) != 3 || ribbon_count(this.doc) != 3 { return; }
         if this.started == 0 || this.stopped != 0 { return; }
-        let throttle = port(this.subject, "throttle");
-        if throttle == () || throttle.abs() < 0.01 { return; }
+        let guidance = port(this.subject, "guidance_throttle");
+        if guidance == () || guidance.abs() < 0.01 { return; }
         this.checks.push(t_true(true,
             "an active route keeps running through a live point edit"));
-        if this.possessed == 0 { return; }
+        let program_active = port(this.subject, "program_active");
+        if program_active == () || program_active < 0.5 { return; }
         this.checks.push(t_true(true,
-            "F starts the route through generic possession authority"));
+            "F starts the authored program without replacing local possession"));
         this.checks.push(t_true(true,
             "the running route program produces generic drive commands"));
         let points = direct_points(this.doc);
@@ -766,7 +795,10 @@ fn on_tick(me) {
             || ribbon_count(this.doc) != 2 { return; }
         this.checks.push(t_true(true,
             "generic DeleteEntity persists a runtime active override for an authored point"));
-        let selected = program_editor::select(ALTERNATE_ROUTE + "/Program");
+        let alternate = program_editor::list(this.doc, ALTERNATE_ROUTE);
+        if alternate == () || !alternate.ok || alternate.programs.len() == 0 { return; }
+        this.alternate_program_path = alternate.programs[0]["path"];
+        let selected = program_editor::select(this.alternate_program_path);
         if !selected.ok {
             this.checks.push(t_true(false, selected.error));
             finish(this);
@@ -805,7 +837,7 @@ fn on_tick(me) {
     }
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.checks.push(t_true(false, "route lifecycle test stopped before its verdict"));
         finish(this);

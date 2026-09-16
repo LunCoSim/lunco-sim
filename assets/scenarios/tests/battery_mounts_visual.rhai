@@ -30,12 +30,12 @@ fn visible_rover_ok(name) {
         && solar.children.contains(solar_path + "/PanelSurface")
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
     if this.t < 0.5 { return; }

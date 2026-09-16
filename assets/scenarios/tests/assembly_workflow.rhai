@@ -22,7 +22,7 @@ fn fail(me, message) {
     }
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.doc = -1;
     this.synced = false;
@@ -147,7 +147,7 @@ fn detached_relationships(me) {
         && query_ok(socket) && occupied != () && occupied.len() == 0
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

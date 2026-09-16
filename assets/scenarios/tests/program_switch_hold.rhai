@@ -12,23 +12,23 @@ fn subject(me) {
     find_path(targets[0])
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.started = true;
     let target = subject(me);
     if target >= 0 { brake(target); }
     emit("program_switch_hold_started", usd_path(me));
 }
 
-fn on_event(me, evt) { }
+fn on_event(me, evt, ctx) { }
 
-fn task(me) {
+fn task(me, ctx) {
     forever(step(|m| {
         let target = subject(m);
         if target >= 0 { brake(target); }
     }, |m| false))
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     let target = subject(me);
     if target >= 0 { brake(target); }
 }

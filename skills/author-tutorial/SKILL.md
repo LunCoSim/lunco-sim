@@ -49,7 +49,7 @@ Use the shared prelude:
 - `hint(...)`, `spotlight(anchor, caption)`, and `notify_kind(...)` for
   presentation;
 - `coach_step(steps, index)` with an `on_event` cursor for a guided tour;
-- `mission(me)` and `objective(...)` for an objective-driven exercise;
+- `mission(me, ctx)` and `objective(...)` for an objective-driven exercise;
 - `input_binding(...)`/`input_hint(...)` for the controller-owned semantic
   labels.
 
@@ -63,7 +63,7 @@ attended and automated execution need different behavior.
 Example objective:
 
 ```rhai
-fn mission(me) {
+fn mission(me, ctx) {
     [
         objective("possess", #{
             text: "Select the rover to take control",

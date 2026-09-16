@@ -3,7 +3,7 @@ const TEST_KIND = "editor";
 const PANEL = "/ReferencedPartEdit/Panel";
 const RENAMED = "/ReferencedPartEdit/RenamedPanel";
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.phase = 0; this.elapsed = 0.0; this.done = false;
     this.doc = -1; this.checks = [];
 }
@@ -16,7 +16,7 @@ fn ready(doc, generation) {
     false
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 40.0 {

@@ -7,7 +7,7 @@
 //! objectives checklist to the tutorial HUD, so this whole lesson is ~30 lines
 //! and no Rust.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts. This script
     // only teaches and verifies the rover actions in that world.
     hint("Select the rover. Click Possess in Inspector or Command Deck.");
@@ -34,7 +34,7 @@ fn first_drive_at_flag(me) {
     arrived(rover, world_pos(flag), 2.5)
 }
 
-fn mission(me) {
+fn mission(me, ctx) {
     // Scene entity paths as LOCALS (not top-level `const`): rhai closures capture
     // enclosing locals by value, but named fns can't see module consts — so the
     // `done` closure below captures these, resolving each via find() every tick.
@@ -57,7 +57,7 @@ fn mission(me) {
     ]
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     // The engine emits MISSION_COMPLETE once every objective is done.
     if evt.name == "MISSION_COMPLETE" {
         hint("You took control and reached the flag.\n\nClick Continue to start Moon Driving Basics, or choose another lesson from Tutorials.");
@@ -111,7 +111,7 @@ fn first_drive_brake(me) {
     brake(find("/FirstDrive/Rover"))
 }
 
-fn task(me) {
+fn task(me, ctx) {
     if !is_unattended() { return; }   // a human is watching: they drive
     seq([
         wait(1.0),                     // let the scene settle / rover spawn

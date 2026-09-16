@@ -140,7 +140,7 @@ fn battery_ok(spec) {
         && wheel_projection_ok(root_path, spec)
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.cases = [
@@ -151,7 +151,7 @@ fn on_start(me) {
     ];
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 
@@ -183,7 +183,7 @@ fn on_tick(me) {
     report_verdict(failures, "BATTERY MOUNTS", "BATTERY_MOUNTS");
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     if !this.done {
         this.done = true;
         report_verdict(["battery mount test stopped before composed geometry was observed"],

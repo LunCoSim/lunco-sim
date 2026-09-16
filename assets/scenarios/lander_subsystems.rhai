@@ -28,7 +28,7 @@ fn own_gnc(me) {
     find(lander_path + "/GNC")
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "lander_engine_cutoff"
         || evt.name == "lander_flight_handoff"
         || evt.name == "lander_touchdown" {

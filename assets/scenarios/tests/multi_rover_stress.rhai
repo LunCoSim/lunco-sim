@@ -7,7 +7,7 @@ const DRIVE_SECONDS = 10.0;
 const DRIVE_DISTANCE_M = 20.0;
 const DRIVE_THROTTLE = 0.20;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
     this.rovers = [];
@@ -43,7 +43,7 @@ fn on_start(me) {
     print("[multi-rover-stress] discovered " + this.rovers.len() + " rover(s)");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
 
@@ -96,7 +96,7 @@ fn on_tick(me) {
     this.phase = "done";
 }
 
-fn on_stop(me) {
+fn on_stop(me, ctx) {
     for rover in this.rovers {
         if rover != () && rover >= 0 { brake(rover); }
     }

@@ -52,6 +52,7 @@ cross-host entry point instead of copying that table into a second source.
 - Component-by-component live Editor cycle: [`interactive-component-authoring`](interactive-component-authoring/SKILL.md)
 - Vehicle or mission: [`build-vehicle`](build-vehicle/SKILL.md)
 - SysML requirements and verification: [`sysml-requirements`](sysml-requirements/SKILL.md)
+- Authored behavior or asset-backed tests: [`author-rhai-tests`](author-rhai-tests/SKILL.md)
 - Live observation or proof: [`inspect-simulation`](inspect-simulation/SKILL.md)
 - FPS, physics time, Builder stalls, or Tracy: [`performance-profiling`](performance-profiling/SKILL.md)
 - Terrain albedo, shadows, or visual quality: [`render-quality`](render-quality/SKILL.md)

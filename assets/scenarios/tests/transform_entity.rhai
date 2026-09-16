@@ -13,7 +13,7 @@ const PARENT_INVERSE_ROTATION = [0.0, -0.3420201433, 0.0, 0.9396926208];
 const MAX_POSITION_ERROR = 0.0001;
 const MAX_ROTATION_ERROR = 0.000001;
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.sent = false;
@@ -40,7 +40,7 @@ fn quat_abs_dot(a, b) {
     dot.abs()
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 

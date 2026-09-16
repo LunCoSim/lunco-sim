@@ -969,6 +969,11 @@ fn validate_sysml_reference(world: &World, reference: &str) -> ValidationReport 
 }
 
 fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> ValidationReport {
+    let Some(workspace) = world.get_resource::<lunco_workspace::WorkspaceResource>() else {
+        return ValidationReport::new(reference, "sysml").error(
+            "ValidateSysml twin:// requires the mounted WorkspaceResource; open the Twin before validating it",
+        );
+    };
     let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
         return ValidationReport::new(reference, "sysml")
             .error("ValidateSysml twin:// requires the TwinRoots asset registry");
@@ -984,21 +989,10 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
                 .error(format!("cannot resolve {reference}: {error}"));
         }
     };
-    let mode = match lunco_twin::TwinMode::open(&root) {
-        Ok(mode) => mode,
-        Err(error) => {
-            return ValidationReport::new(reference, "sysml")
-                .error(format!("cannot open Twin `{name}`: {error}"));
-        }
-    };
-    let twin = match mode {
-        lunco_twin::TwinMode::Twin(twin) | lunco_twin::TwinMode::Folder(twin) => twin,
-        lunco_twin::TwinMode::Orphan(path) => {
-            return ValidationReport::new(reference, "sysml").error(format!(
-                "Twin `{name}` resolved to a file, not a folder: {}",
-                path.display()
-            ));
-        }
+    let Some((_, twin)) = workspace.twins().find(|(_, twin)| twin.root == root) else {
+        return ValidationReport::new(reference, "sysml").error(format!(
+            "Twin `{name}` is mounted in TwinRoots but has no matching Workspace entry; reopen it through the Workspace",
+        ));
     };
     let relative_sources = match twin.discover_sysml_sources_checked() {
         Ok(sources) => sources,
@@ -1017,12 +1011,45 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
     let mut policy_source = String::new();
     let mut revision_input = Vec::new();
     for relative in relative_sources {
-        let path = root.join(&relative);
-        let text = match lunco_assets_core::read_asset_file_string(&path) {
-            Ok(text) => text,
+        let text = match roots.overlay_bytes(name, &relative) {
+            Ok(Some(bytes)) => match String::from_utf8((*bytes).clone()) {
+                Ok(text) => text,
+                Err(error) => {
+                    return ValidationReport::new(reference, "sysml").error(format!(
+                        "Twin `{name}` SysML overlay `{}` is not UTF-8: {error}",
+                        relative.display()
+                    ));
+                }
+            },
+            Ok(None) => {
+                let path = match roots.resolve_file(name, &relative) {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        return ValidationReport::new(reference, "sysml").error(format!(
+                            "Twin `{name}` SysML source `{}` cannot be resolved by TwinRoots",
+                            relative.display()
+                        ));
+                    }
+                    Err(error) => {
+                        return ValidationReport::new(reference, "sysml").error(format!(
+                            "cannot resolve Twin `{name}` SysML source `{}`: {error}",
+                            relative.display()
+                        ));
+                    }
+                };
+                match lunco_assets_core::read_asset_file_string(&path) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        return ValidationReport::new(reference, "sysml")
+                            .error(format!("cannot read {}: {error}", path.display()));
+                    }
+                }
+            }
             Err(error) => {
-                return ValidationReport::new(reference, "sysml")
-                    .error(format!("cannot read {}: {error}", path.display()));
+                return ValidationReport::new(reference, "sysml").error(format!(
+                    "cannot read Twin `{name}` SysML source `{}`: {error}",
+                    relative.display()
+                ));
             }
         };
         let logical = lunco_assets_core::twin_uri(name, &relative);
@@ -1067,6 +1094,8 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
             "component_registry_errors".to_owned(),
             json!(component_errors_for_info),
         );
+        info.insert("source_origin".to_owned(), json!("workspace_twin_index"));
+        info.insert("source_resolver".to_owned(), json!("TwinRoots"));
     }
     if !binding_errors.is_empty() {
         report.errors.extend(binding_errors);

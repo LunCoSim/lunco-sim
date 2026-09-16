@@ -6,7 +6,7 @@
 //! itself: duplicating the autopilot here would allow the test to pass while
 //! the built-in lesson was broken.
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.possess_count = 0;
     this.port_writes = 0;
     this.verdict_done = false;
@@ -23,7 +23,7 @@ fn verdict(pass, reason) {
     }
 }
 
-fn on_event(me, evt) {
+fn on_event(me, evt, ctx) {
     if evt.name == "cmd:PossessVessel" {
         this.possess_count += 1;
     } else if evt.name == "cmd:SetPorts" && this.possess_count > 0 {
@@ -61,7 +61,7 @@ fn on_event(me, evt) {
 
 // A real verdict is required even when the lesson stalls. This is test-only
 // liveness handling; the lesson itself remains event/state driven.
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.verdict_done { return; }
     this.elapsed += dt();
     if this.elapsed > 60.0 {

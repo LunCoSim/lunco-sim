@@ -294,7 +294,7 @@ fn scene_contract() {
         && wiring_contract() && composition_contract() && asset_metadata_ok
 }
 
-fn on_start(me) {
+fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
     this.osc = find("/SandboxScene/Oscillator");
@@ -312,7 +312,7 @@ fn fail(message) {
     fail_fast(message, "SANDBOX SMOKE", "SANDBOX_SMOKE");
 }
 
-fn on_tick(me) {
+fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
 
