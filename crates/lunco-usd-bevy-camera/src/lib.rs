@@ -30,6 +30,9 @@ pub struct UsdCameraPlugin;
 
 impl Plugin for UsdCameraPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
@@ -37,7 +40,6 @@ impl Plugin for UsdCameraPlugin {
 
         app.init_resource::<lunco_core::SceneViewport>()
             .init_resource::<lunco_core::SceneMountState>()
-            .init_resource::<lunco_core::TheLocalAvatar>()
             .init_resource::<camera_switch::ViewportCameraSelection>()
             .init_resource::<camera_switch::CameraSelectionStatus>()
             .init_resource::<camera_switch::CameraContractStatus>()

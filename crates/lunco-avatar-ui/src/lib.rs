@@ -6,6 +6,7 @@ use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt};
 
 use lunco_avatar_core::notifications::ScreenNotifications;
+use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_avatar_policy::{
     avatar_soil_collision_policy, AvatarSoilCollisionPolicy, AVATAR_ALLOW_THROUGH_SOIL_SETTING,
 };
@@ -13,7 +14,7 @@ use lunco_camera_core::CameraFollow;
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, LocalGravityField, SurfacePoseQuery};
 use lunco_control_core::{ControlBinding, UserIntent};
-use lunco_core::{Avatar, GlobalEntityId, LocalAvatar};
+use lunco_core::GlobalEntityId;
 use lunco_core_session::{SessionProfiles, SessionRegistry};
 use lunco_cosim_core::ControlLink;
 use lunco_input_core::{resolved_input_label, InputBindingsSettings};
@@ -461,6 +462,9 @@ pub struct AvatarUiPlugin;
 
 impl Plugin for AvatarUiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         app.init_resource::<AvatarStatusView>()
             .init_resource::<RoverNameTagSettings>()
             .register_type::<RoverNameTagSettings>();

@@ -8,6 +8,7 @@ description = "Render-free USD camera, path, selection, and presentation contrac
 [dependencies]
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_window"] }
 big_space = { workspace = true }
+lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-spatial = { path = "../lunco-spatial" }

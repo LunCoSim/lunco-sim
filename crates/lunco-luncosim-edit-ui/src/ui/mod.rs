@@ -7,8 +7,9 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use lunco_avatar_core::roles::{Avatar, TheLocalAvatar};
 use lunco_control_core::ControlBinding;
-use lunco_core::{Avatar, SceneMountState, TheLocalAvatar};
+use lunco_core::SceneMountState;
 use lunco_cosim_core::ControlLink;
 use lunco_luncosim_edit_gizmo_ui as edit_gizmo;
 use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
@@ -272,7 +273,7 @@ fn sync_editor_session_selection(
 fn refresh_view_help_controls(
     bindings: Res<lunco_input_core::InputBindingsSettings>,
     local_avatar: Res<TheLocalAvatar>,
-    q_avatar: Query<&ControlLink, (With<Avatar>, With<lunco_core::LocalAvatar>)>,
+    q_avatar: Query<&ControlLink, (With<Avatar>, With<lunco_avatar_core::roles::LocalAvatar>)>,
     q_names: Query<Ref<Name>>,
     q_callsigns: Query<&lunco_core::markers::Callsign>,
     q_catalog_ids: Query<&lunco_core::CatalogEntryId>,
@@ -378,6 +379,9 @@ pub struct SceneEditUiPlugin;
 
 impl Plugin for SceneEditUiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         // The transform-gizmo transaction adapter is composed as a focused
         // sibling package. The remaining panel and scene interaction adapters
         // are UI-owned because they depend on the rendered viewport and its

@@ -6,7 +6,8 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_core::{GlobalEntityId, TheLocalAvatar};
+use lunco_avatar_core::roles::TheLocalAvatar;
+use lunco_core::GlobalEntityId;
 use lunco_cosim_core::ControlLink;
 use lunco_scene_selection::SelectedEntities;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};

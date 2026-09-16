@@ -168,6 +168,9 @@ fn tag_existing_world_reference_frame(
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         // EmbeddedAssetsPlugin embeds mission data on wasm32, no-op on desktop.
         app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
 

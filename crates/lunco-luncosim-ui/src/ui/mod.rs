@@ -142,6 +142,9 @@ fn sync_runtime_ui_capture_state(
 
 impl Plugin for LunCoSimUiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         app.insert_resource(lunco_workbench::BuildIdentity::new(
             self.config.product_version,
             self.config.git_sha,
@@ -437,7 +440,13 @@ fn in_view_perspective(layout: Option<Res<WorkbenchSnapshot>>) -> bool {
 
 fn on_runtime_ui_action(
     trigger: On<runtime_ui::RuntimeUiAction>,
-    q_avatar: Query<Entity, (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>)>,
+    q_avatar: Query<
+        Entity,
+        (
+            With<lunco_avatar_core::roles::Avatar>,
+            With<lunco_avatar_core::roles::LocalAvatar>,
+        ),
+    >,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
     orbital_pin: Option<Res<lunco_celestial_spatial::OrbitalViewPin>>,
     manifests: Res<Assets<runtime_ui::RuntimeUiManifest>>,

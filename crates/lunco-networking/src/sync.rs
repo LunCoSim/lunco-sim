@@ -39,7 +39,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::session::{IncomingSnapshots, SnapshotSample};
 use leafwing_input_manager::prelude::ActionState;
-use lunco_core::{GlobalEntityId, LocalAvatar, Mutation, OpId, SessionId, SimTick, SyncChannel};
+use lunco_avatar_core::roles::{AvatarCorePlugin, LocalAvatar, TheLocalAvatar};
+use lunco_core::{GlobalEntityId, Mutation, OpId, SessionId, SimTick, SyncChannel};
 use lunco_core_session::{
     authorize, AppliedInputSeq, LocalSession, NetReplicate, NetSpawn, NetworkRole,
     PendingReplicatedSpawns, ReplicatedSpawn, SessionProfiles, SessionRegistry, SyncApplyGuard,
@@ -2473,7 +2474,7 @@ pub fn send_student_status_updates(
 /// conventions themselves.
 #[derive(SystemParam)]
 pub struct AvatarPoseContext<'w, 's> {
-    local_avatar: Res<'w, lunco_core::TheLocalAvatar>,
+    local_avatar: Res<'w, lunco_avatar_core::roles::TheLocalAvatar>,
     frames: Query<'w, 's, &'static ReferenceFrame>,
     parents: Query<'w, 's, &'static ChildOf>,
     grids: Query<'w, 's, &'static Grid>,
@@ -2704,7 +2705,7 @@ mod framed_avatar_pose_tests {
     fn capture_exports_f64_pose_in_inherited_semantic_frame() {
         let mut app = App::new();
         app.init_resource::<lunco_celestial_spatial::ReferenceFrameIndex>()
-            .init_resource::<lunco_core::TheLocalAvatar>()
+            .init_resource::<lunco_avatar_core::roles::TheLocalAvatar>()
             .init_resource::<Captured>()
             .add_systems(First, lunco_celestial_spatial::update_reference_frame_index)
             .add_systems(Update, capture_once);
@@ -2719,7 +2720,7 @@ mod framed_avatar_pose_tests {
             ))
             .id();
         app.world_mut()
-            .resource_mut::<lunco_core::TheLocalAvatar>()
+            .resource_mut::<lunco_avatar_core::roles::TheLocalAvatar>()
             .0 = Some(avatar);
 
         app.update();
@@ -3280,6 +3281,9 @@ lunco_core::register_commands!(
 
 impl Plugin for SyncPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<AvatarCorePlugin>() {
+            app.add_plugins(AvatarCorePlugin);
+        }
         lunco_settings::ensure_download_settings(app);
         // CONVENTION: SyncPlugin initializes ONLY wire-only state (envelope
         // queues, dedup, transport/replication config). Always-on substrate

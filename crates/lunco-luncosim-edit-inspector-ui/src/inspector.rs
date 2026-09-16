@@ -13,6 +13,8 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_avatar_core::roles::{Avatar, LocalAvatar};
+use lunco_control_core::{EguiFocus, IntentState, UserIntent};
 use lunco_core::OpId;
 use lunco_cosim::{JOINT_ANGLE_PORT, joint_angle_holder};
 use lunco_doc::Document;
@@ -1244,7 +1246,7 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
 /// button. The shortcut comes from `UserIntent::DeleteSelection`, so it remains
 /// rebindable and never fires while an egui field or cursor tool owns input.
 pub fn delete_selected_on_intent(
-    delete: lunco_control_core::DeleteSelectionIntent,
+    delete: DeleteSelectionIntent,
     cursor_mode: lunco_core::CursorModeActive,
     selected: Res<SelectedEntities>,
     mut commands: Commands,
@@ -1257,6 +1259,28 @@ pub fn delete_selected_on_intent(
             target,
             intent: lunco_core::EditIntent::Persistent,
         });
+    }
+}
+
+/// Rebindable deletion input for the scene editor's selection command.
+///
+/// This editor policy belongs beside the selection consumer. The generic
+/// control package owns the semantic intent and focus gate, while the avatar
+/// package owns the role markers used to find the local input source.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct DeleteSelectionIntent<'w, 's> {
+    avatars: Query<'w, 's, &'static IntentState, (With<Avatar>, With<LocalAvatar>)>,
+    egui_focus: Res<'w, EguiFocus>,
+}
+
+impl DeleteSelectionIntent<'_, '_> {
+    /// True on the frame the user requested deletion.
+    pub fn just_pressed(&self) -> bool {
+        !self.egui_focus.wants_keyboard
+            && self
+                .avatars
+                .iter()
+                .any(|intent| intent.just_pressed(&UserIntent::DeleteSelection))
     }
 }
 

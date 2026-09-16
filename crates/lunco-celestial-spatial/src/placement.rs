@@ -1261,7 +1261,7 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                lunco_core::Avatar,
+                lunco_avatar_core::roles::Avatar,
                 CellCoord::ZERO,
                 Transform::from_xyz(10.0, 20.0, -30.0),
                 GlobalTransform::default(),

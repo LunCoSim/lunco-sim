@@ -7,7 +7,7 @@
 use avian3d::schedule::PhysicsTime;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
-use lunco_core::{Avatar, LocalAvatar};
+use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_cosim_core::{
     BindingEpochDirty, BoundConnection, ConnectionBinding, SimComponent, SimConnection, SimStatus,
     UsdSourcedCosim,
@@ -27,6 +27,9 @@ pub struct UsdSimCosimApiPlugin;
 
 impl Plugin for UsdSimCosimApiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         app.add_systems(
             Startup,
             |registry: Option<ResMut<lunco_api::ApiQueryRegistry>>| {

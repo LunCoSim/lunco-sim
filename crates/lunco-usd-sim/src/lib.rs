@@ -343,6 +343,9 @@ mod authored_sun_tests {
 
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         app.init_resource::<lunco_core::RuntimeFaults>();
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
         crate::shader_ports::build(app);
@@ -1377,8 +1380,8 @@ fn process_usd_sim_prim_read(
         // specialized avatar owner on the next update.
         commands.entity(entity).try_insert((
             lunco_camera_core::CameraPoseMode::Interactive,
-            lunco_core::Avatar,
-            lunco_core::LocalAvatar,
+            lunco_avatar_core::roles::Avatar,
+            lunco_avatar_core::roles::LocalAvatar,
             intent,
         ));
         lunco_spatial::attach::migrate_to_grid(

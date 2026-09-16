@@ -6,10 +6,11 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workbench_widgets::{icon_text_button, UiIcon};
 
 use lunco_avatar_core::commands::{FocusTarget, PossessVessel, ReleaseVessel};
+use lunco_avatar_core::roles::Avatar;
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_control_core::{ControlBinding, UserIntent};
-use lunco_core::{Avatar, Spacecraft};
+use lunco_core::Spacecraft;
 use lunco_input_core::{resolved_input_label, InputBindingsSettings};
 use lunco_time::{
     realtime_rate_label, SetTimeTransport, TimeTransport, TransportMode, WorldTime,
@@ -441,7 +442,7 @@ struct RoverRow {
 /// `is_empty`/scalar checks; the scans only run on a relevant change.
 pub fn populate_mission_control_view(
     mut view: ResMut<MissionControlView>,
-    local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
+    local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
     bodies: Query<(Entity, &Name, &CelestialBody)>,
     spacecraft: Query<(Entity, &Name), With<Spacecraft>>,
     // The local avatar carries a `ControlBinding` too (it's a controllable), so

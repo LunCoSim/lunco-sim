@@ -9,7 +9,8 @@
 
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
-use lunco_core::{Avatar, GlobalEntityId, LocalAvatar};
+use lunco_avatar_core::roles::{Avatar, LocalAvatar};
+use lunco_core::GlobalEntityId;
 use std::collections::VecDeque;
 
 // ── User Intent (Input Abstraction) ───────────────────────────────────────────
@@ -519,28 +520,6 @@ impl CancelIntent<'_, '_> {
                 .global_surface
                 .iter()
                 .any(|i| i.just_pressed(&UserIntent::Cancel))
-    }
-}
-
-/// "Delete the current selection" — the rebindable
-/// [`UserIntent::DeleteSelection`] editor intent.
-///
-/// Like [`CancelIntent`], it stands down while egui owns keyboard focus so a
-/// focused text editor receives Delete normally.
-#[derive(bevy::ecs::system::SystemParam)]
-pub struct DeleteSelectionIntent<'w, 's> {
-    avatars: Query<'w, 's, &'static IntentState, (With<Avatar>, With<LocalAvatar>)>,
-    egui_focus: Res<'w, EguiFocus>,
-}
-
-impl DeleteSelectionIntent<'_, '_> {
-    /// True on the frame the user requested deletion.
-    pub fn just_pressed(&self) -> bool {
-        !self.egui_focus.wants_keyboard
-            && self
-                .avatars
-                .iter()
-                .any(|intent| intent.just_pressed(&UserIntent::DeleteSelection))
     }
 }
 

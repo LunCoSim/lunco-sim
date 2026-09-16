@@ -335,7 +335,7 @@ pub fn update_sun_light_system(
 pub fn celestial_visuals_system(
     q_camera: Query<
         (Entity, &CellCoord, &Transform),
-        (With<Camera>, With<lunco_core::LocalAvatar>),
+        (With<Camera>, With<lunco_avatar_core::roles::LocalAvatar>),
     >,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody)>,
     mut q_tiles: Query<

@@ -75,6 +75,9 @@ pub struct LuncoUiPlugin;
 
 impl Plugin for LuncoUiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         app.init_resource::<UiSelection>();
         // WP-8 view-model for Mission Control — collapses the panel's
         // per-frame world scans into one change-gated producer.

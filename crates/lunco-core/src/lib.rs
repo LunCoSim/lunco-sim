@@ -215,119 +215,6 @@ impl std::str::FromStr for GlobalEntityId {
     }
 }
 
-/// Marker component for an embodiment in the simulation. Ownership and input
-/// eligibility are separate qualifiers: [`LocalAvatar`] marks this process's
-/// interactive embodiment and [`RemoteAvatar`] marks another session's
-/// replicated embodiment.
-#[derive(Component)]
-pub struct Avatar;
-
-/// **The one local interactive embodiment, when a client has one.**
-///
-/// At most one entity in a process may carry this marker, and that invariant is
-/// enforced here. A headless/API or mission-control process can have no local
-/// avatar at all. Other sessions' embodiments belong to [`RemoteAvatar`] and
-/// never acquire this marker.
-///
-/// # Why the invariant is a component hook
-///
-/// It used to be a convention, repaired after the fact by whichever spawner
-/// noticed: `lunco-usd-sim` stripped the role off prior holders when a scene
-/// authored a new `Avatar` prim. That covered only one of the ways an avatar
-/// comes into being — a USD scene's prim, an explicit host-created observation
-/// camera, or a scene reload that re-composes the prim — so the others produced
-/// two live avatars. Two `Avatar` + `Camera3d` entities render ambiguously (the viewport
-/// visibly flickers between them) and split the input path: a click binds the
-/// chase camera on one while the window renders the other, keyboard drives every
-/// avatar's linked vessel at once, and release fires twice.
-///
-/// The hook runs on EVERY insert, whatever the path, so a new spawner cannot
-/// forget it — there is no code to remember. The newest claimant wins (a scene
-/// that authors an avatar is stating what the local operator should be looking
-/// through),
-/// and the previous holder loses both markers, so it stops being the local
-/// interactive embodiment rather than lingering as a second one.
-#[derive(Component, Clone, Copy, Debug, Default)]
-#[component(on_insert = local_avatar_claimed, on_remove = local_avatar_released)]
-pub struct LocalAvatar;
-
-/// Another session's replicated avatar, keyed by the session that owns it. Never
-/// this process's local embodiment — inserting it drops [`LocalAvatar`], so the two can
-/// never describe one entity.
-///
-/// Spawned only by the networking layer, from replicated state. Local input
-/// never reaches it: every input path filters on [`LocalAvatar`], which a remote
-/// avatar by construction does not have.
-#[derive(Component, Clone, Copy, Debug)]
-#[component(on_insert = remote_avatar_claimed)]
-pub struct RemoteAvatar {
-    /// The session this avatar belongs to. Not this process's.
-    pub session: u64,
-}
-
-/// The one entity currently holding [`LocalAvatar`], or `None` when no local
-/// interactive embodiment exists.
-///
-/// This is a derived lookup index, not a second ownership model. The component
-/// hook is authoritative; it maintains this slot so consumers can resolve the
-/// local entity without scanning or selecting by ECS entity order. Read it (or
-/// query `Single<_, With<LocalAvatar>>`) — never write it.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TheLocalAvatar(pub Option<Entity>);
-
-/// `LocalAvatar` was inserted: this entity becomes THE avatar, and any previous
-/// holder stops being one.
-fn local_avatar_claimed(
-    mut world: bevy::ecs::world::DeferredWorld,
-    ctx: bevy::ecs::lifecycle::HookContext,
-) {
-    let entity = ctx.entity;
-    // A remote avatar cannot also be the local one. Whichever order they arrive
-    // in, the entity ends up with exactly one role — see `remote_avatar_claimed`.
-    if world.get::<RemoteAvatar>(entity).is_some() {
-        world.commands().entity(entity).remove::<LocalAvatar>();
-        return;
-    }
-    let prior = world
-        .get_resource::<TheLocalAvatar>()
-        .and_then(|slot| slot.0)
-        .filter(|prior| *prior != entity);
-    if let Some(prior) = prior {
-        // `try_remove`-equivalent: the prior holder may already be despawned by
-        // the same flush that spawned this one (the usual scene-reload shape).
-        if let Ok(mut prior_entity) = world.commands().get_entity(prior) {
-            prior_entity.remove::<(LocalAvatar, Avatar)>();
-        }
-    }
-    if let Some(mut slot) = world.get_resource_mut::<TheLocalAvatar>() {
-        slot.0 = Some(entity);
-    }
-}
-
-/// `LocalAvatar` was removed or the entity despawned: clear the slot if it named
-/// this entity, so nothing reads a stale avatar.
-fn local_avatar_released(
-    mut world: bevy::ecs::world::DeferredWorld,
-    ctx: bevy::ecs::lifecycle::HookContext,
-) {
-    let entity = ctx.entity;
-    if let Some(mut slot) = world.get_resource_mut::<TheLocalAvatar>() {
-        if slot.0 == Some(entity) {
-            slot.0 = None;
-        }
-    }
-}
-
-/// A remote avatar can never be the local one.
-fn remote_avatar_claimed(
-    mut world: bevy::ecs::world::DeferredWorld,
-    ctx: bevy::ecs::lifecycle::HookContext,
-) {
-    if world.get::<LocalAvatar>(ctx.entity).is_some() {
-        world.commands().entity(ctx.entity).remove::<LocalAvatar>();
-    }
-}
-
 /// The main window's 3D **viewport**: which camera it renders from, whether
 /// it's shown, and the sub-rect it occupies. A single reconciler
 /// (`lunco_usd_bevy::reconcile_scene_viewport`) turns this into Bevy's
@@ -870,10 +757,6 @@ pub enum NetcodeSet {
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(LunCoLogPlugin);
-        // The single-avatar slot the `LocalAvatar` hooks maintain. Init'd here
-        // because the invariant is the engine's, not any app's — an app that
-        // spawns an avatar must not have to remember to install its bookkeeping.
-        app.init_resource::<TheLocalAvatar>();
         // Scene projection has an ownership fence independent of the USD
         // plugins.  Load/restart/clear invalidate it synchronously, while the
         // deferred root spawner registers the replacement after creation.

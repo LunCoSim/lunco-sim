@@ -35,6 +35,7 @@ use lunco_avatar_core::commands::{
 };
 use lunco_avatar_core::lifecycle::AvatarSceneHandoffSet;
 use lunco_avatar_core::notifications::{ScreenNotifications, ShowNotification, Toast};
+use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_avatar_policy::{
     avatar_soil_collision_policy, AvatarCollisionSettings, AvatarSoilCollisionPolicy,
 };
@@ -44,7 +45,7 @@ use lunco_camera_core::{
     OrbitViewReturn, RadialArrival, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
-use lunco_core::{on_command, register_commands, Avatar, CelestialBody, LocalAvatar, Spacecraft};
+use lunco_core::{on_command, register_commands, CelestialBody, Spacecraft};
 use lunco_core_session::commands::UpdateProfile;
 use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
 use lunco_cosim_core::ControlLink;
@@ -704,6 +705,9 @@ fn enforce_ownership(
 
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         register_camera_mode_hooks(app);
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
@@ -4055,7 +4059,7 @@ fn get_grid_for_entity(
 
 fn resolve_requested_or_local_avatar(
     requested: Option<Entity>,
-    local_avatar: Option<&lunco_core::TheLocalAvatar>,
+    local_avatar: Option<&lunco_avatar_core::roles::TheLocalAvatar>,
 ) -> Result<Entity, String> {
     match requested {
         Some(entity) => Ok(entity),
@@ -4157,7 +4161,7 @@ fn on_possess_command(
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mut possession_authority: PossessionAuthority,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
-    local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
+    local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
@@ -4509,7 +4513,7 @@ fn on_follow_command(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_vessel: Query<Entity, Controllable>,
     q_vessel_gravity: Query<&GravityBody>,
-    local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
+    local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
@@ -4668,7 +4672,7 @@ fn on_focus_command(
     q_body_entities: Query<(Entity, &CelestialBody)>,
     q_sc: Query<&Spacecraft>,
     q_children: Query<&Children>,
-    local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
+    local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
@@ -7352,7 +7356,7 @@ mod tests {
     #[test]
     fn demoted_avatar_camera_stops_being_a_viewport_candidate() {
         let mut app = App::new();
-        app.init_resource::<lunco_core::TheLocalAvatar>();
+        app.init_resource::<lunco_avatar_core::roles::TheLocalAvatar>();
         app.add_observer(demote_former_avatar);
 
         let old = app
@@ -7363,7 +7367,7 @@ mod tests {
                     None,
                     lunco_render::RenderingQuality::Balanced.profile(),
                 ),
-                lunco_core::Avatar,
+                lunco_avatar_core::roles::Avatar,
                 LocalAvatar,
             ))
             .id();
@@ -7382,14 +7386,16 @@ mod tests {
                     None,
                     lunco_render::RenderingQuality::Balanced.profile(),
                 ),
-                lunco_core::Avatar,
+                lunco_avatar_core::roles::Avatar,
                 LocalAvatar,
             ))
             .id();
         app.update();
 
         assert_eq!(
-            app.world().resource::<lunco_core::TheLocalAvatar>().0,
+            app.world()
+                .resource::<lunco_avatar_core::roles::TheLocalAvatar>()
+                .0,
             Some(new),
             "the incoming camera holds the avatar role"
         );

@@ -14,14 +14,13 @@ use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Ro
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
+use lunco_avatar_core::roles::{Avatar, LocalAvatar, TheLocalAvatar};
 use lunco_celestial_spatial::link::LinkState;
 use lunco_celestial_spatial::OrbitalViewPin;
 use lunco_core::exposure::{
     EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
 };
-use lunco_core::{
-    Avatar, CelestialBody, GlobalEntityId, LocalAvatar, SceneMountState, TheLocalAvatar,
-};
+use lunco_core::{CelestialBody, GlobalEntityId, SceneMountState};
 use lunco_cosim_core::ControlLink;
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_hooks::HookValue;
@@ -46,6 +45,9 @@ pub struct RuntimeExposuresPlugin;
 
 impl Plugin for RuntimeExposuresPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         app.add_systems(Startup, publish_initial_camera_exposure)
             .add_observer(on_camera_selection_status_changed)
             .add_systems(lunco_core::SceneTeardown, clear_scene_exposures)

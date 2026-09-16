@@ -174,7 +174,7 @@ pub fn populate_celestial_bodies_view(
         ),
     >,
     mut removed: RemovedComponents<CelestialBody>,
-    avatar: Query<Entity, With<lunco_core::LocalAvatar>>,
+    avatar: Query<Entity, With<lunco_avatar_core::roles::LocalAvatar>>,
 ) {
     let avatar_ent = avatar.single().ok();
     let dirty = !changed.is_empty() || removed.read().next().is_some() || view.avatar != avatar_ent;

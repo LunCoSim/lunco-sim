@@ -17,10 +17,10 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
 
+use lunco_avatar_core::roles::Avatar;
 use lunco_camera_core::{FreeFlightCamera, OrbitCamera, SurfaceCamera, SurfaceRelativeMode};
 use lunco_celestial::{CelestialBody, ReferenceFrame};
 use lunco_celestial_spatial::PointMassGravity;
-use lunco_core::Avatar;
 use lunco_environment::GravityProvider;
 
 const MOON_RADIUS: f64 = 1737.0e3;

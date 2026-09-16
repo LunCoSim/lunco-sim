@@ -30,7 +30,8 @@
 use bevy::camera::{primitives::Aabb, RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, Command, LocalAvatar, SceneViewport, TheLocalAvatar};
+use lunco_avatar_core::roles::{LocalAvatar, TheLocalAvatar};
+use lunco_core::{on_command, Command, SceneViewport};
 use lunco_render::{GraphicsCameraDefaults, LightGraphicsDefaults, SceneCamera};
 use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_bevy_core::UsdStageAsset;

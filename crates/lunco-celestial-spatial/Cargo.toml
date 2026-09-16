@@ -60,6 +60,7 @@ lunco-theme = { path = "../lunco-theme", optional = true }
 big_space = { workspace = true }
 # Headless astronomy and semantic frame types. This is intentionally a
 # one-way dependency: `lunco-celestial` does not depend on this adapter.
+lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-celestial = { path = "../lunco-celestial" }
 # Heavy VSOP2013/ELP/EOP integration lives in the sibling crate
 # `lunco-celestial-ephemeris`. This crate only defines the

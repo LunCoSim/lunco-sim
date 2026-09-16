@@ -9,10 +9,11 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_avatar_core::roles::{Avatar, LocalAvatar, TheLocalAvatar};
 use lunco_camera_core::{OrbitCamera, SpringArmCamera};
 use lunco_core::{
-    entity_display_name, Avatar, CatalogEntryId, GlobalEntityId, LocalAvatar, RuntimeDiagnostics,
-    RuntimeFaults, SceneMountState, SceneViewport, TheLocalAvatar,
+    entity_display_name, CatalogEntryId, GlobalEntityId, RuntimeDiagnostics, RuntimeFaults,
+    SceneMountState, SceneViewport,
 };
 use lunco_cosim_core::ControlLink;
 use lunco_render::SceneCamera;

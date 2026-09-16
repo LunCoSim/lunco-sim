@@ -134,20 +134,23 @@ pub fn apply_pending_focus(
             Option<&mut lunco_camera_core::FreeFlightCamera>,
             Has<lunco_camera_core::OrbitViewReturn>,
         ),
-        (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
+        (
+            With<lunco_avatar_core::roles::Avatar>,
+            With<lunco_avatar_core::roles::LocalAvatar>,
+        ),
     >,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<
         (Option<&big_space::prelude::CellCoord>, &Transform),
-        Without<lunco_core::Avatar>,
+        Without<lunco_avatar_core::roles::Avatar>,
     >,
     q_celestial: Query<(), With<lunco_celestial::CelestialBody>>,
     q_celestial_decl: Query<(), With<lunco_celestial_spatial::CelestialBodyDecl>>,
     q_children: Query<&Children>,
     mut commands: Commands,
     mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
-    local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
+    local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let Some(pending) = pending else { return };
@@ -328,8 +331,8 @@ pub fn on_set_camera_look_at(
             Option<&mut big_space::prelude::CellCoord>,
             &ChildOf,
             Option<&mut CameraPoseMode>,
-            Has<lunco_core::Avatar>,
-            Has<lunco_core::LocalAvatar>,
+            Has<lunco_avatar_core::roles::Avatar>,
+            Has<lunco_avatar_core::roles::LocalAvatar>,
         ),
         With<SceneCamera>,
     >,
@@ -458,7 +461,7 @@ mod tests {
             .spawn((Grid::new(2_000.0, 0.0), GlobalTransform::default()))
             .id();
         app.insert_resource(lunco_spatial::ActivePhysicsFrame(active_physics_grid));
-        app.insert_resource(lunco_core::TheLocalAvatar::default());
+        app.insert_resource(lunco_avatar_core::roles::TheLocalAvatar::default());
 
         let avatar = app
             .world_mut()
@@ -534,8 +537,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                lunco_core::Avatar,
-                lunco_core::LocalAvatar,
+                lunco_avatar_core::roles::Avatar,
+                lunco_avatar_core::roles::LocalAvatar,
                 CellCoord::new(1, 0, 0),
                 Transform::from_xyz(4.0, 6.0, 8.0),
                 GlobalTransform::from(Transform::from_xyz(7.0e10, -8.0e10, 9.0e10)),
@@ -552,7 +555,7 @@ mod tests {
             target,
             distance: 6.0,
         });
-        app.insert_resource(lunco_core::TheLocalAvatar(Some(avatar)));
+        app.insert_resource(lunco_avatar_core::roles::TheLocalAvatar(Some(avatar)));
         app.add_systems(bevy::app::First, apply_pending_focus);
         app.update();
 
@@ -588,6 +591,9 @@ pub struct SceneCameraCommandPlugin;
 impl Plugin for SceneCameraCommandPlugin {
     fn build(&self, app: &mut App) {
         register_all_commands(app);
+        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
+            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        }
         app.add_systems(bevy::app::First, apply_pending_focus);
     }
 }

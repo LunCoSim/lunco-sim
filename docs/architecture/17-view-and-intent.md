@@ -245,7 +245,8 @@ that ownership conflict instead of creating a second writer.
 
 ### 6.7 Avatar identity and ownership
 
-`Avatar` is an embodiment component, not a user, session, or control authority.
+`lunco-avatar-core::roles` owns the avatar embodiment markers and derived local
+lookup. `Avatar` is an embodiment component, not a user, session, or control authority.
 It identifies an entity that can carry a presentation rig and a controller link.
 The local/remote distinction is an ownership qualifier on that same embodiment:
 

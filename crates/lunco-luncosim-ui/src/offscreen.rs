@@ -435,7 +435,7 @@ fn maintain_offscreen_render_camera(
         ),
         (
             With<lunco_render::SceneCamera>,
-            With<lunco_core::LocalAvatar>,
+            With<lunco_avatar_core::roles::LocalAvatar>,
             Without<OffscreenRenderCamera>,
         ),
     >,
@@ -646,7 +646,7 @@ fn activate_offscreen_camera(
             bevy::ecs::query::Has<lunco_render::SceneCamera>,
             Option<&lunco_usd_bevy_scene::UsdPrimPath>,
             bevy::ecs::query::Has<lunco_usd_bevy_camera::camera_path::CameraPathDriven>,
-            bevy::ecs::query::Has<lunco_core::LocalAvatar>,
+            bevy::ecs::query::Has<lunco_avatar_core::roles::LocalAvatar>,
             bevy::ecs::query::Has<bevy::camera::ShadowLodOrigin>,
         ),
         Without<OffscreenRenderCamera>,

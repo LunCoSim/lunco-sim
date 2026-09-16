@@ -9,6 +9,7 @@ description = "API query providers for the USD co-simulation runtime"
 avian3d = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 lunco-api = { path = "../lunco-api" }
+lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
