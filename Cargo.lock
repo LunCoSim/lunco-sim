@@ -7198,6 +7198,7 @@ dependencies = [
  "bevy",
  "big_space",
  "leafwing-input-manager",
+ "lunco-avatar-camera-core",
  "lunco-avatar-core",
  "lunco-avatar-policy",
  "lunco-camera-core",
@@ -7210,6 +7211,7 @@ dependencies = [
  "lunco-cosim-core",
  "lunco-environment",
  "lunco-input-core",
+ "lunco-interaction-core",
  "lunco-physics",
  "lunco-port-core",
  "lunco-render",
@@ -7219,6 +7221,16 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-workspace",
  "serde",
+]
+
+[[package]]
+name = "lunco-avatar-camera-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "big_space",
+ "lunco-camera-core",
+ "lunco-environment",
 ]
 
 [[package]]
@@ -7263,12 +7275,32 @@ name = "lunco-behavior"
 version = "0.1.0"
 
 [[package]]
-name = "lunco-camera-core"
+name = "lunco-camera-celestial"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "big_space",
+ "lunco-camera-core",
+ "lunco-celestial-spatial",
  "lunco-environment",
+ "lunco-time",
+]
+
+[[package]]
+name = "lunco-camera-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
+name = "lunco-camera-runtime"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-camera-core",
+ "lunco-interaction-core",
+ "lunco-time",
 ]
 
 [[package]]
@@ -7560,6 +7592,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-interaction-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
 name = "lunco-lint"
 version = "0.1.0-dev"
 dependencies = [
@@ -7625,6 +7664,8 @@ dependencies = [
  "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-avatar",
+ "lunco-camera-celestial",
+ "lunco-camera-runtime",
  "lunco-celestial-ephemeris",
  "lunco-celestial-spatial",
  "lunco-controller",
@@ -7686,6 +7727,7 @@ dependencies = [
  "big_space",
  "lunco-control-core",
  "lunco-core",
+ "lunco-interaction-core",
  "lunco-physics",
  "lunco-render",
  "lunco-scene-camera",
@@ -7710,6 +7752,7 @@ dependencies = [
  "lunco-core",
  "lunco-cosim-core",
  "lunco-doc",
+ "lunco-interaction-core",
  "lunco-physics",
  "lunco-render",
  "lunco-scene-commands",
@@ -7788,6 +7831,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-input-core",
+ "lunco-interaction-core",
  "lunco-luncosim-edit-core",
  "lunco-luncosim-edit-gizmo-ui",
  "lunco-mobility",
@@ -8416,6 +8460,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-api",
+ "lunco-avatar-camera-core",
  "lunco-avatar-core",
  "lunco-camera-core",
  "lunco-celestial",

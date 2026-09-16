@@ -1,9 +1,9 @@
 [package]
-name = "lunco-camera-core"
+name = "lunco-interaction-core"
 version = "0.1.0-dev"
 edition = "2024"
 license.workspace = true
-description = "Backend-neutral camera rig contracts for LunCoSim"
+description = "Shared cursor-interaction contracts for LunCoSim runtimes"
 
 [dependencies]
 bevy = { workspace = true }

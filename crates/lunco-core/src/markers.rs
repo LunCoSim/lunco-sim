@@ -58,28 +58,6 @@ pub struct CatalogEntryId(pub String);
 #[reflect(Component)]
 pub struct UsdPrimKind(pub String);
 
-/// Marker: this camera's **pose is owned by an explicit pose driver**, not by
-/// the interactive camera stack.
-///
-/// Inserted by an authored camera path or a direct camera command alongside its
-/// pose contract. The avatar's camera-mode systems (`freeflight_system`,
-/// `spring_arm_system`, `orbit_system`, …) each write `Transform` on whatever
-/// avatar carries their mode component, and they run in the same `PostUpdate`
-/// as the path driver with no ordering between plugins — whichever happens to
-/// run last wins. MEASURED: a scene whose scenario issued `ReleaseVessel` put
-/// the avatar in free-flight, and `freeflight_system` re-pinned the rotation
-/// to the spawn heading every frame; an entire 63 s take recorded staring at
-/// one patch of sky while the path dutifully moved the eye through its curve.
-///
-/// Contract: avatar systems must neither write the `Transform` of, nor
-/// (re)insert camera-mode components onto, an entity carrying this marker.
-/// Lives in `lunco-core` so authored drivers and interactive runtimes share
-/// the contract at the engine boundary (same pattern as
-/// [`HorizonShadowTerrain`]).
-#[derive(Component, Debug, Default, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct CameraPoseLock;
-
 /// The physics pose was authoritatively changed outside Avian's solver and
 /// must be written back to the cell-local representation before the bridge
 /// reads ancestor-frame changes again.

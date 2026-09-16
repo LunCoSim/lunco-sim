@@ -21,6 +21,7 @@ big_space = { workspace = true }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }

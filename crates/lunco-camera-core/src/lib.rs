@@ -1,14 +1,39 @@
 //! Backend-neutral camera rig contracts shared by avatar and scene systems.
 //!
 //! This crate contains camera state and pose contracts only. Specialized
-//! runtimes such as `lunco-avatar` translate interaction into these contracts
-//! and provide fast pose solvers; authored scene policy remains in USD/Rhai.
+//! `lunco-camera-runtime` provides generic pose realization, while specialized
+//! runtimes such as `lunco-avatar` translate interaction and source-specific
+//! frames into these contracts. Authored scene policy remains in USD/Rhai.
 
 pub mod math;
 
+/// Ordering anchor for generic interactive camera pose writers.
+///
+/// Avatar-specific preparation may run before this set and movement or other
+/// pose consumers may run after it. The set belongs to the camera contract so
+/// a host can compose camera realization without importing the avatar runtime.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub struct CameraUpdateSet;
+
+/// Marker for an entity carrying a generic interactive camera rig.
+///
+/// Camera behavior components require this marker automatically. It lets
+/// generic camera realization query the rig without identifying the product
+/// that supplies it (avatar, inspection tool, or another authored operator).
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct CameraRig;
+
+/// Marker: this camera's pose is owned by an explicit pose driver.
+///
+/// Authored camera paths and direct camera commands use this fence to exclude
+/// interactive pose writers. It is a camera contract, not a general engine
+/// marker, so all camera runtimes share one owner and one reader path.
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct CameraPoseLock;
+
 use bevy::prelude::*;
-use big_space::prelude::CellCoord;
-use lunco_environment::GravityBody;
 
 /// Shared defaults for camera pose solvers.
 ///
@@ -327,7 +352,7 @@ impl Default for CameraRigIntent {
 /// Chase camera that follows a target with a spring-arm pose.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
-#[require(CameraZoomInput)]
+#[require(CameraRig, CameraZoomInput)]
 pub struct SpringArmCamera {
     /// Followed entity.
     pub target: Entity,
@@ -350,7 +375,7 @@ pub struct SpringArmCamera {
 /// Survey camera that orbits a target in an external frame.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
-#[require(CameraZoomInput)]
+#[require(CameraRig, CameraZoomInput)]
 pub struct OrbitCamera {
     /// Followed celestial or spacecraft entity.
     pub target: Entity,
@@ -366,91 +391,10 @@ pub struct OrbitCamera {
     pub vertical_offset: f32,
 }
 
-/// Camera behavior captured before entering an orbital view.
-#[derive(Clone, Debug)]
-pub enum OrbitReturnBehavior {
-    /// Restore a chase camera.
-    SpringArm(SpringArmCamera),
-    /// Restore a surface camera.
-    Surface(SurfaceCamera),
-    /// Restore free flight.
-    FreeFlight(FreeFlightCamera),
-}
-
-/// Exact pre-orbit camera state used by the avatar transition system.
-#[derive(Component, Clone, Debug)]
-pub struct OrbitViewReturn {
-    parent_grid: Entity,
-    cell: CellCoord,
-    transform: Transform,
-    behavior: OrbitReturnBehavior,
-    gravity_body: Option<GravityBody>,
-    surface_relative: bool,
-}
-
-impl OrbitViewReturn {
-    /// Capture a camera state before moving it to an inertial orbit grid.
-    pub fn new(
-        parent_grid: Entity,
-        cell: CellCoord,
-        transform: Transform,
-        behavior: OrbitReturnBehavior,
-        gravity_body: Option<GravityBody>,
-        surface_relative: bool,
-    ) -> Self {
-        Self {
-            parent_grid,
-            cell,
-            transform,
-            behavior,
-            gravity_body,
-            surface_relative,
-        }
-    }
-
-    /// Grid parent captured at orbit entry.
-    pub fn parent_grid(&self) -> Entity {
-        self.parent_grid
-    }
-
-    /// Cell-local coordinate captured at orbit entry.
-    pub fn cell(&self) -> CellCoord {
-        self.cell
-    }
-
-    /// Local transform captured at orbit entry.
-    pub fn transform(&self) -> Transform {
-        self.transform
-    }
-
-    /// Camera behavior captured at orbit entry.
-    pub fn behavior(&self) -> &OrbitReturnBehavior {
-        &self.behavior
-    }
-
-    /// Gravity binding captured at orbit entry.
-    pub fn gravity_body(&self) -> Option<GravityBody> {
-        self.gravity_body
-    }
-
-    /// Whether surface-relative mode was active at orbit entry.
-    pub fn surface_relative(&self) -> bool {
-        self.surface_relative
-    }
-}
-
-/// Marks an orbit camera whose first pose faces the body's current region.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct CurrentRegionArrival;
-
-/// Marks an orbit camera whose arm is derived from its current position.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct RadialArrival;
-
 /// Free-flight camera that moves independently of a target.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
-#[require(FreeFlightSettings)]
+#[require(CameraRig, FreeFlightSettings)]
 pub struct FreeFlightCamera {
     /// Camera yaw in radians.
     pub yaw: f32,
@@ -463,12 +407,42 @@ pub struct FreeFlightCamera {
 /// Camera whose orientation is derived from a local surface frame.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
-#[require(FreeFlightSettings)]
+#[require(CameraRig, FreeFlightSettings)]
 pub struct SurfaceCamera {
     /// Heading from local north in radians.
     pub heading: f32,
     /// Elevation from the horizon in radians.
     pub pitch: f32,
+}
+
+/// Generic surface basis supplied by the subsystem that owns the surface.
+///
+/// Camera realization consumes this value without knowing whether it came
+/// from celestial geodesy, a terrain frame, or another spatial provider. The
+/// provider must replace it when the camera's parent frame or surface point
+/// changes; missing or non-finite axes cause the pose writer to hold.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component)]
+pub struct SurfaceCameraFrame {
+    /// Tangent east axis in the camera's direct parent Grid.
+    pub east: Vec3,
+    /// Tangent north axis in the camera's direct parent Grid.
+    pub north: Vec3,
+    /// Surface-up axis in the camera's direct parent Grid.
+    pub up: Vec3,
+}
+
+impl SurfaceCameraFrame {
+    /// Create a frame only when all supplied axes are finite and non-zero.
+    pub fn new(east: Vec3, north: Vec3, up: Vec3) -> Option<Self> {
+        (east.is_finite()
+            && north.is_finite()
+            && up.is_finite()
+            && east.length_squared() > f32::EPSILON
+            && north.length_squared() > f32::EPSILON
+            && up.length_squared() > f32::EPSILON)
+            .then_some(Self { east, north, up })
+    }
 }
 
 /// Marker for camera clipping-plane adaptation.

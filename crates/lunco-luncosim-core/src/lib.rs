@@ -1741,6 +1741,7 @@ impl Plugin for LunCoSimCorePlugin {
                 spawn_observer_camera: false,
             })
             .add_plugins(lunco_celestial_spatial::CelestialPlugin)
+            .add_plugins(lunco_camera_celestial::CelestialSurfaceCameraPlugin)
             // Real VSOP2013/ELP body positions on ALL platforms (wasm too) —
             // this is the explicit provider required by orbital scenes.
             .add_plugins(lunco_celestial_ephemeris::EphemerisPlugin)
@@ -1759,6 +1760,7 @@ impl Plugin for LunCoSimCorePlugin {
             // just produces no input while the Drive/Brake/Possess command
             // observers + wire-type registrations the host needs stay live.
             .add_plugins(LunCoControllerPlugin)
+            .add_plugins(lunco_camera_runtime::CameraRuntimePlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
             .add_systems(Startup, setup_luncosim)
