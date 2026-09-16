@@ -564,6 +564,14 @@ fn process_usd_sim_prims(
     }
 
     // --- Pass 2: Process all prims ---
+    // Query order is an ECS allocation detail.  Async USD closure loading can
+    // allocate the same authored hierarchy in a different order between fresh
+    // processes, and the deferred physics components would then reach Avian in
+    // that different order.  Sort by the stable composed USD path before
+    // recording any simulation state.  This keeps physics admission independent
+    // of loader timing while preserving the existing bounded work path.
+    let mut unprocessed: Vec<_> = query.iter().collect();
+    unprocessed.sort_by(|left, right| left.1.path.cmp(&right.1.path));
     for (
         entity,
         prim_path,
@@ -574,7 +582,7 @@ fn process_usd_sim_prims(
         instance_projection,
         mesh_pending,
         shader_bound,
-    ) in query.iter()
+    ) in unprocessed
     {
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             continue;
@@ -2951,7 +2959,13 @@ fn activate_dynamic_bodies(
     // first and hoping the parked constraint appears before the next solver tick
     // is precisely how an articulated pad escaped during warm-cache startup.
     let mut promoted = false;
-    for (entity, path, authored_velocity, body_disabled) in q_kinematic.iter() {
+    // Promotion is the final admission boundary before the first solver tick.
+    // Keep it independent of ECS allocation order for the same reason as the
+    // projection pass: async layer completion must not choose which rigid body
+    // enters the native solver island first.
+    let mut kinematic: Vec<_> = q_kinematic.iter().collect();
+    kinematic.sort_by(|left, right| left.1.path.cmp(&right.1.path));
+    for (entity, path, authored_velocity, body_disabled) in kinematic {
         let has_pending_joint = q_pending_joints.iter().any(|(joint_path, pending)| {
             joint_path.stage_handle == path.stage_handle
                 && (pending.body0_path == path.path || pending.body1_path == path.path)

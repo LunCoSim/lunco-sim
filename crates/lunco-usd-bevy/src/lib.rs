@@ -1610,7 +1610,14 @@ fn commit_usd_children<R: UsdRead>(
     is_grid_entity: bool,
     commands: &mut Commands,
 ) {
-    for child_path in reader.children(parent_path) {
+    // Child order is part of the structural admission contract.  Readers may
+    // be backed by different composition/index implementations, and their
+    // iteration order is not an identity guarantee.  Sort by the fully
+    // composed authored path before queuing entities so referenced components
+    // enter ECS/Avian in the same order on every load.
+    let mut children = reader.children(parent_path);
+    children.sort_by_key(|path| path.to_string());
+    for child_path in children {
         if !reader.is_active(&child_path) {
             continue;
         }
@@ -1964,7 +1971,18 @@ fn process_queued_usd_visuals(
     let started = web_time::Instant::now();
     let mut projected = 0usize;
 
-    for (entity, prim_path, vis, tf, is_instance_root, member, instance_projection) in q.iter() {
+    // ECS query iteration reflects entity allocation, not authored USD order.
+    // Allocation can change when referenced layer closures finish on different
+    // frames, and the frame budget can then split the queue at a different
+    // boundary.  That used to make body/collider admission order a function of
+    // async timing, which is enough to change a contact solve even with one
+    // Avian compute thread.  Consume every queue in authored path order; the
+    // path is the stable identity within a stage and is already the key used by
+    // the canonical topology/indexes.
+    let mut queued: Vec<_> = q.iter().collect();
+    queued.sort_by(|left, right| left.1.path.cmp(&right.1.path));
+
+    for (entity, prim_path, vis, tf, is_instance_root, member, instance_projection) in queued {
         if projected != 0 && started.elapsed() >= settings.frame_budget {
             break;
         }
