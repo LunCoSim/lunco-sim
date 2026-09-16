@@ -4,7 +4,7 @@
 # Rule: any `AsyncComputeTaskPool::get().spawn(...)` whose output
 # eventually surfaces in a UI panel must register a `StatusBus`
 # `BusyHandle` (typically via
-# `lunco_workbench::tracked_task::spawn_tracked[_cancellable]`).
+# `lunco_status_core::tracked_task::spawn_tracked[_cancellable]`).
 # Without that, the panel's overlay can flicker through "empty" or
 # "missing" while work is still in flight.
 #
@@ -30,14 +30,10 @@ cd "$ROOT"
 # need spawn_tracked.
 ALLOWLIST=$(cat <<'EOF'
 # Wrapper itself — this is THE primitive every caller goes through.
-crates/lunco-workbench/src/tracked_task.rs
+crates/lunco-status-core/src/tracked_task.rs
 
 # Doc-comment reference (line 65) + doctest fixture (line 202).
 crates/lunco-cache/src/lib.rs
-
-# File picker — one-shot modal dialog with its own progress indicator;
-# no canvas/panel overlay depends on this completing.
-crates/lunco-workbench/src/picker.rs
 
 # DrillIn / Duplicate / FileLoad spawns. The BusyHandle is minted at
 # the binding-insert site (DrillInBinding._busy / DuplicateBinding._busy
@@ -80,7 +76,7 @@ while IFS=: read -r file line _; do
     fi
     if [[ $violations -eq 0 ]]; then
         echo "error: bare AsyncComputeTaskPool::get().spawn(...) outside allowlist."
-        echo "       Route the spawn through lunco_workbench::tracked_task::spawn_tracked"
+        echo "       Route the spawn through lunco_status_core::tracked_task::spawn_tracked"
         echo "       (or add the site to scripts/check_no_bare_spawn.sh with a justification)."
         echo
     fi
