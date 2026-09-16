@@ -655,9 +655,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             }
 
             match ops {
-                // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe /
-                // relationship — no incremental stage-author yet, and whole-source
-                // undo may change surviving prims' attribute values): rebuild the
+                // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe
+                // removal / composition arc — no incremental stage-author yet,
+                // and whole-source undo may change surviving prims' values): rebuild the
                 // stage from composed_source + the already-loaded closure. (The
                 // overlay is refreshed on the next settled frame.)
                 None => {
@@ -944,8 +944,8 @@ pub(crate) fn wake_twin_projection_on_stage_event(
 /// authors incrementally), or a composition-arc edit whose effect is non-local
 /// (a variant selection or payload re-composes a whole subtree). The common
 /// interactive ops — translate, attribute, spawn, remove, keyframe *authoring*,
-/// and now relationship / connection edits — return `false` and replay
-/// incrementally via [`apply_incremental_op_to_stage`].
+/// relationship/connection edits, API-schema edits, and kind edits — return
+/// `false` and replay incrementally via [`apply_incremental_op_to_stage`].
 ///
 /// `SetRelationship` and `SetConnection` use live-stage authors
 /// (`CanonicalStage::author_relationship` / `author_connection`). Their consumers

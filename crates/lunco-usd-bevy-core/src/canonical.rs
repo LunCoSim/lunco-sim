@@ -617,9 +617,9 @@ impl CanonicalStage {
         prim: &SdfPath,
         schemas: &[String],
     ) -> anyhow::Result<()> {
-        self.stage
-            .override_prim(prim.clone())
-            .map_err(|e| anyhow::anyhow!("override prim before authoring apiSchemas at {prim}: {e}"))?;
+        self.stage.override_prim(prim.clone()).map_err(|e| {
+            anyhow::anyhow!("override prim before authoring apiSchemas at {prim}: {e}")
+        })?;
         let tokens: Vec<openusd::tf::Token> = schemas
             .iter()
             .cloned()
@@ -863,8 +863,9 @@ impl StageProjector<'_> {
         self.0.author_connection(prim, name, type_name, sources)
     }
 
-    /// Replay a metadata-only `SetApiSchemas` op. Callers classify whether a
-    /// schema can be reconciled without rebuilding physical ECS topology.
+    /// Replay a `SetApiSchemas` op. The runtime classifies metadata-only lists
+    /// as refresh-free and refreshes only the affected subtree for physical
+    /// schemas.
     pub fn author_api_schemas(&self, prim: &SdfPath, schemas: &[String]) -> anyhow::Result<()> {
         self.0.author_api_schemas(prim, schemas)
     }
