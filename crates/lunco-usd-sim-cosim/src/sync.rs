@@ -80,7 +80,7 @@ pub fn sync_modelica_outputs(
 pub(crate) fn copy_modelica_input_values(
     model: &mut ModelicaModel,
     component: &SimComponent,
-    command_surface: Option<&lunco_core::InputPorts>,
+    command_surface: Option<&lunco_port_core::InputPorts>,
 ) {
     for (name, value) in &component.inputs {
         if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
@@ -112,7 +112,7 @@ pub fn sync_modelica_inputs(
     mut q: Query<
         (
             &SimComponent,
-            Option<&lunco_core::InputPorts>,
+            Option<&lunco_port_core::InputPorts>,
             &mut ModelicaModel,
         ),
         With<UsdSourcedCosim>,

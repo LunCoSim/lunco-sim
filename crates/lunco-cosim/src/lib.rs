@@ -76,7 +76,7 @@ fn endpoint_ready_on_add<T: Component>(
         // has installed its named surface. It is deliberately published
         // alongside the lifecycle state for every backend, not inferred
         // from a vehicle- or sensor-specific component.
-        lunco_core::PortSurfaceReady,
+        lunco_port_core::PortSurfaceReady,
     ));
     revision.request();
 }
@@ -95,7 +95,7 @@ fn endpoint_pending_on_add<T: Component>(
 fn mark_causal_state_sink<T: Component>(trigger: On<Add, T>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
-        .try_insert(lunco_core::CausalStateSink);
+        .try_insert(lunco_port_core::CausalStateSink);
 }
 
 fn mark_joint_torque_port(
@@ -109,7 +109,7 @@ fn mark_joint_torque_port(
     if actuator.port_entity != Entity::PLACEHOLDER {
         commands
             .entity(actuator.port_entity)
-            .try_insert(lunco_core::CausalStateSink);
+            .try_insert(lunco_port_core::CausalStateSink);
     }
 }
 
@@ -200,6 +200,8 @@ impl Plugin for CoSimPlugin {
             .register_type::<RealtimeSafe>()
             .register_type::<avian_queries::RaycastObservation>();
 
+        lunco_port_core::register_endpoint_types(app);
+
         // The shared port substrate (in `lunco-port-core`, below every participant).
         // The cosim engine owns the avian/joint/Modelica/hardware backends and
         // registers them here; wires, the API, the inspector, and scripts all
@@ -226,10 +228,10 @@ impl Plugin for CoSimPlugin {
             // Co-sim retains every `SimComponent` output itself, with source
             // metadata. Mark it at lifecycle time so generic port telemetry does
             // not create a second, ungrouped history for the same values.
-            .add_observer(endpoint_ready_on_add::<lunco_core::InputPorts>)
-            .add_observer(endpoint_ready_on_add::<lunco_core::architecture::Port>)
-            .add_observer(endpoint_ready_on_add::<lunco_core::PortSurfaceReady>)
-            .add_observer(endpoint_pending_on_add::<lunco_core::PortSurfacePending>)
+            .add_observer(endpoint_ready_on_add::<lunco_port_core::InputPorts>)
+            .add_observer(endpoint_ready_on_add::<lunco_port_core::Port>)
+            .add_observer(endpoint_ready_on_add::<lunco_port_core::PortSurfaceReady>)
+            .add_observer(endpoint_pending_on_add::<lunco_port_core::PortSurfacePending>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RigidBody>)
             // Force and torque actuators are native scalar port endpoints too.
             // USD projects them after the authored wiring pass has started and
@@ -471,7 +473,7 @@ mod binding_lifecycle_tests {
             .0;
         let entity = app
             .world_mut()
-            .spawn(lunco_core::InputPorts::new(&["throttle"]))
+            .spawn(lunco_port_core::InputPorts::new(&["throttle"]))
             .id();
         let after_add = app
             .world()
@@ -500,7 +502,7 @@ mod binding_lifecycle_tests {
         );
 
         app.world_mut()
-            .get_mut::<lunco_core::InputPorts>(entity)
+            .get_mut::<lunco_port_core::InputPorts>(entity)
             .unwrap()
             .values
             .insert("arm".into(), 0.0);
@@ -831,7 +833,7 @@ mod binding_lifecycle_tests {
 
         assert!(app
             .world()
-            .get::<lunco_core::PortSurfaceReady>(actuator)
+            .get::<lunco_port_core::PortSurfaceReady>(actuator)
             .is_some());
         assert!(app.world().get::<BoundConnection>(edge).is_some());
     }
@@ -884,7 +886,10 @@ mod binding_lifecycle_tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
 
-        let entity = app.world_mut().spawn(lunco_core::PortSurfaceReady).id();
+        let entity = app
+            .world_mut()
+            .spawn(lunco_port_core::PortSurfaceReady)
+            .id();
         app.update();
 
         assert_eq!(
@@ -914,7 +919,7 @@ mod binding_lifecycle_tests {
         );
         assert!(app
             .world()
-            .get::<lunco_core::PortSurfaceReady>(entity)
+            .get::<lunco_port_core::PortSurfaceReady>(entity)
             .is_some());
     }
 
@@ -1109,7 +1114,7 @@ fn on_release_control(
     registry: Res<lunco_port_core::ports::PortRegistry>,
     mut holds: ResMut<PortHolds>,
     mut fence: ResMut<ControlWriteFence>,
-    q_inputs: Query<&lunco_core::InputPorts>,
+    q_inputs: Query<&lunco_port_core::InputPorts>,
     mut commands: Commands,
 ) {
     let target = trigger.event().target;
@@ -1137,7 +1142,7 @@ fn on_release_control(
         for (name, value) in &inputs {
             registry.write_port(world, target, name, *value);
         }
-        if let Some(mut command_surface) = world.get_mut::<lunco_core::InputPorts>(target) {
+        if let Some(mut command_surface) = world.get_mut::<lunco_port_core::InputPorts>(target) {
             command_surface.safe_stop();
         }
         if let Some(mut holds) = world.get_resource_mut::<PortHolds>() {
@@ -1150,11 +1155,11 @@ fn on_release_control(
         // actuator ports are also neutralized immediately when the authored
         // endpoint publishes them, matching the existing hard-stop contract.
         let actuator_ports = world
-            .get::<lunco_core::OutputPorts>(target)
+            .get::<lunco_port_core::OutputPorts>(target)
             .map(|outputs| outputs.ports.clone())
             .unwrap_or_default();
         for (name, entity) in actuator_ports {
-            if let Some(mut port) = world.get_mut::<lunco_core::Port>(entity) {
+            if let Some(mut port) = world.get_mut::<lunco_port_core::Port>(entity) {
                 port.value = if name == "brake" { 1.0 } else { 0.0 };
             }
         }
@@ -1168,7 +1173,7 @@ fn on_release_control(
 /// here lets every higher-level controller reuse the same authority transition.
 fn on_control_authority_changed(
     trigger: On<ControlAuthorityChanged>,
-    q_endpoints: Query<(Entity, &lunco_core::GlobalEntityId), With<lunco_core::InputPorts>>,
+    q_endpoints: Query<(Entity, &lunco_core::GlobalEntityId), With<lunco_port_core::InputPorts>>,
     mut commands: Commands,
 ) {
     let released = &trigger.event().released;
@@ -1191,12 +1196,12 @@ mod control_intent_tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
 
-        let throttle_output = app.world_mut().spawn(lunco_core::Port::default()).id();
-        let brake_output = app.world_mut().spawn(lunco_core::Port::default()).id();
+        let throttle_output = app.world_mut().spawn(lunco_port_core::Port::default()).id();
+        let brake_output = app.world_mut().spawn(lunco_port_core::Port::default()).id();
         let target = app
             .world_mut()
             .spawn((
-                lunco_core::InputPorts::new(&[
+                lunco_port_core::InputPorts::new(&[
                     "throttle",
                     "steer",
                     "brake",
@@ -1206,7 +1211,7 @@ mod control_intent_tests {
                     "yaw",
                     "rcs_translation",
                 ]),
-                lunco_core::OutputPorts::new(HashMap::from([
+                lunco_port_core::OutputPorts::new(HashMap::from([
                     ("throttle".to_string(), throttle_output),
                     ("brake".to_string(), brake_output),
                 ])),
@@ -1234,7 +1239,7 @@ mod control_intent_tests {
         for (name, value) in &writes {
             assert_eq!(
                 app.world()
-                    .get::<lunco_core::InputPorts>(target)
+                    .get::<lunco_port_core::InputPorts>(target)
                     .unwrap()
                     .cmd(name),
                 *value,
@@ -1248,7 +1253,7 @@ mod control_intent_tests {
         app.update();
         assert_eq!(
             app.world()
-                .get::<lunco_core::InputPorts>(target)
+                .get::<lunco_port_core::InputPorts>(target)
                 .unwrap()
                 .cmd("external_throttle"),
             0.6
@@ -1266,7 +1271,10 @@ mod control_intent_tests {
         app.world_mut().trigger(ReleaseControl { target });
         app.world_mut().flush();
 
-        let inputs = app.world().get::<lunco_core::InputPorts>(target).unwrap();
+        let inputs = app
+            .world()
+            .get::<lunco_port_core::InputPorts>(target)
+            .unwrap();
         assert_eq!(inputs.cmd("throttle"), 0.0);
         assert_eq!(inputs.cmd("steer"), 0.0);
         assert_eq!(inputs.cmd("brake"), 1.0);
@@ -1278,14 +1286,14 @@ mod control_intent_tests {
         assert!(inputs.brake_active);
         assert_eq!(
             app.world()
-                .get::<lunco_core::Port>(throttle_output)
+                .get::<lunco_port_core::Port>(throttle_output)
                 .unwrap()
                 .value,
             0.0
         );
         assert_eq!(
             app.world()
-                .get::<lunco_core::Port>(brake_output)
+                .get::<lunco_port_core::Port>(brake_output)
                 .unwrap()
                 .value,
             1.0
@@ -1311,7 +1319,7 @@ mod control_intent_tests {
         app.world_mut().flush();
         assert_eq!(
             app.world()
-                .get::<lunco_core::InputPorts>(target)
+                .get::<lunco_port_core::InputPorts>(target)
                 .unwrap()
                 .cmd("throttle"),
             0.5
@@ -1326,7 +1334,7 @@ mod control_intent_tests {
             .world_mut()
             .spawn((
                 lunco_core::GlobalEntityId::from_raw(7),
-                lunco_core::InputPorts::new(&["headlights"]),
+                lunco_port_core::InputPorts::new(&["headlights"]),
             ))
             .id();
         app.insert_resource(lunco_time::TimeTransport {
@@ -1343,7 +1351,7 @@ mod control_intent_tests {
         app.world_mut().flush();
         assert_eq!(
             app.world()
-                .get::<lunco_core::InputPorts>(target)
+                .get::<lunco_port_core::InputPorts>(target)
                 .unwrap()
                 .cmd("headlights"),
             0.0,
@@ -1366,7 +1374,7 @@ mod control_intent_tests {
         app.world_mut().flush();
         assert_eq!(
             app.world()
-                .get::<lunco_core::InputPorts>(target)
+                .get::<lunco_port_core::InputPorts>(target)
                 .unwrap()
                 .cmd("headlights"),
             1.0,

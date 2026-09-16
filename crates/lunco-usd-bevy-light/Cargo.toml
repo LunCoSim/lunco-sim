@@ -9,6 +9,7 @@ description = "USD light and dome projection for Bevy"
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_light", "hdr", "ktx2", "zstd_rust"] }
 half = "2"
 lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-render = { path = "../lunco-render" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-data = { path = "../lunco-usd-data" }

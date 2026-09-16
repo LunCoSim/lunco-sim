@@ -28,8 +28,9 @@ use avian3d::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use lunco_core::architecture::Port;
-use lunco_core::{InputPorts, MobilityRoot, OutputPorts};
+use lunco_core::MobilityRoot;
+use lunco_port_core::Port;
+use lunco_port_core::{InputPorts, OutputPorts};
 use lunco_spatial::coords::{GridPos, GridRot};
 use std::collections::HashSet;
 
@@ -74,7 +75,7 @@ fn mark_wheel_ports_causal(
         if port != Entity::PLACEHOLDER {
             commands
                 .entity(port)
-                .try_insert(lunco_core::CausalStateSink);
+                .try_insert(lunco_port_core::CausalStateSink);
         }
     }
 }

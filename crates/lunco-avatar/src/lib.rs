@@ -54,7 +54,7 @@ use lunco_input_core::InputBindingsSettings;
 /// backend (`SimComponent`).
 ///
 /// This is not the possession predicate. Possession validates a writable
-/// [`lunco_core::InputPorts`] endpoint that is not an [`Avatar`], then the
+/// [`lunco_port_core::InputPorts`] endpoint that is not an [`Avatar`], then the
 /// authority layer (`SessionRegistry::may_possess` / `PossessionPolicy`) decides
 /// who may hold it. This alias answers only whether a target accepts commands,
 /// and is used for one presentation decision: whether a heading-follow camera
@@ -1281,7 +1281,7 @@ pub fn spawn_avatar_camera(
     let input_map = bindings
         .input_map()
         .expect("registered input bindings must satisfy their settings contract");
-    let input_ports = lunco_core::InputPorts::with_defaults(
+    let input_ports = lunco_port_core::InputPorts::with_defaults(
         control_binding.ports().map(|port| (port.to_string(), 0.0)),
     );
     // Initial spawn: anchor `ChildOf` in the bundle so parent + cell +
@@ -2957,7 +2957,7 @@ fn apply_fly(
             &mut Transform,
             &mut CellCoord,
             &ChildOf,
-            &lunco_core::InputPorts,
+            &lunco_port_core::InputPorts,
             &FreeFlightSettings,
             Has<FreeFlightCamera>,
             Has<SurfaceCamera>,
@@ -3327,7 +3327,7 @@ fn avatar_global_hotkeys(
 /// Resolves a picked vehicle part to its authored vehicle control root.
 ///
 /// `SelectableRoot` is an editor boundary, and every independently simulated
-/// wheel may carry it. [`lunco_core::InputPorts`] is the public interface:
+/// wheel may carry it. [`lunco_port_core::InputPorts`] is the public interface:
 /// its nonempty vocabulary is the input surface a session may own. A
 /// [`lunco_control_core::ControlBinding`] or [`lunco_core::MobilityRoot`] identifies the
 /// authored vehicle boundary, which takes precedence over nested component
@@ -3337,7 +3337,7 @@ fn avatar_global_hotkeys(
 fn find_control_owner_from_hit(
     mut entity: Entity,
     q_parents: &Query<&ChildOf>,
-    q_input_ports: &Query<&lunco_core::InputPorts, Without<Avatar>>,
+    q_input_ports: &Query<&lunco_port_core::InputPorts, Without<Avatar>>,
     q_vehicle_roots: &Query<
         (),
         Or<(
@@ -3382,7 +3382,7 @@ fn find_control_owner_from_hit(
 /// never become the vessel selected by a click or a direct possession command.
 fn is_vessel_control_endpoint(
     entity: Entity,
-    q_input_ports: &Query<&lunco_core::InputPorts, Without<Avatar>>,
+    q_input_ports: &Query<&lunco_port_core::InputPorts, Without<Avatar>>,
     q_child_of: &Query<&ChildOf>,
     q_preview_only: &Query<(), With<UsdPreviewOnly>>,
 ) -> bool {
@@ -3482,7 +3482,7 @@ pub fn avatar_raycast_possession(
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
+    q_input_ports: Query<&lunco_port_core::InputPorts, Without<Avatar>>,
     q_parents: Query<&ChildOf>,
     q_vehicle_roots: Query<
         (),
@@ -4153,7 +4153,7 @@ fn on_possess_command(
         ),
         Controllable,
     >,
-    q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
+    q_input_ports: Query<&lunco_port_core::InputPorts, Without<Avatar>>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mut possession_authority: PossessionAuthority,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
@@ -5608,7 +5608,7 @@ mod tests {
             .id();
         let rover = app
             .world_mut()
-            .spawn(lunco_core::InputPorts::new(&["throttle"]))
+            .spawn(lunco_port_core::InputPorts::new(&["throttle"]))
             .id();
 
         app.world_mut().trigger(PossessVessel {
@@ -5637,7 +5637,7 @@ mod tests {
         let target = app
             .world_mut()
             .spawn((
-                lunco_core::InputPorts::new(&["throttle"]),
+                lunco_port_core::InputPorts::new(&["throttle"]),
                 lunco_core::GlobalEntityId::from_raw(0xA1),
             ))
             .id();
@@ -5672,14 +5672,14 @@ mod tests {
         let first = app
             .world_mut()
             .spawn((
-                lunco_core::InputPorts::new(&["throttle"]),
+                lunco_port_core::InputPorts::new(&["throttle"]),
                 lunco_core::GlobalEntityId::from_raw(0xA1),
             ))
             .id();
         let second = app
             .world_mut()
             .spawn((
-                lunco_core::InputPorts::new(&["throttle"]),
+                lunco_port_core::InputPorts::new(&["throttle"]),
                 lunco_core::GlobalEntityId::from_raw(0xB2),
             ))
             .id();
@@ -5708,7 +5708,10 @@ mod tests {
     fn wheel_click_resolves_to_owning_vehicle_command_root() {
         let mut world = World::new();
         let rover = world
-            .spawn((lunco_core::InputPorts::new(&["drive"]), Name::new("Rover")))
+            .spawn((
+                lunco_port_core::InputPorts::new(&["drive"]),
+                Name::new("Rover"),
+            ))
             .id();
         let wheel = world
             .spawn((
@@ -5721,7 +5724,7 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
             Query<
                 (),
                 Or<(
@@ -5754,17 +5757,17 @@ mod tests {
         let rover = world
             .spawn((
                 lunco_core::MobilityRoot,
-                lunco_core::InputPorts::new(&["throttle"]),
+                lunco_port_core::InputPorts::new(&["throttle"]),
             ))
             .id();
         let actuator = world
-            .spawn((lunco_core::InputPorts::new(&["force"]), ChildOf(rover)))
+            .spawn((lunco_port_core::InputPorts::new(&["force"]), ChildOf(rover)))
             .id();
         let mesh = world.spawn(ChildOf(actuator)).id();
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
             Query<
                 (),
                 Or<(
@@ -5798,14 +5801,14 @@ mod tests {
         let rover = world
             .spawn((
                 lunco_core::SelectableRoot,
-                lunco_core::InputPorts::new(&["drive"]),
+                lunco_port_core::InputPorts::new(&["drive"]),
             ))
             .id();
         let mesh = world.spawn(ChildOf(rover)).id();
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
             Query<
                 (),
                 Or<(
@@ -5839,14 +5842,14 @@ mod tests {
             .spawn((
                 UsdPreviewOnly,
                 lunco_core::SelectableRoot,
-                lunco_core::InputPorts::new(&["drive"]),
+                lunco_port_core::InputPorts::new(&["drive"]),
             ))
             .id();
         let mesh = world.spawn(ChildOf(preview)).id();
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
             Query<
                 (),
                 Or<(
@@ -5877,19 +5880,22 @@ mod tests {
     fn avatar_endpoint_hit_resolves_to_vehicle_parent_not_avatar() {
         let mut world = World::new();
         let rover = world
-            .spawn((lunco_core::InputPorts::new(&["drive"]), Name::new("Rover")))
+            .spawn((
+                lunco_port_core::InputPorts::new(&["drive"]),
+                Name::new("Rover"),
+            ))
             .id();
         let avatar = world
             .spawn((
                 Avatar,
-                lunco_core::InputPorts::new(&["forward"]),
+                lunco_port_core::InputPorts::new(&["forward"]),
                 ChildOf(rover),
             ))
             .id();
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
             Query<
                 (),
                 Or<(
@@ -5920,12 +5926,12 @@ mod tests {
     fn top_level_avatar_endpoint_is_not_a_possession_target() {
         let mut world = World::new();
         let avatar = world
-            .spawn((Avatar, lunco_core::InputPorts::new(&["forward"])))
+            .spawn((Avatar, lunco_port_core::InputPorts::new(&["forward"])))
             .id();
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
             Query<
                 (),
                 Or<(
@@ -5956,13 +5962,13 @@ mod tests {
     fn preview_descendant_is_not_a_possession_target() {
         let mut world = World::new();
         let preview_root = world
-            .spawn((UsdPreviewOnly, lunco_core::InputPorts::new(&["drive"])))
+            .spawn((UsdPreviewOnly, lunco_port_core::InputPorts::new(&["drive"])))
             .id();
         let preview_part = world.spawn(ChildOf(preview_root)).id();
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
             Query<
                 (),
                 Or<(
@@ -7436,7 +7442,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
                 .map(|n| n.as_str().to_string())
                 .unwrap_or_default();
             let gid = world.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get());
-            let has_cmd = world.get::<lunco_core::InputPorts>(e).is_some();
+            let has_cmd = world.get::<lunco_port_core::InputPorts>(e).is_some();
             let has_sim = world.get::<lunco_cosim_core::SimComponent>(e).is_some();
             let has_sel = world.get::<lunco_core::SelectableRoot>(e).is_some();
             let binding = world.get::<lunco_control_core::ControlBinding>(e).map(|b| {

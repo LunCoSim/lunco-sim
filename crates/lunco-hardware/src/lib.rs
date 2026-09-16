@@ -6,7 +6,7 @@
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_core::architecture::Port;
+use lunco_port_core::Port;
 
 /// Plugin for generic hardware sensors.
 pub struct LunCoHardwarePlugin;

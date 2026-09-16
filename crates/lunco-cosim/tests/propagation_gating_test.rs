@@ -26,9 +26,9 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
 
-use lunco_core::architecture::Port;
 use lunco_cosim::CoSimPlugin;
 use lunco_cosim_core::{SimConnection, PORT_NAME};
+use lunco_port_core::Port;
 
 /// Minimal headless app: cosim over avian, with the fixed clock driven manually
 /// so one `app.update()` runs at least one `FixedUpdate`.

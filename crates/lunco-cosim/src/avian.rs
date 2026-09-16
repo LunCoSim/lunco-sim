@@ -241,12 +241,12 @@ pub fn apply_joint_torque_actuators(
     faults: Option<Res<lunco_core::RuntimeFaults>>,
     q_actuators: Query<(&JointTorqueActuator, &RevoluteJoint)>,
     mut q_ports: ParamSet<(
-        Query<&lunco_core::architecture::Port>,
-        Query<&mut lunco_core::architecture::Port>,
+        Query<&lunco_port_core::Port>,
+        Query<&mut lunco_port_core::Port>,
     )>,
     q_sleeping: Query<(), With<Sleeping>>,
     q_child_of: Query<&ChildOf>,
-    q_inputs: Query<&lunco_core::InputPorts>,
+    q_inputs: Query<&lunco_port_core::InputPorts>,
     mut bodies: ParamSet<(
         Query<(&Rotation, &AngularVelocity)>,
         Query<Forces, lunco_physics::Integrable>,
@@ -288,19 +288,18 @@ pub fn apply_joint_torque_actuators(
         if let Ok(mut speed_port) = q_ports.p1().get_mut(actuator.speed_port_entity) {
             speed_port.value = coordinate_speed;
         }
-        let brake =
-            if lunco_core::architecture::owning_input_ports(joint.body2, &q_child_of, &q_inputs)
-                .is_some_and(|inputs| inputs.brake_active)
-            {
-                bounded_brake_torque(
-                    actuator.brake_torque,
-                    actuator.rotational_inertia,
-                    coordinate_speed,
-                    physics_time.delta_secs_f64(),
-                )
-            } else {
-                0.0
-            };
+        let brake = if lunco_port_core::owning_input_ports(joint.body2, &q_child_of, &q_inputs)
+            .is_some_and(|inputs| inputs.brake_active)
+        {
+            bounded_brake_torque(
+                actuator.brake_torque,
+                actuator.rotational_inertia,
+                coordinate_speed,
+                physics_time.delta_secs_f64(),
+            )
+        } else {
+            0.0
+        };
         let coordinate_torque = torque + brake;
         if coordinate_torque == 0.0 {
             continue;

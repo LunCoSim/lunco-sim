@@ -26,7 +26,7 @@
 //! its boundary. We deliberately do **not** model `Bool`/`Enum`/`String` ports
 //! until a concrete need appears.
 //!
-//! [`Port`]: lunco_core::architecture::Port
+//! [`Port`]: crate::Port
 //!
 //! ## One registry, one discovery path and four thin access operations
 //!
@@ -42,7 +42,7 @@ use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
-use lunco_core::InputPorts;
+use crate::InputPorts;
 
 /// Durable invalidation generation for the shared runtime port surface.
 ///
@@ -949,8 +949,8 @@ mod tests {
     use super::{
         PortBackend, PortCollisionDirection, PortDirection, PortMetadata, PortRef, PortRegistry,
     };
+    use crate::InputPorts;
     use bevy::prelude::*;
-    use lunco_core::InputPorts;
 
     fn duplicate_input_list(_world: &World, _entity: Entity, out: &mut Vec<PortRef>) {
         out.push(PortRef {

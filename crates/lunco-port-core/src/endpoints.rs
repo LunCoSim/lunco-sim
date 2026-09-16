@@ -1,36 +1,32 @@
-//! # Simulation Control and Communication Fabric
+//! Shared ECS endpoint and control-surface contracts.
 //!
-//! This module defines the shared ECS components at the boundary between
-//! authored control surfaces and runtime scalar endpoints.
-//!
-//! ## Ownership
-//!
-//! The port/command fabric is consumed by every domain that exchanges a
-//! signal: `lunco-cosim` (SimConnection endpoints ARE [`Port`]s),
-//! `lunco-mobility` (wheel drive/steer ports), `lunco-hardware` (actuators),
-//! `lunco-telemetry` (sampled channels), `lunco-usd-sim`
-//! (port authoring from USD). No domain crate can own it without inverting
-//! the dependency graph. Domain logic does not belong here; only the shared
-//! endpoint and lifecycle components those domains meet on. The registry that
-//! discovers and accesses these surfaces lives in `lunco-port-core`.
-//!
-//! ## The "Why": Fidelity-Driven Emulation
-//! Signals move between subsystems through **[Port]**: one `f64` value — a
-//! command, an actuator setpoint, a sensor reading, or a value exchanged with a
-//! Modelica co-simulation. A directed link between two ports is a
-//! `lunco_cosim_core::SimConnection` (the SSP connection: element + named connector,
-//! with factor and offset), which is where a unit conversion belongs when two
-//! ports are authored in different units.
-//!
+//! These components are the generic runtime surface exchanged by co-simulation,
+//! physics, authored USD projection, hardware, telemetry, API, and scripting.
+//! The registry that discovers and accesses them lives beside them in
+//! [`crate::ports`]. They are deliberately independent of the general engine
+//! core so a port-bearing package does not pull the engine's unrelated scene,
+//! identity, and command substrate merely to describe a scalar endpoint.
+
 use bevy::prelude::*;
+
+/// Register endpoint markers used by reflected commands and API schemas.
+///
+/// The general engine plugin registers only engine-owned types. Hosts that
+/// install the port substrate call this once from their port/wiring plugin so
+/// the reflection ownership follows the component ownership.
+pub fn register_endpoint_types(app: &mut App) {
+    app.register_type::<Port>()
+        .register_type::<CausalStateSink>();
+}
 
 /// A named signal value exchanged between subsystems.
 ///
 /// One port type carries every signal in the simulation — commands from the
 /// control surface, actuator setpoints consumed by the physics solvers, sensor
-/// readings, and the values a Modelica co-simulation exchanges. Values are `f64`
-/// in whatever unit the signal is authored in; a `lunco_cosim_core::SimConnection`
-/// applies factor/offset when two ports are expressed in different units.
+/// readings, and the values a Modelica co-simulation exchanges. Values are
+/// `f64` in whatever unit the signal is authored in; a
+/// `lunco_cosim_core::SimConnection` applies factor/offset when two ports are
+/// expressed in different units.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
 #[reflect(Component)]
 pub struct Port {
@@ -52,13 +48,13 @@ pub struct CausalStateSink;
 /// Marks an entity whose dynamic scene-property port surface is now present.
 ///
 /// Some engine-owned backends are installed after the USD entity itself is
-/// projected.  A `SphereLight`, for example, is first represented by the USD
+/// projected. A `SphereLight`, for example, is first represented by the USD
 /// prim and only then receives its Bevy `PointLight`/`SpotLight` component.
 /// Co-simulation binding must be notified at the moment that component-backed
 /// surface exists; otherwise a wire can be checked once, classified as
-/// missing, and never reconsidered.  This marker is the dependency-neutral
+/// missing, and never reconsidered. This marker is the dependency-neutral
 /// lifecycle contract: the producer of a port surface adds it, while the wire
-/// engine observes it.  It is intentionally not light-specific so the same
+/// engine observes it. It is intentionally not light-specific so the same
 /// contract works for any deferred scene-property backend.
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component)]
@@ -67,7 +63,7 @@ pub struct PortSurfaceReady;
 /// Marks an entity while a deferred port backend is still being installed.
 ///
 /// A scene projection may author a wire in the same epoch in which its target
-/// component is spawned.  The binder must keep that edge pending across an
+/// component is spawned. The binder must keep that edge pending across an
 /// epoch seal while the producer finishes installing its surface; otherwise a
 /// valid wire becomes a terminal missing-port fault merely because component
 /// insertion and wire projection were observed in different schedules.
@@ -75,68 +71,40 @@ pub struct PortSurfaceReady;
 #[reflect(Component)]
 pub struct PortSurfacePending;
 
-/// Marks a dynamic physics participant while its authored initial state is
-/// still being admitted into the live solver.
-///
-/// This is the inverse lifecycle state of [`PhysicsStateReady`]. Consumers
-/// must not sample or record a dynamic body until the USD projection has
-/// published its authored pose and velocity and the body has been promoted
-/// from its admission state.
-#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
-#[reflect(Component)]
-pub struct PhysicsStatePending;
-
-/// Marks the boundary at which a physics participant has published its
-/// authored initial state to the co-simulation fabric.
-///
-/// This is distinct from [`PortSurfaceReady`]: a rigid body can expose its
-/// velocity and attitude ports while it is still being held kinematic during
-/// articulated-scene admission. Sensors use this fact to acquire their first
-/// live sample without treating the loader's zero-valued placeholder as a
-/// physical measurement.
-#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
-#[reflect(Component)]
-pub struct PhysicsStateReady;
-
-// ── Control surface ───────────────────────────────────────────────────────────
-
 /// An entity's declared **`inputs:*` port surface**, with current values.
 ///
-/// The input *vocabulary is data* — the keys present here declare exactly which
+/// The input vocabulary is data — the keys present here declare exactly which
 /// input ports this entity accepts, so the port backend stays strict (an
-/// undeclared name is rejected → still reported as a dangling wire). A rover may
+/// undeclared name is rejected and reported as a dangling wire). A rover may
 /// expose `throttle`/`steer`/`brake`, an avatar `forward`/`side`/`up` plus the
-/// normalized `speed_boost` modifier, and a
-/// factory `start_cycle`/`target_rate`. Inputs are scalar `f64`s: an intent such
-/// as `Action` or `Thrust` normally produces a binary `0.0`/`1.0` input, while analog control
-/// can supply any normalized or physical value. The keys are seeded from the vessel's
-/// the authored control binding (from its `Controls` scope) for USD vessels;
-/// runtime-built endpoints may declare the same surface directly with
-/// [`InputPorts::new`]. The surface, not the optional binding, is the command
-/// endpoint. The avatar domain uses a non-`Avatar` surface as the vessel
-/// possession boundary; an avatar's own surface is reserved for free flight.
+/// normalized `speed_boost` modifier, and a factory `start_cycle`/`target_rate`.
+/// Inputs are scalar `f64`s: an intent such as `Action` or `Thrust` normally
+/// produces a binary `0.0`/`1.0` input, while analog control can supply any
+/// normalized or physical value. The keys are seeded from an authored control
+/// binding for USD vessels; runtime-built endpoints may declare the same
+/// surface directly with [`InputPorts::new`]. The surface, not the optional
+/// binding, is the command endpoint.
 ///
-/// Written through the shared port substrate (`SetPorts` → `PortRegistry`)
-/// and consumed by the authored mechanical controller or free-flight
-/// realization.
+/// Written through the shared port substrate (`SetPorts` → `PortRegistry`) and
+/// consumed by the authored mechanical controller or free-flight realization.
 ///
-/// NOTE: the command port named `"brake"` here is NOT the output port named
-/// `"brake"` in [`OutputPorts`]. They carry different values — an analog command
-/// in `[-1,1]` here, a discretized `1.0`/`0.0` gate there — and are deliberately
+/// The command port named `"brake"` here is not the output port named `"brake"`
+/// in [`OutputPorts`]. They carry different values — an analog command in
+/// `[-1, 1]` here, a discretized `1.0`/`0.0` gate there — and are deliberately
 /// kept in two components so the two `"brake"`s can never be conflated.
 #[derive(Component, Debug, Clone, Default)]
 pub struct InputPorts {
-    /// Current value per accepted input-port name. Only seeded keys are writable;
-    /// see the type docs.
+    /// Current value per accepted input-port name. Only seeded keys are
+    /// writable; see the type docs.
     pub values: std::collections::HashMap<String, f64>,
-    /// Derived brake state, cached from `values["brake"] > 0.5` by the actuator so
-    /// the per-tick physics systems read a bool without a map lookup.
+    /// Derived brake state, cached from `values["brake"] > 0.5` by the actuator
+    /// so per-tick physics systems read a bool without a map lookup.
     pub brake_active: bool,
 }
 
 impl InputPorts {
-    /// Build with a seeded command vocabulary: the input-port names this vehicle
-    /// accepts, each initialised to `0.0`. The seeded keys ARE the input surface.
+    /// Build with a seeded command vocabulary: the input-port names this
+    /// vehicle accepts, each initialised to `0.0`.
     pub fn new(command_ports: &[&str]) -> Self {
         Self {
             values: command_ports.iter().map(|n| (n.to_string(), 0.0)).collect(),
@@ -154,8 +122,8 @@ impl InputPorts {
         }
     }
 
-    /// Current value of command input `name` (`0.0` if this vehicle doesn't accept
-    /// it). The read side of the input surface for actuators.
+    /// Current value of command input `name` (`0.0` if this vehicle does not
+    /// accept it). The read side of the input surface for actuators.
     #[inline]
     pub fn cmd(&self, name: &str) -> f64 {
         self.values.get(name).copied().unwrap_or(0.0)
@@ -175,15 +143,11 @@ impl InputPorts {
 
 /// The [`InputPorts`] governing `entity` — its own, or the nearest ancestor's.
 ///
-/// A command surface belongs to the VESSEL, and a part is not always a child of
-/// it. On an articulated rover a wheel hangs off a rocker link
-/// (`rocker_bogie.usda` hinges its wheels to `/RockerBogie/RockerL|R`), so the
+/// A command surface belongs to the vessel, and a part is not always a child
+/// of it. On an articulated rover a wheel hangs off a rocker link, so the
 /// wheel's carrier body is a suspension member with no command surface of its
-/// own. Anything asking "is my vehicle braking?" by looking at its immediate
-/// parent gets `None` there and, if it treats that as "not braking", silently
-/// loses the brake on exactly the rovers with the most suspension.
-///
-/// Walking up terminates at the vessel because only vessels carry `InputPorts`.
+/// own. Walking up terminates at the vessel because only vessels carry
+/// `InputPorts`.
 pub fn owning_input_ports<'w>(
     entity: Entity,
     q_child_of: &Query<&ChildOf>,
@@ -201,19 +165,16 @@ pub fn owning_input_ports<'w>(
 /// A runtime index from **output** name to the [`Port`] entity carrying that
 /// output's current value.
 ///
-/// This is the produced-value half of a control surface, and is a different
-/// thing from [`InputPorts`]: those are the logical input values a human or
-/// script issues, while these are runtime endpoints written by the authored
+/// This is the produced-value half of a control surface, and is different
+/// from [`InputPorts`]: those are the logical input values a human or script
+/// issues, while these are runtime endpoints written by the authored
 /// Modelica/Rhai controller network. The names and topology still come from
 /// authored USD `outputs:*` attributes; this component only stores the runtime
 /// endpoint for each one.
-///
-/// The port entities are owned by their producer so the recursive scene-clear
-/// reclaims them with it. Generated Modelica outputs stay on `SimComponent` and
-/// are never duplicated here.
 #[derive(Component, Debug, Clone, Default)]
 pub struct OutputPorts {
-    /// Maps authored output names (e.g. `"drive_left"`) to their `Port` entity.
+    /// Maps authored output names (for example, `"drive_left"`) to their
+    /// [`Port`] entity.
     pub ports: std::collections::HashMap<String, Entity>,
 }
 
@@ -233,7 +194,7 @@ impl OutputPorts {
 /// A runtime surface for a USD-authored component's physical ports.
 ///
 /// The names and endpoint entities are published by the component projection
-/// from authored `inputs:*`/`outputs:*` declarations.  Consumers resolve the
+/// from authored `inputs:*`/`outputs:*` declarations. Consumers resolve the
 /// authored connection through this surface; they do not discover a wheel,
 /// motor, hydraulic valve, or thermal boundary by Rust type or entity name.
 #[derive(Component, Debug, Clone, Default)]
@@ -259,10 +220,10 @@ impl PortSurface {
 ///
 /// `InputPorts` are the command request, while the wired Modelica/hardware path
 /// reads the derived output [`Port`]s. Waiting for a later producer tick to copy
-/// one into the other leaves an actor's final drive demand live after its
-/// lease has ended. This operation clears every actuator output now and closes the
-/// discrete brake gate when present, so the next co-simulation propagation sees a
-/// neutral vehicle regardless of schedule phase.
+/// one into the other leaves an actor's final drive demand live after its lease
+/// has ended. This operation clears every actuator output now and closes the
+/// discrete brake gate when present, so the next co-simulation propagation sees
+/// a neutral vehicle regardless of schedule phase.
 pub fn safe_stop_control_surface(
     inputs: Option<&mut InputPorts>,
     outputs: Option<&OutputPorts>,
@@ -282,9 +243,6 @@ pub fn safe_stop_control_surface(
 }
 
 /// Neutralize all declared control outputs while engaging the discrete brake gate.
-///
-/// Kept apart from its caller so every lifecycle boundary uses the identical
-/// actuator mapping.
 fn safe_stop_outputs(outputs: &OutputPorts, mut write: impl FnMut(Entity, f64)) {
     for (name, entity) in &outputs.ports {
         write(*entity, if name == "brake" { 1.0 } else { 0.0 });
@@ -296,12 +254,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_port_defaults() {
-        assert_eq!(
-            Port::default().value,
-            0.0,
-            "A port should initialize to zero"
-        );
+    fn port_defaults_to_zero() {
+        assert_eq!(Port::default().value, 0.0);
     }
 
     #[test]
@@ -311,10 +265,7 @@ mod tests {
         assert_eq!(inputs.cmd("brake"), 1.0);
         assert_eq!(inputs.cmd("throttle"), 0.0);
         assert_eq!(inputs.cmd("undeclared"), 0.0);
-        assert!(
-            !inputs.brake_active,
-            "the actuator derives this gate each tick"
-        );
+        assert!(!inputs.brake_active);
     }
 
     #[test]

@@ -63,7 +63,7 @@ pub enum CosimSet {
 ///   dynamic prediction (state reconciled), or
 /// * it is **not replicated at all** ([`lunco_core_session::NetReplicate`] absent). This
 ///   clause is the load-bearing one for vessel control: the endpoints of a
-///   rover's actuation graph are bare [`lunco_core::architecture::Port`] entities
+///   rover's actuation graph are bare [`lunco_port_core::Port`] entities
 ///   (`lunco-usd-sim`'s generic USD wiring targets wheel drive/heading ports), which have
 ///   no `RigidBody` and therefore never enter replication membership
 ///   (`apply_net_replication` requires one). They are local scaffolding whose
@@ -714,7 +714,7 @@ pub fn propagate_connections(
         // surface is a terminal authoring fault rather than a forever-pending
         // wire.
         let surface_pending = world
-            .get::<lunco_core::PortSurfacePending>(t.entity)
+            .get::<lunco_port_core::PortSurfacePending>(t.entity)
             .is_some();
         if compiling || surface_pending {
             pending.push(unresolved);
@@ -994,7 +994,10 @@ mod wire_order_tests {
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         let sink = world
-            .spawn((GlobalEntityId::from_raw(20), lunco_core::PortSurfacePending))
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                lunco_port_core::PortSurfacePending,
+            ))
             .id();
         world.spawn((
             SimConnection {
@@ -1169,10 +1172,16 @@ mod wire_order_tests {
         world.init_resource::<CosimDiagnostics>();
 
         let a = world
-            .spawn((GlobalEntityId::from_raw(10), lunco_core::PortSurfacePending))
+            .spawn((
+                GlobalEntityId::from_raw(10),
+                lunco_port_core::PortSurfacePending,
+            ))
             .id();
         let b = world
-            .spawn((GlobalEntityId::from_raw(20), lunco_core::PortSurfacePending))
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                lunco_port_core::PortSurfacePending,
+            ))
             .id();
         wire(&mut world, a, "out", b, "in");
         wire(&mut world, b, "out", a, "in");
@@ -1398,7 +1407,10 @@ mod wire_order_tests {
         world.init_resource::<CosimDiagnostics>();
 
         let balloon = world
-            .spawn((GlobalEntityId::from_raw(10), lunco_core::PortSurfacePending))
+            .spawn((
+                GlobalEntityId::from_raw(10),
+                lunco_port_core::PortSurfacePending,
+            ))
             .id();
         wire(&mut world, balloon, "netForce", balloon, "force_y");
         wire(&mut world, balloon, "height", balloon, "height");
@@ -1421,13 +1433,22 @@ mod wire_order_tests {
         world.init_resource::<CosimDiagnostics>();
 
         let a = world
-            .spawn((GlobalEntityId::from_raw(10), lunco_core::PortSurfacePending))
+            .spawn((
+                GlobalEntityId::from_raw(10),
+                lunco_port_core::PortSurfacePending,
+            ))
             .id();
         let b = world
-            .spawn((GlobalEntityId::from_raw(20), lunco_core::PortSurfacePending))
+            .spawn((
+                GlobalEntityId::from_raw(20),
+                lunco_port_core::PortSurfacePending,
+            ))
             .id();
         let c = world
-            .spawn((GlobalEntityId::from_raw(30), lunco_core::PortSurfacePending))
+            .spawn((
+                GlobalEntityId::from_raw(30),
+                lunco_port_core::PortSurfacePending,
+            ))
             .id();
         wire(&mut world, a, "out", b, "in");
         wire(&mut world, b, "out", c, "in");

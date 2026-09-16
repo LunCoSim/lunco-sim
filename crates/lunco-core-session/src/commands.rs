@@ -42,7 +42,7 @@ fn on_claim_control(
     local: Res<LocalSession>,
     rbac: Res<SessionRbac>,
     mut registry: ResMut<SessionRegistry>,
-    q_identity: Query<&lunco_core::GlobalEntityId, With<lunco_core::InputPorts>>,
+    q_identity: Query<&lunco_core::GlobalEntityId, With<lunco_port_core::InputPorts>>,
     mut commands: Commands,
 ) {
     // A client sends the command to the host and learns the authoritative

@@ -755,7 +755,7 @@ mod tests {
         let owned = world
             .spawn((
                 Name::new("owned"),
-                lunco_core::InputPorts::new(&["throttle"]),
+                lunco_port_core::InputPorts::new(&["throttle"]),
             ))
             .id();
         world.spawn(Name::new("not a port owner"));
@@ -786,7 +786,10 @@ mod tests {
         );
 
         let second = world
-            .spawn((Name::new("second"), lunco_core::InputPorts::new(&["arm"])))
+            .spawn((
+                Name::new("second"),
+                lunco_port_core::InputPorts::new(&["arm"]),
+            ))
             .id();
         populate_port_view(&mut world);
         assert_eq!(

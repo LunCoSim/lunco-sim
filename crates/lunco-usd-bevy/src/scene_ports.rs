@@ -328,13 +328,13 @@ pub fn build(app: &mut App) {
 fn mark_point_light_surface_ready(trigger: On<Add, PointLight>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
-        .try_insert(lunco_core::PortSurfaceReady);
+        .try_insert(lunco_port_core::PortSurfaceReady);
 }
 
 fn mark_spot_light_surface_ready(trigger: On<Add, SpotLight>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
-        .try_insert(lunco_core::PortSurfaceReady);
+        .try_insert(lunco_port_core::PortSurfaceReady);
 }
 
 #[cfg(test)]
@@ -382,7 +382,10 @@ mod tests {
         app.world_mut().entity_mut(e).insert(PointLight::default());
         app.update();
 
-        assert!(app.world().get::<lunco_core::PortSurfaceReady>(e).is_some());
+        assert!(app
+            .world()
+            .get::<lunco_port_core::PortSurfaceReady>(e)
+            .is_some());
     }
 
     #[test]

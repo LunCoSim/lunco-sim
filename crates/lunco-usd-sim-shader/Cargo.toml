@@ -10,6 +10,7 @@ bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh"] }
 openusd = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-render = { path = "../lunco-render" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }

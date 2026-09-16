@@ -1520,7 +1520,7 @@ mod tests {
     struct InteractionObserved(Option<(f64, f64, f64)>);
 
     fn observe_interaction_ports(
-        q: Query<&lunco_core::InputPorts>,
+        q: Query<&lunco_port_core::InputPorts>,
         mut observed: ResMut<InteractionObserved>,
     ) {
         let inputs = q.single().expect("the free avatar input surface");
@@ -1777,7 +1777,7 @@ mod tests {
             .world_mut()
             .spawn((
                 lunco_core::GlobalEntityId::from_raw(0xCAFE),
-                lunco_core::InputPorts::new(&["throttle", "steer", "brake"]),
+                lunco_port_core::InputPorts::new(&["throttle", "steer", "brake"]),
                 ControlBinding::from_intent_entries(&[
                     ("forward".into(), "throttle".into(), 1.0),
                     ("backward".into(), "throttle".into(), -1.0),
@@ -1915,7 +1915,7 @@ mod tests {
         state.press(&UserIntent::SpeedBoost);
         app.world_mut().spawn((
             state,
-            lunco_core::InputPorts::new(&["forward", "up", "speed_boost"]),
+            lunco_port_core::InputPorts::new(&["forward", "up", "speed_boost"]),
             ControlBinding {
                 binds: vec![
                     (UserIntent::MoveForward, "forward".into(), 1.0),
@@ -1938,7 +1938,7 @@ mod tests {
     struct LanderControlObserved(Option<(f64, f64, f64, f64)>);
 
     fn observe_lander_control_ports(
-        q: Query<&lunco_core::InputPorts>,
+        q: Query<&lunco_port_core::InputPorts>,
         mut observed: ResMut<LanderControlObserved>,
     ) {
         let inputs = q.single().expect("the lander input surface");
@@ -1991,7 +1991,7 @@ mod tests {
 
         app.world_mut().spawn((
             state,
-            lunco_core::InputPorts::new(&["external_throttle", "pitch", "roll", "yaw"]),
+            lunco_port_core::InputPorts::new(&["external_throttle", "pitch", "roll", "yaw"]),
             binding,
         ));
         app.world_mut().run_schedule(InteractionSchedule);

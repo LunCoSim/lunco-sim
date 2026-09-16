@@ -7,7 +7,7 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use lunco_core::InputPorts;
+use lunco_port_core::InputPorts;
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 
 use crate::wheel_kinematics::{body_point_velocity, wheel_heading, wheel_hub_pose};
@@ -56,8 +56,8 @@ pub(crate) fn update_wheel_spin(
         &WheelBodyMount,
     )>,
     mut q_ports: ParamSet<(
-        Query<&lunco_core::architecture::Port>,
-        Query<&mut lunco_core::architecture::Port>,
+        Query<&lunco_port_core::Port>,
+        Query<&mut lunco_port_core::Port>,
     )>,
     q_chassis: Query<
         (
@@ -139,7 +139,7 @@ pub(crate) fn update_wheel_spin(
         // vessel rather than read off whatever body this wheel hangs from — see
         // `owning_input_ports`. The chassis fetch below stays the carrier's,
         // because that IS the body whose motion sets the contact-patch velocity.
-        let braking = lunco_core::architecture::owning_input_ports(entity, &q_child_of, &q_inputs)
+        let braking = lunco_port_core::owning_input_ports(entity, &q_child_of, &q_inputs)
             .map(|c| c.brake_active)
             .unwrap_or(false);
         if let Ok((lin, ang, pos, rot, center_of_mass, _inputs, body, motion)) =
@@ -347,7 +347,7 @@ mod tests {
     use bevy::math::DVec3;
     use bevy::prelude::*;
     use bevy::time::{Time, TimePlugin, TimeUpdateStrategy};
-    use lunco_core::OutputPorts;
+    use lunco_port_core::OutputPorts;
     use std::time::Duration;
 
     /// Put a test app on the SAME clock the product runs on: fixed steps of
@@ -409,7 +409,7 @@ mod tests {
         // projection never substitutes a missing endpoint with a Rust default.
         let port = app
             .world_mut()
-            .spawn(lunco_core::architecture::Port { value: 0.0 })
+            .spawn(lunco_port_core::Port { value: 0.0 })
             .id();
         let chassis = app
             .world_mut()
@@ -507,11 +507,11 @@ mod tests {
 
         let port = app
             .world_mut()
-            .spawn(lunco_core::architecture::Port { value: 1.0 })
+            .spawn(lunco_port_core::Port { value: 1.0 })
             .id();
         let speed_port = app
             .world_mut()
-            .spawn(lunco_core::architecture::Port { value: 0.0 })
+            .spawn(lunco_port_core::Port { value: 0.0 })
             .id();
         let chassis = app
             .world_mut()

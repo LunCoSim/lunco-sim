@@ -23,11 +23,11 @@
 use bevy::prelude::*;
 use std::hash::{Hash, Hasher};
 
-use lunco_core::architecture::{InputPorts, OutputPorts, Port, PortSurface};
 use lunco_port_core::ports::{
     port_entity_map_key, port_name_set_key, push_map, PortBackend, PortDirection, PortMetadata,
     PortRef, PortRegistry, PortTopologyRevision, PortTopologyState,
 };
+use lunco_port_core::{InputPorts, OutputPorts, Port, PortSurface};
 
 use lunco_cosim_core::{DeclaredOutputPorts, SimComponent, SimConnection, PORT_NAME};
 
@@ -578,7 +578,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
     list: |w, e, out| {
         // `GlobalEntityId` names every composed USD prim, not just a vehicle.
         // The `InputPorts` surface is the architecture's already-authoritative
-        // command and possession boundary (see `lunco_core::InputPorts`).
+        // command and possession boundary (see `lunco_port_core::InputPorts`).
         // `ControlBinding` is merely an input-device adapter and `OutputPorts`
         // are mechanical output plumbing, so neither defines this port's owner.
         // Never manufacture `piloted` on meshes, joints, sensors, or arbitrary

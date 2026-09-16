@@ -8,10 +8,11 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use lunco_control_core::ControlBinding;
-use lunco_core::{Avatar, InputPorts, SceneMountState, TheLocalAvatar};
+use lunco_core::{Avatar, SceneMountState, TheLocalAvatar};
 use lunco_cosim_core::ControlLink;
 use lunco_luncosim_edit_gizmo_ui as edit_gizmo;
 use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
+use lunco_port_core::InputPorts;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp, ViewportPanel,

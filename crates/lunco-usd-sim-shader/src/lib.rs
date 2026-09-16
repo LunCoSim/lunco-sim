@@ -393,7 +393,7 @@ fn apply_usd_shader_material_read(
     let mut entity_commands = commands.entity(material_entity);
     entity_commands.remove::<PbrLook>().try_insert((
         look,
-        lunco_core::PortSurfaceReady,
+        lunco_port_core::PortSurfaceReady,
         lunco_usd_bevy_scene::UsdVisualShaderBound,
     ));
     None
@@ -414,7 +414,7 @@ fn reject_shader_material(
         .remove::<ShaderLook>()
         .remove::<lunco_materials::ShaderLookBound>()
         .remove::<lunco_materials::ShaderLookReady>()
-        .remove::<lunco_core::PortSurfaceReady>()
+        .remove::<lunco_port_core::PortSurfaceReady>()
         .remove::<lunco_usd_bevy_scene::UsdVisualShaderBound>();
     let detail = detail.into();
     error!(

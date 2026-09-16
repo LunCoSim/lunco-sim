@@ -1045,10 +1045,10 @@ pub fn instantiate_light_prim(
                 // the component below.
                 commands
                     .entity(entity)
-                    .try_insert(lunco_core::PortSurfacePending);
+                    .try_insert(lunco_port_core::PortSurfacePending);
                 commands
                     .entity(entity)
-                    .try_remove::<lunco_core::PortSurfacePending>();
+                    .try_remove::<lunco_port_core::PortSurfacePending>();
                 commands.entity(entity).try_insert((
                     SpotLight {
                         color,
@@ -1073,7 +1073,7 @@ pub fn instantiate_light_prim(
                         intensity_scale: exposure_scale * area_scale,
                         range_uses_graphics_default,
                     },
-                    lunco_core::PortSurfaceReady,
+                    lunco_port_core::PortSurfaceReady,
                 ));
                 debug!(
                     "[usd-bevy] {} SphereLight (SpotLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m, cone={} deg",
@@ -1091,10 +1091,10 @@ pub fn instantiate_light_prim(
                 // — local light, not a scene-dominant sun/sky (see above).
                 commands
                     .entity(entity)
-                    .try_insert(lunco_core::PortSurfacePending);
+                    .try_insert(lunco_port_core::PortSurfacePending);
                 commands
                     .entity(entity)
-                    .try_remove::<lunco_core::PortSurfacePending>();
+                    .try_remove::<lunco_port_core::PortSurfacePending>();
                 commands.entity(entity).try_insert((
                     PointLight {
                         color,
@@ -1113,7 +1113,7 @@ pub fn instantiate_light_prim(
                         intensity_scale: exposure_scale * area_scale,
                         range_uses_graphics_default,
                     },
-                    lunco_core::PortSurfaceReady,
+                    lunco_port_core::PortSurfaceReady,
                 ));
                 debug!(
                     "[usd-bevy] {} SphereLight (PointLight) intensity={} lm (base {} x area {}), radius={} m, normalize={}, range={} m",

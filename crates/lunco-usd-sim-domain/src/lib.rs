@@ -525,7 +525,7 @@ fn commit_domain_projection(
         model,
         signal_layout,
         UsdSourcedCosim,
-        lunco_core::PortSurfacePending,
+        lunco_port_core::PortSurfacePending,
         UsdModelicaPortContract::new(synthesized.inputs.iter().cloned(), declared_output_ports),
         UsdModelicaSchedule {
             communication_period_secs: synthesized.communication_period_secs,

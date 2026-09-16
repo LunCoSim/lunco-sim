@@ -11,7 +11,6 @@
 // commands on exactly the same macro/reflection path as plugin commands.
 extern crate self as lunco_core;
 
-pub mod architecture;
 /// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `SyncChannel`.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
@@ -29,6 +28,7 @@ pub mod log;
 /// Architectural marker components shared by engine subsystems.
 pub mod markers;
 pub mod mocks;
+pub mod physics_state;
 pub mod programs;
 /// M4 — pure predict-own reconciliation decision (input-replay, D2). The
 /// dependency-free geometry the spawn-domain `reconcile_owned_prediction` system
@@ -58,7 +58,6 @@ pub mod pacing;
 /// Run-condition effectiveness — see [`gate::tracked`].
 pub mod gate;
 
-pub use architecture::*;
 pub use derived::RebuildOnChange;
 pub use faults::{
     clear_runtime_diagnostics, DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics,
@@ -71,6 +70,7 @@ pub use model_state::ModelStateRevision;
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };
+pub use physics_state::*;
 pub use telemetry::*;
 // Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
 // crate-root `use bevy::prelude::*` below shadows the glob above for external
@@ -888,8 +888,6 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<Parameter>()
             .register_type::<SampledParameter>()
             .register_type::<ModelStateRevision>()
-            .register_type::<Port>()
-            .register_type::<CausalStateSink>()
             .register_type::<PhysicalProperties>()
             .register_type::<CelestialBody>()
             .register_type::<Spacecraft>()

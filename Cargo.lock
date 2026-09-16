@@ -7211,6 +7211,7 @@ dependencies = [
  "lunco-environment",
  "lunco-input-core",
  "lunco-physics",
+ "lunco-port-core",
  "lunco-render",
  "lunco-settings",
  "lunco-spatial",
@@ -7390,6 +7391,7 @@ dependencies = [
  "lunco-cosim",
  "lunco-cosim-core",
  "lunco-input-core",
+ "lunco-port-core",
  "lunco-time",
  "serde",
  "serde_json",
@@ -7415,6 +7417,7 @@ dependencies = [
  "bevy",
  "lunco-core",
  "lunco-hooks",
+ "lunco-port-core",
  "serde",
 ]
 
@@ -7504,7 +7507,7 @@ version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
- "lunco-core",
+ "lunco-port-core",
 ]
 
 [[package]]
@@ -7959,6 +7962,7 @@ dependencies = [
  "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
+ "lunco-port-core",
  "lunco-spatial",
  "lunco-time",
  "serde_json",
@@ -8312,7 +8316,6 @@ name = "lunco-port-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
- "lunco-core",
 ]
 
 [[package]]
@@ -8572,6 +8575,7 @@ dependencies = [
  "lunco-hooks-rhai",
  "lunco-input-core",
  "lunco-physics",
+ "lunco-port-core",
  "lunco-readiness",
  "lunco-render-recovery",
  "lunco-scripting-bridge-core",
@@ -8617,6 +8621,7 @@ dependencies = [
  "lunco-control-core",
  "lunco-core",
  "lunco-physics",
+ "lunco-port-core",
  "lunco-scripting-bridge-core",
  "lunco-spatial",
 ]
@@ -9128,6 +9133,7 @@ dependencies = [
  "bevy",
  "half",
  "lunco-core",
+ "lunco-port-core",
  "lunco-render",
  "lunco-usd-bevy-core",
  "lunco-usd-compose",
@@ -9419,6 +9425,7 @@ dependencies = [
  "lunco-modelica-core",
  "lunco-modelica-runtime",
  "lunco-physics",
+ "lunco-port-core",
  "lunco-readiness",
  "lunco-scripting",
  "lunco-spatial",
@@ -9475,6 +9482,7 @@ dependencies = [
  "lunco-modelica-core",
  "lunco-modelica-index",
  "lunco-modelica-runtime",
+ "lunco-port-core",
  "lunco-signal",
  "lunco-usd-actuation",
  "lunco-usd-bevy-core",
@@ -9503,6 +9511,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-core",
  "lunco-materials",
+ "lunco-port-core",
  "lunco-render",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",

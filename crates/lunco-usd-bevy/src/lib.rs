@@ -1071,12 +1071,13 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 // surface. The binding declares which names are writable; USD
                 // remains the source of their initial state. Omitted inputs
                 // use the semantic zero default.
-                let inputs = lunco_core::InputPorts::with_defaults(binding.ports().map(|port| {
-                    let value = reader
-                        .real(&sdf_path, &format!("inputs:{port}"))
-                        .unwrap_or(0.0);
-                    (port.to_string(), value)
-                }));
+                let inputs =
+                    lunco_port_core::InputPorts::with_defaults(binding.ports().map(|port| {
+                        let value = reader
+                            .real(&sdf_path, &format!("inputs:{port}"))
+                            .unwrap_or(0.0);
+                        (port.to_string(), value)
+                    }));
                 // `InputPorts` rides along with the binding: the binding DECLARES
                 // the accepted input ports, while the composed USD inputs provide
                 // their initial values. The vocabulary is never a Rust literal.

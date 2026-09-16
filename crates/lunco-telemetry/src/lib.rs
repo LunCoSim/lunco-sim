@@ -989,7 +989,7 @@ fn read_port(
             // clock: the output will become readable when the worker publishes it.
             if registry.has_output_port(world, entity, name)
                 || world
-                    .get::<lunco_core::PortSurfacePending>(entity)
+                    .get::<lunco_port_core::PortSurfacePending>(entity)
                     .is_some()
             {
                 return None;
@@ -1047,8 +1047,8 @@ fn read_reflect(world: &World, entity: Entity, path: &str) -> Option<TelemetryVa
 mod tests {
     use super::*;
     use bevy::time::TimeUpdateStrategy;
-    use lunco_core::architecture::Port;
     use lunco_port_core::ports::PortDirection;
+    use lunco_port_core::Port;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 

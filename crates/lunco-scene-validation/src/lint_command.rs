@@ -277,7 +277,7 @@ fn live_runtime_connection_facts(
                     }
                 });
                 let pending = source_entity
-                    .and_then(|entity| world.get::<lunco_core::PortSurfacePending>(entity))
+                    .and_then(|entity| world.get::<lunco_port_core::PortSurfacePending>(entity))
                     .is_some();
                 let provider = lunco_usd_bevy_core::read::runtime_port_provider(view, &source_prim)
                     .unwrap_or("runtime provider");

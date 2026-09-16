@@ -603,7 +603,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
             })
             .unwrap_or_default();
         let Some(mut causal_sinks) =
-            QueryState::<(), With<lunco_core::CausalStateSink>>::try_new(world)
+            QueryState::<(), With<lunco_port_core::CausalStateSink>>::try_new(world)
         else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::InternalError,

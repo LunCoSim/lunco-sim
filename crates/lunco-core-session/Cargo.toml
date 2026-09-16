@@ -8,6 +8,7 @@ description = "Always-on session, authority, prediction markers, and identity ad
 [dependencies]
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 serde = { workspace = true }
 

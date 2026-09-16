@@ -28,9 +28,9 @@ use avian3d::prelude::{AngularVelocity, JointBasis, JointFrame, RevoluteJoint, R
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_core::architecture::Port;
 use lunco_cosim::JointTorqueActuator;
 use lunco_mobility::WheelRaycast;
+use lunco_port_core::Port;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_scene_selection::SelectedEntities;

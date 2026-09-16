@@ -174,10 +174,10 @@ pub fn bind_connections(world: &mut World) {
             || matches!(model_status(spec.start_element), Some(SimStatus::Compiling))
             || matches!(model_status(spec.end_element), Some(SimStatus::Compiling));
         let surface_pending = world
-            .get::<lunco_core::PortSurfacePending>(spec.start_element)
+            .get::<lunco_port_core::PortSurfacePending>(spec.start_element)
             .is_some()
             || world
-                .get::<lunco_core::PortSurfacePending>(spec.end_element)
+                .get::<lunco_port_core::PortSurfacePending>(spec.end_element)
                 .is_some();
         // A terminal participant failure is already an authoritative runtime
         // fact on the endpoint. Retire the edge without manufacturing a second
@@ -285,7 +285,7 @@ pub fn bind_connections(world: &mut World) {
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-    use lunco_core::InputPorts;
+    use lunco_port_core::InputPorts;
 
     fn world_with_ports(target_port: &str) -> (World, Entity, Entity) {
         let mut world = World::new();
@@ -356,7 +356,7 @@ mod tests {
             let mut registry = world.resource_mut::<PortRegistry>();
             crate::ports::register_builtin_port_backends(&mut registry);
         }
-        let source = world.spawn(lunco_core::Port { value: 0.75 }).id();
+        let source = world.spawn(lunco_port_core::Port { value: 0.75 }).id();
         let target = world.spawn(InputPorts::new(&["drive_left"])).id();
         let edge = world
             .spawn(SimConnection {
@@ -604,7 +604,7 @@ mod tests {
 
         world
             .entity_mut(target)
-            .insert(lunco_core::PortSurfacePending);
+            .insert(lunco_port_core::PortSurfacePending);
         world.resource_mut::<BindingRevision>().seal_epoch();
         world.run_system_once(bind_connections).unwrap();
 
@@ -616,7 +616,7 @@ mod tests {
 
         world
             .entity_mut(target)
-            .remove::<lunco_core::PortSurfacePending>();
+            .remove::<lunco_port_core::PortSurfacePending>();
         world.resource_mut::<BindingRevision>().request();
         world.run_system_once(bind_connections).unwrap();
         assert!(world.get::<BoundConnection>(edge).is_some());

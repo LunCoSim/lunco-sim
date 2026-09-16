@@ -66,7 +66,6 @@ use lunco_usd_bevy_scene::{
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
 // See docs/architecture/render-decoupling.md.
-use lunco_core::architecture::{Port, PortSurface};
 use lunco_cosim::{avian_queries::RaycastObservation, JointTorqueActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::wheel_kinematics::{body_point_velocity, wheel_hub_pose, wheel_roll_rate};
@@ -74,6 +73,7 @@ use lunco_mobility::{
     DifferentialCoupling, DifferentialDriveType, JointedWheelTire, Suspension, SuspensionPiston,
     SuspensionSpring, WheelRaycast,
 };
+use lunco_port_core::{Port, PortSurface};
 use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
@@ -1312,7 +1312,7 @@ fn process_usd_sim_prim_read(
                 // no SimComponent of its own.
                 commands
                     .entity(entity)
-                    .try_insert((observation, lunco_core::PortSurfaceReady));
+                    .try_insert((observation, lunco_port_core::PortSurfaceReady));
             }
             Err(()) => {
                 push_usd_sim_diagnostic(
@@ -1431,7 +1431,7 @@ fn process_usd_sim_prim_read(
         commands
             .entity(entity)
             .try_insert((lunco_core::SelectableRoot, lunco_core::MobilityRoot))
-            .remove::<lunco_core::OutputPorts>();
+            .remove::<lunco_port_core::OutputPorts>();
 
         if port_names.is_empty() {
             debug!(
@@ -1455,7 +1455,7 @@ fn process_usd_sim_prim_read(
 
             commands
                 .entity(entity)
-                .try_insert(lunco_core::OutputPorts::new(port_map));
+                .try_insert(lunco_port_core::OutputPorts::new(port_map));
         }
 
         // The input surface is AUTHORED, in the vessel's `Controls` scope: the
@@ -1720,7 +1720,7 @@ fn process_usd_sim_prim_read(
                 ("heading".to_owned(), p_heading),
                 ("shaft_speed".to_owned(), p_speed),
             ])),
-            lunco_core::PortSurfaceReady,
+            lunco_port_core::PortSurfaceReady,
         ));
 
         // A wheel receives only the scalar signals explicitly authored on its
@@ -3419,7 +3419,7 @@ mod proxy_wheel_tests {
                     ang: DVec3::ZERO,
                 },
                 lunco_core::MobilityRoot,
-                lunco_core::OutputPorts::default(),
+                lunco_port_core::OutputPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -3508,7 +3508,7 @@ mod proxy_wheel_tests {
                     ang: DVec3::ZERO,
                 },
                 lunco_core::MobilityRoot,
-                lunco_core::OutputPorts::default(),
+                lunco_port_core::OutputPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
@@ -3588,7 +3588,7 @@ mod proxy_wheel_tests {
                     ang,
                 },
                 lunco_core::MobilityRoot,
-                lunco_core::OutputPorts::default(),
+                lunco_port_core::OutputPorts::default(),
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();

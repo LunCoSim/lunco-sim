@@ -9,9 +9,9 @@
 use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use lunco_core::architecture::Port;
-use lunco_core::InputPorts;
 use lunco_cosim::{bounded_brake_torque, revolute_hinge_axis_world, JointTorqueActuator};
+use lunco_port_core::InputPorts;
+use lunco_port_core::Port;
 
 use crate::wheel_kinematics::body_point_velocity;
 use crate::{
@@ -172,9 +172,8 @@ pub fn apply_jointed_tire_forces(
             let Ok(port) = q_ports.get(motor.port_entity) else {
                 continue;
             };
-            let braking =
-                lunco_core::architecture::owning_input_ports(wheel, &q_child_of, &q_inputs)
-                    .is_some_and(|inputs| inputs.brake_active);
+            let braking = lunco_port_core::owning_input_ports(wheel, &q_child_of, &q_inputs)
+                .is_some_and(|inputs| inputs.brake_active);
             let brake_torque = if braking {
                 bounded_brake_torque(motor.brake_torque, motor.rotational_inertia, omega, full_dt)
             } else {

@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 bevy = { workspace = true }
 avian3d = { workspace = true }
-lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 
 [lints]
 workspace = true

@@ -3915,7 +3915,7 @@ mod tests {
 
         let mut world = World::new();
         world.init_resource::<ApiEntityRegistry>();
-        world.register_component::<lunco_core::InputPorts>();
+        world.register_component::<lunco_port_core::InputPorts>();
         let parent = world.spawn(Name::new("base")).id();
         // Inserting ChildOf fires the relationship hook → parent gains Children.
         let child = world.spawn((Name::new("arm"), ChildOf(parent))).id();
@@ -3947,7 +3947,7 @@ mod tests {
 
         let mut world = World::new();
         world.init_resource::<ApiEntityRegistry>();
-        world.register_component::<lunco_core::InputPorts>();
+        world.register_component::<lunco_port_core::InputPorts>();
         let frame = world
             .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();

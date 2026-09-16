@@ -68,14 +68,14 @@ fn spawn_endpoints(app: &mut App, handle: Handle<UsdStageAsset>) {
             stage_handle: handle.clone(),
             path: "/World/Src".into(),
         },
-        lunco_core::PortSurfaceReady,
+        lunco_port_core::PortSurfaceReady,
     ));
     app.world_mut().spawn((
         UsdPrimPath {
             stage_handle: handle,
             path: "/World/Sink".into(),
         },
-        lunco_core::PortSurfaceReady,
+        lunco_port_core::PortSurfaceReady,
     ));
 }
 

@@ -708,8 +708,8 @@ fn project_usd_telemetry(
     )>,
     target_surface_query: Query<(
         Has<SimComponent>,
-        Has<lunco_core::PortSurfaceReady>,
-        Has<lunco_core::PortSurfacePending>,
+        Has<lunco_port_core::PortSurfaceReady>,
+        Has<lunco_port_core::PortSurfacePending>,
     )>,
     pending_interface_query: Query<(), (With<UsdSourcedCosim>, Without<SimComponent>)>,
     pending_query: Query<
@@ -2008,7 +2008,7 @@ pub(crate) fn wrap_modelica_into_simcomponent(
         // telemetry and connection diagnostics in typed assembly-pending state
         // for that real lifecycle interval; the wrapper owns readiness once it
         // has been inserted.
-        entity_commands.remove::<lunco_core::PortSurfacePending>();
+        entity_commands.remove::<lunco_port_core::PortSurfacePending>();
         if let Some(contract) = contract {
             entity_commands.try_insert(DeclaredOutputPorts {
                 names: contract.outputs.iter().cloned().collect(),
@@ -2038,13 +2038,13 @@ struct WiringQueries<'w, 's> {
             Has<ModelicaModel>,
             Option<&'static GeneratedModelicaSource>,
             Has<lunco_environment::EnvironmentProbe>,
-            Option<&'static lunco_core::PortSurface>,
+            Option<&'static lunco_port_core::PortSurface>,
             Option<&'static UsdInstanceProjection>,
         ),
         Or<(
-            With<lunco_core::PortSurfaceReady>,
-            With<lunco_core::PortSurface>,
-            With<lunco_core::OutputPorts>,
+            With<lunco_port_core::PortSurfaceReady>,
+            With<lunco_port_core::PortSurface>,
+            With<lunco_port_core::OutputPorts>,
             With<SimComponent>,
         )>,
     >,
@@ -2060,7 +2060,7 @@ struct WiringQueries<'w, 's> {
         Without<lunco_core_session::NotPredictable>,
     >,
     defaults: Query<'w, 's, &'static UsdInputDefaults>,
-    outputs: Query<'w, 's, &'static lunco_core::OutputPorts>,
+    outputs: Query<'w, 's, &'static lunco_port_core::OutputPorts>,
 }
 
 /// Run condition for the derived USD wiring cache.
@@ -2074,9 +2074,9 @@ fn wiring_due(
         (),
         Or<(
             Added<SimComponent>,
-            Added<lunco_core::OutputPorts>,
-            Added<lunco_core::PortSurface>,
-            Added<lunco_core::PortSurfaceReady>,
+            Added<lunco_port_core::OutputPorts>,
+            Added<lunco_port_core::PortSurface>,
+            Added<lunco_port_core::PortSurfaceReady>,
         )>,
     >,
     dirty: Res<UsdWiringDirty>,
@@ -2292,13 +2292,13 @@ fn rewire_usd_connections(
             // this transition a boundary wire can be permanently absent while
             // diagnostics quite correctly report no broken edge.
             Added<SimComponent>,
-            Added<lunco_core::OutputPorts>,
+            Added<lunco_port_core::OutputPorts>,
             // A generic physical surface can be installed after a broader
             // endpoint marker (for example a rigid body) already exists. The
             // surface itself is the authoritative transition for its named
             // ports; do not rely on the earlier marker to trigger a rebuild.
-            Added<lunco_core::PortSurface>,
-            Added<lunco_core::PortSurfaceReady>,
+            Added<lunco_port_core::PortSurface>,
+            Added<lunco_port_core::PortSurfaceReady>,
         )>,
     >,
     mut dirty: ResMut<UsdWiringDirty>,
@@ -2386,7 +2386,7 @@ fn rewire_usd_connections(
         .iter()
         .filter_map(|(entity, _, _, _, is_probe, _, _)| is_probe.then_some(entity))
         .collect();
-    let port_surfaces: HashMap<Entity, lunco_core::PortSurface> = wiring
+    let port_surfaces: HashMap<Entity, lunco_port_core::PortSurface> = wiring
         .endpoints
         .iter()
         .filter_map(|(entity, _, _, _, _, surface, _)| {
@@ -2885,13 +2885,13 @@ fn causal_participants_changed(
             Changed<SimConnection>,
             Changed<ConnectionBinding>,
             Added<ModelicaModel>,
-            Added<lunco_core::CausalStateSink>,
+            Added<lunco_port_core::CausalStateSink>,
         )>,
     >,
     mut removed_connections: RemovedComponents<SimConnection>,
     mut removed_bindings: RemovedComponents<ConnectionBinding>,
     mut removed_models: RemovedComponents<ModelicaModel>,
-    mut removed_sinks: RemovedComponents<lunco_core::CausalStateSink>,
+    mut removed_sinks: RemovedComponents<lunco_port_core::CausalStateSink>,
     revision: Res<lunco_cosim::BindingRevision>,
 ) -> bool {
     !arrivals.is_empty()
@@ -2925,7 +2925,7 @@ fn derive_causal_barrier_participants(world: &mut World) {
         .collect();
 
     let stateful_sinks: bevy::ecs::entity::EntityHashSet = world
-        .query_filtered::<Entity, With<lunco_core::CausalStateSink>>()
+        .query_filtered::<Entity, With<lunco_port_core::CausalStateSink>>()
         .iter(world)
         .collect();
 
@@ -3236,9 +3236,9 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(lunco_usd_sim_domain::on_remove_generated_source)
             .add_observer(request_binding_epoch::<SimComponent>)
             .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
-            .add_observer(mark_wiring_dirty_on_remove::<lunco_core::OutputPorts>)
-            .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurface>)
-            .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurfaceReady>)
+            .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::OutputPorts>)
+            .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurface>)
+            .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurfaceReady>)
             .add_observer(forget_binding_model_status)
             .add_observer(request_binding_epoch::<lunco_usd_avian_contracts::PendingUsdJoint>)
             .add_observer(
@@ -3647,7 +3647,7 @@ mod tests {
         let body = world
             .spawn((
                 avian3d::prelude::RigidBody::Dynamic,
-                lunco_core::CausalStateSink,
+                lunco_port_core::CausalStateSink,
             ))
             .id();
 
@@ -3692,7 +3692,7 @@ mod tests {
         let body = world
             .spawn((
                 avian3d::prelude::RigidBody::Dynamic,
-                lunco_core::CausalStateSink,
+                lunco_port_core::CausalStateSink,
             ))
             .id();
         world.spawn((SimConnection {
@@ -3721,7 +3721,7 @@ mod tests {
         let body = world
             .spawn((
                 avian3d::prelude::RigidBody::Dynamic,
-                lunco_core::CausalStateSink,
+                lunco_port_core::CausalStateSink,
             ))
             .id();
         world.spawn((
@@ -4108,7 +4108,7 @@ mod tests {
         model.inputs.insert("throttle".into(), 0.0);
         model.compiled_input_names.insert("throttle".into());
         let component = SimComponent::default();
-        let command_surface = lunco_core::InputPorts::with_defaults([
+        let command_surface = lunco_port_core::InputPorts::with_defaults([
             ("throttle".to_string(), 0.75),
             ("heading".to_string(), -0.2),
         ]);
