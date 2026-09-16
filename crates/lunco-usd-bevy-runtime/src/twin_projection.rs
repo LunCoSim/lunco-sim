@@ -149,7 +149,7 @@ impl PendingTwinDocs {
 /// authored onto the live scene stage. When a structural edit adds a prim that
 /// references an asset whose layer bytes aren't loaded into the scene's live
 /// resolver yet (a first-of-its-kind rover spawn), [`sync_twin_overlays`] loads
-/// that asset as a `UsdStageAsset` (whose loader fetches the full closure,
+/// that asset as a `UsdStageAsset` (whose loader fetches the available closure,
 /// web-ready) and queues this. [`drain_ref_spawns`] injects the fetched bytes
 /// into the scene stage's resolver and authors the prim + `references` arc, so
 /// the openusd change sink fires and `project_stage_changes` instantiates the
@@ -1881,10 +1881,11 @@ fn rebuild_scene_from_composed(
 
 /// Make every newly referenced asset in a coarse edit available to the live
 /// stage before rebuilding it. The async `UsdStageAsset` loader already owns
-/// the complete transitive layer closure; this only transfers those bytes into
+/// the available transitive layer closure; this only transfers those bytes into
 /// the existing canonical resolver. If a closure is still loading, leave the
 /// document generation unsynced so the asset event retries the same rebuild
-/// with a complete resolver instead of publishing an incomplete stage.
+/// with the available resolver instead of publishing a stage before its root
+/// asset is ready.
 fn ensure_reference_layers_for_rebuild(
     world: &mut World,
     scene_id: AssetId<UsdStageAsset>,
