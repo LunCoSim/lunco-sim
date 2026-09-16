@@ -130,8 +130,9 @@ pub fn requirement_report_json(analysis: &SysmlAnalysis) -> String {
 ///
 /// This is the preferred in-process path: every field is constructed directly
 /// as a Rhai value, so callers do not serialize to JSON and immediately parse
-/// the same data back into maps.  `source_revision_hex` is retained as the
-/// lossless identity for the u64 source generation.
+/// the same data back into maps.  Source generations are exposed as canonical
+/// decimal text plus hexadecimal text: Rhai's signed integer is not a lossless
+/// representation of the full u64 identity, so the bridge never narrows it.
 pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     let mut report = Map::new();
     report.insert(
@@ -140,7 +141,7 @@ pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     );
     report.insert(
         "source_revision".into(),
-        Dynamic::from_int(analysis.source_revision() as i64),
+        Dynamic::from(analysis.source_revision().to_string()),
     );
     report.insert(
         "stdlib".into(),
@@ -227,7 +228,7 @@ pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     );
     report.insert(
         "source_revision".into(),
-        Dynamic::from_int(analysis.source_revision() as i64),
+        Dynamic::from(analysis.source_revision().to_string()),
     );
     report.insert(
         "stdlib".into(),
@@ -517,5 +518,27 @@ mod tests {
             .eval("sysml_report().attributes[0].value.number_value")
             .expect("native numeric projection");
         assert_eq!(value, 2.5);
+    }
+
+    #[test]
+    fn source_revision_is_lossless_text_in_native_reports() {
+        let analysis = SysmlAnalysis::build(
+            [("revision.sysml", "requirement def R {}")],
+            false,
+            u64::MAX,
+        );
+        let report = report_dynamic(&analysis);
+        let report = report.cast::<Map>();
+        assert_eq!(
+            report["source_revision"].clone().into_immutable_string().unwrap(),
+            u64::MAX.to_string()
+        );
+        assert_eq!(
+            report["source_revision_hex"]
+                .clone()
+                .into_immutable_string()
+                .unwrap(),
+            "0xffffffffffffffff"
+        );
     }
 }
