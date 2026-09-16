@@ -7912,7 +7912,6 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-document",
  "lunco-usd-geometry",
- "lunco-usd-sim",
  "lunco-usd-sim-core",
  "lunco-usd-ui",
  "lunco-usd-viewport-core",

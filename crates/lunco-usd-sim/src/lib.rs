@@ -435,9 +435,6 @@ impl Plugin for UsdSimPlugin {
     }
 }
 
-/// USD-authored screen-facing text labels (`lunco:billboard*`) — a prim
-/// declares its own label content, including live geolocation.
-pub mod billboard;
 pub mod lint;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
@@ -1119,7 +1116,7 @@ fn process_usd_sim_prim_read(
         }
     };
     if billboard_enabled {
-        let default = billboard::UsdBillboard::default();
+        let default = lunco_usd_bevy_scene::billboard::UsdBillboard::default();
         let billboard = (|| {
             let template = match reader.attr_value(&sdf_path, "lunco:billboard:text") {
                 Some(Value::String(value)) => value,
@@ -1141,7 +1138,7 @@ fn process_usd_sim_prim_read(
             if fade_end <= 0.0 {
                 return Err(());
             }
-            Ok(billboard::UsdBillboard {
+            Ok(lunco_usd_bevy_scene::billboard::UsdBillboard {
                 template,
                 offset_y,
                 fade_end,

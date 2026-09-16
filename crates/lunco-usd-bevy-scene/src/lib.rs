@@ -8,6 +8,7 @@
 //! the visual implementation. It also owns the shared composed collision
 //! envelopes used for placement and read-only scene inspection.
 
+pub mod billboard;
 pub mod collision;
 mod geometry;
 

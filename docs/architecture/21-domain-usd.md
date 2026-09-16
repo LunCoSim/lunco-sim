@@ -32,8 +32,9 @@ owns the reusable render-free BasisCurves evaluator, NURBS, trim, and
 curve-sweep substrate;
 `lunco-usd-bevy-core` owns prepared/composed stage data;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
-projection ordering boundaries, visual-split markers, shared geometry decoding,
-and composed collision/placement envelopes; `lunco-usd-bevy-camera` owns render-free camera
+projection ordering boundaries, visual-split markers, authored billboard
+contracts, shared geometry decoding, and composed collision/placement
+envelopes; `lunco-usd-bevy-camera` owns render-free camera
 projection intent, camera paths, mounts, selection, and viewport reconciliation;
 it consumes the BasisCurves evaluator from `lunco-usd-geometry` rather than
 owning a second curve implementation;
