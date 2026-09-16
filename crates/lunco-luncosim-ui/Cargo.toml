@@ -81,6 +81,7 @@ lunco-scene-camera = { path = "../lunco-scene-camera" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 lunco-scripting = { path = "../lunco-scripting" }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }

@@ -72,7 +72,8 @@ Apps (luncosim, luncosim-server, lunica)
    ├── Domain crates (Documents + Co-Simulation)
    │     lunco-modelica-core   lunco-usd-commands   lunco-cosim   lunco-celestial
    │     lunco-environment   lunco-avatar   lunco-controller   ...
-   │     lunco-scripting   ← rhai world-bridge + op-graph generators
+   │     lunco-scripting-bridge-core ← interpreter-free reflected world mechanism
+   │     lunco-scripting   ← rhai/python bindings + op-graph generators
    │          │
    │          ▼
    ├── UI adapters

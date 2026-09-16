@@ -1,12 +1,6 @@
 use bevy::prelude::*;
 
 pub mod backend;
-/// Language-neutral world bridge (verbs + native `ValueBuilder`); rhai/Python
-/// are thin bindings over it. Compiled whenever a backend that uses it is
-/// enabled — it pulls the ECS/world deps (`lunco-api`, `big_space`) those
-/// features provide.
-#[cfg(any(feature = "rhai", feature = "python"))]
-pub mod bridge_core;
 /// Authoring catalog (`ScriptingCatalog` query) — the discoverability surface
 /// for editor completion / hover / docs.
 #[cfg(feature = "rhai")]
@@ -407,7 +401,7 @@ impl Plugin for LunCoScriptingPlugin {
         // what a scenario ticked before Startup (there is none) would want.
         #[cfg(any(feature = "rhai", feature = "python"))]
         {
-            app.init_resource::<scenario::ScenarioAudience>();
+            app.init_resource::<lunco_scripting_bridge_core::ScenarioAudience>();
             app.add_systems(Startup, scenario::resolve_scenario_audience);
         }
         app.add_observer(on_close_script_document);

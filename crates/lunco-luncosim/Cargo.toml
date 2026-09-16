@@ -72,6 +72,7 @@ lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
 lunco-scripting = { path = "../lunco-scripting" }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets = { path = "../lunco-assets", optional = true }
 lunco-twin = { path = "../lunco-twin" }

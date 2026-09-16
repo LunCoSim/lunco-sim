@@ -1,0 +1,32 @@
+[package]
+name = "lunco-scripting-bridge-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Language-neutral reflected world bridge for LunCoSim scripting backends"
+
+[features]
+default = []
+workspace = ["dep:lunco-workspace"]
+
+[dependencies]
+bevy = { workspace = true }
+big_space = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-core = { path = "../lunco-core" }
+lunco-core-session = { path = "../lunco-core-session" }
+lunco-control-core = { path = "../lunco-control-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-physics = { path = "../lunco-physics" }
+lunco-spatial = { path = "../lunco-spatial" }
+lunco-time = { path = "../lunco-time" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-workspace = { path = "../lunco-workspace", optional = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -16,10 +16,10 @@ use lunco_core::GlobalEntityId;
 use lunco_doc::{status_json, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 
-use crate::bridge_core::JsonBuilder;
 use crate::doc::ScriptedModel;
 use crate::scenario::ScenarioDriver;
 use crate::world_bridge::RhaiScenarioRuntime;
+use lunco_scripting_bridge_core::JsonBuilder;
 
 /// `ScriptStatus { target }` → `{ state, ok, diagnostics: [{severity,message,line,col}] }`
 /// for the scenario attached to entity `target` (a `GlobalEntityId`). Returns an

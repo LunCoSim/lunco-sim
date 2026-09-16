@@ -61,13 +61,14 @@ fn first_set_failure(id: u64, path: &str) -> bool {
 
 use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext, AST};
 
-use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::ScriptLanguage;
 use lunco_doc::Diagnostic;
+use lunco_scripting_bridge_core as bridge_core;
+use lunco_scripting_bridge_core::ValueBuilder;
 
 // ── Native value builder (rhai) ────────────────────────────────────────────
 //
-// The world-access logic lives in [`crate::bridge_core`], language-neutral. This
+// The world-access logic lives in [`lunco_scripting_bridge_core`], language-neutral. This
 // is the rhai binding: `RhaiBuilder` constructs native `Dynamic` values so the
 // core's generic readers build `reflect → Dynamic` in one hop (no JSON on the
 // read path). `WorldScope` / `with_world` also live in `bridge_core` now.
@@ -3101,16 +3102,18 @@ mod tests {
     fn get_returns_vectors_as_arrays() {
         use bevy::math::{Quat, Vec3};
         // Vec3 → [x,y,z]
-        let d =
-            crate::bridge_core::build_from_reflect(&super::RhaiBuilder, &Vec3::new(1.0, 2.0, 3.0))
-                .unwrap();
+        let d = lunco_scripting_bridge_core::build_from_reflect(
+            &super::RhaiBuilder,
+            &Vec3::new(1.0, 2.0, 3.0),
+        )
+        .unwrap();
         let a = d.into_array().expect("Vec3 should become a rhai array");
         assert_eq!(a.len(), 3);
         assert_eq!(a[0].as_float().unwrap(), 1.0);
         assert_eq!(a[2].as_float().unwrap(), 3.0);
 
         // Quat → [x,y,z,w]
-        let q = crate::bridge_core::build_from_reflect(
+        let q = lunco_scripting_bridge_core::build_from_reflect(
             &super::RhaiBuilder,
             &Quat::from_xyzw(0.0, 0.0, 0.0, 1.0),
         )
@@ -3121,7 +3124,8 @@ mod tests {
         assert_eq!(q[3].as_float().unwrap(), 1.0);
 
         // scalar stays scalar
-        let s = crate::bridge_core::build_from_reflect(&super::RhaiBuilder, &7.5_f64).unwrap();
+        let s =
+            lunco_scripting_bridge_core::build_from_reflect(&super::RhaiBuilder, &7.5_f64).unwrap();
         assert_eq!(s.as_float().unwrap(), 7.5);
     }
 
@@ -3151,7 +3155,7 @@ mod tests {
             data: TelemetryValue::Map(value),
             timestamp: 12.0,
         };
-        let built = crate::bridge_core::build_event(&super::RhaiBuilder, &event)
+        let built = lunco_scripting_bridge_core::build_event(&super::RhaiBuilder, &event)
             .try_cast::<Map>()
             .expect("event must be a Rhai map");
         let event_value = built
@@ -3207,7 +3211,7 @@ mod tests {
             data: TelemetryValue::String("x".repeat(128 * 1024)),
             timestamp: 12.0,
         };
-        let full = crate::bridge_core::build_event(&super::RhaiBuilder, &event);
+        let full = lunco_scripting_bridge_core::build_event(&super::RhaiBuilder, &event);
         let mut limited = rhai::Engine::new();
         crate::rhai_limits::apply(&mut limited);
         assert!(

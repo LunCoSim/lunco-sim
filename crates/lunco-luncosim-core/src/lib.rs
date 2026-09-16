@@ -2077,7 +2077,7 @@ impl Plugin for LunCoSimHeadlessPlugin {
         // the explicit presentation surface as no-ops so one scenario works in
         // interactive and acceptance modes; every other unknown command still
         // fails loudly through the normal reflection dispatcher.
-        app.insert_resource(lunco_scripting::bridge_core::IgnoredScenarioCommands::new(
+        app.insert_resource(lunco_scripting_bridge_core::IgnoredScenarioCommands::new(
             [
                 "SetHint",
                 "SetObjectives",

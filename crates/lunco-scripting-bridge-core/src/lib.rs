@@ -42,7 +42,7 @@ use std::{
 
 use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
-    authz_target_gid, command_result_json, validate_command_params, ApiCommandEvent,
+    ApiCommandEvent, authz_target_gid, command_result_json, validate_command_params,
 };
 use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
@@ -51,11 +51,11 @@ use lunco_core::{
     CelestialBody, CommandResults, GlobalEntityId, OpId, SessionId, Severity, SimTick,
     TelemetryEvent, TelemetryValue,
 };
-use lunco_core_session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
+use lunco_core_session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
 use lunco_physics::PhysicsTime;
 use lunco_spatial::{
-    coords::{GridPos, VehicleFrame},
     NavigationCommand, SteeringGeometry,
+    coords::{GridPos, VehicleFrame},
 };
 use lunco_time::{Clocks, MissionClock, ResolvedDomains, TimeTransport, WorldTime};
 
@@ -82,6 +82,26 @@ pub trait ValueBuilder {
     fn array(&self, items: Vec<Self::Value>) -> Self::Value;
     /// A string-keyed map (object).
     fn map(&self, entries: Vec<(String, Self::Value)>) -> Self::Value;
+}
+
+/// Whether a person can interact with the current scripted run.
+///
+/// The scenario host resolves this resource from its window/input boundary;
+/// the language-neutral bridge only exposes the resolved fact to backends.
+#[derive(bevy::prelude::Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScenarioAudience {
+    /// No window is available, so an authored program may drive itself.
+    #[default]
+    Unattended,
+    /// A window is available and a person may control the run.
+    Attended,
+}
+
+impl ScenarioAudience {
+    /// Whether the current run has no interactive audience.
+    pub fn is_unattended(self) -> bool {
+        self == Self::Unattended
+    }
 }
 
 /// Commands a particular host intentionally accepts from scenarios without
@@ -504,7 +524,8 @@ pub fn with_world<R>(f: impl FnOnce(&mut World) -> R) -> Option<R> {
     })
 }
 
-pub(crate) fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
+/// Resolve a reflected global entity id through the authoritative API registry.
+pub fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
     world
         .get_resource::<ApiEntityRegistry>()?
         .resolve(&GlobalEntityId::from_raw(gid))
@@ -1735,7 +1756,7 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
 /// scene loaded from the engine's own `assets/`): a script concatenating onto it then
 /// produces a relative path, which fails visibly at the write rather than silently
 /// targeting `/`.
-#[cfg(feature = "rhai")]
+#[cfg(feature = "workspace")]
 pub fn twin_root() -> String {
     with_world(|w| {
         let ws = w.get_resource::<lunco_workspace::WorkspaceResource>()?;
@@ -1751,7 +1772,7 @@ pub fn twin_root() -> String {
 /// This is the URI counterpart to [`twin_root`].  Rhai policy should use this
 /// name when asking a provider to resolve Twin-owned source sets so the same
 /// script works after the project moves to another machine.
-#[cfg(feature = "rhai")]
+#[cfg(feature = "workspace")]
 pub fn twin_name() -> String {
     with_world(|world| {
         let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>()?;
@@ -1777,7 +1798,7 @@ pub fn twin_name() -> String {
 /// `get_twin_setting("ui.camera_status")` — read a scalar setting from the
 /// active Twin manifest. Missing keys, plain folders, and no active Twin are
 /// represented as the backend's unit value by the caller.
-#[cfg(feature = "rhai")]
+#[cfg(feature = "workspace")]
 pub fn get_twin_setting<B: ValueBuilder>(b: &B, key: &str) -> Option<B::Value> {
     with_world(|world| {
         let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>()?;
@@ -1794,10 +1815,9 @@ pub fn get_twin_setting<B: ValueBuilder>(b: &B, key: &str) -> Option<B::Value> {
 }
 
 /// Read one scalar from the generic engine exposure registry. This is the
-/// language-neutral bridge for Rhai-owned presentation policy: an engine
+/// language-neutral bridge for authored presentation policy: an engine
 /// producer publishes facts, and a script can consume them without importing
 /// the producer's domain crate.
-#[cfg(feature = "rhai")]
 pub fn get_exposure<B: ValueBuilder>(b: &B, namespace: &str, property: &str) -> Option<B::Value> {
     with_world(|world| {
         let exposures = world.get_resource::<lunco_core::exposure::EngineExposures>()?;
@@ -1811,7 +1831,6 @@ pub fn get_exposure<B: ValueBuilder>(b: &B, namespace: &str, property: &str) -> 
     .flatten()
 }
 
-#[cfg(feature = "rhai")]
 fn exposure_value_to_native<B: ValueBuilder>(
     b: &B,
     value: &lunco_core::exposure::ExposureValue,
@@ -1837,22 +1856,18 @@ fn exposure_value_to_native<B: ValueBuilder>(
 
 /// `is_unattended()` — whether NOTHING can take user input this run, so an
 /// authored task program may drive itself. See
-/// [`ScenarioAudience`](crate::scenario::ScenarioAudience) for how it's resolved
+/// [`ScenarioAudience`] for how it's resolved
 /// and why it is not the build profile.
 ///
 /// Unresolvable (no such resource — a bare `World`) ⇒ `true`: a world with no
 /// scripting plugin has no window either, and an authored program that runs when it
 /// should not is visible, whereas a lesson that silently refuses to run in CI is
 /// a green test that tested nothing.
-#[cfg(any(feature = "rhai", feature = "python"))]
 pub fn is_unattended() -> bool {
-    with_world(|w| {
-        w.get_resource::<crate::scenario::ScenarioAudience>()
-            .copied()
-    })
-    .flatten()
-    .unwrap_or_default()
-    .is_unattended()
+    with_world(|w| w.get_resource::<ScenarioAudience>().copied())
+        .flatten()
+        .unwrap_or_default()
+        .is_unattended()
 }
 
 // ── Deterministic RNG ───────────────────────────────────────────────────────

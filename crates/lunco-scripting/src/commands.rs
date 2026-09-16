@@ -38,10 +38,12 @@ use lunco_core::ActiveCommandId;
 use lunco_core::TelemetryValue;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_core::{on_command, Ack, Command, OpId};
-#[cfg(any(feature = "rhai", feature = "python"))]
+#[cfg(feature = "rhai")]
 use lunco_doc::DocumentId;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
+#[cfg(any(feature = "rhai", feature = "python"))]
+use lunco_scripting_bridge_core as bridge_core;
 
 // Pause/stop scenario commands are language-agnostic (`any(rhai, python)`) and
 // touch `ScriptedModel`; rhai already imports it above, so a python-only build
@@ -1449,26 +1451,26 @@ pub(crate) fn register_command_policies(app: &mut App) {
     // (`bridge_core::capability::STRUCTURAL_MUTATE`): ownership-gated control, so
     // a remote script may only restructure entities its launching session owns.
     reg.register(
-        crate::bridge_core::capability::STRUCTURAL_MUTATE,
+        bridge_core::capability::STRUCTURAL_MUTATE,
         CommandPolicy::OWNED_CONTROL,
     );
     reg.register(
-        crate::bridge_core::capability::FIELD_MUTATE,
+        bridge_core::capability::FIELD_MUTATE,
         CommandPolicy::OWNED_CONTROL,
     );
     reg.register(
-        crate::bridge_core::capability::PORT_MUTATE,
+        bridge_core::capability::PORT_MUTATE,
         CommandPolicy::OWNED_CONTROL,
     );
     reg.register(
-        crate::bridge_core::capability::SETTING_MUTATE,
+        bridge_core::capability::SETTING_MUTATE,
         CommandPolicy {
             min_role: AuthorityRole::Operator,
             ownership_gated: false,
         },
     );
     reg.register(
-        crate::bridge_core::capability::POLICY_MUTATE,
+        bridge_core::capability::POLICY_MUTATE,
         CommandPolicy {
             min_role: AuthorityRole::Operator,
             ownership_gated: false,
@@ -1632,7 +1634,7 @@ mod tests {
         // The structural mutation verbs share the registry under a capability key,
         // ownership-gated so a remote script only restructures what it owns.
         assert_eq!(
-            reg.policy_for(crate::bridge_core::capability::STRUCTURAL_MUTATE),
+            reg.policy_for(bridge_core::capability::STRUCTURAL_MUTATE),
             CommandPolicy::OWNED_CONTROL,
         );
 

@@ -47,7 +47,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // through the shared scenario-command policy instead of advertising a
         // window command whose semantics would terminate before the video
         // trailer is written.
-        app.insert_resource(lunco_scripting::bridge_core::IgnoredScenarioCommands::new(
+        app.insert_resource(lunco_scripting_bridge_core::IgnoredScenarioCommands::new(
             ["CloseWindow"],
         ));
 

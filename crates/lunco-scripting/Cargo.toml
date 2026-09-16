@@ -14,10 +14,7 @@ lunco-behavior = { path = "../lunco-behavior" }
 # used by Modelica + scripting). `default-features = false` drops its egui `ui`
 # feature so headless / wasm scripting builds don't pull bevy_egui→winit.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene", optional = true }
-# The Rhai route bridge reads the authoritative USD document generation for
-# structural invalidation without routing that hot-path read through JSON.
-lunco-usd-document = { path = "../lunco-usd-document", optional = true }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core", optional = true }
 # `ScriptOp` implements `OpPayload` (DomainKind::Script) so live script edits
 # auto-record into the canonical Twin journal — same "sync by default" bridge
 # Modelica/USD use. `attach_journal_recorder` (in lunco-doc-bevy) needs the trait.
@@ -27,7 +24,6 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # lunco-core. The API discovers it by reflection (AppTypeRegistry) — no direct
 # lunco-api dep. Lua remains only a reserved language id; it has no command.
 lunco-core = { path = "../lunco-core" }
-lunco-control-core = { path = "../lunco-control-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 # Render recovery is an application-edge policy provider. Keep it optional and
@@ -62,15 +58,6 @@ rhai = { workspace = true, optional = true }
 # ApiEntityRegistry are needed here. Application roots add the outward
 # transport package separately.
 lunco-api = { path = "../lunco-api", optional = true }
-# rhai World-bridge only: `world_pos()` walks the big_space float-origin
-# hierarchy (Grid / CellCoord) via lunco-core's coords helpers.
-big_space = { workspace = true, optional = true }
-# `geolocation()` — the site anchor (`GeodeticAnchor` / `SiteAnchor`), the body
-# radius (`CelestialBody`) and the local↔geodetic conversion all live here.
-# `default-features = false` drops celestial's `ui` feature: this bridge is
-# headless-capable and must not pull bevy_egui/workbench in behind it.
-# No cycle — lunco-celestial depends on lunco-core, never on lunco-scripting.
-lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 # Tool libraries: the runtime-agnostic registry (lunco-tools) + its rhai binding
 # (lunco-tools-rhai). Gated on `rhai` since the binding + scenario runtime are
@@ -97,13 +84,13 @@ lunco-workspace = { path = "../lunco-workspace", optional = true }
 # rhai on by default — the browser-capable backend. Turn it off
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
-rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:big_space", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-controller", "dep:lunco-usd-bevy-scene", "dep:lunco-usd-document", "lunco-twin-journal/hooks"]
+rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-controller", "dep:lunco-scripting-bridge-core", "lunco-scripting-bridge-core/workspace", "lunco-twin-journal/hooks"]
 # Opt-in bridge for the GUI's render-shadow policy. This edge belongs to the
 # application composition root, never to the generic scripting/runtime crate.
 render-policy = ["dep:lunco-render-recovery"]
-# Python pulls the same world-bridge deps as rhai (lunco-api + big_space) so the
-# language-neutral `bridge_core` compiles for a python-only build too.
-python = ["dep:pyo3", "dep:libloading", "dep:serde_json", "dep:lunco-api", "dep:big_space", "dep:lunco-usd-bevy-scene", "dep:lunco-usd-document"]
+# Python enables the same language-neutral bridge package as Rhai; its Python
+# binding remains a separate optional backend.
+python = ["dep:pyo3", "dep:libloading", "dep:serde_json", "dep:lunco-api", "dep:lunco-scripting-bridge-core"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 crossbeam-channel = { workspace = true }

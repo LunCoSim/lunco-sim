@@ -150,7 +150,7 @@ an ordinary Bevy system, and a system has no reader: everything it needs is proj
 into the ECS at load, by `attach_programs`.
 
 That makes `ScriptParams`' `HashMap<String, f64>` bind drivers too. It is `f64` because
-rhai's `FLOAT` is (`script_param() -> Option<f64>`, `bridge_core.rs`), which is a
+rhai's `FLOAT` is (`script_param() -> Option<f64>`, `lunco-scripting-bridge-core`), which is a
 script-marshalling detail that leaked into a shared component — but the constraint is
 real today, so **a driver's parameters must be numbers**. That is not the hardship it
 sounds like: a colour belongs in a bound `Material`, where USD says it belongs, and

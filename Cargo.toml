@@ -132,6 +132,7 @@ members = [
     "crates/lunco-status-core",
     "crates/lunco-web",
     "crates/lunco-scripting",
+    "crates/lunco-scripting-bridge-core",
     "crates/lunco-signal",
     "crates/lunco-viz",
     "crates/lunco-canvas",

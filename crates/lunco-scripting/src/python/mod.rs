@@ -28,7 +28,7 @@ pub fn lunco(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<reflect::EntityProxy>()?;
     // TODO(python world-bridge): register the world verbs here so scripts can
     // `import lunco; lunco.cmd(...)`. The language-neutral logic already lives in
-    // `crate::bridge_core`; the Python side is now "implement a binding", not
+    // `lunco_scripting_bridge_core`; the Python side is now "implement a binding", not
     // "design the bridge". Concretely:
     //   1. `PyBuilder<'py> { py: Python<'py> }` impl `bridge_core::ValueBuilder`
     //      (type Value = PyObject; pyo3 0.23 — `into_py_any`, `PyList::new`,

@@ -821,7 +821,8 @@ fn drive_from_bindings(
         // keyboard, not just the wire and script paths. Without this a policy like
         // "refuse tele-op while the control path is down" was true only for remote
         // and scripted commands, while the student at the keyboard drove straight
-        // through it — `authorize()` sits on `sync.rs` and `bridge_core.rs`, and
+        // through it — `authorize()` sits on `sync.rs` and
+        // `lunco-scripting-bridge-core`, and
         // this system triggers `SetPorts` directly.
         //
         // `authorize_policy`, NOT the full `authorize`: the role/ownership floor is a

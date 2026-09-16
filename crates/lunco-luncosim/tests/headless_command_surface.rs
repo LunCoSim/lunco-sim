@@ -70,7 +70,7 @@ fn an_unregistered_name_does_not_resolve() {
 
 #[test]
 fn presentation_commands_are_explicitly_ignored_not_registered() {
-    let policy = lunco_scripting::bridge_core::IgnoredScenarioCommands::new([
+    let policy = lunco_scripting_bridge_core::IgnoredScenarioCommands::new([
         "SetHint",
         "SetObjectives",
         "FocusPanel",

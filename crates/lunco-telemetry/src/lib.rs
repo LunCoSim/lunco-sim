@@ -19,7 +19,7 @@
 //!
 //! Authoring needs no new API: `Parameter` is `Reflect` + `ReflectDefault`, so a
 //! script adds one with `add(id, "Parameter", #{…})`
-//! (`lunco_scripting::bridge_core::add_component`).
+//! (`lunco_scripting_bridge_core::add_component`).
 //!
 //! ## Rate is measured on the channel's own clock, NOT the wall clock
 //!

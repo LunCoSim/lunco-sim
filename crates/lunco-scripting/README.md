@@ -18,7 +18,7 @@ command/query API the HTTP API, MCP, and UI use.
 The language-neutral core means a backend supplies only the interpreter
 mechanics; lifecycle, scheduling, hot-reload, pause, teardown, diagnostics, and
 the world verbs are shared (see [`scenario.rs`](src/scenario.rs) and
-[`bridge_core.rs`](src/bridge_core.rs)).
+[`lunco-scripting-bridge-core`](../lunco-scripting-bridge-core)).
 
 ## Model
 
@@ -90,7 +90,7 @@ never on a networked client (which receives behaviour via replication).
 | Path | What |
 |---|---|
 | [`src/world_bridge.rs`](src/world_bridge.rs) | the rhai backend (verbs + `RhaiScenarioRuntime`) |
-| [`src/bridge_core.rs`](src/bridge_core.rs) | language-neutral world bridge (`ValueBuilder`) |
+| [`lunco-scripting-bridge-core`](../lunco-scripting-bridge-core) | language-neutral world bridge (`ValueBuilder`) |
 | [`src/scenario.rs`](src/scenario.rs) | language-neutral lifecycle driver |
 | [`src/commands.rs`](src/commands.rs) | the `#[Command]` entry points |
 | [`src/catalog.rs`](src/catalog.rs) · [`src/diagnostics.rs`](src/diagnostics.rs) | discovery + introspection queries |

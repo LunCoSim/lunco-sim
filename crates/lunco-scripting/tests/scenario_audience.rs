@@ -6,7 +6,8 @@
 //! resolution and its fail-safe default.
 
 use bevy::prelude::*;
-use lunco_scripting::scenario::{resolve_scenario_audience, ScenarioAudience};
+use lunco_scripting::scenario::resolve_scenario_audience;
+use lunco_scripting_bridge_core::ScenarioAudience;
 
 /// `LUNCO_SCENARIO_UNATTENDED` overrides the window check, so a set variable in
 /// the ambient environment would decide these cases instead of the window.

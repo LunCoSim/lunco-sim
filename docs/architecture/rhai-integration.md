@@ -20,7 +20,7 @@ Modelica, cosim, scene, vehicles) from script.** The engine builds on native
 - **Lifecycle** — `on_stop` teardown hook (hot-reload / detach / despawn) +
   `SetScenarioPaused` / `StopScenario`. The lifecycle lives in a **language-neutral
   driver** (`scenario.rs`, `ScenarioRuntime` trait) over a **native world bridge**
-  (`bridge_core.rs`, `ValueBuilder` — no JSON on the read path); rhai is one
+  (`lunco-scripting-bridge-core`, `ValueBuilder` — no JSON on the read path); rhai is one
   backend, Python can implement the same traits.
 - **Introspection** — `ScriptStatus` (compile/runtime health) + `ScriptInspect`
   (live `this` state, defined hooks, generation, running/paused).
