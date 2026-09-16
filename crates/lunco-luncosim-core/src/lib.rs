@@ -210,10 +210,18 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
 }
 
 /// Build the production headless simulation app with an optional fixed
-/// compute-pool size. The returned app has the core plugin but not the
-/// schedule runner, allowing deterministic scene tests to install their own
-/// clock and loop.
-pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
+/// compute-pool size and an explicit startup scene.
+///
+/// The scene parameter is intentionally part of the constructor boundary. A
+/// caller that resolves a scene from a Twin manifest (for example the
+/// component-test runner) must not rely on the core plugin reparsing the
+/// process command line; doing so loses the resolved scene when the command
+/// uses a manifest-selected fixture. `None` preserves the normal raw
+/// `--scene` lookup used by the server and ordinary headless launches.
+pub fn build_headless_app_with_scene(
+    compute_threads: Option<usize>,
+    startup_scene: Option<String>,
+) -> App {
     let mut app = App::new();
     lunco_assets_core::register_lunco_asset_sources(&mut app);
 
@@ -247,8 +255,24 @@ pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
         compute_threads,
     ));
     app.add_plugins(log_dedup::LogDedupPlugin);
-    app.add_plugins(LunCoSimCorePlugin { headless: true });
+    app.add_plugins(LunCoSimCorePlugin {
+        headless: true,
+        startup_scene,
+    });
     app
+}
+
+/// Build the production headless simulation app with an optional fixed
+/// compute-pool size. The returned app has the core plugin but not the
+/// schedule runner, allowing deterministic scene tests to install their own
+/// clock and loop.
+///
+/// This compatibility constructor preserves the historical process-argument
+/// behavior. Code that has already resolved a scene should call
+/// [`build_headless_app_with_scene`] instead.
+pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
+    let args: Vec<String> = std::env::args().collect();
+    build_headless_app_with_scene(compute_threads, startup_scene_arg(&args))
 }
 
 /// Build the normal headless app with the production schedule runner.
@@ -1472,6 +1496,9 @@ lunco_core::register_commands!(on_set_rhai_policy);
 /// (never touches a GPU device), so it is safe in headless mode.
 pub struct LunCoSimCorePlugin {
     pub headless: bool,
+    /// Explicit startup scene supplied by the application boundary. `None`
+    /// falls back to the process `--scene` argument for compatibility.
+    pub startup_scene: Option<String>,
 }
 
 #[cfg(test)]
@@ -1591,7 +1618,10 @@ impl Plugin for LunCoSimCorePlugin {
         // shipped asset-root spelling, a workspace/cwd relative path, or an
         // absolute filesystem path. The latter two are required for running a
         // custom Twin without copying it into assets/.
-        let scene_path = startup_scene_arg(&args);
+        let scene_path = self
+            .startup_scene
+            .clone()
+            .or_else(|| startup_scene_arg(&args));
 
         app.insert_resource(ScenePath(scene_path))
             // Match the workbench theme's backdrop so the window's first-frame

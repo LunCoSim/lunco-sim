@@ -1179,10 +1179,16 @@ pub fn run() -> u8 {
     //
     // The core builder receives the compute-pool override at plugin-group build
     // time, keeping scene tests on the same production composition as the server.
-    let mut app = lunco_luncosim_core::build_headless_app_with_threads(
+    let mut app = lunco_luncosim_core::build_headless_app_with_scene(
         (cli.threads > 0).then_some(cli.threads),
+        Some(cli.scene.clone()),
     );
     app.add_plugins(LunCoSimHeadlessPlugin::default());
+    // The component runner has already resolved the manifest-selected scene.
+    // Re-assert that resolved value at the application boundary immediately
+    // before startup schedules are built. This keeps the runner independent of
+    // process argv and makes the scene hand-off explicit for every test mode.
+    app.insert_resource(lunco_luncosim_core::ScenePath(Some(cli.scene.clone())));
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────
     //
