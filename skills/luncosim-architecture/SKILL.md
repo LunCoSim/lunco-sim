@@ -124,7 +124,8 @@ may select a documented unsafe policy, but the movement owner reads that
 setting directly and remains safe when the setting is omitted, malformed, or
 the Twin closes.
 
-The shared semantic input contract lives in `lunco-control-core` and is not
+The shared semantic input contract lives in `lunco-control-core`, while the
+persisted device-to-intent map lives in `lunco-input-core`, and is not
 avatar-only: the workbench
 owns one app-level local intent surface for editor actions when an isolated
 preview has no avatar. Shared actions such as `CancelIntent` read that surface

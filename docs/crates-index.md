@@ -66,13 +66,15 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | :--- | :--- |
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
 | **`lunco-control-core`** | Generic semantic-control contracts: the shared `UserIntent` vocabulary, authored intent-to-port bindings, input state, egui focus gate, and bounded causal-edge trace. Input producers and domain consumers depend on this focused package instead of placing control policy in `lunco-core`. |
+| **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |
+| **`lunco-input-ui`** | Optional egui presentation for the shared input state: the recording/observation input overlay and its typed visibility command. It does not translate input or own vessel control. |
 | **`lunco-camera-core`** | Backend-neutral camera-rig contracts: free-flight, orbit, spring-arm, surface, authored rig intent, pose-transition state, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
 | **`lunco-avatar-core`** | Backend-neutral avatar contracts: possession/focus command payloads, transient notification command/queue types, and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
 | **`lunco-avatar-policy`** | Twin-scoped avatar safety policy and physical collision-controller settings. It is shared directly by the runtime and UI, so the UI does not depend on the monolithic avatar implementation. |
 | **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: fast camera/possession systems and the local input-to-intent boundary. It consumes `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
 | **`lunco-avatar-ui`** | Optional egui presentation adapter for `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`: avatar status panel, camera/name-tag and notification overlays, and the Avatar settings row. It does not depend on the avatar runtime implementation. |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
-| **`lunco-controller`** | Owns the persisted `InputBindingsSettings` keymap and translates resolved raw user input (Keyboard/Gamepad/Mouse) into typed `UserIntent` actions for FSW. Yields a vessel to its owning session (spec 034), so the human never fights an autopilot. |
+| **`lunco-controller`** | Specialized vessel-control adapter: translates semantic `UserIntent` actions into authored port writes, handles control authority and input injection, and yields a vessel to its owning session (spec 034). Shared keymap settings live in `lunco-input-core`. |
 
 ---
 
@@ -401,8 +403,21 @@ enabled; headless avatar consumers do not compile it.
 **`lunco-hardware`**
 Physical actuator and sensor implementations. Bridges `Port` values to the `avian3d` physics engine, providing concrete motor, brake, and sensor components that interact with the simulation world.
 
+**`lunco-input-core`**
+Shared input settings and projection. It owns the persisted `InputBindingsSettings`
+section, bundled `assets/config/keybindings.json` defaults, semantic labels,
+pointer-chord resolution, and Leafwing `InputMap` construction. UI, avatar,
+controller, and Rhai consumers use this focused contract directly.
+
+**`lunco-input-ui`**
+Optional egui adapter for the shared input state. It owns the input overlay
+settings and rendering, but no raw-device translation or vessel actuation.
+
 **`lunco-controller`**
-Input mapping and translation. Owns the persisted `InputBindingsSettings` keymap and converts raw human-interface device inputs (Keyboard, Gamepad, Mouse) into the shared `lunco-control-core::UserIntent` actions and typed command events for consumption by Flight Software. The semantic contract itself is reusable by non-controller producers and is not re-exported through this adapter.
+Specialized vessel-control adapter. It converts semantic `UserIntent` actions
+into authored `SetPorts` writes, applies authority/session rules, and provides
+the generic window-input injection path. It consumes `lunco-input-core` rather
+than owning a second keymap.
 
 ---
 
@@ -692,7 +707,9 @@ through `lunco-storage`, while Twin discovery stays in
 the independent `lunco-render-recovery` crate; the workbench only composes its
 banner and recovery systems. Hosts that need Twin and Files navigation add the
 separate `lunco-workbench-browser` feature package, which does not link this
-shell.
+shell. The shared input keymap is owned by `lunco-input-core`; the recording
+overlay is supplied by `lunco-input-ui`, so the shell does not depend on the
+full vessel-control adapter.
 
 **`lunco-workbench-file-ops`**
 Windowed file-workflow adapters. It owns picker-triggering seams and routes

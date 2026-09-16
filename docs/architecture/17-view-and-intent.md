@@ -25,7 +25,7 @@ LunCoSim decouples human interaction from physical execution using five distinct
 
 | Layer | Name | Responsibility | Logical Flow |
 | :--- | :--- | :--- | :--- |
-| **5** | **UserIntent** | **Semantic Mapping**: The specialized input owner translates configured devices into abstract goals (`MoveForward`, `Look`, `Zoom`). | Keyboard/gamepad/mouse -> `lunco-avatar` / `lunco-controller` -> `lunco-control-core::UserIntent` |
+| **5** | **UserIntent** | **Semantic Mapping**: The specialized input owner translates configured devices into abstract goals (`MoveForward`, `Look`, `Zoom`). | Keyboard/gamepad/mouse -> `lunco-input-core` -> `lunco-control-core::UserIntent` |
 | **4** | **Controller** | **Translation**: Translates semantic intents into specific typed commands (e.g., `SetPorts`) or actions for a target entity. | `UserIntent` -> `lunco-controller` -> typed command |
 | **3** | **FSW / Subsystem**| **The Brain**: Decentralized observers that execute commands and emit ACK/NACK responses. | `Typed Command` -> `Subsystem Observer` -> `ACK` |
 | **2** | **Logic / Device** | **Hardware Logic**: The individual components responding to state changes. | `Subsystem` -> `Component Field` |
@@ -320,7 +320,7 @@ existing generic Twin-settings command.
 
 ### 6.7 Vehicle control frame
 
-The controller has one shared input path: persisted `input_bindings` resolve raw
+The input stack has one shared input path: `lunco-input-core` resolves persisted `input_bindings` from raw
 devices to semantic `lunco-control-core::UserIntent`s, then the vessel's authored
 `lunco-control-core::ControlBinding` resolves those intents to named command
 ports. `lunco-control-core` is the reusable contract package for input state,
@@ -344,7 +344,7 @@ may follow the full vehicle attitude for presentation, but it still does not
 alter the body-frame control contract.
 
 The bundled W/S/A/D/Q/E and other key labels are not the control contract. They
-are the current projection of `InputBindingsSettings`; UI help and tutorials
+are the current projection of `lunco-input-core::InputBindingsSettings`; UI help and tutorials
 must resolve labels from that resource so remapping updates presentation while
 the semantic profile and physical actuator ownership remain unchanged.
 
@@ -377,7 +377,7 @@ policy, so two spawned vehicles cannot receive one another's edge.
 ### 6.9 Editor keyboard input
 
 The workbench host owns one app-level semantic input surface in addition to the
-local avatar's input surface. Both use the same `InputBindingsSettings` map and
+local avatar's input surface. Both use the same `lunco-input-core::InputBindingsSettings` map and
 publish `UserIntent`; editor-only views therefore do not need an avatar merely
 to receive `Cancel`. `CancelIntent` reads the app-level surface when present and
 still reads the local avatar for simulation camera/possession behavior. Egui

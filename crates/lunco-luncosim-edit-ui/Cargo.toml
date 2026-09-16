@@ -42,7 +42,7 @@ lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-api = { path = "../lunco-api" }
-lunco-controller = { path = "../lunco-controller" }
+lunco-input-core = { path = "../lunco-input-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }

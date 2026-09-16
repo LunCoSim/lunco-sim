@@ -27,9 +27,9 @@
 
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
-use lunco_controller::InputBindingsSettings;
 use lunco_core::{TelemetryEvent, TelemetryValue, TheLocalAvatar};
 use lunco_cosim_core::ControlLink;
+use lunco_input_core::InputBindingsSettings;
 use lunco_scene_selection::SelectedEntities;
 use lunco_spatial::coords::{
     ActiveFrameCoordinates, RenderPos, ACTIVE_FRAME_NAME, RENDER_FRAME_NAME,

@@ -15,7 +15,7 @@ lunco-theme = { path = "../lunco-theme" }
 lunco-core = { path = "../lunco-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-core-session = { path = "../lunco-core-session" }
-lunco-controller = { path = "../lunco-controller" }
+lunco-input-core = { path = "../lunco-input-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }

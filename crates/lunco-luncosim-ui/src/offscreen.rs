@@ -47,9 +47,9 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // through the shared scenario-command policy instead of advertising a
         // window command whose semantics would terminate before the video
         // trailer is written.
-        app.insert_resource(lunco_scripting_bridge_core::IgnoredScenarioCommands::new(
-            ["CloseWindow"],
-        ));
+        app.insert_resource(lunco_scripting_bridge_core::IgnoredScenarioCommands::new([
+            "CloseWindow",
+        ]));
 
         // Recording owns its deterministic clock. Do not inherit a persisted
         // editor cadence (especially the scene-test EXACT setting), which
@@ -60,7 +60,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // without requiring the egui workbench in an offscreen run.
         app.add_plugins(lunco_theme::ThemePlugin);
         app.add_plugins(lunco_workbench::theme_command::ThemeCommandPlugin);
-        lunco_workbench::input_overlay::register_input_overlay_commands(app);
+        lunco_input_ui::register_input_overlay_commands(app);
 
         // The recorder has no OS window and therefore no egui host. It still
         // renders Bevy UI into the same image as the authored scene camera;

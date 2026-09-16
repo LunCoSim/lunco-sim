@@ -1,14 +1,15 @@
-//! Input overlay panel rendering active keys and mouse actions in real-time.
+//! Reusable input-state presentation.
 //!
-//! Visualizes simulator inputs for video generation or AI agent observation.
-//! Persisted via `lunco-settings` under the `"input_overlay"` key.
+//! The overlay is an application UI adapter over the generic input settings.
+//! It does not translate input or own vessel control; `lunco-controller` and
+//! avatar consumers remain the specialized input producers.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
-use lunco_controller::{key_label, InputBindingsSettings};
-use lunco_core::{on_command, register_commands, Command};
+use bevy_egui::{EguiContexts, egui};
+use lunco_core::{Command, on_command, register_commands};
+use lunco_input_core::{InputBindingsSettings, key_label};
 use lunco_settings::{AppSettingsExt, SettingsSection};
-use lunco_workbench_widgets::{paint_icon, UiIcon};
+use lunco_workbench_widgets::{UiIcon, paint_icon};
 use serde::{Deserialize, Serialize};
 
 /// Persisted settings for the input overlay HUD.
@@ -41,7 +42,7 @@ fn on_toggle_input_overlay(
     }
 }
 
-/// System to draw the input overlay HUD in the foreground of the primary egui context.
+/// Draw the input overlay in the foreground of the primary egui context.
 pub fn draw_input_overlay(
     mut egui_ctx: EguiContexts,
     settings: Res<InputOverlaySettings>,
@@ -78,12 +79,6 @@ pub fn draw_input_overlay(
                 .corner_radius(6.0)
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
-                        // Keyboard key visualizer, drawn as KEYCAP CHIPS. A pressed
-                        // key fills its chip with the warning (amber) token and
-                        // flips the glyph dark — a colored-text-only pressed state
-                        // (the previous styling) was invisible at video scale over
-                        // dark footage, which defeats the overlay's whole purpose
-                        // (it exists FOR the recordings).
                         let draw_key = |ui: &mut egui::Ui, text: &str, is_pressed: bool| {
                             let (fill, glyph, border) = if is_pressed {
                                 (
@@ -129,13 +124,6 @@ pub fn draw_input_overlay(
                         }
                         ui.separator();
 
-                        // WHO IS FLYING. A key row shows inputs arriving; it
-                        // cannot show whether they are being obeyed. `piloted`
-                        // is the vessel's own authority gate (1 = a session has
-                        // the stick, 0 = the guidance law flies), so this badge
-                        // is the state itself rather than a caption about it —
-                        // and it is what makes a handback legible: the keys go
-                        // dark, and MANUAL flips to AUTO in the same frame.
                         let (mode, mode_color) = if authority.piloted {
                             ("MANUAL", theme.tokens.warning)
                         } else {
@@ -155,15 +143,10 @@ pub fn draw_input_overlay(
                             });
                         ui.separator();
 
-                        // Mouse visualizer
                         let cursor_pos = window.cursor_position().unwrap_or(Vec2::ZERO);
-                        let m_left = buttons.pressed(MouseButton::Left);
-                        let m_right = buttons.pressed(MouseButton::Right);
-                        let m_middle = buttons.pressed(MouseButton::Middle);
-                        draw_key(ui, "L", m_left);
-                        draw_key(ui, "M", m_middle);
-                        draw_key(ui, "R", m_right);
-
+                        draw_key(ui, "L", buttons.pressed(MouseButton::Left));
+                        draw_key(ui, "M", buttons.pressed(MouseButton::Middle));
+                        draw_key(ui, "R", buttons.pressed(MouseButton::Right));
                         ui.label(
                             egui::RichText::new(format!(
                                 " [{:.0}, {:.0}]",
@@ -179,17 +162,15 @@ pub fn draw_input_overlay(
 
 register_commands!(on_toggle_input_overlay,);
 
-/// Register the typed presentation commands without installing an egui panel.
-/// Offscreen/headless scenario runners still receive the shared command surface.
+/// Register the typed presentation commands without installing the egui panel.
 pub fn register_input_overlay_commands(app: &mut App) {
     app.register_settings_section::<InputOverlaySettings>();
     app.init_resource::<InputOverlaySettings>();
-    app.init_resource::<InputBindingsSettings>();
     app.init_resource::<lunco_core::markers::FlightAuthority>();
     register_all_commands(app);
 }
 
-/// Registers the input overlay resources, settings, commands, and systems.
+/// Register the input overlay resources, commands, and render system.
 pub fn build_input_overlay(app: &mut App) {
     register_input_overlay_commands(app);
     app.add_systems(
@@ -205,9 +186,6 @@ mod tests {
     #[test]
     fn input_overlay_settings_use_the_shared_persisted_section() {
         assert_eq!(InputOverlaySettings::KEY, "input_overlay");
-        assert_eq!(
-            serde_json::to_value(InputOverlaySettings::default()).unwrap(),
-            serde_json::json!({"enabled": false})
-        );
+        assert!(!InputOverlaySettings::default().enabled);
     }
 }

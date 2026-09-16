@@ -240,7 +240,7 @@ pub fn setup_big_space_hierarchy(
     // The single world-shell grid (WorldShellPlugin) to nest under.
     q_world_grid: Query<Entity, (With<lunco_spatial::WorldGrid>, With<Grid>)>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
-    bindings: Res<lunco_controller::InputBindingsSettings>,
+    bindings: Res<lunco_input_core::InputBindingsSettings>,
 ) {
     let Ok(input_map) = bindings.input_map() else {
         error!("[celestial] refusing to create the observer from invalid input bindings");

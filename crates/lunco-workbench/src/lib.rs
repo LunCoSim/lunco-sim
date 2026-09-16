@@ -86,7 +86,6 @@ mod viewport;
 use layout::{WorkbenchLayout, WorkbenchLayoutStateProvider};
 
 pub mod control_status;
-pub mod input_overlay;
 pub mod perf_hud;
 pub mod perspective_command;
 pub mod theme_command;
@@ -728,14 +727,14 @@ impl Plugin for WorkbenchPlugin {
         // Input overlay visualizer for video recording & AI observation.
         if !app
             .world()
-            .contains_resource::<input_overlay::InputOverlaySettings>()
+            .contains_resource::<lunco_input_ui::InputOverlaySettings>()
         {
-            input_overlay::build_input_overlay(app);
+            lunco_input_ui::build_input_overlay(app);
         } else {
             // A host may install the render-free command substrate before the
             // workbench. Preserve the command surface even when its egui panel
             // is already owned by that host.
-            input_overlay::register_input_overlay_commands(app);
+            lunco_input_ui::register_input_overlay_commands(app);
         }
         if !app.is_plugin_added::<theme_command::ThemeCommandPlugin>() {
             app.add_plugins(theme_command::ThemeCommandPlugin);

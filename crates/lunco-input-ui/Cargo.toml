@@ -1,0 +1,20 @@
+[package]
+name = "lunco-input-ui"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Reusable egui presentation for the shared LunCoSim input state"
+
+[dependencies]
+bevy = { workspace = true }
+bevy_egui = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-input-core = { path = "../lunco-input-core" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-theme = { path = "../lunco-theme" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

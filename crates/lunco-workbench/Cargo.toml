@@ -30,7 +30,6 @@ api = [
 # limits before it can reach the render world; it does not reimplement them.
 bevy = { workspace = true, features = ["bevy_render", "bevy_light", "bevy_pbr"] }
 bevy_egui = { workspace = true }
-leafwing-input-manager = { workspace = true }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workbench-file-ops = { path = "../lunco-workbench-file-ops" }
@@ -52,11 +51,10 @@ egui_dock = { version = "0.20", features = ["serde"] }
 # same typed-command bus that domain crates already use.
 lunco-core = { path = "../lunco-core" }
 lunco-control-core = { path = "../lunco-control-core" }
+lunco-input-core = { path = "../lunco-input-core" }
+lunco-input-ui = { path = "../lunco-input-ui" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-render-recovery = { path = "../lunco-render-recovery" }
-# The overlay is a view of the controller's authored keymap; it must not keep a
-# second list of keyboard labels that drifts when keybindings.json changes.
-lunco-controller = { path = "../lunco-controller" }
 lunco-time = { path = "../lunco-time" }
 # `SaveDocument` / `SaveAsDocument` / `CloseDocument` Command structs +
 # `EditorIntent` rebindable verbs.

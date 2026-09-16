@@ -1476,13 +1476,13 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     );
 
     // input_binding("forward") -> "W" (or () when the intent is unbound).
-    // Tutorials read the controller's resolved settings resource directly, so
+    // Tutorials read the shared resolved settings resource directly, so
     // authored copy and action policy follow user rebinding without a second
     // tutorial-owned key table.
     engine.register_fn("input_binding", |binding: ImmutableString| -> Dynamic {
         bridge_core::with_world(|world| {
             world
-                .get_resource::<lunco_controller::InputBindingsSettings>()
+                .get_resource::<lunco_input_core::InputBindingsSettings>()
                 .and_then(|settings| settings.label(binding.as_str()))
                 .map(Dynamic::from)
         })

@@ -61,6 +61,7 @@ lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-feature
 lunco-core = { path = "../lunco-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-input-ui = { path = "../lunco-input-ui" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-environment = { path = "../lunco-environment" }

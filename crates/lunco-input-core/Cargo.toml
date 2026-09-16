@@ -1,0 +1,17 @@
+[package]
+name = "lunco-input-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Shared semantic input bindings and Bevy input-map projection"
+
+[dependencies]
+bevy = { workspace = true }
+leafwing-input-manager = { workspace = true }
+lunco-control-core = { path = "../lunco-control-core" }
+lunco-settings = { path = "../lunco-settings" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

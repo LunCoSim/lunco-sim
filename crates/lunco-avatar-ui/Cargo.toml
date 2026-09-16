@@ -13,7 +13,7 @@ lunco-avatar-policy = { path = "../lunco-avatar-policy" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
-lunco-controller = { path = "../lunco-controller" }
+lunco-input-core = { path = "../lunco-input-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-control-core = { path = "../lunco-control-core" }

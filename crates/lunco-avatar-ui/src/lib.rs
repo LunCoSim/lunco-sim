@@ -12,10 +12,10 @@ use lunco_avatar_policy::{
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, LocalGravityField, SurfacePoseQuery};
 use lunco_control_core::{ControlBinding, UserIntent};
-use lunco_controller::{resolved_input_label, InputBindingsSettings};
 use lunco_core::{Avatar, CameraFollow, GlobalEntityId, LocalAvatar};
 use lunco_core_session::{SessionProfiles, SessionRegistry};
 use lunco_cosim_core::ControlLink;
+use lunco_input_core::{resolved_input_label, InputBindingsSettings};
 
 use lunco_camera_core::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 

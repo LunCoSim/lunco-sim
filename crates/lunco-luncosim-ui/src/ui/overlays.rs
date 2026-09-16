@@ -15,9 +15,10 @@
 //! possessing a vessel, so it is already answering a question you just asked.
 
 use bevy::prelude::*;
+use lunco_input_ui::InputOverlaySettings;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_twin::TwinSettingValue;
-use lunco_workbench::{input_overlay::InputOverlaySettings, perf_hud::PerfHudSettings};
+use lunco_workbench::perf_hud::PerfHudSettings;
 use lunco_workbench_core::{MenuCtx, WorkbenchMenuRegistry};
 use lunco_workbench_state::RuntimeSurfaceLayouts;
 use lunco_workspace::{ResetTwinSetting, SetTwinSetting, TwinSettingInput, WorkspaceResource};

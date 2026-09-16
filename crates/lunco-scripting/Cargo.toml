@@ -33,9 +33,9 @@ lunco-core-session = { path = "../lunco-core-session" }
 # out of the default Rhai/world bridge so headless hosts do not acquire Bevy's
 # GPU graph merely to register generic scripted policies.
 lunco-render-recovery = { path = "../lunco-render-recovery", optional = true }
-# The Rhai tutorial bridge reads the controller-owned resolved keymap. Optional
-# so Python-only and script-free builds do not acquire the input projection.
-lunco-controller = { path = "../lunco-controller", optional = true }
+# The Rhai tutorial bridge reads the shared resolved keymap. Optional so
+# Python-only and script-free builds do not acquire the input projection.
+lunco-input-core = { path = "../lunco-input-core", optional = true }
 lunco-physics = { path = "../lunco-physics", optional = true }
 # For the readiness policy hook id registered in `register_builtin_policies`.
 lunco-readiness = { workspace = true }
@@ -87,7 +87,7 @@ lunco-workspace = { path = "../lunco-workspace", optional = true }
 # rhai on by default — the browser-capable backend. Turn it off
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
-rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-controller", "dep:lunco-scripting-bridge-core", "lunco-scripting-bridge-core/workspace", "dep:lunco-scripting-bridge-spatial", "dep:lunco-scripting-bridge-time", "dep:lunco-scripting-bridge-usd", "dep:lunco-celestial-spatial", "dep:lunco-physics", "dep:lunco-spatial", "lunco-twin-journal/hooks"]
+rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-input-core", "dep:lunco-scripting-bridge-core", "lunco-scripting-bridge-core/workspace", "dep:lunco-scripting-bridge-spatial", "dep:lunco-scripting-bridge-time", "dep:lunco-scripting-bridge-usd", "dep:lunco-celestial-spatial", "dep:lunco-physics", "dep:lunco-spatial", "lunco-twin-journal/hooks"]
 # Opt-in bridge for the GUI's render-shadow policy. This edge belongs to the
 # application composition root, never to the generic scripting/runtime crate.
 render-policy = ["dep:lunco-render-recovery"]

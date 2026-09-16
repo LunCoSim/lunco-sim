@@ -1275,7 +1275,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Command to toggle the input overlay visibility.
 
-- *defined in:* `crates/lunco-workbench/src/input_overlay.rs`
+- *defined in:* `crates/lunco-input-ui/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|

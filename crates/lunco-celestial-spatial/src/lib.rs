@@ -351,7 +351,9 @@ impl Plugin for CelestialPlugin {
         // world is never re-posed for viewing (see `placement::OrbitalViewPin`).
         app.init_resource::<placement::OrbitalViewPin>();
         app.init_resource::<lunco_environment::SunState>();
-        app.init_resource::<lunco_controller::InputBindingsSettings>();
+        if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
+            app.add_plugins(lunco_input_core::InputBindingsPlugin);
+        }
 
         // Celestial cadence: the tree is re-solved on an ANGULAR ERROR BUDGET,
         // not at a fixed wall-clock Hz (the transport rate changes the epoch

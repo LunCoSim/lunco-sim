@@ -4,14 +4,10 @@ Input mapping and controller translation for LunCoSim vessels.
 
 ## What This Crate Does
 
-This crate resolves user input (Keyboard, Gamepad, Mouse) from the persisted
-`InputBindingsSettings` section and translates it into typed command events that
-Flight Software (FSW) can consume.
+This crate consumes semantic user input (Keyboard, Gamepad, Mouse) and
+translates it into typed command events that Flight Software (FSW) can consume.
+The shared persisted keymap is owned by `lunco-input-core`.
 
-- **Input Mapping** — `assets/config/keybindings.json` supplies the bundled
-  semantic defaults; user overrides live under `input_bindings` in
-  `<OS config dir>/lunco/settings.json`. The resolved resource is projected into every live
-  avatar input map when it changes.
 - **Intent Translation** — Maps semantic `UserIntent` actions into the shared
   `SetPorts` command surface and authored per-vessel `ControlBinding`s.
 - **Context Awareness** — UI focus and session authority gates are applied at
@@ -24,15 +20,16 @@ The controller acts as the **Human-Machine Interface (HMI)** layer, decoupling r
 
 ```
 lunco-controller/
-  ├── InputBindingsSettings — persisted semantic key/pointer map
   ├── UserIntent            — shared abstract action vocabulary
   ├── ControlLink       — Component from lunco-cosim-core linking a producer to a target
-  └── lib.rs             — translation, authority, and input projection
+  └── lib.rs             — translation, authority, and input injection
 ```
 
 ## Usage
 
 ```rust
+use lunco_input_core::InputBindingsSettings;
+
 app.add_plugins(LunCoControllerPlugin);
 
 // Assign a controller to a rover
@@ -68,7 +65,7 @@ body axes. Opposite intents sum and cancel through `ControlBinding::resolve`,
 and releasing an intent writes zero to every authored command port.
 
 The default W/S/A/D/Q/E labels are only the current `input_bindings` projection.
-UI help resolves them from `InputBindingsSettings`, so remapping changes the
+UI help resolves them from `lunco-input-core::InputBindingsSettings`, so remapping changes the
 display without introducing a second control scheme.
 
 ### Native UI input automation

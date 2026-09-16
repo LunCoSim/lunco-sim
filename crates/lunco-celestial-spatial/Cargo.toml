@@ -80,7 +80,7 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 avian3d = { workspace = true }
-lunco-controller = { path = "../lunco-controller" }
+lunco-input-core = { path = "../lunco-input-core" }
 futures-lite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

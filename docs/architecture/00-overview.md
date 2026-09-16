@@ -71,7 +71,7 @@ Apps (luncosim, luncosim-server, lunica)
    │
    ├── Domain crates (Documents + Co-Simulation)
    │     lunco-modelica-core   lunco-usd-commands   lunco-cosim   lunco-celestial
-   │     lunco-environment   lunco-avatar   lunco-controller   ...
+   │     lunco-environment   lunco-avatar   lunco-input-core   lunco-controller   ...
    │     lunco-scripting-bridge-core ← interpreter-free reflected world mechanism
    │     lunco-scripting   ← rhai/python bindings + op-graph generators
    │          │
@@ -82,6 +82,7 @@ Apps (luncosim, luncosim-server, lunica)
    │                        crates (lunco-avatar, lunco-celestial, lunco-mobility)
    │     lunco-avatar-ui  ← optional egui presentation over avatar contracts
    │                        (status, overlays, settings; no runtime edge)
+   │     lunco-input-ui   ← optional egui input-state overlay
    │          │
    │          ▼
    ├── Framework layer

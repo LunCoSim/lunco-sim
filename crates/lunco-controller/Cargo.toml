@@ -10,6 +10,7 @@ leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-input-core = { path = "../lunco-input-core" }
 # The generic vessel-control command contracts live in the backend-neutral
 # package; `drive_from_bindings` triggers them from held keys.
 lunco-cosim-core = { path = "../lunco-cosim-core" }
@@ -17,9 +18,6 @@ lunco-cosim-core = { path = "../lunco-cosim-core" }
 # step the free avatar's self-drive runs on, so pausing the sim doesn't freeze the
 # user's own movement.
 lunco-time = { path = "../lunco-time" }
-lunco-settings = { path = "../lunco-settings" }
-# Key→intent bindings are DATA (`assets/config/keybindings.json`), parsed into the
-# leafwing `InputMap` — no keys hardcoded in Rust.
 serde = { workspace = true }
 serde_json = { workspace = true }
 

@@ -74,15 +74,13 @@ use bevy::prelude::*;
 // `bevy::camera::*` re-exports work on *both* native and
 // `--no-default-features` wasm builds. `bevy::render::camera::*` only
 // exists when the `bevy_render` feature is on, which wasm strips.
+use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
-use leafwing_input_manager::prelude::ActionState;
-
-use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
-use lunco_control_core::UserIntent;
-use lunco_controller::InputBindingsSettings;
+use lunco_control_core::{IntentState, LocalIntentSurface};
 use lunco_core::SceneViewport;
+use lunco_input_core::InputBindingsSettings;
 use lunco_render::SceneCamera;
 use lunco_workbench_core::presentation::ViewportPlaceholder;
 use lunco_workbench_core::scene_pick::{EguiPointerState, ScenePickGate, SceneTarget};
@@ -298,8 +296,8 @@ pub(crate) fn ensure_egui_host(
             RenderLayers::none(),
             PrimaryEguiContext,
             WorkbenchEguiHost,
-            lunco_control_core::LocalIntentSurface,
-            ActionState::<UserIntent>::default(),
+            LocalIntentSurface,
+            IntentState::default(),
             input_map,
             Name::new("WorkbenchEguiHost"),
         ));
@@ -655,6 +653,9 @@ fn apply_viewport_panel_measurement(
 impl Plugin for WorkbenchViewportPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(lunco_control_core::LunCoControlPlugin);
+        if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
+            app.add_plugins(lunco_input_core::InputBindingsPlugin);
+        }
         app.init_resource::<PanelRects>()
             .init_resource::<ScenePickGate>()
             .init_resource::<ViewportPlaceholder>()

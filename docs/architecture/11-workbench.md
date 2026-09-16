@@ -775,10 +775,10 @@ crates):
 | `modelica.editor` | `lunco-modelica-ui` | Source editor word-wrap, tab width, auto-format-on-save |
 | `welcome_progress` | `lunco-modelica-ui` | Open-count progress for the Welcome learning paths |
 | `perf_hud` | `lunco-workbench` | Performance HUD visibility and live status-bar diagnostics |
-| `input_overlay` | `lunco-workbench` | Input HUD visibility for recording and observation |
+| `input_overlay` | `lunco-input-ui` | Input HUD visibility for recording and observation |
 | `download` | `lunco-settings` | Shared download concurrency, attempt budget, exponential backoff, and delay cap |
 | `journal` | `lunco-twin-journal` | Retention, blob commit policy (`twin.toml` may override) |
-| `input_bindings` | `lunco-controller` | Resolved keyboard and look-button bindings shared by avatar control, help, input injection, and Rhai tutorials |
+| `input_bindings` | `lunco-input-core` | Resolved keyboard and pointer bindings shared by avatar control, help, input injection, and Rhai tutorials |
 | `ui.entity_list.grid_scope` | `lunco-luncosim-edit-ui` | Active-Twin entity-tree visibility: `current` for the active `ActivePhysicsFrame`, or `all` for every mounted BigSpace grid |
 
 #### 9b.3 Per-Twin overrides
@@ -846,7 +846,7 @@ surfaces, and user-global preferences remain in `settings.json`.
 
 - Theming via egui's visuals system. Built-in themes: Dark, Light, High
   Contrast. Per-user customization is a typed section in `settings.json`.
-- Avatar and vessel input bindings are owned by `lunco-controller` as the typed
+- Avatar and vessel input bindings are owned by `lunco-input-core` as the typed
   `InputBindingsSettings` section in `<OS config dir>/lunco/settings.json`. The bundled
   defaults are the data in `assets/config/keybindings.json`; the same resolved
   resource feeds the live input map, help surfaces, input injection, and Rhai
@@ -928,6 +928,11 @@ dependency chain. In particular, `lunco-workbench-state` and
    │     - authored placement, input regions, readiness, and semantic actions
    │         │
    │         ▼
+   ├── lunco-input-core + lunco-input-ui  (shared input contract and presentation)
+   │     - persisted keyboard/pointer bindings and semantic InputMap projection
+   │     - optional recording/observation overlay; no vessel actuation
+   │         │
+   │         ▼
    ├── lunco-workbench-text-editor  (generic source editor)
    │     - source tabs and async storage-backed text I/O
    │     - source panel registration and Twin-close lifecycle
@@ -977,6 +982,10 @@ dependency chain. In particular, `lunco-workbench-state` and
 - `lunco-workbench-file-dialog` owns the native/wasm dialog backends and typed
   picker events; `lunco-workbench-file-ops` composes those events with the
   existing document/workspace commands.
+- `lunco-input-core` owns the persisted device-to-intent map and
+  `lunco-input-ui` owns its optional egui overlay. The shell consumes the
+  generic map for its app-level intent surface but does not depend on the
+  vessel-control adapter.
 - `lunco-luncosim-edit-gizmo-ui` owns the transform-gizmo frontend and pose
   transaction lifecycle; `lunco-luncosim-edit-ui` composes it with selection,
   scene tools, panels, and diagnostic visualization.

@@ -269,7 +269,7 @@ fn sync_editor_session_selection(
 /// binding into the existing View Help popup. This is presentation only: it
 /// reads the public input-port surface and never changes control state.
 fn refresh_view_help_controls(
-    bindings: Res<lunco_controller::InputBindingsSettings>,
+    bindings: Res<lunco_input_core::InputBindingsSettings>,
     local_avatar: Res<TheLocalAvatar>,
     q_avatar: Query<&ControlLink, (With<Avatar>, With<lunco_core::LocalAvatar>)>,
     q_names: Query<Ref<Name>>,
@@ -300,7 +300,7 @@ fn refresh_view_help_controls(
     let global_rows = match bindings.key_bindings() {
         Ok(rows) => rows
             .into_iter()
-            .map(|(intent, keys)| (lunco_controller::key_label(&keys), intent.to_string()))
+            .map(|(intent, keys)| (lunco_input_core::key_label(&keys), intent.to_string()))
             .collect(),
         Err(error) => {
             error!("[view-help] active keymap is invalid: {error}");

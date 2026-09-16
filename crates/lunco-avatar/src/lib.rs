@@ -44,11 +44,11 @@ use lunco_camera_core::{
     OrbitViewReturn, RadialArrival, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
-use lunco_controller::InputBindingsSettings;
 use lunco_core::{on_command, register_commands, Avatar, CelestialBody, LocalAvatar, Spacecraft};
 use lunco_core_session::commands::UpdateProfile;
 use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
 use lunco_cosim_core::ControlLink;
+use lunco_input_core::InputBindingsSettings;
 /// Capability test for "**accepts commands**": carries an authored intent→port
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
 /// backend (`SimComponent`).
@@ -705,8 +705,10 @@ fn enforce_ownership(
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
         register_camera_mode_hooks(app);
-        app.init_resource::<InputBindingsSettings>()
-            .init_resource::<CameraDefaults>()
+        if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
+            app.add_plugins(lunco_input_core::InputBindingsPlugin);
+        }
+        app.init_resource::<CameraDefaults>()
             .init_resource::<AvatarCollisionSettings>()
             .init_resource::<SurfaceModeThreshold>();
         app.configure_sets(Update, AvatarSceneHandoffSet);
