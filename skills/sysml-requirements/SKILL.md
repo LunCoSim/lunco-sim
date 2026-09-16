@@ -149,7 +149,8 @@ The current supported subset is source-backed and deterministic:
   definitions/usages with documentation and attributes;
 - standard external references plus `satisfy` and verification `verify`
   memberships;
-- qualified names, typed scalar literal projections, source spans, diagnostics,
+- qualified names, typed scalar literal projections (`value.number_value` is a
+  native finite Rhai number while `value.number` preserves authored text), source spans, diagnostics,
   source files, and a deterministic `source_revision`;
 - Twin-indexed source-set discovery through the existing asset manifest, with
   `SysmlPlugin` opening the checked set automatically after `TwinAssetMounted`;
@@ -160,7 +161,14 @@ The current supported subset is source-backed and deterministic:
   and external clients;
 - the read-only `ValidateSysml` query and the
   `luncosim test --verification QUALIFIED_NAME` selector; and
-- structured per-check evidence emitted by `report_structured_verdict`.
+- structured per-check evidence emitted by `report_structured_verdict`.  The
+  summary event keeps small reports inline; larger reports emit one bounded
+  `*_EVIDENCE_RESULT` event per observation with a stable `result_index`.
+  Consumers must group by channel and source revision, then order by that
+  index.  This preserves the complete typed table without exceeding Rhai's
+  bounded value budget.  Check records may use qualified or validated short
+  requirement/verification names; short names are preferred in repeated
+  arrays to avoid duplicating package prefixes.
 
 It does not provide a full SysML/KerML execution engine. Do not promise or
 silently emulate interface definitions, arbitrary expressions and constraints,
@@ -311,10 +319,16 @@ its explicit `expected` value. Do not copy a threshold into Rhai, TOML, a UI
 label, or a Rust constant. Do not infer a requirement from a screenshot or
 from an ambiguous short-name lookup.
 
-The result contains `ok`, `results`, `failures`, `requirement_count`,
-`failure_count`, `verification`, `source_revision`, and `source_files`. Keep
-the result and emitted evidence with the run. A missing observation is a
-failure, not a passing empty set.
+The result contains `ok`, `results`, `failures`, `check_count`,
+`requirement_count`, `requirement_names`, `requirement_summary`,
+`failure_count`, `verification`, `source_revision`, and `source_files`.
+`check_count` is the number of concrete observations (for example, one
+transform or attribute on one repeated part); `requirement_count` is the
+number of unique SysML requirement usages represented by those observations.
+Use `requirement_summary` for a compact per-requirement `{ checks, failures }`
+view and keep the complete result table as evidence. A missing observation is a
+failure, not a passing empty set. The next performance seam is a native batch
+USD query; do not implement an ad-hoc Rhai cache that outlives one evaluation.
 
 ## Select and run a verification case
 

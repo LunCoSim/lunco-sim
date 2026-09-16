@@ -142,7 +142,7 @@ fn number(report, name) {
     if resolved.ok != true || resolved.record.value == () {
         return ();
     }
-    if resolved.record.value.number != () { return resolved.record.value.number.to_float(); }
+    if resolved.record.value.number_value != () { return resolved.record.value.number_value; }
     ()
 }
 
@@ -219,7 +219,7 @@ fn _expected(report, check) {
     if check.expected_attr == () { return check.expected; }
     let resolved = attribute(report, check.expected_attr);
     if resolved.ok != true || resolved.record.value == () { return (); }
-    if resolved.record.value.number != () { return resolved.record.value.number.to_float(); }
+    if resolved.record.value.number_value != () { return resolved.record.value.number_value; }
     _text(resolved.record.value.literal)
 }
 
@@ -456,9 +456,35 @@ fn evaluate(source_report, checks) {
     if checks.len() > 0 && checks[0].verification != () {
         verification = checks[0].verification;
     }
+    // A component observer normally expands one SysML requirement over many
+    // repeated instances and leaf observations.  Keep those checks as the
+    // durable evidence table, but do not call the observation count a
+    // requirement count: doing so made a four-tank component appear to have
+    // hundreds of requirements.  The short requirement identity is stable in
+    // the check records and is sufficient for this bounded aggregate.
+    let requirement_summary = #{};
+    let requirement_names = [];
+    for result in results {
+        let requirement = result.requirement;
+        if requirement == () || requirement == "" { continue; }
+        if requirement_summary[requirement] == () {
+            requirement_summary[requirement] = #{checks: 0, failures: 0};
+            requirement_names.push(requirement);
+        }
+        requirement_summary[requirement].checks += 1;
+        if result.ok != true {
+            requirement_summary[requirement].failures += 1;
+        }
+    }
     #{ok: failures.len() == 0, results: results, failures: failures,
-      requirement_count: checks.len(), failure_count: failures.len(),
-      verification: verification,
+      // `check_count` is the number of concrete USD/source observations.
+      check_count: checks.len(),
+      // `requirement_count` is the number of unique SysML requirement usages
+      // represented by those observations.
+      requirement_count: requirement_names.len(),
+      requirement_names: requirement_names,
+      requirement_summary: requirement_summary,
+      failure_count: failures.len(), verification: verification,
       source_revision: source_report.source_revision_hex,
       source_files: source_report.source_files}
 }

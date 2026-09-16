@@ -2135,7 +2135,13 @@ fn build_usd_physics_joints(
     mut resolve_ticks: Local<EntityHashMap<u32>>,
 ) {
     resolve_ticks.retain(|e, _| q_pending.contains(*e));
-    for (joint_entity, pending, joint_prim_path) in q_pending.iter() {
+    // Pending constraints are created from deferred USD projections.  ECS
+    // iteration order is not authored order and can vary when async referenced
+    // layers finish on different frames.  Attach them by stable USD path so
+    // native solver-island construction cannot depend on loader timing.
+    let mut pending_joints: Vec<_> = q_pending.iter().collect();
+    pending_joints.sort_by(|left, right| left.2.path.cmp(&right.2.path));
+    for (joint_entity, pending, joint_prim_path) in pending_joints {
         // Joint preparation is intentionally allowed while world readiness
         // holds. The hold pauses integration, not topology construction:
         // `attach_joint` parks the native constraint and `JointAttachPlugin`

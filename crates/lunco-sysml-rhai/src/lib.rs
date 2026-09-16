@@ -360,6 +360,9 @@ fn literal_dynamic(literal: &lunco_sysml_ast::SysmlLiteral) -> Dynamic {
     if let Some(number) = &literal.number {
         value.insert("number".into(), Dynamic::from(number.clone()));
     }
+    if let Some(number) = literal.number_value {
+        value.insert("number_value".into(), Dynamic::from_float(number.as_f64()));
+    }
     Dynamic::from_map(value)
 }
 
@@ -500,5 +503,19 @@ mod tests {
         assert!(json.contains("example.sysml"));
         let requirements: String = engine.eval("sysml_requirement_report_json()").unwrap();
         assert!(requirements.contains("MassRequirement"));
+    }
+
+    #[test]
+    fn native_report_exposes_numeric_literal_without_string_parsing() {
+        let analysis = Arc::new(SysmlAnalysis::from_files_without_stdlib([(
+            "numeric.sysml",
+            "part def A { attribute mass : Real = 2.5; }",
+        )]));
+        let mut engine = rhai::Engine::new();
+        register_sysml_report(&mut engine, analysis);
+        let value: f64 = engine
+            .eval("sysml_report().attributes[0].value.number_value")
+            .expect("native numeric projection");
+        assert_eq!(value, 2.5);
     }
 }

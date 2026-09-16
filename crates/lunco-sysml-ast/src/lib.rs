@@ -107,6 +107,35 @@ pub struct SysmlReference {
     pub target: String,
 }
 
+/// A finite numeric literal projected from SysML source.
+///
+/// The wrapper keeps the semantic snapshot comparable (`Eq`) while exposing
+/// the native `f64` to language adapters.  Construction rejects non-finite
+/// values, so requirement consumers never receive NaN or infinity.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SysmlNumber(f64);
+
+impl SysmlNumber {
+    /// Construct a numeric projection only for finite values.
+    pub fn new(value: f64) -> Option<Self> {
+        value.is_finite().then_some(Self(value))
+    }
+
+    /// Return the native floating-point value for a language adapter.
+    pub fn as_f64(self) -> f64 {
+        self.0
+    }
+}
+
+impl PartialEq for SysmlNumber {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for SysmlNumber {}
+
 /// A literal value written on a SysML attribute.
 ///
 /// The semantic model keeps the authored expression text.  This projection
@@ -122,6 +151,10 @@ pub struct SysmlLiteral {
     /// Canonical numeric text when the literal is an integer or real.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number: Option<String>,
+    /// Validated native numeric projection for integer or real literals.
+    /// The authored text above remains the lossless source-of-truth value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_value: Option<SysmlNumber>,
 }
 
 /// An authored SysML attribute with its source span and owning element.
@@ -544,13 +577,10 @@ fn project_attributes(files: &[SysmlFile], elements: &[SysmlElement]) -> Vec<Sys
 }
 
 fn parse_literal(literal: &str) -> SysmlLiteral {
-    let number = literal
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite());
+    let number_value = literal.parse::<f64>().ok().and_then(SysmlNumber::new);
     let kind = if literal.parse::<i64>().is_ok() {
         "integer"
-    } else if number.is_some() {
+    } else if number_value.is_some() {
         "real"
     } else if literal == "true" || literal == "false" {
         "boolean"
@@ -562,7 +592,8 @@ fn parse_literal(literal: &str) -> SysmlLiteral {
     SysmlLiteral {
         literal: literal.to_owned(),
         kind: kind.to_owned(),
-        number: number.map(|_| literal.to_owned()),
+        number: number_value.map(|_| literal.to_owned()),
+        number_value,
     }
 }
 
@@ -761,6 +792,22 @@ mod tests {
     fn source_revision_is_preserved() {
         let analysis = SysmlAnalysis::build([("a.sysml", "part def A {}")], false, 42);
         assert_eq!(analysis.source_revision(), 42);
+    }
+
+    #[test]
+    fn numeric_literal_keeps_text_and_validated_native_value() {
+        let analysis = SysmlAnalysis::from_files_without_stdlib([(
+            "numeric.sysml",
+            "part def A { attribute mass : Real = 2.5; }",
+        )]);
+        let mass = analysis
+            .attributes()
+            .iter()
+            .find(|attribute| attribute.name == "mass")
+            .expect("mass attribute");
+        let value = mass.value.as_ref().expect("mass literal");
+        assert_eq!(value.number.as_deref(), Some("2.5"));
+        assert_eq!(value.number_value.map(SysmlNumber::as_f64), Some(2.5));
     }
 
     #[test]

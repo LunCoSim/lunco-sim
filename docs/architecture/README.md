@@ -117,6 +117,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`derive-substrate.md`](derive-substrate.md) | The unified derived-artifact substrate (async compute/bake patterns) |
 | [`caching-and-precompute-strategy.md`](caching-and-precompute-strategy.md) · [`scenario-program-cache.md`](scenario-program-cache.md) | Caching strategy; the rhai program cache |
 | [`efficiency-and-maintainability.md`](efficiency-and-maintainability.md) | **The North Star + substrates B–E in full**: the one principle, the tier ladder, `lunco-precompute` (B), `Mobility` (C), ports resolve→handle (D), `lunco-hash` (E) |
+| [`editor-authoring-capability-gaps.md`](editor-authoring-capability-gaps.md) | Remaining generic capabilities that shorten the live component edit/checkpoint loop without adding a second USD writer |
 | [`usd-source-of-truth.md`](usd-source-of-truth.md) | **USD is the truth; ECS is a projection of it.** The rule every edit path obeys |
 | [`rhai-integration.md`](rhai-integration.md) | Why rhai, and the as-built scripting surface. The *how-to* is [`../scripting-guide.md`](../scripting-guide.md) |
 | [`rhai-test-strategy.md`](rhai-test-strategy.md) | Test ownership, the Rust/Rhai migration boundary, and no-build/live-suite commands |

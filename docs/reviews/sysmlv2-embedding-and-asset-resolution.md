@@ -43,6 +43,8 @@ and server. A deliberately lean build may still opt out with
   `sysml_requirement_report()` maps over an immutable analysis snapshot, plus
   JSON compatibility functions. Script policy and verdict ownership stay in
   the existing Rhai test runner.
+  Numeric literals retain authored text and expose a validated native
+  `number_value`, so requirement policy does not repeatedly parse strings.
 - `lunco-scene-validation` registers a compact `ValidateSysml` API query for
   authored tests. It reuses `ValidateAsset`'s parser/resolver and projects
   typed attributes/literals, requirement/verification records, diagnostics,

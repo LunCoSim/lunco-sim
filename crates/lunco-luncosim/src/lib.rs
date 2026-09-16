@@ -516,7 +516,10 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         }
         app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
     }
-    app.add_plugins(LunCoSimCorePlugin { headless: false });
+    app.add_plugins(LunCoSimCorePlugin {
+        headless: false,
+        startup_scene: None,
+    });
     // Provisioning is an explicit GUI application capability. The shared core
     // installs only the lightweight registry/discovery plugin, so headless and
     // server compositions do not inherit native HTTP/archive/image workers.

@@ -41,6 +41,11 @@ let report = sysml_requirement_report();
 let all_declarations = sysml_report();
 ```
 
+Numeric literals in those maps carry both representations: `value.number` is
+the lossless authored text, while `value.number_value` is the validated native
+finite number used by requirement policy. Consumers must use `number_value`;
+reparsing the text in Rhai is not part of the bridge contract.
+
 The `sysml_report_json()` and `sysml_requirement_report_json()` functions are
 compatibility paths for logs and external clients. A Twin declares the
 execution binding separately in `twin.toml`:

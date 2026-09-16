@@ -372,16 +372,19 @@ deliberately; that is unchanged.
 ## Verify
 
 For iterative modeling, keep one luncosim process running with an explicit
-`--api PORT` and use that API. Edit
-the USD, then use `OpenFile` for a file-backed asset, `RestartScene` for the
-mounted scene, or `ApplyUsdOp` for an in-place authored opinion. Re-run a Rhai
-telemetry observer with `RunScenario` and inspect live rover status/ports before
-restarting anything.
+`--api PORT` and use that API. Edit a component through the focused Editor
+preview with `assembly_edit`/`assembly_builder`; the document owner journals
+the change and the dependency-scoped projection refreshes mounted references
+in place, preserving the current camera and selection. Wait for the matching
+projected generation, query the affected composed paths, capture the focused
+view, and re-run the Rhai observer with `RunScenario` before saving.
 
-Object-level USD/reference reload is a planned TODO. Use `RestartScene` while
-testing asset edits: it is the supported boundary that reconstructs the prim
-tree, Modelica models, and USD connections together. Do not emulate a partial
-reload by manually respawning only a visual subtree.
+`RestartScene` is reserved for an explicit scene-lifecycle test or a Rust
+binary rebuild. Never use it as the normal response to a component edit, and
+never emulate refresh by manually respawning a visual subtree. If a referenced
+component fails to refresh, inspect the document/preview generations and the
+projection diagnostics; report the dependency or capability error instead of
+adding a second writer or a restart fallback.
 
 **1. Pre-flight, before launching anything** — composes the whole reference
 closure and runs the same strict wheel reader the spawner uses, so a missing
