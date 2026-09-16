@@ -106,6 +106,9 @@ the observer through the API as described by
 - Is there a meaningful negative case with a named, non-crashing diagnostic?
 - Are units, coordinate frame, camera/time contract, and deterministic clocks
   explicit where they affect the result?
+- Is canonical numeric state kept as native `f64`/USD `double`, with any
+  `f32`/`float` conversion explicit and limited to a renderer/GPU boundary or a
+  USD field whose schema requires it?
 - Is the test short enough to reuse libraries rather than becoming a batch
   builder or a second runtime in Rhai?
 - Did the run use the production binary/API and prove a real verdict?
