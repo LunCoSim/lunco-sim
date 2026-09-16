@@ -624,10 +624,9 @@ impl Plugin for ModelicaUiPlugin {
         // fires — drives the progress dots on the example paths.
         app.add_plugins(welcome_progress::WelcomeProgressPlugin);
 
-        // Edit events (`ModelicaApiEditPlugin`), the doc registry, the journal
-        // wire, and `drain_document_changes` now live in `ModelicaCorePlugin`
-        // (build_modelica_core) so a headless server journals Modelica edits
-        // too. UI adds core first, so they're already present here.
+        // The document registry, journal wire, and `drain_document_changes`
+        // live in `ModelicaCorePlugin`; the transport-free edit commands are
+        // supplied by `lunco-modelica-api` and installed by `ModelicaPlugin`.
 
         app.init_resource::<WorkbenchState>()
             .init_resource::<ModelicaDocumentRegistry>()

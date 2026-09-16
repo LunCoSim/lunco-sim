@@ -7,6 +7,7 @@ description = "Transport-free API query providers for Modelica documents and run
 
 [dependencies]
 bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
 lunco-api = { path = "../lunco-api" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
@@ -17,10 +18,15 @@ lunco-modelica-core = { path = "../lunco-modelica-core", default-features = fals
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-solver = { path = "../lunco-modelica-solver" }
+lunco-twin-journal = { path = "../lunco-twin-journal" }
 serde_json = { workspace = true }
+serde = { workspace = true }
 uuid = { workspace = true }
 web-time = { workspace = true }
 lunco-workspace = { path = "../lunco-workspace" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+crossbeam-channel = { workspace = true }

@@ -6,7 +6,6 @@ pub mod diagram;
 pub mod doc;
 pub mod util;
 
-use crate::document::ModelicaOp;
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 use lunco_doc::DocumentId;
@@ -15,6 +14,7 @@ use lunco_modelica_ast::pretty::{
     GraphicSpec, Line, LinePattern, LunCoPlotNodeSpec, Placement, PortRef, VariabilitySpec,
     VariableDecl,
 };
+use lunco_modelica_core::document::ModelicaOp;
 use util::{resolve_doc, strip_same_package_prefix};
 
 /// Plugin that registers the Modelica edit events + observers.
@@ -47,9 +47,9 @@ impl Plugin for ModelicaApiEditPlugin {
         // Chain: core `lunco_workspace::FileRenamed` → `RenameModelicaClass`
         // for saved `.mo` files. Observer is not a `#[Command]`, so it's not
         // in `register_commands!()` — added directly. Names no UI types, so it
-        // stays in the core API plugin (dormant on a headless server, which
+        // stays in this API edit plugin (dormant on a headless server, which
         // never fires the event). The Untitled-draft rename chain (which names
-        // a workbench UI event) lives in `crate::ui::rename_chain` instead.
+        // a workbench UI event) lives in the Modelica UI package instead.
         app.add_observer(class::on_file_renamed_chain_to_modelica);
     }
 }
@@ -453,7 +453,7 @@ pub fn on_apply_modelica_ops(
         if internal.is_empty() {
             return;
         }
-        crate::doc_ops::apply_ops_as(
+        lunco_modelica_core::doc_ops::apply_ops_as(
             world,
             doc,
             internal,
@@ -973,8 +973,8 @@ fn api_graphic_to_pretty(g: &ApiGraphic) -> GraphicSpec {
     }
 }
 
-pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> ApiOp {
-    match op {
+pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Result<ApiOp, String> {
+    Ok(match op {
         ModelicaOp::AddComponent { class, decl } => ApiOp::AddComponent {
             class: class.clone(),
             type_name: decl.type_name.clone(),
@@ -1226,7 +1226,10 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> ApiOp {
             to_component: to.component.clone(),
             to_port: to.port.clone(),
         },
-    }
+        _ => {
+            return Err("Modelica operation is not supported by the API edit surface".to_owned());
+        }
+    })
 }
 
 fn internal_placement_to_api(p: Placement) -> ApiPlacement {
@@ -1344,7 +1347,13 @@ fn graphic_to_api(graphic: &GraphicSpec) -> ApiGraphic {
 }
 
 pub fn trigger_apply_ops(world: &mut World, doc: lunco_doc::DocumentId, ops: Vec<ModelicaOp>) {
-    let api_ops: Vec<ApiOp> = ops.iter().map(internal_op_to_api).collect();
+    let api_ops: Vec<ApiOp> = match ops.iter().map(internal_op_to_api).collect() {
+        Ok(api_ops) => api_ops,
+        Err(error) => {
+            bevy::log::warn!("[ApplyModelicaOps] {error}");
+            return;
+        }
+    };
     if api_ops.is_empty() {
         return;
     }

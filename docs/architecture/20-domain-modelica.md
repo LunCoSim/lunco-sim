@@ -53,10 +53,10 @@ HTML documentation rendering is isolated in
 [`lunco-modelica-docs-ui`](../../crates/lunco-modelica-docs-ui/); the Modelica
 view supplies only the selected class's documentation fragments.
 
-The transport-free Modelica query surface is a separate production capability
+The transport-free Modelica API surface is a separate production capability
 in [`lunco-modelica-api`](../../crates/lunco-modelica-api/). API-enabled hosts
 install it alongside the compiler; compiler-only builds do not inherit query
-registration or Workspace API dependencies. Workspace queries remain owned by
+registration, edit-command registration, or Workspace API dependencies. Workspace queries remain owned by
 [`lunco-workspace-api`](../../crates/lunco-workspace-api/).
 
 The shared render-free participant contract is [`lunco-modelica-runtime`](../../crates/lunco-modelica-runtime/).
@@ -1268,7 +1268,7 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 ### Source
 
 - [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — crate root
-- [`../../crates/lunco-modelica-api/`](../../crates/lunco-modelica-api/) — transport-free Modelica query capability
+- [`../../crates/lunco-modelica-api/`](../../crates/lunco-modelica-api/) — transport-free Modelica queries and document edit commands
 - [`../../crates/lunco-modelica-ast/`](../../crates/lunco-modelica-ast/) — normalized Rumoca parse boundary, AST projections, and Modelica lint facts
 - [`../../crates/lunco-modelica-core/src/document/core.rs`](../../crates/lunco-modelica-core/src/document/core.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
 - [`../../crates/lunco-modelica-core/src/pretty.rs`](../../crates/lunco-modelica-core/src/pretty.rs) — subset pretty-printer, `PrettyOptions`

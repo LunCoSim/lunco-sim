@@ -8,8 +8,9 @@
 //!   `Node(id)` is mapped through the scene to the Modelica instance
 //!   name (`Node.origin`), then cross-referenced against the doc's AST
 //!   to find the matching `Component` declaration.
-//! - **Writes** via the unified [`crate::api_edits::ApplyModelicaOps`]
-//!   Reflect event with [`crate::api_edits::ApiOp::SetParameter`]. The
+//! - **Writes** via the unified
+//!   [`lunco_modelica_api::edit::ApplyModelicaOps`] Reflect event with
+//!   [`lunco_modelica_api::edit::ApiOp::SetParameter`]. The
 //!   GUI never mutates state directly; per AGENTS.md §4.1 every edit
 //!   goes through the same command surface an external API caller
 //!   would use.
@@ -31,7 +32,7 @@ use bevy_egui::egui;
 use lunco_canvas::SelectItem;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::api::{ApiOp, ApplyModelicaOps};
+use lunco_modelica_api::edit::{ApiOp, ApplyModelicaOps};
 
 #[derive(Event, Clone, Debug)]
 pub(crate) struct PlotBindingRequested {

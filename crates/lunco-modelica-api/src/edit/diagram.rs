@@ -1,11 +1,11 @@
 //! API handlers for diagram-level operations (Connect, Disconnect).
 
 use super::util::{parse_port_ref, resolve_doc};
-use crate::document::ModelicaOp;
 use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
 use lunco_modelica_ast::pretty::ConnectEquation;
+use lunco_modelica_core::document::ModelicaOp;
 
 /// Add a `connect(a.p, b.q)` equation to a class.
 #[Command(default)]
@@ -44,7 +44,7 @@ pub fn on_connect_components(trigger: On<ConnectComponents>, mut commands: Comma
             to: to.clone(),
             line: None,
         };
-        match crate::doc_ops::apply_one_op_as(
+        match lunco_modelica_core::doc_ops::apply_one_op_as(
             world,
             doc,
             ModelicaOp::AddConnection {
@@ -62,15 +62,17 @@ pub fn on_connect_components(trigger: On<ConnectComponents>, mut commands: Comma
                     ev.to
                 );
                 let anim_ms = if ev.animation_ms == 0 {
-                    crate::canvas_feedback::DEFAULT_EDGE_FLASH_MS
+                    lunco_modelica_core::canvas_feedback::DEFAULT_EDGE_FLASH_MS
                 } else {
                     ev.animation_ms
                 };
                 // UI-only feedback: absent (no-op) on a headless server.
                 if let Some(mut q) =
-                    world.get_resource_mut::<crate::canvas_feedback::PendingApiConnectionQueue>()
+                    world.get_resource_mut::<
+                        lunco_modelica_core::canvas_feedback::PendingApiConnectionQueue,
+                    >()
                 {
-                    q.push(crate::canvas_feedback::PendingApiConnection {
+                    q.push(lunco_modelica_core::canvas_feedback::PendingApiConnection {
                         doc,
                         from_component: from.component,
                         from_port: from.port,
@@ -119,7 +121,7 @@ pub fn on_disconnect_components(trigger: On<DisconnectComponents>, mut commands:
         let Some(to) = parse_port_ref(&ev.to) else {
             return;
         };
-        match crate::doc_ops::apply_one_op_as(
+        match lunco_modelica_core::doc_ops::apply_one_op_as(
             world,
             doc,
             ModelicaOp::RemoveConnection {

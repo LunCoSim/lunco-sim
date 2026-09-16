@@ -534,7 +534,7 @@ impl Panel for ComponentPalettePanel {
         //
         // Fires `AddModelicaComponent` against the active doc + its
         // drilled-in / detected class. The Reflect observer in
-        // `crate::api_edits` does the actual AST-level insertion via
+        // `lunco_modelica_api::edit` does the actual AST-level insertion via
         // `ModelicaOp::AddComponent`, so the path is identical to what
         // an external API caller would trigger (per AGENTS.md §4.1).
         //
@@ -670,7 +670,7 @@ pub(crate) fn place_component(
 
     world
         .commands()
-        .trigger(crate::api::component::AddModelicaComponent {
+        .trigger(lunco_modelica_api::edit::component::AddModelicaComponent {
             doc_id,
             class,
             type_name: def.name.clone(),

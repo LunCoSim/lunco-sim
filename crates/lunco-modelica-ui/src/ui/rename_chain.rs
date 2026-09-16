@@ -2,19 +2,19 @@
 //!
 //! This observer reacts to a workbench (UI) event
 //! ([`lunco_doc_bevy::rename::RenameOpenDocument`]) and chains it into the
-//! core [`crate::api::class::RenameModelicaClass`] command. It lives in the
-//! `ui` module because the trigger is a UI workflow event; the core API plugin
-//! stays free of workbench types. A headless server never fires the event, so
-//! it simply isn't registered there.
+//! [`lunco_modelica_api::edit::class::RenameModelicaClass`] command. It lives
+//! in the `ui` module because the trigger is a UI workflow event; the API edit
+//! plugin stays free of workbench types. A headless server never fires the
+//! event, so it simply isn't registered there.
 //!
 //! The saved-`.mo`-file path (`RenameTwinEntry` → `FileRenamed` →
 //! `on_file_renamed_chain_to_modelica`) chains off the now-core
 //! [`lunco_workspace::FileRenamed`] event, so that observer stays in
-//! `crate::api::class` (it names no UI types).
+//! `lunco_modelica_api::edit::class` (it names no UI types).
 
 use bevy::prelude::*;
 
-use crate::api::class::RenameModelicaClass;
+use lunco_modelica_api::edit::class::RenameModelicaClass;
 
 /// Chain observer: document [`lunco_doc_bevy::rename::RenameOpenDocument`]
 /// → [`RenameModelicaClass`] for Untitled Modelica drafts.

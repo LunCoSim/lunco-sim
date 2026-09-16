@@ -1,11 +1,11 @@
 //! API handlers for class-level operations (Rename, etc).
 
 use super::util::resolve_doc;
-use crate::document::ModelicaOp;
-use crate::state::ModelicaDocumentRegistry;
 use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
+use lunco_modelica_core::document::ModelicaOp;
+use lunco_modelica_core::state::ModelicaDocumentRegistry;
 
 /// Rename a top-level class within an open Modelica document.
 #[Command(default)]
@@ -52,7 +52,7 @@ pub fn on_rename_modelica_class(trigger: On<RenameModelicaClass>, mut commands: 
             }
         };
 
-        match crate::doc_ops::apply_one_op_as(
+        match lunco_modelica_core::doc_ops::apply_one_op_as(
             world,
             doc,
             ModelicaOp::ReplaceSource { new: new_source },
@@ -142,8 +142,8 @@ fn is_ident_byte(b: u8) -> bool {
 }
 
 // `on_rename_open_document_chain_to_modelica` (Untitled-draft rename via the
-// workbench `RenameOpenDocument` UI event) moved to `crate::ui::rename_chain`
-// — it names a workbench type, so it can't live in the core API plugin.
+// workbench `RenameOpenDocument` UI event) lives in the Modelica UI package
+// — it names a workbench type, so it can't live in this API package.
 
 /// Chain observer: when the workbench fires [`FileRenamed`] after a
 /// successful on-disk rename, and the renamed entry is a `.mo` file
@@ -165,7 +165,7 @@ fn is_ident_byte(b: u8) -> bool {
 pub fn on_file_renamed_chain_to_modelica(
     trigger: On<lunco_workspace::FileRenamed>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
-    mut registry: ResMut<crate::state::ModelicaDocumentRegistry>,
+    mut registry: ResMut<ModelicaDocumentRegistry>,
     mut commands: Commands,
 ) {
     use lunco_doc::DocumentOrigin;

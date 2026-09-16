@@ -52,6 +52,9 @@ impl Plugin for ModelicaPlugin {
         if !app.is_plugin_added::<native_library::NativeLibraryIndexerPlugin>() {
             app.add_plugins(native_library::NativeLibraryIndexerPlugin);
         }
+        if !app.is_plugin_added::<lunco_modelica_api::edit::ModelicaApiEditPlugin>() {
+            app.add_plugins(lunco_modelica_api::edit::ModelicaApiEditPlugin);
+        }
         #[cfg(feature = "api")]
         if !app.is_plugin_added::<lunco_modelica_api::ModelicaApiQueriesPlugin>() {
             app.add_plugins(lunco_modelica_api::ModelicaApiQueriesPlugin);

@@ -1,11 +1,11 @@
 //! API handlers for component-level operations (Add, Remove).
 
 use super::util::{resolve_doc, strip_same_package_prefix};
-use crate::document::ModelicaOp;
 use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
 use lunco_modelica_ast::pretty::{ComponentDecl, Placement};
+use lunco_modelica_core::document::ModelicaOp;
 
 /// Add a sub-component to a class.
 #[Command(default)]
@@ -51,7 +51,7 @@ pub fn on_add_modelica_component(trigger: On<AddModelicaComponent>, mut commands
             modifications: Vec::new(),
             placement: Some(placement),
         };
-        match crate::doc_ops::apply_one_op_as(
+        match lunco_modelica_core::doc_ops::apply_one_op_as(
             world,
             doc,
             ModelicaOp::AddComponent {
@@ -69,16 +69,17 @@ pub fn on_add_modelica_component(trigger: On<AddModelicaComponent>, mut commands
                     ev.type_name
                 );
                 let anim_ms = if ev.animation_ms == 0 {
-                    crate::canvas_feedback::DEFAULT_PULSE_MS
+                    lunco_modelica_core::canvas_feedback::DEFAULT_PULSE_MS
                 } else {
                     ev.animation_ms
                 };
                 // UI-only feedback: present in the windowed editor, absent
                 // (no-op) on a headless server where the queue isn't inserted.
-                if let Some(mut q) =
-                    world.get_resource_mut::<crate::canvas_feedback::PendingApiFocusQueue>()
+                if let Some(mut q) = world
+                    .get_resource_mut::<lunco_modelica_core::canvas_feedback::PendingApiFocusQueue>(
+                    )
                 {
-                    q.push(crate::canvas_feedback::PendingApiFocus {
+                    q.push(lunco_modelica_core::canvas_feedback::PendingApiFocus {
                         doc,
                         name: ev.name.clone(),
                         queued_at: web_time::Instant::now(),
@@ -124,7 +125,7 @@ pub fn on_remove_modelica_component(trigger: On<RemoveModelicaComponent>, mut co
         if ev.class.is_empty() || ev.name.is_empty() {
             return;
         }
-        match crate::doc_ops::apply_one_op_as(
+        match lunco_modelica_core::doc_ops::apply_one_op_as(
             world,
             doc,
             ModelicaOp::RemoveComponent {

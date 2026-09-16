@@ -25,6 +25,7 @@ ui = [
     "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:arboard",
     "dep:lunco-modelica-icon-ui",
     "dep:lunco-modelica-docs-ui",
+    "dep:lunco-modelica-api",
     # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
     # needs the winit backend (no longer in the workspace bevy default).
     "bevy/bevy_winit", "bevy/bevy_window", "bevy/x11", "bevy/wayland",

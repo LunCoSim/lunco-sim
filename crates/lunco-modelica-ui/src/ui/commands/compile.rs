@@ -1582,7 +1582,7 @@ fn parse_param_value(txt: &str) -> Option<lunco_experiments::ParamValue> {
 
 /// Turn API `[{name, value}]` rows into a typed param map (skips empties).
 fn param_map_from_mods(
-    mods: &[crate::api::ApiModification],
+    mods: &[lunco_modelica_api::edit::ApiModification],
 ) -> std::collections::BTreeMap<lunco_experiments::ParamPath, lunco_experiments::ParamValue> {
     let mut map = std::collections::BTreeMap::new();
     for m in mods {
@@ -2091,9 +2091,9 @@ pub struct RunExperiment {
     /// Target class. `None` → drilled-in class or sole non-package class.
     pub class: Option<String>,
     /// Parameter overrides `[{name, value}]` (e.g. `{name:"Isp", value:"300"}`).
-    pub overrides: Vec<crate::api::ApiModification>,
+    pub overrides: Vec<lunco_modelica_api::edit::ApiModification>,
     /// Runtime input overrides `[{name, value}]`.
-    pub inputs: Vec<crate::api::ApiModification>,
+    pub inputs: Vec<lunco_modelica_api::edit::ApiModification>,
     pub t_start: Option<f64>,
     pub t_end: Option<f64>,
     /// Output step in seconds (Modelica `Interval`). Mutually exclusive with

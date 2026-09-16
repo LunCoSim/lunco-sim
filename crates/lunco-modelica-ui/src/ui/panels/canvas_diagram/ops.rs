@@ -882,7 +882,7 @@ pub(super) fn auto_arrange_now(world: &mut World, doc_id: lunco_doc::DocumentId)
         ops.len()
     );
     #[cfg(feature = "api")]
-    crate::api::trigger_apply_ops(world, doc_id, ops);
+    lunco_modelica_api::edit::trigger_apply_ops(world, doc_id, ops);
     #[cfg(not(feature = "api"))]
     apply_ops_public(world, doc_id, ops);
 }

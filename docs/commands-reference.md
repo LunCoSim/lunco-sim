@@ -468,7 +468,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Add a sub-component to a class.
 
-- *defined in:* `crates/lunco-modelica-core/src/api/component.rs`
+- *defined in:* `crates/lunco-modelica-api/src/edit/component.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -491,7 +491,7 @@ actually call, with the fields the deserializer actually accepts. See the
  only re-parsed once at the end. This is the structural authoring surface
  for the Modelica document; it does not attach a simulation program to USD.
 
-- *defined in:* `crates/lunco-modelica-core/src/api/mod.rs`
+- *defined in:* `crates/lunco-modelica-api/src/edit/mod.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -502,7 +502,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Add a `connect(a.p, b.q)` equation to a class.
 
-- *defined in:* `crates/lunco-modelica-core/src/api/diagram.rs`
+- *defined in:* `crates/lunco-modelica-api/src/edit/diagram.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -518,7 +518,7 @@ actually call, with the fields the deserializer actually accepts. See the
  inverse of `ConnectComponents`; a connection that isn't there is a logged
  no-op.
 
-- *defined in:* `crates/lunco-modelica-core/src/api/diagram.rs`
+- *defined in:* `crates/lunco-modelica-api/src/edit/diagram.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -538,7 +538,7 @@ actually call, with the fields the deserializer actually accepts. See the
  the connect spans). Batch both through `ApplyModelicaOps` to keep them in
  one undo group.
 
-- *defined in:* `crates/lunco-modelica-core/src/api/component.rs`
+- *defined in:* `crates/lunco-modelica-api/src/edit/component.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -550,7 +550,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Rename a top-level class within an open Modelica document.
 
-- *defined in:* `crates/lunco-modelica-core/src/api/class.rs`
+- *defined in:* `crates/lunco-modelica-api/src/edit/class.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -562,7 +562,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Replace an open document's entire source text.
 
-- *defined in:* `crates/lunco-modelica-core/src/api/doc.rs`
+- *defined in:* `crates/lunco-modelica-api/src/edit/doc.rs`
 
 | Field | Type | Description |
 |---|---|---|

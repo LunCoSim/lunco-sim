@@ -8,6 +8,9 @@
 //!   source inventory used by authored validation. Modelica-specific; lives here
 //!   because that's where the data lives.
 
+/// Transport-free Modelica document edit commands and their observers.
+pub mod edit;
+
 use bevy::prelude::*;
 use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
 use lunco_doc::{Document, DocumentOrigin};
@@ -25,13 +28,16 @@ use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_modelica_core::state::{is_generated_document, ModelicaDocumentRegistry};
 use lunco_modelica_index::visual_diagram::library_class_library;
 
-/// Plugin that registers the Modelica [`ApiQueryProvider`]s. Hosts add this
-/// capability alongside the Modelica compiler plugin when they expose the
-/// transport-free API.
+/// Plugin that registers the Modelica query providers and edit commands. Hosts
+/// add this capability alongside the Modelica compiler plugin when they expose
+/// the transport-free Modelica API surface.
 pub struct ModelicaApiQueriesPlugin;
 
 impl Plugin for ModelicaApiQueriesPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<edit::ModelicaApiEditPlugin>() {
+            app.add_plugins(edit::ModelicaApiEditPlugin);
+        }
         // Idempotent init: `LunCoApiPlugin::ApiQueryRegistryPlugin`
         // installs this resource too, but plugin ordering is not
         // guaranteed — if the modelica plugin builds before lunco-api,

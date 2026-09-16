@@ -7935,8 +7935,10 @@ name = "lunco-modelica-api"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "crossbeam-channel",
  "lunco-api",
  "lunco-assets-core",
+ "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
@@ -7945,7 +7947,9 @@ dependencies = [
  "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
+ "lunco-twin-journal",
  "lunco-workspace",
+ "serde",
  "serde_json",
  "uuid",
  "web-time",

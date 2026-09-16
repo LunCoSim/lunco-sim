@@ -1119,13 +1119,6 @@ pub struct ModelicaRunnerResource(pub std::sync::Arc<experiments_runner::Modelic
 pub mod worker_transport;
 use worker::{handle_modelica_responses, spawn_modelica_requests};
 
-// Always built — the UI (palette, inspector, canvas) dispatches these
-// `ApplyModelicaOps` Reflect events directly. The module is named `api_*`
-// because external HTTP callers also use it when `lunco-api` is enabled,
-// but the events themselves carry no `lunco-api` dependency.
-/// External JSON-RPC API handlers.
-pub mod api;
-
 /// Shareable model links (encode model source into a URL fragment).
 pub mod model_share;
 /// Headless Modelica compiler, worker, and simulation plugin.
@@ -1328,16 +1321,13 @@ fn build_modelica_core(app: &mut App) {
 
     // ── Document foundation (moved out of the UI plugin so a headless server
     // journals + replicates Modelica edits, not just the GUI) ──────────────
-    // The registry (source-of-truth for open `.mo` docs), the egui-free edit
-    // funnel (`ModelicaApiEditPlugin` — already UI-free), the A3 journal-wire
+    // The registry (source-of-truth for open `.mo` docs), the A3 journal-wire
     // auto-bridge (`wire_modelica_journal_handle`, reactive/once), and the
     // lifecycle-event drain. `ModelicaUiPlugin` no longer registers these; it
-    // adds core first, so the GUI still gets them. Guarded/idempotent so the
-    // UI and headless hosts share the same idempotent initialization.
+    // adds core first, so the GUI still gets them. The transport-free edit
+    // command plugin is owned by `lunco-modelica-api` and installed by API
+    // hosts. Guarded/idempotent so hosts can compose the packages independently.
     app.init_resource::<crate::state::ModelicaDocumentRegistry>();
-    if !app.is_plugin_added::<crate::api::ModelicaApiEditPlugin>() {
-        app.add_plugins(crate::api::ModelicaApiEditPlugin);
-    }
     app.add_systems(Update, crate::doc_ops::drain_document_changes);
     app.add_systems(
         Update,
