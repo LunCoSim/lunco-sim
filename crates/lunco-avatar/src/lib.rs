@@ -34,6 +34,10 @@ use lunco_avatar_core::commands::{
     FocusTarget, FollowTarget, PossessVessel, ReleaseVessel, ReturnFromOrbit, SetCameraInput,
 };
 use lunco_avatar_core::lifecycle::AvatarSceneHandoffSet;
+use lunco_avatar_core::notifications::{ScreenNotifications, ShowNotification, Toast};
+use lunco_avatar_policy::{
+    avatar_soil_collision_policy, AvatarCollisionSettings, AvatarSoilCollisionPolicy,
+};
 use lunco_camera_core::{
     AdaptiveNearPlane, CameraRigIntent, CameraRigMode, CameraZoomInput, CurrentRegionArrival,
     FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera, OrbitReturnBehavior,
@@ -68,8 +72,6 @@ use lunco_spatial::attach::migrate_to_grid;
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
 
-pub mod commands;
-use commands::ShowNotification;
 // Render-bound screenshots and deterministic offline recording are owned by
 // `lunco-capture`; this crate remains responsible for camera intent,
 // possession, and interaction, without linking the render-world readback pipeline.
@@ -80,170 +82,6 @@ use commands::ShowNotification;
 /// malformed/cyclic hierarchy — it does not encode a real structural depth.
 /// (Unifies the former ad-hoc `0..10` / `MAX_DEPTH = 8` bounds.)
 const MAX_HIERARCHY_WALK_DEPTH: usize = 16;
-
-/// Twin-scoped policy key for intentionally allowing the local avatar to pass
-/// through colliders. The safe behavior is the omitted-value default.
-pub const AVATAR_ALLOW_THROUGH_SOIL_SETTING: &str = "avatar.allow_through_soil";
-
-/// Runtime interpretation of the active Twin's avatar collision policy.
-///
-/// `Unavailable` is distinct from `CollisionEnabled`: a plain folder or a
-/// host without a workspace has no Twin settings contract, but it still gets
-/// the safe collision behavior. The value is read directly from the active
-/// Twin, so no policy survives `TwinClosed` or a scene replacement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AvatarSoilCollisionPolicy {
-    /// The setting is absent or explicitly false; colliders are enforced.
-    CollisionEnabled,
-    /// The active Twin explicitly opted into unsafe traversal.
-    ThroughSoilAllowed,
-    /// No active Twin manifest is available; collision remains enforced.
-    Unavailable,
-}
-
-/// Physical shape used by the kinematic avatar controller.
-///
-/// This is engine geometry, not a user preference and not a USD fact: the
-/// avatar is a runtime camera embodiment rather than an authored rigid body.
-/// Keeping the dimensions in one resource gives the controller one owner for
-/// its measured shape without duplicating a collider in every scene.
-#[derive(Resource, Reflect, Clone, Copy, Debug, PartialEq)]
-#[reflect(Resource)]
-pub struct AvatarCollisionSettings {
-    /// Capsule radius in stage metres.
-    pub radius_m: f64,
-    /// Length of the capsule's central segment in stage metres.
-    pub capsule_length_m: f64,
-}
-
-impl Default for AvatarCollisionSettings {
-    fn default() -> Self {
-        Self {
-            radius_m: 0.35,
-            capsule_length_m: 1.1,
-        }
-    }
-}
-
-#[cfg(test)]
-mod avatar_collision_policy_tests {
-    use super::*;
-
-    #[test]
-    fn omitted_policy_is_safe_and_missing_session_is_visible() {
-        assert_eq!(
-            avatar_soil_collision_policy_from_setting(None),
-            Ok(AvatarSoilCollisionPolicy::CollisionEnabled)
-        );
-        assert_eq!(
-            avatar_soil_collision_policy(None),
-            Ok(AvatarSoilCollisionPolicy::Unavailable)
-        );
-    }
-
-    #[test]
-    fn only_an_explicit_boolean_true_enables_traversal() {
-        assert_eq!(
-            avatar_soil_collision_policy_from_setting(Some(
-                &lunco_workspace::TwinSettingValue::Bool(false),
-            )),
-            Ok(AvatarSoilCollisionPolicy::CollisionEnabled)
-        );
-        assert_eq!(
-            avatar_soil_collision_policy_from_setting(Some(
-                &lunco_workspace::TwinSettingValue::Bool(true),
-            )),
-            Ok(AvatarSoilCollisionPolicy::ThroughSoilAllowed)
-        );
-    }
-
-    #[test]
-    fn invalid_policy_type_is_an_explicit_error() {
-        let error = avatar_soil_collision_policy_from_setting(Some(
-            &lunco_workspace::TwinSettingValue::Text("true".into()),
-        ))
-        .expect_err("text must not be coerced into an unsafe opt-out");
-        assert!(error.contains(AVATAR_ALLOW_THROUGH_SOIL_SETTING));
-    }
-
-    #[test]
-    fn policy_is_read_from_active_twin_and_disappears_on_close() {
-        let temp = tempfile::tempdir().expect("Twin directory");
-        std::fs::write(
-            temp.path().join(lunco_twin::MANIFEST_FILENAME),
-            "name = \"Avatar Twin\"\nversion = \"0.1.0\"\n",
-        )
-        .expect("Twin manifest");
-        let twin = match lunco_workspace::TwinMode::open(temp.path()).expect("open Twin") {
-            lunco_workspace::TwinMode::Twin(twin) => twin,
-            other => panic!("expected Twin, got {other:?}"),
-        };
-
-        let mut workspace = lunco_workspace::WorkspaceResource::new();
-        let twin_id = workspace.add_twin(twin);
-        workspace
-            .twin_mut(twin_id)
-            .expect("registered Twin")
-            .manifest
-            .as_mut()
-            .expect("Twin manifest")
-            .set_setting(
-                AVATAR_ALLOW_THROUGH_SOIL_SETTING,
-                lunco_workspace::TwinSettingValue::Bool(true),
-            )
-            .expect("valid policy setting");
-
-        assert_eq!(
-            avatar_soil_collision_policy(Some(&workspace)),
-            Ok(AvatarSoilCollisionPolicy::ThroughSoilAllowed)
-        );
-
-        workspace.close_twin(twin_id);
-        assert_eq!(
-            avatar_soil_collision_policy(Some(&workspace)),
-            Ok(AvatarSoilCollisionPolicy::Unavailable)
-        );
-    }
-}
-
-/// Interpret one generic Twin setting without coercing unrelated scalar types.
-pub fn avatar_soil_collision_policy_from_setting(
-    setting: Option<&lunco_workspace::TwinSettingValue>,
-) -> Result<AvatarSoilCollisionPolicy, String> {
-    match setting {
-        None => Ok(AvatarSoilCollisionPolicy::CollisionEnabled),
-        Some(lunco_workspace::TwinSettingValue::Bool(true)) => {
-            Ok(AvatarSoilCollisionPolicy::ThroughSoilAllowed)
-        }
-        Some(lunco_workspace::TwinSettingValue::Bool(false)) => {
-            Ok(AvatarSoilCollisionPolicy::CollisionEnabled)
-        }
-        Some(value) => Err(format!(
-            "Twin setting `{AVATAR_ALLOW_THROUGH_SOIL_SETTING}` must be boolean, got {value:?}"
-        )),
-    }
-}
-
-/// Read the avatar traversal policy from the active Twin's existing settings
-/// boundary. Missing workspace/session state is visible to the UI through
-/// `Unavailable` and remains fail-closed in the movement owner.
-pub fn avatar_soil_collision_policy(
-    workspace: Option<&lunco_workspace::WorkspaceResource>,
-) -> Result<AvatarSoilCollisionPolicy, String> {
-    let Some(workspace) = workspace else {
-        return Ok(AvatarSoilCollisionPolicy::Unavailable);
-    };
-    let Some(twin_id) = workspace.active_twin else {
-        return Ok(AvatarSoilCollisionPolicy::Unavailable);
-    };
-    let Some(twin) = workspace.twin(twin_id) else {
-        return Err(format!("active Twin {twin_id:?} is no longer present"));
-    };
-    let Some(manifest) = twin.manifest.as_ref() else {
-        return Ok(AvatarSoilCollisionPolicy::Unavailable);
-    };
-    avatar_soil_collision_policy_from_setting(manifest.setting(AVATAR_ALLOW_THROUGH_SOIL_SETTING))
-}
 
 fn report_avatar_policy_error(error: &str, last_error: &mut Option<String>) {
     if last_error.as_deref() != Some(error) {
@@ -935,9 +773,6 @@ impl Plugin for LunCoAvatarPlugin {
 
         app.register_settings_section::<CameraInputSettings>();
         app.register_settings_section::<ProfileSettings>();
-        app.init_resource::<RoverNameTagSettings>()
-            .register_type::<RoverNameTagSettings>();
-
         // On-screen notifications (rhai `notify(...)` → `ShowNotification`). The
         // command itself is registered as a REAL command via `register_commands!`
         // below (API-discoverable); here we only need its toast queue.
@@ -5603,49 +5438,6 @@ fn resolve_declared_body(
         .map(|(entity, _)| entity)
 }
 
-/// Global visual settings for floating rover name tags.
-///
-/// The `lunco-avatar-ui` adapter draws these as an egui overlay rather than as
-/// `Text2d` world entities: this app renders the scene through a single
-/// `Camera3d` and owns the only 2D camera for egui, so world-anchored `Text2d`
-/// never projects into the 3D viewport. The adapter instead projects each
-/// possessed rover's world position through the avatar camera every frame.
-#[derive(Resource, Reflect, Clone, Debug)]
-#[reflect(Resource)]
-pub struct RoverNameTagSettings {
-    /// Nominal font size, rendered at exactly [`reference_distance`](Self::reference_distance)
-    /// from the camera. Closer rovers scale the tag up, farther ones scale it down.
-    pub font_size: f32,
-    /// Color of the floating name tag text.
-    pub text_color: Color,
-    /// Vertical offset of the tag above the rover's origin, in world units.
-    pub vertical_offset: f32,
-    /// Camera distance (world units) at which the tag renders at [`font_size`](Self::font_size).
-    /// The on-screen size scales as `reference_distance / distance`.
-    pub reference_distance: f32,
-    /// Camera distance (world units) past which the tag is fully faded out and culled.
-    /// Tags begin fading from [`reference_distance`](Self::reference_distance) toward this.
-    pub max_distance: f32,
-    /// Force the tags on even in single-player. Name tags exist to identify OTHER
-    /// players, so by default they are **suppressed in solo play** (a standalone
-    /// session — including one where a local AI autopilot drives a rover; that's
-    /// still solo, not a wire peer). Set `true` to always render them.
-    pub show_always: bool,
-}
-
-impl Default for RoverNameTagSettings {
-    fn default() -> Self {
-        Self {
-            font_size: 26.0,
-            text_color: Color::WHITE,
-            vertical_offset: 2.0,
-            reference_distance: 15.0,
-            max_distance: 150.0,
-            show_always: false,
-        }
-    }
-}
-
 #[on_command(UpdateProfile)]
 fn on_update_profile(
     trigger: On<UpdateProfile>,
@@ -5664,31 +5456,6 @@ fn on_update_profile(
     );
 }
 
-/// One active on-screen toast (see [`ScreenNotifications`]).
-#[derive(Clone, Debug)]
-pub struct Toast {
-    pub text: String,
-    /// "info" | "success" | "warn" | "error" — drives color.
-    pub kind: String,
-    /// Seconds left before it disappears (counts down on REAL time, so it fades
-    /// even while the sim is paused). Also drives the fade-out in the last second.
-    pub remaining: f32,
-}
-
-/// Queue of transient on-screen notifications drawn by the
-/// `lunco-avatar-ui` presentation adapter. Written by
-/// [`commands::ShowNotification`] (rhai `notify(...)`) and aged by
-/// [`tick_notifications`]. Always present, including in headless hosts, so the
-/// command has one authoritative runtime sink while presentation remains
-/// optional.
-#[derive(Resource, Default)]
-pub struct ScreenNotifications {
-    pub toasts: Vec<Toast>,
-}
-
-/// Real command (registered via `register_commands!`, so it's API-discoverable
-/// and dispatchable through `/api/commands` and rhai `cmd("ShowNotification")`).
-/// Pushes a toast onto [`ScreenNotifications`]; the ui overlay renders it.
 #[on_command(ShowNotification)]
 pub fn on_show_notification(trigger: On<ShowNotification>, mut notes: ResMut<ScreenNotifications>) {
     let secs = if cmd.secs > 0.0 { cmd.secs } else { 4.5 };

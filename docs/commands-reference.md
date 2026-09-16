@@ -1140,13 +1140,13 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Show a transient on-screen notification (toast) to the player.
 
- Pushes onto the [`crate::ScreenNotifications`] resource; the optional
+ Pushes onto the `lunco-avatar-core::notifications::ScreenNotifications` resource; the optional
  `lunco-avatar-ui` adapter renders active toasts top-center and fades them
  out. Headless hosts accept the command (and log it) but draw nothing. Fired
  from rhai via `notify(msg)` / `notify_kind(msg, kind)` (see the prelude) so a
  scenario can announce each phase without touching Rust.
 
-- *defined in:* `crates/lunco-avatar/src/commands.rs`
+- *defined in:* `crates/lunco-avatar-core/src/notifications.rs`
 
 | Field | Type | Description |
 |---|---|---|

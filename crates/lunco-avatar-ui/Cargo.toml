@@ -8,7 +8,8 @@ description = "Egui presentation for the render-free LunCoSim avatar runtime"
 [dependencies]
 bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"] }
 bevy_egui = { workspace = true }
-lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-avatar-policy = { path = "../lunco-avatar-policy" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }

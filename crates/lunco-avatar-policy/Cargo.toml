@@ -1,0 +1,13 @@
+[package]
+name = "lunco-avatar-policy"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Twin-scoped avatar safety policy and collision contracts for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-workspace = { path = "../lunco-workspace" }
+
+[lints]
+workspace = true

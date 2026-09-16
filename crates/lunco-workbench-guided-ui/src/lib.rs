@@ -1,6 +1,6 @@
 //! Script-driven guided overlay: a persistent objectives/hint HUD plus a
 //! widget spotlight. Both are the *display surface* the guided system was
-//! missing — [`ShowNotification`](lunco_avatar) toasts fade, but a guided
+//! missing — `ShowNotification` toasts fade, but a guided
 //! needs sticky instructions and a way to point at a widget.
 //!
 //! Everything here is driven by **commands** (API- and rhai-callable), so a

@@ -57,7 +57,7 @@ Representing a sensing hardware unit.
 
 ### **Renderer / Blender (Visual)** — *today: `lunco-avatar` + `lunco-avatar-ui`*
 The rendering bridge.
-- **Crates**: `lunco-avatar` (`LunCoAvatarPlugin`, client-only camera rigs) and the optional `lunco-avatar-ui` egui adapter. Sun/shadow in `lunco-render`.
+- **Crates**: `lunco-avatar` (`LunCoAvatarPlugin`, client-only camera rigs), the optional `lunco-avatar-ui` egui adapter, and the focused `lunco-avatar-core`/`lunco-avatar-policy` contracts. Sun/shadow in `lunco-render`.
 - **Purpose**: Drives a Bevy `Camera3d`; the persistent `OriginAnchor` tracks
   the selected camera's f64 cell while camera rigs (spring-arm, orbit,
   free-flight, surface-relative) handle motion between simulation truth and

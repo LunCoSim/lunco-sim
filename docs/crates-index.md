@@ -67,9 +67,10 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
 | **`lunco-control-core`** | Generic semantic-control contracts: the shared `UserIntent` vocabulary, authored intent-to-port bindings, input state, egui focus gate, and bounded causal-edge trace. Input producers and domain consumers depend on this focused package instead of placing control policy in `lunco-core`. |
 | **`lunco-camera-core`** | Backend-neutral camera-rig contracts: free-flight, orbit, spring-arm, surface, authored rig intent, pose-transition state, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
-| **`lunco-avatar-core`** | Backend-neutral avatar contracts: possession/focus command payloads and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
-| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: fast camera/possession systems, the local input-to-intent boundary, collision policy, and Twin-scoped presentation state. It consumes `lunco-camera-core` and `lunco-avatar-core`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
-| **`lunco-avatar-ui`** | Optional egui presentation adapter for `lunco-avatar` and `lunco-camera-core`: avatar status panel, camera/name-tag and notification overlays, and the Avatar settings row. It is not reachable from headless avatar consumers. |
+| **`lunco-avatar-core`** | Backend-neutral avatar contracts: possession/focus command payloads, transient notification command/queue types, and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
+| **`lunco-avatar-policy`** | Twin-scoped avatar safety policy and physical collision-controller settings. It is shared directly by the runtime and UI, so the UI does not depend on the monolithic avatar implementation. |
+| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: fast camera/possession systems and the local input-to-intent boundary. It consumes `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
+| **`lunco-avatar-ui`** | Optional egui presentation adapter for `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`: avatar status panel, camera/name-tag and notification overlays, and the Avatar settings row. It does not depend on the avatar runtime implementation. |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Owns the persisted `InputBindingsSettings` keymap and translates resolved raw user input (Keyboard/Gamepad/Mouse) into typed `UserIntent` actions for FSW. Yields a vessel to its owning session (spec 034), so the human never fights an autopilot. |
 
@@ -377,16 +378,25 @@ avatar behavior, editor tools, API/Rhai simulation, and vessel control; the
 generic engine substrate remains in `lunco-core`.
 
 **`lunco-avatar`**
-Headless-safe human-interaction runtime. Implements the camera **rigs** (SpringArm, Orbit, FreeFlight, Surface), possession/focus observers, input intent projection, collision policy, and Twin-scoped presentation state described by `lunco-camera-core` and `lunco-avatar-core`. Optional egui presentation is supplied by `lunco-avatar-ui`. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy-camera`.
+Headless-safe human-interaction runtime. Implements the camera **rigs** (SpringArm, Orbit, FreeFlight, Surface), possession/focus observers, and input intent projection described by `lunco-camera-core` and `lunco-avatar-core`. It consumes the shared Twin-scoped safety policy from `lunco-avatar-policy`; optional egui presentation is supplied by `lunco-avatar-ui`. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy-camera`.
 
 **`lunco-avatar-core`**
-Backend-neutral avatar contract package. Owns possession/focus command payloads and the `AvatarSceneHandoffSet` schedule boundary. Scene camera, USD projection, networking, and UI consumers use these focused contracts; `lunco-avatar` supplies the avatar system implementation.
+Backend-neutral avatar contract package. Owns possession/focus command payloads, the `ShowNotification`/`ScreenNotifications` presentation contract, and the `AvatarSceneHandoffSet` schedule boundary. Scene camera, USD projection, networking, and UI consumers use these focused contracts; `lunco-avatar` supplies the avatar system implementation.
+
+**`lunco-avatar-policy`**
+Owns the generic workspace-setting interpretation for avatar soil collision and
+the runtime's measured collision shape. Both the movement runtime and avatar UI
+read this package directly; it has no dependency on the avatar implementation.
 
 **`lunco-camera-core`**
 Backend-neutral camera contract package. Owns reusable camera behavior components, authored rig intent, camera-mode transition state, and pose-input accumulators. `lunco-avatar` supplies the specialized input boundary and fast BigSpace solvers.
 
 **`lunco-avatar-ui`**
-Optional egui presentation adapter for `lunco-avatar` and `lunco-camera-core`. It owns the avatar status panel, camera/name-tag and notification overlays, and the Avatar settings row. The application UI shell adds it explicitly when avatar presentation is enabled; headless avatar consumers do not compile it.
+Optional egui presentation adapter for `lunco-camera-core`,
+`lunco-avatar-core`, and `lunco-avatar-policy`. It owns the avatar status
+panel, camera/name-tag and notification overlays, and the Avatar settings row.
+The application UI shell adds it explicitly when avatar presentation is
+enabled; headless avatar consumers do not compile it.
 
 **`lunco-hardware`**
 Physical actuator and sensor implementations. Bridges `Port` values to the `avian3d` physics engine, providing concrete motor, brake, and sensor components that interact with the simulation world.

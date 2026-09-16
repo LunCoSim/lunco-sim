@@ -232,7 +232,7 @@ Representative commands already covering the user's surface:
 | Subsystem | Commands (file:line) |
 |---|---|
 | Rover/vehicle | `SetPorts` — writes named input ports (`throttle`/`steer`/`brake`); authored Modelica/Rhai programs publish final drive and wheel-heading outputs through the same generic port graph |
-| Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar/src/commands.rs`) |
+| Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar-core/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-sim-cosim/src/scene.rs`) |
 | Scene editing | `SpawnEntity`, `MoveEntity`, `RotateEntity`, `TransformEntity`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`); `SetObjectProperty` (`lunco-scene-authoring/src/properties.rs`); `SelectUsdPrim` (`lunco-luncosim-edit-ui/src/selection.rs`) |
 | USD geometry editing | `ApplyUsdOp` with `UsdOp::SetAttribute` (`lunco-usd-commands`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this typed command |

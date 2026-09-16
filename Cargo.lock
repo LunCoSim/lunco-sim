@@ -7198,6 +7198,7 @@ dependencies = [
  "big_space",
  "leafwing-input-manager",
  "lunco-avatar-core",
+ "lunco-avatar-policy",
  "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",
@@ -7212,11 +7213,9 @@ dependencies = [
  "lunco-settings",
  "lunco-spatial",
  "lunco-time",
- "lunco-twin",
  "lunco-usd-bevy-scene",
  "lunco-workspace",
  "serde",
- "tempfile",
 ]
 
 [[package]]
@@ -7228,12 +7227,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-avatar-policy"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-workspace",
+]
+
+[[package]]
 name = "lunco-avatar-ui"
 version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
- "lunco-avatar",
+ "lunco-avatar-core",
+ "lunco-avatar-policy",
  "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial",

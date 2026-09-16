@@ -80,8 +80,8 @@ Apps (luncosim, luncosim-server, lunica)
    │     lunco-ui         ← reusable UI adapter over workbench contracts/widgets
    │                        widgets, telemetry, diagrams; also depends on Domain
    │                        crates (lunco-avatar, lunco-celestial, lunco-mobility)
-   │     lunco-avatar-ui  ← optional egui presentation for the headless-safe
-   │                        lunco-avatar runtime (status, overlays, settings)
+   │     lunco-avatar-ui  ← optional egui presentation over avatar contracts
+   │                        (status, overlays, settings; no runtime edge)
    │          │
    │          ▼
    ├── Framework layer
@@ -117,8 +117,9 @@ Arrows point at dependencies, and two edges deserve calling out explicitly:
   toolkits under the workbench: `lunco-ui` consumes `lunco-workbench-core` and
   `lunco-workbench-widgets`
   and reaches into domain crates for mission-control views, while
-  `lunco-avatar-ui` owns Avatar-specific egui presentation over the
-  headless-safe `lunco-avatar` runtime. UI and domain state meet below the
+  `lunco-avatar-ui` owns Avatar-specific egui presentation over
+  `lunco-avatar-core` and `lunco-avatar-policy`; it does not depend on the
+  headless-safe `lunco-avatar` implementation. UI and domain state meet below
   Apps only through these explicit adapters.
 
 ## 6. Strategic Roadmap Orientation

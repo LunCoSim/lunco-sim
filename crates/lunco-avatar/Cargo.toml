@@ -22,6 +22,7 @@ big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-avatar-policy = { path = "../lunco-avatar-policy" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
@@ -37,10 +38,6 @@ lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 serde = { workspace = true }
-
-[dev-dependencies]
-lunco-twin = { path = "../lunco-twin" }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

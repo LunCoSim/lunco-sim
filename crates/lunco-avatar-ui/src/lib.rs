@@ -5,7 +5,10 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt};
 
-use lunco_avatar::RoverNameTagSettings;
+use lunco_avatar_core::notifications::ScreenNotifications;
+use lunco_avatar_policy::{
+    avatar_soil_collision_policy, AvatarSoilCollisionPolicy, AVATAR_ALLOW_THROUGH_SOIL_SETTING,
+};
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, LocalGravityField, SurfacePoseQuery};
 use lunco_control_core::{ControlBinding, UserIntent};
@@ -15,6 +18,41 @@ use lunco_core_session::{SessionProfiles, SessionRegistry};
 use lunco_cosim_core::ControlLink;
 
 use lunco_camera_core::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
+
+/// Global visual settings for floating rover name tags.
+///
+/// This resource belongs to the egui adapter because name tags are screen-space
+/// presentation. The avatar runtime only owns movement, camera, and possession
+/// behavior and does not initialize UI-only state.
+#[derive(Resource, Reflect, Clone, Debug)]
+#[reflect(Resource)]
+pub struct RoverNameTagSettings {
+    /// Nominal font size at [`reference_distance`](Self::reference_distance).
+    pub font_size: f32,
+    /// Color of the floating name tag text.
+    pub text_color: Color,
+    /// Vertical offset of the tag above the rover's origin.
+    pub vertical_offset: f32,
+    /// Camera distance at which the tag renders at [`font_size`](Self::font_size).
+    pub reference_distance: f32,
+    /// Camera distance past which the tag is fully faded out and culled.
+    pub max_distance: f32,
+    /// Force the tags on even in single-player.
+    pub show_always: bool,
+}
+
+impl Default for RoverNameTagSettings {
+    fn default() -> Self {
+        Self {
+            font_size: 26.0,
+            text_color: Color::WHITE,
+            vertical_offset: 2.0,
+            reference_distance: 15.0,
+            max_distance: 150.0,
+            show_always: false,
+        }
+    }
+}
 
 /// Register the avatar's Twin-scoped safety policy in the existing Settings
 /// menu. The movement system and this row call the same policy reader, so the
@@ -26,11 +64,10 @@ pub fn register_avatar_settings(world: &mut World) {
     };
     menus.register_settings_submenu("Avatar", |ui, ctx| {
         ui.label(egui::RichText::new("Avatar collision").weak().small());
-        let policy = lunco_avatar::avatar_soil_collision_policy(
-            ctx.resource::<lunco_workspace::WorkspaceResource>(),
-        );
+        let policy =
+            avatar_soil_collision_policy(ctx.resource::<lunco_workspace::WorkspaceResource>());
         match &policy {
-            Ok(lunco_avatar::AvatarSoilCollisionPolicy::ThroughSoilAllowed) => {
+            Ok(AvatarSoilCollisionPolicy::ThroughSoilAllowed) => {
                 ui.label(
                     egui::RichText::new(
                         "The avatar bypasses projected colliders in the active Twin.",
@@ -39,14 +76,14 @@ pub fn register_avatar_settings(world: &mut World) {
                     .small(),
                 );
             }
-            Ok(lunco_avatar::AvatarSoilCollisionPolicy::CollisionEnabled) => {
+            Ok(AvatarSoilCollisionPolicy::CollisionEnabled) => {
                 ui.label(
                     egui::RichText::new("Projected colliders block avatar movement by default.")
                         .weak()
                         .small(),
                 );
             }
-            Ok(lunco_avatar::AvatarSoilCollisionPolicy::Unavailable) => {
+            Ok(AvatarSoilCollisionPolicy::Unavailable) => {
                 ui.label(
                     egui::RichText::new(
                         "No active Twin settings manifest; avatar collision remains enabled.",
@@ -69,19 +106,16 @@ pub fn register_avatar_settings(world: &mut World) {
         }
         if matches!(
             &policy,
-            Ok(lunco_avatar::AvatarSoilCollisionPolicy::CollisionEnabled)
-                | Ok(lunco_avatar::AvatarSoilCollisionPolicy::ThroughSoilAllowed)
+            Ok(AvatarSoilCollisionPolicy::CollisionEnabled)
+                | Ok(AvatarSoilCollisionPolicy::ThroughSoilAllowed)
         ) {
-            let mut allowed = matches!(
-                &policy,
-                Ok(lunco_avatar::AvatarSoilCollisionPolicy::ThroughSoilAllowed)
-            );
+            let mut allowed = matches!(&policy, Ok(AvatarSoilCollisionPolicy::ThroughSoilAllowed));
             if ui
                 .checkbox(&mut allowed, "Allow avatar through soil (unsafe)")
                 .changed()
             {
                 ctx.trigger(lunco_workspace::SetTwinSetting {
-                    key: lunco_avatar::AVATAR_ALLOW_THROUGH_SOIL_SETTING.to_string(),
+                    key: AVATAR_ALLOW_THROUGH_SOIL_SETTING.to_string(),
                     value: lunco_workspace::TwinSettingInput::Bool(allowed),
                 });
             }
@@ -426,7 +460,9 @@ pub struct AvatarUiPlugin;
 
 impl Plugin for AvatarUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<AvatarStatusView>();
+        app.init_resource::<AvatarStatusView>()
+            .init_resource::<RoverNameTagSettings>()
+            .register_type::<RoverNameTagSettings>();
         app.add_systems(Update, populate_avatar_status_view);
         app.add_systems(Startup, register_avatar_settings);
         app.add_systems(
@@ -443,7 +479,7 @@ impl Plugin for AvatarUiPlugin {
 
 /// Draw a floating name tag above every possessed rover, in screen space.
 ///
-/// Registered in the egui pass alongside [`lunco_avatar::LunCoAvatarPlugin`] so it
+/// Registered in the egui pass alongside the avatar runtime so it
 /// composites on top of the 3D viewport regardless of camera setup. Each rover's
 /// world position (plus a vertical offset) is projected through the active avatar
 /// camera; rovers behind the camera or off the near plane are skipped
@@ -557,16 +593,13 @@ pub fn draw_rover_name_tags(
     }
 }
 
-/// Draw active [`lunco_avatar::ScreenNotifications`] toasts as a centered stack near the
+/// Draw active [`ScreenNotifications`] toasts as a centered stack near the
 /// top of the screen, newest at the bottom; each fades out over its final second.
 ///
 /// Screen-space overlay (the scene has only a `Camera3d`, so a world-anchored
 /// `Text2d` HUD never renders) registered by [`AvatarUiPlugin`]. Mission scripts
 /// drive it through rhai `notify`.
-pub fn draw_notifications(
-    mut egui_ctx: EguiContexts,
-    notes: Res<lunco_avatar::ScreenNotifications>,
-) {
+pub fn draw_notifications(mut egui_ctx: EguiContexts, notes: Res<ScreenNotifications>) {
     if notes.toasts.is_empty() {
         return;
     }
