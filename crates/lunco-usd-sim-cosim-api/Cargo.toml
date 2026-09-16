@@ -18,8 +18,8 @@ lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-render = { path = "../lunco-render" }
 lunco-signal = { path = "../lunco-signal" }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
+lunco-usd-avian-joints = { path = "../lunco-usd-avian-joints" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }

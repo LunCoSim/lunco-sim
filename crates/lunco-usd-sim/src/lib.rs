@@ -672,11 +672,15 @@ fn collect_joint_scan_read(
         ) {
             let body0 = reader
                 .rel_target(&path, "physics:body0")
-                .and_then(|target| lunco_usd_avian::resolve_joint_body_path(reader, &target))
+                .and_then(|target| {
+                    lunco_usd_avian_reader::joint::resolve_joint_body_path(reader, &target)
+                })
                 .unwrap_or_default();
             let body1 = body1_target
                 .clone()
-                .and_then(|target| lunco_usd_avian::resolve_joint_body_path(reader, &target))
+                .and_then(|target| {
+                    lunco_usd_avian_reader::joint::resolve_joint_body_path(reader, &target)
+                })
                 .unwrap_or_default();
             let is_physical_wheel_joint = joint_type.as_deref() == Some("PhysicsRevoluteJoint")
                 && body1_target.as_deref().is_some_and(|target| {
@@ -2500,12 +2504,12 @@ fn setup_physical_wheel(
     // Inserting a joint component here directly is what "Neither body … is in an
     // island" was: the wheel and its carrier are spawned by this very pass, so on
     // a scene swap they are routinely not yet admitted at this exact moment.
-    lunco_usd_avian::attach_joint(
+    lunco_usd_avian_joints::attach_joint(
         commands,
         joint_entity,
         carrier,
         entity,
-        lunco_usd_avian::wheel_revolute_joint(carrier, entity, mount_local, axle),
+        lunco_usd_avian_joints::wheel_revolute_joint(carrier, entity, mount_local, axle),
     );
 
     // The wheel's `WheelBodyMount` is the canonical physics ownership boundary.

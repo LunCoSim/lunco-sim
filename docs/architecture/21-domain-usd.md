@@ -6,7 +6,7 @@
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-document/`](../../crates/lunco-usd-document), [`../../crates/lunco-usd-data/`](../../crates/lunco-usd-data), [`../../crates/lunco-usd-authoring/`](../../crates/lunco-usd-authoring), [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core), [`../../crates/lunco-usd-commands/`](../../crates/lunco-usd-commands/) and companion crates
-> `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
+> `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian-joints`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
 > `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
@@ -57,7 +57,10 @@ bridge, including f64 pose synchronization, rootless collider propagation,
 frame transport/reset, and backend admission validation;
 `lunco-usd-avian-filters` owns standard USD collision filtering, transient joint
 pair suppression, and Avian's single collision/contact hook;
-`lunco-usd-avian` owns OpenUSD physics projection and joint construction;
+`lunco-usd-avian-joints` owns native Avian joint construction, seating, solver
+admission, pair filtering, and graph-safe detach; `lunco-usd-avian` owns
+OpenUSD physics projection and translates authored joint facts into that generic
+boundary;
 `lunco-usd-actuation` owns the render-free composed USD force/torque actuator
 reader used by the simulation projectors;
 `lunco-usd-sim-core` owns the small shared USD-simulation protocol;
@@ -378,7 +381,7 @@ section.
 1. **UsdVisualPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
 2. **UsdAnimationPlugin** — Binds projected animated prims to the shared time domains and samples authored `timeSamples` into transform and material intent.
 3. **UsdDiagnosticsPlugin** — Handles visual glTF placeholder hiding and failure-stub diagnostics; render-free stage failure state belongs to the `UsdScenePlugin`.
-4. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for USD-driven Avian joint construction. The separate `lunco-usd-avian-core` plugin owns the USD-independent Avian/BigSpace frame bridge and is installed directly by application composition.
+4. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). It translates authored joint facts to the reusable `lunco-usd-avian-joints` boundary, which owns native construction and lifecycle. The separate `lunco-usd-avian-core` plugin owns the USD-independent Avian/BigSpace frame bridge and is installed directly by application composition.
 5. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored vehicle topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `lunco_port_core::OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, and sensors. **UsdSimCosimPlugin** separately discovers programs, publishes model surfaces, and derives co-simulation wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Compound collision ownership
@@ -425,7 +428,7 @@ vehicle-type rule in Rust.
 
 ### Physics Joints
 
-All Avian joints are built by **`lunco-usd-avian`** from standard `UsdPhysics`
+All USD-authored Avian joints are translated by **`lunco-usd-avian`** from standard `UsdPhysics`
 joint prims (`physics:body0/1` rels, `physics:axis` token, `physics:localPos0/1`
 anchors, `physics:limitLower/Upper` or `physics:min/maxDistance`):
 
@@ -443,7 +446,8 @@ anchors, `physics:limitLower/Upper` or `physics:min/maxDistance`):
 motor at load, so an Omniverse-authored mechanism seeks its setpoint with no
 wire), `physics:targetVelocity`, `physics:maxForce` (motor saturation). A cosim
 wire on the joint's `angle`/`displacement` port overrides the target per tick. The
-programmatic wheel hinge also lives here (`wheel_revolute_joint`).
+native construction and admission boundary is **`lunco-usd-avian-joints`**; the
+programmatic wheel hinge uses its `wheel_revolute_joint` plan.
 
 ### Collision filtering — which pairs never touch
 

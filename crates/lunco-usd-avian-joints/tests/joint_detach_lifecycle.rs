@@ -12,7 +12,7 @@ use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
 
 use lunco_physics::PhysicsJointDetachRequested;
-use lunco_usd_avian::{attach_joint, fixed_joint, JointAttachPlugin};
+use lunco_usd_avian_joints::{JointAttachPlugin, attach_joint, fixed_joint};
 
 #[derive(Resource, Clone, Copy)]
 struct JointIds {

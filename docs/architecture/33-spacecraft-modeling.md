@@ -302,9 +302,10 @@ from standard UsdPhysics prims:
 - **Verified live** on `assets/scenes/tests/g7_joints.usda`: both build
   with no "Unsupported" warning; the distance-tethered Weight settles at exactly
   `2.0 m` below its anchor (= `maxDistance`); the ball-jointed arm hangs stable.
-  Also note **all programmatic joint construction now lives in `lunco-usd-avian`**
-  — the wheel revolute joint moved out of `lunco-usd-sim::setup_physical_wheel`
-  into `lunco_usd_avian::wheel_revolute_joint` (one home for joint-building).
+  Also note **all native programmatic joint construction now lives in
+  `lunco-usd-avian-joints`** — the wheel revolute joint moved out of
+  `lunco-usd-sim::setup_physical_wheel` into
+  `lunco_usd_avian_joints::wheel_revolute_joint` (one native admission boundary).
 
 ### G10 — Avian observations and Modelica sensor conversions  **[DONE]**
 Flight software is not a Rust semantic-sensor special case.
@@ -410,7 +411,7 @@ Rocker-bogie fidelity needs G4+G5+G2.
 
 - Cosim force path: `crates/lunco-cosim/src/avian.rs:57,143`, `systems/propagate.rs:50`
 - Gravity: `crates/lunco-environment/src/lib.rs:167`
-- USD physics/joints: `crates/lunco-usd-avian/src/lib.rs` (USD projection and joint construction); `crates/lunco-usd-avian-core/src/lib.rs` (Avian/BigSpace frame bridge)
+- USD physics/joints: `crates/lunco-usd-avian/src/lib.rs` (USD projection); `crates/lunco-usd-avian-joints/src/lib.rs` (native joint construction and admission); `crates/lunco-usd-avian-core/src/lib.rs` (Avian/BigSpace frame bridge)
 - USD vehicle/wheel spawn: `crates/lunco-usd-sim/src/lib.rs:335,636,690,1026`
 - Wheel physics: `crates/lunco-mobility/src/lib.rs` (raycast), `wheel_spin.rs`
 - Model binding (USD→cosim): `crates/lunco-usd-sim-cosim/src/lib.rs`

@@ -41,19 +41,15 @@
 //! may not be loaded yet (async loading). The `process_usd_avian_prims` system runs in the
 //! `Update` schedule and retries every frame until the asset is available.
 
-use avian3d::dynamics::solver::islands::PhysicsIslands;
 use avian3d::dynamics::solver::joint_graph::JointGraph;
 use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
-use bevy::ecs::entity_disabling::Disabled;
 use bevy::ecs::schedule::common_conditions::any_with_component;
-use bevy::ecs::system::SystemState;
 use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
-use lunco_spatial::coords::GridPos;
 use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
@@ -71,16 +67,13 @@ use openusd::sdf::Path as SdfPath;
 // (an attribute UsdPhysics does not define) got invented and lived here for
 // months: a typo in a `&str` compiles.
 use lunco_usd_avian_contracts::{
-    AuthoredInitialVelocity, JointDrive, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
-    ShouldBeDynamic,
+    AuthoredInitialVelocity, JointDrive, PendingUsdJoint, ScenePhysicsOwned, ShouldBeDynamic,
 };
 use lunco_usd_avian_reader::{
     collider::{
         build_collider_from_usd, collect_child_colliders_from_usd, ColliderProjectionError,
     },
-    joint::{
-        has_rigid_body_ancestor, joint_targets_simulated_wheel, nearest_body_path, read_joint_spec,
-    },
+    joint::{has_rigid_body_ancestor, joint_targets_simulated_wheel, read_joint_spec},
     read_authored_bool_or_default, read_authored_quat, read_authored_real, read_authored_vec3,
 };
 use openusd::schemas::physics::tokens as ptok;
@@ -202,68 +195,6 @@ pub fn invalidate_usd_physics_projection(world: &mut World, entity: Entity) -> b
 /// `Update` schedule **after** `sync_usd_visuals` to ensure assets are loaded.
 pub struct UsdAvianPlugin;
 
-/// Retire a set of joint-graph edges before removing their ECS components.
-///
-/// Avian's component hooks remove edges automatically, but a recursive entity
-/// despawn can remove `JointDisabled`, the native joint, and the pair-filter
-/// marker in an order that causes the same island entry to be unlinked twice.
-/// The scene teardown and live detach paths therefore share this one graph
-/// transaction.  The native removal hooks then see an already-retired edge and
-/// become harmless no-ops.
-fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) {
-    let mut graph_state: SystemState<(
-        ResMut<PhysicsIslands>,
-        ResMut<JointGraph>,
-        Res<ContactGraph>,
-        Query<
-            &'static mut avian3d::dynamics::solver::islands::BodyIslandNode,
-            Or<(With<Disabled>, Without<Disabled>)>,
-        >,
-    )> = SystemState::new(world);
-    {
-        let Ok((mut islands, mut joint_graph, contact_graph, mut body_islands)) =
-            graph_state.get_mut(world)
-        else {
-            error!(
-                "joint graph retirement blocked: Avian graph resources have conflicting access; keeping the topology intact"
-            );
-            return;
-        };
-
-        for &entity in entities {
-            let Some(edge) = joint_graph.get(entity).cloned() else {
-                continue;
-            };
-            let island_id = edge.island.island_id();
-            if island_id != avian3d::dynamics::solver::islands::IslandId::PLACEHOLDER {
-                let Some(island) = islands.get(island_id) else {
-                    warn!(
-                        "joint graph edge {:?} references missing island {:?}; edge is already outside the island list",
-                        entity, island_id
-                    );
-                    joint_graph.remove_joint(entity);
-                    continue;
-                };
-                if island.joint_count() > 0 {
-                    let _ = islands.remove_joint(
-                        edge.id,
-                        &mut body_islands,
-                        &contact_graph,
-                        &mut joint_graph,
-                    );
-                } else {
-                    warn!(
-                        "joint graph edge {:?} has no island joint count; treating it as already retired",
-                        entity
-                    );
-                }
-            }
-            joint_graph.remove_joint(entity);
-        }
-    }
-    graph_state.apply(world);
-}
-
 /// Remove scene physics from Avian's graphs before the scene entities are
 /// despawned.
 ///
@@ -321,7 +252,7 @@ fn prepare_scene_physics_teardown(world: &mut World) {
     // Retire constraints before contacts and bodies. The public graph API lets
     // us tolerate an edge whose island was already emptied by an earlier body
     // teardown without asking Avian's observer to unlink it a second time.
-    retire_joint_graph_edges(world, &graph_joints);
+    lunco_usd_avian_joints::retire_joint_graph_edges(world, &graph_joints);
 
     // Remove the joint component and any marker before despawn. The component
     // removal observer now sees no graph edge, and removing JointComponentId
@@ -343,80 +274,11 @@ fn prepare_scene_physics_teardown(world: &mut World) {
     }
 }
 
-/// Complete live joint detach requests at the physics bridge boundary.
-///
-/// A scene command only writes [`lunco_physics::PhysicsJointDetachRequested`].
-/// This exclusive system is the sole owner of the transition from a live
-/// constraint to a disposable entity: it retires the graph edge first, then
-/// removes the native/pending components, releases the transient collision
-/// filter, and finally despawns the joint.  Keeping the whole sequence here
-/// makes component-removal order explicit and prevents a second command path
-/// from touching Avian's island bookkeeping.
-fn retire_requested_joints(world: &mut World) {
-    let requested: Vec<(Entity, Option<ComponentId>)> = {
-        let mut query = world.query_filtered::<(
-            Entity,
-            Option<&avian3d::dynamics::solver::joint_graph::JointComponentId>,
-        ), With<lunco_physics::PhysicsJointDetachRequested>>();
-        query
-            .iter(world)
-            .map(|(entity, id)| (entity, id.and_then(|id| id.id())))
-            .collect()
-    };
-    if requested.is_empty() {
-        return;
-    }
-
-    if world.get_resource::<PhysicsIslands>().is_none()
-        || world.get_resource::<JointGraph>().is_none()
-        || world.get_resource::<ContactGraph>().is_none()
-    {
-        error!(
-            "DETACH_JOINT blocked: Avian physics resources are not installed; add PhysicsPlugins before JointAttachPlugin"
-        );
-        return;
-    }
-
-    let entities: Vec<Entity> = requested.iter().map(|(entity, _)| *entity).collect();
-    retire_joint_graph_edges(world, &entities);
-
-    for (entity, component_id) in requested {
-        let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
-            continue;
-        };
-
-        // The native component hook queues removal of JointComponentId. Remove
-        // the native component first, then clear the id and disabled marker so
-        // no observer can re-admit the retired edge.
-        if let Some(component_id) = component_id {
-            entity_mut.remove_by_id(component_id);
-        }
-        entity_mut
-            .remove::<avian3d::dynamics::solver::joint_graph::JointComponentId>()
-            .remove::<JointDisabled>()
-            .remove::<PendingJoint<RevoluteJoint>>()
-            .remove::<PendingJoint<PrismaticJoint>>()
-            .remove::<PendingJoint<FixedJoint>>()
-            .remove::<PendingJoint<SphericalJoint>>()
-            .remove::<PendingJoint<DistanceJoint>>()
-            .remove::<PendingJointAdmission>()
-            .remove::<lunco_physics::PhysicsJointPending>()
-            .remove::<lunco_physics::PhysicsJointDetachRequested>()
-            .remove::<collision_filters::JointCollisionPair>();
-
-        entity_mut.despawn();
-        info!(
-            "DETACH_JOINT: retired solver edge and despawned {:?}",
-            entity
-        );
-    }
-}
-
 impl Plugin for UsdAvianPlugin {
     fn build(&self, app: &mut App) {
         // Installs joints parked by `attach_joint` — the USD path attaches
         // authored joints, so this app must be able to land them.
-        app.add_plugins(JointAttachPlugin);
+        app.add_plugins(lunco_usd_avian_joints::JointAttachPlugin);
         app.add_systems(lunco_core::SceneTeardown, prepare_scene_physics_teardown);
         // `on_add_usd_prim`: eager observer for joint pending-state.
         // `process_usd_avian_prims`: observer on UsdSceneProjected — fires
@@ -865,19 +727,6 @@ fn reject_collider_projection(
     log_collider_projection_error(sdf_path, &error);
     report_collider_projection_error(faults, holds, entity, sdf_path, &error);
     commands.entity(entity).try_insert(UsdAvianProcessed);
-}
-
-/// Resolve a USD joint relationship target to the rigid-body prim that owns the
-/// endpoint. The relationship may name a mechanism child inside a referenced
-/// component; the joint contract attaches to that child's nearest body ancestor.
-/// Keep this resolution in the Avian USD reader so topology consumers cannot
-/// accidentally compare an unresolved authored path with a resolved ECS path.
-pub fn resolve_joint_body_path(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    target: &str,
-) -> Option<String> {
-    let path = SdfPath::new(target).ok()?;
-    nearest_body_path(reader, &path).map(|resolved| resolved.to_string())
 }
 
 /// Terrain prims whose collider is built from a loaded `Mesh3d` — a glTF DEM
@@ -1721,375 +1570,17 @@ fn on_add_usd_prim(
 ///
 /// This system runs every frame. When a `PendingUsdJoint` entity finds that both its
 /// referenced bodies have been spawned as Bevy entities with matching `UsdPrimPath`
-/// components, it creates the appropriate Avian joint and removes the pending marker.
-/// Anchor mismatch below which a joint is considered already seated.
-///
-/// Sub-millimetre slack is float noise from the USD→physics transform chain, not a
-/// scene error; correcting it would fight the solver on every reload.
-const JOINT_SEAT_EPS: f64 = 1.0e-3;
-
-/// Angular mismatch below which a weld is considered already seated (radians).
-///
-/// Same rationale as [`JOINT_SEAT_EPS`], in the rotational DOF: a milliradian is
-/// quaternion round-tripping, not an authoring error.
-const JOINT_SEAT_ANGLE_EPS: f64 = 1.0e-3;
-
-/// Seat magnitude above which the scene is certainly wrong rather than slack.
-///
-/// A metre- or radian-scale correction is never authoring tolerance — it means
-/// two bodies were placed inconsistently — and it must not be losable in a
-/// normal log stream, so it is reported at `error!` instead of `warn!`.
-const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
-
+/// components, it hands the normalized joint facts to the native joint-admission
+/// package and removes the pending marker.
 /// Physics ticks a pending joint may scan the body query at full rate before its
-/// unresolved body path is reported (a typo'd rel never spawns, and a silent
-/// forever-scan is exactly the failure mode this project pays most for).
+/// unresolved body path is reported.
 const JOINT_RESOLVE_WARN_TICKS: u32 = 600;
 
 /// Retry cadence for a pending joint after its warning budget.
 const JOINT_RESOLVE_RETRY_INTERVAL: u32 = 60;
 
 /// Hard deadline for a joint whose authored body relationship never resolves.
-/// Once reached the marker is removed and the scene receives a terminal fault;
-/// readiness must not remain open forever on a typo'd relationship.
 const JOINT_RESOLVE_MAX_TICKS: u32 = 3_600;
-
-/// Return body1's velocity after seating a joint without asking the solver to
-/// remove an authored constraint violation on its first step.
-///
-/// The admitted velocity must obey the same degrees of freedom as the joint:
-/// fixed has none, prismatic preserves axial translation, revolute preserves
-/// angular rate about its hinge, and spherical preserves all relative angular
-/// rate. Every one of those joints still locks the two anchor points together.
-/// A child without authored velocity inherits the parent's rigid motion;
-/// treating it as stationary is an impulse request at the joint anchor.
-fn seated_body1_velocity(
-    body0_position: DVec3,
-    body1_position: DVec3,
-    anchor_world: DVec3,
-    body0_linear: DVec3,
-    body0_angular: DVec3,
-    body1_linear: DVec3,
-    body1_angular: DVec3,
-    free_linear_axis_world: Option<DVec3>,
-    free_angular_axis_world: Option<DVec3>,
-    all_angular_free: bool,
-    preserve_authored_free_rates: bool,
-) -> (DVec3, DVec3) {
-    let body0_anchor_offset = anchor_world - body0_position;
-    let body1_anchor_offset = anchor_world - body1_position;
-    let body0_anchor_velocity = body0_linear + body0_angular.cross(body0_anchor_offset);
-    let free_linear_rate = free_linear_axis_world
-        .filter(|_| preserve_authored_free_rates)
-        .map(|axis| {
-            let body1_anchor_velocity = body1_linear + body1_angular.cross(body1_anchor_offset);
-            (body1_anchor_velocity - body0_anchor_velocity).dot(axis)
-        })
-        .unwrap_or(0.0);
-    let target_angular = if !preserve_authored_free_rates {
-        body0_angular
-    } else if all_angular_free {
-        body1_angular
-    } else if let Some(axis) = free_angular_axis_world {
-        body0_angular + axis * (body1_angular - body0_angular).dot(axis)
-    } else {
-        body0_angular
-    };
-    let target_anchor_velocity = free_linear_axis_world
-        .map(|axis| body0_anchor_velocity + axis * free_linear_rate)
-        .unwrap_or(body0_anchor_velocity);
-    let target_linear = target_anchor_velocity - target_angular.cross(body1_anchor_offset);
-    (target_linear, target_angular)
-}
-
-/// The authored frame and free degrees of freedom used to seat a pending
-/// constraint before Avian's first solve.
-///
-/// USD joints and synthesized wheel joints use the same admission boundary.
-/// Keeping the frame here means a synthesized constraint cannot bypass the
-/// position/orientation/velocity projection that authored joints receive.
-#[derive(Clone, Copy, Debug)]
-enum JointSeatKind {
-    Fixed,
-    Prismatic,
-    Revolute,
-    Spherical,
-    Distance,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct JointSeat {
-    local_pos0: DVec3,
-    local_pos1: DVec3,
-    local_rot0: DQuat,
-    local_rot1: DQuat,
-    axis: DVec3,
-    kind: JointSeatKind,
-}
-
-impl JointSeat {
-    fn usd(pending: &PendingUsdJoint) -> Option<Self> {
-        let kind = match pending.joint_type.as_str() {
-            "PhysicsFixedJoint" => JointSeatKind::Fixed,
-            "PhysicsPrismaticJoint" => JointSeatKind::Prismatic,
-            "PhysicsRevoluteJoint" => JointSeatKind::Revolute,
-            "PhysicsSphericalJoint" => JointSeatKind::Spherical,
-            "PhysicsDistanceJoint" => JointSeatKind::Distance,
-            _ => return None,
-        };
-        Some(Self {
-            local_pos0: pending.local_pos0,
-            local_pos1: pending.local_pos1,
-            local_rot0: pending.local_rot0,
-            local_rot1: pending.local_rot1,
-            axis: pending.axis,
-            kind,
-        })
-    }
-}
-
-/// Seat a joint's body1 against body0's authored frame and project its initial
-/// velocity onto the joint's actual free degrees of freedom.
-///
-/// This is deliberately called at the common pending-joint admission boundary,
-/// after both Avian body states exist and before the next fixed solve. It is the
-/// one startup state transition for both authored USD joints and synthesized
-/// wheel joints. A missing state is not guessed: the pending joint remains
-/// admissible, and Avian's normal body initialization owns that endpoint.
-fn seat_joint_bodies(
-    label: &str,
-    body0: Entity,
-    body1: Entity,
-    seat: JointSeat,
-    q_pose: &mut Query<(&mut Position, &mut Rotation)>,
-    q_vel: &mut Query<(&mut LinearVelocity, &mut AngularVelocity)>,
-    q_authored_velocity: &Query<&AuthoredInitialVelocity>,
-    commands: &mut Commands,
-) {
-    let pose0 = q_pose
-        .get(body0)
-        .ok()
-        .map(|(position, rotation)| (GridPos(position.0), rotation.0));
-    let pose1 = q_pose
-        .get(body1)
-        .ok()
-        .map(|(position, rotation)| (GridPos(position.0), rotation.0));
-    let (Some((p0, r0)), Some((p1, r1))) = (pose0, pose1) else {
-        return;
-    };
-
-    let locks_rotation = matches!(seat.kind, JointSeatKind::Fixed | JointSeatKind::Prismatic);
-    let r1_target = r0 * seat.local_rot0 * seat.local_rot1.inverse();
-    let angle = if locks_rotation {
-        r1.angle_between(r1_target)
-    } else {
-        0.0
-    };
-    let r1_seated = if locks_rotation { r1_target } else { r1 };
-    let anchor0_world = p0 + r0 * seat.local_pos0;
-    let anchor1_world = p1 + r1_seated * seat.local_pos1;
-    let delta = anchor0_world - anchor1_world;
-    let p1_seated = p1 + delta;
-    let seat_pos = delta.length() > JOINT_SEAT_EPS;
-    let seat_rot = angle > JOINT_SEAT_ANGLE_EPS;
-
-    if seat_pos || seat_rot {
-        let worst = delta.length().max(angle);
-        let detail = format!(
-            "[usd-avian] joint {label} starts violated by {:.3} m / {:.3} rad — seating body1 {:?} onto the authored joint frame",
-            delta.length(),
-            angle,
-            body1,
-        );
-        if worst > JOINT_SEAT_ERROR_THRESHOLD {
-            error!("{detail}");
-        } else {
-            warn!("{detail}");
-        }
-        if let Ok((mut position, mut rotation)) = q_pose.get_mut(body1) {
-            if seat_rot {
-                rotation.0 = r1_target;
-            }
-            if seat_pos {
-                position.0 += delta;
-            }
-        }
-    }
-
-    let seats_anchor_velocity = matches!(
-        seat.kind,
-        JointSeatKind::Fixed
-            | JointSeatKind::Prismatic
-            | JointSeatKind::Revolute
-            | JointSeatKind::Spherical
-    );
-    if !seats_anchor_velocity {
-        return;
-    }
-
-    let authored0 = q_authored_velocity.get(body0).ok().copied();
-    let authored1 = q_authored_velocity.get(body1).ok().copied();
-    let Some((lin0, ang0)) = q_vel.get(body0).ok().map(|(linear, angular)| {
-        (
-            authored0
-                .and_then(|velocity| velocity.linear)
-                .unwrap_or(linear.0),
-            authored0
-                .and_then(|velocity| velocity.angular)
-                .unwrap_or(angular.0),
-        )
-    }) else {
-        return;
-    };
-    let Some((lin1, ang1)) = q_vel.get(body1).ok().map(|(linear, angular)| {
-        (
-            authored1
-                .and_then(|velocity| velocity.linear)
-                .unwrap_or(linear.0),
-            authored1
-                .and_then(|velocity| velocity.angular)
-                .unwrap_or(angular.0),
-        )
-    }) else {
-        return;
-    };
-
-    let joint_axis_world = (r0 * seat.local_rot0 * seat.axis).normalize_or_zero();
-    let free_linear_axis_world =
-        matches!(seat.kind, JointSeatKind::Prismatic).then_some(joint_axis_world);
-    let free_angular_axis_world =
-        matches!(seat.kind, JointSeatKind::Revolute).then_some(joint_axis_world);
-    let all_angular_free = matches!(seat.kind, JointSeatKind::Spherical);
-    let (target_lin, target_ang) = seated_body1_velocity(
-        p0.0,
-        p1_seated.0,
-        anchor0_world.0,
-        lin0,
-        ang0,
-        lin1,
-        ang1,
-        free_linear_axis_world,
-        free_angular_axis_world,
-        all_angular_free,
-        authored1.is_some_and(|velocity| velocity.linear.is_some() || velocity.angular.is_some()),
-    );
-    if (lin1 - target_lin).length() > JOINT_SEAT_EPS
-        || (ang1 - target_ang).length() > JOINT_SEAT_ANGLE_EPS
-    {
-        if let Ok((mut linear, mut angular)) = q_vel.get_mut(body1) {
-            linear.0 = target_lin;
-            angular.0 = target_ang;
-        }
-        // The authored child velocity has now been projected through its joint
-        // contract. Dynamic admission must not reapply the unconstrained value.
-        commands
-            .entity(body1)
-            .try_remove::<AuthoredInitialVelocity>();
-    }
-}
-
-#[cfg(test)]
-mod joint_velocity_tests {
-    use super::seated_body1_velocity;
-    use bevy::math::DVec3;
-
-    #[test]
-    fn prismatic_child_inherits_parent_motion_but_keeps_slider_rate_free() {
-        let parent_velocity = DVec3::new(0.6, -0.25, 0.3);
-        let slider_axis = DVec3::new(0.34202014, -0.93969262, 0.0);
-        let (linear, angular) = seated_body1_velocity(
-            DVec3::ZERO,
-            DVec3::new(2.5, -4.0, 0.0),
-            DVec3::new(2.5, 0.0, 0.0),
-            parent_velocity,
-            DVec3::ZERO,
-            DVec3::ZERO,
-            DVec3::ZERO,
-            Some(slider_axis),
-            None,
-            false,
-            false,
-        );
-
-        assert!((linear - parent_velocity).length() < 1.0e-6);
-        assert_eq!(angular, DVec3::ZERO);
-    }
-
-    #[test]
-    fn prismatic_child_preserves_only_an_authored_slider_rate() {
-        let parent_velocity = DVec3::new(0.6, -0.25, 0.3);
-        let slider_axis = DVec3::new(0.34202014, -0.93969262, 0.0);
-        let child_velocity = parent_velocity + slider_axis * 1.75;
-        let (linear, angular) = seated_body1_velocity(
-            DVec3::ZERO,
-            DVec3::new(2.5, -4.0, 0.0),
-            DVec3::new(2.5, 0.0, 0.0),
-            parent_velocity,
-            DVec3::ZERO,
-            child_velocity,
-            DVec3::ZERO,
-            Some(slider_axis),
-            None,
-            false,
-            true,
-        );
-
-        assert!((linear - child_velocity).length() < 1.0e-6);
-        assert_eq!(angular, DVec3::ZERO);
-    }
-
-    #[test]
-    fn spherical_child_inherits_rigid_motion_when_rates_are_unauthored() {
-        let parent_linear = DVec3::new(0.8, -2.6, 1.5);
-        let parent_angular = DVec3::new(0.1, -0.2, 0.3);
-        let child_position = DVec3::new(2.5, -5.0, 0.0);
-        let anchor = DVec3::new(2.5, -4.9, 0.0);
-        let (linear, angular) = seated_body1_velocity(
-            DVec3::ZERO,
-            child_position,
-            anchor,
-            parent_linear,
-            parent_angular,
-            DVec3::ZERO,
-            DVec3::ZERO,
-            None,
-            None,
-            true,
-            false,
-        );
-
-        let expected_anchor_velocity = parent_linear + parent_angular.cross(anchor);
-        let actual_anchor_velocity = linear + angular.cross(anchor - child_position);
-        assert!((actual_anchor_velocity - expected_anchor_velocity).length() < 1.0e-6);
-        assert_eq!(angular, parent_angular);
-    }
-
-    #[test]
-    fn revolute_child_preserves_only_authored_hinge_rate() {
-        let hinge = DVec3::Y;
-        let parent_angular = DVec3::new(0.1, -0.2, 0.3);
-        let child_angular = parent_angular + hinge * 1.75 + DVec3::X * 4.0;
-        let (linear, angular) = seated_body1_velocity(
-            DVec3::ZERO,
-            DVec3::new(1.0, 0.0, 0.0),
-            DVec3::new(0.5, 0.0, 0.0),
-            DVec3::ZERO,
-            parent_angular,
-            DVec3::ZERO,
-            child_angular,
-            None,
-            Some(hinge),
-            false,
-            true,
-        );
-
-        assert!(((angular - parent_angular).dot(hinge) - 1.75).abs() < 1.0e-6);
-        assert!((angular.x - parent_angular.x).abs() < 1.0e-6);
-        let body0_anchor_velocity = parent_angular.cross(DVec3::new(0.5, 0.0, 0.0));
-        let body1_anchor_velocity = linear + angular.cross(DVec3::new(-0.5, 0.0, 0.0));
-        assert!((body1_anchor_velocity - body0_anchor_velocity).length() < 1.0e-6);
-    }
-}
 
 fn build_usd_physics_joints(
     mut commands: Commands,
@@ -2100,8 +1591,9 @@ fn build_usd_physics_joints(
     // `RigidBodyDisabled` while readiness freezes the authored subtree; that
     // marker means "do not integrate yet", not "the authored body does not
     // exist". They do NOT claim island admission. `attach_joint` parks the
-    // constraint as `PendingJoint`, and `JointAttachPlugin` is the sole owner of
-    // admitting that parked constraint after Avian creates both island nodes.
+    // constraint as `PendingJoint`, and `lunco-usd-avian-joints::JointAttachPlugin`
+    // is the sole owner of admitting that parked constraint after Avian creates
+    // both island nodes.
     //
     // `Position` is still only pose storage until `q_shadow` below confirms the
     // bridge has seeded it. Keeping those two facts separate prevents seating
@@ -2144,8 +1636,8 @@ fn build_usd_physics_joints(
     for (joint_entity, pending, joint_prim_path) in pending_joints {
         // Joint preparation is intentionally allowed while world readiness
         // holds. The hold pauses integration, not topology construction:
-        // `attach_joint` parks the native constraint and `JointAttachPlugin`
-        // admits it after Avian creates the solver body-island nodes. Holding
+        // the native joint-admission package parks the constraint and admits it
+        // after Avian creates the solver body-island nodes. Holding
         // this builder would deadlock readiness because the binding epoch waits
         // for the pending joint marker to clear.
         let ticks = resolve_ticks.get(&joint_entity).copied().unwrap_or(0);
@@ -2280,12 +1772,6 @@ fn build_usd_physics_joints(
         // installed, so avian's own `transform_to_position` owns `Position` and has
         // already run in `FixedPostUpdate` — ready by construction.
         //
-        // This replaces a stopgap that inferred readiness from the two bodies being
-        // coincident (`p0.distance_squared(p1) <= JOINT_SEAT_EPS` ⇒ "not real yet").
-        // That heuristic was papering over the actual defect — cross-schedule
-        // ordering against a system that never ran — and it is wrong in both
-        // directions: it cannot see two bodies genuinely stacked at one origin, and
-        // it calls uninitialised poses "ready" as soon as anything perturbs one.
         let seeded = |e: Entity| {
             q_pose_authoritative.contains(e)
                 || q_shadow.get(e).map(|s| s.is_seeded()).unwrap_or(true)
@@ -2304,10 +1790,10 @@ fn build_usd_physics_joints(
         // world-frame data needed for a live angular inertia calculation. A
         // world/static endpoint has no finite mass properties and contributes
         // zero inverse inertia to the effective coordinate.
-        let drive_pose0 = body0_ent
-            .and_then(|entity| q_pose.get(entity).ok().map(|(p, r)| (GridPos(p.0).0, r.0)));
-        let drive_pose1 = body1_ent
-            .and_then(|entity| q_pose.get(entity).ok().map(|(p, r)| (GridPos(p.0).0, r.0)));
+        let drive_pose0 =
+            body0_ent.and_then(|entity| q_pose.get(entity).ok().map(|(p, r)| (p.0, r.0)));
+        let drive_pose1 =
+            body1_ent.and_then(|entity| q_pose.get(entity).ok().map(|(p, r)| (p.0, r.0)));
         let resolved_drive_model = match pending.drive {
             None => None,
             Some(drive) => match resolve_joint_drive_motor_model(
@@ -2385,139 +1871,103 @@ fn build_usd_physics_joints(
         // USD-specific lookup.
         let attached = match pending.joint_type.as_str() {
             "PhysicsPrismaticJoint" => {
-                let mut joint = PrismaticJoint::new(b0, b1)
-                    .with_local_anchor1(pending.local_pos0)
-                    .with_local_anchor2(pending.local_pos1)
-                    .with_local_basis1(pending.local_rot0)
-                    .with_local_basis2(pending.local_rot1)
-                    .with_slider_axis(pending.axis)
-                    .with_limits(pending.limit_lower, pending.limit_upper);
-                if let Some(d) = pending.drive {
-                    joint.motor = LinearMotor {
-                        enabled: d.is_active(),
-                        target_position: d.target_position.unwrap_or(0.0),
-                        target_velocity: d.target_velocity.unwrap_or(0.0),
-                        max_force: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
-                        motor_model: resolved_drive_model
-                            .expect("resolved USD prismatic drive motor"),
-                    };
-                }
-                attach_joint(
+                let motor = pending.drive.map(|d| LinearMotor {
+                    enabled: d.is_active(),
+                    target_position: d.target_position.unwrap_or(0.0),
+                    target_velocity: d.target_velocity.unwrap_or(0.0),
+                    max_force: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
+                    motor_model: resolved_drive_model.expect("resolved USD prismatic drive motor"),
+                });
+                lunco_usd_avian_joints::attach_prismatic_joint(
                     &mut commands,
                     joint_entity,
                     b0,
                     b1,
-                    JointSpec::new(joint).with_usd_seat(pending),
+                    pending.local_pos0,
+                    pending.local_pos1,
+                    pending.local_rot0,
+                    pending.local_rot1,
+                    pending.axis,
+                    pending.limit_lower,
+                    pending.limit_upper,
+                    motor,
                 );
                 true
             }
             "PhysicsRevoluteJoint" => {
-                let mut joint = RevoluteJoint::new(b0, b1)
-                    .with_local_anchor1(pending.local_pos0)
-                    .with_local_anchor2(pending.local_pos1)
-                    .with_local_basis1(pending.local_rot0)
-                    .with_local_basis2(pending.local_rot1)
-                    .with_hinge_axis(pending.axis)
-                    .with_angle_limits(pending.limit_lower, pending.limit_upper);
-                if let Some(d) = pending.drive {
-                    joint.motor = AngularMotor {
-                        enabled: d.is_active(),
-                        target_position: d.target_position.unwrap_or(0.0),
-                        target_velocity: d.target_velocity.unwrap_or(0.0),
-                        max_torque: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
-                        motor_model: resolved_drive_model
-                            .expect("resolved USD revolute drive motor"),
-                    };
-                }
-                attach_joint(
+                let motor = pending.drive.map(|d| AngularMotor {
+                    enabled: d.is_active(),
+                    target_position: d.target_position.unwrap_or(0.0),
+                    target_velocity: d.target_velocity.unwrap_or(0.0),
+                    max_torque: d.max_force.unwrap_or(JOINT_DRIVE_MAX_FORCE_DEFAULT),
+                    motor_model: resolved_drive_model.expect("resolved USD revolute drive motor"),
+                });
+                lunco_usd_avian_joints::attach_revolute_joint(
                     &mut commands,
                     joint_entity,
                     b0,
                     b1,
-                    JointSpec::new(joint).with_usd_seat(pending),
+                    pending.local_pos0,
+                    pending.local_pos1,
+                    pending.local_rot0,
+                    pending.local_rot1,
+                    pending.axis,
+                    pending.limit_lower,
+                    pending.limit_upper,
+                    motor,
                 );
                 true
             }
             "PhysicsFixedJoint" => {
-                attach_joint(
+                lunco_usd_avian_joints::attach_fixed_joint(
                     &mut commands,
                     joint_entity,
                     b0,
                     b1,
-                    JointSpec::new(
-                        FixedJoint::new(b0, b1)
-                            .with_local_anchor1(pending.local_pos0)
-                            .with_local_anchor2(pending.local_pos1)
-                            .with_local_basis1(pending.local_rot0)
-                            .with_local_basis2(pending.local_rot1),
-                    )
-                    .with_usd_seat(pending),
+                    pending.local_pos0,
+                    pending.local_pos1,
+                    pending.local_rot0,
+                    pending.local_rot1,
                 );
                 true
             }
             "PhysicsSphericalJoint" => {
-                // Ball joint: 3 rotational DOF about the anchor. `physics:axis`
-                // is the twist axis; the cone (`physics:coneAngle*Limit`) bounds
-                // swing, `physics:limit{Lower,Upper}` bounds twist. Suspension
-                // uprights, robotic wrists, gimbals.
-                let mut joint = SphericalJoint::new(b0, b1)
-                    .with_local_anchor1(pending.local_pos0)
-                    .with_local_anchor2(pending.local_pos1)
-                    .with_local_basis1(pending.local_rot0)
-                    .with_local_basis2(pending.local_rot1)
-                    .with_twist_axis(pending.axis);
-                if let Some((a0, a1)) = pending.swing_limit {
-                    // avian carries a single swing AngleLimit; use the larger
-                    // cone half-angle as a symmetric bound.
-                    let s = a0.abs().max(a1.abs());
-                    joint = joint.with_swing_limits(-s, s);
-                }
-                if pending.limit_lower.is_finite() && pending.limit_upper.is_finite() {
-                    joint = joint.with_twist_limits(pending.limit_lower, pending.limit_upper);
-                }
-                attach_joint(
+                // Ball joint: 3 rotational DOF about the anchor. The axis is the
+                // twist axis; the cone limits bound swing and the lower/upper
+                // limits bound twist.
+                lunco_usd_avian_joints::attach_spherical_joint(
                     &mut commands,
                     joint_entity,
                     b0,
                     b1,
-                    JointSpec::new(joint).with_usd_seat(pending),
+                    pending.local_pos0,
+                    pending.local_pos1,
+                    pending.local_rot0,
+                    pending.local_rot1,
+                    pending.axis,
+                    pending.swing_limit,
+                    pending.limit_lower,
+                    pending.limit_upper,
                 );
                 true
             }
             "PhysicsDistanceJoint" => {
                 // Tether/strut: keeps the two anchors within [min, max] distance.
-                // Cables, fixed-length links. A NEGATIVE (or unauthored) distance
-                // is the schema's "this bound is disabled" sentinel — a disabled
-                // max leaves the tether free beyond min, never a rigid rod.
-                let min = if pending.limit_lower.is_finite() {
-                    pending.limit_lower.max(0.0)
-                } else {
-                    0.0
-                };
-                let max = if pending.limit_upper.is_finite() && pending.limit_upper >= 0.0 {
-                    pending.limit_upper.max(min)
-                } else {
-                    f64::INFINITY
-                };
-                attach_joint(
+                // A negative or unauthored distance disables that bound.
+                lunco_usd_avian_joints::attach_distance_joint(
                     &mut commands,
                     joint_entity,
                     b0,
                     b1,
-                    JointSpec::new(
-                        DistanceJoint::new(b0, b1)
-                            .with_local_anchor1(pending.local_pos0)
-                            .with_local_anchor2(pending.local_pos1)
-                            .with_limits(min, max),
-                    )
-                    .with_usd_seat(pending),
+                    pending.local_pos0,
+                    pending.local_pos1,
+                    pending.limit_lower,
+                    pending.limit_upper,
                 );
                 true
             }
-            // UsdPhysics generic D6 joint has no avian primitive (avian offers
-            // fixed/revolute/prismatic/spherical/distance, not a configurable
-            // 6-DOF constraint). Reducing it needs per-DOF PhysicsLimitAPI
-            // analysis; until then, point the author at the explicit joint kinds.
+            // Generic D6 has no Avian primitive. Reducing it needs per-DOF
+            // PhysicsLimitAPI analysis; explicit joint kinds are required.
             "PhysicsJoint" | "PhysicsD6Joint" => {
                 warn!(
                     "Generic D6 joint {} unsupported — author an explicit \
@@ -2547,306 +1997,6 @@ fn build_usd_physics_joints(
     }
 }
 
-/// Builds the chassis↔wheel revolute constraint for a physical (joint-driven)
-/// wheel — the one programmatically-synthesized joint (vs. the authored
-/// `Physics*Joint` prims [`build_usd_physics_joints`] resolves). Centralizing it
-/// here keeps **all** Avian joint construction in `lunco-usd-avian`, matching the
-/// documented ownership; the caller (`lunco-usd-sim::setup_physical_wheel`)
-/// supplies the drive [`AngularMotor`] and adds its mobility/hardware actuators
-/// on top. `mount_local` is the hub anchor in chassis-local space, `axle` the
-/// hinge axis (chassis-local).
-/// THE ONLY way to hand an Avian joint to the world. Every joint in this
-/// workspace — authored USD joints here, the synthesized wheel joint in
-/// `lunco-usd-sim` — goes through this, and nothing else may insert a joint
-/// component. It takes the two BODIES as arguments precisely so it can enforce
-/// what a bare bundle could not.
-///
-/// It makes TWO avian rules un-forgettable, because a caller can no longer state
-/// either one:
-///
-/// 1. **A jointed pair never reaches the narrow phase.** `JointCollisionDisabled`
-///    rides the same bundle as the joint component (never a later insert), and
-///    the pair is entered into [`collision_filters::filter_pair`] the moment it is
-///    attached — so no contact can form even while the joint is still parked.
-/// 2. **A joint may only enter the graph once BOTH bodies are in avian's island
-///    graph.** The joint is parked as a [`PendingJoint`] and installed by
-///    [`admit_pending_joints`] on the first tick where that holds.
-///
-/// The two construction paths share this entry point, so no caller can bypass
-/// the island-admission gate or request immediate installation.
-///
-/// Why the bundle, specifically. Bevy writes a whole bundle before firing any
-/// hook or observer, so `add_joint_to_graph` (`joint_graph/plugin.rs:135-143`)
-/// reads `Has<JointCollisionDisabled> == true` and the `JointGraphEdge` is born
-/// with collision disabled. The broad phase therefore never creates a contact
-/// pair for the jointed bodies.
-///
-/// The bundle must land before the first narrow phase that could put its bodies
-/// in contact. The admission gate and each caller's startup ordering establish
-/// that timing.
-pub fn attach_joint<J: Component + Clone>(
-    commands: &mut Commands,
-    joint_entity: Entity,
-    body0: Entity,
-    body1: Entity,
-    joint: JointSpec<J>,
-) {
-    let JointSpec { joint, seat } = joint;
-    // Rule 1, and it lands NOW rather than with the joint: a jointed pair must
-    // never reach the narrow phase, and a contact formed during the wait cannot
-    // be cleaned up afterwards without corrupting avian's island bookkeeping.
-    // See `collision_filters::filter_pair`.
-    collision_filters::filter_pair(commands, joint_entity, body0, body1);
-    commands.entity(joint_entity).try_insert((
-        collision_filters::JointCollisionPair { body0, body1 },
-        PendingJoint {
-            body0,
-            body1,
-            joint,
-            seat,
-        },
-        PendingJointAdmission { body0, body1 },
-        lunco_physics::PhysicsJointLink { body0, body1 },
-        lunco_physics::PhysicsJointPending,
-    ));
-}
-
-/// The other half of [`attach_joint`]: installs parked joints once their bodies
-/// are admitted. **An app that attaches joints must add this**, or they park
-/// forever.
-///
-/// A plugin rather than five `add_systems` lines at the call site, because the
-/// set of joint kinds is this crate's knowledge and nobody else should have to
-/// restate it — including the tests, which is where a restated list silently
-/// drifts (a test app missing one kind proves nothing about that kind).
-/// [`UsdAvianPlugin`] adds it; a plain-avian harness adds it directly.
-pub struct JointAttachPlugin;
-
-/// The systems that install parked joints.
-///
-/// Public so a joint BUILDER can order itself before them. Admission runs in
-/// the outer `Update` schedule because that schedule continues while the
-/// nested Avian physics schedule is held for scene readiness. The builder seats
-/// the joint in `FixedPostUpdate`; the deferred command boundary then exposes
-/// the parked constraint to this set, and the next fixed physics step consumes
-/// the admitted component. The readiness hold keeps the seated assembly from
-/// integrating during that boundary.
-#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct JointAdmission;
-
-impl Plugin for JointAttachPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_observer(collision_filters::on_remove_joint_collision_pair);
-        // Live detach is owned by the same plugin as joint admission.  The
-        // lifecycle marker is consumed before admission, and the graph edge is
-        // retired before any native component removal can reach Avian hooks.
-        app.add_systems(Update, retire_requested_joints.before(JointAdmission));
-        // One registration per joint type: the ticket is generic over the
-        // constraint it carries, so a new joint kind is one line HERE and
-        // nothing else anywhere.
-        //
-        // Admission is structural topology work, not solver work. It must be
-        // able to run while the nested PhysicsSchedule is paused by the world
-        // readiness hold; otherwise the hold waits for PendingJointAdmission
-        // while the only system that can clear it is itself paused. Body island
-        // nodes are already authoritative by this point, and Avian consumes
-        // the installed constraint on the next fixed physics step.
-        app.add_systems(
-            Update,
-            (
-                admit_pending_joints::<RevoluteJoint>
-                    .run_if(any_with_component::<PendingJoint<RevoluteJoint>>),
-                admit_pending_joints::<PrismaticJoint>
-                    .run_if(any_with_component::<PendingJoint<PrismaticJoint>>),
-                admit_pending_joints::<FixedJoint>
-                    .run_if(any_with_component::<PendingJoint<FixedJoint>>),
-                admit_pending_joints::<SphericalJoint>
-                    .run_if(any_with_component::<PendingJoint<SphericalJoint>>),
-                admit_pending_joints::<DistanceJoint>
-                    .run_if(any_with_component::<PendingJoint<DistanceJoint>>),
-            )
-                .in_set(JointAdmission),
-        );
-    }
-}
-
-/// A constructed constraint that is not yet a component — the only currency
-/// [`attach_joint`] accepts, and the only thing a joint builder hands back.
-///
-/// This is the compile-time half of the contract. The inner value is private, so
-/// outside this module a `JointSpec` cannot be unwrapped, and `JointSpec` itself
-/// is not a `Component`, so it cannot be handed to `insert`/`spawn`. A caller in
-/// another crate therefore has no expressible way to put a joint into the world
-/// except through [`attach_joint`] — the ordering rules are not documentation it
-/// must remember, they are the only path the type system leaves open.
-///
-/// Within this module the wrapper is transparent, because this is where joints
-/// are built; the guard is against a SECOND attachment site appearing elsewhere,
-/// which is exactly how the wheel joint came to bypass the admission gate.
-pub struct JointSpec<J: Component + Clone> {
-    joint: J,
-    seat: Option<JointSeat>,
-}
-
-impl<J: Component + Clone> JointSpec<J> {
-    /// Wrap a constructed constraint. Private to this crate: a joint is built by
-    /// one of the builders here, never assembled by a caller.
-    pub(crate) fn new(joint: J) -> Self {
-        Self { joint, seat: None }
-    }
-
-    fn with_seat(mut self, seat: JointSeat) -> Self {
-        self.seat = Some(seat);
-        self
-    }
-
-    fn with_usd_seat(self, pending: &PendingUsdJoint) -> Self {
-        match JointSeat::usd(pending) {
-            Some(seat) => self.with_seat(seat),
-            None => self,
-        }
-    }
-}
-
-/// A joint that has been handed to [`attach_joint`] and is waiting for avian to
-/// admit both of its bodies. Insert only through that function.
-///
-/// This type is what makes the two rules structural instead of remembered: the
-/// bundle is assembled in ONE place ([`admit_pending_joints`]) and it is
-/// assembled only once both bodies are in the island graph. A caller cannot get
-/// the ordering wrong because a caller no longer expresses the ordering.
-#[derive(Component, Clone, Debug)]
-pub struct PendingJoint<J: Component + Clone> {
-    /// First jointed body.
-    pub body0: Entity,
-    /// Second jointed body.
-    pub body1: Entity,
-    /// The constraint to install once both bodies are admitted.
-    pub joint: J,
-    /// Common authored-frame seating contract, when this joint has one.
-    seat: Option<JointSeat>,
-}
-
-/// Install every [`PendingJoint<J>`] whose two bodies avian has admitted into
-/// its island graph, as one bundle with [`JointCollisionDisabled`].
-///
-/// `BodyIslandNode` is the precondition stated exactly: it is avian's own record
-/// that a body is in the island graph, and it is what the joint-add path asserts
-/// when it merges the two bodies' islands. Asking anything else — "does it have
-/// `RigidBody`", "does it have `Position`" — approximates it and gets a body
-/// that exists but is not admitted: freshly spawned (avian initialises bodies in
-/// its own schedule, several frames after the USD build queues them) or disabled
-/// (`lunco_physics`'s readiness freeze holds a vehicle whose model is still
-/// compiling). Both cases panic in `merge_islands`.
-///
-/// **A STATIC body is admitted by construction.** Islands exist to manage
-/// simulation and sleep for bodies the solver integrates, so avian never gives a
-/// `RigidBody::Static` a `BodyIslandNode` — and demanding one of both endpoints
-/// meant a joint anchored to static geometry waited for a component that would
-/// never arrive. Forever, and silently: there is no terminal state and nothing
-/// logs.
-///
-/// That is not a corner case, it is how every mounted mechanism attaches to
-/// fixed infrastructure. A comms mast's dish, a dish on a tower, a hinge on a
-/// habitat — all of them are a dynamic link jointed to something that does not
-/// move. It is the real reason `components/comms/antenna.usda` never tracked
-/// Earth on `structures/comms_mast.usda`: that mount's `body0` was the tower, a
-/// standalone static collider. The namespace the joint was authored in, which is
-/// where that bug was first hunted, had nothing to do with it.
-///
-/// At least one endpoint must still be a genuine island member: avian's
-/// `merge_islands` asserts on a pair where *neither* body has one
-/// (`islands/mod.rs`, "Neither body … is in an island"), and a joint welding two
-/// pieces of static geometry constrains nothing the solver would ever integrate.
-///
-/// Registered per joint type by [`UsdAvianPlugin`]. A pending joint whose bodies
-/// never arrive simply never installs — the same disposition as an unresolved
-/// [`PendingUsdJoint`], and it dies with its scene.
-pub fn admit_pending_joints<J: Component + Clone>(
-    pending: Query<(Entity, &PendingJoint<J>)>,
-    admitted: Query<(), With<avian3d::dynamics::solver::islands::BodyIslandNode>>,
-    bodies: Query<&RigidBody>,
-    mut q_pose: Query<(&mut Position, &mut Rotation)>,
-    mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
-    q_authored_velocity: Query<&AuthoredInitialVelocity>,
-    mut commands: Commands,
-) {
-    for (entity, p) in pending.iter() {
-        let ready = |e: Entity| {
-            admitted.contains(e) || bodies.get(e).map(RigidBody::is_static).unwrap_or(false)
-        };
-        if !ready(p.body0) || !ready(p.body1) {
-            continue;
-        }
-        // Both static ⇒ nothing to solve, and avian panics on the pair.
-        if !admitted.contains(p.body0) && !admitted.contains(p.body1) {
-            continue;
-        }
-        if let Some(seat) = p.seat {
-            seat_joint_bodies(
-                "pending joint",
-                p.body0,
-                p.body1,
-                seat,
-                &mut q_pose,
-                &mut q_vel,
-                &q_authored_velocity,
-                &mut commands,
-            );
-        }
-        commands
-            .entity(entity)
-            .try_insert((p.joint.clone(), JointCollisionDisabled))
-            .try_remove::<PendingJoint<J>>()
-            .try_remove::<PendingJointAdmission>()
-            .try_remove::<lunco_physics::PhysicsJointPending>();
-    }
-}
-
-/// A plain weld between two bodies, anchored at their own origins.
-///
-/// A builder, because [`JointSpec`]'s contents are private: constructing a joint
-/// is this crate's job, and every kind a caller can attach has a function here
-/// that returns the spec. The USD path builds its welds with authored anchors
-/// inside [`build_usd_physics_joints`]; this is the anchor-free form.
-pub fn fixed_joint(body0: Entity, body1: Entity) -> JointSpec<FixedJoint> {
-    JointSpec::new(FixedJoint::new(body0, body1))
-}
-
-pub fn wheel_revolute_joint(
-    chassis: Entity,
-    wheel: Entity,
-    mount_local: DVec3,
-    axle: DVec3,
-) -> JointSpec<RevoluteJoint> {
-    JointSpec::new(
-        RevoluteJoint::new(chassis, wheel)
-            .with_local_anchor1(mount_local)
-            .with_local_anchor2(DVec3::ZERO)
-            .with_hinge_axis(axle),
-    )
-    .with_seat(JointSeat {
-        local_pos0: mount_local,
-        local_pos1: DVec3::ZERO,
-        local_rot0: DQuat::IDENTITY,
-        local_rot1: DQuat::IDENTITY,
-        axis: axle,
-        kind: JointSeatKind::Revolute,
-    })
-}
-
-/// Read mass, principal inertia, COM, damping, and friction from a rigid-body
-/// prim and insert the corresponding Avian *override* components.
-///
-/// The single place `physics:mass`/damping/friction and the **G2 load-time**
-/// mass-properties (`physics:diagonalInertia` / `physics:centerOfMass`) are read,
-/// so every body gets them the same way.
-///
-/// An authored mass is an override; when it is omitted Avian computes total mass
-/// from the collider tree and density. Inertia/COM are likewise inserted only
-/// when explicitly authored. These are the same override components the runtime
-/// mass-props cosim ports write (`lunco-cosim`), so authored and model-driven
-/// values share one path.
 fn apply_rigid_body_mass_props(
     commands: &mut Commands,
     entity: Entity,

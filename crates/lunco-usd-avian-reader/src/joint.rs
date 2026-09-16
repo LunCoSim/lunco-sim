@@ -86,6 +86,16 @@ pub fn nearest_body_path(
     }
     None
 }
+
+/// Resolve a USD joint relationship target to the rigid-body prim that owns
+/// the endpoint.
+pub fn resolve_joint_body_path(
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    target: &str,
+) -> Option<String> {
+    let path = SdfPath::new(target).ok()?;
+    nearest_body_path(reader, &path).map(|resolved| resolved.to_string())
+}
 /// `xformOp:translate` — instead of typing it again as the joint's `physics:localPos0`.
 /// `read_joint_spec` calls it only when the anchor is UNAUTHORED, so authored
 /// joints are untouched (no regression) and hand-tuned anchors always win.

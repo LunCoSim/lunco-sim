@@ -110,7 +110,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-avian-filters`** | Render-free USD/Avian collision-filter boundary: interprets standard `PhysicsFilteredPairsAPI` and `PhysicsCollisionGroup`, owns transient joint-pair suppression, and installs the single Avian collision/contact hook. |
 | **`lunco-usd-avian-contracts`** | Shared USD/Avian ECS carriers and normalized joint-drive contract used by physics projection, readiness, queries, and co-simulation; contains no stage traversal or projection systems. |
 | **`lunco-usd-avian-reader`** | Shared render-free composed OpenUSD physics readers for collider geometry, joint topology/limits/drives, and typed physics attributes. Reused by the runtime Avian projector and authored-stage lint without owning Bevy systems or lifecycle. |
-| **`lunco-usd-avian`** | Physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. Its USD physics-material reader is isolated from the main projection module. It consumes the independent collision-filter package and `lunco-usd-avian-reader`; lint fact production is in `lunco-usd-avian-lint`. |
+| **`lunco-usd-avian-joints`** | Reusable native Avian joint boundary: typed constructors, joint-pair filtering, seating, solver-island admission, and graph-safe detach. It consumes shared contracts and is usable by authored USD and synthesized mechanisms. |
+| **`lunco-usd-avian`** | USD physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to normalized Avian joint plans and body/collider components. Native joint lifecycle is owned by `lunco-usd-avian-joints`; its USD physics-material reader is isolated from the main projection module. It consumes the independent collision-filter package and `lunco-usd-avian-reader`; lint fact production is in `lunco-usd-avian-lint`. |
 | **`lunco-usd-actuation`** | Render-free composed USD force/torque actuator reader. It converts authored actuator geometry and limits into generic co-simulation components without depending on the Avian runtime projection. |
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
@@ -673,14 +674,20 @@ reader does not rebuild the bridge implementation.
 Shared ECS carriers crossing the USD physics, vehicle, readiness, query, and
 co-simulation packages. It owns `PendingUsdJoint`, joint-drive data, scene
 ownership, dynamic-admission, and authored-velocity markers, while the runtime
-projector remains the owner of stage traversal and joint construction.
+projector remains the owner of stage traversal and authored-fact translation.
+
+**`lunco-usd-avian-joints`**
+Reusable native Avian joint boundary. It owns typed joint construction,
+joint-pair filtering, initial seating, solver-island admission, and graph-safe
+detach for authored USD and synthesized mechanisms.
 
 **`lunco-usd-avian`**
 Physics projection for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas —
 rigid bodies + mass-properties, all collider shapes, and **all joints**
 (revolute/prismatic/fixed/spherical/distance, D6-reduced) with
-`UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for USD-driven
-Avian joint construction (including the programmatic wheel hinge). It consumes
+`UsdPhysicsDriveAPI` motor drive — to normalized Avian joint plans and
+body/collider components. Native joint construction and lifecycle live in
+`lunco-usd-avian-joints`, including the programmatic wheel hinge. It consumes
 the separate Avian/BigSpace core bridge. Runtime-only; its Rust tests cover
 low-level mechanics with in-memory USDA fixtures, while shipped asset/runtime
 assertions are owned by the Rhai scene-test gate. Lint fact extraction is

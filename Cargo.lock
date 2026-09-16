@@ -8666,9 +8666,9 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-time",
  "lunco-twin",
- "lunco-usd-avian",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
+ "lunco-usd-avian-joints",
  "lunco-usd-bevy-scene",
  "lunco-usd-document",
  "lunco-usd-sim",
@@ -9137,11 +9137,11 @@ dependencies = [
  "lunco-core",
  "lunco-environment",
  "lunco-physics",
- "lunco-spatial",
  "lunco-storage",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
  "lunco-usd-avian-filters",
+ "lunco-usd-avian-joints",
  "lunco-usd-avian-reader",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -9182,6 +9182,17 @@ dependencies = [
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-avian-joints"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-physics",
+ "lunco-usd-avian-contracts",
+ "lunco-usd-avian-filters",
 ]
 
 [[package]]
@@ -9549,9 +9560,9 @@ dependencies = [
  "lunco-render",
  "lunco-spatial",
  "lunco-usd-actuation",
- "lunco-usd-avian",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-filters",
+ "lunco-usd-avian-joints",
  "lunco-usd-avian-reader",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-light",
@@ -9638,9 +9649,9 @@ dependencies = [
  "lunco-port-core",
  "lunco-render",
  "lunco-signal",
- "lunco-usd-avian",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
+ "lunco-usd-avian-joints",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",

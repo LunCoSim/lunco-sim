@@ -29,8 +29,8 @@ lunco-settings = { path = "../lunco-settings", optional = true }
 lunco-time = { path = "../lunco-time" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-twin = { path = "../lunco-twin" }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
+lunco-usd-avian-joints = { path = "../lunco-usd-avian-joints" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-document = { path = "../lunco-usd-document" }

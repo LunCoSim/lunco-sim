@@ -778,11 +778,11 @@ fn participants_ready(world: &mut World) -> bool {
 
     let mut q_pending = world.query_filtered::<(), Or<(
         With<lunco_usd_avian_contracts::PendingUsdJoint>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::SphericalJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::DistanceJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::SphericalJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::DistanceJoint>>,
     )>>();
     q_pending.iter(world).next().is_none()
 }
@@ -805,11 +805,11 @@ fn physics_admission_ready(world: &mut World) -> bool {
         With<lunco_usd_avian_contracts::ShouldBeDynamic>,
         With<lunco_core::PhysicsStatePending>,
         With<lunco_usd_avian_contracts::PendingUsdJoint>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::SphericalJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::DistanceJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::SphericalJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::DistanceJoint>>,
     )>>();
     q_pending.iter(world).next().is_none()
 }
@@ -907,11 +907,11 @@ fn log_participant_readiness_blockers(world: &mut World) {
     let mut pending_joints = world
         .query_filtered::<(Entity, Option<&lunco_usd_bevy_scene::UsdPrimPath>), Or<(
             With<lunco_usd_avian_contracts::PendingUsdJoint>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::SphericalJoint>>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::DistanceJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::SphericalJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::DistanceJoint>>,
         )>>();
     for (entity, path) in pending_joints.iter(world) {
         warn!(
