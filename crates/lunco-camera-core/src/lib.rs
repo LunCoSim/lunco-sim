@@ -4,9 +4,39 @@
 //! runtimes such as `lunco-avatar` translate interaction into these contracts
 //! and provide fast pose solvers; authored scene policy remains in USD/Rhai.
 
+pub mod math;
+
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_environment::GravityBody;
+
+/// Shared defaults for camera pose solvers.
+///
+/// Specialized runtimes may override these values on individual camera
+/// components. Keeping the defaults with the camera contracts avoids making
+/// an avatar runtime the owner of generic camera behavior.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct CameraDefaults {
+    /// Base damping used when a camera component does not provide one.
+    pub damping: f32,
+    /// Base responsiveness (Hz) of rotation follow before damping scales it.
+    pub rotation_rate: f32,
+    /// Base responsiveness (Hz) of position follow before damping scales it.
+    pub position_rate: f32,
+    /// Default distance used by camera setup that does not author a distance.
+    pub default_distance: f64,
+}
+
+impl Default for CameraDefaults {
+    fn default() -> Self {
+        Self {
+            damping: 0.1,
+            rotation_rate: 60.0,
+            position_rate: 30.0,
+            default_distance: 10.0,
+        }
+    }
+}
 
 /// Authored attitude policy for a target-following camera.
 ///

@@ -69,7 +69,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-control-core`** | Generic semantic-control contracts: the shared `UserIntent` vocabulary, authored intent-to-port bindings, input state, egui focus gate, and bounded causal-edge trace. Input producers and domain consumers depend on this focused package instead of placing control policy in `lunco-core`. |
 | **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |
 | **`lunco-input-ui`** | Optional egui presentation for the shared input state: the recording/observation input overlay and its typed visibility command. It does not translate input or own vessel control. |
-| **`lunco-camera-core`** | Backend-neutral camera-rig contracts: free-flight, orbit, spring-arm, surface, authored rig intent, pose-transition state, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
+| **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, authored rig intent, smoothing defaults, pose-transition state, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
 | **`lunco-avatar-core`** | Backend-neutral avatar contracts: ECS role markers and the derived local-avatar index, possession/focus command payloads, transient notification command/queue types, and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
 | **`lunco-avatar-policy`** | Twin-scoped avatar safety policy and physical collision-controller settings. It is shared directly by the runtime and UI, so the UI does not depend on the monolithic avatar implementation. |
 | **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: fast camera/possession systems and the local input-to-intent boundary. It consumes `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
@@ -395,7 +395,7 @@ the runtime's measured collision shape. Both the movement runtime and avatar UI
 read this package directly; it has no dependency on the avatar implementation.
 
 **`lunco-camera-core`**
-Backend-neutral camera contract package. Owns reusable camera behavior components, authored rig intent, camera-mode transition state, and pose-input accumulators. `lunco-avatar` supplies the specialized input boundary and fast BigSpace solvers.
+Backend-neutral camera contract package. Owns reusable camera behavior components, shared smoothing defaults, pure frame/zoom/movement math, authored rig intent, camera-mode transition state, and pose-input accumulators. `lunco-avatar` supplies the specialized input boundary and fast BigSpace solvers.
 
 **`lunco-avatar-ui`**
 Optional egui presentation adapter for `lunco-camera-core`,

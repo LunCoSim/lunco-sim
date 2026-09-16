@@ -18,7 +18,7 @@ law in f64 so BigSpace coordinates are not rounded through f32.
       intuitive to dial for feel. Play with values to find the good range.
 - [ ] **Make all of the above camera properties.** Smoothing function +
       time/rate + damping should be per-camera fields (on `SpringArmCamera`,
-      `OrbitCamera`), falling back to `CameraDefaults`, the same
+      `OrbitCamera`), falling back to `lunco_camera_core::CameraDefaults`, the same
       way `damping` already does. A cinematic orbit can then differ from a
       snappy full-attitude chase.
 

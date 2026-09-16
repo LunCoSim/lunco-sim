@@ -40,9 +40,14 @@ use lunco_avatar_policy::{
     avatar_soil_collision_policy, AvatarCollisionSettings, AvatarSoilCollisionPolicy,
 };
 use lunco_camera_core::{
-    AdaptiveNearPlane, CameraRigIntent, CameraRigMode, CameraZoomInput, CurrentRegionArrival,
-    FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera, OrbitReturnBehavior,
-    OrbitViewReturn, RadialArrival, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
+    math::{
+        apply_scroll_zoom, camera_decay_alpha, camera_decay_rate, camera_move_direction,
+        resolve_camera_arm_length, surface_camera_angles, surface_camera_rotation, zoom_factor,
+    },
+    AdaptiveNearPlane, CameraDefaults, CameraRigIntent, CameraRigMode, CameraZoomInput,
+    CurrentRegionArrival, FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera,
+    OrbitReturnBehavior, OrbitViewReturn, RadialArrival, SpringArmCamera, SurfaceCamera,
+    SurfaceRelativeMode,
 };
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
 use lunco_core::{on_command, register_commands, CelestialBody, Spacecraft};
@@ -242,73 +247,11 @@ mod camera_input_settings_tests {
 /// conversion at the source boundary makes a pixel-mode touchpad and a
 /// line-mode wheel produce the same camera response.
 const ZOOM_SENSITIVITY: f32 = 5.0;
-const ZOOM_FACTOR_MIN: f64 = 0.75;
-const ZOOM_FACTOR_MAX: f64 = 1.25;
 /// Altitude of the orbital zoom's min-distance floor above a celestial body's
 /// surface. Doubles as the scroll-through threshold: one more inward detent
 /// while the arm sits on this floor exits the orbital view to the surface
 /// camera at the current pose (task: seamless orbit⇄terrain, no clicks).
 const SCROLL_EXIT_ALTITUDE_M: f64 = 50_000.0;
-
-/// Global default values for camera behavior parameters.
-///
-/// Individual behavior components can override these with their own values
-/// (using `Option<f32>` fields). When `None`, the system falls back to this resource.
-#[derive(Resource)]
-pub struct CameraDefaults {
-    pub damping: f32,
-    /// Base responsiveness (Hz) of rotation follow, before per-camera `damping`
-    /// scales it. Passed to Bevy's `StableInterpolate::smooth_nudge`.
-    pub rotation_rate: f32,
-    /// Base responsiveness (Hz) of position follow, before per-camera `damping`
-    /// scales it. The f64 position path uses the same decay law because
-    /// BigSpace positions must remain in double precision.
-    pub position_rate: f32,
-    pub default_distance: f64,
-}
-
-impl Default for CameraDefaults {
-    fn default() -> Self {
-        Self {
-            damping: 0.1,
-            rotation_rate: 60.0,
-            position_rate: 30.0,
-            default_distance: 10.0,
-        }
-    }
-}
-
-/// Resolve the shared camera decay rate from the authored base rate and
-/// per-camera damping. Rotations use Bevy's `StableInterpolate`; positions use
-/// the same rate in f64 because `StableInterpolate` intentionally covers f32
-/// normed spaces, while BigSpace camera positions must not round-trip through
-/// f32 before the grid split.
-#[inline]
-fn camera_decay_rate(rate: f32, damping: f32) -> f32 {
-    rate * (1.0 - damping)
-}
-
-#[inline]
-fn camera_decay_alpha(rate: f32, damping: f32, dt: f32) -> f64 {
-    f64::from(1.0 - (-camera_decay_rate(rate, damping) * dt).exp())
-}
-
-#[inline]
-fn resolve_camera_arm_length(
-    current_len: f64,
-    target_len: f64,
-    obstacle_present: bool,
-    position_rate: f32,
-    damping: f32,
-    dt: f32,
-) -> f64 {
-    if !obstacle_present || current_len < 1e-3 {
-        return target_len;
-    }
-
-    let alpha = camera_decay_alpha(position_rate, damping, dt);
-    current_len + (target_len - current_len) * alpha
-}
 
 // ─── Behavior Components ─────────────────────────────────────────────────────
 
@@ -1526,86 +1469,6 @@ fn site_body(
     Some((ent, body.radius_m))
 }
 
-/// Build a surface-relative camera orientation from the body's ENU axes plus
-/// `heading` and `pitch`.
-///
-/// Forward starts at the geodetic north axis, is yawed by `heading` about the
-/// exact surface normal, then pitched about the resulting right axis. Rebuilt
-/// from scratch (no incremental accumulation) so there is zero roll drift.
-///
-pub fn surface_camera_rotation(
-    east: Vec3,
-    north: Vec3,
-    up: Vec3,
-    heading: f32,
-    pitch: f32,
-) -> Quat {
-    let (_, north, up) = orthonormal_surface_axes(east, north, up);
-    let heading_q = Quat::from_axis_angle(up, heading);
-    let forward = heading_q.mul_vec3(north);
-    let right = forward.cross(up).normalize();
-    let base_rot = Quat::from_mat3(&Mat3::from_cols(right, up, -forward));
-    let pitch_q = Quat::from_axis_angle(right, pitch);
-    (pitch_q * base_rot).normalize()
-}
-
-/// Compose the free-flight movement vector from the camera's forward/right
-/// directions and a stable vertical axis.
-///
-/// Elevation must not use `Transform::up()`: when the view is pitched, Q+W can
-/// then cancel the forward vector's horizontal component and make the diagonal
-/// appear not to move. World +Y is the vertical axis in free flight; callers in
-/// surface mode pass the current gravity-up direction instead.
-fn fly_move_direction(
-    tf: &Transform,
-    forward: f32,
-    side: f32,
-    elevation: f32,
-    up_dir: Vec3,
-) -> Vec3 {
-    let up_dir = up_dir.normalize_or_zero();
-    let up_dir = if up_dir == Vec3::ZERO {
-        Vec3::Y
-    } else {
-        up_dir
-    };
-    let direction = *tf.forward() * forward + *tf.right() * side + up_dir * elevation;
-    // Keyboard diagonals intentionally contribute multiple axes, but the
-    // resulting command must still have the same maximum speed as a single
-    // axis. Preserve sub-unit analog input and cap only the combined vector.
-    let length_sq = direction.length_squared();
-    if length_sq > 1.0 {
-        direction / length_sq.sqrt()
-    } else {
-        direction
-    }
-}
-
-/// Decompose a camera rotation into the same surface-frame heading and pitch
-/// consumed by [`surface_camera_rotation`].
-///
-/// This is the only legal way to enter surface mode from another camera mode:
-/// Euler angles are coordinates in the old frame, not surface heading/pitch.
-pub fn surface_camera_angles(east: Vec3, north: Vec3, up: Vec3, rotation: Quat) -> (f32, f32) {
-    let (east, north, up) = orthonormal_surface_axes(east, north, up);
-    let forward = rotation * Vec3::NEG_Z;
-    let pitch = forward.dot(up).clamp(-1.0, 1.0).asin();
-    let tangent_forward = (forward - up * forward.dot(up)).normalize_or(north);
-    let heading = (-tangent_forward.dot(east)).atan2(tangent_forward.dot(north));
-    (heading, pitch)
-}
-
-/// Normalize a surface ENU basis with the engine's right-handed convention.
-fn orthonormal_surface_axes(east: Vec3, north: Vec3, up: Vec3) -> (Vec3, Vec3, Vec3) {
-    let east = east.normalize_or(Vec3::X);
-    let up = up.normalize_or(Vec3::Y);
-    // Re-derive north from the handed ENU pair so a tiny input drift cannot
-    // introduce roll. The fallback is only for the physically undefined
-    // body-centre frame.
-    let north = up.cross(east).normalize_or(north.normalize_or(Vec3::NEG_Z));
-    (east, north, up)
-}
-
 /// Resolve a surface-bound target's local up vector and authored heading.
 ///
 /// The target and the surface grid are siblings under the body's rotating
@@ -1630,28 +1493,6 @@ fn surface_target_frame(
     )?;
     let heading = surface_camera_angles(east, north, up, target_rotation.as_quat()).0;
     Some((east, north, up, heading))
-}
-
-/// Apply an accumulated mouse-scroll delta as a multiplicative (exponential)
-/// zoom to a camera arm `distance`, clamped to `[min_dist, max_dist]`, then
-/// consume the delta. Scroll up (delta > 0) zooms in; down zooms out.
-///
-/// Consolidates the CQ-113 duplicate zoom math shared by the spring-arm, chase,
-/// and orbit camera systems (they differed only in the clamp bounds).
-fn apply_scroll_zoom(
-    distance: &mut f64,
-    scroll_delta: &mut f32,
-    sens: f32,
-    min_dist: f64,
-    max_dist: f64,
-) {
-    if *scroll_delta != 0.0 {
-        let zoom_factor = (-*scroll_delta as f64 * sens as f64 * 0.01)
-            .exp()
-            .clamp(ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX);
-        *distance = (*distance * zoom_factor).clamp(min_dist, max_dist);
-        *scroll_delta = 0.0;
-    }
 }
 
 /// Migrate the avatar to a target's Grid, placing it at a pose already expressed
@@ -2661,9 +2502,7 @@ fn freeflight_scroll_transit_system(
         // to the altitude scale: factor > 1 on scroll-out, < 1 on scroll-in.
         // Clamped to ±25% per FRAME: wheel events batch, and an accumulated
         // delta must never become a teleport-sized step.
-        let factor = (-zoom.delta as f64 * ZOOM_SENSITIVITY as f64 * 0.01)
-            .exp()
-            .clamp(ZOOM_FACTOR_MIN, ZOOM_FACTOR_MAX);
+        let factor = zoom_factor(zoom.delta, ZOOM_SENSITIVITY);
         let transition_direction = zoom.delta;
         let scroll_out = zoom.delta < 0.0;
         zoom.delta = 0.0;
@@ -3047,7 +2886,7 @@ fn apply_fly(
         } else {
             Vec3::Y
         };
-        let move_vec = fly_move_direction(&tf, forward, side, elevation, up_dir);
+        let move_vec = camera_move_direction(&tf, forward, side, elevation, up_dir);
 
         // Authored flight speed × the real frame delta.
         // Normalize the combined direction BEFORE applying the speed. Scaling
@@ -6014,34 +5853,6 @@ mod tests {
     }
 
     #[test]
-    fn scroll_zoom_limits_one_frame_to_a_safe_factor() {
-        let mut distance = 100.0;
-        let mut delta = -10_000.0;
-        apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
-        assert_eq!(distance, 125.0);
-
-        let mut distance = 100.0;
-        let mut delta = 10_000.0;
-        apply_scroll_zoom(&mut distance, &mut delta, ZOOM_SENSITIVITY, 1.0, 1_000.0);
-        assert_eq!(distance, 75.0);
-    }
-
-    #[test]
-    fn clear_follow_ray_keeps_requested_distance_when_target_moves() {
-        let final_len = resolve_camera_arm_length(47.0, 50.0, false, 30.0, 0.1, 1.0 / 60.0);
-
-        assert_eq!(final_len, 50.0);
-    }
-
-    #[test]
-    fn obstructed_follow_ray_eases_arm_length() {
-        let final_len = resolve_camera_arm_length(50.0, 20.0, true, 30.0, 0.1, 1.0 / 60.0);
-
-        assert!(final_len < 50.0);
-        assert!(final_len > 20.0);
-    }
-
-    #[test]
     fn semantic_look_intent_rotates_camera_angles() {
         let settings = CameraInputSettings {
             look_radians_per_pointer_unit: 0.01,
@@ -6057,24 +5868,6 @@ mod tests {
 
         assert!((yaw + 0.1).abs() < 1.0e-6);
         assert!((pitch - 0.05).abs() < 1.0e-6);
-    }
-
-    #[test]
-    fn pitched_qw_keeps_a_forward_component() {
-        // Looking down by 45° makes camera-relative `forward - up` lose its
-        // horizontal component. Q+W must still travel forward while descending.
-        let tf = Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4));
-        let direction = fly_move_direction(&tf, 1.0, 0.0, -1.0, Vec3::Y);
-
-        assert!(
-            direction.z < -0.3,
-            "Q+W must retain forward travel at a pitched view, got {direction:?}"
-        );
-        assert!(
-            direction.y < -0.5,
-            "Q+W must retain downward travel at a pitched view, got {direction:?}"
-        );
-        assert!(direction.length() <= 1.0 + 1e-6);
     }
 
     #[test]
