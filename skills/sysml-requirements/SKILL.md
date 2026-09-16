@@ -161,7 +161,14 @@ The current supported subset is source-backed and deterministic:
   and external clients;
 - the read-only `ValidateSysml` query and the
   `luncosim test --verification QUALIFIED_NAME` selector; and
-- structured per-check evidence emitted by `report_structured_verdict`.
+- structured per-check evidence emitted by `report_structured_verdict`.  The
+  summary event keeps small reports inline; larger reports emit one bounded
+  `*_EVIDENCE_RESULT` event per observation with a stable `result_index`.
+  Consumers must group by channel and source revision, then order by that
+  index.  This preserves the complete typed table without exceeding Rhai's
+  bounded value budget.  Check records may use qualified or validated short
+  requirement/verification names; short names are preferred in repeated
+  arrays to avoid duplicating package prefixes.
 
 It does not provide a full SysML/KerML execution engine. Do not promise or
 silently emulate interface definitions, arbitrary expressions and constraints,

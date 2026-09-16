@@ -212,14 +212,34 @@ fn report_structured_verdict(report, title, channel) {
         }
     }
     if failures.is_empty() && !ok { failures.push("requirement evaluation unavailable"); }
+    // Rhai values have a bounded 64 KiB string/value budget.  A large
+    // component can legitimately produce hundreds of typed observations, so
+    // never attempt to emit the complete result table as one event.  Small
+    // reports retain the historical single-event shape; larger reports carry
+    // the same typed maps as individually bounded events and expose the count
+    // in the summary. Consumers can reconstruct the exact table by grouping
+    // on (channel, source_revision) and ordering by result_index.
+    let inline_results = result_count <= 64;
     let evidence = #{schema_version: 1, ok: ok, title: title, channel: channel,
         verdict: if ok { "pass" } else { "fail" },
         verification: verification, requirement_count: requirement_count,
         source_revision: source_revision, source_revision_hex: source_revision_hex,
         source_files: source_files, result_count: result_count,
-        failure_count: raw_failures.len(), results: results,
-        failures: raw_failures, metrics: metrics};
+        failure_count: raw_failures.len(), evidence_chunked: !inline_results,
+        evidence_result_events: if inline_results { 0 } else { result_count },
+        results: if inline_results { results } else { [] },
+        failures: if inline_results { raw_failures } else { [] }, metrics: metrics};
     emit(channel + "_EVIDENCE", evidence);
+    if !inline_results {
+        for result_index in 0..result_count {
+            emit(channel + "_EVIDENCE_RESULT", #{schema_version: 1,
+                title: title, channel: channel, verification: verification,
+                source_revision: source_revision,
+                source_revision_hex: source_revision_hex,
+                result_count: result_count, failure_count: raw_failures.len(),
+                result_index: result_index, result: results[result_index]});
+        }
+    }
     print(channel + "_EVIDENCE source_revision=" + source_revision
         + " results=" + result_count + " failures=" + raw_failures.len());
     report_verdict(failures, title, channel)
