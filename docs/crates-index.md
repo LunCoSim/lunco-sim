@@ -70,8 +70,8 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-interaction-core`** | Small cross-runtime cursor-interaction contract: editor drag state and the affected-entity marker consumed by camera, possession, and follow runtimes. It contains no editor implementation. |
 | **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |
 | **`lunco-input-ui`** | Optional egui presentation for the shared input state: the recording/observation input overlay and its typed visibility command. It does not translate input or own vessel control. |
-| **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, authored rig intent, smoothing defaults, pose-transition state, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
-| **`lunco-camera-runtime`** | Generic interactive camera realization: camera-mode exclusivity, frame-handoff rebasing, and free-flight/surface pose writers over the camera-core contracts. Avatar and other authored operators supply their own source-specific frame and input policy. |
+| **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, authored rig intent, smoothing defaults, pose-transition state, adaptive clip-plane math, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
+| **`lunco-camera-runtime`** | Generic interactive camera realization: camera-mode exclusivity, frame-handoff rebasing, free-flight/surface pose writers, persisted camera-input settings, and the typed `SetCameraInput` command over the camera-core contracts. Rhai authors presentation policy through the generic command surface. |
 | **`lunco-avatar-core`** | Backend-neutral avatar contracts: ECS role markers and the derived local-avatar index, possession/focus command payloads, transient notification command/queue types, and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
 | **`lunco-avatar-camera-core`** | Avatar-specific camera transition contracts: BigSpace orbit-return state and arrival markers. It depends on the generic camera contracts without making generic camera consumers carry avatar frame state. |
 | **`lunco-avatar-policy`** | Twin-scoped avatar safety policy and physical collision-controller settings. It is shared directly by the runtime and UI, so the UI does not depend on the monolithic avatar implementation. |
@@ -397,8 +397,8 @@ types here prevents the camera runtime from depending on the high-fan-out
 Headless-safe local-avatar runtime. Implements possession/focus observers,
 input intent projection, and the BigSpace-aware orbit/spring-arm camera solvers
 described by `lunco-camera-core` and `lunco-avatar-core`. Generic camera mode
-exclusivity and free-flight/surface pose writers live in
-`lunco-camera-runtime`; optional egui presentation is supplied by
+exclusivity, input policy, clip-plane math, and free-flight/surface pose writers
+live in `lunco-camera-runtime`/`lunco-camera-core`; optional egui presentation is supplied by
 `lunco-avatar-ui`. The viewport reconciler in `lunco-usd-bevy-camera` owns which
 camera is shown.
 
@@ -418,16 +418,17 @@ read this package directly; it has no dependency on the avatar implementation.
 
 **`lunco-camera-core`**
 Backend-neutral camera contract package. Owns reusable camera behavior
-components, shared smoothing defaults, pure frame/zoom/movement math, authored
-rig intent, camera-mode transition state, and pose-input accumulators. It does
-not choose an avatar or a camera source.
+components, shared smoothing defaults, pure frame/zoom/movement/clip-plane
+math, authored rig intent, camera-mode transition state, and pose-input
+accumulators. It does not choose an avatar or a camera source.
 
 **`lunco-camera-runtime`**
 Generic interactive camera realization package. Owns the exclusive camera-mode
-hooks, frame-handoff rebasing, and free-flight/surface pose writers over
-`lunco-camera-core`. It is reusable by avatar, inspection, and other authored
-operators; source-specific frame production and input policy remain with the
-calling runtime.
+hooks, frame-handoff rebasing, free-flight/surface pose writers, persisted
+`CameraInputSettings`, and the `SetCameraInput` command over `lunco-camera-core`.
+It is reusable by avatar, inspection, and other authored
+operators; source-specific frame production remains with the calling runtime,
+while Rhai can author presentation policy through the command surface.
 
 **`lunco-camera-celestial`**
 Celestial spatial adapter for the generic `SurfaceCameraFrame` contract. It

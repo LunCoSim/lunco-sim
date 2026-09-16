@@ -7,12 +7,89 @@
 
 use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
+use lunco_avatar_core::commands::SetCameraInput;
 use lunco_camera_core::{
     CameraDefaults, CameraFollow, CameraPoseLock, CameraPoseMode, CameraRig, CameraRigIntent,
     CameraRigMode, CameraUpdateSet, FollowAttitude, FreeFlightCamera, FreeFlightSettings,
     OrbitCamera, SpringArmCamera, SurfaceCamera, SurfaceCameraFrame, math::surface_camera_rotation,
 };
+use lunco_core::{on_command, register_commands};
+use lunco_settings::{AppSettingsExt, SettingsSection};
+
+/// Persisted pointer response shared by every interactive camera rig.
+///
+/// The input layer supplies semantic look deltas; this resource only defines
+/// how much camera motion one accepted delta produces. Orbit scaling remains a
+/// pure camera policy and is independent of avatar or celestial ownership.
+#[derive(Resource, Reflect, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[reflect(Resource)]
+#[serde(default)]
+pub struct CameraInputSettings {
+    /// Camera radians per pointer-motion unit before behavior-specific scaling.
+    pub look_radians_per_pointer_unit: f32,
+    /// Lower bound for orbital rotation at the body's surface.
+    pub orbit_surface_min_scale: f64,
+    /// Shapes the geometric visible-horizon response.
+    pub orbit_distance_curve_exponent: f64,
+}
+
+impl Default for CameraInputSettings {
+    fn default() -> Self {
+        Self {
+            look_radians_per_pointer_unit: 0.001125,
+            orbit_surface_min_scale: 0.04,
+            orbit_distance_curve_exponent: 0.75,
+        }
+    }
+}
+
+impl SettingsSection for CameraInputSettings {
+    const KEY: &'static str = "camera_input";
+}
+
+#[on_command(SetCameraInput)]
+fn on_set_camera_input(trigger: On<SetCameraInput>, mut settings: ResMut<CameraInputSettings>) {
+    let command = trigger.event();
+    if let Some(value) = command.look_radians_per_pointer_unit {
+        if value.is_finite() && value >= 0.0 {
+            settings.look_radians_per_pointer_unit = value;
+        } else {
+            warn!("SetCameraInput rejected non-finite/negative look sensitivity: {value}");
+        }
+    }
+    if let Some(value) = command.orbit_surface_min_scale {
+        if value.is_finite() && (0.0..=1.0).contains(&value) {
+            settings.orbit_surface_min_scale = value;
+        } else {
+            warn!("SetCameraInput rejected surface scale outside [0, 1]: {value}");
+        }
+    }
+    if let Some(value) = command.orbit_distance_curve_exponent {
+        if value.is_finite() && value > 0.0 {
+            settings.orbit_distance_curve_exponent = value;
+        } else {
+            warn!("SetCameraInput rejected non-positive distance exponent: {value}");
+        }
+    }
+}
+
+/// Scale an orbit gesture from the target body's apparent geometry.
+pub fn body_orbit_look_scale(
+    distance_m: f64,
+    radius_m: f64,
+    settings: &CameraInputSettings,
+) -> f64 {
+    let min_scale = settings.orbit_surface_min_scale.clamp(0.0, 1.0);
+    let exponent = settings.orbit_distance_curve_exponent.max(f64::EPSILON);
+    if !distance_m.is_finite() || !radius_m.is_finite() || radius_m <= 0.0 {
+        return 1.0;
+    }
+    let ratio = (radius_m / distance_m.max(radius_m)).clamp(0.0, 1.0);
+    let visible_horizon = (1.0 - ratio * ratio).max(0.0).sqrt();
+    min_scale + (1.0 - min_scale) * visible_horizon.powf(exponent)
+}
 
 fn freeflight_camera_added(mut world: DeferredWorld, context: HookContext) {
     let entity = context.entity;
@@ -93,7 +170,9 @@ impl Plugin for CameraRuntimePlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         register_camera_mode_hooks(app);
+        register_all_commands(app);
         app.init_resource::<CameraDefaults>()
+            .init_resource::<CameraInputSettings>()
             .register_type::<CameraRig>()
             .register_type::<CameraPoseLock>()
             .register_type::<CameraFollow>()
@@ -106,7 +185,9 @@ impl Plugin for CameraRuntimePlugin {
             .register_type::<OrbitCamera>()
             .register_type::<FreeFlightCamera>()
             .register_type::<SurfaceCamera>()
-            .register_type::<SurfaceCameraFrame>();
+            .register_type::<SurfaceCameraFrame>()
+            .register_type::<CameraInputSettings>();
+        app.register_settings_section::<CameraInputSettings>();
         app.add_systems(
             lunco_time::InteractionSchedule,
             (
@@ -119,6 +200,43 @@ impl Plugin for CameraRuntimePlugin {
         );
     }
 }
+
+#[cfg(test)]
+mod camera_input_tests {
+    use super::*;
+
+    #[test]
+    fn orbit_look_scale_is_continuous_monotonic_and_body_size_independent() {
+        let settings = CameraInputSettings::default();
+        let moon = 1_737_400.0;
+        let surface = body_orbit_look_scale(moon, moon, &settings);
+        let low = body_orbit_look_scale(moon + 100.0, moon, &settings);
+        let high = body_orbit_look_scale(moon + 100_000.0, moon, &settings);
+        let far = body_orbit_look_scale(moon * 100.0, moon, &settings);
+
+        assert_eq!(surface, settings.orbit_surface_min_scale);
+        assert!(
+            surface < low && low < high && high < far,
+            "{surface} {low} {high} {far}"
+        );
+        assert!(far < 1.0);
+
+        let same_ratio_on_earth = body_orbit_look_scale(6_378_137.0 * 2.0, 6_378_137.0, &settings);
+        let same_ratio_on_moon = body_orbit_look_scale(moon * 2.0, moon, &settings);
+        assert!((same_ratio_on_earth - same_ratio_on_moon).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn orbit_look_scale_honours_the_configured_surface_floor() {
+        let settings = CameraInputSettings {
+            orbit_surface_min_scale: 0.125,
+            ..default()
+        };
+        assert_eq!(body_orbit_look_scale(10.0, 10.0, &settings), 0.125);
+    }
+}
+
+register_commands!(on_set_camera_input);
 
 /// Preserve free-flight orientation when its parent frame changes.
 pub fn rebase_freeflight_state(
