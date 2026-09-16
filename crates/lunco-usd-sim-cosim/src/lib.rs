@@ -3545,7 +3545,6 @@ mod tests {
         copy_modelica_input_values, event_rising_edge, fire_connected_events, modelica_status,
         parse_event_severity, EventBinding,
     };
-    use lunco_usd_bevy_camera::camera_switch::CameraContractStatus;
 
     #[derive(Resource, Default)]
     struct WiringRuns(usize);
@@ -4281,11 +4280,6 @@ mod tests {
             .init_resource::<SceneTransitionCoordinator>()
             .init_resource::<PendingSceneStageOutcome>()
             .init_resource::<CompletedTransitions>()
-            .insert_resource(CameraContractStatus {
-                required: true,
-                ready: false,
-                errors: vec!["presentation is still being validated".to_owned()],
-            })
             .add_observer(on_scene_transition_completed)
             .add_observer(
                 |trigger: On<SceneTransitionCompleted>,

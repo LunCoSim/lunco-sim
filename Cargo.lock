@@ -9490,7 +9490,6 @@ dependencies = [
  "lunco-spatial",
  "lunco-time",
  "lunco-usd-avian-contracts",
- "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
