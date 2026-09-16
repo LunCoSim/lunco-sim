@@ -98,6 +98,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`58-vessel-envelope-and-routes.md`](58-vessel-envelope-and-routes.md) | Vehicle capability is **derived, not copied** — slip limit is `atan(μ)`, not a constant retyped into six files. HUD derivation and rhai accessors are built; routes and tiers are proposed |
 | [`60-curvature-elevation-and-gravity.md`](60-curvature-elevation-and-gravity.md) | **PLANNED.** The measured curvature-feather defect (the edge feather descends ABSOLUTE relief, so a 1 km site renders as kilometre-tall spikes) and the plan for radial gravity on curved ground |
 | [`61-scene-lifecycle-and-teardown.md`](61-scene-lifecycle-and-teardown.md) | **A scene owns more than its entities.** Entities die by structural tag (`CelestialDerived`); resources, caches and handles die in the `SceneTeardown` schedule — a schedule rather than a registry so the reset lives beside the code that writes the state. Remove vs restore, and why gravity is the restore case |
+| [`62-chrono-physics-backend.md`](62-chrono-physics-backend.md) | **Draft.** Optional native Chrono evaluation: mechanical ownership, cosim boundary, coordinates/time, web capability, and P0 evidence gate |
 
 ## Cross-cutting
 
