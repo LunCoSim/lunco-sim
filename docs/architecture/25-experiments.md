@@ -46,6 +46,10 @@ lunco-experiments/        (backend-agnostic)
   ExperimentRunner    (trait)
   events: RunRequested, RunProgress, RunCompleted, RunFailed
 
+lunco-experiments-ui/     (backend-agnostic view state)
+  ExperimentVisibility, PlotPanelStates, ActivePlot
+  ExperimentsViewModel and change-gated trajectory cache
+
 lunco-modelica-core/
   ModelicaRunner: ExperimentRunner
     cfg(target_arch="wasm32") -> WebWorkerTransport
@@ -62,6 +66,7 @@ lunco-twin/, lunco-twin-journal/      unchanged in v1
 lunco-cosim/                          unchanged (Interactive path)
 lunco-modelica-ui/                   Modelica experiment adapters and panel
 lunco-viz/                            Shared multi-series trajectory renderer
+lunco-viz-core/                       Render-free visualization identifiers
 ```
 
 `lunco-modelica-core` depends on `lunco-experiments`. `lunco-experiments` does not depend on `lunco-modelica-core` or `rumoca-*`.
@@ -212,6 +217,13 @@ live `LinePlot` kind. It owns legends, run/variable stroke styles, log-Y
 formatting, fit/reset, overlays, and scrub interaction. This keeps those UI
 semantics available to other experiment or co-simulation backends without
 making `lunco-viz` depend on Modelica.
+
+The shared selection state and trajectory cache live in
+`lunco-experiments-ui`. They are intentionally separate from the Modelica
+panel: Telemetry, Graphs, canvas snapshots, and future experiment backends
+can use the same state without making the reusable package depend on document
+resolution or Modelica setup. The host resolves its current document to a
+`TwinId` and calls the cache producer; the package never guesses that scope.
 
 ## Future enhancements
 

@@ -332,7 +332,7 @@ impl Panel for TelemetryPanel {
         // Filter input lives on ExperimentVisibility — same resource
         // that already holds `picked_vars`, no new state.
         let mut filter_text = ctx
-            .resource::<crate::ui::panels::experiments::ExperimentVisibility>()
+            .resource::<lunco_experiments_ui::ExperimentVisibility>()
             .map(|v| v.var_filter.clone())
             .unwrap_or_default();
         let mut filter_changed = false;
@@ -358,11 +358,9 @@ impl Panel for TelemetryPanel {
             }
         });
         if filter_changed {
-            ctx.resource_scope::<crate::ui::panels::experiments::ExperimentVisibility, _>(
-                |_, visibility| {
-                    visibility.var_filter = filter_text.clone();
-                },
-            );
+            ctx.resource_scope::<lunco_experiments_ui::ExperimentVisibility, _>(|_, visibility| {
+                visibility.var_filter = filter_text.clone();
+            });
         }
         let filter_lower = filter_text.to_ascii_lowercase();
 
@@ -370,7 +368,7 @@ impl Panel for TelemetryPanel {
         // plot tab. Default (None) = active plot (Dymola "current
         // window" behaviour). Snapshot the open plots up front; the
         // dropdown re-resolves on next frame after target changes.
-        let plot_options: Vec<(lunco_viz::viz::VizId, String)> = {
+        let plot_options: Vec<(lunco_viz::VizId, String)> = {
             let mut opts: Vec<_> = ctx
                 .resource::<lunco_viz::VisualizationRegistry>()
                 .map(|r| r.iter().map(|(id, cfg)| (*id, cfg.title.clone())).collect())
@@ -379,9 +377,9 @@ impl Panel for TelemetryPanel {
             opts
         };
         let pinned = ctx
-            .resource::<crate::ui::panels::experiments::ExperimentVisibility>()
+            .resource::<lunco_experiments_ui::ExperimentVisibility>()
             .and_then(|v| v.target_plot);
-        let mut new_target: Option<Option<lunco_viz::viz::VizId>> = None;
+        let mut new_target: Option<Option<lunco_viz::VizId>> = None;
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Plot:").size(11.0).color(muted));
             let label = match pinned {
@@ -412,11 +410,9 @@ impl Panel for TelemetryPanel {
                 });
         });
         if let Some(t) = new_target {
-            ctx.resource_scope::<crate::ui::panels::experiments::ExperimentVisibility, _>(
-                |_, visibility| {
-                    visibility.target_plot = t;
-                },
-            );
+            ctx.resource_scope::<lunco_experiments_ui::ExperimentVisibility, _>(|_, visibility| {
+                visibility.target_plot = t;
+            });
         }
 
         // Picked-for-experiments set, snapshotted once. Routes
@@ -424,10 +420,10 @@ impl Panel for TelemetryPanel {
         // else the active plot. Same VizId used for the toggle
         // writes below so reads and writes always agree.
         let active_plot = ctx
-            .resource::<crate::ui::panels::experiments::ActivePlot>()
+            .resource::<lunco_experiments_ui::ActivePlot>()
             .copied()
             .unwrap_or_default()
-            .or_default();
+            .or_default(crate::ui::viz::DEFAULT_MODELICA_GRAPH);
         let target_plot = pinned.unwrap_or(active_plot);
 
         // Variable-plot toggles collected while painting; the actual
@@ -472,7 +468,7 @@ impl Panel for TelemetryPanel {
                 };
 
                 let picked_exp: std::collections::BTreeSet<String> = ctx
-                    .resource::<crate::ui::panels::experiments::PlotPanelStates>()
+                    .resource::<lunco_experiments_ui::PlotPanelStates>()
                     .map(|s| s.picked(target_plot))
                     .unwrap_or_default();
 
@@ -596,13 +592,11 @@ impl Panel for TelemetryPanel {
                     }
                 }
             });
-            ctx.resource_scope::<crate::ui::panels::experiments::PlotPanelStates, _>(
-                |_, states| {
-                    for (name, on) in toggled {
-                        states.set_var(target_plot, name, on);
-                    }
-                },
-            );
+            ctx.resource_scope::<lunco_experiments_ui::PlotPanelStates, _>(|_, states| {
+                for (name, on) in toggled {
+                    states.set_var(target_plot, name, on);
+                }
+            });
         }
 
         // Auto-Fit button was here but moved to the Graphs panel's own

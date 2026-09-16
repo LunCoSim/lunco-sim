@@ -34,14 +34,14 @@ use lunco_workbench_core::PanelCtx;
 /// A line-plot toolbar edit requested by the panel's read-only paint pass.
 #[derive(Event)]
 pub(crate) struct LinePlotEditRequested {
-    pub(crate) viz: crate::viz::VizId,
+    pub(crate) viz: lunco_viz_core::VizId,
     edit: Edit,
 }
 
 /// A one-shot request to reset a plot's egui bounds on its next render.
 #[derive(Event, Clone, Copy)]
 pub(crate) struct LinePlotFitRequested {
-    pub(crate) viz: crate::viz::VizId,
+    pub(crate) viz: lunco_viz_core::VizId,
 }
 
 /// LinePlot-specific options stashed in
@@ -784,7 +784,7 @@ fn render_toolbar(
     edit
 }
 
-fn apply_edit(registry: &mut VisualizationRegistry, viz: crate::viz::VizId, edit: Edit) {
+fn apply_edit(registry: &mut VisualizationRegistry, viz: lunco_viz_core::VizId, edit: Edit) {
     let Some(cfg) = registry.get_mut(viz) else {
         return;
     };
@@ -915,7 +915,8 @@ mod tests {
 
     #[test]
     fn line_plot_style_round_trips_through_config_json() {
-        use crate::viz::{VisualizationConfig, VizId};
+        use crate::viz::VisualizationConfig;
+        use lunco_viz_core::VizId;
         let mut cfg = VisualizationConfig {
             id: VizId(42),
             title: "t".into(),

@@ -7557,6 +7557,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-experiments-ui"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-experiments",
+ "lunco-viz-core",
+]
+
+[[package]]
 name = "lunco-geotiff"
 version = "0.6.0-dev"
 dependencies = [
@@ -8265,6 +8274,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
+ "lunco-experiments-ui",
  "lunco-modelica-api",
  "lunco-modelica-assets",
  "lunco-modelica-ast",
@@ -9786,10 +9796,18 @@ dependencies = [
  "lunco-signal",
  "lunco-theme",
  "lunco-usd-bevy-scene",
+ "lunco-viz-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-viz-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

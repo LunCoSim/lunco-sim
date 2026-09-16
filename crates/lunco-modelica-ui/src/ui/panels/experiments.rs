@@ -16,11 +16,14 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
+use lunco_experiments_ui::{
+    ActivePlot, ExperimentVisibility, ExperimentsViewModel, PlotPanelStates,
+};
 use lunco_viz::multi_series_plot::{
     render_multi_series_plot, MultiSeriesLine, MultiSeriesOverlay, MultiSeriesPlotOptions,
     MultiSeriesStyle,
 };
-use lunco_viz::viz::VizId;
+use lunco_viz::VizId;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workbench_widgets::{icon_button, UiIcon};
 
@@ -108,209 +111,6 @@ pub(crate) fn on_set_experiment_run_target_requested(
     commands.queue(move |world: &mut World| {
         crate::sim_default::set_run_target_for_doc(world, doc, &class);
     });
-}
-
-/// UI-only state attached to the experiments panel that has no
-/// natural home on a per-plot basis: the variable-picker filter,
-/// inline-rename buffer, and the Telemetry "Plot in" router target.
-///
-/// Per-plot experiment visibility lives on [`PlotPanelState`] —
-/// each plot tab toggles its own checked runs, so switching tabs
-/// shows a different set of curves (OMEdit / Dymola-style "Plot
-/// Window" semantics).
-#[derive(Resource, Default, Debug)]
-pub struct ExperimentVisibility {
-    /// Free-text filter for the variable picker. Case-insensitive
-    /// substring match against the dotted variable path.
-    pub var_filter: String,
-    /// Inline-rename state. `Some((id, draft_text))` → row `id`
-    /// renders a `TextEdit` instead of a `Label`; `None` → all rows
-    /// show their name as a plain label. Committed on Enter or
-    /// focus-loss.
-    pub editing_name: Option<(ExperimentId, String)>,
-    /// Telemetry's "Plot in" router target. `None` ⇒ route to the
-    /// active plot (`ActivePlot::or_default()`); `Some(viz)` pins
-    /// Telemetry checkboxes to a specific plot tab regardless of
-    /// which one is focused. Mirrors Dymola's "current plot window"
-    /// pin.
-    pub target_plot: Option<VizId>,
-}
-
-/// Per-plot-panel state — picked variables, scrub cursor, and the
-/// set of experiments visible *in this plot*. Keyed by `VizId` so
-/// each plot tab maintains independent picks and run-visibility
-/// (OMEdit / Dymola treat each Plot Window as an independent view
-/// over the same result store).
-///
-/// `last_twin` lets the plot drop stale `picked_vars` /
-/// `visible_experiments` when the resolved document switches
-/// (different doc → different `TwinId` → different variable
-/// namespace + experiment ids). Without this, ids ticked while
-/// viewing doc A would linger as zombies after switching to doc B.
-#[derive(Default, Debug, Clone)]
-pub struct PlotPanelState {
-    pub picked_vars: std::collections::BTreeSet<String>,
-    pub scrub_time: Option<f64>,
-    pub visible_experiments: std::collections::HashSet<ExperimentId>,
-    pub last_twin: Option<lunco_experiments::TwinId>,
-    /// True once the plot has auto-promoted a run for this twin and
-    /// auto-picked its top dynamic vars. Gates the one-time variable
-    /// auto-pick so clearing picks later doesn't re-fire it.
-    pub auto_show_attempted: bool,
-    /// Run ids this plot has already auto-shown (made visible without
-    /// the user ticking 👁). Every completed run auto-plots exactly
-    /// once; recording it here means a later un-tick sticks instead of
-    /// being re-promoted next frame.
-    pub auto_shown: std::collections::HashSet<ExperimentId>,
-    /// Plot the Y axis on a log10 scale for this plot tab. Per-VizId so
-    /// each plot window chooses independently; survives like the rest
-    /// of the per-plot state.
-    pub log_y: bool,
-    /// True once the user has manually toggled `log_y`. Suppresses the
-    /// auto-log-Y default (which kicks in on mixed-unit / wide-magnitude
-    /// plots) so we never fight an explicit choice in either direction.
-    pub log_y_user_set: bool,
-    /// Comparison mode for the curve palette. `false` (default) →
-    /// colour encodes the *variable* and line-style encodes the *run*
-    /// (good for tracking one variable across sweeps). `true` → colour
-    /// encodes the *run* and line-style encodes the *variable* (good
-    /// for comparing the same variable across many runs, where the
-    /// dash-only distinction is unreadable past ~3 runs).
-    pub color_by_run: bool,
-}
-
-#[derive(Resource, Default, Debug)]
-pub struct PlotPanelStates {
-    pub by_viz: std::collections::HashMap<VizId, PlotPanelState>,
-    /// Archived per-(viz, twin) state. When a plot's resolved twin
-    /// changes (user switches to a tab backed by a different model),
-    /// the live entry's prior state is stashed here keyed by the
-    /// previous twin; returning to that twin restores the picks /
-    /// run-visibility / scrub. Without this archive, switching tabs
-    /// would discard the prior plot's curve selections entirely.
-    archived: std::collections::HashMap<(VizId, lunco_experiments::TwinId), PlotPanelState>,
-}
-
-impl PlotPanelStates {
-    pub fn get(&self, viz: VizId) -> Option<&PlotPanelState> {
-        self.by_viz.get(&viz)
-    }
-    pub fn entry(&mut self, viz: VizId) -> &mut PlotPanelState {
-        self.by_viz.entry(viz).or_default()
-    }
-    pub fn picked(&self, viz: VizId) -> std::collections::BTreeSet<String> {
-        self.by_viz
-            .get(&viz)
-            .map(|s| s.picked_vars.clone())
-            .unwrap_or_default()
-    }
-    pub fn scrub(&self, viz: VizId) -> Option<f64> {
-        self.by_viz.get(&viz).and_then(|s| s.scrub_time)
-    }
-    pub fn toggle_var(&mut self, viz: VizId, var: String) {
-        let s = self.entry(viz);
-        if !s.picked_vars.insert(var.clone()) {
-            s.picked_vars.remove(&var);
-        }
-    }
-    pub fn set_var(&mut self, viz: VizId, var: String, on: bool) {
-        let s = self.entry(viz);
-        if on {
-            s.picked_vars.insert(var);
-        } else {
-            s.picked_vars.remove(&var);
-        }
-    }
-    pub fn set_scrub(&mut self, viz: VizId, t: Option<f64>) {
-        self.entry(viz).scrub_time = t;
-    }
-    pub fn visible(&self, viz: VizId) -> std::collections::HashSet<ExperimentId> {
-        self.by_viz
-            .get(&viz)
-            .map(|s| s.visible_experiments.clone())
-            .unwrap_or_default()
-    }
-    pub fn is_visible(&self, viz: VizId, id: ExperimentId) -> bool {
-        self.by_viz
-            .get(&viz)
-            .is_some_and(|s| s.visible_experiments.contains(&id))
-    }
-    pub fn toggle_visible(&mut self, viz: VizId, id: ExperimentId) {
-        let s = self.entry(viz);
-        if !s.visible_experiments.insert(id) {
-            s.visible_experiments.remove(&id);
-        }
-    }
-    pub fn set_visible(&mut self, viz: VizId, id: ExperimentId, on: bool) {
-        let s = self.entry(viz);
-        if on {
-            s.visible_experiments.insert(id);
-        } else {
-            s.visible_experiments.remove(&id);
-        }
-    }
-    /// Remove this experiment id from every plot's visibility set.
-    /// Called when a run is deleted from the registry so stale ids
-    /// don't linger.
-    pub fn forget_experiment(&mut self, id: ExperimentId) {
-        for s in self.by_viz.values_mut() {
-            s.visible_experiments.remove(&id);
-            s.auto_shown.remove(&id);
-        }
-        for s in self.archived.values_mut() {
-            s.visible_experiments.remove(&id);
-            s.auto_shown.remove(&id);
-        }
-    }
-
-    /// Swap the live entry for `viz` to match `twin`, archiving any
-    /// non-empty state from the previous twin and restoring a prior
-    /// stash for `twin` if one exists. Idempotent when the twin is
-    /// already current. Called at the top of `render_experiments_plot`
-    /// each frame.
-    pub fn sync_twin(&mut self, viz: VizId, twin: &lunco_experiments::TwinId) {
-        let needs_swap = match self.by_viz.get(&viz) {
-            Some(s) => s.last_twin.as_ref() != Some(twin),
-            None => true,
-        };
-        if !needs_swap {
-            return;
-        }
-        if let Some(prev) = self.by_viz.remove(&viz) {
-            if let Some(prev_twin) = prev.last_twin.clone() {
-                let worth_keeping = !prev.picked_vars.is_empty()
-                    || !prev.visible_experiments.is_empty()
-                    || prev.scrub_time.is_some();
-                if worth_keeping {
-                    self.archived.insert((viz, prev_twin), prev);
-                }
-            }
-        }
-        let mut restored = self
-            .archived
-            .remove(&(viz, twin.clone()))
-            .unwrap_or_else(|| {
-                let mut state = PlotPanelState::default();
-                // Live run visible by default — matches the dedicated
-                // LinePlot behavior (live signals show until hidden).
-                state.visible_experiments.insert(ExperimentId::live());
-                state
-            });
-        restored.last_twin = Some(twin.clone());
-        self.by_viz.insert(viz, restored);
-    }
-}
-
-/// Most-recently-rendered plot panel. Used by canvas overlay /
-/// telemetry / runner so global readers can pick a sensible default
-/// plot when they need per-plot state. Updated on every plot render.
-#[derive(Resource, Default, Debug, Copy, Clone)]
-pub struct ActivePlot(pub Option<VizId>);
-
-impl ActivePlot {
-    pub fn or_default(self) -> VizId {
-        self.0.unwrap_or(crate::ui::viz::DEFAULT_MODELICA_GRAPH)
-    }
 }
 
 pub struct ExperimentsPanel;
@@ -610,7 +410,7 @@ impl Panel for ExperimentsPanel {
                                 .resource::<ActivePlot>()
                                 .copied()
                                 .unwrap_or_default()
-                                .or_default()
+                                .or_default(crate::ui::viz::DEFAULT_MODELICA_GRAPH)
                         })
                     };
                     let visibility_snapshot: std::collections::HashSet<ExperimentId> = ctx
@@ -853,7 +653,7 @@ impl Panel for ExperimentsPanel {
                         .resource::<ActivePlot>()
                         .copied()
                         .unwrap_or_default()
-                        .or_default()
+                        .or_default(crate::ui::viz::DEFAULT_MODELICA_GRAPH)
                 })
             };
             ctx.resource_scope::<PlotPanelStates, _>(|_, states| {
@@ -1718,141 +1518,11 @@ fn parse_override(type_name: &str, text: &str) -> Option<lunco_experiments::Para
     }
 }
 
-/// Change-gated view-model for the experiments plot (CQ-207).
-///
-/// The plot used to **re-zip every run's `times`×`values` columns into a
-/// fresh `Vec<[f64;2]>` every frame** (once to build the series, again at
-/// render), and re-walk the registry to collect the variable catalog —
-/// all per frame, for every visible run × picked variable. None of that
-/// depends on the per-frame UI state (which runs are visible, which vars
-/// are picked, colours); only *which* precomputed series to draw does.
-///
-/// [`populate_experiments_view_model`] builds the shared `Arc<[[f64;2]]>`
-/// point arrays (keyed by run + variable) and the variable catalog once
-/// per registry change; the plot then assembles its per-frame series by
-/// cloning `Arc`s (pointer bumps) and reads the catalog directly.
-#[derive(Resource, Default)]
-pub struct ExperimentsViewModel {
-    /// `(twin, content signature, run count)` the cache was built for. The
-    /// signature is a collision-resistant hash fold over each run's id,
-    /// status, and per-variable sample shape (see
-    /// [`populate_experiments_view_model`]); a changed signature re-derives,
-    /// an unchanged one skips the whole rebuild.
-    built_for: Option<(lunco_experiments::TwinId, u64, u64)>,
-    /// Shared time-value samples per `(run, variable)`.
-    points: std::collections::HashMap<
-        (lunco_experiments::ExperimentId, String),
-        std::sync::Arc<Vec<[f64; 2]>>,
-    >,
-    /// Every variable name across the twin's runs (the picker catalog).
-    all_vars: std::collections::BTreeSet<String>,
-}
-
-/// Producer for [`ExperimentsViewModel`]. Runs in `Update` before the
-/// egui pass; rebuilds only when the active twin's run set or sample
-/// totals change. Exclusive because it resolves the active doc/twin from
-/// several resources.
+/// Host adapter for the shared experiment trajectory cache.
 pub fn populate_experiments_view_model(world: &mut World) {
-    let clear = |world: &mut World| {
-        let mut vm = world.resource_mut::<ExperimentsViewModel>();
-        if vm.built_for.is_some() {
-            vm.built_for = None;
-            vm.points.clear();
-            vm.all_vars.clear();
-        }
-    };
-
-    let Some(doc_id) = crate::ui::doc_pin::resolved_experiments_doc(world) else {
-        clear(world);
-        return;
-    };
-    let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
-
-    let (sig, run_count) = {
-        use lunco_experiments::RunStatus;
-        use std::hash::{Hash, Hasher};
-        let Some(reg) = world.get_resource::<ExperimentRegistry>() else {
-            clear(world);
-            return;
-        };
-        let runs = reg.list_for_twin(&twin);
-        // Collision-resistant signature: a *summed* sample count collides
-        // trivially (a run that gains one variable and loses one time-sample,
-        // or any in-place result swap preserving the totals, leaves the sum
-        // unchanged — the cache then never rebuilds and the plot draws a stale
-        // trajectory). Fold per run: id + status (incl. `wall_time_ms` /
-        // `t_current`, so a same-shape re-run still re-derives) + `times.len()`
-        // + each `(variable, len)`. `RunStatus`/`f64` aren't `Hash`, hence the
-        // manual discriminant.
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        for e in runs.iter() {
-            e.id.hash(&mut h);
-            match &e.status {
-                RunStatus::Pending => 0u8.hash(&mut h),
-                RunStatus::Queued => 1u8.hash(&mut h),
-                RunStatus::Running { t_current } => {
-                    2u8.hash(&mut h);
-                    t_current.to_bits().hash(&mut h);
-                }
-                RunStatus::Done { wall_time_ms } => {
-                    3u8.hash(&mut h);
-                    wall_time_ms.hash(&mut h);
-                }
-                RunStatus::Failed { error, partial } => {
-                    4u8.hash(&mut h);
-                    error.hash(&mut h);
-                    partial.hash(&mut h);
-                }
-                RunStatus::Cancelled => 5u8.hash(&mut h),
-            }
-            match &e.result {
-                Some(r) => {
-                    r.times.len().hash(&mut h);
-                    for (var, vals) in &r.series {
-                        var.hash(&mut h);
-                        vals.len().hash(&mut h);
-                    }
-                }
-                None => usize::MAX.hash(&mut h),
-            }
-        }
-        (h.finish(), runs.len() as u64)
-    };
-
-    let key = (twin.clone(), sig, run_count);
-    if world.resource::<ExperimentsViewModel>().built_for.as_ref() == Some(&key) {
-        return; // run set + sample totals unchanged — skip the re-zip.
-    }
-
-    let (points, all_vars) = {
-        let reg = world.resource::<ExperimentRegistry>();
-        let mut points: std::collections::HashMap<
-            (lunco_experiments::ExperimentId, String),
-            std::sync::Arc<Vec<[f64; 2]>>,
-        > = std::collections::HashMap::new();
-        let mut all_vars: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for exp in reg.list_for_twin(&twin) {
-            let Some(result) = &exp.result else { continue };
-            for (var, values) in &result.series {
-                all_vars.insert(var.clone());
-                let pts = std::sync::Arc::new(
-                    result
-                        .times
-                        .iter()
-                        .zip(values.iter())
-                        .map(|(t, y)| [*t, *y])
-                        .collect(),
-                );
-                points.insert((exp.id, var.clone()), pts);
-            }
-        }
-        (points, all_vars)
-    };
-
-    let mut vm = world.resource_mut::<ExperimentsViewModel>();
-    vm.points = points;
-    vm.all_vars = all_vars;
-    vm.built_for = Some(key);
+    let twin = crate::ui::doc_pin::resolved_experiments_doc(world)
+        .map(crate::ui::doc_pin::twin_id_for_doc);
+    lunco_experiments_ui::populate_experiments_view_model(world, twin.as_ref());
 }
 
 /// Render the experiments multi-series plot. Picker lives in
@@ -1984,9 +1654,7 @@ fn render_experiments_plot_inner(
                     // Shared samples are precomputed in `ExperimentsViewModel`
                     // (CQ-207) — a pointer-bump clone, not a per-frame re-zip.
                     // Absence means this run has no data for `var`.
-                    let Some(pts) =
-                        exp_vm.and_then(|vm| vm.points.get(&(exp.id, var.clone())).cloned())
-                    else {
+                    let Some(pts) = exp_vm.and_then(|vm| vm.points_for(exp.id, var)) else {
                         continue;
                     };
                     let unit = units.get(var).cloned();
@@ -2054,7 +1722,7 @@ fn render_experiments_plot_inner(
         // the picker's mutations below.
         let all_vars: std::collections::BTreeSet<String> = ctx
             .resource::<ExperimentsViewModel>()
-            .map(|vm| vm.all_vars.clone())
+            .map(ExperimentsViewModel::variables)
             .unwrap_or_default();
         // Variable picker — a compact Dymola / OMEdit-style component tree
         // in a persistent popup. Variables group by their first dotted

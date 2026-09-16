@@ -26,6 +26,7 @@ ui = [
     "dep:lunco-modelica-icon-ui",
     "dep:lunco-modelica-docs-ui",
     "dep:lunco-modelica-api",
+    "dep:lunco-experiments-ui",
     # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
     # needs the winit backend (no longer in the workspace bevy default).
     "bevy/bevy_winit", "bevy/bevy_window", "bevy/x11", "bevy/wayland",
@@ -131,6 +132,7 @@ lunco-storage = { path = "../lunco-storage" }
 # "time not implemented on this platform" on wasm32-unknown-unknown.
 web-time = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
+lunco-experiments-ui = { path = "../lunco-experiments-ui", optional = true }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rumoca-compile = { workspace = true }
 # Modelica formatter — surfaced as a "Format" toolbar button +

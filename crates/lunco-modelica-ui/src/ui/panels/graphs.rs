@@ -24,14 +24,13 @@
 //! a follow-up; the live-signal split (the more impactful one) is in
 //! place.
 
-use crate::ui::panels::experiments::PlotPanelStates;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_experiments::{ExperimentId, ExperimentRegistry};
 use lunco_modelica_ui_core::MODELICA_PLOT_KIND_ID;
 use lunco_viz::{
-    kinds::line_plot::LinePlot, view::Panel2DCtx, viz::VizId, SignalRegistry,
-    VisualizationRegistry, VizFitRequests,
+    kinds::line_plot::LinePlot, view::Panel2DCtx, SignalRegistry, VisualizationRegistry,
+    VizFitRequests, VizId,
 };
 use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 
@@ -121,7 +120,7 @@ fn render_modelica_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
     // (this panel never reads ActivePlot back this frame), so it is
     let panel_rect = ui.max_rect();
     let hovered_here = ui.rect_contains_pointer(panel_rect);
-    let _ = ctx.resource_scope::<crate::ui::panels::experiments::ActivePlot, _>(|_, active| {
+    let _ = ctx.resource_scope::<lunco_experiments_ui::ActivePlot, _>(|_, active| {
         if active.0.is_none() || hovered_here {
             active.0 = Some(viz_id);
         }
@@ -336,7 +335,7 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
                 // If "Interactive Live" is hidden in experiments, skip live
                 // signals if they are Modelica signals.
                 let show_live = world
-                    .get_resource::<PlotPanelStates>()
+                    .get_resource::<lunco_experiments_ui::PlotPanelStates>()
                     .map(|s| s.is_visible(viz_id, ExperimentId::live()))
                     .unwrap_or(true);
 
@@ -375,7 +374,7 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
     // 2. Collect visible experiment curves
     {
         let reg = world.get_resource::<ExperimentRegistry>();
-        let states = world.get_resource::<PlotPanelStates>();
+        let states = world.get_resource::<lunco_experiments_ui::PlotPanelStates>();
         if let (Some(reg), Some(states)) = (reg, states) {
             let visible = states.visible(viz_id);
             let picked = states.picked(viz_id);

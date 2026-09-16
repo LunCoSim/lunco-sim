@@ -2217,9 +2217,7 @@ pub(crate) fn purge_experiment_side_state(
             sources.0.remove(id);
         }
     }
-    if let Some(mut states) =
-        world.get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
-    {
+    if let Some(mut states) = world.get_resource_mut::<lunco_experiments_ui::PlotPanelStates>() {
         for id in removed {
             states.forget_experiment(*id);
         }

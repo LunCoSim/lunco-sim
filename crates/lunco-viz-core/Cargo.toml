@@ -1,0 +1,12 @@
+[package]
+name = "lunco-viz-core"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Render-free visualization identifiers shared by visualization adapters"
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

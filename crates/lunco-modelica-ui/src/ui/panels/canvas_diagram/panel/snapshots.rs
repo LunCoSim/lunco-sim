@@ -233,11 +233,11 @@ fn seed_state_from_latest_experiment(
     use lunco_experiments::ExperimentRegistry;
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
     let active_plot = ctx
-        .resource::<crate::ui::panels::experiments::ActivePlot>()
+        .resource::<lunco_experiments_ui::ActivePlot>()
         .copied()
         .unwrap_or_default()
-        .or_default();
-    let plot_states = ctx.resource::<crate::ui::panels::experiments::PlotPanelStates>();
+        .or_default(crate::ui::viz::DEFAULT_MODELICA_GRAPH);
+    let plot_states = ctx.resource::<lunco_experiments_ui::PlotPanelStates>();
     let visible_in_active = plot_states.map(|s| s.visible(active_plot));
     let Some(registry) = ctx.resource::<ExperimentRegistry>() else {
         return;

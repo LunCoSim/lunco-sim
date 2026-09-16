@@ -1167,7 +1167,7 @@ pub fn drain_pending_tab_closes(
             commands.queue(move |world: &mut World| {
                 if let Some(mut reg) = world.get_resource_mut::<lunco_viz::VisualizationRegistry>()
                 {
-                    reg.remove(lunco_viz::viz::VizId(instance));
+                    reg.remove(lunco_viz::VizId(instance));
                 }
             });
             continue;

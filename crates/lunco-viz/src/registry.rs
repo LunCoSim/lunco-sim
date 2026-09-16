@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 
-use crate::viz::{Visualization, VisualizationConfig, VizId, VizKindId};
+use crate::viz::{Visualization, VisualizationConfig, VizKindId};
+use lunco_viz_core::VizId;
 
 /// Live instance map: one entry per open visualization.
 #[derive(Resource, Default)]
