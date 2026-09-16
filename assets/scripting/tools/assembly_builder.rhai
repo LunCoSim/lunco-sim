@@ -1547,6 +1547,15 @@ fn bundle_geometry_plan(edit_target, parent, shape) {
             edit_target: edit_target, path: path, name: "height",
             type_name: "double", value: shape.height.to_string(),
         }});
+        // UsdGeomCylinder/UsdGeomCone require an authored extent whenever
+        // dimensions are authored.  `extent` is intentionally float3[] at
+        // the USD/render boundary; radius and height remain double above.
+        let axis = if shape.axis == () { "Z" } else { shape.axis };
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "extent",
+            type_name: "float3[]",
+            value: _cylinder_extent_literal(shape.radius, shape.height, axis),
+        }});
     }
     if shape.axis != () {
         ops.push(#{ SetAttribute: #{
@@ -1816,7 +1825,7 @@ fn component_bundle_update_plan(doc, edit_target, path, bundle, bindings) {
         let record = query("QueryUsdPrim", #{
             doc_id: doc,
             path: shape_path,
-            attrs: ["size", "radius", "height", "axis",
+            attrs: ["size", "radius", "height", "axis", "extent",
                 "physics:collisionEnabled", "visibility", "xformOp:translate",
                 "xformOp:rotateXYZ", "xformOp:scale"],
             rels: ["material:binding"],
@@ -1848,12 +1857,14 @@ fn component_bundle_update_plan(doc, edit_target, path, bundle, bindings) {
         let transform_ops = bundle_transform_update_ops(edit_target, shape_path, record,
             shape.translation, shape.rotation, shape.scale);
         for op in transform_ops { ops.push(op); }
+        let dimensions_changed = false;
         if shape.kind == "Cube" {
             if !bundle_value_matches(record.attrs["size"], shape.size) {
                 ops.push(#{ SetAttribute: #{
                     edit_target: edit_target, path: shape_path, name: "size",
                     type_name: "double", value: shape.size.to_string(),
                 }});
+                dimensions_changed = true;
             }
         } else {
             if !bundle_value_matches(record.attrs["radius"], shape.radius) {
@@ -1861,18 +1872,30 @@ fn component_bundle_update_plan(doc, edit_target, path, bundle, bindings) {
                     edit_target: edit_target, path: shape_path, name: "radius",
                     type_name: "double", value: shape.radius.to_string(),
                 }});
+                dimensions_changed = true;
             }
             if !bundle_value_matches(record.attrs["height"], shape.height) {
                 ops.push(#{ SetAttribute: #{
                     edit_target: edit_target, path: shape_path, name: "height",
                     type_name: "double", value: shape.height.to_string(),
                 }});
+                dimensions_changed = true;
             }
         }
+        let axis_changed = false;
         if shape.axis != () && !bundle_value_matches(record.attrs["axis"], shape.axis) {
             ops.push(#{ SetAttribute: #{
                 edit_target: edit_target, path: shape_path, name: "axis",
                 type_name: "token", value: bundle_token_literal(shape.axis),
+            }});
+            axis_changed = true;
+        }
+        if shape.kind != "Cube" && (dimensions_changed || axis_changed) {
+            let axis = if shape.axis == () { "Z" } else { shape.axis };
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: shape_path, name: "extent",
+                type_name: "float3[]",
+                value: _cylinder_extent_literal(shape.radius, shape.height, axis),
             }});
         }
     }
