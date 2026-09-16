@@ -99,7 +99,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, and environment-camera binding. It is independent from the visual mesh projector. |
 | **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `lunco-usd-bevy-runtime`; kept separate from the visual projector. |
 | **`lunco-usd-avian-filters`** | Render-free USD/Avian collision-filter boundary: interprets standard `PhysicsFilteredPairsAPI` and `PhysicsCollisionGroup`, owns transient joint-pair suppression, and installs the single Avian collision/contact hook. |
-| **`lunco-usd-avian`** | Physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. It consumes the independent collision-filter package; lint fact production is in `lunco-usd-avian-lint`. |
+| **`lunco-usd-avian`** | Physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. Its USD physics-material reader is isolated from the main projection module. It consumes the independent collision-filter package; lint fact production is in `lunco-usd-avian-lint`. |
 | **`lunco-usd-actuation`** | Render-free composed USD force/torque actuator reader. It converts authored actuator geometry and limits into generic co-simulation components without depending on the Avian runtime projection. |
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It publishes authored avatar identity/intent handoff only; it has no camera-mode realization or raw input dependency. It no longer installs the heavy USD cosim translator. |
@@ -566,7 +566,9 @@ Avian joint construction (including the programmatic wheel hinge). It consumes
 the separate Avian/BigSpace core bridge. Runtime-only; its Rust tests cover
 low-level mechanics with in-memory USDA fixtures, while shipped asset/runtime
 assertions are owned by the Rhai scene-test gate. Lint fact extraction is
-isolated in `lunco-usd-avian-lint`.
+isolated in `lunco-usd-avian-lint`. USD physics-material decoding is kept in a
+separate internal module so changes to surface mapping do not enlarge the root
+projection module.
 
 **`lunco-usd-avian-lint`**
 Render-free composed-`UsdPhysics` fact producer for the authored Rhai lint
