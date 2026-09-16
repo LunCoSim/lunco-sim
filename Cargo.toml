@@ -125,6 +125,8 @@ members = [
     "crates/lunco-tools-bevy",
     "crates/lunco-hooks",
     "crates/lunco-hooks-rhai",
+    "crates/lunco-hooks-plugin-api",
+    "crates/lunco-hooks-native",
     "crates/lunco-workbench",
     "crates/lunco-workbench-browser",
     "crates/lunco-workbench-datasets-ui",

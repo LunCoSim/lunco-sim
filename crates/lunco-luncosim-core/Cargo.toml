@@ -97,6 +97,7 @@ networking = [
 ]
 net-diag = ["networking", "lunco-networking/net-diag"]
 python = ["lunco-scripting/python", "lunco-usd-sim-cosim/python"]
+native-plugins = ["lunco-scripting/native-plugins"]
 sysml = ["dep:lunco-sysml"]
 
 [lints]

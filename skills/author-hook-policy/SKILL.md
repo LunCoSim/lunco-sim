@@ -25,6 +25,9 @@ Rhai test.
 - [`AGENTS.md`](../../AGENTS.md) for ownership, failure, asset, and test rules.
 - [`hook-policies.md`](../../docs/architecture/hook-policies.md) for the
   active hook contract.
+- [`native-hook-providers.md`](../../docs/architecture/native-hook-providers.md)
+  when a trusted native implementation or an expensive domain kernel is under
+  consideration.
 - [`rust-rhai-modelica-boundary`](../rust-rhai-modelica-boundary/SKILL.md) when
   deciding whether the seam belongs in Rust, Rhai, USD, or Modelica.
 - [`validate-assets`](../validate-assets/SKILL.md) for authored production
@@ -85,6 +88,14 @@ Inline `bind_policy(id, entry, source)` is useful for a local non-deterministic
 experiment. It must not claim a deterministic contract. Use `unbind_policy`
 to remove exactly that implementation; reloading the authored manifest is the
 explicit operation that installs the authored policy again.
+
+For a trusted native implementation, add an explicit `[[native_plugins]]`
+entry to the Twin manifest. The provider must implement an existing reflected
+installable hook and return the declared typed result through the native ABI;
+it does not declare a second hook list or mutate the owner's ECS/USD state.
+Use a native provider for expensive or platform-specific computation, not for
+changeable product policy. An eventual terrain provider belongs at the
+consumed `lunco-terrain-bake` boundary.
 
 ## Inspect and test
 

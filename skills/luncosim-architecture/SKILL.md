@@ -54,6 +54,24 @@ dependency cycle, put the provider in a small `*-api` adapter crate and have
 each API-capable composition root install it explicitly. Keep the data/core
 crate independent of transport and presentation layers.
 
+For dynamic providers, keep `lunco-hooks` as the single reflected contract and
+invocation owner. `lunco-hooks-plugin-api` owns only the stable edition-2024
+ABI and typed wire helpers; `lunco-hooks-native` owns `libloading`, unsafe
+admission, callback limits, and exact-registration teardown. Enable that path
+only from an application composition feature. A Twin must explicitly approve a
+provider with a Twin-relative `[[native_plugins]]` manifest entry; USD and Rhai
+source do not load shared libraries. Native code is trusted process code, so
+untrusted bundles require deployment-level signature and isolation controls.
+
+A provider may implement only an existing reflected, installable hook and must
+return typed data or a validated action plan. It must not mutate ECS/USD or add
+a second domain registry. The owner invokes it through `lunco_hooks::invoke`,
+validates the result, and reports a fault or unconfigured state according to
+the hook contract. Put an eventual expensive terrain provider at the consumed
+`lunco-terrain-bake` kernel boundary; keep `lunco-terrain-core` projection-free
+and leave `lunco-terrain-surface` as the runtime projection owner. See
+[`native-hook-providers.md`](../../docs/architecture/native-hook-providers.md).
+
 Keep the workbench split at the dependency boundary: `lunco-workbench-core`
 owns renderer-independent panel/menu/perspective/registration contracts, tab
 navigation, source-view commands, scene display state, pending tab-close state,

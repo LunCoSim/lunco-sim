@@ -166,6 +166,7 @@ fn lifecycle_status_dynamic(status: &crate::policy::LifecyclePolicyReport) -> Dy
 fn policy_status_dynamic(
     status: &crate::policy::PolicyLoadReport,
     lifecycle: &crate::policy::LifecyclePolicyReport,
+    native_plugins: Dynamic,
 ) -> Dynamic {
     let strings = |values: &[String]| {
         RhaiBuilder.array(
@@ -193,7 +194,43 @@ fn policy_status_dynamic(
                 .unwrap_or(Dynamic::UNIT),
         ),
         ("lifecycle".into(), lifecycle_status_dynamic(lifecycle)),
+        ("native_plugins".into(), native_plugins),
     ])
+}
+
+fn empty_native_plugins_status_dynamic() -> Dynamic {
+    RhaiBuilder.map(vec![
+        ("loaded".into(), RhaiBuilder.array(Vec::new())),
+        ("failed".into(), RhaiBuilder.array(Vec::new())),
+    ])
+}
+
+#[cfg(feature = "native-plugins")]
+fn native_plugins_status_dynamic(world: &World) -> Dynamic {
+    let Some(plugins) = world.get_resource::<crate::native_plugins::NativeTwinPlugins>() else {
+        return empty_native_plugins_status_dynamic();
+    };
+    let loaded = RhaiBuilder.array(
+        plugins
+            .loaded
+            .iter()
+            .map(|plugin| Dynamic::from(plugin.id().to_owned()))
+            .collect::<Vec<_>>(),
+    );
+    let failed = RhaiBuilder.array(
+        plugins
+            .failed
+            .iter()
+            .cloned()
+            .map(Dynamic::from)
+            .collect::<Vec<_>>(),
+    );
+    RhaiBuilder.map(vec![("loaded".into(), loaded), ("failed".into(), failed)])
+}
+
+#[cfg(not(feature = "native-plugins"))]
+fn native_plugins_status_dynamic(_world: &World) -> Dynamic {
+    empty_native_plugins_status_dynamic()
 }
 
 fn lifecycle_status_json(status: &crate::policy::LifecyclePolicyReport) -> serde_json::Value {
@@ -213,6 +250,22 @@ fn lifecycle_status_json(status: &crate::policy::LifecyclePolicyReport) -> serde
     })
 }
 
+#[cfg(feature = "native-plugins")]
+fn native_plugins_status_json(world: &World) -> serde_json::Value {
+    let Some(plugins) = world.get_resource::<crate::native_plugins::NativeTwinPlugins>() else {
+        return serde_json::json!({ "loaded": [], "failed": [] });
+    };
+    serde_json::json!({
+        "loaded": plugins.loaded.iter().map(|plugin| plugin.id()).collect::<Vec<_>>(),
+        "failed": &plugins.failed,
+    })
+}
+
+#[cfg(not(feature = "native-plugins"))]
+fn native_plugins_status_json(_world: &World) -> serde_json::Value {
+    serde_json::json!({ "loaded": [], "failed": [] })
+}
+
 /// JSON discovery view of the last authored application/Twin policy load.
 ///
 /// The runtime hook ABI remains native; this helper is only for the
@@ -227,6 +280,7 @@ pub fn policy_status_json(world: &World) -> serde_json::Value {
             "required_failures": [],
             "error": null,
             "lifecycle": lifecycle_status_json(&Default::default()),
+            "native_plugins": native_plugins_status_json(world),
         });
     };
     let status = &registry.status;
@@ -237,6 +291,7 @@ pub fn policy_status_json(world: &World) -> serde_json::Value {
         "required_failures": status.required_failures,
         "error": status.error,
         "lifecycle": lifecycle_status_json(&registry.lifecycle),
+        "native_plugins": native_plugins_status_json(world),
     })
 }
 
@@ -1311,20 +1366,27 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     });
 
     // policy_status() -> #{scope, installed, failed, required_failures, error,
-    // lifecycle}.
+    // lifecycle, native_plugins}.
     // Loading errors belong to the policy loader, not to an individual hook
     // row, so expose the last startup/Twin transition report separately.
     engine.register_fn("policy_status", || -> Dynamic {
         bridge_core::with_world(|world| {
             world
                 .get_resource::<crate::policy::ScriptedPolicyRegistry>()
-                .map(|registry| policy_status_dynamic(&registry.status, &registry.lifecycle))
+                .map(|registry| {
+                    policy_status_dynamic(
+                        &registry.status,
+                        &registry.lifecycle,
+                        native_plugins_status_dynamic(world),
+                    )
+                })
         })
         .flatten()
         .unwrap_or_else(|| {
             policy_status_dynamic(
                 &crate::policy::PolicyLoadReport::default(),
                 &crate::policy::LifecyclePolicyReport::default(),
+                empty_native_plugins_status_dynamic(),
             )
         })
     });

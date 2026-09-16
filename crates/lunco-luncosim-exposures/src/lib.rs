@@ -191,6 +191,13 @@ fn hook_value_to_exposure(
             );
             None
         }
+        HookValue::Bytes(_) => {
+            warn!(
+                surface_id,
+                property, "[runtime-ui] ignored binary policy value"
+            );
+            None
+        }
         HookValue::Array(values) => Some(ExposureValue::Array(
             values
                 .into_iter()

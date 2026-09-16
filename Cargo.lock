@@ -7569,6 +7569,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-hooks-native"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "lunco-hooks",
+ "lunco-hooks-plugin-api",
+]
+
+[[package]]
+name = "lunco-hooks-plugin-api"
+version = "0.1.0"
+dependencies = [
+ "lunco-hooks",
+]
+
+[[package]]
 name = "lunco-hooks-rhai"
 version = "0.1.0"
 dependencies = [
@@ -8651,6 +8667,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-hash",
  "lunco-hooks",
+ "lunco-hooks-native",
  "lunco-hooks-rhai",
  "lunco-input-core",
  "lunco-physics",

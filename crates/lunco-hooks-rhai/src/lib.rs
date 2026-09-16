@@ -220,6 +220,7 @@ pub fn hook_to_dynamic(v: &HookValue) -> Dynamic {
             }
             Dynamic::from_map(map)
         }
+        HookValue::Bytes(bytes) => Dynamic::from_blob(bytes.clone()),
     }
 }
 
@@ -246,6 +247,8 @@ fn dynamic_to_hook(d: &Dynamic) -> HookResult {
             .into_string()
             .map(HookValue::Str)
             .map_err(|error| HookError(format!("failed to read Rhai string: {error}")))
+    } else if d.is_blob() {
+        Ok(HookValue::Bytes(d.clone().cast::<rhai::Blob>()))
     } else if d.is_array() {
         let arr = d.clone().cast::<rhai::Array>();
         arr.iter()

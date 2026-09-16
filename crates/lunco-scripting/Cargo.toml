@@ -67,6 +67,9 @@ lunco-tools-rhai = { path = "../lunco-tools-rhai", optional = true }
 # decision functions (spec 034 control-authority) under their hook ids at startup.
 lunco-hooks = { path = "../lunco-hooks", optional = true }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
+# Optional native hook providers. The loader stays out of the hook registry and
+# is enabled only by application builds that explicitly accept Twin plugins.
+lunco-hooks-native = { path = "../lunco-hooks-native", optional = true }
 # The prelude + built-in tool libraries + example scenarios are authored under
 # `assets/scripting/` and embedded at compile time (wasm has no fs). That embed
 # is owned by lunco-assets-core (the shared asset-access crate) — we consume it via
@@ -84,6 +87,7 @@ lunco-workspace = { path = "../lunco-workspace", optional = true }
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
 rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-input-core", "dep:lunco-scripting-bridge-core", "lunco-scripting-bridge-core/workspace", "dep:lunco-scripting-bridge-spatial", "dep:lunco-scripting-bridge-time", "dep:lunco-scripting-bridge-usd", "dep:lunco-physics", "dep:lunco-spatial", "lunco-twin-journal/hooks"]
+native-plugins = ["dep:lunco-hooks-native", "rhai"]
 # Python enables the same language-neutral bridge package as Rhai; its Python
 # binding remains a separate optional backend.
 python = ["dep:pyo3", "dep:libloading", "dep:serde_json", "dep:lunco-api", "dep:lunco-scripting-bridge-core"]
