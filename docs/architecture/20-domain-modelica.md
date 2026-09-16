@@ -123,6 +123,11 @@ that those outputs cover the composed USD graph and then sends the exact
 returned source to the compiler. A missing or invalid policy is an explicit
 projection error, never a compiled-schema fallback.
 
+The production Rust boundary keeps these policy contracts in the public
+`lunco_usd_sim_domain::synthesis` module; the parent module owns only USD
+reading, source-class lifecycle, and ECS projection. Consumers use that module
+path directly so the root does not carry a second reexported API.
+
 `GeneratedModelicaSource` exposes the same source, member mapping, topology
 units, and layout to diagnostics and the workbench, so the visible diagram and
 the compiled simulation have one inspectable source of truth. Its

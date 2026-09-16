@@ -8,10 +8,10 @@
 //! place.
 
 use lunco_usd_bevy_core::program::DEFAULT_DOMAIN_SYNTHESIZER;
-use lunco_usd_sim_domain::{
-    network_facts, read_network, register_hook_synthesizer, MemberClasses, SynthContext,
-    SynthOutcome, SynthesizerRegistry,
+use lunco_usd_sim_domain::synthesis::{
+    network_facts, register_hook_synthesizer, SynthContext, SynthOutcome, SynthesizerRegistry,
 };
+use lunco_usd_sim_domain::{read_network, MemberClasses};
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 

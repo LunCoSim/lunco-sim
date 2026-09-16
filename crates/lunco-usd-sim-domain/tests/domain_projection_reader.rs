@@ -6,7 +6,8 @@
 //! while a boundary output still named it, which rejected the whole electrical
 //! domain of a rover that was otherwise fine — lived entirely here.
 
-use lunco_usd_sim_domain::{network_facts, read_network, MemberClasses};
+use lunco_usd_sim_domain::synthesis::network_facts;
+use lunco_usd_sim_domain::{read_network, MemberClasses};
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 

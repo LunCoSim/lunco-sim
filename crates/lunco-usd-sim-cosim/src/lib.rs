@@ -4191,7 +4191,7 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_usd_sim_domain::MemberClasses>()
             .init_resource::<lunco_usd_sim_domain::ProjectionDirty>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
-            .init_resource::<lunco_usd_sim_domain::SynthesizerRegistry>()
+            .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>()
             .init_resource::<PendingSceneStageOutcome>()
             .init_resource::<SceneTransitionCoordinator>();
