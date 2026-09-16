@@ -13,10 +13,11 @@ use lunco_usd_bevy_core::{source::UsdSourceText, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::commands::{is_usd_path, EmptyViewportReason};
 use lunco_usd_document::document::UsdDocument;
-use lunco_usd_sim_cosim::{
+use lunco_usd_sim_cosim::scene::{
     clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
-    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
+    ClearScene, LoadScene, SceneEntities,
 };
+use lunco_usd_sim_cosim::SceneLoadInFlight;
 use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 

@@ -33,7 +33,7 @@ use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime::UsdPlugins;
 use lunco_usd_bevy_scene::UsdPrimPath;
 #[cfg(feature = "networking")]
-use lunco_usd_sim_cosim::LoadScene;
+use lunco_usd_sim_cosim::scene::LoadScene;
 
 /// Asset registration needed by USD authoring in a headless world. These are
 /// data stores only; no render plugin is installed here.
@@ -1861,7 +1861,7 @@ impl Plugin for LunCoSimCorePlugin {
             // downloaded the host's advertised scenario, load its entry scene from
             // the cache mounted as a Twin root (read-only consume). The bridge lives here —
             // the assembly crate that owns both the wire (`lunco-networking`) and
-            // the scene loader (`lunco_usd_sim_cosim::LoadScene`) — keeping each of those
+            // the scene loader (`lunco_usd_sim_cosim::scene::LoadScene`) — keeping each of those
             // crates free of the other.
             app.add_systems(Update, load_ready_scenario);
             // Layer B: project peers' live journal edits onto the local scene

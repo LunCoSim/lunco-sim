@@ -586,10 +586,10 @@ implementation crate.
 **`lunco-usd-sim-cosim`**
 USD-to-cosim translator and scene lifecycle package. `UsdSimCosimPlugin`
 installs source discovery, wiring, readiness, scene commands, telemetry
-projection independently from vehicle realization. The `sync` module owns the
-fixed-step Modelica/script port exchange and authored event projection, while
-the parent package owns discovery, wiring, and scene lifecycle. Its optional
-API query providers live in `lunco-usd-sim-cosim-api`.
+projection independently from vehicle realization. The `scene` module owns
+scene commands and mount/teardown mechanics; `sync` owns the fixed-step
+Modelica/script port exchange and authored event projection. Its optional API
+query providers live in `lunco-usd-sim-cosim-api`.
 
 **`lunco-usd-sim-cosim-api`**
 Optional API query providers for the cosimulation runtime: uniform ports,

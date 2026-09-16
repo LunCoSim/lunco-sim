@@ -937,7 +937,7 @@ pub(crate) fn reconcile_structural_live(
                 {
                     pending.remove(id, path);
                 }
-                lunco_usd_sim_cosim::despawn_usd_subtree(world, entity);
+                lunco_usd_sim_cosim::scene::despawn_usd_subtree(world, entity);
             }
             (true, None) => {
                 let parent_path =
@@ -978,7 +978,7 @@ pub(crate) fn reconcile_structural_live(
                         .and_then(|stage| stage.view().text(&sp, "lunco:catalogId"))
                         .filter(|value| !value.trim().is_empty())
                 });
-                if let Some(entity) = lunco_usd_sim_cosim::spawn_usd_child_under_parent(
+                if let Some(entity) = lunco_usd_sim_cosim::scene::spawn_usd_child_under_parent(
                     world,
                     parent_entity,
                     path,

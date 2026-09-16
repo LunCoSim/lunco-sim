@@ -61,7 +61,7 @@ use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued, UsdSceneRoot,
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake};
-use lunco_usd_sim_cosim::LoadScene;
+use lunco_usd_sim_cosim::scene::LoadScene;
 
 use crate::scene_runtime::TWIN_SCENE_LOAD_FAILED;
 use lunco_doc::OpenOutcome;

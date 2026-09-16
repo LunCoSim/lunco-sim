@@ -302,6 +302,6 @@ prim→entity.
 - `lunco-usd-commands/src/lib.rs` — document registration and authoring commands
 - `lunco-usd-bevy-core/src/asset.rs` — `UsdStageAsset`; `lunco-usd-bevy-scene/src/lib.rs` — `UsdPrimPath`
 - `lunco-usd-data/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
-- `lunco-usd-sim-cosim/src/lib.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
+- `lunco-usd-sim-cosim/src/scene.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
 - `lunco-usd-terrain/src/lib.rs` — `refresh_layered_terrain_layers` (the
   per-domain projection-on-`Modified` precedent)

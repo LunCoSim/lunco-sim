@@ -311,7 +311,7 @@ impl Plugin for LunCoSimUiPlugin {
                 ),
             )
             .add_observer(
-                |t: On<lunco_usd_sim_cosim::LoadScene>,
+                |t: On<lunco_usd_sim_cosim::scene::LoadScene>,
                  current: Option<ResMut<CurrentScenePath>>,
                  current_name: Option<ResMut<CurrentSceneName>>,
                  hud: Option<ResMut<lunco_workbench_guided_ui::GuidedOverlay>>| {
@@ -1301,7 +1301,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 // `LoadScene` deliberately no-ops for the active `(stage, root)`.
                 // RestartScene is the lifecycle verb that clears the current world,
                 // invalidates the stage asset, and mounts a newly read source.
-                ctx.trigger(lunco_usd_sim_cosim::RestartScene::default());
+                ctx.trigger(lunco_usd_sim_cosim::scene::RestartScene::default());
                 ui.close();
             }
         });
@@ -1378,7 +1378,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                             continue;
                                         }
                                     };
-                                    ctx.trigger(lunco_usd_sim_cosim::LoadScene {
+                                    ctx.trigger(lunco_usd_sim_cosim::scene::LoadScene {
                                         path,
                                         root_prim: String::new(),
                                     });
@@ -1514,7 +1514,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                 None => resp,
                             };
                             if resp.clicked() {
-                                ctx.trigger(lunco_usd_sim_cosim::LoadScene {
+                                    ctx.trigger(lunco_usd_sim_cosim::scene::LoadScene {
                                     path: lunco_assets_core::engine_asset_uri(&asset.asset_path),
                                     root_prim: String::new(),
                                 });
