@@ -296,10 +296,10 @@ let result = sysml_requirements::evaluate(source, [
        verification: "Project::VerifyVisual",
        kind: "exists", path: "/Twin/VisualCamera",
        expected_type: "Camera", visible: true },
-    #{ id: "VIS-002", component: "wheel_FL",
+    #{ id: "VIS-002", component: "vehicle.wheel.front_left",
        requirement: "Project::WheelRadius",
        verification: "Project::VerifyVisual",
-       kind: "attribute", path: "/Twin/FLIP/Wheel_FL",
+       kind: "attribute", path: "/Twin/Vehicle/WheelFrontLeft",
        attr: "radius", expected_attr: "visualWheelRadiusM",
        tolerance: 0.001 }
 ]);
