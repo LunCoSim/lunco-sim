@@ -940,7 +940,7 @@ pub(crate) fn build(app: &mut App) {
         )
         .add_systems(lunco_core::SceneTeardown, clear_shader_image_mips);
     // Shader parameters become connection targets in `lunco-usd-sim`'s
-    // `shader_ports` — beside the pass that authors `ShaderLook::driven`, so a
+    // `lunco-usd-sim-shader::ports` — beside the pass that authors `ShaderLook::driven`, so a
     // shader wire lands in a headless build too. The writes arrive in
     // `ShaderLook::live`, which `rebind_changed_shader_look` above drains.
 }

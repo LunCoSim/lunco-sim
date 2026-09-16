@@ -347,7 +347,7 @@ impl Plugin for UsdSimPlugin {
         }
         app.init_resource::<lunco_core::RuntimeFaults>();
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
-        crate::shader_ports::build(app);
+        lunco_usd_sim_shader::ports::build(app);
         app.add_plugins(lunco_usd_sim_celestial::CelestialProjectionPlugin);
         app.configure_sets(
             Update,
@@ -442,10 +442,6 @@ pub mod lint;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
-/// Shader parameters as connection targets — the port backend for what
-/// `lunco-usd-sim-shader` authors.
-pub mod shader_ports;
-
 /// A joint-based wheel: a full rigid body that interacts with terrain through
 /// collision, not raycast suspension. It gets `RigidBody`, `Collider`, and a
 /// solved `JointTorqueActuator` boundary instead of `WheelRaycast` + `RayCaster`.
