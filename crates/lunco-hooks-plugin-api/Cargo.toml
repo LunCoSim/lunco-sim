@@ -1,0 +1,12 @@
+[package]
+name = "lunco-hooks-plugin-api"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Stable C ABI and typed wire helpers for LunCoSim native hook providers"
+
+[dependencies]
+lunco-hooks = { path = "../lunco-hooks" }
+
+[lints]
+workspace = true

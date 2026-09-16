@@ -1114,12 +1114,23 @@ which replace matching application policies when the Twin is active. Use
 `list_hooks()` to inspect the reflected
 `parameters: [{name, type}]` and `output` contract, `policy_status()` to read
 load diagnostics, and `invoke_hook(id, [args])` to call an installed function.
+With native-provider support enabled, `policy_status().native_plugins` reports
+loaded provider ids and admission failures through the same status object.
 
 `bind_policy(id, entry, source)` can install a local non-deterministic policy
 for an installable seam. `unbind_policy(id)` removes exactly that
 implementation; it does not silently restore another implementation. A
 deterministic seam must be selected through an authored manifest that explicitly
 marks it deterministic. Internal calls use typed `HookValue`, not JSON.
+
+An explicitly approved Twin may also provide a native implementation for an
+existing installable hook with `[[native_plugins]]` in `twin.toml`. The native
+provider uses the same reflected contract and invocation path as a Rhai policy;
+it is suitable for trusted, expensive kernels and returns typed data for the
+Rust owner to validate and apply. Native code is not a sandbox and cannot load
+from a USD or script-discovered path. See
+[`architecture/native-hook-providers.md`](architecture/native-hook-providers.md)
+for the provider lifecycle, ABI, diagnostics, and terrain extension boundary.
 
 For example, [`control_authority.rhai`](../assets/scripting/policy/control_authority.rhai)
 implements `control.authority.take`: it receives the owner-defined `ctx` map

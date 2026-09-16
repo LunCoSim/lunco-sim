@@ -221,6 +221,10 @@ python = [
     "lunco-luncosim-core/python",
     "lunco-luncosim-ui?/python",
 ]
+native-plugins = [
+    "lunco-luncosim-core/native-plugins",
+    "lunco-scripting/native-plugins",
+]
 sysml = ["lunco-luncosim-core/sysml"]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the

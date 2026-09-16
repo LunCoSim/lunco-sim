@@ -191,14 +191,20 @@ pub fn evaluate_initialization_policy(
             policy.0
         ));
     }
-    let decision = match hook.hook.invoke(&[facts]) {
-        Err(error) => {
+    let decision = match lunco_hooks::invoke(&hook_id, &[facts]) {
+        None => {
+            return Err(format!(
+                "initialization policy `{}` became unavailable before invocation",
+                policy.0
+            ));
+        }
+        Some(Err(error)) => {
             return Err(format!(
                 "initialization policy `{}` failed: {error}",
                 policy.0
             ));
         }
-        Ok(value) => value,
+        Some(Ok(value)) => value,
     };
     match decision.as_str() {
         Some("accept") => Ok(()),

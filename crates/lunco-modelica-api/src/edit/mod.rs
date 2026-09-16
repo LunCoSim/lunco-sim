@@ -9,12 +9,12 @@ pub mod util;
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 use lunco_doc::{Document, DocumentId};
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_modelica_ast::pretty::{
     CausalitySpec, ClassKindSpec, ComponentDecl, ConnectEquation, EquationDecl, FillPattern,
     GraphicSpec, Line, LinePattern, LunCoPlotNodeSpec, Placement, PortRef, VariabilitySpec,
     VariableDecl,
 };
-use lunco_doc_bevy::DocumentRegistry;
 use lunco_modelica_document::{ModelicaDocument, ModelicaOp};
 use util::strip_same_package_prefix;
 

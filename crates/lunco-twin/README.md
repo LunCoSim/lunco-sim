@@ -44,7 +44,8 @@ remote-twin milestone.
 |------|------|
 | [`TwinMode`] | `Orphan(PathBuf)` / `Folder(Twin)` / `Twin(Twin)` — the three ways to open content |
 | [`Twin`] | Loaded folder: `root` + optional `manifest` + file index + sub-twins |
-| [`TwinManifest`] | Serde-backed `twin.toml` (name, version, optional description + default perspective + `children` + SysML/verification/component ownership + project settings) |
+| [`TwinManifest`] | Serde-backed `twin.toml` (name, version, optional description + default perspective + `children` + SysML/verification/component ownership + project settings + approved native hook providers) |
+| [`NativePluginManifest`] | One explicitly approved Twin-relative shared-library provider entry (`[[native_plugins]]`) |
 | [`ComponentManifest`] | One component-owned SysML/KerML source and qualified verification binding |
 | [`TwinChildRef`] | One `[[children]]` entry — `name` + (`path` or `url`) |
 | [`FileEntry`] | One discovered file: `relative_path` + `kind` |
@@ -124,6 +125,15 @@ new Twin settings do not require new Rust fields or per-setting commands.
 writes the same active-Twin scope with `get_twin_setting` and
 `set_twin_setting`. Missing keys remain absent, allowing each authored consumer
 to declare its own semantic default.
+
+Native hook providers are a separate explicit manifest boundary. Each
+`[[native_plugins]]` entry names an approved Twin-relative shared library and
+can be disabled with `enabled = false`. The application loader validates the
+library's capabilities against the reflected hook catalog when the Twin starts;
+the manifest parser only validates the path shape and does not access the
+filesystem. See
+[`native-hook-providers.md`](../../docs/architecture/native-hook-providers.md)
+for the lifecycle and ABI contract.
 
 ## What this crate does NOT do (yet)
 

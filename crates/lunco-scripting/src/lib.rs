@@ -18,6 +18,9 @@ pub mod doc;
 pub mod module_resolver;
 #[cfg(feature = "rhai")]
 mod names;
+/// Twin-scoped native shared-library providers for declared hook contracts.
+#[cfg(feature = "native-plugins")]
+pub mod native_plugins;
 /// Runtime policy activation for every rhai hook seam, including generated
 /// Modelica synthesis policies.
 #[cfg(feature = "rhai")]
@@ -272,6 +275,8 @@ impl Plugin for LunCoScriptingPlugin {
         app.init_resource::<ScriptRegistry>();
         #[cfg(feature = "rhai")]
         app.init_resource::<policy::ScriptedPolicyRegistry>();
+        #[cfg(feature = "native-plugins")]
+        app.init_resource::<native_plugins::NativeTwinPlugins>();
         // Attended (a person is watching) or not — read by the `is_unattended()`
         // verb so a lesson knows whether to drive itself. Resolved in Startup,
         // once windows exist; the `Default` until then is `Unattended`, which is

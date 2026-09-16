@@ -930,6 +930,9 @@ pub fn sync_policies_on_twin_added(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut registry: ResMut<ScriptedPolicyRegistry>,
     journal: Option<Res<JournalResource>>,
+    #[cfg(feature = "native-plugins")] mut native_plugins: ResMut<
+        crate::native_plugins::NativeTwinPlugins,
+    >,
 ) {
     let twin_id = trigger.event().twin;
     let Some(workspace) = workspace.as_deref() else {
@@ -950,8 +953,12 @@ pub fn sync_policies_on_twin_added(
                     invoke_twin_lifecycle("close", previous_id, &previous.root, &registry.status);
             }
         }
+        #[cfg(feature = "native-plugins")]
+        native_plugins.unload();
         "startup"
     };
+    #[cfg(feature = "native-plugins")]
+    log_native_plugin_report(native_plugins.load_for_twin(twin_id, twin));
     let report = load_twin_policies(&twin.root, &mut registry, journal.as_deref());
     registry.active_twin = Some(twin_id);
     registry.lifecycle = invoke_twin_lifecycle(event, twin_id, &twin.root, &report);
@@ -964,6 +971,9 @@ pub fn wind_down_policies_on_twin_closed(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut registry: ResMut<ScriptedPolicyRegistry>,
     journal: Option<Res<JournalResource>>,
+    #[cfg(feature = "native-plugins")] mut native_plugins: ResMut<
+        crate::native_plugins::NativeTwinPlugins,
+    >,
 ) {
     if !trigger.event().was_active {
         return;
@@ -971,6 +981,8 @@ pub fn wind_down_policies_on_twin_closed(
     let twin_id = trigger.event().twin;
     registry.lifecycle =
         invoke_twin_lifecycle("close", twin_id, &trigger.event().root, &registry.status);
+    #[cfg(feature = "native-plugins")]
+    native_plugins.unload();
     wind_down_twin_policies(&mut registry, journal.as_deref());
     registry.active_twin = None;
     registry.status = registry.application_status.clone();
@@ -982,10 +994,24 @@ pub fn wind_down_policies_on_twin_closed(
         })
     });
     if let Some((twin_id, root)) = next {
+        #[cfg(feature = "native-plugins")]
+        if let Some(twin) = workspace
+            .as_deref()
+            .and_then(|workspace| workspace.twin(twin_id))
+        {
+            log_native_plugin_report(native_plugins.load_for_twin(twin_id, twin));
+        }
         let report = load_twin_policies(&root, &mut registry, journal.as_deref());
         registry.active_twin = Some(twin_id);
         registry.lifecycle = invoke_twin_lifecycle("startup", twin_id, &root, &report);
         log_report(&report);
+    }
+}
+
+#[cfg(feature = "native-plugins")]
+fn log_native_plugin_report(report: crate::native_plugins::NativePluginLoadReport) {
+    for failure in report.failed {
+        warn!("[native-hook-plugin] {failure}");
     }
 }
 

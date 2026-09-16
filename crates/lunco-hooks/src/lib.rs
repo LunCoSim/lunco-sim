@@ -28,6 +28,9 @@
 //!   (works deep inside a pure crate like the journal, with no Bevy/ECS), keyed by
 //!   a `HookId` string. Owner-side declarations use [`declare_hook!`], whose
 //!   inventory submission is collected automatically across crates.
+//! - [`wire`] — a bounded, versioned binary representation used only by native
+//!   dynamic providers. It keeps plugin calls typed without putting Rust,
+//!   Bevy, USD, or a serializer ABI across a shared-library boundary.
 //!
 //! # Determinism contract
 //!
@@ -66,6 +69,12 @@ pub enum HookValue {
     Array(Vec<HookValue>),
     /// A string-keyed map (insertion-ordered; small, so a `Vec` not a `HashMap`).
     Map(Vec<(String, HookValue)>),
+    /// An owned byte buffer for native providers and other bulk boundaries.
+    ///
+    /// Rhai may see this as a `Blob`, but policy should pass identifiers and
+    /// bounded metadata whenever a provider can read the authoritative asset
+    /// through its host rather than copying a large raster through the script.
+    Bytes(Vec<u8>),
 }
 
 impl HookValue {
@@ -110,6 +119,13 @@ impl HookValue {
             _ => None,
         }
     }
+    /// This value as a byte slice, if it is binary data.
+    pub fn as_bytes(&self) -> Option<&[u8]> {
+        match self {
+            HookValue::Bytes(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
     /// The value under `key`, if this is a map containing it.
     pub fn get(&self, key: &str) -> Option<&HookValue> {
         match self {
@@ -128,6 +144,304 @@ impl HookValue {
             HookValue::Str(_) => HookValueType::String.as_str(),
             HookValue::Array(_) => HookValueType::Array.as_str(),
             HookValue::Map(_) => HookValueType::Map.as_str(),
+            HookValue::Bytes(_) => HookValueType::Bytes.as_str(),
+        }
+    }
+}
+
+/// Bounded binary encoding for values crossing a native shared-library hook
+/// boundary.
+///
+/// This is deliberately owned by the hook substrate so Rhai, Rust, and native
+/// providers use one encoding. The format is not Rust-layout based: it has a
+/// magic/version prefix, fixed little-endian scalar encodings, bounded lengths,
+/// and a depth limit. A plugin therefore never receives a Rust enum, allocator
+/// pointer, trait object, or domain type.
+pub mod wire {
+    use super::HookValue;
+
+    /// Current wire format version.
+    pub const VERSION: u8 = 1;
+    /// Maximum complete encoded value accepted by the host.
+    pub const MAX_BYTES: usize = 64 * 1024 * 1024;
+    /// Maximum number of elements in one array or map.
+    pub const MAX_ELEMENTS: usize = 1_000_000;
+    /// Maximum UTF-8 string or map-key length.
+    pub const MAX_STRING_BYTES: usize = 16 * 1024 * 1024;
+    /// Maximum nesting depth.
+    pub const MAX_DEPTH: usize = 64;
+
+    const MAGIC: [u8; 4] = *b"LHK\0";
+    const UNIT: u8 = 0;
+    const INT: u8 = 1;
+    const FLOAT: u8 = 2;
+    const BOOL: u8 = 3;
+    const STRING: u8 = 4;
+    const ARRAY: u8 = 5;
+    const MAP: u8 = 6;
+    const BYTES: u8 = 7;
+
+    /// An error produced while encoding or decoding a native hook value.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Error(pub String);
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    impl std::error::Error for Error {}
+
+    /// Encode one value with the format header.
+    pub fn encode(value: &HookValue) -> Result<Vec<u8>, Error> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&MAGIC);
+        out.push(VERSION);
+        write_value(value, 0, &mut out)?;
+        if out.len() > MAX_BYTES {
+            return Err(Error(format!(
+                "encoded hook value exceeds the {}-byte limit",
+                MAX_BYTES
+            )));
+        }
+        Ok(out)
+    }
+
+    /// Encode positional arguments as one top-level array.
+    pub fn encode_arguments(arguments: &[HookValue]) -> Result<Vec<u8>, Error> {
+        encode(&HookValue::Array(arguments.to_vec()))
+    }
+
+    /// Decode one complete value and reject trailing bytes.
+    pub fn decode(bytes: &[u8]) -> Result<HookValue, Error> {
+        if bytes.len() > MAX_BYTES {
+            return Err(Error(format!(
+                "encoded hook value exceeds the {}-byte limit",
+                MAX_BYTES
+            )));
+        }
+        let mut reader = Reader { bytes, offset: 0 };
+        if reader.take(4)? != MAGIC {
+            return Err(Error("invalid LunCo hook wire magic".into()));
+        }
+        if reader.byte()? != VERSION {
+            return Err(Error(format!(
+                "unsupported LunCo hook wire version (expected {})",
+                VERSION
+            )));
+        }
+        let value = read_value(&mut reader, 0)?;
+        if reader.offset != bytes.len() {
+            return Err(Error("trailing bytes after encoded hook value".into()));
+        }
+        Ok(value)
+    }
+
+    /// Decode the top-level positional argument array.
+    pub fn decode_arguments(bytes: &[u8]) -> Result<Vec<HookValue>, Error> {
+        match decode(bytes)? {
+            HookValue::Array(arguments) => Ok(arguments),
+            other => Err(Error(format!(
+                "hook arguments must be an array, received {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn write_value(value: &HookValue, depth: usize, out: &mut Vec<u8>) -> Result<(), Error> {
+        if depth > MAX_DEPTH {
+            return Err(Error("hook value nesting exceeds the depth limit".into()));
+        }
+        match value {
+            HookValue::Unit => out.push(UNIT),
+            HookValue::Int(value) => {
+                out.push(INT);
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+            HookValue::Float(value) => {
+                out.push(FLOAT);
+                out.extend_from_slice(&value.to_bits().to_le_bytes());
+            }
+            HookValue::Bool(value) => {
+                out.push(BOOL);
+                out.push(u8::from(*value));
+            }
+            HookValue::Str(value) => {
+                out.push(STRING);
+                write_string(value, out)?;
+            }
+            HookValue::Array(values) => {
+                out.push(ARRAY);
+                write_len(values.len(), "array", out)?;
+                for value in values {
+                    write_value(value, depth + 1, out)?;
+                }
+            }
+            HookValue::Map(entries) => {
+                out.push(MAP);
+                write_len(entries.len(), "map", out)?;
+                for (key, value) in entries {
+                    write_string(key, out)?;
+                    write_value(value, depth + 1, out)?;
+                }
+            }
+            HookValue::Bytes(bytes) => {
+                out.push(BYTES);
+                write_len(bytes.len(), "byte buffer", out)?;
+                out.extend_from_slice(bytes);
+            }
+        }
+        if out.len() > MAX_BYTES {
+            return Err(Error(format!(
+                "encoded hook value exceeds the {}-byte limit",
+                MAX_BYTES
+            )));
+        }
+        Ok(())
+    }
+
+    fn write_string(value: &str, out: &mut Vec<u8>) -> Result<(), Error> {
+        if value.len() > MAX_STRING_BYTES {
+            return Err(Error(format!(
+                "hook string exceeds the {}-byte limit",
+                MAX_STRING_BYTES
+            )));
+        }
+        write_len(value.len(), "string", out)?;
+        out.extend_from_slice(value.as_bytes());
+        Ok(())
+    }
+
+    fn write_len(length: usize, kind: &str, out: &mut Vec<u8>) -> Result<(), Error> {
+        let length = u32::try_from(length)
+            .map_err(|_| Error(format!("hook {kind} is too large for the wire format")))?;
+        out.extend_from_slice(&length.to_le_bytes());
+        Ok(())
+    }
+
+    fn read_value(reader: &mut Reader<'_>, depth: usize) -> Result<HookValue, Error> {
+        if depth > MAX_DEPTH {
+            return Err(Error("hook value nesting exceeds the depth limit".into()));
+        }
+        match reader.byte()? {
+            UNIT => Ok(HookValue::Unit),
+            INT => Ok(HookValue::Int(i64::from_le_bytes(reader.array()?))),
+            FLOAT => Ok(HookValue::Float(f64::from_bits(u64::from_le_bytes(
+                reader.array()?,
+            )))),
+            BOOL => match reader.byte()? {
+                0 => Ok(HookValue::Bool(false)),
+                1 => Ok(HookValue::Bool(true)),
+                _ => Err(Error("invalid boolean in hook wire value".into())),
+            },
+            STRING => Ok(HookValue::Str(reader.string()?)),
+            ARRAY => {
+                let length = reader.length("array")?;
+                let mut values = Vec::with_capacity(length.min(1024));
+                for _ in 0..length {
+                    values.push(read_value(reader, depth + 1)?);
+                }
+                Ok(HookValue::Array(values))
+            }
+            MAP => {
+                let length = reader.length("map")?;
+                let mut entries = Vec::with_capacity(length.min(1024));
+                for _ in 0..length {
+                    let key = reader.string()?;
+                    let value = read_value(reader, depth + 1)?;
+                    entries.push((key, value));
+                }
+                Ok(HookValue::Map(entries))
+            }
+            BYTES => {
+                let length = reader.length("byte buffer")?;
+                Ok(HookValue::Bytes(reader.take(length)?.to_vec()))
+            }
+            tag => Err(Error(format!("unknown hook wire value tag {tag}"))),
+        }
+    }
+
+    struct Reader<'a> {
+        bytes: &'a [u8],
+        offset: usize,
+    }
+
+    impl<'a> Reader<'a> {
+        fn take(&mut self, length: usize) -> Result<&'a [u8], Error> {
+            let end = self
+                .offset
+                .checked_add(length)
+                .ok_or_else(|| Error("hook wire length overflows usize".into()))?;
+            let value = self
+                .bytes
+                .get(self.offset..end)
+                .ok_or_else(|| Error("truncated hook wire value".into()))?;
+            self.offset = end;
+            Ok(value)
+        }
+
+        fn byte(&mut self) -> Result<u8, Error> {
+            self.take(1)?
+                .first()
+                .copied()
+                .ok_or_else(|| Error("internal hook wire reader error for one-byte value".into()))
+        }
+
+        fn array<const N: usize>(&mut self) -> Result<[u8; N], Error> {
+            self.take(N)?.try_into().map_err(|_| {
+                Error(format!(
+                    "internal hook wire reader error for {N}-byte scalar"
+                ))
+            })
+        }
+
+        fn length(&mut self, kind: &str) -> Result<usize, Error> {
+            let length = u32::from_le_bytes(self.array()?) as usize;
+            if length > MAX_ELEMENTS && matches!(kind, "array" | "map") {
+                return Err(Error(format!(
+                    "hook {kind} exceeds the {MAX_ELEMENTS}-element limit"
+                )));
+            }
+            if length > MAX_STRING_BYTES && kind == "string" {
+                return Err(Error(format!(
+                    "hook string exceeds the {MAX_STRING_BYTES}-byte limit"
+                )));
+            }
+            Ok(length)
+        }
+
+        fn string(&mut self) -> Result<String, Error> {
+            let length = self.length("string")?;
+            String::from_utf8(self.take(length)?.to_vec())
+                .map_err(|_| Error("hook wire string is not valid UTF-8".into()))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn round_trips_typed_arguments_without_json() {
+            let value = HookValue::Array(vec![
+                HookValue::Int(-7),
+                HookValue::Float(f64::from_bits(0x3ff0_0000_0000_0001)),
+                HookValue::Bool(true),
+                HookValue::str("terrain"),
+                HookValue::Bytes(vec![0, 1, 255]),
+                HookValue::map([("nested", HookValue::Unit)]),
+            ]);
+            let encoded = encode(&value).expect("value must encode");
+            assert_eq!(decode(&encoded).expect("value must decode"), value);
+        }
+
+        #[test]
+        fn rejects_trailing_and_invalid_values() {
+            let mut encoded = encode(&HookValue::Unit).expect("unit must encode");
+            encoded.push(0);
+            assert!(decode(&encoded).is_err());
+            assert!(decode(b"bad").is_err());
         }
     }
 }
@@ -248,6 +562,8 @@ pub enum HookValueType {
     Array,
     /// String-keyed map.
     Map,
+    /// An owned byte buffer.
+    Bytes,
     /// Ordered array of strings.
     ArrayOfString,
     /// Ordered array of maps.
@@ -270,6 +586,7 @@ impl HookValueType {
             Self::String => "string",
             Self::Array => "array",
             Self::Map => "map",
+            Self::Bytes => "bytes",
             Self::ArrayOfString => "array<string>",
             Self::ArrayOfMap => "array<map>",
             Self::StringOrUnit => "string|unit",
@@ -434,6 +751,27 @@ pub fn register(hook: RegisteredHook) -> String {
     id
 }
 
+/// Register a hook only when no implementation currently occupies its id.
+///
+/// The returned [`Arc`] is the registration identity that can later be passed
+/// to [`unregister_if`]. This is the atomic admission primitive for dynamic
+/// providers; a check followed by [`register`] would allow two providers to
+/// race and silently replace one another.
+pub fn register_if_vacant(hook: RegisteredHook) -> Result<Arc<RegisteredHook>, String> {
+    let id = hook.id.clone();
+    let hook = Arc::new(hook);
+    let mut hooks = registry()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if hooks.contains_key(&id) {
+        return Err(format!("hook `{id}` already has an active implementation"));
+    }
+    hooks.insert(id, Arc::clone(&hook));
+    drop(hooks);
+    generation_cell().fetch_add(1, Ordering::Relaxed);
+    Ok(hook)
+}
+
 /// Remove a hook, if present. Bumps the generation.
 pub fn unregister(id: &str) {
     if registry()
@@ -444,6 +782,30 @@ pub fn unregister(id: &str) {
     {
         generation_cell().fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Remove a hook only when the registry still contains the exact registration
+/// supplied by the caller.
+///
+/// Dynamic providers use this at Twin teardown. Comparing registration identity
+/// prevents an old provider from removing a newer implementation that replaced
+/// the same hook id while it was active.
+pub fn unregister_if(id: &str, expected: &Arc<RegisteredHook>) -> bool {
+    let removed = {
+        let mut hooks = registry()
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        hooks
+            .get(id)
+            .is_some_and(|current| Arc::ptr_eq(current, expected))
+            .then(|| hooks.remove(id))
+            .flatten()
+            .is_some()
+    };
+    if removed {
+        generation_cell().fetch_add(1, Ordering::Relaxed);
+    }
+    removed
 }
 
 /// The declared contract under `id`, if any.
@@ -550,6 +912,7 @@ fn matches_value_type(expected: HookValueType, value: &HookValue) -> bool {
         | (HookValueType::String, HookValue::Str(_))
         | (HookValueType::Array, HookValue::Array(_))
         | (HookValueType::Map, HookValue::Map(_))
+        | (HookValueType::Bytes, HookValue::Bytes(_))
         | (HookValueType::StringOrUnit, HookValue::Unit)
         | (HookValueType::StringOrUnit, HookValue::Str(_))
         | (HookValueType::Any, _) => true,
@@ -759,5 +1122,29 @@ mod tests {
         assert_eq!(m.get("missing"), None);
         assert_eq!(HookValue::Float(1.0).as_i64(), None);
         assert_eq!(HookValue::Bool(true).as_i64(), None);
+        assert_eq!(
+            HookValue::Bytes(vec![1, 2]).as_bytes(),
+            Some([1, 2].as_slice())
+        );
+    }
+
+    #[test]
+    fn exact_registration_teardown_does_not_remove_a_replacement() {
+        let registration = register_if_vacant(RegisteredHook {
+            id: "test.identity".into(),
+            backend: "native:test".into(),
+            deterministic: false,
+            hook: Arc::new(AddHook),
+        })
+        .expect("identity registration must be vacant");
+        register(RegisteredHook {
+            id: "test.identity".into(),
+            backend: "replacement".into(),
+            deterministic: false,
+            hook: Arc::new(AddHook),
+        });
+        assert!(!unregister_if("test.identity", &registration));
+        assert_eq!(get("test.identity").unwrap().backend, "replacement");
+        unregister("test.identity");
     }
 }

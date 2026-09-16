@@ -126,6 +126,13 @@ pub struct TwinManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub downloads: Option<DownloadManifest>,
 
+    /// Explicit native hook providers approved by this Twin. A provider is
+    /// never discovered from USD or loaded from an arbitrary script path; its
+    /// relative library path is declared here and validated before the native
+    /// host opens it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_plugins: Vec<NativePluginManifest>,
+
     /// Generic project-owned settings (`[settings]`). Keys are namespaced
     /// strings and values are scalar TOML values. This is the extensibility
     /// seam for Twin policy: adding a new setting does not add a Rust field or
@@ -196,6 +203,49 @@ pub struct DownloadManifest {
     /// The default is `false`, so a newly opened project offers the prompt.
     #[serde(default)]
     pub suppress_missing_prompt: bool,
+}
+
+/// One Twin-approved native hook provider (`[[native_plugins]]`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NativePluginManifest {
+    /// Stable provider identity reported by the library descriptor.
+    pub id: String,
+    /// Twin-relative shared-library path.
+    pub path: PathBuf,
+    /// Whether this entry participates in the active Twin load.
+    #[serde(default = "default_native_plugin_enabled")]
+    pub enabled: bool,
+}
+
+impl NativePluginManifest {
+    /// Validate the authored entry and resolve its path without touching disk.
+    pub fn resolve(&self, twin_root: &Path) -> Result<PathBuf, String> {
+        if self.id.is_empty() || self.id.chars().any(char::is_whitespace) {
+            return Err("native plugin id must be non-empty and contain no whitespace".into());
+        }
+        if self.path.as_os_str().is_empty() || self.path.is_absolute() {
+            return Err(format!(
+                "native plugin `{}` path must be a non-empty relative path",
+                self.id
+            ));
+        }
+        if self
+            .path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(format!(
+                "native plugin `{}` path may not contain `..`",
+                self.id
+            ));
+        }
+        Ok(twin_root.join(&self.path))
+    }
+}
+
+fn default_native_plugin_enabled() -> bool {
+    true
 }
 
 /// The `[modelica]` section of `twin.toml`.
@@ -370,6 +420,7 @@ impl TwinManifest {
             modelica: None,
             journal: None,
             downloads: None,
+            native_plugins: Vec::new(),
             settings: BTreeMap::new(),
         }
     }
@@ -564,6 +615,7 @@ mod tests {
             modelica: None,
             journal: None,
             downloads: None,
+            native_plugins: Vec::new(),
             settings: BTreeMap::new(),
         };
         let text = toml::to_string_pretty(&manifest).unwrap();
@@ -624,6 +676,7 @@ mod tests {
             downloads: Some(DownloadManifest {
                 suppress_missing_prompt: true,
             }),
+            native_plugins: Vec::new(),
             settings: BTreeMap::from([
                 ("ui.camera_status".into(), TwinSettingValue::Bool(true)),
                 ("simulation.rate".into(), TwinSettingValue::Number(2.5)),
@@ -652,6 +705,7 @@ mod tests {
             modelica: None,
             journal: None,
             downloads: None,
+            native_plugins: Vec::new(),
             settings: BTreeMap::new(),
         };
         let path =
@@ -787,6 +841,32 @@ externals = [{ name = "Shared", path = "../shared-models" }]
     }
 
     #[test]
+    fn native_plugin_paths_are_twin_relative_and_enabled_by_default() {
+        let text = r#"
+name = "plugin-twin"
+version = "0.1.0"
+
+[[native_plugins]]
+id = "chrono-terrain"
+path = "plugins/libchrono_terrain.so"
+"#;
+        let parsed: TwinManifest = toml::from_str(text).unwrap();
+        let plugin = &parsed.native_plugins[0];
+        assert!(plugin.enabled);
+        assert_eq!(
+            plugin.resolve(Path::new("/twins/demo")).unwrap(),
+            PathBuf::from("/twins/demo/plugins/libchrono_terrain.so")
+        );
+        assert!(NativePluginManifest {
+            id: "chrono-terrain".into(),
+            path: PathBuf::from("../escape.so"),
+            enabled: true,
+        }
+        .resolve(Path::new("/twins/demo"))
+        .is_err());
+    }
+
+    #[test]
     fn uuid_round_trips_when_present() {
         let id = Uuid::new_v4();
         let text = format!(
@@ -834,6 +914,7 @@ uuid = "{id}"
             modelica: None,
             journal: None,
             downloads: None,
+            native_plugins: Vec::new(),
             settings: BTreeMap::new(),
         };
         let minted = bare.ensure_uuid();

@@ -132,6 +132,25 @@ manifest-declared `required = true` failure blocks that seam. Deterministic
 hooks can be installed from an authored manifest only when the manifest opts
 into `deterministic = true`; an inline binding cannot claim convergence.
 
+## Native providers
+
+An approved Twin may implement an existing installable hook with a native
+shared library. The provider is listed explicitly in `twin.toml` under
+`[[native_plugins]]`; it is never discovered from USD, a Rhai source file, or a
+directory scan. The loader validates the provider descriptor against the
+link-collected hook catalog and registers the callback through the same
+`lunco_hooks::invoke` path used by Rust and Rhai. See
+[`native-hook-providers.md`](native-hook-providers.md) for the ABI, lifecycle,
+failure, and future terrain-kernel boundary.
+
+Native code is trusted process code, not a sandbox. A plugin may provide an
+expensive generic computation, but it must return typed data or an action plan;
+the Rust owner validates and applies that result. It must not mutate ECS or USD
+behind the owner’s boundary, and a domain-specific plugin must not become a
+second dispatch registry. A future Chrono terrain provider belongs at the
+consumed `lunco-terrain-bake` kernel contract, not in the terrain runtime
+projection.
+
 ## Rhai and API surfaces
 
 Rhai uses native values at the hook boundary:
@@ -146,7 +165,9 @@ let result = invoke_hook("camera.default_presentation", [#{
 ```
 
 `list_hooks()` reports `parameters: [{name, type}]`, `output`, owner,
-determinism, requirement, policy binding, and installed backend. The API
+determinism, requirement, policy binding, and installed backend. With
+native-provider support enabled, `policy_status().native_plugins` also reports
+loaded provider ids and admission failures. The API
 `DiscoverSchema.hooks` exposes the same catalog with
 `parameters: [{name, type_name}]`. `bind_policy`, `unbind_policy`, and
 `invoke_hook` return structured operation results so denied, rejected,

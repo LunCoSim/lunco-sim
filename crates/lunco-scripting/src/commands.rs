@@ -22,7 +22,9 @@ use crate::backend::ScriptBackends;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use crate::doc::ScriptLanguage;
 #[cfg(feature = "rhai")]
-use crate::doc::{ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptOp, ScriptedModel};
+use crate::doc::{
+    ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptOp, ScriptedModel,
+};
 #[cfg(feature = "rhai")]
 use crate::world_bridge::{PendingWorldScript, PendingWorldScripts};
 #[cfg(any(feature = "rhai", feature = "python"))]
