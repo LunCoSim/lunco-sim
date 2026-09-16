@@ -609,7 +609,7 @@ impl Plugin for LunCoAvatarPlugin {
         // `science::take_photo` is registered by `lunco-workbench`'s `ScreenshotPlugin`,
         // not here: the tool's closure triggers `CaptureFromCamera`, whose observer is a
         // render-world readback this crate deliberately cannot link.
-        app.add_plugins(lunco_control_core::LunCoControlPlugin);
+        lunco_control_core::ensure_control_plugin(app);
         // Possession and release commands own both authority bookkeeping and
         // local binding, so the registry and `ControlLink` commit together.
         app.add_systems(lunco_core::SceneTeardown, clear_scene_possession_claims);
