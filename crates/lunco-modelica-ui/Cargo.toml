@@ -98,6 +98,7 @@ bevy_egui = { workspace = true, optional = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-api-contracts = { path = "../lunco-api-contracts" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-doc = { path = "../lunco-doc" }
 # Core document-lifecycle events; its egui systems come back via `ui` below.

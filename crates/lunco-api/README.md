@@ -34,8 +34,10 @@ Commands are discovered automatically. The API scans `AppTypeRegistry` for refle
 
 ### HTTP Endpoint
 
-The endpoint is supplied by `lunco-api-transport`; this package only defines
-the request/response contract consumed by that transport.
+The endpoint is supplied by `lunco-api-transport`. The pure JSON wire
+envelopes shared by that transport and native clients live in
+`lunco-api-contracts`; this package owns the Bevy-backed runtime request and
+response types.
 
 ```
 POST /api/commands

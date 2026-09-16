@@ -1,0 +1,20 @@
+[package]
+name = "lunco-api-client"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Small native client for the LunCoSim command API"
+
+[features]
+default = []
+# HTTPS is opt-in so headless localhost clients do not compile TLS and its
+# cryptographic backend. GUI/deployment builds can enable it explicitly.
+tls = ["ureq/rustls"]
+
+[dependencies]
+lunco-api-contracts = { path = "../lunco-api-contracts" }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+
+[lints]
+workspace = true

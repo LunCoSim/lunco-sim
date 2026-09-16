@@ -97,7 +97,7 @@ The windowed apps that embed the API bridge (`luncosim`, `lunica`, and anything 
 
 - `--api [PORT]` — enable the HTTP automation API. Default port **4101**. This is
   mandatory for luncosim visual/runtime validation; use an explicit free port.
-  (`lunco_core_session::DEFAULT_API_PORT`); the MCP config points here via
+  (`lunco_api_contracts::DEFAULT_API_PORT`); the MCP config points here via
   `LUNCO_API_PORT`. Without `--api`, no network surface.
 
 - `--no-ui` — headless (skip winit/egui, run the shared sim loop).

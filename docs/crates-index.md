@@ -138,8 +138,10 @@ External communication, ECS replication, telemetry extraction, and distributed a
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-networking`** | Multiplayer layer: transport-agnostic replication, authentication, and collaborative edit logs. Host-authoritative planes broadcast on connect + change: the **journal plane** (convergent op-log merge), the **scenario plane** (CID asset manifest + scenario sync), the **scripted-policy plane** (rhai merge/authorize/drive-kernel hooks distributed so every peer runs the identical one), and per-peer AOI snapshot routing. |
-| **`lunco-api`** | Transport-free API core: typed command/query contracts, reflection-based discovery, entity identity, execution, and response/telemetry infrastructure. |
-| **`lunco-api-transport`** | Application-bound API transports: native Axum HTTP listener, asset endpoint, and wasm browser bridge over the `lunco-api` contracts. |
+| **`lunco-api-contracts`** | Pure API wire envelopes and shared API endpoint constants. It has no ECS or language-runtime dependency, so native clients and transport adapters compile against the same contract without linking the runtime. |
+| **`lunco-api-client`** | Generic native command-API client. It owns endpoint configuration and HTTP request/response handling; it knows no Rhai command or simulator implementation. |
+| **`lunco-api`** | ECS API runtime: typed command/query execution, reflection-based discovery, entity identity, and response/telemetry infrastructure. Its internal requests are converted to/from `lunco-api-contracts` only at transport edges. |
+| **`lunco-api-transport`** | Application-bound API transports: native Axum HTTP listener, asset endpoint, and wasm browser bridge. It converts the pure wire contract to the Bevy-backed `lunco-api` runtime. |
 | **`lunco-telemetry`** | Telemetry channels: per-channel rate + deadband, bound to a `TimeDomain` (so pause/warp come free), retained in `lunco-signal`'s ring buffer, plus the OpenMCT-shaped query surface (catalog / history / recording). |
 | **`lunco-signal`** | The signal DATA model — `SignalRegistry`, `SignalRef`, `ScalarHistory`, and the backend-neutral `SimRegistry`/`SimStream` snapshot publication path. **Render-free by construction**: split out of `lunco-viz` (which links bevy_egui → bevy_render) so a headless run can retain history without a GPU stack. `lunco-viz` re-exports the signal registry. |
 
@@ -220,9 +222,11 @@ Primary entry points and simulation assembly targets.
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
 | **`lunco-luncosim-exposures`** | — | Headless-safe runtime exposure projection plugin. Resolves authoritative ECS/domain state and authored telemetry into the shared `EngineExposures` registry for HTML, egui, API, telemetry, and remote consumers; it has no renderer or UI dependency. |
-| **`lunco-luncosim`** | `luncosim` | Windowed application shell and production authored-scene test command. It configures the renderer/window and composes `lunco-luncosim-core` with `lunco-luncosim-ui`. |
+| **`lunco-luncosim`** | `luncosim` | Thin process/CLI shell and production authored-scene test command. It dispatches headless mode to `lunco-luncosim-core`, GUI mode to `lunco-luncosim-ui`, and the `rhai` subcommand to `lunco-rhai-repl`. |
+| **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, readiness barriers, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
 | **`lunco-luncosim-core`** | — | Headless-safe simulation runtime shared by the GUI shell, `luncosim-server`, and scene-test runner. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends directly on `lunco-luncosim-core` with API + networking enabled; the GUI shell is not linked. |
+| **`lunco-rhai-repl`** | — | Terminal adapter for the reflected `RunRhai` command. It reads stdin/files and presents results while delegating evaluation to the running simulator and HTTP to `lunco-api-client`. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
 | **`lunco-modelica-icon-ui`** | — | Reusable egui Modelica icon/diagram graphics renderer used by the diagram canvas and model preview. |
 | **`lunco-modelica-docs-ui`** | — | Reusable egui Modelica documentation renderer used by the model view. |
@@ -949,13 +953,16 @@ Bevy dispatch adapter for `lunco-tools` — the engine-action execution half. De
 ### Applications
 
 **`lunco-luncosim`**
-The windowed `luncosim` application shell: command-line dispatch, renderer/window configuration, desktop integration, offscreen capture, and composition of `lunco-luncosim-core` with `lunco-luncosim-ui`. Its authored scene-test runner remains here because it is a production binary command, not a Rust test-only crate.
+The thin `luncosim` process/CLI shell: it selects headless versus GUI mode and delegates `luncosim test` to the separate production `lunco-scene-runner` package. It contains no renderer/window composition, so changes to presentation do not rebuild this dispatch crate.
+
+**`lunco-scene-runner`**
+Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, asynchronous Modelica/physics readiness, telemetry verdict capture, diagnostics, and exit codes. Domain assertions and fixture knowledge remain in the authored scene/Rhai assets; the runner only owns the generic process and engine seams required to execute them. It is a production command dependency, not a Rust test-only crate.
 
 **`lunco-luncosim-core`**
 Headless-safe LunCoSim runtime substrate shared by the GUI shell, `luncosim-server`, and authored scene-test runner: persistent world shell, Avian physics, USD loading/projection, Modelica/cosim, networking/API, exposure projection, persistence, and the schedule runner. It has no renderer, egui, workbench, picking, or tutorial policy.
 
 **`lunco-luncosim-ui`**
-Windowed LunCoSim presentation and packaging boundary: egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, native window icon generation, and the UI-owned `window_icon_bytes()` API. The headless application core and `luncosim-server` do not compile its GUI/build-time graphics dependencies.
+Windowed LunCoSim application and presentation boundary: Bevy window/render plugin composition and CLI render choices, egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, native desktop integration, native window icon generation, and the UI-owned `window_icon_bytes()` API. The headless application core and `luncosim-server` do not compile its GUI/build-time graphics dependencies.
 
 **`lunco-luncosim-exposures`**
 Production integration crate for the renderer-independent runtime exposure projection. `RuntimeExposuresPlugin` registers the single shared path from authoritative ECS/domain state and authored telemetry to `lunco_core::exposure::EngineExposures`; HTML, egui, API, telemetry, and remote clients consume that registry. It owns no UI, renderer, or tutorial policy, so changing exposure derivation does not recompile the application composition root.

@@ -10,7 +10,7 @@ default = []
 # The in-process API bridge used by the optional Rhai REPL panel. The host
 # application forwards its API feature here so this crate remains a pure UI
 # dependency when the bridge is not part of the build.
-api-transport = ["dep:lunco-api", "dep:lunco-api-transport", "lunco-modelica-ui/api"]
+api-transport = ["dep:lunco-api-transport", "lunco-modelica-ui/api"]
 # Native HTTP transport for the REPL panel. The panel is still transport
 # agnostic; the feature only makes the host's bridge available on native.
 transport-http = ["api-transport", "lunco-api-transport/transport-http"]
@@ -21,6 +21,8 @@ python = []
 avatar-ui = ["dep:lunco-avatar-ui"]
 # Downloaded Twin presentation in the Scenarios menu.
 networking = ["dep:lunco-networking", "lunco-networking/networking"]
+# Opt-in profiling for the complete GPU-backed application composition.
+tracy = ["bevy/trace_tracy"]
 
 [dependencies]
 bevy = { workspace = true, features = [
@@ -47,11 +49,12 @@ bevy_egui = { workspace = true }
 bevy_winit = { version = "0.19" }
 winit = { version = "0.30.13" }
 
-lunco-api = { path = "../lunco-api", optional = true }
+lunco-api-contracts = { path = "../lunco-api-contracts" }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 lunco-assets-transport = { workspace = true }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets = { path = "../lunco-assets" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-capture = { path = "../lunco-capture", features = ["api"] }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
@@ -69,6 +72,7 @@ lunco-hooks = { path = "../lunco-hooks" }
 lunco-luncosim-edit-core = { path = "../lunco-luncosim-edit-core" }
 lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui" }
 lunco-luncosim-edit-inspector-ui = { path = "../lunco-luncosim-edit-inspector-ui" }
+lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
 lunco-usd-prim-tree-ui = { path = "../lunco-usd-prim-tree-ui" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
@@ -77,6 +81,7 @@ lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }
 lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
 lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
 lunco-render = { path = "../lunco-render" }
+lunco-render-bevy = { path = "../lunco-render-bevy" }
 lunco-render-recovery = { path = "../lunco-render-recovery" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-scene-camera = { path = "../lunco-scene-camera" }
@@ -110,6 +115,7 @@ lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench-guided-ui = { path = "../lunco-workbench-guided-ui" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-storage = { path = "../lunco-storage" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -130,7 +136,7 @@ ignored = ["image", "resvg", "usvg", "winresource"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 velopack = { version = "=1.2.110-ge826545", features = ["public-utils"] }
-ureq = { workspace = true }
+ureq = { workspace = true, features = ["rustls", "gzip"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }

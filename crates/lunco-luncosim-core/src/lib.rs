@@ -317,8 +317,10 @@ pub fn run_headless() -> AppExit {
         .remove_resource::<lunco_api_transport::transports::HttpServerStartupError>()
     {
         eprintln!(
-            "luncosim-server: cannot start HTTP API on 127.0.0.1:{}: {}",
-            error.port, error.message
+            "luncosim-server: cannot start HTTP API on {}:{}: {}",
+            std::net::Ipv4Addr::LOCALHOST,
+            error.port,
+            error.message
         );
         return AppExit::error();
     }

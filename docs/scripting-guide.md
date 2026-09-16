@@ -262,6 +262,13 @@ Both paths avoid a Rust rebuild. The live helper delegates to the native
 `RunScenario`/`run_scenario.sh` for a persistent per-entity observer and
 `run_rhai_test.sh` for a one-shot verdict.
 
+The terminal frontend and the evaluator are deliberately separate. The
+running host's `lunco-scripting` package owns the Rhai engine and the reflected
+`RunRhai` command. `lunco-rhai-repl` only reads terminal input and formats the
+result; `lunco-api-client` only sends the generic API envelope. The in-process
+stdin REPL in `lunco-scripting` is a host-local debug seam and is not reused as
+a second remote client implementation.
+
 ### Inspect & debug
 
 - `print(...)` lands in the console.

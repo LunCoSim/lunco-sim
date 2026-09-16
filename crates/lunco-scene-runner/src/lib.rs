@@ -159,8 +159,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use lunco_core::SimTick;
+use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_core::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
@@ -1137,6 +1137,7 @@ fn reproject_test_transport(app: &mut App) {
     }
 }
 
+/// Run the production authored-scene command and return its process exit code.
 pub fn run() -> u8 {
     if std::env::args().any(|argument| argument == "--list") {
         return list_scene_tests();
@@ -1575,7 +1576,7 @@ pub fn run() -> u8 {
         #[cfg(feature = "ui")]
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
-                use lunco_luncosim_edit_ui::selection::{compute_selection_aabb, Selected};
+                use lunco_luncosim_edit_ui::selection::{Selected, compute_selection_aabb};
                 use lunco_usd_bevy_scene::UsdPrimPath;
 
                 let target_ent = {

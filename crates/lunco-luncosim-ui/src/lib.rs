@@ -5,13 +5,17 @@
 //! windowed-only update surface. The simulator core does not depend on these
 //! modules, so editing the UI does not rebuild the headless application core.
 
+mod application;
 #[cfg(feature = "api-transport")]
 mod offscreen;
 mod presentation_bridge;
 mod save_scenario;
 mod terrain_horizon;
 mod ui;
+#[cfg(all(feature = "networking", not(target_family = "wasm")))]
+mod url_scheme;
 
+pub use application::run_gui;
 #[cfg(feature = "api-transport")]
 pub use offscreen::LunCoSimOffscreenPlugin;
 pub(crate) use save_scenario::SaveScenario;

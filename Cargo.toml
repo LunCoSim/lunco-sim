@@ -24,6 +24,7 @@ members = [
     "crates/lunco-avatar-ui",
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-core",
+    "crates/lunco-scene-runner",
     "crates/lunco-luncosim-ui",
     "crates/lunco-luncosim-exposures",
     "crates/lunco-usd-ui",
@@ -112,6 +113,8 @@ members = [
     "crates/lunco-terrain-globe",
     "crates/lunco-terrain-core",
     "crates/lunco-api",
+    "crates/lunco-api-contracts",
+    "crates/lunco-api-client",
     "crates/lunco-api-transport",
     "crates/lunco-cosim",
     "crates/lunco-cosim-core",
@@ -143,6 +146,7 @@ members = [
     "crates/lunco-status-core",
     "crates/lunco-web",
     "crates/lunco-scripting",
+    "crates/lunco-rhai-repl",
     "crates/lunco-scripting-bridge-core",
     "crates/lunco-scripting-bridge-spatial",
     "crates/lunco-scripting-bridge-time",
@@ -447,8 +451,10 @@ web-sys = "0.3"
 console_error_panic_hook = "0.1"
 
 # ── Misc shared third-party (centralised to kill version drift) ──────
-# v3: TLS moved into the default `rustls` feature (the v2 `tls` flag is gone).
-ureq = "3"
+# Keep the shared HTTP client lean. HTTPS and response compression are enabled
+# only by the asset/update consumers that need them; local API clients opt into
+# TLS through their own feature.
+ureq = { version = "3", default-features = false }
 # NB: bincode 3.0.0 on crates.io is a non-functional troll release
 # (`compile_error!("https://xkcd.com/2347/")`); 2.x is the real latest. The
 # The `serde` feature exposes `bincode::serde::{encode_to_vec,decode_from_slice}`

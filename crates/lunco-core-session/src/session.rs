@@ -42,11 +42,6 @@ use std::collections::{HashMap, VecDeque};
 /// Network menu) — can reference one constant.
 pub const DEFAULT_HOST_PORT: u16 = 5888;
 
-/// Default HTTP API port when `--api` is passed without an explicit value.
-/// Single source of truth for the `4101` the GUI / headless server bins bind to
-/// (loopback admin API) — matches the `lunco-server.service` unit and DEPLOY.md.
-pub const DEFAULT_API_PORT: u16 = 4101;
-
 /// Which side of the wire is this process? Drives three decisions:
 /// capture (`Standalone` never serializes), id minting (`Host` mints
 /// [`lunco_core::Provenance::Authoritative`]), and apply (`Host` authorizes).

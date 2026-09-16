@@ -23,7 +23,7 @@
 # wall's 8 m width: line of sight is a GEOMETRY question, so the way out of a
 # radio shadow is to move, not to wait.
 #
-#   sandbox rhai --api 4101 -e 'print(can_reach(find("/CommsWallTest/Rover/Comms"), "base"))'
+#   luncosim rhai --api 4101 -e 'print(can_reach(find("/CommsWallTest/Rover/Comms"), "base"))'
 #
 # `can_reach` takes the rover's GID and the mast's authored ROLE ("base"); see
 # `assets/scripting/prelude/links.rhai`. The kernel also emits `link.aos` /

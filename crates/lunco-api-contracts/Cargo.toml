@@ -1,0 +1,13 @@
+[package]
+name = "lunco-api-contracts"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Pure wire contracts shared by LunCoSim API transports and clients"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
