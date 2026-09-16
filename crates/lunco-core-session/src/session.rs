@@ -949,6 +949,17 @@ pub mod capability {
 /// Absent hook ⇒ behaviour is byte-for-byte the pre-hook gate.
 pub const AUTHORIZE_HOOK: &str = "rbac.authorize";
 
+lunco_hooks::declare_hook! {
+    id: AUTHORIZE_HOOK,
+    owner: "lunco-core-session",
+    description: "Further restrict an already admitted command without weakening the compiled RBAC floor.",
+    signature: [ctx: Map],
+    output: Bool,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
 /// The [`lunco_hooks`] id of the **control-authority takeover** policy (spec 034).
 ///
 /// When one actor tries to claim an endpoint **another session already owns**, the
@@ -963,12 +974,34 @@ pub const AUTHORIZE_HOOK: &str = "rbac.authorize";
 /// its current owner). See [`may_take_control`].
 pub const CONTROL_AUTHORITY_HOOK: &str = "control.authority.take";
 
+lunco_hooks::declare_hook! {
+    id: CONTROL_AUTHORITY_HOOK,
+    owner: "lunco-core-session",
+    description: "Decide whether a session may take an entity from another session.",
+    signature: [ctx: Map],
+    output: Bool,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
 /// Hook id for the user-facing decision made when an opened Twin declares
 /// datasets that are not installed. The engine supplies the facts; the Rhai
 /// policy returns `"prompt"` for an interactive consent window or
 /// `"skip"` when that interaction is not appropriate (for example in a
 /// headless run). The policy never authorises network traffic itself.
 pub const DATASET_PROVISION_HOOK: &str = "assets.provision";
+
+lunco_hooks::declare_hook! {
+    id: DATASET_PROVISION_HOOK,
+    owner: "lunco-core-session",
+    description: "Choose whether missing Twin datasets should be requested or skipped.",
+    signature: [ctx: Map],
+    output: String,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
 
 /// Which entities the **control path is currently down** to: commands issued now
 /// would not reach them.

@@ -117,6 +117,129 @@ impl ValueBuilder for RhaiBuilder {
     }
 }
 
+fn hook_operation_result(
+    id: &str,
+    ok: bool,
+    status: &str,
+    installed: bool,
+    value: Dynamic,
+    error: Option<&str>,
+) -> Dynamic {
+    let mut map = Map::new();
+    map.insert("id".into(), Dynamic::from(id.to_owned()));
+    map.insert("ok".into(), Dynamic::from_bool(ok));
+    map.insert("status".into(), Dynamic::from(status.to_owned()));
+    map.insert("installed".into(), Dynamic::from_bool(installed));
+    map.insert("value".into(), value);
+    map.insert(
+        "error".into(),
+        error
+            .map(|error| Dynamic::from(error.to_owned()))
+            .unwrap_or(Dynamic::UNIT),
+    );
+    Dynamic::from_map(map)
+}
+
+fn lifecycle_status_dynamic(status: &crate::policy::LifecyclePolicyReport) -> Dynamic {
+    RhaiBuilder.map(vec![
+        ("event".into(), Dynamic::from(status.event.clone())),
+        ("status".into(), Dynamic::from(status.status.clone())),
+        (
+            "result".into(),
+            status
+                .result
+                .as_ref()
+                .map(lunco_hooks_rhai::hook_to_dynamic)
+                .unwrap_or(Dynamic::UNIT),
+        ),
+        (
+            "error".into(),
+            status
+                .error
+                .as_ref()
+                .map(|error| Dynamic::from(error.clone()))
+                .unwrap_or(Dynamic::UNIT),
+        ),
+    ])
+}
+
+fn policy_status_dynamic(
+    status: &crate::policy::PolicyLoadReport,
+    lifecycle: &crate::policy::LifecyclePolicyReport,
+) -> Dynamic {
+    let strings = |values: &[String]| {
+        RhaiBuilder.array(
+            values
+                .iter()
+                .cloned()
+                .map(Dynamic::from)
+                .collect::<Vec<_>>(),
+        )
+    };
+    RhaiBuilder.map(vec![
+        ("scope".into(), Dynamic::from(status.scope.clone())),
+        ("installed".into(), strings(&status.installed)),
+        ("failed".into(), strings(&status.failed)),
+        (
+            "required_failures".into(),
+            strings(&status.required_failures),
+        ),
+        (
+            "error".into(),
+            status
+                .error
+                .as_ref()
+                .map(|error| Dynamic::from(error.clone()))
+                .unwrap_or(Dynamic::UNIT),
+        ),
+        ("lifecycle".into(), lifecycle_status_dynamic(lifecycle)),
+    ])
+}
+
+fn lifecycle_status_json(status: &crate::policy::LifecyclePolicyReport) -> serde_json::Value {
+    let (result, result_error) = match status.result.as_ref() {
+        Some(value) => match dynamic_to_json(&lunco_hooks_rhai::hook_to_dynamic(value)) {
+            Ok(value) => (value, serde_json::Value::Null),
+            Err(error) => (serde_json::Value::Null, serde_json::Value::String(error)),
+        },
+        None => (serde_json::Value::Null, serde_json::Value::Null),
+    };
+    serde_json::json!({
+        "event": status.event,
+        "status": status.status,
+        "result": result,
+        "error": status.error,
+        "result_error": result_error,
+    })
+}
+
+/// JSON discovery view of the last authored application/Twin policy load.
+///
+/// The runtime hook ABI remains native; this helper is only for the
+/// transport-facing authoring catalog, whose outer response is JSON by API
+/// contract.
+pub fn policy_status_json(world: &World) -> serde_json::Value {
+    let Some(registry) = world.get_resource::<crate::policy::ScriptedPolicyRegistry>() else {
+        return serde_json::json!({
+            "scope": "",
+            "installed": [],
+            "failed": [],
+            "required_failures": [],
+            "error": null,
+            "lifecycle": lifecycle_status_json(&Default::default()),
+        });
+    };
+    let status = &registry.status;
+    serde_json::json!({
+        "scope": status.scope,
+        "installed": status.installed,
+        "failed": status.failed,
+        "required_failures": status.required_failures,
+        "error": status.error,
+        "lifecycle": lifecycle_status_json(&registry.lifecycle),
+    })
+}
+
 fn sysml_report_json_value(path: &str) -> ImmutableString {
     match bridge_core::query_raw("ValidateSysml", serde_json::json!({ "path": path })) {
         Ok(Some(value)) => serde_json::to_string(&value).unwrap_or_else(|error| {
@@ -974,19 +1097,16 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
             .unwrap_or(Dynamic::UNIT)
     });
 
-    // register_hook(id, entry, src) -> bool — plug a rhai rule into ANY Rust
-    // policy seam (lunco-hooks) from a scenario: merge policies, RBAC,
-    // control-authority takeover, comms link availability
-    // ("link.connected"), … Replaces the previously-registered hook for
-    // that id (the built-in `assets/scripting/policy/*` rules are just earlier
-    // registrations), so a scenario re-shapes policy live, no rebuild — the
-    // doc-37 §8 "policy = rhai" surface. `src` must define `fn <entry>(...)`;
-    // returns false (and logs why) on a compile error. Replacing or removing a
-    // hook is itself a policy mutation and uses the same Operator-floor gate as
-    // other global script settings.
+    // bind_policy(id, entry, src) -> #{ok, status, id, error} — install a Rhai
+    // implementation into any installable hook seam. The source is supplied by
+    // authored Rhai, while the Rust owner supplies only the reflected contract.
+    // Replacing or removing a hook is a policy mutation and uses the same
+    // Operator-floor gate as other global script settings. A failed replacement
+    // removes the previous implementation, so an invalid policy cannot keep
+    // executing stale behavior.
     engine.register_fn(
-        "register_hook",
-        |id: ImmutableString, entry: ImmutableString, src: ImmutableString| -> bool {
+        "bind_policy",
+        |id: ImmutableString, entry: ImmutableString, src: ImmutableString| -> Dynamic {
             let authorized = bridge_core::with_world(|world| {
                 bridge_core::enforce_script_mutation(
                     world,
@@ -997,8 +1117,57 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
             })
             .unwrap_or(false);
             if !authorized {
-                bevy::log::warn!("[rhai] register_hook denied by script authority");
-                return false;
+                bevy::log::warn!("[rhai] bind_policy denied by script authority");
+                return hook_operation_result(
+                    id.as_str(),
+                    false,
+                    "denied",
+                    lunco_hooks::get(id.as_str()).is_some(),
+                    Dynamic::UNIT,
+                    Some("policy mutation denied by script authority"),
+                );
+            }
+            let Some(contract) = lunco_hooks::descriptor(id.as_str()) else {
+                let error = format!(
+                    "hook '{}' has no owner declaration; declare it with declare_hook! first",
+                    id
+                );
+                bevy::log::warn!("[rhai] bind_policy rejected: {error}");
+                return hook_operation_result(
+                    id.as_str(),
+                    false,
+                    "rejected",
+                    lunco_hooks::get(id.as_str()).is_some(),
+                    Dynamic::UNIT,
+                    Some(error.as_str()),
+                );
+            };
+            if !contract.installable {
+                let error = format!("hook '{}' is not installable at runtime", id);
+                bevy::log::warn!("[rhai] bind_policy rejected: {error}");
+                return hook_operation_result(
+                    id.as_str(),
+                    false,
+                    "rejected",
+                    lunco_hooks::get(id.as_str()).is_some(),
+                    Dynamic::UNIT,
+                    Some(error.as_str()),
+                );
+            }
+            if contract.deterministic {
+                let error = format!(
+                    "hook '{}' requires a deterministic authored policy manifest entry",
+                    id
+                );
+                bevy::log::warn!("[rhai] bind_policy rejected: {error}");
+                return hook_operation_result(
+                    id.as_str(),
+                    false,
+                    "rejected",
+                    lunco_hooks::get(id.as_str()).is_some(),
+                    Dynamic::UNIT,
+                    Some(error.as_str()),
+                );
             }
             match lunco_hooks_rhai::register_rhai_hook(
                 id.as_str(),
@@ -1007,23 +1176,34 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
                 false,
             ) {
                 Ok(_) => {
-                    bevy::log::info!("[rhai] register_hook: '{id}' → {entry}()");
-                    true
+                    // An inline binding is no longer the file-backed policy
+                    // selected by the application/Twin manifest.
+                    lunco_hooks::unbind_policy(id.as_str());
+                    bevy::log::info!("[rhai] bind_policy: '{id}' → {entry}()");
+                    hook_operation_result(id.as_str(), true, "installed", true, Dynamic::UNIT, None)
                 }
                 Err(e) => {
-                    bevy::log::warn!("[rhai] register_hook '{id}' failed to compile: {e}");
-                    false
+                    lunco_hooks::unregister(id.as_str());
+                    lunco_hooks::unbind_policy(id.as_str());
+                    bevy::log::warn!("[rhai] bind_policy '{id}' failed to compile: {e}");
+                    hook_operation_result(
+                        id.as_str(),
+                        false,
+                        "rejected",
+                        false,
+                        Dynamic::UNIT,
+                        Some(e.as_str()),
+                    )
                 }
             }
         },
     );
 
-    // unregister_hook(id) -> bool — drop a rule and fall back to the engine's
-    // own built-in for that seam. The counterpart to `register_hook`: a scenario
-    // that overrode a policy for one shot can put it back without knowing what
-    // the original said, because "no hook" is always a valid, defined state (the
-    // Rust seam's built-in). Returns whether a hook was actually removed.
-    engine.register_fn("unregister_hook", |id: ImmutableString| -> bool {
+    // unbind_policy(id) -> #{ok, status, id, error} — remove exactly the
+    // installed implementation. It never fabricates or restores another
+    // implementation; a subsequent policy reload is the explicit way to apply
+    // the authored application/Twin manifest again.
+    engine.register_fn("unbind_policy", |id: ImmutableString| -> Dynamic {
         let authorized = bridge_core::with_world(|world| {
             bridge_core::enforce_script_mutation(
                 world,
@@ -1034,30 +1214,119 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
         })
         .unwrap_or(false);
         if !authorized {
-            bevy::log::warn!("[rhai] unregister_hook denied by script authority");
-            return false;
+            bevy::log::warn!("[rhai] unbind_policy denied by script authority");
+            return hook_operation_result(
+                id.as_str(),
+                false,
+                "denied",
+                lunco_hooks::get(id.as_str()).is_some(),
+                Dynamic::UNIT,
+                Some("policy mutation denied by script authority"),
+            );
         }
         let existed = lunco_hooks::get(id.as_str()).is_some();
         lunco_hooks::unregister(id.as_str());
-        bevy::log::info!("[rhai] unregister_hook: '{id}' (was registered: {existed})");
-        existed
+        lunco_hooks::unbind_policy(id.as_str());
+        let status = if existed { "removed" } else { "missing" };
+        let error = (!existed).then_some("hook implementation is not installed");
+        bevy::log::info!("[rhai] unbind_policy: '{id}' (was installed: {existed})");
+        hook_operation_result(id.as_str(), existed, status, false, Dynamic::UNIT, error)
     });
 
-    // list_hooks() -> [#{id, backend, deterministic}] — which policy seams are
-    // currently filled, and by what. Discovery, so a script can find the seam it
-    // wants to override instead of hard-coding an id that may have moved.
+    // invoke_hook(id, [args]) -> #{ok, installed, value, error}. The result is
+    // deliberately structured: `installed=false` is distinct from a policy
+    // that is installed but faulted during invocation.
+    engine.register_fn(
+        "invoke_hook",
+        |id: ImmutableString, args: rhai::Array| -> Dynamic {
+            match lunco_hooks_rhai::invoke_rhai_hook(id.as_str(), args) {
+                Ok(Some(value)) => {
+                    hook_operation_result(id.as_str(), true, "ok", true, value, None)
+                }
+                Ok(None) => hook_operation_result(
+                    id.as_str(),
+                    false,
+                    "unavailable",
+                    false,
+                    Dynamic::UNIT,
+                    Some("hook implementation is not installed"),
+                ),
+                Err(error) => hook_operation_result(
+                    id.as_str(),
+                    false,
+                    "fault",
+                    true,
+                    Dynamic::UNIT,
+                    Some(error.as_str()),
+                ),
+            }
+        },
+    );
+
+    // list_hooks() -> complete reflected hook contracts, policy bindings, and
+    // implementation state. This includes declared-but-unimplemented seams so
+    // an author can discover an available extension point before binding it.
     engine.register_fn("list_hooks", || -> Dynamic {
-        let rows: Vec<Dynamic> = lunco_hooks::index()
+        let rows: Vec<Dynamic> = lunco_hooks::catalog()
             .into_iter()
             .map(|h| {
                 let mut m = rhai::Map::new();
                 m.insert("id".into(), Dynamic::from(h.id));
-                m.insert("backend".into(), Dynamic::from(h.backend));
+                m.insert("owner".into(), Dynamic::from(h.owner));
+                m.insert("description".into(), Dynamic::from(h.description));
+                let parameters = h
+                    .parameters
+                    .into_iter()
+                    .map(|parameter| {
+                        let mut parameter_map = rhai::Map::new();
+                        parameter_map.insert("name".into(), Dynamic::from(parameter.name));
+                        parameter_map
+                            .insert("type".into(), Dynamic::from(parameter.value_type.as_str()));
+                        Dynamic::from_map(parameter_map)
+                    })
+                    .collect::<rhai::Array>();
+                m.insert("parameters".into(), Dynamic::from_array(parameters));
+                m.insert("output".into(), Dynamic::from(h.output.as_str()));
+                m.insert(
+                    "policy_file".into(),
+                    h.policy_file.map(Dynamic::from).unwrap_or(Dynamic::UNIT),
+                );
+                m.insert(
+                    "policy_entry".into(),
+                    h.policy_entry.map(Dynamic::from).unwrap_or(Dynamic::UNIT),
+                );
                 m.insert("deterministic".into(), Dynamic::from_bool(h.deterministic));
+                m.insert("required".into(), Dynamic::from_bool(h.required));
+                m.insert("installable".into(), Dynamic::from_bool(h.installable));
+                m.insert("declared".into(), Dynamic::from_bool(h.declared));
+                m.insert("installed".into(), Dynamic::from_bool(h.installed));
+                m.insert(
+                    "backend".into(),
+                    h.backend.map(Dynamic::from).unwrap_or(Dynamic::UNIT),
+                );
                 Dynamic::from_map(m)
             })
             .collect();
         RhaiBuilder.array(rows)
+    });
+
+    // policy_status() -> #{scope, installed, failed, required_failures, error,
+    // lifecycle}.
+    // Loading errors belong to the policy loader, not to an individual hook
+    // row, so expose the last startup/Twin transition report separately.
+    engine.register_fn("policy_status", || -> Dynamic {
+        bridge_core::with_world(|world| {
+            world
+                .get_resource::<crate::policy::ScriptedPolicyRegistry>()
+                .map(|registry| policy_status_dynamic(&registry.status, &registry.lifecycle))
+        })
+        .flatten()
+        .unwrap_or_else(|| {
+            policy_status_dynamic(
+                &crate::policy::PolicyLoadReport::default(),
+                &crate::policy::LifecyclePolicyReport::default(),
+            )
+        })
     });
 
     // get(id, "Component.field") -> Dynamic (f64/i64/bool/string/array/map) or ().

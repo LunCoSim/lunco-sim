@@ -209,7 +209,7 @@ The default policy is `propagate`. A Twin may override this local presentation
 decision through the generic Rhai hook registry:
 
 ```rhai
-register_hook("usd.component_refresh", "decide_refresh", #"
+bind_policy("usd.component_refresh", "decide_refresh", #"
     fn decide_refresh(facts) {
         // facts.changed_layer, facts.dependent_stage,
         // facts.default_action == "propagate", facts.camera_policy == "preserve"

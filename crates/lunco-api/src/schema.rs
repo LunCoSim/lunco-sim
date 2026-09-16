@@ -186,6 +186,8 @@ pub struct ApiSchema {
     pub commands: Vec<CommandSchema>,
     /// Names of read-only query providers accepted by `ExecuteCommand`.
     pub queries: Vec<String>,
+    /// Reflected hook contracts and their current policy implementations.
+    pub hooks: Vec<HookSchema>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +201,33 @@ pub struct CommandSchema {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldSchema {
+    pub name: String,
+    pub type_name: String,
+}
+
+/// One reflected hook contract. `parameters` and `output` describe the typed
+/// [`lunco_hooks::HookValue`] ABI used by native Rhai/Python bindings; JSON is
+/// only the transport representation of this discovery document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookSchema {
+    pub id: String,
+    pub owner: String,
+    pub description: String,
+    pub parameters: Vec<HookParameterSchema>,
+    pub output: String,
+    pub policy_file: Option<String>,
+    pub policy_entry: Option<String>,
+    pub deterministic: bool,
+    pub required: bool,
+    pub installable: bool,
+    pub declared: bool,
+    pub installed: bool,
+    pub backend: Option<String>,
+}
+
+/// One named positional hook parameter in the reflected ABI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookParameterSchema {
     pub name: String,
     pub type_name: String,
 }

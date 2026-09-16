@@ -30,15 +30,11 @@ lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-spatial = { path = "../lunco-spatial", optional = true }
 lunco-core-session = { path = "../lunco-core-session" }
-# Render recovery is an application-edge policy provider. Keep it optional and
-# out of the default Rhai/world bridge so headless hosts do not acquire Bevy's
-# GPU graph merely to register generic scripted policies.
-lunco-render-recovery = { path = "../lunco-render-recovery", optional = true }
 # The Rhai tutorial bridge reads the shared resolved keymap. Optional so
 # Python-only and script-free builds do not acquire the input projection.
 lunco-input-core = { path = "../lunco-input-core", optional = true }
 lunco-physics = { path = "../lunco-physics", optional = true }
-# For the readiness policy hook id registered in `register_builtin_policies`.
+# For the readiness policy contract declared by its owning crate.
 lunco-readiness = { workspace = true }
 # `fnv1a64` — content-address a scenario's source to a cache key for the
 # compiled-AST memo (Substrate E fast tier; local/ephemeral, never on wire).
@@ -62,7 +58,6 @@ rhai = { workspace = true, optional = true }
 # ApiEntityRegistry are needed here. Application roots add the outward
 # transport package separately.
 lunco-api = { path = "../lunco-api", optional = true }
-lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false, optional = true }
 # Tool libraries: the runtime-agnostic registry (lunco-tools) + its rhai binding
 # (lunco-tools-rhai). Gated on `rhai` since the binding + scenario runtime are
 # rhai; the registry itself is dependency-light.
@@ -88,10 +83,7 @@ lunco-workspace = { path = "../lunco-workspace", optional = true }
 # rhai on by default — the browser-capable backend. Turn it off
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
-rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-input-core", "dep:lunco-scripting-bridge-core", "lunco-scripting-bridge-core/workspace", "dep:lunco-scripting-bridge-spatial", "dep:lunco-scripting-bridge-time", "dep:lunco-scripting-bridge-usd", "dep:lunco-celestial-spatial", "dep:lunco-physics", "dep:lunco-spatial", "lunco-twin-journal/hooks"]
-# Opt-in bridge for the GUI's render-shadow policy. This edge belongs to the
-# application composition root, never to the generic scripting/runtime crate.
-render-policy = ["dep:lunco-render-recovery"]
+rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-input-core", "dep:lunco-scripting-bridge-core", "lunco-scripting-bridge-core/workspace", "dep:lunco-scripting-bridge-spatial", "dep:lunco-scripting-bridge-time", "dep:lunco-scripting-bridge-usd", "dep:lunco-physics", "dep:lunco-spatial", "lunco-twin-journal/hooks"]
 # Python enables the same language-neutral bridge package as Rhai; its Python
 # binding remains a separate optional backend.
 python = ["dep:pyo3", "dep:libloading", "dep:serde_json", "dep:lunco-api", "dep:lunco-scripting-bridge-core"]

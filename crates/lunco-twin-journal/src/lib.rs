@@ -150,6 +150,18 @@ pub enum DomainKind {
     Other(String),
 }
 
+#[cfg(feature = "hooks")]
+lunco_hooks::declare_hook! {
+    id: "journal.merge.order",
+    owner: "lunco-twin-journal",
+    description: "Order concurrent journal entries with a convergent deterministic policy.",
+    signature: [a: Map, b: Map],
+    output: Int,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
 /// Typed reference to a domain entity. Used for conflict detection and
 /// cross-domain link tracking. `path` is a stable, domain-defined identity
 /// (e.g. `"MyClass.k"` for Modelica, `"/world/rover/wheel0"` for USD).

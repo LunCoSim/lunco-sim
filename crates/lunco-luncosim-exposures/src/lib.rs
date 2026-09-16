@@ -65,6 +65,28 @@ const LUNAR_MAP_SETTING_KEY: &str = "ui.lunar_map";
 const RUNTIME_UI_VISIBILITY_HOOK: &str = "runtime.ui.visibility";
 const RUNTIME_UI_PROPERTIES_HOOK: &str = "runtime.ui.properties";
 
+lunco_hooks::declare_hook! {
+    id: RUNTIME_UI_VISIBILITY_HOOK,
+    owner: "lunco-luncosim-exposures",
+    description: "Choose whether an authored runtime UI surface is visible.",
+    signature: [facts: Map],
+    output: Map,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
+lunco_hooks::declare_hook! {
+    id: RUNTIME_UI_PROPERTIES_HOOK,
+    owner: "lunco-luncosim-exposures",
+    description: "Build the typed property map presented by an authored runtime UI surface.",
+    signature: [facts: Map],
+    output: Map,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
 /// Ask the active Twin's Rhai policy whether a subject-scoped surface is
 /// visible. The engine passes one owned, typed fact map; no product or model
 /// name is interpreted here.

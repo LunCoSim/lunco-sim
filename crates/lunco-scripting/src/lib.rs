@@ -231,130 +231,6 @@ pub fn on_close_script_document(
 
 pub struct LunCoScriptingPlugin;
 
-/// Register the built-in `policy→rhai` hooks from `assets/scripting/policy/*.rhai`.
-/// Each is a small authored decision function consulted by a Rust seam by hook id;
-/// authoring the rule in rhai keeps policy out of compiled code (tunable, no
-/// rebuild). Returns every missing or failed built-in so a pre-flight caller can
-/// refuse to report a clean result without its policy layer.
-#[cfg(feature = "rhai")]
-pub fn register_builtin_policies() -> Result<(), String> {
-    // (policy file stem, hook id, entry fn)
-    const BUILTINS: &[(&str, &str, &str)] = &[
-        (
-            "control_authority",
-            lunco_core_session::CONTROL_AUTHORITY_HOOK,
-            "may_take_control",
-        ),
-        // Readiness policy: does a pending compile / scene load freeze the
-        // world, freeze one object, or cost nothing? Consulted every frame by
-        // `lunco_readiness::evaluate_readiness`.
-        (
-            "readiness",
-            lunco_readiness::READINESS_HOOK,
-            "readiness_action",
-        ),
-        // Dataset provisioning policy: Rust reports missing Twin datasets;
-        // Rhai decides whether an interactive consent window is appropriate.
-        (
-            "dataset_provisioning",
-            lunco_core_session::DATASET_PROVISION_HOOK,
-            "dataset_provisioning",
-        ),
-        // Renderer Rust publishes shadow-resource facts only; the authored
-        // Rhai policy owns the warning decision and message. The render edge
-        // is deliberately opt-in so a headless scripting host stays GPU-free.
-        #[cfg(feature = "render-policy")]
-        (
-            "render_shadow_quality",
-            lunco_render_recovery::RENDER_SHADOW_QUALITY_HOOK,
-            "shadow_quality",
-        ),
-        // Runtime presentation is a typed Twin policy. The engine publishes
-        // generic subject facts; the policy owns visibility and scalar view
-        // model construction.
-        (
-            "runtime_ui_surface",
-            "runtime.ui.visibility",
-            "runtime_ui_surface",
-        ),
-        (
-            "runtime_ui_properties",
-            "runtime.ui.properties",
-            "runtime_ui_properties",
-        ),
-        // Capture selection is separate from live visibility. A Twin can ask
-        // the recorder to wait for any visible surface without putting a
-        // recording flag in the global UI manifest or engine core.
-        (
-            "runtime_ui_recording",
-            "runtime.ui.recording",
-            "runtime_ui_recording",
-        ),
-        // Generated Modelica source, topology and diagram schema. The USD
-        // projector supplies the complete composed graph as facts; this policy
-        // owns the emitted model and its presentation without a Rust edit.
-        (
-            "synth_acausal_network",
-            "synth.acausal-network",
-            "synthesize",
-        ),
-        (
-            "synth_actuator_wrench",
-            "synth.actuator-wrench",
-            "synthesize",
-        ),
-        // Direct rover links may use Earth stations, lunar bases, or relays.
-        // Rover-to-rover connectivity belongs to a separate authored radio
-        // system, not the generic direct-link graph.
-        (
-            "link",
-            lunco_celestial_spatial::link::LINK_HOOK,
-            "link_connected",
-        ),
-        // LINT policies — one per DOMAIN, because a USD rule, a script rule and a
-        // Modelica rule share no vocabulary and no audience. The domain crate
-        // gathers facts and calls `lunco_lint::run_lint(domain, facts)`; the rules
-        // are entirely here, and `register_hook("lint.usd", …)` replaces them on a
-        // running sim.
-        ("lint_usd", "lint.usd", "lint_usd"),
-        ("lint_rhai", "lint.rhai", "lint_rhai"),
-        ("lint_modelica", "lint.modelica", "lint_modelica"),
-        ("lint_sysml", "lint.sysml", "lint_sysml"),
-        ("lint_twin", "lint.twin", "lint_twin"),
-        // (Link availability is not a builtin policy. The generic link kernel
-        // computes the geometry and applies a builtin range+mask+occlusion rule;
-        // an authored `link.connected` hook overrides the verdict, and routing is
-        // rhai over `query("Links")` — see doc 49 / prelude/links.rhai.)
-    ];
-    let sources = match lunco_assets_core::scripting::policy_files() {
-        Ok(sources) => sources,
-        Err(error) => {
-            error!("[policy] active policy assets could not be loaded: {error}");
-            return Err(error);
-        }
-    };
-    let mut failures = Vec::new();
-    for (stem, hook_id, entry) in BUILTINS {
-        let Some((_, src)) = sources.iter().find(|(candidate, _)| candidate == stem) else {
-            warn!("[policy] built-in policy '{stem}' missing from active policy assets");
-            failures.push(format!("{stem}: active source is missing"));
-            continue;
-        };
-        match lunco_hooks_rhai::register_rhai_hook(*hook_id, *entry, src, false) {
-            Ok(_) => info!("[policy] registered built-in '{stem}' → {hook_id}"),
-            Err(e) => {
-                error!("[policy] built-in policy '{stem}' failed to compile: {e}");
-                failures.push(format!("{stem}: {e}"));
-            }
-        }
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(failures.join("; "))
-    }
-}
-
 impl Plugin for LunCoScriptingPlugin {
     fn build(&self, app: &mut App) {
         info!("Initializing LunCo Scripting Bridge...");
@@ -466,19 +342,18 @@ impl Plugin for LunCoScriptingPlugin {
             // BEFORE the runtime engine is built, so build_world_engine's binding
             // binds them immediately.
             tool_libs::register_builtins();
-            // Built-in `policy→rhai` hooks: register each `assets/scripting/policy/
-            // *.rhai` under its hook id so the possession / authorization paths
-            // consult AUTHORED rhai rules, not hardcoded Rust (spec 034 control-
-            // authority takeover). These are the weakest-scope defaults; a
-            // `LunCoPolicy` USD prim projected at the same seam hot-replaces them.
-            if let Err(error) = register_builtin_policies() {
-                error!("[policy] built-in policy registration incomplete: {error}");
-            }
             // Shared per-document diagnostics store (also init'd by Modelica;
             // init_resource is idempotent). Scenario compile/runtime errors land
             // here and surface via the ScriptStatus query.
             app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
             app.init_resource::<world_bridge::PendingWorldScripts>();
+            // Hook contracts are link-collected by `declare_hook!` in their
+            // owner crates. The application startup policy installs the
+            // application manifest, while each active Twin gets its own
+            // startup/close/reload policy invocation.
+            app.add_systems(Startup, policy::load_application_policies_on_startup)
+                .add_observer(policy::sync_policies_on_twin_added)
+                .add_observer(policy::wind_down_policies_on_twin_closed);
             // RunRhai needs full World access, so its API response is resolved
             // by the Update drain after evaluation completes.
             app.register_deferred_command::<commands::RunRhai>();
@@ -831,38 +706,5 @@ mod journal_tests {
             .expect("script redo applies");
         assert_eq!(reg.documents.get(&id).unwrap().document().source, "v2");
         assert_eq!(journal.len(), 3, "apply, undo, and redo are all journaled");
-    }
-}
-
-#[cfg(all(test, feature = "rhai", feature = "render-policy"))]
-mod policy_tests {
-    use super::*;
-
-    #[test]
-    fn render_shadow_quality_policy_owns_the_warning_message() {
-        register_builtin_policies().expect("built-in policies compile");
-        let facts = lunco_hooks::HookValue::map([
-            ("directional_casters", lunco_hooks::HookValue::Int(0)),
-            ("point_casters", lunco_hooks::HookValue::Int(5)),
-            ("spot_casters", lunco_hooks::HookValue::Int(0)),
-            (
-                "max_directional_shadow_casters",
-                lunco_hooks::HookValue::Int(0),
-            ),
-            ("max_point_shadow_casters", lunco_hooks::HookValue::Int(1)),
-            ("max_spot_shadow_casters", lunco_hooks::HookValue::Int(0)),
-            ("estimated_bytes", lunco_hooks::HookValue::Int(1)),
-            ("budget_bytes", lunco_hooks::HookValue::Int(2)),
-        ]);
-        let result =
-            lunco_hooks::invoke(lunco_render_recovery::RENDER_SHADOW_QUALITY_HOOK, &[facts])
-                .expect("the render shadow policy is registered")
-                .expect("the render shadow policy accepts renderer facts");
-        let lunco_hooks::HookValue::Str(message) = result else {
-            panic!("the render shadow policy must return warning text when limits are unmet");
-        };
-        assert!(message.contains("5 point caster(s) exceed the configured limit of 1"));
-        assert!(message.contains("All authored shadow maps remain enabled"));
-        lunco_hooks::unregister(lunco_render_recovery::RENDER_SHADOW_QUALITY_HOOK);
     }
 }

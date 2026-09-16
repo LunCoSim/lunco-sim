@@ -46,12 +46,21 @@ fn main() -> lunco_luncosim_core::AppExit {
                 );
                 std::process::exit(2);
             }
-            // The app is intentionally not constructed for pre-flight, so its
-            // scripting plugin cannot register the authored lint policies.
-            // Use the same registration owner as the live runtime before the
-            // shared ValidateAsset entry point is called.
-            if let Err(error) = lunco_scripting::register_builtin_policies() {
-                eprintln!("--validate cannot register built-in policies: {error}");
+            // The app is intentionally not constructed for pre-flight. Resolve
+            // the same authored application policy manifest used at startup,
+            // but keep its derived registry local to this one-shot command.
+            let mut policy_registry = lunco_scripting::policy::ScriptedPolicyRegistry::default();
+            let report =
+                lunco_scripting::policy::load_application_policies(&mut policy_registry, None);
+            if let Some(error) = report.error {
+                eprintln!("--validate cannot load application policies: {error}");
+                std::process::exit(1);
+            }
+            if !report.failed.is_empty() {
+                eprintln!(
+                    "--validate cannot load application policies: {}",
+                    report.failed.join("; ")
+                );
                 std::process::exit(1);
             }
             std::process::exit(lunco_scene_validation::validate::run_cli(&paths));

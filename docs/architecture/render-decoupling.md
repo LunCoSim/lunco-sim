@@ -48,9 +48,9 @@ feature-unified invocation.
 
 The windowed `lunco-luncosim` shell owns `DefaultPlugins`, Bevy light/window
 features, the `LunCoRenderPlugin`, workbench, and render recovery. The scripted
-render-shadow policy is an explicit `lunco-scripting/render-policy` feature
-enabled by that shell; the default Rhai/world bridge does not depend on the
-render-recovery crate. Likewise, `lunco-usd-queries` disables
+render-shadow policy is supplied by the application-edge render recovery and
+its owning UI/workbench crates; the default Rhai/world bridge does not depend
+on the render-recovery crate. Likewise, `lunco-usd-queries` disables
 `lunco-doc-bevy`'s egui default because query providers are shared by API and
 headless hosts.
 

@@ -42,6 +42,20 @@ defer_to = ["capability-discovery", "usd-projection"]
 evidence = "docs/architecture/"
 
 [[skills]]
+name = "rust-rhai-modelica-boundary"
+category = "architecture"
+primary_for = ["choose Rust or Rhai", "choose Modelica or Rust", "policy hook", "lean Rust core"]
+defer_to = ["capability-discovery", "luncosim-architecture", "author-rhai-tool", "use-asset-library"]
+evidence = "docs/architecture/00-overview.md"
+
+[[skills]]
+name = "author-hook-policy"
+category = "authoring"
+primary_for = ["declare hook", "author hook policy", "bind Rhai policy", "hook reflection"]
+defer_to = ["rust-rhai-modelica-boundary", "validate-assets", "capability-discovery"]
+evidence = "docs/architecture/hook-policies.md"
+
+[[skills]]
 name = "coordinate-frames"
 category = "architecture"
 primary_for = ["BigSpace", "reference frames", "pose precision"]

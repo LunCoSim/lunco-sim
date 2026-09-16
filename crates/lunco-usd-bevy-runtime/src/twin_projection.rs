@@ -841,6 +841,17 @@ fn refresh_dependent_stage_assets(
 /// state, so the hook is intentionally not required to be deterministic.
 const COMPONENT_REFRESH_POLICY_HOOK: &str = "usd.component_refresh";
 
+lunco_hooks::declare_hook! {
+    id: COMPONENT_REFRESH_POLICY_HOOK,
+    owner: "lunco-usd-bevy-runtime",
+    description: "Choose whether a changed USD component layer propagates to dependent stages.",
+    signature: [ctx: Map],
+    output: Map,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ComponentRefreshDecision {
     Propagate,

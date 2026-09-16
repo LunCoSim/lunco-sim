@@ -256,8 +256,8 @@ or "not certifiable" rather than claim a nonlinear assembled mechanism is safe.
 Rules are hot-swappable at that same level:
 
 ```rhai
-register_hook("lint.usd", "lint_usd", my_rules_source);   // next RunLint obeys
-unregister_hook("lint.usd");                              // back to no USD rules
+bind_policy("lint.usd", "lint_usd", my_rules_source);    // next RunLint obeys
+unbind_policy("lint.usd");                                // remove the active implementation
 ```
 
 ## Two entry points, one rule set

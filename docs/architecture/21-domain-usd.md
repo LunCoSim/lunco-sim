@@ -569,15 +569,17 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
   `UsdSceneProjectionFailed` and hidden. The projector does not reinterpret it
   as an omitted camera or choose a previous/heuristic camera; only genuinely
   unauthored USD schema attributes use their standard defaults.
-- **Standalone presentation:** the interactive window host may generate one
-  render-free `SceneCamera` plus one unscoped directional light under the active
-  `UsdSceneRoot` when a standalone assembly has finite projected bounds but no
-  `CameraTrack` or unique `LocalAvatar` initial presentation. The generated
-  camera is framed from composed Bevy bounds and selected after deferred
-  projection; it is Twin/scene-scoped and is removed on authored takeover or
-  `SceneTeardown`. Headless and recording hosts leave this policy disabled, and
-  a scene without finite bounds reports an owning diagnostic instead of a fake
-  camera.
+- **Standalone presentation:** an interactive window host may ask the
+  `camera.default_presentation` Rhai policy to choose `avatar`, `generated`,
+  or `none` when no `CameraTrack` or unique `LocalAvatar` initial presentation
+  is authored. Rust passes only derived USD/ECS counts, validates the closed
+  result, and realizes `generated` as one render-free `SceneCamera` plus one
+  unscoped directional light under the active `UsdSceneRoot` when projected
+  bounds are finite. The pair is selected after deferred projection and is
+  removed on authored/operator takeover or `SceneTeardown`. A missing,
+  faulting, or invalid policy result is a diagnostic and no presentation;
+  headless hosts can leave the convenience policy disabled, and a scene
+  without finite bounds remains camera-less instead of receiving a fake camera.
 
 The local avatar remains a runtime camera embodiment rather than a USD rigid
 body. Its movement controller consumes the standard `UsdPhysics` colliders

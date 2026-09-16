@@ -5,7 +5,7 @@
 //! snapshot and own the retained tree, layout, and styling. A template does not
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
-use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
+use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::picking::events::{Click, Drag, Pointer};
@@ -13,14 +13,14 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{PrimaryEguiContext, egui};
+use bevy_egui::{egui, PrimaryEguiContext};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress, Tags,
     TemplateProperties, UiId,
 };
-use lunco_core::SceneViewport;
 use lunco_core::exposure::EngineExposures;
+use lunco_core::SceneViewport;
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
 use lunco_workbench_core::scene_pick::ScenePickGate;
@@ -30,6 +30,17 @@ use lunco_workbench_state::{RuntimeSurfaceLayout, RuntimeSurfaceLayouts};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::io;
+
+lunco_hooks::declare_hook! {
+    id: "runtime.ui.recording",
+    owner: "lunco-workbench-runtime-ui",
+    description: "Select visible runtime UI surface ids for an active recording.",
+    signature: [facts: Map],
+    output: ArrayOfString,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
 
 /// A semantic action emitted by an authored runtime surface.
 ///

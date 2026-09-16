@@ -21,8 +21,7 @@
 //! Every composed stage currently loaded, through the domain's authored rules
 //! (`assets/scripting/policy/lint_usd.rhai`, hook `lint.usd`) over the complete
 //! USD facts assembled from the standard-joint and USD-sim projection owners.
-//! Rules are rhai: edit and
-//! `register_hook("lint.usd", "lint_usd", src)` and the NEXT `RunLint` obeys
+//! Rules are rhai: edit and bind the `lint.usd` policy, and the NEXT `RunLint` obeys
 //! them, on a running sim, with no rebuild.
 //!
 //! `ValidateAsset` runs the same rules over the same facts for a FILE. This runs
