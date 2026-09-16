@@ -1,0 +1,17 @@
+[package]
+name = "lunco-camera-celestial"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Celestial spatial adapter for generic surface camera frames"
+
+[dependencies]
+bevy = { workspace = true }
+big_space = { workspace = true }
+lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-environment = { path = "../lunco-environment" }
+lunco-time = { path = "../lunco-time" }
+
+[lints]
+workspace = true

@@ -84,8 +84,8 @@ pub use identity::Provenance;
 pub use labels::{entity_display_name, humanize_identifier};
 pub use log::*;
 pub use markers::{
-    CameraPoseLock, CatalogEntryId, EmbeddedScenarioPath, EmbeddedScenarioSource,
-    HorizonShadowTerrain, PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams,
+    CatalogEntryId, EmbeddedScenarioPath, EmbeddedScenarioSource, HorizonShadowTerrain,
+    PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams,
     SunAngularDiameter, TriggerZone, UsdPrimKind, CELESTIAL_COLLISION_LAYER,
     NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG, TRIGGER_COLLISION_LAYER,
 };
@@ -449,16 +449,6 @@ pub const MOON_MEAN_RADIUS_M: f64 = 1_737_400.0;
 // hardware/mobility/usd-sim) reads `relative_speed_f64() > 0`. One representation,
 // no drift.
 
-/// Marker resource indicating that entity dragging is active.
-///
-/// Used by scene editing systems to signal other systems (like avatar possession)
-/// to disable conflicting interactions during drag operations.
-#[derive(Resource, Default)]
-pub struct DragModeActive {
-    /// Whether dragging is currently active.
-    pub active: bool,
-}
-
 /// Marker resource indicating a click-to-place spawn tool is armed.
 ///
 /// Set by scene-edit's spawn placement system whenever `SpawnState`
@@ -628,14 +618,6 @@ impl CursorModeActive<'_> {
 /// Per-entity marker: this entity is currently being dragged by the editor
 /// transform gizmo.
 ///
-/// Set/cleared by scene-edit's gizmo systems (an editor/UI concern that lives
-/// behind the `ui` feature). It exists in `lunco-core` so render/sim systems can
-/// react to a drag **without** depending on `transform-gizmo-bevy`: e.g. the
-/// avatar camera-follow systems pause following a target while it's dragged.
-/// On a headless server nothing inserts it, so those checks are simply always-false.
-#[derive(Component, Default)]
-pub struct GizmoDragging;
-
 /// The fixed-simulation rate, in Hz. The **single source of truth** for every
 /// fixed-step clock in the system: it drives `Time::<Fixed>` (set by each app
 /// binary), [`SimTick`] advancement ([`advance_sim_tick`], one tick per fixed
@@ -761,8 +743,7 @@ impl Plugin for LunCoCorePlugin {
         // plugins.  Load/restart/clear invalidate it synchronously, while the
         // deferred root spawner registers the replacement after creation.
         app.init_resource::<SceneMountState>();
-        app.register_type::<CameraPoseLock>()
-            .register_type::<PhysicsPoseAuthoritative>()
+        app.register_type::<PhysicsPoseAuthoritative>()
             // `telemetry::` — bevy 0.19's prelude exports its own `Severity`
             // (log-level type), which shadows ours in glob-import scopes.
             .register_type::<crate::telemetry::Severity>()

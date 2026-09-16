@@ -267,7 +267,8 @@ pub(crate) fn build_interaction_cadence(app: &mut App) {
         .register_type::<InteractionEased>()
         .init_schedule(InteractionSchedule)
         // Per step: restore the true pose FIRST (undo last frame's render ease), then
-        // the pose writers run (in `AvatarCameraSet`, ordered between these two sets),
+        // the pose writers run (in `lunco_camera_core::CameraUpdateSet`, ordered
+        // between these two sets),
         // then record the true pose LAST for `ease_interaction_poses` to lerp.
         .add_systems(
             InteractionSchedule,

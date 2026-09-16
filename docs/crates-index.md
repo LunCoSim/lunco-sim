@@ -67,12 +67,15 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | :--- | :--- |
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
 | **`lunco-control-core`** | Generic semantic-control contracts: the shared `UserIntent` vocabulary, authored intent-to-port bindings, input state, egui focus gate, and bounded causal-edge trace. Input producers and domain consumers depend on this focused package instead of placing control policy in `lunco-core`. |
+| **`lunco-interaction-core`** | Small cross-runtime cursor-interaction contract: editor drag state and the affected-entity marker consumed by camera, possession, and follow runtimes. It contains no editor implementation. |
 | **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |
 | **`lunco-input-ui`** | Optional egui presentation for the shared input state: the recording/observation input overlay and its typed visibility command. It does not translate input or own vessel control. |
 | **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, authored rig intent, smoothing defaults, pose-transition state, and camera input accumulators. Device translation, rendering, and UI adapters consume these contracts. |
+| **`lunco-camera-runtime`** | Generic interactive camera realization: camera-mode exclusivity, frame-handoff rebasing, and free-flight/surface pose writers over the camera-core contracts. Avatar and other authored operators supply their own source-specific frame and input policy. |
 | **`lunco-avatar-core`** | Backend-neutral avatar contracts: ECS role markers and the derived local-avatar index, possession/focus command payloads, transient notification command/queue types, and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
+| **`lunco-avatar-camera-core`** | Avatar-specific camera transition contracts: BigSpace orbit-return state and arrival markers. It depends on the generic camera contracts without making generic camera consumers carry avatar frame state. |
 | **`lunco-avatar-policy`** | Twin-scoped avatar safety policy and physical collision-controller settings. It is shared directly by the runtime and UI, so the UI does not depend on the monolithic avatar implementation. |
-| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: fast camera/possession systems and the local input-to-intent boundary. It consumes `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
+| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: possession/focus systems, local input-to-intent translation, and source-specific camera solvers. Generic camera realization lives in `lunco-camera-runtime`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
 | **`lunco-avatar-ui`** | Optional egui presentation adapter for `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`: avatar status panel, camera/name-tag and notification overlays, and the Avatar settings row. It does not depend on the avatar runtime implementation. |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Specialized vessel-control adapter: translates semantic `UserIntent` actions into authored port writes, handles control authority and input injection, and yields a vessel to its owning session (spec 034). Shared keymap settings live in `lunco-input-core`. |
@@ -383,11 +386,30 @@ semantic-edge trace. It is the single contract used by raw input translation,
 avatar behavior, editor tools, API/Rhai simulation, and vessel control; the
 generic engine substrate remains in `lunco-core`.
 
+**`lunco-interaction-core`**
+Small cross-runtime cursor-interaction contract package. The editor publishes
+`DragModeActive` and `GizmoDragging`; camera, possession, and follow runtimes
+consume those contracts to stand down during a transform drag. Keeping these
+types here prevents the camera runtime from depending on the high-fan-out
+`lunco-core` package and keeps editor implementation details out of consumers.
+
 **`lunco-avatar`**
-Headless-safe human-interaction runtime. Implements the camera **rigs** (SpringArm, Orbit, FreeFlight, Surface), possession/focus observers, and input intent projection described by `lunco-camera-core` and `lunco-avatar-core`. It consumes the shared Twin-scoped safety policy from `lunco-avatar-policy`; optional egui presentation is supplied by `lunco-avatar-ui`. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy-camera`.
+Headless-safe local-avatar runtime. Implements possession/focus observers,
+input intent projection, and the BigSpace-aware orbit/spring-arm camera solvers
+described by `lunco-camera-core` and `lunco-avatar-core`. Generic camera mode
+exclusivity and free-flight/surface pose writers live in
+`lunco-camera-runtime`; optional egui presentation is supplied by
+`lunco-avatar-ui`. The viewport reconciler in `lunco-usd-bevy-camera` owns which
+camera is shown.
 
 **`lunco-avatar-core`**
 Backend-neutral avatar contract package. Its `roles` module owns the `Avatar`, `LocalAvatar`, and `RemoteAvatar` markers plus the derived `TheLocalAvatar` lookup and its single-claim hooks. The package also owns possession/focus command payloads, the `ShowNotification`/`ScreenNotifications` presentation contract, and the `AvatarSceneHandoffSet` schedule boundary. Scene camera, USD projection, networking, and UI consumers use these focused contracts; `lunco-avatar` supplies the avatar system implementation.
+
+**`lunco-avatar-camera-core`**
+Avatar-specific camera transition contract package. Owns the BigSpace-backed
+`OrbitViewReturn` snapshot, its captured behavior variants, and orbit arrival
+markers. Generic camera consumers use `lunco-camera-core` without acquiring
+these avatar-only frame and restoration types.
 
 **`lunco-avatar-policy`**
 Owns the generic workspace-setting interpretation for avatar soil collision and
@@ -395,7 +417,23 @@ the runtime's measured collision shape. Both the movement runtime and avatar UI
 read this package directly; it has no dependency on the avatar implementation.
 
 **`lunco-camera-core`**
-Backend-neutral camera contract package. Owns reusable camera behavior components, shared smoothing defaults, pure frame/zoom/movement math, authored rig intent, camera-mode transition state, and pose-input accumulators. `lunco-avatar` supplies the specialized input boundary and fast BigSpace solvers.
+Backend-neutral camera contract package. Owns reusable camera behavior
+components, shared smoothing defaults, pure frame/zoom/movement math, authored
+rig intent, camera-mode transition state, and pose-input accumulators. It does
+not choose an avatar or a camera source.
+
+**`lunco-camera-runtime`**
+Generic interactive camera realization package. Owns the exclusive camera-mode
+hooks, frame-handoff rebasing, and free-flight/surface pose writers over
+`lunco-camera-core`. It is reusable by avatar, inspection, and other authored
+operators; source-specific frame production and input policy remain with the
+calling runtime.
+
+**`lunco-camera-celestial`**
+Celestial spatial adapter for the generic `SurfaceCameraFrame` contract. It
+resolves a camera's body-fixed ENU basis from its live BigSpace pose and
+`GravityBody` binding, keeping that conversion out of generic camera and
+avatar interaction packages.
 
 **`lunco-avatar-ui`**
 Optional egui presentation adapter for `lunco-camera-core`,

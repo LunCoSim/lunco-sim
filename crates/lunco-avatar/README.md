@@ -1,5 +1,11 @@
 # LunCoSim Avatar Camera System
 
+Avatar owns local input, possession, and source-specific camera transitions.
+The reusable camera contracts and generic free-flight/surface pose writers are
+in `lunco-camera-core` and `lunco-camera-runtime`; celestial ENU frame
+resolution is supplied by `lunco-camera-celestial`. This package does not own
+the generic surface-frame conversion.
+
 ## Architecture Overview
 
 The camera system uses composable behavior components — each camera mode is its own component with a dedicated system:

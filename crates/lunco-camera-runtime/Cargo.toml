@@ -1,0 +1,15 @@
+[package]
+name = "lunco-camera-runtime"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Generic camera pose realization for interactive camera rigs"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
+lunco-time = { path = "../lunco-time" }
+
+[lints]
+workspace = true

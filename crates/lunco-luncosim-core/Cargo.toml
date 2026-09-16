@@ -25,6 +25,8 @@ lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-camera-runtime = { path = "../lunco-camera-runtime" }
+lunco-camera-celestial = { path = "../lunco-camera-celestial" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
