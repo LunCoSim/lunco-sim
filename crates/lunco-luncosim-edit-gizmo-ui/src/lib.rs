@@ -26,13 +26,13 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use lunco_core::SceneViewport;
 use lunco_doc::DocumentId;
-use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_scene::{UsdPrimPath, is_preview_entity};
 use lunco_usd_document::document::LayerId;
-use lunco_usd_viewport_ui::{
-    USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID, UsdPreviewId, UsdViewportState,
-};
+use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_ui::{USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID};
+use lunco_viewport_core::PanelRect;
 use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
-use lunco_workbench_core::viewport::{PanelRect, PanelRects};
+use lunco_workbench_core::viewport::PanelRects;
 use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
 };
@@ -554,7 +554,7 @@ fn preview_drag_owner(
     let prim = q_paths.get(entity).ok()?;
     if prim.stage_handle.id() != session.stage_handle().id()
         || prim.path.is_empty()
-        || !lunco_usd_viewport_ui::is_preview_entity(entity, session.scene_root(), q_parents)
+        || !is_preview_entity(entity, session.scene_root(), q_parents)
     {
         return None;
     }

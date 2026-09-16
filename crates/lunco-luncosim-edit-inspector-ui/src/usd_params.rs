@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState, selected_entity_in_preview};
 use openusd::sdf::Path as SdfPath;
 
 /// One ranged parameter derived from an attribute's `customData`.
@@ -177,7 +177,7 @@ pub fn produce_usd_param_view(
         // A drilled prim-backed subpart wins over the primary: Alt+Shift+click
         // a wheel of the selected rover and this session edits the wheel's own
         // attrs. A raw mesh drill falls back to the session's primary prim.
-        let Some(entity) = lunco_usd_viewport_ui::selected_entity_in_preview(
+        let Some(entity) = selected_entity_in_preview(
             session,
             selected
                 .as_deref()

@@ -154,6 +154,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, tab/source-view commands, scene display state, pending close state, panel registration, perspective layout plans, menu contributions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
+| **`lunco-viewport-core`** | Small renderer-independent measured viewport geometry contract. Owns the physical-pixel `PanelRect` value shared by scene, camera, editor, and shell adapters without coupling that value to egui or the Workbench implementation. |
 | **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization (isolated in its private `src/layout.rs` module), `bevy_egui` rendering, panel-host consumption, viewport integration, and shell-owned command observers. It consumes the focused Workbench capability crates plus `lunco-workbench-core`; headless adapters use the core contract without linking this shell. |
 | **`lunco-workbench-guided-ui`** | Optional application-level guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
@@ -573,8 +574,25 @@ on the command/runtime boundary.
 **`lunco-usd-ui`**
 Interactive USD browser and document presentation. Owns workbench sections, loaded-stage and scene-file views, browser dispatch, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd-commands`. Add `lunco-usd-viewport-ui` when an application needs the render-heavy preview surface.
 
+**`lunco-viewport-core`**
+Small renderer-independent viewport geometry contract. It owns the physical-pixel
+`PanelRect` value used to pass measured panel bounds across render, scene, and
+editor packages without coupling those contracts to egui or the Workbench shell.
+
+**`lunco-usd-viewport-core`**
+Render-independent USD preview contracts. It owns preview/session/view
+identities, document-backed projection state, camera pose math, preview
+commands, inspection settings, and selection resolution. It does not own
+offscreen images, egui textures, render cameras, or viewport panels, so USD
+editors and headless adapters can consume the state without linking the
+render-heavy surface.
+
 **`lunco-usd-viewport-ui`**
-Render-heavy USD preview surface. Owns preview sessions/views, offscreen cameras and images, viewport interaction, inspection commands/queries, and the viewport panels. It consumes the document and projection APIs but does not own Twin-browser lifecycle or document navigation.
+Render-heavy USD preview surface. It owns offscreen images and egui texture
+registration, render cameras/lights, pointer interaction, projection binding,
+inspection queries, and the viewport panels. Preview/session state and typed
+commands come from `lunco-usd-viewport-core`; this package does not own
+Twin-browser lifecycle or document navigation.
 
 **`lunco-usd-bevy-camera`**
 Render-free camera adapter built on `lunco-usd-bevy-core`,

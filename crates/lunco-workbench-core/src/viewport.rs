@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::{Resource, UVec2};
 use egui::{Context, Rect, Ui};
+use lunco_viewport_core::PanelRect;
 
 use crate::PanelId;
 
@@ -19,29 +20,6 @@ pub const VIEWPORT_PANEL_ID: PanelId = PanelId("workbench::viewport");
 pub struct PanelRects {
     rects: HashMap<PanelId, PanelRect>,
     instance_rects: HashMap<(PanelId, u64), PanelRect>,
-}
-
-/// One panel's footprint inside the window, in physical pixels.
-#[derive(Debug, Clone, Copy)]
-pub struct PanelRect {
-    /// Top-left of the panel rect inside the window framebuffer.
-    pub origin: UVec2,
-    /// Width × height of the rect. It is never zero.
-    pub size: UVec2,
-}
-
-impl PanelRect {
-    /// Convert this physical-pixel footprint to egui's logical point space.
-    pub fn to_egui_rect(self, ctx: &Context) -> Rect {
-        let ppp = ctx.pixels_per_point().max(f32::EPSILON);
-        Rect::from_min_max(
-            egui::pos2(self.origin.x as f32 / ppp, self.origin.y as f32 / ppp),
-            egui::pos2(
-                self.origin.x.saturating_add(self.size.x) as f32 / ppp,
-                self.origin.y.saturating_add(self.size.y) as f32 / ppp,
-            ),
-        )
-    }
 }
 
 impl PanelRects {
@@ -94,7 +72,16 @@ impl PanelRects {
 
     /// Look up a singleton panel footprint directly in egui point space.
     pub fn egui_rect(&self, panel: PanelId, ctx: &Context) -> Option<Rect> {
-        self.get(panel).map(|rect| rect.to_egui_rect(ctx))
+        self.get(panel).map(|rect| {
+            let ppp = ctx.pixels_per_point().max(f32::EPSILON);
+            Rect::from_min_max(
+                egui::pos2(rect.origin.x as f32 / ppp, rect.origin.y as f32 / ppp),
+                egui::pos2(
+                    rect.origin.x.saturating_add(rect.size.x) as f32 / ppp,
+                    rect.origin.y.saturating_add(rect.size.y) as f32 / ppp,
+                ),
+            )
+        })
     }
 }
 

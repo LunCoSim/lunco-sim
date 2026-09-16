@@ -23,7 +23,7 @@ use lunco_scene_selection::{
 };
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState};
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -129,8 +129,7 @@ pub(crate) fn on_usd_viewport_click(
 
     let root = session.scene_root();
     let stage_id = session.stage_handle().id();
-    let filter =
-        |entity: Entity| lunco_usd_viewport_ui::is_preview_entity(entity, root, &q_parents);
+    let filter = |entity: Entity| lunco_usd_bevy_scene::is_preview_entity(entity, root, &q_parents);
     let settings = MeshRayCastSettings {
         // Preview projection visibility can lag the egui paint by one schedule;
         // the explicit stage/root filter is the authoritative scope here.
@@ -507,7 +506,7 @@ fn resolve_usd_prim_in_preview(
         .find(|(entity, prim)| {
             prim.stage_handle.id() == stage_id
                 && prim.path == path
-                && lunco_usd_viewport_ui::is_preview_entity(*entity, preview_root, q_parents)
+                && lunco_usd_bevy_scene::is_preview_entity(*entity, preview_root, q_parents)
         })
         .map(|(entity, _)| entity)
 }

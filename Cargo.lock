@@ -7795,7 +7795,9 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-document",
+ "lunco-usd-viewport-core",
  "lunco-usd-viewport-ui",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "transform-gizmo-bevy",
 ]
@@ -7838,7 +7840,7 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-data",
  "lunco-usd-document",
- "lunco-usd-viewport-ui",
+ "lunco-usd-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
  "openusd",
@@ -7892,6 +7894,7 @@ dependencies = [
  "lunco-usd-geometry",
  "lunco-usd-sim",
  "lunco-usd-ui",
+ "lunco-usd-viewport-core",
  "lunco-usd-viewport-ui",
  "lunco-workbench",
  "lunco-workbench-browser",
@@ -9480,7 +9483,7 @@ dependencies = [
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
- "lunco-usd-viewport-ui",
+ "lunco-usd-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
  "openusd",
@@ -9741,7 +9744,7 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-data",
  "lunco-usd-document",
- "lunco-usd-viewport-ui",
+ "lunco-usd-viewport-core",
  "lunco-workbench",
  "lunco-workbench-browser",
  "lunco-workbench-core",
@@ -9752,6 +9755,21 @@ dependencies = [
  "openusd",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "lunco-usd-viewport-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-settings",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-document",
+ "lunco-viewport-core",
+ "serde",
 ]
 
 [[package]]
@@ -9775,12 +9793,20 @@ dependencies = [
  "lunco-usd-commands",
  "lunco-usd-core",
  "lunco-usd-document",
+ "lunco-usd-viewport-core",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
- "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-viewport-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
 ]
 
 [[package]]
@@ -9841,6 +9867,7 @@ dependencies = [
  "lunco-theme",
  "lunco-time",
  "lunco-twin",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-file-ops",
  "lunco-workbench-state",
@@ -9876,6 +9903,7 @@ dependencies = [
  "bevy",
  "egui",
  "lunco-core",
+ "lunco-viewport-core",
  "serde",
 ]
 
@@ -9945,6 +9973,7 @@ dependencies = [
  "lunco-status-core",
  "lunco-theme",
  "lunco-twin",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-state",
  "lunco-workspace",

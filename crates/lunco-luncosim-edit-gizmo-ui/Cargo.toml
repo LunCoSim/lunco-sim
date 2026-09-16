@@ -30,7 +30,9 @@ lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-usd-viewport-core = { path = "../lunco-usd-viewport-core" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 transform-gizmo-bevy = { workspace = true }
 

@@ -82,9 +82,10 @@ use lunco_control_core::{IntentState, LocalIntentSurface};
 use lunco_core::SceneViewport;
 use lunco_input_core::InputBindingsSettings;
 use lunco_render::SceneCamera;
+use lunco_viewport_core::PanelRect;
 use lunco_workbench_core::presentation::ViewportPlaceholder;
 use lunco_workbench_core::scene_pick::{EguiPointerState, ScenePickGate, SceneTarget};
-use lunco_workbench_core::viewport::{PanelRect, PanelRects, VIEWPORT_PANEL_ID};
+use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 
 /// Marker component on the egui-owning camera for one window.
 ///

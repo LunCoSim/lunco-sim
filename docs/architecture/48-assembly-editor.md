@@ -84,9 +84,14 @@ name convention, or ECS-only grouping state is introduced.
   canonical metre frame used by typed transform operations. Imported
   non-canonical stages remain supported, but their metrics must be visible and
   verified before authoring.
-- A `UsdPreviewSession` owns one projected composed stage, scene root, and
-  render layer. A `UsdPreviewView` owns only one camera, light, render target,
-  projection mode, orbit pose, and navigation scale over that session.
+- `lunco-usd-viewport-core` owns the render-independent `UsdPreviewSession` and
+  `UsdPreviewView` contracts: document/stage identity, projection readiness,
+  presentation mode, orbit pose, navigation scale, and typed commands.
+  `lunco-usd-viewport-ui` owns the render adapter around those contracts,
+  including camera/light entities, offscreen images, egui texture registration,
+  pointer input, and viewport panels. A `UsdPreviewSession` still owns one
+  projected composed stage, scene root, and render layer; a view is only a
+  presentation state over that shared session.
   `OpenUsdPreviewView` therefore provides
   split or tabbed 3D inspection without duplicate USD projection work.
   Hidden view tabs have inactive cameras; visible tabs publish their own dock
