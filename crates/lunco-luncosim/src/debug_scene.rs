@@ -434,9 +434,6 @@ fn resolve_component_test(
     twin_path: &Path,
     component_name: &str,
 ) -> Result<ComponentTestSelection, String> {
-    if component_name.trim().is_empty() {
-        return Err("--component requires a non-empty Twin component name".to_owned());
-    }
     let mode = lunco_twin::TwinMode::open(twin_path).map_err(|error| {
         format!(
             "cannot open Twin for component `{component_name}` at `{}`: {error}",
@@ -452,55 +449,10 @@ fn resolve_component_test(
             ));
         }
     };
-    let mut structural = twin.verification_registry_errors();
-    structural.extend(twin.component_registry_errors());
-    if !structural.is_empty() {
-        return Err(format!(
-            "Twin component registry is invalid: {}",
-            structural.join("; ")
-        ));
-    }
-    let matches: Vec<_> = twin
-        .components()
-        .iter()
-        .filter(|component| component.name == component_name)
-        .collect();
-    let component = match matches.as_slice() {
-        [component] => *component,
-        [] => {
-            let names: Vec<_> = twin
-                .components()
-                .iter()
-                .map(|item| item.name.as_str())
-                .collect();
-            return Err(format!(
-                "Twin `{}` has no component `{component_name}` (available: {})",
-                twin.manifest
-                    .as_ref()
-                    .map(|manifest| manifest.name.as_str())
-                    .unwrap_or("<folder>"),
-                if names.is_empty() {
-                    "none".to_owned()
-                } else {
-                    names.join(", ")
-                }
-            ));
-        }
-        _ => {
-            return Err(format!(
-                "Twin declares duplicate component `{component_name}`"
-            ));
-        }
-    };
-    let case = twin
-        .verification_case(&component.verification)
-        .ok_or_else(|| {
-            format!(
-                "component `{component_name}` references unregistered verification `{}`",
-                component.verification
-            )
-        })?;
-    let scene = twin.root.join(&case.scene);
+    let selected = twin
+        .component_verification(component_name)
+        .map_err(|errors| format!("Twin component registry is invalid: {}", errors.join("; ")))?;
+    let scene = twin.root.join(&selected.verification.scene);
     if !scene.is_file() {
         return Err(format!(
             "component `{component_name}` verification scene is missing: `{}`",
@@ -509,8 +461,8 @@ fn resolve_component_test(
     }
     Ok(ComponentTestSelection {
         scene: scene.to_string_lossy().into_owned(),
-        verification: component.verification.clone(),
-        verdict_channel: case.verdict_channel.clone(),
+        verification: selected.component.verification,
+        verdict_channel: selected.verification.verdict_channel,
     })
 }
 

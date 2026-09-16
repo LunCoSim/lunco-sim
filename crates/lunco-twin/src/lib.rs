@@ -84,6 +84,19 @@ pub use lunco_storage;
 
 use lunco_storage::StorageHandle;
 
+/// A component together with the exact Twin-owned verification harness it
+/// selects.  Returning the pair from one API keeps runners from reimplementing
+/// manifest validation and accidentally selecting a different scene or
+/// observer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentVerification {
+    /// Component ownership record, including its requirement source and USD
+    /// review path.
+    pub component: ComponentManifest,
+    /// Verification mapping selected by `component.verification`.
+    pub verification: VerificationCase,
+}
+
 /// Whether a path can be joined to a Twin root without escaping it.
 ///
 /// `.` is accepted because domain manifest sections use it to designate the
@@ -728,6 +741,68 @@ impl Twin {
             .as_ref()
             .map(|manifest| manifest.components.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Resolve one component to its exact, Twin-owned verification mapping.
+    ///
+    /// This is the single selection boundary for component runners.  Registry
+    /// errors are returned before lookup, and an unknown or ambiguous component
+    /// is an explicit error; callers must not fall back to a similarly named
+    /// scene, script, or verification.
+    pub fn component_verification(
+        &self,
+        component_name: &str,
+    ) -> Result<ComponentVerification, Vec<String>> {
+        let component_name = component_name.trim();
+        if component_name.is_empty() {
+            return Err(vec!["component name must not be empty".to_owned()]);
+        }
+
+        let mut errors = self.verification_registry_errors();
+        errors.extend(self.component_registry_errors());
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        let matches: Vec<_> = self
+            .components()
+            .iter()
+            .filter(|component| component.name == component_name)
+            .collect();
+        let component = match matches.as_slice() {
+            [component] => *component,
+            [] => {
+                let available = self
+                    .components()
+                    .iter()
+                    .map(|component| component.name.as_str())
+                    .collect::<Vec<_>>();
+                return Err(vec![format!(
+                    "Twin has no component `{component_name}` (available: {})",
+                    if available.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        available.join(", ")
+                    }
+                )]);
+            }
+            _ => {
+                return Err(vec![format!(
+                    "Twin declares duplicate component `{component_name}`"
+                )]);
+            }
+        };
+
+        let Some(verification) = self.verification_case(&component.verification) else {
+            return Err(vec![format!(
+                "component `{component_name}` references unregistered verification `{}`",
+                component.verification
+            )]);
+        };
+        Ok(ComponentVerification {
+            component: component.clone(),
+            verification: verification.clone(),
+        })
     }
 
     /// Validate component ownership and its verification binding.

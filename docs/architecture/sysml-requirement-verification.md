@@ -72,6 +72,14 @@ fixture and Rhai observer, so a component cannot pass by accidentally using a
 sibling's test or by sharing a stale source file. The registry is generic and
 does not add domain names or duplicate thresholds.
 
+The generic `sysml_requirements::component_binding(report, name)` helper
+exposes this same manifest selection to Rhai observers. It returns the exact
+component and verification records only when both registries are valid and the
+name is unique; unavailable, unknown, duplicate, or unregistered selections
+are explicit failures. Rust's `Twin::component_verification` is the shared
+low-level selector used by CLI/runtime callers, so no caller needs a second
+lookup path.
+
 `luncosim test --scene tests/visual.usda --verification Project::VerifyVisual`
 checks this registry mapping (qualified SysML name, Twin-relative scene and
 Rhai observer, and verdict channel) before constructing the simulation. The

@@ -81,6 +81,63 @@ fn _find_requirement(report, expected) {
     ()
 }
 
+// Resolve a Twin component and its verification case from the native
+// ValidateSysml projection.  Ownership and mapping are manifest data, so this
+// helper deliberately rejects registry errors, missing names, and duplicate
+// matches instead of guessing a scene or script.  Authored tests can then use
+// `binding.component`/`binding.verification` while keeping identity in
+// twin.toml and SysML.
+fn component_binding(report, component_name) {
+    if report == () || report.ok != true {
+        return #{ok: false, error: "SysML/Twin source report is unavailable"};
+    }
+    if component_name == () || component_name == "" {
+        return #{ok: false, error: "Twin component name is missing"};
+    }
+    if report.component_registry_errors != () && report.component_registry_errors.len() > 0 {
+        return #{ok: false, error: "Twin component registry is invalid",
+            details: report.component_registry_errors};
+    }
+    if report.verification_registry_errors != () && report.verification_registry_errors.len() > 0 {
+        return #{ok: false, error: "Twin verification registry is invalid",
+            details: report.verification_registry_errors};
+    }
+    if report.components == () {
+        return #{ok: false, error: "Twin component registry is unavailable"};
+    }
+    let found = ();
+    for component in report.components {
+        if component.name == component_name {
+            if found != () {
+                return #{ok: false, error: "duplicate Twin component: " + component_name};
+            }
+            found = component;
+        }
+    }
+    if found == () {
+        return #{ok: false, error: "Twin component is not registered: " + component_name};
+    }
+    if found.verification == () || found.verification == "" {
+        return #{ok: false, error: "Twin component has no verification: " + component_name};
+    }
+    if report.verification_registry == () {
+        return #{ok: false, error: "Twin verification registry is unavailable"};
+    }
+    let verification = ();
+    for candidate in report.verification_registry {
+        if candidate.name == found.verification {
+            if verification != () {
+                return #{ok: false, error: "duplicate Twin verification: " + found.verification};
+            }
+            verification = candidate;
+        }
+    }
+    if verification == () {
+        return #{ok: false, error: "Twin verification is not registered: " + found.verification};
+    }
+    #{ok: true, component: found, verification: verification}
+}
+
 fn _lazy_attribute(report, name) {
     if report == () || report.path == () || report.path == "" { return (); }
     let selected = query("ValidateSysml", #{path: report.path,

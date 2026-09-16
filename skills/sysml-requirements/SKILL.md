@@ -259,6 +259,22 @@ the source attribute's short name),
 use JSON only at an external/logging boundary. The full non-compact report
 also exposes `attributes_qualified` and `attribute_collisions` for tooling.
 
+For a component-owned observer, resolve the manifest binding through the
+generic helper instead of repeating scene/script or qualified-verification
+selection logic:
+
+```rhai
+let binding = sysml_requirements::component_binding(source, "vehicle.wheel");
+if binding.ok != true { throw(binding.error); }
+let component = binding.component;
+let verification = binding.verification;
+```
+
+The helper fails closed on unavailable reports, registry errors, unknown or
+duplicate components, and missing or duplicate verification mappings. It does
+not replace the component's SysML checks; it only supplies the exact
+Twin-owned identity selected by the manifest.
+
 Repeated source queries reuse one immutable semantic snapshot only when the
 caller revision, ordered source-set fingerprint, embedded standard-library
 contents, and cache format all match. Do not treat a document generation or a
