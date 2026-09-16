@@ -715,7 +715,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // an authored preview camera here would register a live SceneCamera
         // and let the avatar arbiter switch the main window to it on reload.
         if !preview_only {
-            lunco_usd_bevy_camera::camera::instantiate_camera_prim(
+            let camera_outcome = lunco_usd_bevy_camera::camera::instantiate_camera_prim(
                 reader,
                 &sdf_path,
                 prim_type.as_deref(),
@@ -723,6 +723,16 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 entity,
                 quality,
             );
+            if matches!(
+                camera_outcome,
+                lunco_usd_bevy_camera::camera::CameraProjectionOutcome::Rejected
+            ) {
+                // The camera adapter has already published the terminal
+                // failure marker and hidden the prim. Stop this projection
+                // transaction before the shared transform/visibility commit
+                // can overwrite that diagnostic or revive the invalid camera.
+                return;
+            }
         }
 
         // Horizon-map terrain self-shadowing (consumed by

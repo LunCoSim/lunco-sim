@@ -564,6 +564,11 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
 - **Switching:** cameras spawn inactive; make one the active view with
   `set_camera("Name")` (rhai / API `SetActiveCamera`, matches the prim's leaf or
   full path) or the `KeyC` hotkey. Exactly one window camera renders at a time.
+- **Invalid authoring:** an authored camera with an invalid USD attribute,
+  invalid `LunCoCameraAPI` value, or contradictory pose declaration is marked
+  `UsdSceneProjectionFailed` and hidden. The projector does not reinterpret it
+  as an omitted camera or choose a previous/heuristic camera; only genuinely
+  unauthored USD schema attributes use their standard defaults.
 - **Standalone presentation:** the interactive window host may generate one
   render-free `SceneCamera` plus one unscoped directional light under the active
   `UsdSceneRoot` when a standalone assembly has finite projected bounds but no

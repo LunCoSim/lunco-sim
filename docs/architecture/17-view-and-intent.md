@@ -180,6 +180,13 @@ behavior only after a standard USD camera has been projected with its
 `SceneCamera` intent. Missing camera intent is an explicit no-camera state, not
 an invitation for the avatar runtime to create or guess a camera.
 
+An authored camera that fails USD attribute/API validation is a terminal
+projection failure: the prim is hidden and carries `UsdSceneProjectionFailed`,
+so the scene/UI diagnostic identifies the authored path. It is not reclassified
+as an omitted camera, assigned a guessed projection, or replaced by the prior
+scene's camera. USD schema defaults are used only for genuinely unauthored
+attributes.
+
 ### 6.3 Switching
 
 The viewport has explicit presentation ownership:

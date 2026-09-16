@@ -169,6 +169,49 @@ impl Default for StandalonePresentationSettings {
     }
 }
 
+impl StandalonePresentationSettings {
+    fn validate(&self) -> Result<(), String> {
+        if !(self.framing_margin.is_finite() && self.framing_margin >= 1.0) {
+            return Err(
+                "standalone presentation framing_margin must be finite and at least 1.0"
+                    .to_string(),
+            );
+        }
+        if !(self.camera_direction.is_finite()
+            && self.camera_direction.length_squared().is_finite()
+            && self.camera_direction.length_squared() > 0.0)
+        {
+            return Err(
+                "standalone presentation camera_direction must be finite and non-zero".to_string(),
+            );
+        }
+        if !(self.light_direction.is_finite()
+            && self.light_direction.length_squared().is_finite()
+            && self.light_direction.length_squared() > 0.0)
+        {
+            return Err(
+                "standalone presentation light_direction must be finite and non-zero".to_string(),
+            );
+        }
+        if !(self.light_illuminance.is_finite() && self.light_illuminance > 0.0) {
+            return Err(
+                "standalone presentation light_illuminance must be finite and positive".to_string(),
+            );
+        }
+        if !(self.near_clip.is_finite()
+            && self.near_clip > 0.0
+            && self.minimum_far_clip.is_finite()
+            && self.minimum_far_clip > self.near_clip)
+        {
+            return Err(
+                "standalone presentation clip settings must be finite with 0 < near_clip < minimum_far_clip"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Mandatory presentation contract for a windowed scene.
 ///
 /// The render host opts into `required`. The USD projection owns the verdict:
@@ -1164,6 +1207,21 @@ pub(crate) fn ensure_standalone_presentation(
         return;
     }
 
+    if let Err(message) = settings.validate() {
+        if presentation.error.as_deref() != Some(message.as_str()) {
+            let enabled = presentation.enabled;
+            presentation.set_if_neq(StandalonePresentationState {
+                enabled,
+                root: Some(root),
+                error: Some(message.clone()),
+                ..default()
+            });
+            publish_standalone_presentation_diagnostic(&mut diagnostics, Some(&message));
+            error!("[usd-presentation] {message}");
+        }
+        return;
+    }
+
     let existing_camera = queries
         .generated_cameras
         .iter()
@@ -1353,11 +1411,14 @@ fn standalone_presentation_bounds(
     let mut found = false;
 
     for (entity, aabb, transform) in q_bounds.iter() {
-        if !entity_belongs_to_root(entity, root, q_scene_roots, q_child_of, q_entities)
-            || !aabb.center.is_finite()
-            || !aabb.half_extents.is_finite()
-        {
+        if !entity_belongs_to_root(entity, root, q_scene_roots, q_child_of, q_entities) {
             continue;
+        }
+        if !aabb.center.is_finite()
+            || !aabb.half_extents.is_finite()
+            || !transform.affine().is_finite()
+        {
+            return None;
         }
         let half = aabb.half_extents.abs();
         let center = aabb.center;
@@ -1367,16 +1428,17 @@ fn standalone_presentation_bounds(
                     let corner = center + half * Vec3A::new(x, y, z);
                     let world = transform.affine().transform_point3a(corner);
                     let local: Vec3 = root_from_world.transform_point3a(world).into();
-                    if local.is_finite() {
-                        min = min.min(local);
-                        max = max.max(local);
-                        found = true;
+                    if !local.is_finite() {
+                        return None;
                     }
+                    min = min.min(local);
+                    max = max.max(local);
+                    found = true;
                 }
             }
         }
     }
-    found.then_some((min, max))
+    (found && (max - min).length_squared() > 0.0).then_some((min, max))
 }
 
 fn standalone_presentation_pose(
@@ -1385,16 +1447,11 @@ fn standalone_presentation_pose(
     settings: &StandalonePresentationSettings,
 ) -> (Transform, Transform, Projection) {
     let center = (min + max) * 0.5;
-    let radius = ((max - min) * 0.5).length().max(0.1);
-    let camera_direction = settings.camera_direction.normalize_or_zero();
-    let camera_direction = if camera_direction.length_squared() > 0.0 {
-        camera_direction.normalize()
-    } else {
-        Vec3::new(1.0, 0.65, 1.0).normalize()
-    };
+    let radius = ((max - min) * 0.5).length();
+    let camera_direction = settings.camera_direction.normalize();
     let fov = std::f32::consts::FRAC_PI_4;
     let tan_half_fov = (fov * 0.5).tan();
-    let margin = settings.framing_margin.max(1.0);
+    let margin = settings.framing_margin;
     let distance = (radius / tan_half_fov + radius) * margin;
     let camera_position = center + camera_direction * distance;
     let camera_up = if camera_direction.dot(Vec3::Y).abs() > 0.95 {
@@ -1405,12 +1462,7 @@ fn standalone_presentation_pose(
     let camera_transform =
         Transform::from_translation(camera_position).looking_at(center, camera_up);
 
-    let light_direction = settings.light_direction.normalize_or_zero();
-    let light_direction = if light_direction.length_squared() > 0.0 {
-        light_direction
-    } else {
-        Vec3::new(-1.0, 1.5, 1.0).normalize()
-    };
+    let light_direction = settings.light_direction.normalize();
     let light_position = center + light_direction * (radius * 4.0).max(4.0);
     let light_up = if light_direction.dot(Vec3::Y).abs() > 0.95 {
         Vec3::Z
@@ -2031,6 +2083,31 @@ mod tests {
             state.error.as_deref(),
             Some("standalone USD assembly has no finite renderable bounds for generated presentation")
         );
+    }
+
+    #[test]
+    fn standalone_presentation_reports_invalid_settings_without_faking_a_camera() {
+        let mut app = standalone_test_app();
+        standalone_root_with_bounds(&mut app);
+        app.world_mut()
+            .resource_mut::<StandalonePresentationSettings>()
+            .camera_direction = Vec3::ZERO;
+
+        app.update();
+
+        let state = app.world().resource::<StandalonePresentationState>();
+        assert!(state.camera.is_none());
+        assert!(!state.pending);
+        assert_eq!(
+            state.error.as_deref(),
+            Some("standalone presentation camera_direction must be finite and non-zero")
+        );
+        assert!(app
+            .world_mut()
+            .query_filtered::<Entity, With<StandalonePresentationCamera>>()
+            .iter(app.world())
+            .next()
+            .is_none());
     }
 
     #[test]
