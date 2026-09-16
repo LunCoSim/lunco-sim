@@ -4,6 +4,7 @@
 //! module. This module owns policy selection and validation of the generated
 //! Modelica plan; runtime ECS projection remains in the parent module.
 
+use super::network::read_network;
 use super::*;
 
 /// One deterministic Modelica composite unit inside a network root.
