@@ -37,9 +37,7 @@
 // Re-registering the hook takes effect on the NEXT FRAME, with items already
 // pending — from a scenario:
 //
-//   register_hook("readiness.action", "readiness_action", `
-//       fn readiness_action(ctx) { "proceed" }
-//   `);
+//   bind_policy("readiness.action", "readiness_action", source);
 //
 // which is how a test disables holding entirely before the terminal threshold,
 // or how a demo makes a slow compile freeze the whole world so the recording

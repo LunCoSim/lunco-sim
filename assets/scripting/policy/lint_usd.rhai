@@ -1,10 +1,10 @@
 // ── USD lint policy — the rules, in rhai ────────────────────────────────────
 //
 // Hook `lint.usd`, entry `lint_usd(facts)`. Registered at startup from this file
-// (`lunco_scripting::register_builtin_policies`) and REPLACEABLE AT RUNTIME:
+// (the authored application policy manifest) and REPLACEABLE AT RUNTIME:
 //
-//     register_hook("lint.usd", "lint_usd", my_source)   // from any scenario/REPL
-//     unregister_hook("lint.usd")                        // back to no USD rules
+//     bind_policy("lint.usd", "lint_usd", my_source)    // from any scenario/REPL
+//     unbind_policy("lint.usd")                          // remove the active rules
 //
 // so a rule can be written, tried and tightened by an explicit RunLint command
 // against the selected composed stage, with no rebuild. That is the point of

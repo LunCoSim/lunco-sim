@@ -320,6 +320,17 @@ pub struct LinkPeer {
 /// latency budget is exactly the kind of thing this hook is for).
 pub const LINK_HOOK: &str = "link.connected";
 
+lunco_hooks::declare_hook! {
+    id: LINK_HOOK,
+    owner: "lunco-celestial-spatial",
+    description: "Apply an authored routing rule to the generic geometric link verdict.",
+    signature: [ctx: Map],
+    output: Bool,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
 /// Set the connectivity recompute cadence at runtime (any client / language).
 #[Command(default)]
 pub struct SetLinkCadence {

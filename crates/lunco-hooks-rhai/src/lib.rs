@@ -38,6 +38,20 @@ impl RhaiHook {
     /// helper functions and top-level `const`s; `entry` is the function invoked
     /// per hook call, receiving the marshalled args positionally.
     pub fn compile(source: &str, entry: impl Into<String>) -> Result<Self, String> {
+        Self::compile_with(source, entry, |_| {})
+    }
+
+    /// Compile a hook after registering a small, caller-owned native surface.
+    ///
+    /// This is used only for generic hook infrastructure that needs a private
+    /// bootstrap function, such as the application policy installer. Ordinary
+    /// policies use [`Self::compile`] and therefore cannot access host
+    /// functions or filesystem state through this backend.
+    pub fn compile_with(
+        source: &str,
+        entry: impl Into<String>,
+        configure: impl FnOnce(&mut Engine),
+    ) -> Result<Self, String> {
         let mut engine = Engine::new();
 
         // Close the file-import hole BEFORE compiling anything. `Engine::new()`
@@ -70,7 +84,12 @@ impl RhaiHook {
         // Hook sources are local authored inputs in this path. A remote source
         // must enter through the authenticated session boundary before it can
         // be compiled or registered as a hook.
+        configure(&mut engine);
         let ast = compile_with_script_consts(&engine, source).map_err(|e| e.to_string())?;
+        let entry = entry.into();
+        let Some(_function) = ast.iter_functions().find(|function| function.name == entry) else {
+            return Err(format!("Rhai hook entry function '{entry}' is not defined"));
+        };
         // Run top-level statements once to populate runtime state into the
         // base scope; literal constants are propagated at compile time above.
         let mut scope = Scope::new();
@@ -81,8 +100,17 @@ impl RhaiHook {
             engine,
             ast,
             scope,
-            entry: entry.into(),
+            entry,
         })
+    }
+
+    /// Whether the compiled source exports an overload with this positional
+    /// arity. The hook registry validates value kinds at invocation time; this
+    /// check catches a missing or obviously incompatible function at bind time.
+    pub fn supports_arity(&self, arity: usize) -> bool {
+        self.ast
+            .iter_functions()
+            .any(|function| function.name == self.entry && function.params.len() == arity)
     }
 }
 
@@ -133,19 +161,48 @@ pub fn register_rhai_hook(
     source: &str,
     deterministic: bool,
 ) -> Result<String, String> {
+    let id = id.into();
     let hook = RhaiHook::compile(source, entry)?;
+    if let Some(contract) = lunco_hooks::descriptor(&id) {
+        if !hook.supports_arity(contract.parameters.len()) {
+            return Err(format!(
+                "Rhai hook '{}' has no '{}' overload accepting {} argument(s)",
+                contract.id,
+                hook.entry,
+                contract.parameters.len()
+            ));
+        }
+    }
     Ok(lunco_hooks::register(RegisteredHook {
-        id: id.into(),
+        id,
         backend: "rhai".into(),
         deterministic,
         hook: std::sync::Arc::new(hook),
     }))
 }
 
+/// Invoke an installed Rhai-backed hook using native Rhai values.
+///
+/// `Ok(None)` means the seam has no implementation. A runtime or return-shape
+/// failure is an `Err`; callers can therefore distinguish an unconfigured
+/// optional seam from a configured policy that faulted.
+pub fn invoke_rhai_hook(id: &str, args: Vec<Dynamic>) -> Result<Option<Dynamic>, String> {
+    let values = args
+        .iter()
+        .map(dynamic_to_hook)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    match lunco_hooks::invoke(id, &values) {
+        None => Ok(None),
+        Some(Ok(value)) => Ok(Some(hook_to_dynamic(&value))),
+        Some(Err(error)) => Err(error.to_string()),
+    }
+}
+
 // ── HookValue ↔ Dynamic marshalling ──────────────────────────────────────────
 
-/// Convert a neutral [`HookValue`] into a rhai [`Dynamic`].
-fn hook_to_dynamic(v: &HookValue) -> Dynamic {
+/// Convert a neutral hook value into its native Rhai representation.
+pub fn hook_to_dynamic(v: &HookValue) -> Dynamic {
     match v {
         HookValue::Unit => Dynamic::UNIT,
         HookValue::Int(i) => Dynamic::from_int(*i),

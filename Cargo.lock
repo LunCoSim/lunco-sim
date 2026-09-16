@@ -7075,6 +7075,7 @@ dependencies = [
  "bevy",
  "lunco-control-core",
  "lunco-core",
+ "lunco-hooks",
  "lunco-port-core",
  "lunco-readiness",
  "serde",
@@ -7128,7 +7129,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
+ "tempfile",
  "thiserror 2.0.18",
+ "toml 1.1.2+spec-1.1.0",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -7292,6 +7295,7 @@ name = "lunco-camera-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-hooks",
 ]
 
 [[package]]
@@ -7560,6 +7564,9 @@ dependencies = [
 [[package]]
 name = "lunco-hooks"
 version = "0.1.0"
+dependencies = [
+ "inventory",
+]
 
 [[package]]
 name = "lunco-hooks-rhai"
@@ -8619,7 +8626,6 @@ dependencies = [
  "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-behavior",
- "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8631,7 +8637,6 @@ dependencies = [
  "lunco-physics",
  "lunco-port-core",
  "lunco-readiness",
- "lunco-render-recovery",
  "lunco-scripting-bridge-core",
  "lunco-scripting-bridge-spatial",
  "lunco-scripting-bridge-time",
@@ -9129,6 +9134,7 @@ dependencies = [
  "lunco-avatar-core",
  "lunco-camera-core",
  "lunco-core",
+ "lunco-hooks",
  "lunco-render",
  "lunco-spatial",
  "lunco-time",

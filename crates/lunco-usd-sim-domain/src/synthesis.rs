@@ -7,6 +7,28 @@
 use super::network::read_network;
 use super::*;
 
+lunco_hooks::declare_hook! {
+    id: "synth.acausal-network",
+    owner: "lunco-usd-sim-domain",
+    description: "Generate a validated Modelica composite from authored acausal network facts.",
+    signature: [net: Map],
+    output: Map,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
+lunco_hooks::declare_hook! {
+    id: "synth.actuator-wrench",
+    owner: "lunco-usd-sim-domain",
+    description: "Generate a Modelica actuator wrench allocator from authored actuator facts.",
+    signature: [net: Map],
+    output: Map,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
 /// One deterministic Modelica composite unit inside a network root.
 ///
 /// A unit is a connected component of the composed program graph. It is not a

@@ -15,12 +15,18 @@
 //! startup; packaged and wasm builds use the embedded copies. Runtime tool
 //! replacement uses the registration command and does not require a restart.
 //!
-//! Three layers, each its own flat directory:
+//! Three layers, each its own flat directory, plus a manifest-driven policy
+//! directory:
 //!   - `prelude/`  — always-on helpers, merged into one flat namespace.
 //!   - `tools/`    — namespaced `name::fn(...)` tool libraries (name = stem).
 //!   - `examples/` — sample scenarios, for docs / the catalog / the parse test.
+//!   - `policy/`   — hook implementations selected by `index.toml`; the
+//!                   manifest's startup entry orchestrates their installation.
 
 use include_dir::{include_dir, Dir};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::{Component, Path};
 
 /// Prelude topic files — always-on rhai helpers.
 static PRELUDE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/prelude");
@@ -28,9 +34,14 @@ static PRELUDE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/sc
 static TOOLS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/tools");
 /// Example scenarios — used by docs / the parse test / the catalog.
 static EXAMPLES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/examples");
-/// Built-in rhai POLICY snippets registered as `lunco_hooks` at startup — the
-/// `policy→rhai` decision surface.
+/// Embedded Rhai policy sources. The manifest below, rather than Rust source,
+/// selects which source and entry function implements each hook at startup.
 static POLICY: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/scripting/policy");
+/// Authored mapping from hook ids to policy source files and entry functions.
+static POLICY_MANIFEST: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/scripting/policy/index.toml"
+));
 /// Bundled runtime scenarios — the guidance/mission scripts a scene loads at
 /// startup (e.g. lander auto-land). Distinct from `examples/`: these are shipped
 /// behaviour, not documentation samples, and live alongside the scene assets.
@@ -170,35 +181,334 @@ pub fn scenario(stem: &str) -> Option<&'static str> {
         .and_then(|f| f.contents_utf8())
 }
 
-/// Built-in policy snippets (`assets/scripting/policy/*.rhai`) as `(stem, source)`.
+/// Policy snippets embedded in the application package as `(stem, source)`.
 pub fn policies() -> Vec<(&'static str, &'static str)> {
     rhai_files(&POLICY)
 }
 
-/// Compiled-in policy snippets as owned strings.
-pub fn embedded_policy_files() -> Vec<(String, String)> {
-    policies()
+/// Authored mapping from a hook id to its policy source and entry point.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicySpec {
+    /// Hook id that receives the compiled policy.
+    pub hook: String,
+    /// Relative `.rhai` source path beside the manifest.
+    pub source: String,
+    /// Function exported by `source`.
+    pub entry: String,
+    /// Whether the policy is safe for convergent/replicated execution.
+    #[serde(default)]
+    pub deterministic: bool,
+    /// Whether failure to load this policy blocks the owning seam.
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// The authored Rhai function that installs one resolved policy set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct StartupSpec {
+    /// Relative `.rhai` source path beside the application manifest.
+    pub source: String,
+    /// Function exported by `source`.
+    pub entry: String,
+}
+
+/// A policy manifest. Twin manifests may be empty and omit `startup`: optional
+/// hook seams do not require an implementation merely because the scripting
+/// backend exists. The application manifest must provide `startup` so its
+/// broad default policy set has one explicit installation boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyManifest {
+    /// The one application bootstrap function. Twin manifests omit this and
+    /// contribute only policy overrides to the application's bootstrap.
+    #[serde(default)]
+    pub startup: Option<StartupSpec>,
+    /// Policies to load in declaration order.
+    #[serde(default)]
+    pub policies: Vec<PolicySpec>,
+}
+
+/// One policy source after its authored file has been resolved through the
+/// asset/storage boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedPolicy {
+    /// Manifest metadata for the source.
+    pub spec: PolicySpec,
+    /// UTF-8 Rhai source.
+    pub source: String,
+    /// Stable asset-relative path reported by hook reflection.
+    pub policy_file: String,
+}
+
+/// The resolved application bootstrap and the policy sources it receives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedPolicyBundle {
+    /// The startup function that receives [`policies`](Self::policies), when
+    /// this is a manifest with a startup section. Twin manifests may omit it
+    /// when they contain no policy overrides.
+    pub startup: Option<LoadedStartup>,
+    /// Policy source files selected by this manifest.
+    pub policies: Vec<LoadedPolicy>,
+}
+
+/// One resolved application startup function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedStartup {
+    /// Manifest metadata for the startup function.
+    pub spec: StartupSpec,
+    /// UTF-8 Rhai source.
+    pub source: String,
+    /// Stable asset-relative path reported in diagnostics.
+    pub policy_file: String,
+}
+
+fn parse_policy_manifest(text: &str, location: &Path) -> Result<PolicyManifest, String> {
+    let manifest: PolicyManifest = toml::from_str(text).map_err(|error| {
+        format!(
+            "cannot parse policy manifest {}: {error}",
+            location.display()
+        )
+    })?;
+    let mut hooks = HashSet::new();
+    if let Some(startup) = &manifest.startup {
+        validate_rhai_source_path(&startup.source, location, "startup")?;
+        if startup.entry.trim().is_empty() {
+            return Err(format!(
+                "policy manifest {} has an empty startup entry",
+                location.display()
+            ));
+        }
+    }
+    for spec in &manifest.policies {
+        if spec.hook.trim().is_empty() {
+            return Err(format!(
+                "policy manifest {} contains an empty hook id",
+                location.display()
+            ));
+        }
+        if spec.entry.trim().is_empty() {
+            return Err(format!(
+                "policy manifest {} has an empty entry for hook '{}'",
+                location.display(),
+                spec.hook
+            ));
+        }
+        validate_rhai_source_path(&spec.source, location, "policy")?;
+        if !hooks.insert(&spec.hook) {
+            return Err(format!(
+                "policy manifest {} declares hook '{}' more than once",
+                location.display(),
+                spec.hook
+            ));
+        }
+    }
+    Ok(manifest)
+}
+
+fn validate_rhai_source_path(source: &str, location: &Path, kind: &str) -> Result<(), String> {
+    if !is_relative_asset_path(Path::new(source))
+        || Path::new(source)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("rhai")
+    {
+        return Err(format!(
+            "policy manifest {} has unsafe or non-Rhai {kind} source '{source}'",
+            location.display()
+        ));
+    }
+    Ok(())
+}
+
+fn is_relative_asset_path(path: &Path) -> bool {
+    path.components()
+        .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn load_policy_sources(
+    manifest: PolicyManifest,
+    root: Option<&Path>,
+    location: &Path,
+    policy_prefix: &str,
+) -> Result<Vec<LoadedPolicy>, String> {
+    manifest
+        .policies
         .into_iter()
-        .map(|(stem, source)| (stem.to_string(), source.to_string()))
+        .map(|spec| {
+            let source = load_policy_source(&spec.source, root, location)?;
+            Ok(LoadedPolicy {
+                policy_file: format!("{policy_prefix}/{}", spec.source),
+                spec,
+                source,
+            })
+        })
         .collect()
 }
 
-/// Active policy snippets for native startup.
-///
-/// A repository checkout reads the editable policy files so changing Rhai does
-/// not require a Rust rebuild. If no live policy directory exists, packaged
-/// builds use the compiled-in source. A present live directory remains the
-/// authoritative source; registration reports its parse errors instead of
-/// replacing it with stale embedded code.
-pub fn policy_files() -> Result<Vec<(String, String)>, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(files) = disk_rhai_files(&crate::assets_dir().join("scripting/policy"))? {
-        return Ok(files);
+fn load_policy_source(
+    source: &str,
+    root: Option<&Path>,
+    location: &Path,
+) -> Result<String, String> {
+    match root {
+        Some(root) => {
+            let path = root.join(source);
+            let bytes = lunco_storage::read_file_sync(&path).map_err(|error| {
+                format!("cannot read policy source {}: {error}", path.display())
+            })?;
+            String::from_utf8(bytes)
+                .map_err(|error| format!("policy source {} is not UTF-8: {error}", path.display()))
+        }
+        None => POLICY
+            .get_file(source)
+            .and_then(|file| file.contents_utf8())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                format!(
+                    "embedded policy source '{source}' listed by {} is missing",
+                    location.display()
+                )
+            }),
     }
-    Ok(embedded_policy_files())
 }
 
-/// One built-in policy's source by file stem (e.g. `"control_authority"`).
+fn load_policy_bundle(
+    manifest: PolicyManifest,
+    root: Option<&Path>,
+    location: &Path,
+    policy_prefix: &str,
+) -> Result<LoadedPolicyBundle, String> {
+    let startup = manifest.startup.clone();
+    let startup = startup
+        .map(|startup| -> Result<LoadedStartup, String> {
+            let source = load_policy_source(&startup.source, root, location)?;
+            Ok(LoadedStartup {
+                policy_file: format!("{policy_prefix}/{}", startup.source),
+                spec: startup,
+                source,
+            })
+        })
+        .transpose()?;
+    let policies = load_policy_sources(manifest, root, location, policy_prefix)?;
+    Ok(LoadedPolicyBundle { startup, policies })
+}
+
+fn require_application_startup(
+    bundle: LoadedPolicyBundle,
+    location: &Path,
+) -> Result<LoadedPolicyBundle, String> {
+    if bundle.startup.is_none() {
+        return Err(format!(
+            "application policy manifest {} does not define a startup entry",
+            location.display()
+        ));
+    }
+    Ok(bundle)
+}
+
+fn manifest_from_file(path: &Path) -> Result<Option<PolicyManifest>, String> {
+    match lunco_storage::read_file_sync(path) {
+        Ok(bytes) => {
+            let text = String::from_utf8(bytes).map_err(|error| {
+                format!("policy manifest {} is not UTF-8: {error}", path.display())
+            })?;
+            parse_policy_manifest(&text, path).map(Some)
+        }
+        Err(lunco_storage::StorageError::NotFound) => Ok(None),
+        Err(error) => Err(format!(
+            "cannot read policy manifest {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+/// Load the application policy set and its authored startup function at sim startup.
+///
+/// A native editable `assets/scripting/policy/` directory must contain its
+/// `index.toml`; otherwise the loader uses the packaged manifest and embedded
+/// sources. A present but malformed or incomplete editable set is an explicit
+/// startup diagnostic, never silently replaced by an older generation.
+pub fn active_policy_set() -> Result<Vec<LoadedPolicy>, String> {
+    Ok(active_policy_bundle()?.policies)
+}
+
+/// Load the application startup function and its manifest-selected policies.
+pub fn active_policy_bundle() -> Result<LoadedPolicyBundle, String> {
+    let manifest_path = crate::assets_dir_abs().join("scripting/policy/index.toml");
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(manifest) = manifest_from_file(&manifest_path)? {
+        return require_application_startup(
+            load_policy_bundle(
+                manifest,
+                Some(manifest_path.parent().expect("manifest has a parent")),
+                &manifest_path,
+                "assets/scripting/policy",
+            )?,
+            &manifest_path,
+        );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if matches!(
+        lunco_storage::entry_kind_file_sync(manifest_path.parent().expect("manifest has a parent")),
+        Ok(lunco_storage::StorageEntryKind::Directory)
+    ) {
+        return Err(format!(
+            "editable policy directory {} is present but index.toml is missing",
+            manifest_path.parent().unwrap().display()
+        ));
+    }
+    require_application_startup(
+        load_policy_bundle(
+            parse_policy_manifest(POLICY_MANIFEST, Path::new("embedded policy index.toml"))?,
+            None,
+            Path::new("embedded policy index.toml"),
+            "assets/scripting/policy",
+        )?,
+        Path::new("embedded policy index.toml"),
+    )
+}
+
+/// Load the active Twin's optional policy set and its separate startup function.
+///
+/// Twin policy sources live under `<twin>/policies/` and are selected by its
+/// authored `index.toml`. No application defaults are substituted here: a
+/// Twin with no policy directory simply contributes no overrides. Application
+/// code decides whether and how to layer the returned Twin bundle over the
+/// application bundle.
+pub fn twin_policy_set(root: &Path) -> Result<Option<LoadedPolicyBundle>, String> {
+    let policy_root = root.join("policies");
+    let manifest_path = policy_root.join("index.toml");
+    let Some(manifest) = manifest_from_file(&manifest_path)? else {
+        return match lunco_storage::entry_kind_file_sync(&policy_root) {
+            Ok(lunco_storage::StorageEntryKind::Directory) => Err(format!(
+                "Twin policy directory {} is present but index.toml is missing",
+                policy_root.display()
+            )),
+            Ok(_) => Err(format!(
+                "Twin policy path {} is not a directory",
+                policy_root.display()
+            )),
+            Err(lunco_storage::StorageError::NotFound) => Ok(None),
+            Err(error) => Err(format!(
+                "cannot inspect Twin policy directory {}: {error}",
+                policy_root.display()
+            )),
+        };
+    };
+    let bundle = load_policy_bundle(manifest, Some(&policy_root), &manifest_path, "policies")?;
+    if bundle.startup.is_none() && !bundle.policies.is_empty() {
+        return Err(format!(
+            "Twin policy manifest {} defines policies but no startup entry",
+            manifest_path.display()
+        ));
+    }
+    Ok(Some(bundle))
+}
+
+/// One embedded policy's source by file stem. Prefer [`active_policy_set`] for
+/// runtime loading because it also resolves the authored manifest.
 pub fn policy(stem: &str) -> Option<&'static str> {
     POLICY
         .get_file(format!("{stem}.rhai"))
@@ -222,20 +532,15 @@ mod tests {
             sorted.sort_by_key(|(s, _)| *s);
             assert_eq!(files, sorted, "{label} not sorted by stem");
         }
-        // Both the embedded packaged source and the active source set must be
-        // non-empty and stem-sorted.
-        for (label, files) in [
-            ("prelude-embedded", embedded_prelude_files()),
-            (
-                "prelude-active",
-                prelude_files().expect("active prelude source"),
-            ),
-        ] {
-            assert!(!files.is_empty(), "{label} empty");
-            let mut sorted = files.clone();
-            sorted.sort_by(|a, b| a.0.cmp(&b.0));
-            assert_eq!(files, sorted, "{label} not sorted by stem");
-        }
+        let active = active_policy_set().expect("active policy source set");
+        assert!(!active.is_empty(), "active policy manifest empty");
+        assert!(active.iter().all(|policy| policy.source.contains("fn ")));
+        let mut hooks = active
+            .iter()
+            .map(|policy| policy.spec.hook.as_str())
+            .collect::<Vec<_>>();
+        hooks.sort_unstable();
+        assert!(hooks.windows(2).all(|pair| pair[0] != pair[1]));
         // Known built-ins are present (guards a broken move / path).
         let tool_names: Vec<_> = tool_libraries().into_iter().map(|(n, _)| n).collect();
         for t in [

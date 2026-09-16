@@ -1,0 +1,108 @@
+---
+name: author-hook-policy
+description: Declare, bind, inspect, and test a LunCoSim function-shaped Rhai hook policy through the owner macro and authored policy manifest.
+---
+
+# Author a hook policy
+
+Use this skill when a decision should be changeable without recompiling the
+engine. A hook is a function-shaped seam: Rust publishes a small typed fact
+boundary and Rhai supplies the policy implementation.
+
+Treat hook candidacy as a mandatory design step. Prefer a hook for changeable
+lifecycle, routing/selection, presentation, permission, deployment, or
+Twin-specific behavior. A hook may expose substantial behavior with nested
+maps/arrays and return a typed decision or action plan. Its owner must validate
+and consume that result through a generic mechanism; use `Unit` for a pure
+notification and never leave a decision result unread. Keep continuous math,
+kinematics, dynamics, invariants, and hot paths in Rust or Modelica. Before
+adding a Rust branch, identify the owner, fact inputs, result consumer,
+installation scope, lifecycle, failure/required semantics, and the production
+Rhai test.
+
+## Read first
+
+- [`AGENTS.md`](../../AGENTS.md) for ownership, failure, asset, and test rules.
+- [`hook-policies.md`](../../docs/architecture/hook-policies.md) for the
+  active hook contract.
+- [`rust-rhai-modelica-boundary`](../rust-rhai-modelica-boundary/SKILL.md) when
+  deciding whether the seam belongs in Rust, Rhai, USD, or Modelica.
+- [`validate-assets`](../validate-assets/SKILL.md) for authored production
+  scene-test execution.
+
+## Declare the seam at its owner
+
+Place one `lunco_hooks::declare_hook!` invocation beside the owner’s hook id
+and decision function. It is collected automatically; do not edit a central
+list. Declare the function-shaped ABI with named parameters and a
+`HookValueType` for each parameter and the result:
+
+```rust
+lunco_hooks::declare_hook! {
+    id: MY_HOOK,
+    owner: "my-owner",
+    description: "Choose a generic engine action from authored facts.",
+    signature: [ctx: Map],
+    output: String,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+```
+
+Keep the map contents as owner facts, not a second ad-hoc registry. Use a
+deterministic contract only when identical inputs must produce the same result
+on every peer. Set `required` only when the generic mechanism cannot operate
+safely without a policy.
+
+## Author and select the policy
+
+Put the implementation in `assets/scripting/policy/<name>.rhai` and add one
+entry to `assets/scripting/policy/index.toml`:
+
+```toml
+[[policies]]
+hook = "my.hook"
+source = "my_policy.rhai"
+entry = "decide"
+deterministic = false
+required = false
+```
+
+The manifest's single `[startup]` entry names the Rhai function that receives
+and installs all resolved policy records. The application manifest is loaded
+at simulation startup. A Twin may provide its own `policies/index.toml`; its
+matching entries replace application records before its own startup function
+runs when that Twin becomes active. The Twin startup function receives the
+Twin-owned records; application policies remain active for seams the Twin does
+not replace. A Twin manifest that contains policy records must declare its own
+`[startup]` source and entry; an empty Twin policy directory may omit it. Do
+not add a Rust-side policy list or a second bootstrap path.
+The source path is resolved by the asset/storage layer. Do not read policy
+files through `std::fs` in a runtime/domain crate.
+
+Inline `bind_policy(id, entry, source)` is useful for a local non-deterministic
+experiment. It must not claim a deterministic contract. Use `unbind_policy`
+to remove exactly that implementation; reloading the authored manifest is the
+explicit operation that installs the authored policy again.
+
+## Inspect and test
+
+Use `list_hooks()` to inspect the reflected declaration. It reports
+`parameters: [{name, type}]`, `output`, ownership, policy binding, determinism,
+requirement, and installation state. Use `policy_status()` for startup/Twin
+load diagnostics and the last typed Twin lifecycle result. The owner must
+consume every non-`Unit` result; the lifecycle dispatcher retains its returned
+map in that status surface. `invoke_hook(id, [args])` distinguishes unavailable
+hooks from installed functions that fault.
+
+Put policy and observable runtime assertions in an authored Rhai production
+scene test. Cover the declared signature, successful binding/invocation,
+missing-policy status, rejected deterministic inline binding, and exact
+unbinding. Keep Rust coverage to the low-level `HookValue` conversion and
+registry mechanics; do not embed long USD or load Twin assets in Rust tests.
+
+## Handoff
+
+Report the owner-side declaration, manifest/source files, reflected signature,
+failure semantics, focused checks, and the production Rhai test evidence.

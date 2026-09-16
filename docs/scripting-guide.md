@@ -111,9 +111,12 @@ Camera creation is authored through the camera entry in that recipe: Rhai
 validates the requested role, pose, projection, look-at, and standard
 `UsdGeomCamera` intrinsics, then emits a standard `def Camera` with
 `LunCoCameraAPI`. Omitted intrinsics use only the defaults defined by the USD
-camera schema. A missing or invalid camera contract remains a visible
-no-camera/diagnostic result; the runtime does not choose a first camera, infer
-an avatar camera from an entity, or repair malformed authored values.
+camera schema. The window host's convenience choice is a separate
+`camera.default_presentation` policy over derived facts; return exactly
+`avatar`, `generated`, or `none`. A missing, faulting, or invalid policy or
+camera contract remains a visible no-camera/diagnostic result. The runtime
+does not choose a first camera, infer an avatar camera from an entity, or
+repair malformed authored values.
 
 Use `port_graph` to discover standard USD `inputs:`, `outputs:`, and
 `connectors:` endpoints. `wiring_plan` validates exact source/sink paths,
@@ -577,7 +580,7 @@ component preview from silently becoming a different asset identity than the
 assembly it is meant to update.
 
 ```rhai
-register_hook("usd.component_refresh", "decide_refresh", #"
+bind_policy("usd.component_refresh", "decide_refresh", #"
     fn decide_refresh(facts) {
         // Return #{ action: "propagate" }, "defer", or "reject".
         #{ action: "propagate" }
@@ -1058,17 +1061,50 @@ edited by opening that assembly's explicit USD document and preview in Editor.
 
 ## F. Policy hooks (decision functions)
 
-Distinct from scenarios: a **policy hook** is a small *pure* rhai function —
-`ctx` in → a value out — that a Rust seam consults **by id** at a decision point.
-Authored under [`policy/`](../assets/scripting/policy), registered under a
-`HookId`, and **hot-rewritable** (replace the file, or `SetScriptedPolicy` the
-same id) — so behavior that used to be hardcoded is data, no rebuild.
+See the complete contract in
+[`architecture/hook-policies.md`](architecture/hook-policies.md). A policy
+hook is a function-shaped seam: the owner declares a typed positional
+signature with `lunco_hooks::declare_hook!`, Rust supplies a small fact map,
+and an authored Rhai function returns the declared type. The declaration is
+collected automatically from the owner; there is no central hook list.
 
-- [`control_authority.rhai`](../assets/scripting/policy/control_authority.rhai)
-  (`control.authority.take`) — may `taker` take a vessel from its current owner?
-  (spec 034). Returns `bool`.
-The seam supplies context Rust alone can see (argv, roles, first-run flag); the
-*decision* is entirely the policy's. Consulted via `lunco_hooks::invoke(id, &[ctx])`.
+Application policy selection is authored in
+[`assets/scripting/policy/index.toml`](../assets/scripting/policy/index.toml)
+and loaded at simulation startup. Its single `[startup]` function receives the
+resolved policy records and installs every `[[policies]]` entry through the
+typed bootstrap surface. A Twin may add its own `policies/index.toml` with a
+separate `[startup]` function; the Twin function receives its authored entries,
+which replace matching application policies when the Twin is active. Use
+`list_hooks()` to inspect the reflected
+`parameters: [{name, type}]` and `output` contract, `policy_status()` to read
+load diagnostics, and `invoke_hook(id, [args])` to call an installed function.
+
+`bind_policy(id, entry, source)` can install a local non-deterministic policy
+for an installable seam. `unbind_policy(id)` removes exactly that
+implementation; it does not silently restore another implementation. A
+deterministic seam must be selected through an authored manifest that explicitly
+marks it deterministic. Internal calls use typed `HookValue`, not JSON.
+
+For example, [`control_authority.rhai`](../assets/scripting/policy/control_authority.rhai)
+implements `control.authority.take`: it receives the owner-defined `ctx` map
+and returns `bool`. Rust still owns authorization floors, validation, and the
+effect of the result; Rhai owns the changeable decision.
+
+When adding behavior, first check whether it is a hook candidate: a
+changeable lifecycle rule, routing/selection decision, presentation choice,
+permission, or Twin/scenario policy belongs at a typed Rust hook boundary with
+its implementation in Rhai. Hooks can return structured nested maps and arrays
+when the owner needs a decision or action plan, not only a scalar. The Rust
+owner must validate and consume that result through a generic mechanism; do not
+add a hook whose result is ignored. Keep continuous math, kinematics,
+dynamics, invariants, and other hot-path mechanisms in Rust or Modelica, and
+keep USD facts/topology authored in USD. Record the hook's owner, signature,
+startup scope, lifecycle, failure semantics, and a production Rhai test.
+
+The lifecycle hook's returned map is retained as the current lifecycle record
+and is visible in `policy_status().lifecycle` (and the API status view), so a
+structured policy result is observable rather than silently discarded. If a
+seam only emits a notification, declare and return `Unit` instead.
 
 ## G. Authored controllers & control authority
 

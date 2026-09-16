@@ -9,7 +9,10 @@
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
 use crate::{
-    discovery::{discover_commands, discover_queries, find_api_command, ApiCommandLookupError},
+    discovery::{
+        discover_commands, discover_hooks, discover_queries, find_api_command,
+        ApiCommandLookupError,
+    },
     queries::{ApiQueryRegistry, ApiVisibility},
     registry::ApiEntityRegistry,
     schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
@@ -861,10 +864,12 @@ fn execute_request(
         ApiRequest::DiscoverSchema => {
             let cmds = discover_commands(type_registry, Some(visibility));
             let queries = discover_queries(Some(query_registry));
+            let hooks = discover_hooks();
             Some(ApiResponse::ok(
                 serde_json::to_value(&ApiSchema {
                     commands: cmds,
                     queries,
+                    hooks,
                 })
                 .unwrap_or_default(),
             ))

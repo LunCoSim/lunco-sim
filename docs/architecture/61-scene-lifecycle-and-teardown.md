@@ -70,14 +70,16 @@ Scene-scoped `RuntimeDiagnostics` is cleared at the same boundary. Each producer
 then repopulates only its own findings, so a camera, environment, or physics
 error from the outgoing scene cannot be displayed as a fact about the replacement.
 
-Windowed presentation state follows the same ownership rule. A scene must
-author its initial camera selection through `CameraTrack`; avatar or scene-root
-projection never creates an implicit view. If the authored camera contract is
-missing or unresolved, the viewport remains inactive and the scene-scoped
-diagnostic identifies the missing producer/consumer contract. This runtime
-presentation check observes the composed, projected result; it is not the
-generic loading completion signal. Scene teardown resets the selection intent,
-and no engine-created camera can survive into the next Twin.
+Windowed presentation state follows the same ownership rule. A scene authors
+its initial camera selection through `CameraTrack` or a unique `LocalAvatar`;
+avatar or scene-root projection never creates an implicit view. A window host
+that wants convenience framing invokes the `camera.default_presentation`
+Rhai policy over derived USD/ECS facts. Rust validates and realizes its closed
+decision, while a missing, faulting, or invalid policy result leaves the
+viewport inactive with a scene-scoped diagnostic. This runtime presentation
+check observes the composed, projected result; it is not the generic loading
+completion signal. Scene teardown resets the selection intent, and no
+engine-created camera can survive into the next Twin.
 
 The retained runtime UI uses the same invariant. When an exposure, perspective,
 gate, or placement makes a surface invisible, the bridge removes the whole

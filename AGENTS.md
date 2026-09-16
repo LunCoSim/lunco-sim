@@ -82,6 +82,18 @@ package checks after changing skill metadata or packaging.
   tutorial flow belongs in Rhai. Add Rust behavior only when it is an
   authoritative engine mechanism that cannot be expressed by composing the
   existing Rhai-facing API.
+- Treat hook candidacy as a required design review. Before adding or retaining
+  Rust code for a changeable lifecycle decision, routing/selection rule,
+  presentation choice, permission, scenario rule, or Twin-specific behavior,
+  ask whether the owner should expose a small typed hook and let Rhai provide
+  the policy. A hook may expose substantial behavior through rich owner facts
+  and a typed decision or action plan (`Map`, `Array`, or nested
+  `Array<Map>`); the owner must validate and consume that result through its
+  generic mechanism. Keep continuous math, kinematics, dynamics, hot loops,
+  invariants, and generic action application in Rust or Modelica. Every hook
+  review records its owner, inputs, output, installation scope, lifecycle,
+  failure/required semantics, and a production Rhai test. Do not create a
+  parallel hardcoded policy API or hide an unconsumed hook result.
 - Generic Rust crates and tests must not enumerate, load, or assert on tutorial
   assets or lesson names. Tutorial behavior and tutorial-specific acceptance
   belong in authored USD/Rhai scene tests; only the application-owned menu and

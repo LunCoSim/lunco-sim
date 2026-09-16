@@ -296,7 +296,7 @@ on a physics tick, or on a background cadence — deliberately. An editor,
 launcher, or caller explicitly repeats the command after an authored change, and
 
 ```rhai
-register_hook("lint.usd", "lint_usd", my_rules);   // next RunLint obeys
+bind_policy("lint.usd", "lint_usd", my_rules);    // next RunLint obeys
 ```
 
 re-shapes the rules for the next explicit lint run without a rebuild. Loaded

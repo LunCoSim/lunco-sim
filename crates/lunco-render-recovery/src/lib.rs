@@ -70,6 +70,17 @@ use lunco_settings::AppSettingsExt;
 /// Hook id for the authored render-shadow warning policy.
 pub const RENDER_SHADOW_QUALITY_HOOK: &str = "render.shadow_quality";
 
+lunco_hooks::declare_hook! {
+    id: RENDER_SHADOW_QUALITY_HOOK,
+    owner: "lunco-render-recovery",
+    description: "Choose the authored diagnostic message for shadow-resource pressure.",
+    signature: [ctx: Map],
+    output: StringOrUnit,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
 /// Error tallies shared between the wgpu callback (render thread, no `World`)
 /// and the escalation system (main world).
 ///

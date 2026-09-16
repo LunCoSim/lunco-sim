@@ -6,6 +6,7 @@ license.workspace = true
 description = "Backend-neutral camera rig contracts for LunCoSim"
 
 [dependencies]
+lunco-hooks = { path = "../lunco-hooks" }
 bevy = { workspace = true }
 
 [lints]

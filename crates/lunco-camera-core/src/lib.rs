@@ -15,6 +15,23 @@ pub mod math;
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct CameraUpdateSet;
 
+/// Hook seam for an application's initial presentation decision.
+///
+/// Camera runtimes supply derived facts and realize the policy's closed
+/// decision; the application chooses whether convenience framing is wanted.
+pub const DEFAULT_PRESENTATION_HOOK: &str = "camera.default_presentation";
+
+lunco_hooks::declare_hook! {
+    id: DEFAULT_PRESENTATION_HOOK,
+    owner: "lunco-camera-core",
+    description: "Choose which authored camera presentation action the host should realize.",
+    signature: [ctx: Map],
+    output: String,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
 /// Marker for an entity carrying a generic interactive camera rig.
 ///
 /// Camera behavior components require this marker automatically. It lets

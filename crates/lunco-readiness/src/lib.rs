@@ -76,6 +76,17 @@ use serde::{Deserialize, Serialize};
 /// the same run reaches the same verdict at the same tick on every machine.
 pub const READINESS_HOOK: &str = "readiness.action";
 
+lunco_hooks::declare_hook! {
+    id: READINESS_HOOK,
+    owner: "lunco-readiness",
+    description: "Map a pending readiness fact to a closed engine action.",
+    signature: [ctx: Map],
+    output: String,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
+
 /// What a pending item is waiting for. A `&'static str` so it can be matched in
 /// Rust and read by name in policy; the constants below are the vocabulary the
 /// shipped policy knows.

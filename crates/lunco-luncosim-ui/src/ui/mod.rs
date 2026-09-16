@@ -763,6 +763,7 @@ fn register_camera_menu(world: &mut World) {
                 CameraSelectionOwner::None => "none",
                 CameraSelectionOwner::Director => "director",
                 CameraSelectionOwner::User => "operator",
+                CameraSelectionOwner::Policy => "policy",
                 CameraSelectionOwner::Generated => "generated",
             };
             ui.label(format!("Active: {active}  ·  Owner: {owner}"));

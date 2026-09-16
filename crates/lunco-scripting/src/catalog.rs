@@ -348,22 +348,34 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "Fire a TelemetryEvent on the shared bus; delivered to on_event hooks on the next scenario pass. `value` may be a scalar, array, or map and keeps its typed structure.",
     ),
     (
-        "register_hook",
-        "register_hook(id, entry, source)",
-        "bool",
-        "PRIVILEGED POLICY. Install a deterministic Rhai policy hook; requires Operator authority.",
+        "bind_policy",
+        "bind_policy(id, entry, source)",
+        "#{ id, ok, status, value, error }",
+        "PRIVILEGED POLICY. Compile and install an inline Rhai policy into an installable hook seam; requires Operator authority. A rejected replacement removes the old implementation.",
     ),
     (
-        "unregister_hook",
-        "unregister_hook(id)",
-        "bool",
-        "PRIVILEGED POLICY. Remove an installed policy hook; requires Operator authority.",
+        "unbind_policy",
+        "unbind_policy(id)",
+        "#{ id, ok, status, value, error }",
+        "PRIVILEGED POLICY. Remove exactly the installed policy implementation; it never restores a hidden fallback. Requires Operator authority.",
+    ),
+    (
+        "invoke_hook",
+        "invoke_hook(id, [args])",
+        "#{ id, ok, status, value, error }",
+        "READ. Invoke a reflected hook with native Rhai values. `status=unavailable` means no implementation; `status=fault` means an installed policy failed.",
     ),
     (
         "list_hooks",
         "list_hooks()",
-        "[#{id, backend, deterministic}]",
-        "READ. List installed policy hooks.",
+        "[#{id, owner, description, input, output, policy_file, policy_entry, deterministic, required, installable, declared, installed, backend}]",
+        "READ. Reflect every declared hook contract, authored policy binding, and current implementation. `input` and `output` describe the HookValue ABI accepted by invoke_hook.",
+    ),
+    (
+        "policy_status",
+        "policy_status()",
+        "#{scope, installed, failed, required_failures, error}",
+        "READ. Report the last application/Twin policy-set transition, including source/compile failures and whether any failed policy was mandatory.",
     ),
     (
         "subscribe",
@@ -525,6 +537,34 @@ fn tool_surface() -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn hook_surface() -> Vec<serde_json::Value> {
+    lunco_hooks::catalog()
+        .into_iter()
+        .map(|hook| {
+            serde_json::json!({
+                "id": hook.id,
+                "owner": hook.owner,
+                "description": hook.description,
+                "parameters": hook.parameters.into_iter().map(|parameter| {
+                    serde_json::json!({
+                        "name": parameter.name,
+                        "type": parameter.value_type.as_str(),
+                    })
+                }).collect::<Vec<_>>(),
+                "output": hook.output.as_str(),
+                "policy_file": hook.policy_file,
+                "policy_entry": hook.policy_entry,
+                "deterministic": hook.deterministic,
+                "required": hook.required,
+                "installable": hook.installable,
+                "declared": hook.declared,
+                "installed": hook.installed,
+                "backend": hook.backend,
+            })
+        })
+        .collect()
+}
+
 /// Completion query over the same runtime catalog used by authoring tools.
 struct ScriptCompleteProvider;
 
@@ -563,6 +603,33 @@ impl ApiQueryProvider for ScriptCompleteProvider {
                 "label": function["name"],
                 "kind": "prelude",
                 "detail": function["params"],
+            })
+        }));
+        candidates.extend(hook_surface().into_iter().map(|hook| {
+            serde_json::json!({
+                "label": hook["id"],
+                "kind": "policy-hook",
+                "detail": format!(
+                    "({}) -> {}",
+                    hook["parameters"]
+                        .as_array()
+                        .map(|parameters| {
+                            parameters
+                                .iter()
+                                .map(|parameter| {
+                                    format!(
+                                        "{}: {}",
+                                        parameter["name"].as_str().unwrap_or("_"),
+                                        parameter["type"].as_str().unwrap_or("any"),
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default(),
+                    hook["output"].as_str().unwrap_or("undeclared"),
+                ),
+                "documentation": hook["description"],
             })
         }));
         candidates.extend(tool_surface().into_iter().flat_map(|tool| {
@@ -669,6 +736,7 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
             .iter()
             .map(|(name, doc)| serde_json::json!({ "name": name, "doc": doc }))
             .collect();
+        let policy_hooks = hook_surface();
 
         // Prelude helpers and tool libraries (incl. file-loaded ones) use the
         // same helpers as `ScriptComplete`, keeping both discovery surfaces in
@@ -697,6 +765,8 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
         ApiResponse::ok(serde_json::json!({
             "verbs": verbs,
             "hooks": hooks,
+            "policy_hooks": policy_hooks,
+            "policy_status": crate::world_bridge::policy_status_json(world),
             "prelude": prelude,
             "tools": tools,
             "commands": commands,
