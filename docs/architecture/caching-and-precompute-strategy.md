@@ -332,9 +332,10 @@ the integrator state.
 1. **Compiled connection table** — compiles connection topology into a flat index table rebuilt only on connection change (in `lunco-cosim/src/systems/propagate.rs`). Replaces per-tick string cloning and map accumulation with direct index offsets.
 2. **Avian port resolution index** — resolves name-based ports once during compile (`lunco-core/src/ports.rs:180` `ResolvedPort`) instead of scanning const tables on every tick read/write.
 3. **`sync_collider` volume-dirty gate** — gates `Collider::sphere` rebuilds on volume change (`Changed<>`), eliminating per-frame allocations during steady-state.
-4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica-core/src/worker.rs` and its
-   `worker/cache.rs` prepared-solve boundary
-   keeps the per-entity `CachedModel` for instant Reset and a worker-owned
+4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica-core/src/worker.rs` owns
+   worker execution, while `worker/cache.rs` owns the prepared-solve cache
+   and `worker/scheduling.rs` owns the native command lanes.
+   The worker keeps the per-entity `CachedModel` for instant Reset and a worker-owned
    structural artifact cache that shares immutable DAE compilation across
    scene instances. The prepared live solve IR is reused by structural source
    identity in RAM and persisted by structural source key plus the compiler-owned library

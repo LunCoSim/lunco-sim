@@ -667,7 +667,7 @@ pub fn ensure_loaded(
     // Dispatch + mark Loading. The worker's COMPILE lane is FIFO
     // (Steps of other live entities may jump ahead, but LoadSourceRoot /
     // Compile / Reset / UpdateParameters never reorder among themselves —
-    // see `worker::enqueue_command`), so a Compile sent immediately after
+    // see the worker scheduling module, so a Compile sent immediately after
     // this is guaranteed to see the loaded session. Worker results transition
     // Loading → Ready or Failed based on the actual load outcome.
     let cmd = ModelicaCommand::LoadSourceRoot {
