@@ -149,7 +149,8 @@ The current supported subset is source-backed and deterministic:
   definitions/usages with documentation and attributes;
 - standard external references plus `satisfy` and verification `verify`
   memberships;
-- qualified names, typed scalar literal projections, source spans, diagnostics,
+- qualified names, typed scalar literal projections (`value.number_value` is a
+  native finite Rhai number while `value.number` preserves authored text), source spans, diagnostics,
   source files, and a deterministic `source_revision`;
 - Twin-indexed source-set discovery through the existing asset manifest, with
   `SysmlPlugin` opening the checked set automatically after `TwinAssetMounted`;

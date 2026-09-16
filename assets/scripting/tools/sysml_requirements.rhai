@@ -142,7 +142,7 @@ fn number(report, name) {
     if resolved.ok != true || resolved.record.value == () {
         return ();
     }
-    if resolved.record.value.number != () { return resolved.record.value.number.to_float(); }
+    if resolved.record.value.number_value != () { return resolved.record.value.number_value; }
     ()
 }
 
@@ -219,7 +219,7 @@ fn _expected(report, check) {
     if check.expected_attr == () { return check.expected; }
     let resolved = attribute(report, check.expected_attr);
     if resolved.ok != true || resolved.record.value == () { return (); }
-    if resolved.record.value.number != () { return resolved.record.value.number.to_float(); }
+    if resolved.record.value.number_value != () { return resolved.record.value.number_value; }
     _text(resolved.record.value.literal)
 }
 

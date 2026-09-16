@@ -55,15 +55,12 @@ pub fn attribute_collisions(analysis: &SysmlAnalysis) -> Value {
 /// Return one source-backed, typed attribute record.
 pub fn attribute_record(attribute: &SysmlAttribute) -> Value {
     let value = attribute.value.as_ref().map(|literal| {
-        let number = literal
-            .number
-            .as_deref()
-            .and_then(|text| text.parse::<f64>().ok())
-            .filter(|number| number.is_finite());
+        let number = literal.number_value.map(|value| value.as_f64());
         json!({
             "literal": literal.literal,
             "kind": literal.kind,
             "number": number,
+            "number_value": number,
         })
     });
     json!({

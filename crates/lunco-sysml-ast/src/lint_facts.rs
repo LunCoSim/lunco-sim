@@ -102,11 +102,15 @@ fn attribute(value: &SysmlAttribute) -> H {
 }
 
 fn literal(value: &SysmlLiteral) -> H {
-    H::map([
+    let mut facts = vec![
         ("literal", H::str(value.literal.clone())),
         ("kind", H::str(value.kind.clone())),
         ("number", H::str(value.number.clone().unwrap_or_default())),
-    ])
+    ];
+    if let Some(number) = value.number_value {
+        facts.push(("number_value", H::Float(number.as_f64())));
+    }
+    H::map(facts)
 }
 
 fn subject(value: &SysmlSubject) -> H {
