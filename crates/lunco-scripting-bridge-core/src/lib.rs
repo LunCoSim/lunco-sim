@@ -551,6 +551,18 @@ pub fn owner_of(gid: u64) -> Option<u64> {
     with_world(|world| Some(world.get_resource::<SessionRegistry>()?.owner_of(gid)?.0)).flatten()
 }
 
+/// The session id used by commands emitted on this peer. Authored policy uses
+/// this only to compare generic authority ownership; it does not encode a
+/// vehicle, controller, or product-specific role in the engine.
+pub fn local_session_id() -> Option<u64> {
+    with_world(|world| {
+        world
+            .get_resource::<lunco_core_session::LocalSession>()
+            .map(|session| session.0.0)
+    })
+    .flatten()
+}
+
 /// The role of `gid`'s controlling session — or `None` if unowned. Falls back to
 /// `"Owner"` for an owned-but-unregistered (local) session. The human-vs-AI test.
 pub fn controller_role(gid: u64) -> Option<String> {
