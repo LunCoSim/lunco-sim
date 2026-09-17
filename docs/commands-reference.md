@@ -104,7 +104,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-usd-bevy-camera`](#lunco-usd-bevy-camera) (5 commands)
 - [`lunco-usd-core`](#lunco-usd-core) (9 commands)
 - [`lunco-usd-sim-cosim`](#lunco-usd-sim-cosim) (3 commands)
-- [`lunco-usd-viewport-ui`](#lunco-usd-viewport-ui) (18 commands)
+- [`lunco-usd-viewport-runtime`](#lunco-usd-viewport-runtime) (18 commands)
 - [`lunco-viz`](#lunco-viz) (1 command)
 - [`lunco-workbench-core`](#lunco-workbench-core) (5 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
@@ -2864,10 +2864,10 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `reset_document` | `bool` |  Discard the active file document's authored and runtime layers before  remounting. Callers must obtain explicit user consent first. |
 
-### `lunco-usd-viewport-ui` <a id="lunco-usd-viewport-ui"></a>
+### `lunco-usd-viewport-runtime` <a id="lunco-usd-viewport-runtime"></a>
 
 The typed preview/session commands are defined by `lunco-usd-viewport-core`
-and executed by the render adapter in `lunco-usd-viewport-ui`.
+and executed by the render adapter in `lunco-usd-viewport-runtime`.
 
 #### `ApplyUsdInspectionPreset`
 

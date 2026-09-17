@@ -160,7 +160,7 @@ fn close_drilled_tabs_on_class_removed(
     mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut watermark: ResMut<ClassRemovedWatermark>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
-    mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,
+    mut drafts: Option<ResMut<lunco_modelica_runner::ExperimentDrafts>>,
     mut steppers: Query<&mut ModelicaModel>,
 ) {
     use lunco_doc::Document as _;
@@ -1033,10 +1033,10 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     // Current state line.
     let state = ctx.resource::<LibraryLoadState>().cloned();
 
-    // If the Modelica UI is active, the LibrarySettings resource MUST exist
-    // by architectural design (ModelicaPlugin adds ModelicaCorePlugin adds LibraryRemotePlugin).
+    // If the Modelica UI is active, the LibrarySettings resource is installed
+    // by SourceLibraryPlugin during ModelicaCorePlugin setup.
     let Some(mut settings) = ctx
-        .resource::<crate::modelica_library_settings::LibrarySettings>()
+        .resource::<lunco_modelica_library::LibrarySettings>()
         .cloned()
     else {
         return;
@@ -1201,7 +1201,9 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                     )
                     .clicked()
                 {
-                    ctx.trigger(crate::library_remote::LibraryInstallAction::Install);
+                    ctx.trigger(
+                        lunco_modelica_library::source_library::LibraryInstallAction::Install,
+                    );
                 }
             } else if install_failed {
                 if ui
@@ -1212,7 +1214,9 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                     )
                     .clicked()
                 {
-                    ctx.trigger(crate::library_remote::LibraryInstallAction::Reinstall);
+                    ctx.trigger(
+                        lunco_modelica_library::source_library::LibraryInstallAction::Reinstall,
+                    );
                 }
             } else if install_ready
                 && ui
@@ -1223,7 +1227,9 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                     )
                     .clicked()
             {
-                ctx.trigger(crate::library_remote::LibraryInstallAction::Reinstall);
+                ctx.trigger(
+                    lunco_modelica_library::source_library::LibraryInstallAction::Reinstall,
+                );
             }
         });
     }
@@ -1390,7 +1396,10 @@ mod tests {
         let entity = app.world_mut().spawn(ModelicaModel::default()).id();
         let doc = {
             let mut reg = app.world_mut().resource_mut::<ModelicaDocuments>();
-            let doc = reg.allocate("model M end M;".into());
+            let doc = reg.allocate(
+                "model M end M;".into(),
+                lunco_doc::PathlessOrigin::untitled("M.mo"),
+            );
             reg.link(entity, doc)
                 .expect("Modelica UI test document link");
             doc

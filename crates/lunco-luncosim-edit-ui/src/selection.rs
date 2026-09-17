@@ -13,9 +13,9 @@ use bevy::camera::primitives::Aabb;
 use bevy::math::primitives::Cuboid;
 use bevy::math::Isometry3d;
 
-use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
-use lunco_core::{on_command, register_commands, Command};
 use lunco_control_core::ControlLink;
+use lunco_core::{on_command, register_commands, Command};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_luncosim_edit_core::SpawnState;
 use lunco_luncosim_edit_gizmo_ui::GizmoSelected;
 use lunco_scene_selection::{
@@ -92,7 +92,7 @@ pub(crate) fn on_select_entity_target(
 /// The nearest prim-backed ancestor is the selection target, which keeps a
 /// generated visual mesh attached to the authored USD prim it represents.
 pub(crate) fn on_usd_viewport_click(
-    trigger: On<lunco_usd_viewport_ui::UsdViewportClick>,
+    trigger: On<lunco_usd_viewport_runtime::UsdViewportClick>,
     viewport: Res<UsdViewportState>,
     q_cameras: Query<(&Camera, &GlobalTransform)>,
     q_paths: Query<&UsdPrimPath>,

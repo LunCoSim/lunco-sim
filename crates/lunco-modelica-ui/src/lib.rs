@@ -1,8 +1,9 @@
 //! Modelica workbench UI and application facade.
 //!
-//! The compiler/document runtime lives in `lunco_modelica_core`; solver
-//! workers and run orchestration live in `lunco_modelica_execution`. This
-//! package owns only the egui/workbench integration and application facade.
+//! The document/runtime integration lives in `lunco_modelica_core`; the
+//! headless compiler is `lunco_modelica_compiler`, and stateful solver workers
+//! live in `lunco_modelica_worker`. This package owns only the egui/workbench
+//! integration and application facade.
 
 pub use lunco_modelica_core::*;
 
@@ -22,11 +23,7 @@ use lunco_modelica_core::ModelicaCorePlugin as CoreModelicaPlugin;
 use lunco_modelica_execution::ModelicaExecutionPlugin;
 
 #[cfg(feature = "ui")]
-pub(crate) use lunco_modelica_execution::experiments_runner;
-
 #[cfg(feature = "ui")]
-pub(crate) use lunco_modelica_execution::ModelicaRunnerResource;
-
 #[cfg(feature = "ui")]
 /// UI configuration for the Modelica workbench.
 #[derive(Resource, Clone, Debug)]
@@ -149,7 +146,7 @@ impl Plugin for ModelicaWorkbenchPlugin {
 #[cfg(feature = "ui")]
 fn sim_focus_pace(
     settings: Option<ResMut<bevy::winit::WinitSettings>>,
-    pending: Option<Res<experiments_runner::PendingHandles>>,
+    pending: Option<Res<lunco_modelica_runner::PendingHandles>>,
     models: Query<&lunco_modelica_runtime::ModelicaModel>,
     keep_awake: Option<Res<lunco_core::KeepAwake>>,
     mut idle: Local<Option<bevy::winit::UpdateMode>>,

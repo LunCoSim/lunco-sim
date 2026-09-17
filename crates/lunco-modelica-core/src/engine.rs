@@ -875,44 +875,46 @@ impl ModelicaEngine {
         // each class scans the bundle at most once — but a `HashMap<qualified,
         // uri-list>` (+ a longest-prefix index) built ONCE at source library install would
         // make the cold lookup O(1)/O(prefix) and let the startup count walk
-        // (`library_remote.rs`) drop its synchronous full tree traversal. Deferred:
-        // multi-file (engine/class_cache/library_remote) and source library resolution is
+        // (`lunco-modelica-library`) drop its synchronous full tree traversal. Deferred:
+        // multi-file (engine/class_cache/source-library) and source library resolution is
         // regression-prone (nested-URI / within-prefix). See
         // docs/architecture/engineering-backlog-and-standards.md.
-        let file_uri = crate::library_remote::parsed_source_bundle().and_then(|bundle| {
-            // A `.mo` that declares top-level qualified class `q` (= within +
-            // top-level key) ALSO contains every class nested under it (source library
-            // packs whole packages per file, e.g. `Modelica/Blocks/Examples.mo`
-            // holds `within Modelica.Blocks; package Examples … model
-            // PID_Controller …`). So the containing file for `qualified` is the
-            // one whose `q` is `qualified` itself or a dotted *prefix* of it.
-            // Match exact-or-prefix and keep the LONGEST `q` so the most
-            // specific file wins (`Modelica.Blocks.Examples` over the broader
-            // `Modelica.Blocks` package stub). The old exact-only match missed
-            // every nested class → `None` → callers (drill-in projection,
-            // icon resolution) retried every frame and rendered nothing.
-            let mut best: Option<(usize, String)> = None;
-            for (uri, ast) in bundle.iter() {
-                let prefix = ast
-                    .within
-                    .as_ref()
-                    .map(|w| w.to_string())
-                    .unwrap_or_default();
-                for class_key in ast.classes.keys() {
-                    let q = if prefix.is_empty() {
-                        class_key.clone()
-                    } else {
-                        format!("{}.{}", prefix, class_key)
-                    };
-                    let is_container = qualified == q || qualified.starts_with(&format!("{}.", q));
-                    if is_container && best.as_ref().is_none_or(|(len, _)| q.len() > *len) {
-                        best = Some((q.len(), uri.clone()));
+        let file_uri =
+            lunco_modelica_library::source_library::parsed_source_bundle().and_then(|bundle| {
+                // A `.mo` that declares top-level qualified class `q` (= within +
+                // top-level key) ALSO contains every class nested under it (source library
+                // packs whole packages per file, e.g. `Modelica/Blocks/Examples.mo`
+                // holds `within Modelica.Blocks; package Examples … model
+                // PID_Controller …`). So the containing file for `qualified` is the
+                // one whose `q` is `qualified` itself or a dotted *prefix* of it.
+                // Match exact-or-prefix and keep the LONGEST `q` so the most
+                // specific file wins (`Modelica.Blocks.Examples` over the broader
+                // `Modelica.Blocks` package stub). The old exact-only match missed
+                // every nested class → `None` → callers (drill-in projection,
+                // icon resolution) retried every frame and rendered nothing.
+                let mut best: Option<(usize, String)> = None;
+                for (uri, ast) in bundle.iter() {
+                    let prefix = ast
+                        .within
+                        .as_ref()
+                        .map(|w| w.to_string())
+                        .unwrap_or_default();
+                    for class_key in ast.classes.keys() {
+                        let q = if prefix.is_empty() {
+                            class_key.clone()
+                        } else {
+                            format!("{}.{}", prefix, class_key)
+                        };
+                        let is_container =
+                            qualified == q || qualified.starts_with(&format!("{}.", q));
+                        if is_container && best.as_ref().is_none_or(|(len, _)| q.len() > *len) {
+                            best = Some((q.len(), uri.clone()));
+                        }
                     }
                 }
-            }
-            // Caching of the resolved URI is unified below the chain.
-            best.map(|(_, uri)| uri)
-        });
+                // Caching of the resolved URI is unified below the chain.
+                best.map(|(_, uri)| uri)
+            });
 
         let Some(file_uri) = file_uri else {
             // Record the miss so the per-frame overlay caller stops

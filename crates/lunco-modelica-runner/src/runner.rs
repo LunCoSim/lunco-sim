@@ -7,9 +7,9 @@
 //!
 //! Inputs and parameter overrides are applied at the **DAE level** by
 //! rebinding each target variable's `start` after a single clean compile
-//! (see [`apply_value_bindings_to_dae`]) — NOT by mutating source. One
-//! compile is shared across a whole sweep; there is no source-rewriting
-//! fallback. A target that is neither a top-level DAE parameter nor input
+//! (see [`apply_value_bindings_to_dae`]) — the authored source is never
+//! mutated for an individual run. One compile is shared across a whole
+//! sweep. A target that is neither a top-level DAE parameter nor input
 //! (or a non-scalar value) is a hard error rather than a silent re-compile.
 //!
 //! - One in-flight Fast Run per runner instance. Native enforcement
@@ -23,11 +23,10 @@
 //! [`apply_value_bindings_to_dae`]. This relies on rumoca's
 //! `preserve_overridable_param_starts` fold (commit 6a849ac) keeping computed
 //! derived params symbolic so they recompute at `SimulationSession::new` time. There
-//! is **no** string-injection / source-rewriting fallback: an override that
 //! can't be applied at the DAE level (non-top-level param/input, or a
-//! non-scalar value) is a hard error, not a silent recompile.
+//! non-scalar value) is a hard error, not a recompile with different source.
 
-use crate::lock_ext::LockExt;
+use lunco_core::LockExt;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(not(target_arch = "wasm32"))]
 use std::hash::{Hash, Hasher};
@@ -35,7 +34,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
-use crossbeam_channel::{Sender, unbounded};
+use crossbeam_channel::{unbounded, Sender};
 use lunco_experiments::{
     Experiment, ExperimentId, ExperimentRegistry, ExperimentRunner, ModelRef, ParamPath,
     ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta, RunProgress,
@@ -44,9 +43,8 @@ use lunco_experiments::{
 use lunco_settings::SettingsSection;
 use rumoca_compile::compile::Dae;
 use serde::{Deserialize, Serialize};
-// Used only by the native-only DAE-override fast path (`apply_overrides_to_dae`).
-// Used by `apply_value_bindings_to_dae` on BOTH platforms (native runner and
-// the wasm worker both inject run values at the DAE level), so not wasm-gated.
+// Used by `apply_value_bindings_to_dae` on both platforms: native and wasm
+// inject run values at the DAE level.
 use rumoca_compile::parsing::ir_core::{
     Expression as DaeExpression, Literal as DaeLiteral, Span as DaeSpan, VarName as DaeVarName,
 };
@@ -198,7 +196,7 @@ struct RunnerState {
     /// compiles on the worker, so the runner never constructs one. See
     /// [`run_inner`].
     #[cfg(not(target_arch = "wasm32"))]
-    compiler: Arc<Mutex<lunco_modelica_core::ModelicaCompiler>>,
+    compiler: Arc<Mutex<lunco_modelica_compiler::ModelicaCompiler>>,
 }
 
 /// `(model_name, filename)` identity used to scope DAE-cache invalidation
@@ -217,7 +215,7 @@ impl Default for RunnerState {
             // Cheap: `new()` builds an empty session and installs no source library
             // (Layer A). source library lands on the first run that actually needs it.
             #[cfg(not(target_arch = "wasm32"))]
-            compiler: Arc::new(Mutex::new(lunco_modelica_core::ModelicaCompiler::new())),
+            compiler: Arc::new(Mutex::new(lunco_modelica_compiler::ModelicaCompiler::new())),
         }
     }
 }
@@ -333,7 +331,9 @@ impl ExperimentRunner for ModelicaRunner {
         #[cfg(target_arch = "wasm32")]
         let cancel_hook: Box<dyn Fn() + Send + Sync> = Box::new(move || {
             cancel_for_hook.store(true, Ordering::SeqCst);
-            crate::worker_transport::dispatch_cancel_run(run_id);
+            if let Some(transport) = crate::worker_run_transport() {
+                (transport.dispatch_cancel_run)(run_id);
+            }
         });
         #[cfg(not(target_arch = "wasm32"))]
         let cancel_hook: Box<dyn Fn() + Send + Sync> = Box::new(move || {
@@ -517,10 +517,18 @@ fn start_job(state: Arc<Mutex<RunnerState>>, job: QueuedJob) {
     };
     // Forward worker updates into the handle's tx; the forwarder frees the
     // slot via `finish_run` when a terminal update arrives.
+    let Some(transport) = crate::worker_run_transport() else {
+        let _ = tx.send(RunUpdate::Failed {
+            error: "Modelica worker run transport is not installed".to_string(),
+            partial: None,
+        });
+        finish_run(&state, run_id);
+        return;
+    };
     let (forward_tx, forward_rx) = unbounded::<RunUpdate>();
-    crate::worker_transport::register_run_sender(run_id, forward_tx);
+    (transport.register_run_sender)(run_id, forward_tx);
     spawn_forwarder(run_id, forward_rx, tx, state.clone());
-    let dispatched = crate::worker_transport::dispatch_run_fast(
+    let dispatched = (transport.dispatch_run_fast)(
         run_id,
         src.model_name,
         src.source,
@@ -638,7 +646,7 @@ fn dae_cache_key(src: &ModelSource) -> u64 {
 /// Apply value bindings — both parameter overrides AND experiment input
 /// values — directly to a compiled DAE by rebinding each target variable's
 /// `start` to a literal. This is THE single place run values are injected;
-/// there is no source-rewriting fallback. Both the native runner and the wasm
+/// the authored source remains unchanged. Both the native runner and the wasm
 /// worker call it, so the two platforms inject identically.
 ///
 /// A target is looked up first among DAE `parameters`, then `inputs`:
@@ -649,12 +657,12 @@ fn dae_cache_key(src: &ModelSource) -> u64 {
 /// - **Inputs**: the build seeds each input's initial value from its `start`
 ///   once (the batch solver never calls `set_input`), so rebinding `start`
 ///   here pins the input to a constant for the run — the DAE-level analog of
-///   the old `input X` → `parameter X = v` source rewrite, with no rumoca
-///   change required.
+///   the DAE-level equivalent of pinning an input for a batch run, with no
+///   source mutation or second compile required.
 ///
 /// Returns `Err` when a target is neither a parameter nor an input, or the
-/// value isn't a scalar literal — a hard error (no silent source-rewrite
-/// fallback that would diverge the run's source from what was compiled).
+/// value isn't a scalar literal — a hard error so the run cannot diverge from
+/// the compiled source contract.
 pub fn apply_value_bindings_to_dae(
     dae: &mut Dae,
     bindings: &BTreeMap<ParamPath, ParamValue>,
@@ -1141,7 +1149,7 @@ impl RunSink for ChannelSink {
 ///
 /// Background: docs/numeric-experiments/README.md § Known working solver configurations
 ///
-/// The worker's live interactive sim (`worker::build_stepper`) previously had
+/// The worker's live interactive sim (`lunco_modelica_worker::worker::build_stepper`) previously had
 /// its OWN defaults (`rtol = 1e-3`, `atol = 1e-6`) with *no* solver selection,
 /// silently running BDF where the batch path runs TR-BDF2. `build_stepper` now
 /// delegates here, collapsing that divergence: one tolerance default, one
@@ -1159,7 +1167,8 @@ impl RunSink for ChannelSink {
 /// **Batch only.** The LIVE interactive/co-simulated path deliberately does NOT
 /// share this policy: an adaptive-implicit solver whose step sequence comes
 /// from per-machine error estimates must not run inside the client-predicted
-/// fixed-step loop. It has its own configuration in `worker::live_stepper_options`
+/// fixed-step loop. It has its own configuration in
+/// `lunco_modelica_worker::worker::live_stepper_options`
 /// (explicit family, fixed micro-step ladder, fixed tolerance). The two surfaces
 /// are meant to differ here — see
 /// `docs/architecture/28-modelica-realtime-physics.md` §2a.
@@ -1493,9 +1502,8 @@ pub struct DetectedParam {
 
 /// One detected top-level `input` declaration. Modelica `input` vars
 /// have no defaults — at runtime the stepper sets them via
-/// `set_input(name, value)`. For batch Fast Run we substitute them
-/// into the source as `parameter <type> <name> = <value>` before
-/// compile so the simulator sees a fixed value instead of zero.
+/// `set_input(name, value)`. For batch Fast Run the runner pins them through
+/// the same compiled-DAE binding path used for parameter overrides.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetectedInput {
     pub name: String,
@@ -1508,8 +1516,8 @@ pub struct DetectedInput {
 ///
 /// Sourced via [`lunco_modelica_ast::ast_extract::extract_typed_inputs_for_class`],
 /// which classifies by the parser's `causality` and additionally
-/// catches connector-typed inputs (`RealInput`/`IntegerInput`/…) that
-/// the old textual `\binput\b` scan silently missed.
+/// catches connector-typed inputs (`RealInput`/`IntegerInput`/…) through the
+/// parser's typed class representation.
 pub fn detect_top_level_inputs(
     class: &rumoca_compile::parsing::ast::ClassDef,
 ) -> Vec<DetectedInput> {
@@ -1590,8 +1598,8 @@ pub struct ExperimentDrafts {
 pub struct ExperimentDraft {
     pub overrides: BTreeMap<ParamPath, ParamValue>,
     /// User-set values for `input` variables. Stored separately from
-    /// parameter overrides because they get a different source-rewrite
-    /// (`input X y` → `parameter X y = value`).
+    /// parameter overrides so the UI can preserve the two authored concepts
+    /// while the runner applies both through one DAE-level binding path.
     pub inputs: BTreeMap<ParamPath, ParamValue>,
     pub bounds_override: Option<RunBounds>,
 }
@@ -1653,7 +1661,7 @@ pub struct ExperimentSources(pub std::collections::HashMap<ExperimentId, lunco_d
 /// One playback entity per doc; refilled in place each time a run
 /// finishes (drop old signals, push new ones). When live cosim is
 /// active for the same doc, the live entity wins in
-/// `doc_to_entity` — playback is the no-live-cosim fallback.
+/// `doc_to_entity` — playback is selected when no live cosim entity is active.
 #[derive(Resource, Default)]
 pub struct PlaybackEntities(
     pub std::collections::HashMap<lunco_doc::DocumentId, bevy::prelude::Entity>,

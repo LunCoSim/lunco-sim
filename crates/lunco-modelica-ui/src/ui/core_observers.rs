@@ -1,7 +1,7 @@
 //! UI-reactive observers of CORE state.
 //!
 //! These systems are the *reactive UI layer built on top of the core*: they
-//! read core domain state (e.g. [`crate::library_remote::LibraryLoadState`]) and
+//! read core domain state (e.g. [`lunco_modelica_library::source_library::LibraryLoadState`]) and
 //! project it into UI surfaces (the workbench status bus, console, plots).
 //! The core never references these surfaces — it just owns the observable
 //! state. All of this is `ui`-feature only; a headless build has no observers
@@ -363,8 +363,8 @@ pub fn project_run_results_to_ui(
     mut ev_failed: MessageReader<lunco_experiments::RunFailed>,
     mut ev_cancelled: MessageReader<lunco_experiments::RunCancelled>,
     registry: Res<lunco_experiments::ExperimentRegistry>,
-    sources: Res<crate::experiments_runner::ExperimentSources>,
-    mut playback: ResMut<crate::experiments_runner::PlaybackEntities>,
+    sources: Res<lunco_modelica_runner::ExperimentSources>,
+    mut playback: ResMut<lunco_modelica_runner::PlaybackEntities>,
     mut console: Option<ResMut<LogBuffer>>,
     mut plot_states: Option<ResMut<lunco_experiments_ui::PlotPanelStates>>,
     active_plot: Option<Res<lunco_experiments_ui::ActivePlot>>,

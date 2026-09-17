@@ -74,6 +74,8 @@ fn on_start(me, ctx) {
     this.stable_rover_samples = 0;
     this.add_x = ADD_X;
     this.add_y = ADD_Y;
+    this.sky_x = ADD_X;
+    this.sky_y = 80.0;
     this.point_x = 0.0;
     this.point_y = 0.0;
     this.last_point_x = 0.0;
@@ -196,6 +198,10 @@ fn on_tick(me, ctx) {
             "native F sends the configured action edge"));
         this.checks.push(t_true(true,
             "the authored route program produces a live guidance command"));
+        let active_label = get_exposure("vessel-hud", "program_label");
+        if active_label == () || active_label != "AUTOPILOT ON" { return; }
+        this.checks.push(t_true(true,
+            "the vessel HUD reflects the authoritative active program state"));
         // Stop before the spatial-edit half of the test. The attended camera
         // follows the controlled subject, so leaving the route running would
         // make a fixed screen coordinate cease to identify the point that was
@@ -221,30 +227,60 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 9 {
-        input_pointer_move(this.add_x, this.add_y);
+        // A terrain-only authoring gesture must consume a sky click without
+        // creating a point or showing an error notification.
+        input_pointer_move(this.sky_x, this.sky_y);
         this.phase = 10;
         return;
     }
 
     if this.phase == 10 {
-        input_pointer_press("primary", this.add_x, this.add_y);
+        input_pointer_press("primary", this.sky_x, this.sky_y);
         this.phase = 11;
         return;
     }
 
     if this.phase == 11 {
-        input_pointer_release("primary", this.add_x, this.add_y);
+        input_pointer_release("primary", this.sky_x, this.sky_y);
         this.phase = 12;
         return;
     }
 
     if this.phase == 12 {
-        input_key_release("AltLeft");
+        let after_sky = route_points();
+        if after_sky == () || after_sky.len() != this.before.len() {
+            return;
+        }
+        this.checks.push(t_true(true,
+            "native Alt-click on the sky does not append a route point"));
+        // Keep the valid terrain gesture close to the controlled rover so the
+        // newly composed marker is observable in the same camera view.
+        this.add_x = this.rover_x + 120.0;
+        this.add_y = this.rover_y;
+        input_pointer_move(this.add_x, this.add_y);
         this.phase = 13;
         return;
     }
 
     if this.phase == 13 {
+        input_pointer_press("primary", this.add_x, this.add_y);
+        this.phase = 14;
+        return;
+    }
+
+    if this.phase == 14 {
+        input_pointer_release("primary", this.add_x, this.add_y);
+        this.phase = 15;
+        return;
+    }
+
+    if this.phase == 15 {
+        input_key_release("AltLeft");
+        this.phase = 16;
+        return;
+    }
+
+    if this.phase == 16 {
         this.after_add = route_points();
         if this.after_add == () || this.after_add.len() != this.before.len() + 1 { return; }
         for path in this.after_add {
@@ -258,12 +294,16 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(true, "native Alt-click appends one authored route point"));
         this.marker = find_path(this.added + "/Dome");
         if this.marker < 0 { return; }
+        // Repeat the release after the projected point is observable. This
+        // gives the native input fan-out its own frame before the secondary
+        // click, so a modifier cannot accidentally suppress route.context.
+        input_key_release("AltLeft");
         this.stable_point_samples = 0;
-        this.phase = 14;
+        this.phase = 17;
         return;
     }
 
-    if this.phase == 14 {
+    if this.phase == 17 {
         // The possessed camera continues to settle after stopping the route.
         // Re-project immediately before the secondary click so the event is
         // addressed to the current rendered marker, not a stale screen point.
@@ -283,44 +323,53 @@ fn on_tick(me, ctx) {
         if this.stable_point_samples < 3 { return; }
         this.point_x = current_screen[0];
         this.point_y = current_screen[1];
-        // The generic popup is anchored at the pointer and its standard
-        // frame/button padding places the row hit area to the right of the
-        // anchor. Use the center of that generic row, not the marker itself.
-        this.delete_x = this.point_x + 60.0;
-        this.delete_y = this.point_y + 40.0;
-        input_pointer_move(this.point_x, this.point_y);
-        input_pointer_press("secondary", this.point_x, this.point_y);
-        this.phase = 15;
-        return;
-    }
-
-    if this.phase == 15 {
-        input_pointer_release("secondary", this.point_x, this.point_y);
-        this.phase = 16;
-        return;
-    }
-
-    if this.phase == 16 {
-        // The generic menu is anchored at the secondary-click position. The
-        // runner supplies the current delete-row coordinate from its screenshot.
-        input_pointer_move(this.delete_x, this.delete_y);
-        this.phase = 17;
-        return;
-    }
-
-    if this.phase == 17 {
-        input_pointer_press("primary", this.delete_x, this.delete_y);
+        input_key_release("AltLeft");
         this.phase = 18;
         return;
     }
 
     if this.phase == 18 {
-        input_pointer_release("primary", this.delete_x, this.delete_y);
+        // The generic popup is anchored at the pointer and its standard
+        // frame/button padding places the row hit area to the right of the
+        // anchor. Use the center of that generic row, not the marker itself.
+        this.delete_x = this.point_x + 60.0;
+        // The generic popup's second row is centered about 30 logical pixels
+        // below its anchor. Keep this as a UI coordinate for the production
+        // input path; the route policy still owns the action identity.
+        this.delete_y = this.point_y + 30.0;
+        input_pointer_move(this.point_x, this.point_y);
+        input_pointer_press("secondary", this.point_x, this.point_y);
         this.phase = 19;
         return;
     }
 
     if this.phase == 19 {
+        input_pointer_release("secondary", this.point_x, this.point_y);
+        this.phase = 20;
+        return;
+    }
+
+    if this.phase == 20 {
+        // The generic menu is anchored at the secondary-click position. The
+        // runner supplies the current delete-row coordinate from its screenshot.
+        input_pointer_move(this.delete_x, this.delete_y);
+        this.phase = 21;
+        return;
+    }
+
+    if this.phase == 21 {
+        input_pointer_press("primary", this.delete_x, this.delete_y);
+        this.phase = 22;
+        return;
+    }
+
+    if this.phase == 22 {
+        input_pointer_release("primary", this.delete_x, this.delete_y);
+        this.phase = 23;
+        return;
+    }
+
+    if this.phase == 23 {
         let after_delete = route_points();
         if after_delete == () || after_delete.len() != this.before.len()
             || after_delete.contains(this.added) {
@@ -330,7 +379,7 @@ fn on_tick(me, ctx) {
             "native context-menu delete removes the authored route point"));
         if port_active(this.subject) {
             send_key(this.action_key, "Pressed");
-            this.phase = 20;
+            this.phase = 24;
         } else {
             this.done = true;
             finish(this.checks);
@@ -338,15 +387,19 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    if this.phase == 20 {
+    if this.phase == 24 {
         send_key(this.action_key, "Released");
-        this.phase = 21;
+        this.phase = 25;
         return;
     }
 
-    if this.phase == 21 {
+    if this.phase == 25 {
         if port_active(this.subject) { return; }
         this.checks.push(t_true(true, "native F stops the route and leaves the subject safe"));
+        let inactive_label = get_exposure("vessel-hud", "program_label");
+        if inactive_label == () || inactive_label != "AUTOPILOT OFF" { return; }
+        this.checks.push(t_true(true,
+            "the vessel HUD reflects the authoritative inactive program state"));
         this.done = true;
         finish(this.checks);
     }

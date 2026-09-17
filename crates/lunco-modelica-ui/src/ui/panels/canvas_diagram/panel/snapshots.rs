@@ -95,7 +95,7 @@ pub(crate) fn stash_snapshots(
         // series in `SignalRegistry` (published by
         // `drain_pending_handles`), keeping the lookup uniform
         // — `(entity, path) → samples` — across live and historical.
-        if let Some(playback) = ctx.resource::<crate::experiments_runner::PlaybackEntities>() {
+        if let Some(playback) = ctx.resource::<lunco_modelica_runner::PlaybackEntities>() {
             for (d, e) in &playback.0 {
                 doc_to_entity.insert(d.raw(), *e);
             }

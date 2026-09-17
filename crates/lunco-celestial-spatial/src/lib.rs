@@ -9,8 +9,8 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::{
-    AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField, OrbitalViewPin, ReferenceFrameIndex,
-    update_reference_frame_index,
+    update_reference_frame_index, AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField,
+    OrbitalViewPin, ReferenceFrameIndex,
 };
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
@@ -162,7 +162,7 @@ impl Plugin for CelestialPlugin {
         // over (docs 10/12) — plus the solar-pose tracking system that feeds
         // the sole `SolarFramePose` reader path, including scene-local prims.
         queries::register_celestial_queries(app);
-        app.register_type::<pose::SolarTracked>();
+        app.register_type::<lunco_celestial_spatial_core::SolarTracked>();
         app.add_systems(
             Update,
             pose::update_solar_poses.run_if(cadence::tracked_needs_solve()),
@@ -177,17 +177,33 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<lunco_port_core::ports::PortTopologyRevision>();
         app.init_resource::<lunco_port_core::ports::PortTopologyState>();
         app.register_type::<link::LinkConfig>();
-        app.register_type::<link::LinkNode>();
-        app.register_type::<link::LinkOccluder>();
-        app.register_type::<link::LinkState>();
-        app.register_type::<link::LinkGeometryState>();
-        app.register_type::<wifi::WifiNode>();
-        app.register_type::<wifi::WifiState>();
+        app.register_type::<lunco_celestial_spatial_core::LinkNode>();
+        app.register_type::<lunco_celestial_spatial_core::LinkOccluder>();
+        app.register_type::<lunco_celestial_spatial_core::LinkState>();
+        app.register_type::<lunco_celestial_spatial_core::LinkGeometryState>();
+        app.register_type::<lunco_celestial_spatial_core::WifiNode>();
+        app.register_type::<lunco_celestial_spatial_core::WifiState>();
         link::register_all_commands(app);
-        app.add_observer(lunco_port_core::ports::bump_port_topology_on_add::<link::LinkNode>)
-            .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<link::LinkNode>)
-            .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<link::LinkState>)
-            .add_observer(lunco_port_core::ports::bump_port_topology_on_remove::<link::LinkState>);
+        app.add_observer(
+            lunco_port_core::ports::bump_port_topology_on_add::<
+                lunco_celestial_spatial_core::LinkNode,
+            >,
+        )
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_remove::<
+                lunco_celestial_spatial_core::LinkNode,
+            >,
+        )
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_add::<
+                lunco_celestial_spatial_core::LinkState,
+            >,
+        )
+        .add_observer(
+            lunco_port_core::ports::bump_port_topology_on_remove::<
+                lunco_celestial_spatial_core::LinkState,
+            >,
+        );
         app.add_systems(PreUpdate, link::refresh_link_class_catalog);
         app.add_systems(PostUpdate, link::check_link_state_structure);
         // `update_links` is a REGULAR (non-exclusive) system — it writes through

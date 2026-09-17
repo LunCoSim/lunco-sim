@@ -157,7 +157,7 @@ fn collect_varying_signals(ctx: &PanelCtx) -> Vec<(bevy::prelude::Entity, String
                     .min_by_key(|e| e.to_bits())
             });
         let playback = ctx
-            .resource::<crate::experiments_runner::PlaybackEntities>()
+            .resource::<lunco_modelica_runner::PlaybackEntities>()
             .and_then(|p| p.0.get(&d).copied());
         live.or(playback)
     });

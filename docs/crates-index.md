@@ -46,7 +46,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-celestial`** | Headless celestial semantics: canonical body catalog/NAIF identities, ephemeris contracts, typed f64 frame transforms, geodesy, body rotation, and Kepler propagation. |
-| **`lunco-celestial-spatial-core`** | Lightweight Bevy/BigSpace contracts shared by celestial consumers: semantic frame lookup, canonical surface poses, surface axes, scene body declarations, orbital-view state, and the cached local-gravity fact. |
+| **`lunco-celestial-spatial-core`** | Lightweight Bevy/BigSpace contracts shared by celestial consumers: semantic frame lookup, canonical surface poses, surface axes, scene body declarations, orbital-view state, cached local-gravity facts, and render-independent connectivity state. |
 | **`lunco-celestial-spatial`** | Headless Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, links, trajectories, cadence, and runtime celestial commands. Application UI owns celestial panels. |
 | **`lunco-celestial-ephemeris`** | Concrete high-fidelity ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
@@ -81,8 +81,8 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-avatar-camera-core`** | Avatar-specific camera transition contracts: BigSpace orbit-return state, transient orbit history, arrival/input markers, and surface/orbit handoff constants. It depends on the generic camera contracts without making generic camera consumers carry avatar frame state. |
 | **`lunco-avatar-input`** | Avatar-specific semantic input runtime: pointer look, unit-normalized wheel zoom, camera behavior updates, and pause/cancel intents. It consumes shared control and camera contracts without coupling input changes to possession/authority implementation. |
 | **`lunco-avatar-policy`** | Twin-scoped avatar safety policy and physical collision-controller settings. It is shared directly by the runtime and UI, so the UI does not depend on the monolithic avatar implementation. |
-| **`lunco-avatar-camera`** | Avatar-specific camera realization: explicit inertial BigSpace orbital placement, bounded body resolution, vessel spring-arm follow, collision-aware local locomotion, and the surface/orbit lifecycle commands and handoff. It consumes avatar camera contracts as a focused runtime package. |
-| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: possession, focus, follow authority, and avatar-side camera transactions. Semantic input projection lives in `lunco-avatar-input`; generic camera realization and easing ownership live in `lunco-camera-runtime`, avatar-specific BigSpace placement/lifecycle and locomotion in `lunco-avatar-camera`, and optional egui presentation in `lunco-avatar-ui`. Camera selection lives in `lunco-usd-bevy-camera`; the shared viewport contract lives in `lunco-viewport-core`. |
+| **`lunco-avatar-camera`** | Avatar-specific camera realization: typed subject-binding and release transactions, explicit inertial BigSpace orbital placement, focus/return transactions, interactive-camera initialization, bounded body resolution, vessel spring-arm follow, collision-aware local locomotion, and the surface/orbit lifecycle handoff. It consumes avatar camera contracts as a focused runtime package. |
+| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: control authority, scene interaction, and avatar control transactions. A successful camera-bound possession emits a generic camera transaction; subject binding, follow policy, and presentation transitions are realized by `lunco-avatar-camera`. Semantic input projection lives in `lunco-avatar-input`; generic camera realization and easing ownership live in `lunco-camera-runtime`, and optional egui presentation in `lunco-avatar-ui`. Camera selection lives in `lunco-usd-bevy-camera`; the shared viewport contract lives in `lunco-viewport-core`. |
 | **`lunco-avatar-ui`** | Optional egui presentation adapter for `lunco-camera-core`, `lunco-embodiment-core`, and `lunco-avatar-policy`: avatar status panel, camera/name-tag and notification overlays, and the Avatar settings row. It does not depend on the avatar runtime implementation. |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Specialized vessel-control adapter: translates semantic `UserIntent` actions into authored port writes, handles control authority and input injection, and yields a vessel to its owning session (spec 034). Shared keymap settings live in `lunco-input-core`. |
@@ -100,7 +100,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
 | **`lunco-usd-commands`** | Headless USD document and authoring command boundary: document kind registration, open/new/save/undo/redo, document lifecycle, and typed USD authoring commands. It owns no scene admission or visual projection. |
-| **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, runtime persistence, and live document-to-stage projection. |
+| **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, runtime persistence, live document-to-stage projection, and generic authored control/program/scene-property runtime surfaces. |
 | **`lunco-usd-bevy-runtime`** | Application-level composition of the USD runtime, visual, diagnostics, physics, simulation, and document-command plugins. |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, domain-owned live-edit registration, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
@@ -200,11 +200,16 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, generated-source metadata, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
+| **`lunco-modelica-telemetry`** | Render-free Modelica telemetry capability: retains landed solver variables in the shared signal registry, applies the shared rate/retention/channel policy, and publishes inspectable Modelica metadata. It is installed by the execution host and is separate from compiler/document ownership. |
 | **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
-| **`lunco-modelica-core`** | Headless Modelica compiler/document host: Rumoca compilation, source-root admission, source-library access, and UI-agnostic document/runtime contracts. It does not own solver workers, Fast Run execution, browser transport, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
-| **`lunco-modelica-execution`** | Modelica execution package: native solver workers, Fast Run/experiment execution, prepared-solve caching, and the wasm worker transport. It consumes the compiler core through typed contracts and keeps numerical/runtime dependencies out of compiler-only consumers. |
+| **`lunco-modelica-library`** | Shared source-library capability: persisted library-root settings, parsed-source bundle admission, browser fetch/decode, lazy source unpacking, editor-index handoff, and the typed Modelica worker bridge. It is a production runtime package, not a test harness; compiler and execution hosts consume its contracts without owning its transport implementation. |
+| **`lunco-modelica-compiler`** | Headless Rumoca compiler and source-admission host: one production `ModelicaCompiler` session, source-root seating, strict reachable-DAE compilation, diagnostics, and library revision tracking. It is shared directly by workers, runners, asset tooling, and command-line hosts; tests exercise this same production package. |
+| **`lunco-modelica-core`** | Headless Modelica document/runtime host: document lifecycle, source-root state, compiler-engine resource synchronization, and UI-agnostic runtime contracts. It consumes the compiler and source-library capabilities but does not own Rumoca compilation, source-library transport, solver workers, Fast Run execution, browser fetch, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-runner`** | Modelica experiment backend: source snapshots, compile-once DAE caching, native scheduling, shared batch/interactive run paths, run-bound resolution, and experiment-side Bevy resources. It consumes compiler and solver contracts without owning worker transport. |
+| **`lunco-modelica-worker`** | Stateful Modelica worker engine: live steppers, command dispatch, worker-local artifact/prepared-solve caches, native worker loop, and the Bevy co-simulation bridge. It is a production runtime package, not a test harness. |
+| **`lunco-modelica-execution`** | Modelica execution host: plugin assembly, native worker launch, and wasm worker transport. It composes `lunco-modelica-worker` and `lunco-modelica-runner` through explicit contracts; compiler-only consumers do not inherit this host. |
 | **`lunco-modelica-solver`** | Renderer-free Modelica solver capability: Rumoca backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session. The execution host supplies lowered solve models and owns worker lifecycle; this package owns numerical integration construction and solver-specific dependencies. |
-| **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, and run query providers plus document edit commands. It depends on the headless Modelica core but is not part of the compiler core's default closure; Workspace queries remain in `lunco-workspace-api`. |
+| **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, and run query providers plus document edit commands. It depends on the headless document/runtime core and compiler contracts but is not part of the compiler host's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui-core`** | Render-independent Modelica UI contracts: shared command/event payloads (`OpenClass`, `FocusDocumentByName`, `SetModelicaParameter`) and stable plot identities. It has no Modelica compiler, workbench shell, panel, or renderer dependency; observers remain in the owning UI package. |
 | **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagram/editor adapters, onboarding, and experiment-result view-models; reusable log, icon, documentation, and trajectory rendering lives in shared UI crates. It has no tutorial catalog or lifecycle. |
 | **`lunco-modelica-icon-ui`** | Reusable egui renderer for authored Modelica `Icon`/`Diagram` graphics, including orientation, text substitution, themed colors, polygon tessellation, and bitmap loading through the source-library asset boundary. It has no workbench panel or document lifecycle ownership. |
@@ -246,7 +251,10 @@ Primary entry points and simulation assembly targets.
 | **`lunco-modelica-icon-ui`** | — | Reusable egui Modelica icon/diagram graphics renderer used by the diagram canvas and model preview. |
 | **`lunco-modelica-docs-ui`** | — | Reusable egui Modelica documentation renderer used by the model view. |
 | **`lunco-modelica-index`** | — | Reusable Modelica index, diagram metadata, package-browser values, and editor-index artifact contract. |
-| **`lunco-modelica-execution`** | `lunica_worker`, `modelica_run`, `modelica_tester` | Headless Modelica execution runtime. It owns solver workers, Fast Run execution, native/wasm worker transport, and execution-side caches; the compiler/document host is `lunco-modelica-core`, and the shared command/result protocol remains in `lunco-modelica-runtime`. |
+| **`lunco-modelica-library`** | — | Source-library runtime admission, artifacts, browser handoff, and the shared Modelica worker bridge. |
+| **`lunco-modelica-runner`** | — | Modelica experiment scheduling and shared batch/interactive run backend. |
+| **`lunco-modelica-worker`** | — | Headless Modelica worker engine and Bevy co-simulation bridge. It owns worker lifecycle internals, command dispatch, live stepping, and execution caches. |
+| **`lunco-modelica-execution`** | `lunica_worker`, `modelica_run`, `modelica_tester` | Modelica execution host. It assembles the worker engine, owns native/wasm host transport, and keeps the shared command/result protocol in `lunco-modelica-runtime`; `lunco-modelica-runner` owns experiment scheduling and run orchestration. |
 | **`lunco-modelica-assets`** | `build_modelica_library_assets`, `modelica_library_indexer`, `modelica_library_parse_bench` | Native Modelica source-library packaging and indexing tools. The indexer is shared by the CLI and the Modelica UI's background lifecycle adapter; the package remains independent of Bevy. |
 | **`lunco-modelica-api`** | — | Transport-free Modelica API capability: query providers plus document edit commands, installed by API-enabled Modelica and LunCoSim hosts. |
 
@@ -362,12 +370,15 @@ Headless celestial semantics. Owns the canonical body catalog and named semantic
 **`lunco-celestial-spatial-core`**
 The lightweight ECS boundary for celestial spatial facts. It owns the semantic
 frame-to-grid index, canonical site/body-fixed pose query, ENU surface-frame
-helpers, scene body declarations, orbital-view state, and the cached local
-gravity fact consumed by cameras, avatars, networking, scripting, telemetry,
-and UI. It depends only on the semantic celestial package, generic spatial
-coordinates, and the Bevy/BigSpace types required by those contracts. It does
-not install a celestial runtime or pull terrain, globe, link, imagery,
-trajectory, cadence, or asset integration.
+helpers, scene body declarations, orbital-view state, the cached local gravity
+fact, authored mission declarations, the solar-tracking marker, and the
+published `LinkNode`, `LinkState`, `LinkGeometryState`, Wi-Fi, peer, and
+occluder components consumed by cameras, avatars, networking, scripting,
+telemetry, USD projection, and UI. It depends only on the semantic celestial
+package, generic spatial coordinates, and the Bevy/BigSpace types required by
+those contracts. It does not install a celestial runtime or pull terrain,
+globe, link solving, imagery, trajectory sampling, cadence, or asset
+integration.
 
 **`lunco-celestial-spatial`**
 Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, globe/imagery integration, links, trajectories, cadence, and runtime commands. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
@@ -428,9 +439,11 @@ types here prevents the camera runtime from depending on the high-fan-out
 `lunco-core` package and keeps editor implementation details out of consumers.
 
 **`lunco-avatar`**
-Headless-safe local-avatar runtime. Implements possession/focus/follow
-observers and avatar-side camera transactions. Avatar-specific semantic input
-projection lives in `lunco-avatar-input`; generic camera mode exclusivity, the
+Headless-safe local-avatar runtime. Implements control authority, scene
+interaction, and avatar control observers. A camera-bound possession emits a
+typed camera subject-binding event; the camera realization owns the spatial
+pose and mode transition. Avatar-specific semantic input projection lives in
+`lunco-avatar-input`; generic camera mode exclusivity, the
 one-writer easing rule, input policy, clip-plane math, and free-flight/surface
 pose writers live in `lunco-camera-runtime`/`lunco-camera-core`; celestial
 orbital placement and surface/orbit lifecycle live in `lunco-avatar-camera`;
@@ -440,9 +453,10 @@ reconciler in `lunco-usd-bevy-camera` owns which camera is shown.
 **`lunco-embodiment-core`**
 Backend-neutral embodiment role package. Its `roles` module owns the
 `Embodiment`, `LocalEmbodiment`, and `RemoteEmbodiment` markers plus the derived
-`TheLocalEmbodiment` lookup and its single-claim hooks. It has no product-specific
-camera, control, notification, or scene-handoff policy; specialized consumers
-compose those contracts around the roles.
+`TheLocalEmbodiment` lookup and its single-claim hooks. It also resolves an
+explicit embodiment request against that authoritative local role. Product
+policies and camera, control, notification, and scene adapters compose around
+these roles.
 
 **`lunco-notifications-core`**
 Backend-neutral transient notification package. It owns the typed
@@ -466,11 +480,13 @@ authority remain in `lunco-avatar`.
 
 **`lunco-avatar-camera`**
 Avatar-specific camera realization package. Its `AvatarCelestialCameraPlugin`
-owns BigSpace orbital placement, pending-focus realization, vessel spring-arm
-follow, collision-aware free-flight/surface locomotion, and the surface/orbit
-lifecycle commands and handoff for avatar entities. Generic celestial surface-frame publication
-remains in `lunco-camera-celestial`, while possession, focus, and follow
-authority remain in `lunco-avatar`.
+owns typed subject-binding and release restoration, `FollowTarget`, BigSpace
+orbital placement, pending-focus realization, focus/return transactions,
+interactive-camera initialization, vessel spring-arm follow, collision-aware
+free-flight/surface locomotion, and the surface/orbit lifecycle handoff for
+avatar entities. Generic celestial surface-frame publication remains in
+`lunco-camera-celestial`, while control authority and scene interaction remain
+in `lunco-avatar`.
 
 **`lunco-avatar-policy`**
 Owns the generic workspace-setting interpretation for avatar soil collision and
@@ -482,9 +498,9 @@ Backend-neutral camera contract package. Owns reusable camera behavior
 components, shared smoothing defaults, pure frame/zoom/movement/clip-plane
 math, camera-mode transition state, pose-input accumulators, the typed camera
 commands (`FocusTarget`, `FollowTarget`, `ReturnFromOrbit`, and
-`SetCameraInput`), the `PendingFocus` request, and the
-`camera.default_presentation` hook identifier. It does not choose an embodiment,
-a camera source, or an authored behavior policy.
+`SetCameraInput`), the `PendingFocus` request, camera transaction diagnostics,
+and the `camera.default_presentation` hook identifier. It does not choose an
+embodiment, a camera source, or an authored behavior policy.
 
 **`lunco-camera-runtime`**
 Generic interactive camera realization package. Owns the exclusive camera-mode
@@ -575,9 +591,10 @@ or UI presentation. Its public query contracts are tested in
 
 **`lunco-usd-bevy-runtime-core`**
 Headless-safe scene runtime boundary. Installs scene admission, Twin-backed
-stage loading, runtime persistence, live document-to-stage projection, scene
-commands, and the stage terminal-outcome contract. It does not assemble the
-complete visual, diagnostics, physics, simulation, or document-command bundle.
+stage loading, runtime persistence, live document-to-stage projection, authored
+control/program projection, scene-property port surfaces, scene commands, and
+the stage terminal-outcome contract. It does not assemble the complete visual,
+diagnostics, physics, simulation, or document-command bundle.
 
 **`lunco-usd-bevy-runtime`**
 Application-level composition boundary. Installs the visual USD projector,
@@ -648,11 +665,19 @@ editors and headless adapters can consume the state without linking the
 render-heavy surface.
 
 **`lunco-usd-viewport-ui`**
-Render-heavy USD preview surface. It owns offscreen images and egui texture
-registration, render cameras/lights, pointer interaction, projection binding,
-inspection queries, and the viewport panels. Preview/session state and typed
-commands come from `lunco-usd-viewport-core`; this package does not own
-Twin-browser lifecycle or document navigation.
+Workbench presentation adapter for the USD preview. It owns the egui viewport
+panels and translates panel geometry/pointer gestures into the typed runtime
+events. Preview/session state, offscreen images, render cameras/lights, pointer
+contracts, projection binding, inspection queries, and typed commands come from
+`lunco-usd-viewport-runtime`; this package does not own Twin-browser lifecycle
+or document navigation.
+
+**`lunco-usd-viewport-runtime`**
+Render runtime for document-backed USD preview sessions. It owns preview
+lifecycle, offscreen images and egui texture registration, render cameras and
+lights, projection readiness, render budgets, preview commands, inspection
+queries, and the runtime integration tests. It consumes the render-independent
+state from `lunco-usd-viewport-core` and does not register workbench panels.
 
 **`lunco-usd-bevy-camera`**
 Render-free camera adapter built on `lunco-usd-bevy-core`,
@@ -665,8 +690,10 @@ does not own BasisCurves geometry math.
 **`lunco-usd-bevy`**
 Visual OpenUSD bridge built on `lunco-usd-bevy-core` and
 `lunco-usd-bevy-mesh`. It maps USD prim hierarchies and visual facts into Bevy
-entities/components, orchestrates async mesh and render-intent projection, and
-installs the camera and light adapters at the integration boundary;
+entities/components and orchestrates async mesh and render-intent projection.
+Authored controls, generic executable programs, and scene-property port
+surfaces belong to `lunco-usd-bevy-runtime-core`, not this visual adapter. The
+visual plugin installs the camera and light adapters at its integration boundary;
 `lunco-render-bevy` supplies the concrete render pipeline. Parametric
 NURBS/lathe definitions and their mesh regeneration live in the independent
 `lunco-usd-bevy-lathe` package, which this crate uses directly rather than
@@ -1006,22 +1033,58 @@ Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco
 
 ### Scripting & Modeling
 
+**`lunco-modelica-compiler`**
+Headless Rumoca compiler and source-admission host. It owns the production
+`ModelicaCompiler` session, source-root seating, strict reachable-DAE calls,
+located compile diagnostics, and source admission revisions. Workers, runners,
+asset tooling, command-line hosts, and the compiler's own tests all call this
+same package directly.
+
 **`lunco-modelica-core`**
-Modelica compiler/document host. It consumes the headless `ModelicaDocument`
-contract from `lunco-modelica-document`, admits source roots, compiles authored
-models, and owns the typed boundary used by execution hosts. It does not own
-solver workers, Fast Runs, prepared solve caches, or browser transport. API
-commands are opt-in, and API query providers are owned by
-`lunco-modelica-api`.
+Modelica document/runtime host. It consumes the headless `ModelicaDocument`
+contract from `lunco-modelica-document`, owns Bevy lifecycle synchronization and
+engine resources, and composes the compiler and source-library capabilities. It
+does not own Rumoca compilation, source-root seating, solver workers, Fast Runs,
+prepared solve caches, or browser transport. API commands are opt-in, and API
+query providers are owned by `lunco-modelica-api`.
+
+**`lunco-modelica-library`**
+Production source-library capability shared by compiler, execution, and UI
+hosts. It owns the persisted local-root setting, native parsed-bundle admission,
+wasm manifest/bundle fetch, bounded decode and source unpack, editor-index
+handoff, and the typed worker callback seam. It has no compiler session or
+solver lifecycle, so changes to library transport do not rebuild the compiler
+implementation.
 
 **`lunco-modelica-execution`**
-Modelica execution host. It owns solver construction, native worker scheduling,
-Fast Run execution, prepared solve-IR caching, and the wasm `lunica_worker`
-transport. The wasm adapter composes the generic
-`lunco-worker-transport::WorkerPool`; source-library readiness and per-run
-routing remain Modelica-specific here. This package depends on the compiler
-core, while compiler-only consumers do not inherit its execution dependency
-closure.
+Modelica execution host. It assembles the stateful worker engine, native worker
+launch, and the wasm `lunica_worker` transport. It composes the generic
+`lunco-worker-transport::WorkerPool` and installs the worker callbacks consumed
+by `lunco-modelica-runner`; source-library readiness and per-run routing remain
+Modelica-specific here. Compiler-only consumers do not inherit this host.
+
+**`lunco-modelica-worker`**
+Stateful Modelica worker engine. It owns live solver construction and stepping,
+command dispatch, native worker scheduling, worker-local compiled/prepared
+artifacts, and the Bevy response/clock bridge. Keeping this package separate
+from the host transport lets worker changes and browser transport changes
+rebuild as independent production packages while both native and wasm paths
+use the same dispatch implementation.
+
+**`lunco-modelica-runner`**
+Modelica experiment backend. It owns `ModelicaRunner`, source snapshots,
+compile-once DAE caching, native scheduling, shared batch/interactive run
+paths, run-bound resolution, and experiment-side Bevy resources. The runner
+depends on compiler and solver contracts but not on the worker transport; the
+execution host installs the typed wasm dispatch callbacks during composition.
+
+**`lunco-modelica-telemetry`**
+Render-free execution-side telemetry projection. It retains the current
+variables of landed `ModelicaModel` sessions in the shared `SignalRegistry`,
+uses `TelemetrySettings` for rate, retention, and channel limits, and attaches
+Modelica signal metadata from the authored document and generated layout. The
+execution host installs its plugin after worker responses; compiler/document
+hosts do not compile this projection.
 
 **`lunco-modelica-document`**
 Headless, render-free Modelica document package. It owns the canonical source

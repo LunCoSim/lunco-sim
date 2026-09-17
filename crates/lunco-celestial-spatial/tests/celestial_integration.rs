@@ -974,7 +974,7 @@ fn descendant_link_endpoint_uses_nearest_geodetic_anchor() {
         .spawn((
             Transform::from_xyz(0.0, 27.0, 0.0),
             ChildOf(station),
-            lunco_celestial_spatial::link::LinkNode {
+            lunco_celestial_spatial_core::LinkNode {
                 class: Some("earth".into()),
                 ..Default::default()
             },

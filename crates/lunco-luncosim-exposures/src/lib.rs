@@ -14,7 +14,7 @@ use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Ro
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_celestial_spatial::link::LinkState;
+use lunco_celestial_spatial_core::LinkState;
 use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_control_core::ControlLink;
 use lunco_core::exposure::{
@@ -255,10 +255,22 @@ fn runtime_ui_facts(
         .and_then(|root| q_paths.get(root).ok())
         .map(|(_, path)| path.path.clone());
     let programs = authored_program_facts(root_path.as_deref(), q_sim, q_paths, stages, canonical);
-    let inputs = root
+    // A generic subject may expose command inputs through the map-backed
+    // `InputPorts` surface, a simulation participant's `SimComponent`, or
+    // both. Present one merged typed input fact to Rhai so a policy does not
+    // have to know which backend owns a declared input. The simulation
+    // participant wins on a duplicate name because it is the backend that
+    // consumes the value during its continuous step.
+    let mut input_values = root
         .and_then(|entity| q_inputs.get(entity).ok())
-        .map(|ports| scalar_hook_map(&ports.values))
-        .unwrap_or_else(|| HookValue::Map(Vec::new()));
+        .map(|ports| ports.values.clone())
+        .unwrap_or_default();
+    if let Some(entity) = root {
+        if let Ok((_, sim)) = q_sim.get(entity) {
+            input_values.extend(sim.inputs.iter().map(|(name, value)| (name.clone(), *value)));
+        }
+    }
+    let inputs = scalar_hook_map(&input_values);
 
     let status = root
         .and_then(|root| q_sim.get(root).ok())

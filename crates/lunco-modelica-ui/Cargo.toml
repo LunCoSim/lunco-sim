@@ -25,6 +25,7 @@ ui = [
     "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:arboard",
     "dep:lunco-modelica-icon-ui",
     "dep:lunco-modelica-docs-ui",
+    "dep:lunco-modelica-library",
     "dep:lunco-modelica-api",
     "dep:lunco-experiments-ui",
     # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
@@ -83,8 +84,10 @@ path = "src/bin/lunica.rs"
 bevy.workspace = true
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-execution = { path = "../lunco-modelica-execution" }
+lunco-modelica-runner = { path = "../lunco-modelica-runner" }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
+lunco-modelica-library = { path = "../lunco-modelica-library", optional = true }
 lunco-modelica-icon-ui = { path = "../lunco-modelica-icon-ui", optional = true }
 lunco-modelica-docs-ui = { path = "../lunco-modelica-docs-ui", optional = true }
 lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }
@@ -209,7 +212,7 @@ wasm-bindgen-futures = { workspace = true }
 # `--cfg getrandom_backend="wasm_js"` (cfg + feature are both required).
 getrandom = { version = "0.3", features = ["wasm_js"] }
 # `Response`, `Request`, `RequestInit`, `Headers` for the source-library fetcher
-# (see `src/library_remote.rs`); the rest predate this work.
+# Source-library transport features live in `lunco-modelica-library`.
 web-sys = { workspace = true, features = [
     "console",
     "Document",

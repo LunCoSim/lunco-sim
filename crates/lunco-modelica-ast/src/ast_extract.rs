@@ -218,7 +218,8 @@ pub fn extract_model_name_from_ast(ast: &StoredDefinition) -> Option<String> {
 /// fully-qualified class is already owned by its package's source root, so
 /// seating the file on its own registers that class a second time and rumoca's
 /// merge pass rejects the pair (`Duplicate class '…' with non-identical
-/// definition`). [`crate::ModelicaCompiler::compile_str`] routes on this.
+/// definition`). The Modelica compiler host routes on this distinction before
+/// seating source into Rumoca.
 ///
 /// A bare `within;` names the top level and is reported as `None` — it declares
 /// membership of no package, which is the same thing as having no clause.

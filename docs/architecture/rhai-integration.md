@@ -54,8 +54,8 @@ participants. Python does not implement `ScenarioRuntime` or execute
 `ScriptedModel` lifecycle hooks; Python scenario lifecycle support remains
 explicitly planned in `lunco-scripting/src/scenario.rs`.
 The native shared-library probe is lazy: the scripting plugin keeps Python
-`Uninitialized` until a Python command, participant, or REPL request needs the
-runtime. A Python participant then resolves availability at the USD bind seam;
+`Uninitialized` until a Python command or participant needs the runtime. A
+Python participant then resolves availability at the USD bind seam;
 an unavailable interpreter is reported as a terminal participant error.
 
 ### Unified document authoring
@@ -205,7 +205,9 @@ via `SubscribeTelemetry` (`lunco-api` `executor.rs` + `subscription.rs`). Script
 receive events via `on_event` on the next scenario pass: a running simulation
 delivers at the next fixed pass, while a paused simulation uses the next
 `Update` pass without running fixed-step behavior. Inter-script interaction is
-bus-only (isolated VMs); see §7f.
+bus-only (isolated VMs); see §7f. Events emitted while a pass is delivering its
+current batch remain queued for the following pass, so lifecycle hooks can
+publish a readiness edge without losing it at the dispatch boundary.
 
 ### Examples
 

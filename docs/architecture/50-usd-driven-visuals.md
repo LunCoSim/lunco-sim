@@ -147,7 +147,7 @@ inspection and command transport; it does not select a vehicle steering mode.
 A driver reads its parameters from `ScriptParams`, the same `lunco:param:*` map a rhai
 script reads through `param(me, key, default)` — **not** off the USD reader. A driver is
 an ordinary Bevy system, and a system has no reader: everything it needs is projected
-into the ECS at load, by `attach_programs`.
+into the ECS at load by the shared program runtime in `lunco-usd-bevy-runtime-core`.
 
 That makes `ScriptParams`' `HashMap<String, f64>` bind drivers too. It is `f64` because
 rhai's `FLOAT` is (`script_param() -> Option<f64>`, `lunco-scripting-bridge-core`), which is a

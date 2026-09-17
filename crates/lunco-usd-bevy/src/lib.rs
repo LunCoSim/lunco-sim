@@ -38,6 +38,7 @@
 //! event both publish the same queue marker; `process_queued_usd_visuals` is the
 //! single reader and marks each projected entity with `UsdSceneProjected`.
 
+use bevy::asset::AssetId;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
@@ -49,8 +50,6 @@ use lunco_render::{PbrLook, PbrTextures, ProceduralSkybox, SurfaceAlpha};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
-/// Light and transform ports — the port backend for what `light`/`compose` spawn.
-pub mod scene_ports;
 use lunco_usd_bevy_core::animation::{prim_is_animated, ANIMATED_SHADER_INPUTS};
 use lunco_usd_bevy_core::point_instancer::read_point_instancer;
 use lunco_usd_bevy_core::read::{
@@ -59,7 +58,7 @@ use lunco_usd_bevy_core::read::{
 };
 use lunco_usd_bevy_core::source::{UsdSourceText, UsdSourceTextLoader};
 use lunco_usd_bevy_core::{
-    canonical, program, read, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader,
+    canonical, read, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader,
     UsdStageAsset,
 };
 use lunco_usd_bevy_core::{
@@ -134,10 +133,6 @@ impl Plugin for UsdVisualPlugin {
             // Lights the glTF loader may embed (USD-authored lights take a
             // separate path, but a glTF can carry its own).
             .register_type::<DirectionalLight>()
-            // Light and transform ports. Registered HERE, beside the systems that spawn the
-            // components they read, so a wire into a light lands in a headless build too —
-            // the value is scene data, not a render resource.
-            .add_plugins(scene_ports::ScenePortsPlugin)
             .register_type::<PointLight>()
             .register_type::<SpotLight>()
             .register_type::<bevy::gltf::GltfExtras>()
@@ -158,7 +153,6 @@ impl Plugin for UsdVisualPlugin {
             .register_asset_loader(UsdSourceTextLoader)
             .register_type::<UsdPrimPath>()
             .register_type::<lunco_core::UsdPrimKind>()
-            .register_type::<lunco_camera_core::CameraFollow>()
             .register_type::<UsdAnimated>()
             .register_type::<UsdResetXformStack>()
             // The retained NurbsPatch definition + its parametric layer. Registered
@@ -417,6 +411,7 @@ fn instantiate_usd_prim(
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     quality: lunco_render::RenderQualityProfile,
+    live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
 ) {
     let id = prim_path.stage_handle.id();
     let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
@@ -446,6 +441,7 @@ fn instantiate_usd_prim(
         meshes,
         quality,
         stage_generation,
+        live_child_keys,
     );
 }
 
@@ -473,6 +469,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
     meshes: &mut Assets<Mesh>,
     quality: lunco_render::RenderQualityProfile,
     stage_generation: u64,
+    live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
 ) {
     let convention = match stage_convention(reader) {
         Ok(convention) => convention,
@@ -1009,33 +1006,11 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             );
         }
 
-        // Scripts are `LunCoProgramAPI` CHILD prims whose source is a `.rhai` — read
-        // from here, the owner, because a script acts on behalf of the thing that
-        // carries it: `me` is the vessel, not the program prim. The program prim is
-        // what makes the binding composable (it arrives on a `references` arc and can
-        // be deleted to take the behaviour away), and what gives the script its own
-        // typed parameters, which live on it rather than on the owner.
-        //
-        // A program with a `.mo` source is owned by lunco-usd-sim; generic Rhai
-        // programs are the policy surface projected here.
-        // Preview stages are inert presentations, including generic programs
-        // attached by this visual projection rather than the physics projector.
-        if !preview_only {
-            attach_programs(
-                reader,
-                &sdf_path,
-                entity,
-                prim_path.stage_handle.id(),
-                commands,
-            );
-        }
-
         // There is deliberately NO "possessable" tag read here. The generic command
-        // surface is authored by `Controls` and projected as `InputPorts`; the avatar
-        // domain owns the semantic vessel boundary and rejects its own `Embodiment`
-        // endpoint before authority arbitration. What a non-avatar endpoint can do is
-        // still decided by its authored capability — no vehicle-class branch belongs
-        // in this translator.
+        // surface is authored by `Controls` and projected by the USD runtime; the
+        // avatar domain owns the semantic vessel boundary and rejects its own
+        // `Embodiment` endpoint before authority arbitration. No vehicle-class branch
+        // belongs in this visual translator.
 
         // `ui:displayName` — the STANDARD UsdUI attribute for a prim's human
         // name (SceneGraphPrimAPI), the field every DCC shows in its outliner.
@@ -1050,65 +1025,6 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 commands
                     .entity(entity)
                     .try_insert(lunco_core::markers::Callsign(trimmed.to_string()));
-            }
-        }
-
-        // Per-vessel intent→port control map (stage 2 of control), authored as a
-        // `Controls` child scope: each child prim's NAME is the intent, with
-        // `string lunco:port` + `double lunco:factor`. Authored inline OR pulled in
-        // from a shared profile class (`inherits = </_RoverControl>`); either way
-        // it's already composed into this live stage. When absent, no keyboard
-        // adapter is attached; direct named-port writes and authored programs
-        // can still operate only on explicitly projected surfaces.
-        if let Some(controls) = reader
-            .children(&sdf_path)
-            .into_iter()
-            .find(|c| c.name() == Some("Controls"))
-        {
-            let entries: Vec<(String, String, f64)> = reader
-                .children(&controls)
-                .into_iter()
-                .filter_map(|bind| {
-                    let intent = bind.name()?.to_string();
-                    let port = reader.scalar::<String>(&bind, "lunco:port")?;
-                    let factor = reader.real(&bind, "lunco:factor")?;
-                    Some((intent, port, factor))
-                })
-                .collect();
-            if let Some(binding) = lunco_control_core::ControlBinding::from_intent_entries(&entries)
-            {
-                // Preserve authored `inputs:<port>` constants on the command
-                // surface. The binding declares which names are writable; USD
-                // remains the source of their initial state. Omitted inputs
-                // use the semantic zero default.
-                let inputs =
-                    lunco_port_core::InputPorts::with_defaults(binding.ports().map(|port| {
-                        let value = reader
-                            .real(&sdf_path, &format!("inputs:{port}"))
-                            .unwrap_or(0.0);
-                        (port.to_string(), value)
-                    }));
-                // `InputPorts` rides along with the binding: the binding DECLARES
-                // the accepted input ports, while the composed USD inputs provide
-                // their initial values. The vocabulary is never a Rust literal.
-                // (A rover also gets one at its `PhysxVehicleContextAPI` branch;
-                // `try_insert` order is irrelevant because seeding is additive and
-                // idempotent.)
-                commands.entity(entity).try_insert((binding, inputs));
-            }
-
-            // Camera-follow mode is a property of how the vehicle moves, so it is
-            // authored on the same control profile as the intent→port binding
-            // (`uniform token lunco:cameraFollow` on the referenced profile, which
-            // flattens onto this `Controls` prim). It answers "should the camera
-            // rotate with the body?" — `heading` (yaw, surface vehicles), `orbit`
-            // (stable frame for a 6-DOF flyer), `chase` (full attitude). Read here
-            // and consumed by `on_possess_command`; absent → the `Heading` default.
-            if let Some(mode) = reader
-                .text(&controls, "lunco:cameraFollow")
-                .and_then(|t| lunco_camera_core::parse_camera_follow(&t))
-            {
-                commands.entity(entity).try_insert(mode);
             }
         }
 
@@ -1310,6 +1226,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             instance_projection,
             is_high_precision_parent,
             is_grid_entity,
+            live_child_keys,
             commands,
         );
     }
@@ -1606,6 +1523,7 @@ fn commit_usd_children<R: UsdRead>(
     instance_projection: Option<&UsdInstanceProjection>,
     is_high_precision_parent: bool,
     is_grid_entity: bool,
+    live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
     commands: &mut Commands,
 ) {
     // Child order is part of the structural admission contract.  Readers may
@@ -1617,6 +1535,15 @@ fn commit_usd_children<R: UsdRead>(
     children.sort_by_key(|path| path.to_string());
     for child_path in children {
         if !reader.is_active(&child_path) {
+            continue;
+        }
+        // A structural sink batch can contain both a newly-added parent and
+        // one of its descendants. The incremental bridge creates the
+        // descendant immediately, while the parent's normal projection also
+        // queues it. Keep one child identity per parent/stage/path so that
+        // the same USD prim cannot acquire two live ECS projections.
+        let child_key = (parent, stage_handle.id(), child_path.to_string());
+        if !live_child_keys.insert(child_key) {
             continue;
         }
 
@@ -1941,6 +1868,7 @@ fn process_queued_usd_visuals(
     >,
     q_grid: Query<(), With<big_space::prelude::Grid>>,
     q_child_of: Query<&ChildOf>,
+    q_live_paths: Query<(Entity, &UsdPrimPath, Option<&ChildOf>)>,
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     q_entities: Query<Entity>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
@@ -1979,6 +1907,15 @@ fn process_queued_usd_visuals(
     // the canonical topology/indexes.
     let mut queued: Vec<_> = q.iter().collect();
     queued.sort_by(|left, right| left.1.path.cmp(&right.1.path));
+
+    // Include already projected and already queued children. The parent
+    // projection may run after an incremental descendant spawn, so a query
+    // limited to the pending queue would still admit the same child twice.
+    let mut live_child_keys = std::collections::HashSet::new();
+    for (_entity, path, child_of) in &q_live_paths {
+        let Some(child_of) = child_of else { continue };
+        live_child_keys.insert((child_of.parent(), path.stage_handle.id(), path.path.clone()));
+    }
 
     for (entity, prim_path, vis, tf, is_instance_root, member, instance_projection) in queued {
         if projected != 0 && started.elapsed() >= settings.frame_budget {
@@ -2037,6 +1974,7 @@ fn process_queued_usd_visuals(
             &asset_server,
             &mut meshes,
             requested_profile,
+            &mut live_child_keys,
         );
         projected += 1;
     }
@@ -2730,114 +2668,6 @@ fn apply_standard_material_intent(
     let look = read_standard_material(reader, sdf_path, asset_server, stage_id)?;
     entity_cmd.try_insert(look);
     Ok(())
-}
-
-/// Attach the generic script/driver programs a prim carries to `entity`.
-///
-/// Program resolution happens before the one-program-per-owner check. Modelica
-/// facets in a `CollectionAPI:components` network are owned by their domain
-/// projection; they are not generic script siblings.
-/// This is the boundary that prevents a physical network's component count from
-/// becoming a false duplicate-program diagnostic.
-fn attach_programs<R: UsdRead>(
-    reader: &R,
-    owner: &SdfPath,
-    entity: Entity,
-    stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    commands: &mut Commands,
-) {
-    let network_members = program::modelica_network_member_paths(reader);
-    let mut candidates: Vec<_> = reader
-        .children(owner)
-        .into_iter()
-        .filter(|child| reader.is_active(child))
-        .filter(|child| reader.has_api_schema(child, "LunCoProgramAPI"))
-        .collect();
-    // Intrinsic behavior is authored directly on a physical prim. A separable
-    // program is a child Scope and is attached by its owner above, never to the
-    // implementation Scope itself.
-    if reader.type_name(owner).as_deref() != Some("Scope")
-        && reader.has_api_schema(owner, "LunCoProgramAPI")
-    {
-        candidates.push(owner.clone());
-    }
-
-    let mut programs = Vec::new();
-    for child in candidates {
-        // Collection membership is the explicit ownership transfer to the
-        // generated Modelica network. Its source is validated by the domain
-        // projector, so it must not enter this generic executor at all.
-        if network_members.contains(child.as_str()) {
-            continue;
-        }
-        let resolved = match program::resolve_program(reader, &child) {
-            Ok(resolved) => resolved,
-            Err(issue) => {
-                warn!(
-                    "[usd] program {} is unresolved at {}: {}",
-                    child.as_str(),
-                    issue.property,
-                    issue.message
-                );
-                continue;
-            }
-        };
-        if program::is_generic_program_backend(resolved.backend) {
-            programs.push((child, resolved));
-        }
-    }
-
-    if programs.len() > 1 {
-        warn!(
-            "[usd] {} has {} generic executable LunCoProgramAPI children; one generic program per owner is the runtime contract, so none was attached",
-            owner.as_str(),
-            programs.len()
-        );
-        return;
-    }
-    for (child, resolved) in programs {
-        // A program's parameters are typed attributes on its own program prim, one
-        // per key — `float lunco:param:width = 1.05`. Read by `param(me, key,
-        // default)`, which is how one reusable program drives many prims, each from
-        // its own numbers.
-        //
-        // A Rust driver reads them the same way, from `ScriptParams`, and NOT off the
-        // reader: a driver is an ordinary Bevy system, and a system has no USD reader.
-        // Everything a driver needs must be projected into the ECS here, at load. That
-        // is why the f64-ness of `ScriptParams` binds drivers too — a colour cannot
-        // ride through it, and belongs in a bound `Material` regardless.
-        let params: std::collections::HashMap<String, f64> = reader
-            .attr_names(&child)
-            .iter()
-            .filter_map(|name| {
-                let key = name.strip_prefix("lunco:param:")?;
-                Some((key.to_string(), reader.real(&child, name)?))
-            })
-            .collect();
-        if !params.is_empty() {
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::ScriptParams(params));
-        } else {
-            commands.entity(entity).remove::<lunco_core::ScriptParams>();
-        }
-
-        // Remember WHICH program this scenario came from. The script runs for the
-        // owner, but its source belongs to the program prim — that is where a live
-        // edit is saved back to.
-        commands
-            .entity(entity)
-            .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()));
-
-        commands.queue(move |world: &mut World| {
-            lunco_usd_bevy_core::program::apply_program_resolution(
-                world,
-                entity,
-                stage_id,
-                Some(resolved),
-            );
-        });
-    }
 }
 
 const MAX_USD_ANCESTRY_DEPTH: usize = 64;

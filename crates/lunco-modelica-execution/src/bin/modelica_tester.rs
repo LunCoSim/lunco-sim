@@ -7,7 +7,7 @@
 // `main` at the bottom.
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use lunco_modelica_core::ModelicaCompiler;
+    use lunco_modelica_compiler::ModelicaCompiler;
     use std::path::PathBuf;
 
     pub(crate) fn main() -> anyhow::Result<()> {
@@ -90,12 +90,10 @@ mod native {
             t_end: t_end_hint,
             ..Default::default()
         };
-        let mut opts =
-            match lunco_modelica_execution::experiments_runner::stepper_options_from_bounds(&bounds)
-            {
-                Ok(o) => o,
-                Err(e) => anyhow::bail!("solver selection failed: {e}"),
-            };
+        let mut opts = match lunco_modelica_runner::stepper_options_from_bounds(&bounds) {
+            Ok(o) => o,
+            Err(e) => anyhow::bail!("solver selection failed: {e}"),
+        };
         opts.atol = atol;
         opts.rtol = rtol;
         let mut stepper = match lunco_modelica_solver::simulation_session::cli(&result.dae, opts) {

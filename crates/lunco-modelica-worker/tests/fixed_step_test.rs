@@ -1,5 +1,5 @@
 use lunco_experiments::solver::{self, RuntimeProfile, SolverParams, SolverRequest};
-use lunco_modelica_core::ModelicaCompiler;
+use lunco_modelica_compiler::ModelicaCompiler;
 use lunco_modelica_solver::{
     fixed_step::FixedStepSession,
     simulation_session::{self, LiveStepper},

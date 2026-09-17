@@ -2,7 +2,7 @@
 //!
 //! Runs inside a Web Worker with its own wasm linear memory. Listens for
 //! bincode-serialized `ModelicaCommand` messages from the main page, drives
-//! them through the same `worker::process_worker_command` dispatch the native
+//! them through the same `lunco_modelica_worker::worker::process_worker_command` dispatch the native
 //! worker uses, and `postMessage`s each `ModelicaResult` back.
 //!
 //! Why a separate bin
@@ -12,7 +12,7 @@
 //! which is a separate JS thread with a separate wasm instance — moves the
 //! blocking work off the page's main thread without needing nightly Rust
 //! atomics or `SharedArrayBuffer`. The native build is unchanged: it still
-//! uses `worker::modelica_worker` on a real `std::thread`.
+//! uses `lunco_modelica_worker::worker::modelica_worker` on a real `std::thread`.
 //!
 //! State
 //! -----
@@ -32,7 +32,7 @@
 //! ~19 MB zstd blob, decompressed + bincode-decoded here, off the main thread).
 //! The worker installs it and answers `WireResult::LibraryReady`; with
 //! `provide_to_main` it also hands the decoded bytes back to the page
-//! (`library_remote::ingest_worker_decoded_library`) for bounded main-thread
+//! (`source_library::ingest_worker_decoded_library`) for bounded main-thread
 //! deserialization.
 
 // Wasm32-only binary; the desktop stub below keeps `cargo build` for the
@@ -81,7 +81,7 @@ mod wasm {
     use wasm_bindgen::prelude::*;
     use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-    use lunco_modelica_execution::worker::{
+    use lunco_modelica_worker::worker::{
         ModelicaWorkerState, panic_result_for_command, process_worker_command,
     };
 
@@ -125,7 +125,7 @@ mod wasm {
     /// Ship the decompressed source library bincode bytes to the main thread as a *transferred*
     /// `ArrayBuffer` (zero-copy move, not a structured-clone copy). Posted as a bare
     /// `ArrayBuffer` — the only non-`Uint8Array` message in the protocol — which the
-    /// main `onmessage` handler routes to `library_remote::ingest_worker_decoded_library`.
+    /// main `onmessage` handler routes to `source_library::ingest_worker_decoded_library`.
     /// Sending the raw bytes (rather than a bincode `WireResult`) avoids re-encoding
     /// ~165 MB and lets the transfer be zero-copy.
     fn post_decoded_library_transfer(scope: &DedicatedWorkerGlobalScope, bytes: Vec<u8>) {
@@ -233,7 +233,7 @@ mod wasm {
         >,
         bounds: &lunco_experiments::RunBounds,
     ) {
-        use lunco_modelica_execution::experiments_runner::apply_value_bindings_to_dae;
+        use lunco_modelica_runner::apply_value_bindings_to_dae;
         let started = web_time::Instant::now();
         post_log(
             scope,
@@ -321,7 +321,7 @@ mod wasm {
         };
 
         // Drive the run through the SHARED `drive_run` — the EXACT same entry
-        // point native (`experiments_runner::run_inner`) uses. It honours
+        // point native (`lunco_modelica_runner`) uses. It honours
         // `bounds.runtime`: Batch → the dense-output `simulate_with_diagnostics`
         // solve (robust on stiff models), Interactive → the streamable
         // `run_stepping_loop`. `WorkerSink` is the only worker-specific part
@@ -332,9 +332,7 @@ mod wasm {
         // closes that divergence and also brings the worker the batch
         // output-decimation.
         let mut sink = WorkerSink { scope, run_id };
-        lunco_modelica_execution::experiments_runner::drive_run(
-            &run_dae, bounds, started, &mut sink,
-        );
+        lunco_modelica_runner::drive_run(&run_dae, bounds, started, &mut sink);
         post_log(
             scope,
             format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
@@ -354,7 +352,7 @@ mod wasm {
         }
     }
 
-    /// Worker-side [`RunSink`](lunco_modelica_execution::experiments_runner::RunSink):
+    /// Worker-side [`RunSink`](lunco_modelica_runner::RunSink):
     /// streams run updates over `postMessage` and reads the worker's cancel
     /// registry. The ONLY platform-specific half of the run loop — the loop
     /// itself is shared with the native runner.
@@ -363,7 +361,7 @@ mod wasm {
         run_id: lunco_experiments::ExperimentId,
     }
 
-    impl lunco_modelica_execution::experiments_runner::RunSink for WorkerSink<'_> {
+    impl lunco_modelica_runner::RunSink for WorkerSink<'_> {
         fn is_cancelled(&mut self) -> bool {
             if is_cancelled(self.run_id) {
                 clear_cancel();
@@ -544,14 +542,14 @@ mod wasm {
                     // heap. Non-primary pool workers skip that transfer — the main
                     // thread needs exactly one copy and would dedupe the rest.
                     let started = web_time::Instant::now();
-                    match lunco_modelica_core::library_remote::decompress_parsed_bundle(&bytes) {
+                    match lunco_modelica_library::source_library::decompress_parsed_bundle(&bytes) {
                         Ok(decoded) => {
-                            match lunco_modelica_core::library_remote::deserialize_parsed_bundle(
+                            match lunco_modelica_library::source_library::deserialize_parsed_bundle(
                                 &decoded,
                             ) {
                                 Ok(parsed) => {
                                     let count = parsed.len();
-                                    lunco_modelica_core::library_remote::install_global_parsed_source_bundle_pub(
+                                    lunco_modelica_library::source_library::install_global_parsed_source_bundle_pub(
                                         parsed,
                                     );
                                     // Ship the decoded bytes to main (transferred
@@ -601,7 +599,7 @@ mod wasm {
                     }
                 }
                 WireMessage::InstallLibraryIndexFromSource { bytes } => {
-                    match lunco_modelica_core::library_remote::load_library_index_from_source_bundle(
+                    match lunco_modelica_library::source_library::load_library_index_from_source_bundle(
                         &bytes,
                     ) {
                         Ok(index) => post_library_index_chunks(&scope_for_cb, index),
@@ -615,7 +613,7 @@ mod wasm {
                         &scope_for_cb,
                         format!(
                             "pong: {tag} (library={})",
-                            lunco_modelica_core::library_remote::global_parsed_source_bundle()
+                            lunco_modelica_library::source_library::global_parsed_source_bundle()
                                 .map(|m| m.len())
                                 .unwrap_or(0)
                         ),

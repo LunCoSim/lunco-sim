@@ -11,7 +11,7 @@ use lunco_modelica_core::{
     class_metadata::{self, ClassMetadata},
     sim_default::{self, ResourceRead},
 };
-use lunco_modelica_execution::resolve_setup_bounds_in;
+use lunco_modelica_runner::resolve_setup_bounds_in;
 use lunco_workbench_core::PanelCtx;
 
 struct PanelResources<'a, 'ctx>(&'a PanelCtx<'ctx>);

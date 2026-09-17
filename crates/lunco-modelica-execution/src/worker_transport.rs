@@ -2,7 +2,7 @@
 //!
 //! Why this module exists
 //! ----------------------
-//! On native, `worker::modelica_worker` runs on its own OS thread and exchanges
+//! On native, `lunco_modelica_worker::worker::modelica_worker` runs on its own OS thread and exchanges
 //! `ModelicaCommand` / `ModelicaResult` over crossbeam channels with the Bevy
 //! main loop. The blocking compile / step work never blocks the UI.
 //!
@@ -30,7 +30,7 @@
 //!    `ModelicaChannels.rx_cmd`, bincode-encodes each command, and calls
 //!    `Worker::post_message(Uint8Array)`.
 //! 3. The worker bundle (`bin/lunica_worker.rs`) decodes the bytes, runs
-//!    `worker::process_worker_command` against its local `ModelicaWorkerState`,
+//!    `lunco_modelica_worker::worker::process_worker_command` against its local `ModelicaWorkerState`,
 //!    and posts each `ModelicaResult` back the same way.
 //!
 //! All wasm-only — `cfg(target_arch = "wasm32")` at the module level.
@@ -48,8 +48,8 @@ use lunco_worker_transport::{Callbacks, WorkerPool as WorkerTransport};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use crate::lock_ext::LockExt;
-use lunco_modelica_core::worker_bridge::{WorkerParseDone, WorkerParseFailed};
+use lunco_core::LockExt;
+use lunco_modelica_library::worker_bridge::{WorkerParseDone, WorkerParseFailed};
 use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 
 /// Wire-format envelope for the postMessage transport.
@@ -80,7 +80,8 @@ pub enum WireMessage {
     /// The worker decompresses once, then — *if* `provide_to_main` — ships the
     /// decoded bincode bytes back to the main thread as a transferred
     /// `ArrayBuffer`, so the main thread's resolution/autocomplete heap is filled
-    /// by *deserialize only* (see `library_remote::ingest_worker_decoded_library`).
+    /// by *deserialize only* (see
+    /// `source_library::ingest_worker_decoded_library`).
     ///
     /// With a worker pool, only the **primary** (worker 0) gets
     /// `provide_to_main = true` — the main thread needs exactly one decoded copy,
@@ -114,7 +115,7 @@ pub enum WireMessage {
     },
     /// Fast Run request: compile (with overrides) + simulate end-to-end.
     /// Worker posts back a `WireResult::RunUpdate` stream tagged with
-    /// `run_id`. See `experiments_runner` and
+    /// `run_id`. See `lunco_modelica_runner` and
     /// `docs/architecture/25-experiments.md`.
     RunFast {
         run_id: lunco_experiments::ExperimentId,
@@ -561,7 +562,7 @@ pub fn is_worker_active() -> bool {
 /// starts it returns `Ok`; a later worker failing just shrinks the pool.
 pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
     let want =
-        lunco_settings::load_section_from_disk::<crate::experiments_runner::ExperimentSettings>()
+        lunco_settings::load_section_from_disk::<lunco_modelica_runner::ExperimentSettings>()
             .resolved_max_parallel()
             .clamp(1, MAX_WORKERS);
 
@@ -632,7 +633,7 @@ fn route_wire_result(idx: usize, data: JsValue) {
     if data.is_instance_of::<js_sys::ArrayBuffer>() {
         let buf: js_sys::ArrayBuffer = data.unchecked_into();
         let decoded = Uint8Array::new(&buf).to_vec();
-        lunco_modelica_core::library_remote::ingest_worker_decoded_library(decoded);
+        lunco_modelica_library::source_library::ingest_worker_decoded_library(decoded);
         return;
     }
     let bytes: Vec<u8> = match Uint8Array::new(&data).to_vec() {
@@ -667,16 +668,16 @@ fn route_wire_result(idx: usize, data: JsValue) {
             bundled,
             done,
         }) => {
-            lunco_modelica_core::library_remote::ingest_worker_library_index_chunk(
+            lunco_modelica_library::source_library::ingest_worker_library_index_chunk(
                 components, bundled, done,
             );
         }
         Ok(WireResult::LibraryIndexFailed { error }) => {
-            lunco_modelica_core::library_remote::fail_worker_library_index(error);
+            lunco_modelica_library::source_library::fail_worker_library_index(error);
         }
         Ok(WireResult::LibraryFailed { error }) => {
             fail_worker_pipeline(error.clone());
-            lunco_modelica_core::library_remote::fail_worker_library(error);
+            lunco_modelica_library::source_library::fail_worker_library(error);
         }
         Ok(WireResult::ParseDocumentDone {
             doc_id,
@@ -1239,7 +1240,9 @@ fn pipeline_failure() -> Option<String> {
 #[cfg(target_arch = "wasm32")]
 fn send_command_failure(cmd: &ModelicaCommand, error: &str) {
     if let Some(tx) = RESULT_TX.get() {
-        let _ = tx.send(crate::worker::failed_result_for_command(cmd, error));
+        let _ = tx.send(lunco_modelica_worker::worker::failed_result_for_command(
+            cmd, error,
+        ));
     }
 }
 

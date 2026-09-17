@@ -16,7 +16,7 @@
 //! ## Design intent
 //!
 //! Generalises the source-bundle load path
-//! ([`crate::library_remote::LibraryRemotePlugin`]) so that every source the
+//! ([`lunco_modelica_library::SourceLibraryPlugin`]) so that every source the
 //! compiler needs goes through one registry with one state machine.
 //! Adding a fourth system library, a new bundled example, or a
 //! workspace folder becomes a data change, not new plumbing.
@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use lunco_modelica_runtime::{
     source_asset::read_text_sync, LoadSourceRootPayload, ModelicaChannels, ModelicaCommand,
 };
-use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
+use rumoca_compile::parsing::ast::StoredDefinition;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use web_time::Instant;
@@ -277,55 +277,6 @@ impl SourceRootRegistry {
 /// - Bare (non-qualified) names — those resolve locally via the
 ///   doc's own classes, no external load needed.
 /// - The empty string (defensive).
-pub fn scan_source_root_deps(ast: &StoredDefinition) -> HashSet<String> {
-    let mut qualified_names: HashSet<String> = HashSet::new();
-    for (_, class) in &ast.classes {
-        walk_class_qualified_types(class, &mut qualified_names);
-    }
-    // Map qualified names to their root segments.
-    qualified_names
-        .into_iter()
-        .filter_map(|name| name.split('.').next().map(|s| s.to_string()))
-        .filter(|root| {
-            !root.is_empty() && !lunco_modelica_ast::ast_extract::is_builtin_type_name(root)
-        })
-        .collect()
-}
-
-/// Scan a source document for the Modelica search-path roots it references.
-/// This is the source-side equivalent of `scan_source_root_deps` for compile
-/// entry points that have source text but do not yet own an AST.
-pub fn scan_source_root_deps_from_source(source: &str, uri: &str) -> HashSet<String> {
-    lunco_modelica_ast::parse_to_ast(source, uri)
-        .map(|ast| scan_source_root_deps(&ast))
-        .unwrap_or_default()
-}
-
-/// Collect type-name references from `class`, keeping only qualified
-/// (dotted) names — bare names always resolve within the current
-/// doc's own classes, so they never imply an external source-root
-/// load. Traversal lives in `lunco_modelica_ast::ast_extract::walk_class_type_names`
-/// so this scanner and the icon warmer can't drift apart on what
-/// "every referenced type" means.
-fn walk_class_qualified_types(class: &ClassDef, out: &mut HashSet<String>) {
-    lunco_modelica_ast::ast_extract::walk_class_type_names(class, &mut |name| {
-        if name.contains('.') {
-            out.insert(name.to_string());
-        }
-    });
-    for import in &class.imports {
-        use rumoca_compile::parsing::ast::Import;
-        let path = match import {
-            Import::Qualified { path, .. } | Import::Renamed { path, .. } => path.to_string(),
-            Import::Unqualified { path, .. } => path.to_string(),
-            Import::Selective { path, .. } => path.to_string(),
-        };
-        if path.contains('.') {
-            out.insert(path);
-        }
-    }
-}
-
 /// Ensure that the source root `id` is loaded into the rumoca
 /// compile session before the next compile runs. Returns `true`
 /// when the root is `Ready` (either now or after this call's
@@ -702,7 +653,7 @@ pub fn ensure_loaded(
 /// dependency, classify each against the registry, and emit a
 /// one-line summary.
 pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &StoredDefinition) {
-    let deps = scan_source_root_deps(ast);
+    let deps = lunco_modelica_index::source_deps::scan_source_root_deps(ast);
     if deps.is_empty() {
         bevy::log::info!(
             "[source-roots] compile `{}`: no external library deps",

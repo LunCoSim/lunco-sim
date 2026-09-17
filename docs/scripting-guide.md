@@ -265,9 +265,9 @@ Both paths avoid a Rust rebuild. The live helper delegates to the native
 The terminal frontend and the evaluator are deliberately separate. The
 running host's `lunco-scripting` package owns the Rhai engine and the reflected
 `RunRhai` command. `lunco-rhai-repl` only reads terminal input and formats the
-result; `lunco-api-client` only sends the generic API envelope. The in-process
-stdin REPL in `lunco-scripting` is a host-local debug seam and is not reused as
-a second remote client implementation.
+result; `lunco-api-client` only sends the generic API envelope. Terminal
+evaluation therefore uses the same API command path as every other external
+client, while the optional in-app panel uses that path directly.
 
 ### Inspect & debug
 

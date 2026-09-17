@@ -413,7 +413,7 @@ system (`tests/usd_connection_mechanics.rs`), pure wheel-parameter validation in
 tests in their owning crates. The separate wheel/tire/suspension target contract
 is now an authored `wheel_attachment_contract` USD + Rhai gate. Raw authoring
 facts that do not require Bevy or Avian stay with
-`lunco-usd-viewport-ui/tests/live_spawn_projection.rs`, which already owns the document
+`lunco-usd-viewport-runtime/tests/live_spawn_projection.rs`, which already owns the document
 projection target. If a future public query exposes one of these mechanism
 claims end-to-end, move that exact assertion to an authored scene and remove
 the Rust duplicate in the same change.

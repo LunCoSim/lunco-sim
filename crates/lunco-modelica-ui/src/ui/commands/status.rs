@@ -112,7 +112,7 @@ fn format_ready_files(files: &[String]) -> String {
 mod tests {
     use super::{format_ready_files, modelica_file_label, update_status_bar};
     use bevy::prelude::{App, Update};
-    use lunco_doc::{CompileState, DocumentOrigin};
+    use lunco_doc::CompileState;
     use lunco_doc_bevy::DocumentDiagnostics;
     use lunco_status_core::status_bus::StatusBus;
 

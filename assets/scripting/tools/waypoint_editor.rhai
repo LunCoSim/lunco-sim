@@ -14,8 +14,10 @@ fn route_ribbon_clearance() { 0.03 }
 fn route_ribbon_sample_spacing() { 3.0 }
 // A transient USD attribute is lowered through a bounded string payload. Keep
 // the whole route below that transport limit; long legs increase their sample
-// spacing adaptively while every authored waypoint remains an endpoint.
-fn route_ribbon_max_samples() { 768 }
+// spacing adaptively while every authored waypoint remains an endpoint. This
+// is deliberately bounded below the input-frame budget: route authoring must
+// never synchronously materialise a large presentation payload.
+fn route_ribbon_max_samples() { 256 }
 
 // Marker appearance is a generic route-tool policy. State is a transient view
 // of the authored program's visited set, written through the standard gprim
@@ -33,7 +35,12 @@ fn on_pointer(context) {
     if context == () { return #{ ok: true, changed: false, handled: false }; }
     if pointer_intent(context, "route.add_point") {
         let point = pointer_surface_point(context);
-        if point.ok != true { return failure(point.error); }
+        // Add-point is a terrain authoring gesture. A click into the sky is
+        // deliberately consumed as a no-op: it must not create a notification
+        // storm or reinterpret an arbitrary mesh/pointer position as terrain.
+        if point.ok != true {
+            return #{ ok: true, changed: false, handled: true, reason: "terrain_required" };
+        }
         return on_click(context);
     }
     if pointer_intent(context, "route.context") {

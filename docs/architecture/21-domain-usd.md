@@ -25,7 +25,9 @@ observers that execute those contracts; `lunco-usd-queries` owns the
 UI-free public query providers for document inspection, edit sessions,
 document synchronization, and explicit assembly-target resolution;
 `lunco-usd-bevy-runtime-core` owns scene admission, Twin-backed stage loading,
-runtime persistence, and live document projection; `lunco-usd-bevy-runtime`
+runtime persistence, live document projection, and generic authored runtime
+surfaces (control bindings, executable programs, and scene-property ports);
+`lunco-usd-bevy-runtime`
 composes that runtime with the complete application plugin bundle;
 `lunco-usd-geometry`
 owns the reusable render-free BasisCurves evaluator, NURBS, trim, and
@@ -54,7 +56,8 @@ NurbsPatch visual mesh projection plus quality invalidation;
 `lunco-usd-bevy-animation` owns the render-free time-sample projection;
 `lunco-usd-bevy` owns hierarchy, transform, async projection orchestration, and
 material intent while consuming the camera, light, lathe, and mesh packages
-directly; and
+directly; authored control/program projection and scene-property port
+registration are installed by `lunco-usd-bevy-runtime-core`; and
 `lunco-usd-avian-lint` owns composed `UsdPhysics` lint facts;
 `lunco-usd-avian-core` owns the USD-independent Avian/BigSpace physics-frame
 bridge, including f64 pose synchronization, rootless collider propagation,
@@ -387,7 +390,7 @@ section.
 
 ### Pipeline Phases
 
-1. **UsdVisualPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
+1. **UsdVisualPlugin** — Spawns child entities and attaches visual meshes, transforms, and appearance intent. It does not install authored runtime behavior.
 2. **UsdAnimationPlugin** — Binds projected animated prims to the shared time domains and samples authored `timeSamples` into transform and material intent.
 3. **UsdDiagnosticsPlugin** — Handles visual glTF placeholder hiding and failure-stub diagnostics; render-free stage failure state belongs to the `UsdScenePlugin`.
 4. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). It translates authored joint facts to the reusable `lunco-usd-avian-joints` boundary, which owns native construction and lifecycle. The separate `lunco-usd-avian-core` plugin owns the USD-independent Avian/BigSpace frame bridge and is installed directly by application composition.
@@ -833,7 +836,7 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms
 - `crates/lunco-usd-bevy-animation/src/lib.rs` — production animation planning, time-domain binding, and ECS sampling systems
 - `crates/lunco-usd-queries/tests/query_api.rs` — public inspection, edit-session, assembly-target, and document-sync query contracts
-- `crates/lunco-usd-viewport-ui/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
+- `crates/lunco-usd-viewport-runtime/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-avian-core/src/lib.rs` — Avian/BigSpace frame bridge and low-level bridge tests
 - `crates/lunco-usd-avian-filters/src/{filtered_pairs,collision_groups}.rs` — standard collision filtering, joint pair suppression, and Avian contact-hook mechanisms; runtime behavior is covered by the production Rhai scene-test assets

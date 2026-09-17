@@ -358,7 +358,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
     // tree (or a canvas drill-in) silently no-ops on web. Unpack now;
     // it's idempotent and one-time. Native already has the sources on disk.
     #[cfg(target_arch = "wasm32")]
-    crate::library_remote::ensure_library_source_unpacked();
+    lunco_modelica_library::source_library::ensure_library_source_unpacked();
 
     // Try source library paths first (resolves Modelica.* and any other source library-rooted
     // qualified path). Fallback: scan the open document registry for a

@@ -2066,10 +2066,8 @@ impl Plugin for UsdSimCosimPlugin {
             // Link port names are derived from the classes of the other authored
             // LinkNodes. A node arriving after its wire must therefore reopen the
             // same binding transaction as any other projected endpoint.
-            .add_observer(request_binding_epoch::<lunco_celestial_spatial::link::LinkNode>)
-            .add_observer(
-                request_binding_epoch_on_remove::<lunco_celestial_spatial::link::LinkNode>,
-            )
+            .add_observer(request_binding_epoch::<lunco_celestial_spatial_core::LinkNode>)
+            .add_observer(request_binding_epoch_on_remove::<lunco_celestial_spatial_core::LinkNode>)
             .add_observer(request_binding_epoch::<ModelicaModel>)
             .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
             .add_observer(lunco_usd_sim_domain::on_remove_generated_source)

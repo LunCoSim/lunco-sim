@@ -31,8 +31,6 @@ pub mod python;
 /// `RegisterToolLibrary`/`RegisterTimeline` syncs + persists via the journal plane.
 #[cfg(feature = "rhai")]
 pub mod registration_journal;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod repl;
 /// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
 #[cfg(feature = "rhai")]
 pub mod rhai_math;
@@ -301,12 +299,6 @@ impl Plugin for LunCoScriptingPlugin {
             wire_scripting_journal_handle.run_if(resource_added::<lunco_doc_bevy::JournalResource>),
         );
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let repl = repl::spawn_repl_thread();
-            app.insert_resource(repl);
-        }
-
         app.register_type::<ScriptedModel>()
             .register_type::<doc::ScenarioParameters>()
             .register_type::<doc::ScriptLanguage>();
@@ -315,13 +307,6 @@ impl Plugin for LunCoScriptingPlugin {
 
         #[cfg(feature = "python")]
         app.init_resource::<python::PythonStatus>();
-
-        // REPL drain: rhai (world-connected) is the default; python-only builds
-        // fall back to the interpreter path. Wasm has no stdin, so neither runs.
-        #[cfg(all(not(target_arch = "wasm32"), feature = "rhai"))]
-        app.add_systems(Update, repl::drain_repl_rhai);
-        #[cfg(all(not(target_arch = "wasm32"), feature = "python", not(feature = "rhai")))]
-        app.add_systems(Update, repl::process_repl_commands);
 
         // Per-tick Python `ScriptedModel` executor (the inputs/outputs dict
         // model used by USD Python-cosim port mapping in `lunco-usd-sim`:

@@ -51,7 +51,7 @@ fn main() {
     );
     hash_file(
         Path::new(&format!(
-            "{manifest}/../lunco-modelica-core/src/worker_bridge.rs"
+            "{manifest}/../lunco-modelica-library/src/worker_bridge.rs"
         )),
         &mut hasher,
     );

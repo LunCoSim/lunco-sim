@@ -2,7 +2,7 @@
 //!
 //! The heavy work lives here in Rust (and thus serves every scripting language):
 //! a cadence-gated pairwise sweep over direct [`LinkNode`] and radio
-//! [`crate::WifiNode`]
+//! [`lunco_celestial_spatial_core::WifiNode`]
 //! entities that computes the geometry — range, local elevation, analytic body
 //! occlusion, and terrain occlusion (via the generic `TerrainRaycast` query) —
 //! then asks a
@@ -54,7 +54,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use lunco_core::{
-    Command, Severity, TelemetryEvent, TelemetryValue, on_command, register_commands,
+    on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
 };
 use lunco_hooks::HookValue;
 use lunco_spatial::coords::world_pose;
@@ -62,10 +62,13 @@ use lunco_terrain_surface::{DemHeightField, SurfaceOracle};
 use lunco_time::WorldTime;
 
 use crate::pose::SolarFramePose;
-use lunco_celestial::CelestialBodyRegistry;
 use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
 use lunco_celestial::geo::{segment_hits_obb, segment_hits_sphere};
+use lunco_celestial::CelestialBodyRegistry;
+use lunco_celestial_spatial_core::{
+    LinkGeometryPeer, LinkGeometryState, LinkNode, LinkOccluder, LinkPeer, LinkState,
+};
 
 /// Speed of light in vacuum, m/s — the SI definition (exact).
 pub const SPEED_OF_LIGHT_M_PER_S: f64 = 299_792_458.0;
@@ -110,97 +113,6 @@ impl Default for LinkConfig {
             drop_debounce: 3,
         }
     }
-}
-
-/// A generic connectivity endpoint. The pose system tracks it (so it has a
-/// [`SolarFramePose`]); the kernel pairs it with every other node. `class` is an
-/// authored role the verdict/routing policy reads — the core never interprets it.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct LinkNode {
-    pub max_range_m: f64,
-    pub min_elevation_deg: f64,
-    pub class: Option<String>,
-}
-
-impl Default for LinkNode {
-    fn default() -> Self {
-        Self {
-            max_range_m: 1.0e12,
-            min_elevation_deg: -90.0,
-            class: None,
-        }
-    }
-}
-
-/// Generic sight-line blocker: an oriented box that severs any link whose segment
-/// passes through it. Authored as `lunco:occluder` on the geometry prim that does
-/// the blocking — a wall, a habitat module, a lander body.
-///
-/// **Nothing here is "comms"** (doc 49 §1): this is a box that blocks a segment. A
-/// sensor, radar, or sunlight domain composes over the same component. It is also
-/// deliberately NOT a physics collider:
-///
-/// * Occlusion is a MATERIAL question, not a collision one. A radio-transparent
-///   handrail has a collider and must not block; a radome that is radio-opaque may
-///   have none. Deriving one from the other is wrong in both directions.
-/// * Reading colliders would mean an avian `SpatialQuery` per node pair against the
-///   full broadphase, and a link sweep that only works once physics is stepping —
-///   where this is `segment_hits_obb` over a handful of authored prims at the
-///   [`LinkConfig`] cadence, through a read-only `Query`, in a crate that must stay
-///   render-free and headless. (Precision is not the argument: avian re-exports
-///   `parry3d_f64`, so a collider cast here would be f64 too.)
-///
-/// The cost is that occlusion is OPT-IN: an untagged wall does not block. That is
-/// intended — say which geometry is opaque.
-///
-/// # The box comes from UsdGeom `extent`
-///
-/// There is no invented size vocabulary here. The occluding box IS the prim's
-/// **`extent`** — core UsdGeom's "three dimensional range measuring the geometric
-/// extent of the authored gprim in its own local space", which every DCC authors
-/// and computes already. `lunco:occluder` adds exactly one fact USD has no word
-/// for ("this geometry is opaque to sight-lines"); the shape it names is standard.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct LinkOccluder {
-    /// Half-size of the prim's UsdGeom `extent`, in its local space, BEFORE the
-    /// prim's own scale. USD projection derives this from authored `extent`, or
-    /// from a standard Cube's `size` when its computed extent is omitted.
-    pub half_extents: DVec3,
-    /// Centre of that `extent` in local space. UsdGeom's extent is not required to
-    /// be origin-centred, so an offset mesh occludes where it actually sits.
-    pub center: DVec3,
-}
-
-impl Default for LinkOccluder {
-    fn default() -> Self {
-        // A unit cube: the identity that makes `scale` alone sufficient.
-        Self {
-            half_extents: DVec3::splat(0.5),
-            center: DVec3::ZERO,
-        }
-    }
-}
-
-impl LinkOccluder {
-    /// The box in the prim's own frame with its `Transform` scale applied:
-    /// `(centre, half_extents)`. The kernel then places it with the prim's
-    /// grid-absolute pose.
-    pub fn box_for(&self, scale: Vec3) -> (DVec3, DVec3) {
-        let s = scale.as_dvec3();
-        (self.center * s, (self.half_extents * s).abs())
-    }
-}
-
-/// One node's resolved peer links, written by the connectivity kernel. Consumers
-/// read it (or subscribe to the AOS/LOS events); routing is authored over this.
-/// Reflect so the inspector / API `query_entity` can read it and a route query
-/// can walk the topology.
-#[derive(Component, Debug, Clone, Default, Reflect)]
-#[reflect(Component)]
-pub struct LinkState {
-    pub peers: Vec<LinkPeer>,
 }
 
 /// Authored link classes indexed once from the live [`LinkNode`] topology.
@@ -252,61 +164,6 @@ pub(crate) fn refresh_link_class_catalog(
         }
     }
     catalog.initialized = true;
-}
-
-/// The pairwise geometry observation published independently of the authored
-/// `link.connected` verdict. Domain graphs such as rover Wi-Fi reuse this output
-/// instead of reimplementing range, horizon and occlusion calculations.
-#[derive(Component, Debug, Clone, Default, Reflect)]
-#[reflect(Component)]
-pub struct LinkGeometryState {
-    pub peers: Vec<LinkGeometryPeer>,
-}
-
-#[derive(Debug, Clone, Reflect)]
-pub struct LinkGeometryPeer {
-    pub peer: u64,
-    /// The raw range/mask/occlusion result before any role policy or debounce.
-    pub builtin: bool,
-    pub range_m: f64,
-    pub light_time_s: f64,
-    pub elevation_deg: Option<f64>,
-    pub class: Option<String>,
-}
-
-#[derive(Debug, Clone, Reflect)]
-pub struct LinkPeer {
-    /// The peer's [`GlobalEntityId`](lunco_core::GlobalEntityId) — the project's
-    /// stable entity reference: deterministic from the prim's asset+path, identical
-    /// on every peer, and the same `u64` that `find()` returns to a script and the
-    /// API speaks on the wire.
-    ///
-    /// Not a name and not a class. Both are labels: `class` is a shared ROLE (three
-    /// DSN complexes all author `class = "earth"`), and a prim `Name` is unique only
-    /// within its parent. Keying identity on either collapsed distinct stations onto
-    /// one graph node. Names/classes still exist — as labels and routing groups, in
-    /// [`LinksProvider`](crate::queries) — but identity is the GID.
-    pub peer: u64,
-    pub connected: bool,
-    pub range_m: f64,
-    /// One-way propagation delay, seconds — `range_m / c`. Published next to the
-    /// range because for anything Earth↔Moon (1.28 s) the DELAY, not the range,
-    /// is what the mission actually has to design around.
-    pub light_time_s: f64,
-    /// Elevation above THIS endpoint's own horizon, or `None` when it has none
-    /// (an orbiting relay, a libration point). Not zero and not 90 — unmeasured.
-    /// The port surface publishes the `None` case as NaN, which is what a
-    /// scalar wire can carry and what a Modelica model reads as "no value".
-    pub elevation_deg: Option<f64>,
-    /// The PEER's authored `class`, denormalized here at solve time.
-    ///
-    /// Identity stays the GID above; this is the peer's ROLE, copied because the
-    /// solver already holds both endpoints' [`LinkNode`] in the pairwise loop. It
-    /// exists so a port read is a pure local component read: without it, resolving
-    /// "which class is peer GID 7" from a `&World` port backend would mean a full
-    /// entity scan per read. `None` for a peer whose node authored no class — such
-    /// a peer is still a real link, it just has no port name.
-    pub class: Option<String>,
 }
 
 /// The verdict seam consulted per pair. `ctx` (a [`HookValue`] map): `a`, `b`
@@ -379,7 +236,7 @@ pub(crate) fn link_solve_due(
     config: Option<Res<LinkConfig>>,
     world_time: Option<Res<WorldTime>>,
     state: Res<LinkSolverState>,
-    nodes: Query<(), Or<(With<LinkNode>, With<crate::wifi::WifiNode>)>>,
+    nodes: Query<(), Or<(With<LinkNode>, With<lunco_celestial_spatial_core::WifiNode>)>>,
 ) -> bool {
     if nodes.iter().take(2).count() < 2 {
         return false;
@@ -449,7 +306,7 @@ pub(crate) fn update_links(
     )>,
     q_wifi: Query<(
         Entity,
-        &crate::wifi::WifiNode,
+        &lunco_celestial_spatial_core::WifiNode,
         &SolarFramePose,
         Option<&Name>,
         Option<&lunco_core::GlobalEntityId>,
@@ -904,7 +761,11 @@ fn occluder_blocks(a: DVec3, b: DVec3, occluders: &[(DVec3, DQuat, DVec3)]) -> b
 
 /// An undirected pair, ordered so `(a,b)` and `(b,a)` are the same edge.
 fn pair_key(a: u64, b: u64) -> (u64, u64) {
-    if a <= b { (a, b) } else { (b, a) }
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 /// An AOS/LOS edge event. `source` is one endpoint's GID (so a per-entity
@@ -1328,11 +1189,9 @@ mod tests {
         let mut listed = Vec::new();
         (LINK_PORT_BACKEND.list)(&world, e, &mut listed);
         assert_eq!(listed.len(), 3, "range + verdict + elevation, enumerable");
-        assert!(
-            listed
-                .iter()
-                .all(|p| p.direction == lunco_port_core::ports::PortDirection::Out)
-        );
+        assert!(listed
+            .iter()
+            .all(|p| p.direction == lunco_port_core::ports::PortDirection::Out));
     }
 
     #[test]
@@ -1901,7 +1760,7 @@ mod tests {
         let a = world
             .spawn((
                 lunco_core::GlobalEntityId::from_raw(GID_A),
-                crate::wifi::WifiNode { max_range_m: 100.0 },
+                lunco_celestial_spatial_core::WifiNode { max_range_m: 100.0 },
                 SolarFramePose {
                     pos: DVec3::ZERO,
                     rotation: DQuat::IDENTITY,
@@ -1913,7 +1772,7 @@ mod tests {
         let b = world
             .spawn((
                 lunco_core::GlobalEntityId::from_raw(GID_B),
-                crate::wifi::WifiNode { max_range_m: 100.0 },
+                lunco_celestial_spatial_core::WifiNode { max_range_m: 100.0 },
                 SolarFramePose {
                     pos: DVec3::new(10.0, 0.0, 0.0),
                     rotation: DQuat::IDENTITY,

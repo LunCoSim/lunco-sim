@@ -7,6 +7,12 @@ This crate provides the foundational integration between OpenUSD and Bevy. It ha
 
 By separating visuals into this crate, we keep the core integration lightweight and allow physics (`lunco-usd-avian`), lighting (`lunco-usd-bevy-light`), or simulation metadata (`lunco-usd-sim`) to be added as modular layers. USD composition and default-time projection data are prepared by the async asset loader; the Bevy update schedule only binds that owned snapshot to ECS. The non-`Send` canonical OpenUSD stage is retained for authoring and live edits.
 
+`UsdVisualPlugin` is the visual projection boundary. It does not project
+authored controls or executable programs and does not register scene-property
+ports. Applications that run a Twin add
+`lunco-usd-bevy-runtime-core::UsdSceneRuntimePlugin`, which owns those generic
+runtime surfaces and their live refresh path.
+
 ## Key Functions & Features
 
 ### 1. `UsdVisualPlugin`
@@ -40,6 +46,8 @@ bounded projection pass binds meshes, transforms, and materials from the
 prepared plan. Later authored edits use the live canonical stage explicitly.
 UsdLux lights and textured domes are installed by the sibling
 `lunco-usd-bevy-light` package at the `UsdVisualPlugin` integration boundary.
+Generic scene-property ports are installed by the runtime plugin so a
+visual-only host can remain free of authored control behavior.
 
 Time-sampled animation is a separate production adapter. Add
 `lunco-usd-bevy-animation::UsdAnimationPlugin` after this plugin when the app

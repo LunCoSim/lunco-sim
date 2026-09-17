@@ -51,7 +51,7 @@ pub fn resolve_setup_bounds_in<R: ResourceRead>(
 ) -> lunco_experiments::RunBounds {
     use lunco_experiments::ExperimentRunner;
     let draft = ctx
-        .read_resource::<crate::experiments_runner::ExperimentDrafts>()
+        .read_resource::<crate::runner::ExperimentDrafts>()
         .and_then(|drafts| {
             drafts
                 .get(doc, model_ref)

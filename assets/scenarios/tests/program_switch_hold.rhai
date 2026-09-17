@@ -3,13 +3,17 @@
 // it does not know which model owns that subject.
 
 fn subject(me) {
-    let path = usd_path(me);
-    if path == () { return -1; }
-    let doc = query("QueryUsdPrim", #{ path: path, rels: ["inputs:subject"] });
-    if doc == () || doc.ok == false || doc.relationships == () { return -1; }
-    let targets = doc.relationships["inputs:subject"];
-    if targets == () || targets.len() == 0 { return -1; }
-    find_path(targets[0])
+    let scope = usd_path(me);
+    if scope == () { return -1; }
+    let owner = query("QueryUsdPrim", #{ path: scope, children: true });
+    if owner == () || owner.ok == false || owner.children == () { return -1; }
+    for path in owner.children {
+        let program = query("QueryUsdPrim", #{ path: path, rels: ["inputs:subject"] });
+        if program == () || program.ok == false || program.relationships == () { continue; }
+        let targets = program.relationships["inputs:subject"];
+        if targets != () && targets.len() == 1 { return find_path(targets[0]); }
+    }
+    -1
 }
 
 fn on_start(me, ctx) {

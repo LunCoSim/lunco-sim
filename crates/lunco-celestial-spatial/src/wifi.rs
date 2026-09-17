@@ -9,31 +9,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use crate::link::LinkGeometryState;
-
-/// A scene-authored rover radio endpoint.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct WifiNode {
-    /// Maximum radio range in metres for this endpoint.
-    pub max_range_m: f64,
-}
-
-/// One endpoint's resolved Wi-Fi peers.
-#[derive(Component, Debug, Clone, Default, Reflect)]
-#[reflect(Component)]
-pub struct WifiState {
-    pub peers: Vec<WifiPeer>,
-}
-
-#[derive(Debug, Clone, Reflect)]
-pub struct WifiPeer {
-    pub peer: u64,
-    pub connected: bool,
-    pub range_m: f64,
-    pub light_time_s: f64,
-    pub class: Option<String>,
-}
+use lunco_celestial_spatial_core::{LinkGeometryState, WifiNode, WifiPeer, WifiState};
 
 /// Wi-Fi is a projection of `WifiNode` settings and the generic link geometry.
 /// Rebuild it only when one of those inputs changes; stable frames have no new
@@ -97,7 +73,7 @@ pub fn update_wifi_links(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::link::{LinkGeometryPeer, LinkState};
+    use lunco_celestial_spatial_core::{LinkGeometryPeer, LinkState};
 
     #[test]
     fn rover_radio_can_connect_when_direct_link_state_is_absent() {
@@ -143,22 +119,20 @@ mod tests {
 
         assert!(app.world().get::<LinkState>(a).is_none());
         assert!(app.world().get::<LinkState>(b).is_none());
-        assert!(
-            app.world()
-                .get::<WifiState>(a)
-                .unwrap()
-                .peers
-                .iter()
-                .any(|peer| peer.peer == 2 && peer.connected)
-        );
-        assert!(
-            app.world()
-                .get::<WifiState>(b)
-                .unwrap()
-                .peers
-                .iter()
-                .any(|peer| peer.peer == 1 && peer.connected)
-        );
+        assert!(app
+            .world()
+            .get::<WifiState>(a)
+            .unwrap()
+            .peers
+            .iter()
+            .any(|peer| peer.peer == 2 && peer.connected));
+        assert!(app
+            .world()
+            .get::<WifiState>(b)
+            .unwrap()
+            .peers
+            .iter()
+            .any(|peer| peer.peer == 1 && peer.connected));
     }
 
     #[test]

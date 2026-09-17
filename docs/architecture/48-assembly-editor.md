@@ -87,9 +87,11 @@ name convention, or ECS-only grouping state is introduced.
 - `lunco-usd-viewport-core` owns the render-independent `UsdPreviewSession` and
   `UsdPreviewView` contracts: document/stage identity, projection readiness,
   presentation mode, orbit pose, navigation scale, and typed commands.
-  `lunco-usd-viewport-ui` owns the render adapter around those contracts,
+  `lunco-usd-viewport-runtime` owns the render adapter around those contracts,
   including camera/light entities, offscreen images, egui texture registration,
-  pointer input, and viewport panels. A `UsdPreviewSession` still owns one
+  pointer contracts, and projection readiness. `lunco-usd-viewport-ui` owns
+  only the workbench panels and translates egui gestures into those runtime
+  events. A `UsdPreviewSession` still owns one
   projected composed stage, scene root, and render layer; a view is only a
   presentation state over that shared session.
   `OpenUsdPreviewView` therefore provides

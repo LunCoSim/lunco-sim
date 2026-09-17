@@ -905,7 +905,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // after the first burst.
         events.clear();
         if let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
-            inbox.pending = events;
+            // Hooks can emit events while this pass is delivering the batch.
+            // Those events are already in `inbox.pending` and belong to the
+            // next pass; never replace them with the recycled delivered batch.
+            // Reuse the old allocation only when no new event was produced.
+            if inbox.pending.is_empty() {
+                inbox.pending = events;
+            }
         }
     }
 

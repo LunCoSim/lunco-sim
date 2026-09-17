@@ -1,6 +1,6 @@
 //! Native source-library provisioning and editor-index lifecycle.
 //!
-//! The compiler core installs an already materialised source root and exposes
+//! The compiler/runtime host installs an already materialised source root and exposes
 //! the generic load state. This application adapter composes dataset delivery
 //! with the Modelica asset indexer and keeps the blocking scan/decode off the
 //! render thread.
@@ -69,9 +69,9 @@ impl Plugin for NativeLibraryIndexerPlugin {
 
         let settings = app
             .world()
-            .resource::<lunco_modelica_core::modelica_library_settings::LibrarySettings>();
+            .resource::<lunco_modelica_library::LibrarySettings>();
         let Some(root) =
-            lunco_modelica_core::library_remote::configured_native_library_root(settings)
+            lunco_modelica_library::source_library::configured_native_library_root(settings)
         else {
             return;
         };
@@ -167,7 +167,7 @@ fn drain_native_library_install(
                 LibraryLoadState::Loading { phase: a, .. },
                 LibraryLoadState::Loading { phase: b, .. },
             ) if a == b => {}
-            _ => lunco_modelica_core::library_remote::log_library_state_transition(&new_state),
+            _ => lunco_modelica_library::source_library::log_library_state_transition(&new_state),
         }
         *state = new_state;
     }
@@ -176,7 +176,7 @@ fn drain_native_library_install(
 fn on_native_library_index_action(
     trigger: On<NativeLibraryIndexAction>,
     state: Res<LibraryLoadState>,
-    settings: Res<lunco_modelica_core::modelica_library_settings::LibrarySettings>,
+    settings: Res<lunco_modelica_library::LibrarySettings>,
     existing: Option<Res<NativeLibraryInstallSlot>>,
     mut commands: Commands,
 ) {
@@ -185,7 +185,8 @@ fn on_native_library_index_action(
     {
         return;
     }
-    let Some(root) = lunco_modelica_core::library_remote::configured_native_library_root(&settings)
+    let Some(root) =
+        lunco_modelica_library::source_library::configured_native_library_root(&settings)
     else {
         return;
     };

@@ -93,8 +93,8 @@ pub struct RadialArrival;
 
 /// Marks an orbital camera whose pose changed through local user input.
 ///
-/// The avatar transition owner consumes this marker when orbit mode ends so a
-/// settled presentation pose can be retained without making the celestial
+/// The avatar camera transaction owner consumes this marker when orbit mode ends
+/// so a settled presentation pose can be retained without making the celestial
 /// spatial writer depend on the avatar runtime.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct OrbitUserInput;
@@ -185,5 +185,18 @@ impl OrbitViewHistory {
         } else {
             self.poses.push((body, pose));
         }
+    }
+
+    /// Remember a finite user-controlled pose for `body`.
+    ///
+    /// The boolean keeps invalid transient camera state visible to the owning
+    /// adapter without making this low-level state container log or fabricate
+    /// a replacement pose.
+    pub fn remember_camera_pose(&mut self, body: i32, camera: &OrbitCamera) -> bool {
+        let Some(pose) = OrbitPose::from_camera(camera) else {
+            return false;
+        };
+        self.remember(body, pose);
+        true
     }
 }

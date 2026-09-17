@@ -489,7 +489,7 @@ pub fn insert_celestial_comms_components(
                 .unwrap_or_else(|| id.clone());
             let description = read_authored_string(reader, sdf_path, "lunco:mission:description")?
                 .unwrap_or_default();
-            Ok(lunco_celestial_spatial::MissionDecl {
+            Ok(lunco_celestial_spatial_core::MissionDecl {
                 id: id.clone(),
                 name,
                 description,
@@ -576,7 +576,7 @@ pub fn insert_celestial_comms_components(
             let name = read_authored_string(reader, sdf_path, "lunco:trajectory:name")?
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| prim_path_str.to_string());
-            Ok(lunco_celestial_spatial::MissionTrajectoryDecl {
+            Ok(lunco_celestial_spatial_core::MissionTrajectoryDecl {
                 name,
                 tracked_id,
                 reference_id,
@@ -665,7 +665,7 @@ pub fn insert_celestial_comms_components(
             {
                 return Err(());
             }
-            Ok(lunco_celestial_spatial::MissionSpacecraftDecl {
+            Ok(lunco_celestial_spatial_core::MissionSpacecraftDecl {
                 name,
                 ephemeris_id,
                 reference_id,
@@ -772,7 +772,7 @@ pub fn insert_celestial_comms_components(
     if solar_tracked {
         commands
             .entity(entity)
-            .try_insert(lunco_celestial_spatial::pose::SolarTracked);
+            .try_insert(lunco_celestial_spatial_core::SolarTracked);
     }
 
     // --- Connectivity node (generic link kernel) ---
@@ -793,7 +793,7 @@ pub fn insert_celestial_comms_components(
     };
     if link_node {
         let link = (|| {
-            let defaults = lunco_celestial_spatial::link::LinkNode::default();
+            let defaults = lunco_celestial_spatial_core::LinkNode::default();
             let max_range_m = read_real_strict(reader, sdf_path, "lunco:link:maxRangeM")?
                 .unwrap_or(defaults.max_range_m);
             let min_elevation_deg =
@@ -808,7 +808,7 @@ pub fn insert_celestial_comms_components(
             }
             let class = read_authored_string(reader, sdf_path, "lunco:link:class")?
                 .filter(|class| !class.is_empty());
-            Ok(lunco_celestial_spatial::link::LinkNode {
+            Ok(lunco_celestial_spatial_core::LinkNode {
                 max_range_m,
                 min_elevation_deg,
                 class,
@@ -847,7 +847,7 @@ pub fn insert_celestial_comms_components(
             if !max_range_m.is_finite() || max_range_m <= 0.0 {
                 return Err(());
             }
-            Ok(lunco_celestial_spatial::wifi::WifiNode { max_range_m })
+            Ok(lunco_celestial_spatial_core::WifiNode { max_range_m })
         })();
         match wifi {
             Ok(wifi) => {
@@ -893,7 +893,7 @@ pub fn insert_celestial_comms_components(
                     // The marker makes that frame an explicit projection
                     // contract for every authored blocker, including a
                     // scene-local wall.
-                    lunco_celestial_spatial::pose::SolarTracked,
+                    lunco_celestial_spatial_core::SolarTracked,
                 ));
             }
             Err(()) => warn!(
@@ -911,7 +911,7 @@ pub fn insert_celestial_comms_components(
 fn read_occluder_box(
     reader: &ComposedReader<'_>,
     sdf_path: &SdfPath,
-) -> Result<lunco_celestial_spatial::link::LinkOccluder, ()> {
+) -> Result<lunco_celestial_spatial_core::LinkOccluder, ()> {
     use bevy::math::DVec3;
     if !reader.has_authored_attribute(sdf_path, "extent") {
         // `extent` is a computed/cacheable UsdGeom attribute. Its schema fallback
@@ -928,7 +928,7 @@ fn read_occluder_box(
         if !size.is_finite() || size <= 0.0 {
             return Err(());
         }
-        return Ok(lunco_celestial_spatial::link::LinkOccluder {
+        return Ok(lunco_celestial_spatial_core::LinkOccluder {
             half_extents: DVec3::splat(size * 0.5),
             center: DVec3::ZERO,
         });
@@ -965,7 +965,7 @@ fn read_occluder_box(
     {
         return Err(());
     }
-    Ok(lunco_celestial_spatial::link::LinkOccluder {
+    Ok(lunco_celestial_spatial_core::LinkOccluder {
         half_extents,
         center: (max + min) * 0.5,
     })
@@ -1034,7 +1034,7 @@ fn project_celestial_comms_prims(
 
 fn remove_nested_link_nodes(
     mut commands: Commands,
-    nodes: Query<(Entity, &lunco_celestial_spatial::link::LinkNode)>,
+    nodes: Query<(Entity, &lunco_celestial_spatial_core::LinkNode)>,
     parents: Query<&ChildOf>,
 ) {
     for (entity, _) in &nodes {
@@ -1044,10 +1044,10 @@ fn remove_nested_link_nodes(
             if nodes.get(cursor).is_ok() {
                 commands
                     .entity(cursor)
-                    .try_remove::<lunco_celestial_spatial::link::LinkNode>();
+                    .try_remove::<lunco_celestial_spatial_core::LinkNode>();
                 commands
                     .entity(cursor)
-                    .try_remove::<lunco_celestial_spatial::link::LinkState>();
+                    .try_remove::<lunco_celestial_spatial_core::LinkState>();
                 break;
             }
         }
@@ -1055,7 +1055,7 @@ fn remove_nested_link_nodes(
 }
 
 fn any_nested_link_nodes(
-    nodes: Query<Entity, With<lunco_celestial_spatial::link::LinkNode>>,
+    nodes: Query<Entity, With<lunco_celestial_spatial_core::LinkNode>>,
     parents: Query<&ChildOf>,
 ) -> bool {
     for entity in &nodes {

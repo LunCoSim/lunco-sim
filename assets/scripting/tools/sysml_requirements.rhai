@@ -72,13 +72,100 @@ fn _short_name(name) {
     parts[parts.len() - 1]
 }
 
-fn _find_requirement(report, expected) {
-    if report == () || report.requirement_records == () { return (); }
+// Resolve an authored requirement usage to its canonical qualified identity.
+// Twin observers may use a short local ID (for example `wheel001`) to keep a
+// repeated check table compact, but the source report is the only authority
+// for the package-qualified name.  Never choose between collisions: a short
+// ID that occurs more than once is an authored error and must be reported.
+fn requirement_name(report, expected) {
+    if report == () || report.requirement_records == ()
+        || expected == () || expected == "" {
+        return #{ok: false, error: "SysML requirement identity is missing"};
+    }
+    let found = ();
     for record in report.requirement_records {
         let name = _record_name(record);
-        if name == expected || _short_name(name) == expected { return record; }
+        if name == expected || _short_name(name) == expected {
+            if found != () {
+                return #{ok: false,
+                    error: "ambiguous SysML requirement identity: " + expected};
+            }
+            found = name;
+        }
     }
-    ()
+    if found == () {
+        return #{ok: false,
+            error: "SysML requirement usage is missing: " + expected};
+    }
+    #{ok: true, name: found}
+}
+
+// Resolve a verification case using the same source-backed identity rule as
+// requirements.  Registry names and evidence names therefore converge on the
+// exact qualified SysML case instead of each observer carrying a package
+// prefix that can drift from its source.
+fn verification_name(report, expected) {
+    if report == () || report.verification_records == ()
+        || expected == () || expected == "" {
+        return #{ok: false, error: "SysML verification identity is missing"};
+    }
+    let found = ();
+    for record in report.verification_records {
+        let name = _record_name(record);
+        if name == expected || _short_name(name) == expected {
+            if found != () {
+                return #{ok: false,
+                    error: "ambiguous SysML verification identity: " + expected};
+            }
+            found = name;
+        }
+    }
+    if found == () {
+        return #{ok: false,
+            error: "SysML verification case is missing: " + expected};
+    }
+    #{ok: true, name: found}
+}
+
+// Validate every check identity once before evaluation.  Keep the authored
+// records compact: component observers may repeat one requirement hundreds of
+// times, and copying a qualified name into every record can exceed Rhai's
+// string/value budget.  Evaluation stamps the canonical names on emitted
+// evidence instead.
+fn _resolve_indexed_identity(index, expected, kind) {
+    if expected == () || expected == "" {
+        return #{ok: false, error: "SysML " + kind + " identity is missing"};
+    }
+    let found = index[expected];
+    if found == () {
+        return #{ok: false,
+            error: "SysML " + kind + " identity is missing: " + expected};
+    }
+    if found == "<ambiguous>" {
+        return #{ok: false,
+            error: "ambiguous SysML " + kind + " identity: " + expected};
+    }
+    #{ok: true, name: found}
+}
+
+fn _resolve_check_identities(checks, indexes) {
+    for check in checks {
+        if check == () || check.requirement == () || check.verification == () {
+            return #{ok: false, check_id: if check == () { "<invalid>" } else { check.id },
+                error: "check requires requirement and verification identities"};
+        }
+        let requirement = _resolve_indexed_identity(indexes.requirement_identities,
+            check.requirement, "requirement");
+        if requirement.ok != true {
+            return #{ok: false, check_id: check.id, error: requirement.error};
+        }
+        let verification = _resolve_indexed_identity(indexes.verification_identities,
+            check.verification, "verification");
+        if verification.ok != true {
+            return #{ok: false, check_id: check.id, error: verification.error};
+        }
+    }
+    #{ok: true}
 }
 
 // Resolve a Twin component and its verification case from the native
@@ -232,12 +319,38 @@ fn _verification_covers(report, requirement, verification_name) {
 // quadratic and can exhaust Rhai's per-tick operation budget.
 fn _indexes(report) {
     let requirements = #{};
+    let requirement_identities = #{};
     if report.requirement_records != () {
         for record in report.requirement_records {
             let name = _record_name(record);
             if name != "" {
                 requirements[name] = true;
                 requirements[_short_name(name)] = true;
+                if requirement_identities[name] == () {
+                    requirement_identities[name] = name;
+                }
+                let short = _short_name(name);
+                if requirement_identities[short] == () {
+                    requirement_identities[short] = name;
+                } else if requirement_identities[short] != name {
+                    requirement_identities[short] = "<ambiguous>";
+                }
+            }
+        }
+    }
+    let verification_identities = #{};
+    if report.verification_records != () {
+        for verification in report.verification_records {
+            let name = _record_name(verification);
+            if name == "" { continue; }
+            if verification_identities[name] == () {
+                verification_identities[name] = name;
+            }
+            let short = _short_name(name);
+            if verification_identities[short] == () {
+                verification_identities[short] = name;
+            } else if verification_identities[short] != name {
+                verification_identities[short] = "<ambiguous>";
             }
         }
     }
@@ -255,7 +368,9 @@ fn _indexes(report) {
             }
         }
     }
-    #{requirements: requirements, coverage: coverage}
+    #{requirements: requirements, coverage: coverage,
+      requirement_identities: requirement_identities,
+      verification_identities: verification_identities}
 }
 
 fn _indexed_requirement(indexes, expected) {
@@ -515,27 +630,74 @@ fn _check_one(report, check, indexes) {
 /// Evaluate a Twin-authored check table. Returns one result per component
 /// check, preserving IDs and paths for a test report or UI evidence panel.
 fn evaluate(source_report, checks) {
+    if checks != () && checks.len() > 64 {
+        // Large tables must use the streaming path so direct callers cannot
+        // accidentally construct an oversized aggregate.  The stream has no
+        // channel here; callers that need live evidence should call it with a
+        // channel explicitly (component_requirements does this).
+        return evaluate_stream(source_report, checks, "", "");
+    }
+    // Keep each value crossing the Rhai boundary bounded. A component may
+    // legitimately emit hundreds of observations; retaining one large array
+    // can trip Rhai's 64 KiB string/value limit. Chunks preserve every typed
+    // observation without raising the global engine limit.
     let results = [];
+    let result_chunks = [];
+    let result_chunk = [];
     let failures = [];
+    let failure_chunks = [];
+    let failure_chunk = [];
     if source_report == () || source_report.ok != true {
         return #{ok: false, results: [], failures: ["SysML source report is unavailable"]};
     }
     let indexes = _indexes(source_report);
+    let identities = _resolve_check_identities(checks, indexes);
+    if identities.ok != true {
+        let failure = #{ok: false, id: identities.check_id,
+            error: identities.error};
+        return #{ok: false, results: [failure], failures: [failure],
+            check_count: 0, requirement_count: 0, failure_count: 1};
+    }
     for check in checks {
         let result = _check_one(source_report, check, indexes);
-        // Stamp the authored identity on every result, including helper
-        // failures.  This keeps the evidence table self-describing and makes
-        // it possible to aggregate reports without retaining the check list.
-        if result.verification == () { result.verification = check.verification; }
-        if result.requirement == () { result.requirement = check.requirement; }
+        // Stamp canonical source identities only on emitted evidence.  The
+        // authored check stays short and is never duplicated for every leaf
+        // observation, while reports remain self-describing.
+        result.requirement = indexes.requirement_identities[check.requirement];
+        result.verification = indexes.verification_identities[check.verification];
         if result.component == () && check.component != () { result.component = check.component; }
         if result.kind == () { result.kind = check.kind; }
-        results.push(result);
-        if result.ok != true { failures.push(result); }
+        result_chunk.push(result);
+        if result_chunk.len() >= 64 {
+            result_chunks.push(result_chunk);
+            result_chunk = [];
+        }
+        if result.ok != true {
+            // Keep the compatibility array bounded while preserving every
+            // failure in chunked evidence.
+            if failures.len() < 64 { failures.push(result); }
+            failure_chunk.push(result);
+            if failure_chunk.len() >= 64 {
+                failure_chunks.push(failure_chunk);
+                failure_chunk = [];
+            }
+        }
     }
+    if result_chunk.len() > 0 { result_chunks.push(result_chunk); }
+    if failure_chunk.len() > 0 { failure_chunks.push(failure_chunk); }
+    // Keep the flattened compatibility field only for small reports. Large
+    // failure sets use bounded chunks as well, avoiding a second oversized
+    // aggregate while retaining every failure record.
+    let total_failures = 0;
+    for chunk in failure_chunks { total_failures += chunk.len(); }
+    if total_failures <= 64 {
+        for chunk in result_chunks {
+            for result in chunk { results.push(result); }
+        }
+    } else { failures = []; }
     let verification = "";
     if checks.len() > 0 && checks[0].verification != () {
-        verification = checks[0].verification;
+        verification = indexes.verification_identities[checks[0].verification];
     }
     // A component observer normally expands one SysML requirement over many
     // repeated instances and leaf observations.  Keep those checks as the
@@ -545,19 +707,22 @@ fn evaluate(source_report, checks) {
     // the check records and is sufficient for this bounded aggregate.
     let requirement_summary = #{};
     let requirement_names = [];
-    for result in results {
-        let requirement = result.requirement;
-        if requirement == () || requirement == "" { continue; }
-        if requirement_summary[requirement] == () {
-            requirement_summary[requirement] = #{checks: 0, failures: 0};
-            requirement_names.push(requirement);
-        }
-        requirement_summary[requirement].checks += 1;
-        if result.ok != true {
-            requirement_summary[requirement].failures += 1;
+    for chunk in result_chunks {
+        for result in chunk {
+            let requirement = result.requirement;
+            if requirement == () || requirement == "" { continue; }
+            if requirement_summary[requirement] == () {
+                requirement_summary[requirement] = #{checks: 0, failures: 0};
+                requirement_names.push(requirement);
+            }
+            requirement_summary[requirement].checks += 1;
+            if result.ok != true {
+                requirement_summary[requirement].failures += 1;
+            }
         }
     }
-    #{ok: failures.len() == 0, results: results, failures: failures,
+    #{ok: total_failures == 0, results: results, failures: failures,
+      result_chunks: result_chunks, failure_chunks: failure_chunks,
       // `check_count` is the number of concrete USD/source observations.
       check_count: checks.len(),
       // `requirement_count` is the number of unique SysML requirement usages
@@ -565,7 +730,73 @@ fn evaluate(source_report, checks) {
       requirement_count: requirement_names.len(),
       requirement_names: requirement_names,
       requirement_summary: requirement_summary,
-      failure_count: failures.len(), verification: verification,
+      failure_count: total_failures, verification: verification,
+      source_revision: source_report.source_revision_hex,
+      source_files: source_report.source_files}
+}
+
+// Evaluate a large table while streaming each bounded evidence record.  This
+// is the production path for component observers with more than 64 checks:
+// no aggregate result array is constructed, yet every typed observation is
+// available to the same evidence channel as a small evaluation.
+fn evaluate_stream(source_report, checks, channel, title) {
+    if source_report == () || source_report.ok != true {
+        return #{ok: false, results: [], failures: ["SysML source report is unavailable"],
+            check_count: 0, requirement_count: 0, failure_count: 1,
+            streamed: true};
+    }
+    let indexes = _indexes(source_report);
+    let identities = _resolve_check_identities(checks, indexes);
+    if identities.ok != true {
+        let failure = #{ok: false, id: identities.check_id,
+            error: identities.error};
+        return #{ok: false, results: [failure], failures: [failure],
+            check_count: 0, requirement_count: 0, failure_count: 1,
+            streamed: true};
+    }
+    let verification = "";
+    if checks.len() > 0 && checks[0].verification != () {
+        verification = indexes.verification_identities[checks[0].verification];
+    }
+    let failure_count = 0;
+    let failures = [];
+    let requirement_summary = #{};
+    let requirement_names = [];
+    let result_index = 0;
+    for check in checks {
+        let result = _check_one(source_report, check, indexes);
+        result.requirement = indexes.requirement_identities[check.requirement];
+        result.verification = indexes.verification_identities[check.verification];
+        if result.component == () && check.component != () { result.component = check.component; }
+        if result.kind == () { result.kind = check.kind; }
+        if channel != () && channel != "" {
+            emit(channel + "_EVIDENCE_RESULT", #{schema_version: 1,
+                title: title, channel: channel, verification: verification,
+                source_revision: source_report.source_revision_hex,
+                source_revision_hex: source_report.source_revision_hex,
+                result_count: checks.len(), failure_count: 0,
+                result_index: result_index, result: result});
+        }
+        result_index += 1;
+        if result.ok != true {
+            failure_count += 1;
+            if failures.len() < 64 { failures.push(result); }
+        }
+        let requirement = result.requirement;
+        if requirement != () && requirement != "" {
+            if requirement_summary[requirement] == () {
+                requirement_summary[requirement] = #{checks: 0, failures: 0};
+                requirement_names.push(requirement);
+            }
+            requirement_summary[requirement].checks += 1;
+            if result.ok != true { requirement_summary[requirement].failures += 1; }
+        }
+    }
+    #{ok: failure_count == 0, results: [], failures: failures,
+      result_chunks: [], failure_chunks: [], streamed: true,
+      check_count: checks.len(), requirement_count: requirement_names.len(),
+      requirement_names: requirement_names, requirement_summary: requirement_summary,
+      failure_count: failure_count, verification: verification,
       source_revision: source_report.source_revision_hex,
       source_files: source_report.source_files}
 }

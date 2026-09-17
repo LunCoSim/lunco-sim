@@ -10,6 +10,8 @@ bevy = { workspace = true }
 big_space = { workspace = true }
 openusd = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-control-core = { path = "../lunco-control-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
@@ -20,6 +22,7 @@ lunco-render = { path = "../lunco-render" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-time = { path = "../lunco-time" }
+lunco-port-core = { path = "../lunco-port-core" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }

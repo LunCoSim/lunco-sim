@@ -21,7 +21,23 @@ use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
 use lunco_modelica_document::ModelicaDocument;
 #[cfg(test)]
 use lunco_modelica_runtime::ModelicaSignalProvenance;
-use lunco_modelica_runtime::{ModelicaModel, ModelicaSignalLayout};
+use lunco_modelica_runtime::{ModelicaModel, ModelicaSet, ModelicaSignalLayout};
+
+/// Plugin that retains landed Modelica state in the shared telemetry registry.
+///
+/// The execution host installs this capability after it has configured the
+/// Modelica response set. Keeping the projection here means compiler and
+/// document consumers do not carry telemetry implementation code.
+pub struct ModelicaTelemetryPlugin;
+
+impl Plugin for ModelicaTelemetryPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<RuntimeTelemetrySessions>().add_systems(
+            Update,
+            retain_modelica_runtime_state.after(ModelicaSet::HandleResponses),
+        );
+    }
+}
 
 /// Runtime state retained for each Modelica participant.
 ///

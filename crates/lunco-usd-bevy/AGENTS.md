@@ -2,7 +2,9 @@
 
 This crate owns the **visual** plugin at the start of the USD pipeline (Layer 2
 / domain). It turns USD prims into Bevy entities with meshes, material intent,
-and transforms. Time-sampled animation is a separate production adapter in
+and transforms. Authored control bindings, generic executable programs, and
+scene-property port surfaces are projected by
+`lunco-usd-bevy-runtime-core` after this visual boundary. Time-sampled animation is a separate production adapter in
 `lunco-usd-bevy-animation`; physics and simulation live in
 `lunco-usd-avian` and `lunco-usd-sim` and run after visual projection.
 

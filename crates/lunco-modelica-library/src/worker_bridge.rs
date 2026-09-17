@@ -1,9 +1,9 @@
-//! Typed seam between the Modelica core and an optional execution transport.
+//! Typed seam between the Modelica compiler host and optional execution transport.
 //!
 //! The compiler/document package must not depend on the solver worker package:
-//! doing so makes every source/index consumer rebuild the simulation stack. The
-//! core therefore owns only the data exchanged by the wasm parser bridge and
-//! the callback table used by the execution package to install its transport.
+//! doing so makes every source/index consumer rebuild the simulation stack. This
+//! package owns only the data exchanged by the wasm parser bridge and the
+//! callback table used by the execution package to install its transport.
 
 use bevy::prelude::Resource;
 use lunco_doc::DocumentId;

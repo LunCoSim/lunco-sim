@@ -23,6 +23,31 @@ pub struct CameraUpdateSet;
 #[derive(Event, Clone, Copy, Debug, Default)]
 pub struct RequestLocalEmbodimentView;
 
+/// Request a camera adapter to bind a camera rig to a moving subject.
+///
+/// The event is emitted after a control owner has committed an optional
+/// presentation binding. It carries the resolved camera entity, so the
+/// camera adapter does not need to select an entity by ECS order or know how
+/// control authority was established. The event does not mutate control
+/// authority or the producer's control link.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct BindCameraTarget {
+    /// Camera rig receiving the subject binding.
+    pub camera: Entity,
+    /// Subject whose pose the camera should present.
+    pub target: Entity,
+}
+
+/// Request a camera adapter to leave a subject-bound presentation mode.
+///
+/// Control authority is a separate transaction owned by the caller. This
+/// event only hands camera-mode cleanup to the camera realization.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct ClearCameraBinding {
+    /// Camera rig leaving subject-bound presentation.
+    pub camera: Entity,
+}
+
 /// A focus request retained until the owning camera adapter can apply it at a
 /// frame boundary. The request carries only generic entity identity and a
 /// presentation distance; spatial interpretation belongs to the active camera
@@ -35,19 +60,25 @@ pub struct PendingFocus {
     pub distance: f32,
 }
 
-/// Replace the diagnostic for the shared scene-focus transaction.
-pub fn replace_focus_diagnostic(
+/// Replace a diagnostic emitted by a camera transaction.
+///
+/// Camera adapters use their stable owner name as both the diagnostic code and
+/// producer, so every camera path has one replacement slot and stale errors do
+/// not survive a subsequent successful transaction.
+pub fn replace_camera_diagnostic(
     diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    producer: &str,
+    subject: &str,
     message: Option<String>,
 ) {
     if let Some(diagnostics) = diagnostics.as_deref_mut() {
         diagnostics.replace_producer(
-            "scene-focus",
+            producer,
             message.map(|message| lunco_core::RuntimeDiagnostic {
-                code: "scene-focus".to_string(),
+                code: producer.to_string(),
                 severity: lunco_core::DiagnosticSeverity::Error,
-                producer: "scene-focus".to_string(),
-                subject: "PendingFocus".to_string(),
+                producer: producer.to_string(),
+                subject: subject.to_string(),
                 message,
             }),
         );

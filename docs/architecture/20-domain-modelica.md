@@ -7,6 +7,7 @@
 > a background worker thread.
 >
 > Engineering docs live in
+> [`../../crates/lunco-modelica-compiler/`](../../crates/lunco-modelica-compiler/),
 > [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/),
 > [`../../crates/lunco-modelica-index/`](../../crates/lunco-modelica-index/), and
 > [`../../crates/lunco-modelica-ui/`](../../crates/lunco-modelica-ui/) and
@@ -45,8 +46,10 @@ The reusable parse boundary is [`lunco-modelica-ast`](../../crates/lunco-modelic
 It owns BOM-preserving normalization, strict/recovering Rumoca parse wrappers,
 AST interface projections, and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-document` owns the headless
-document and source-editing seams; `lunco-modelica-core` owns the compiler,
-worker, and simulation seams; `lunco-modelica-ui` owns workbench
+ document and source-editing seams; `lunco-modelica-compiler` owns the
+ headless Rumoca session and source admission; `lunco-modelica-core` owns
+ document/runtime synchronization; `lunco-modelica-worker` owns worker and
+ simulation seams; `lunco-modelica-ui` owns workbench
  presentation and the `lunica` application facade. The reusable egui graphics
 renderer is isolated in [`lunco-modelica-icon-ui`](../../crates/lunco-modelica-icon-ui/);
 the diagram canvas and model preview consume that package directly.
@@ -96,7 +99,9 @@ rather than authored editing.
 ```
 
 Consumers that need only source facts use `lunco-modelica-ast`; consumers that
-compile or simulate use `lunco-modelica-core`; only workbench hosts use
+compile use `lunco-modelica-compiler`, consumers that host Modelica documents
+and runtime synchronization use `lunco-modelica-core`, and consumers that
+simulate use `lunco-modelica-worker`/`lunco-modelica-execution`; only workbench hosts use
 `lunco-modelica-ui`. Cross-package UI requests use the render-independent
 `lunco-modelica-ui-core` contracts, so an editor can target a Modelica document,
 request a parameter update, or reserve its plot identity without importing the
@@ -147,10 +152,10 @@ stage and synthesizer query set. The system retains the same trigger guard for
 direct system invocation, while the production schedule owns the idle-frame
 skip.
 
-Before a USD-owned Modelica participant is submitted to the execution worker,
+Before a USD-owned Modelica participant is submitted to the Modelica worker,
 the compiler's source-root admission step seats every dependency discoverable
-from the source text (bundled roots and MSL when available). The execution
-worker then performs one DAE compile against the settled session. A later compile is valid only for
+from the source text (bundled roots and MSL when available). The worker
+then performs one DAE compile against the settled session. A later compile is valid only for
 an actual authored source/topology change or an explicit library-set change;
 normal scene projection and solver stepping do not recompile an unchanged USD
 participant.
@@ -313,13 +318,13 @@ advancing. The default is `1.0`, so any caller that builds options from
 than an error. Two consequences, both deliberate:
 
 - The batch/offline path builds options **only** through
-  `experiments_runner::stepper_options_from_bounds`, which carries the run's
+  `lunco_modelica_runner::stepper_options_from_bounds`, which carries the run's
   real horizon through. Nothing else may hand-roll `SimOptions`.
 - The live path is driven by `step(dt)` forever and has no horizon, so
-  `worker::live_stepper_options` sets `t_end = u32::MAX` as an explicit
+  `lunco_modelica_worker::worker::live_stepper_options` sets `t_end = u32::MAX` as an explicit
   "no ceiling" sentinel.
 
-`crates/lunco-modelica-execution/tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end` pins
+`crates/lunco-modelica-worker/tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end` pins
 this behaviour with an inline mechanism fixture, so a future rumoca bump that
 drops the clamp fails loudly without coupling the Rust target to shipped assets.
 
@@ -1270,8 +1275,10 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 
 ### Source
 
-- [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — compiler/document crate root
-- [`../../crates/lunco-modelica-execution/`](../../crates/lunco-modelica-execution/) — worker, solver, and experiment execution crate
+- [`../../crates/lunco-modelica-compiler/`](../../crates/lunco-modelica-compiler/) — headless Rumoca session and source-admission host
+- [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — document/runtime crate root
+- [`../../crates/lunco-modelica-worker/`](../../crates/lunco-modelica-worker/) — stateful worker, live solver, and co-simulation bridge
+- [`../../crates/lunco-modelica-execution/`](../../crates/lunco-modelica-execution/) — host plugin, transport, and execution adapters
 - [`../../crates/lunco-modelica-document/`](../../crates/lunco-modelica-document/) — `ModelicaDocument`, op set, apply pipeline, and source-editing seams
 - [`../../crates/lunco-modelica-api/`](../../crates/lunco-modelica-api/) — transport-free Modelica queries and document edit commands
 - [`../../crates/lunco-modelica-ast/`](../../crates/lunco-modelica-ast/) — normalized Rumoca parse boundary, AST projections, and Modelica lint facts

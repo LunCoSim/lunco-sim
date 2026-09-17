@@ -96,6 +96,17 @@ therefore explicit rather than silently selecting one component's literal.
 Every check carries a component and requirement ID, producing a per-component
 evidence record with the source revision and exact USD path.
 
+Check tables may use either a qualified requirement/verification name or a
+short local identity. Before the first observation, `evaluate` resolves both
+through the mounted source report and rewrites the records to their canonical
+qualified names. A missing or colliding short identity is a failed check, not
+a guessed package prefix. This lets a Twin keep repeated arrays compact while
+the evidence and coverage index retain one unambiguous SysML identity. The
+helpers are available to authored code as
+`sysml_requirements::requirement_name(report, id)` and
+`sysml_requirements::verification_name(report, id)` when a test needs the
+canonical name before constructing a check.
+
 An `assert` check is the pathless counterpart for a source-derived predicate.
 The Twin Rhai observer computes the predicate from typed SysML values (for
 example, deriving a ramp width from another component's wheel stations), then

@@ -1,0 +1,22 @@
+[package]
+name = "lunco-modelica-telemetry"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Render-free Modelica state projection into shared telemetry"
+
+[dependencies]
+bevy.workspace = true
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-modelica-document = { path = "../lunco-modelica-document" }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-telemetry = { path = "../lunco-telemetry" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }

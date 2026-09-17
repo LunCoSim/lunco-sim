@@ -114,6 +114,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
+lunco-usd-viewport-runtime = { path = "../lunco-usd-viewport-runtime" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-workbench-runtime-ui = { path = "../lunco-workbench-runtime-ui" }

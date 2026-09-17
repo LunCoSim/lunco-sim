@@ -7,10 +7,13 @@
 ephemeris` supplies the concrete ephemeris provider. The
 `lunco-celestial-spatial` adapter projects those semantics into the scene
 hierarchy. Its reusable frame lookup and surface-coordinate contracts live in
-`lunco-celestial-spatial-core`, so camera, avatar, networking, and telemetry
-consumers do not install the terrain/globe/link runtime merely to read a
-celestial pose. USD authors the physical intent; the engine resolves it into
-the existing reference-frame hierarchy.
+`lunco-celestial-spatial-core`, so camera, avatar, networking, telemetry, and
+USD projection consumers do not install the terrain/globe/link runtime merely
+to read or publish a celestial fact. The core also carries authored mission
+declarations, the solar-tracking marker, and Wi-Fi endpoint contracts; the
+runtime adapter alone samples trajectories, updates poses, and projects radio
+state. USD authors the physical intent; the engine resolves it into the
+existing reference-frame hierarchy.
 
 ## Body catalog
 

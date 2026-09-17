@@ -71,7 +71,8 @@ with their `overrides` + `bounds` so a sweep's runs are self-describing.
 For parameter sweeps, prefer `RunExperiment` (explicit `overrides`) over
 mutating the source — each run becomes a proper `Experiment` with its
 override set recorded. A sweep's runs execute **in parallel** and the model
-is **compiled once** and shared across runs (see `experiments_runner.rs`).
+is **compiled once** and shared across runs (see
+`lunco-modelica-runner/src/runner.rs`).
 
 ## Architecture at a glance
 
@@ -158,7 +159,7 @@ Users can drag, split, tab, and float panels freely. Layout persists via `lunco-
 |--------|--------|-------------|
 | `lunica` | Desktop | Full Modelica workbench with all panels |
 | `lunica` | wasm32 | Web version (Modelica work in a dedicated Web Worker) |
-The headless Modelica tools are split between the compiler core and the native
+The headless Modelica tools are split between the compiler host and the native
 asset/tool package:
 
 | Binary | Target | Description |

@@ -7,10 +7,10 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_embodiment_core::roles::{Embodiment, TheLocalEmbodiment};
 use lunco_control_core::ControlBinding;
-use lunco_core::SceneMountState;
 use lunco_control_core::ControlLink;
+use lunco_core::SceneMountState;
+use lunco_embodiment_core::roles::{Embodiment, TheLocalEmbodiment};
 use lunco_luncosim_edit_gizmo_ui as edit_gizmo;
 use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
 use lunco_port_core::InputPorts;
@@ -273,7 +273,13 @@ fn sync_editor_session_selection(
 fn refresh_view_help_controls(
     bindings: Res<lunco_input_core::InputBindingsSettings>,
     local_avatar: Res<TheLocalEmbodiment>,
-    q_avatar: Query<&ControlLink, (With<Embodiment>, With<lunco_embodiment_core::roles::LocalEmbodiment>)>,
+    q_avatar: Query<
+        &ControlLink,
+        (
+            With<Embodiment>,
+            With<lunco_embodiment_core::roles::LocalEmbodiment>,
+        ),
+    >,
     q_names: Query<Ref<Name>>,
     q_callsigns: Query<&lunco_core::markers::Callsign>,
     q_catalog_ids: Query<&lunco_core::CatalogEntryId>,
@@ -945,7 +951,7 @@ impl Perspective for EditorPerspective {
             // USD connection graph is opened from the Connections entry in the
             // Lunica/Twin navigation, so it is not a second Build workflow.
             center: PerspectiveSlotPlan::new().tabs([
-                lunco_usd_viewport_ui::USD_VIEWPORT_PANEL_ID,
+                lunco_usd_viewport_runtime::USD_VIEWPORT_PANEL_ID,
                 PanelId("rhai_editor"),
             ]),
             // The Inspector alone on the right — parameter editing is the point here.

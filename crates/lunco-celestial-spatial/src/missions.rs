@@ -17,7 +17,9 @@ use crate::trajectories::{
 };
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
-use lunco_celestial_spatial_core::ReferenceFrameIndex;
+use lunco_celestial_spatial_core::{
+    MissionDecl, MissionSpacecraftDecl, MissionTrajectoryDecl, ReferenceFrameIndex,
+};
 use lunco_render::{PbrLook, WorldLabel};
 
 /// Ids of the missions spawned into the current scene. Diagnostic/UI only — the
@@ -26,60 +28,6 @@ use lunco_render::{PbrLook, WorldLabel};
 #[derive(Debug, Resource, Default)]
 pub struct MissionRegistry {
     pub missions: Vec<String>,
-}
-
-/// A scene-authored declaration that this mission should be shown — the ECS
-/// projection of USD's `LunCoMissionAPI`.
-///
-/// **This is the switch that turns a mission on**, exactly as
-/// [`CelestialBodyDecl`](lunco_celestial_spatial_core::CelestialBodyDecl) is the
-/// switch for the sky, and
-/// it is deliberately a SEPARATE switch: a scene that wants the Moon has not
-/// thereby asked for Artemis II.
-#[derive(Component, Debug, Clone)]
-pub struct MissionDecl {
-    /// Stable mission id (`"artemis-2"`).
-    pub id: String,
-    /// Display name (`"Artemis II"`).
-    pub name: String,
-    /// One-line human description.
-    pub description: String,
-}
-
-/// One trajectory a mission asks to be drawn — projection of
-/// `LunCoMissionTrajectoryAPI`.
-///
-/// Every field here is VISUALISATION config. The state vectors are not in USD and
-/// never were: the curve is sampled at runtime from the ephemeris provider using
-/// `tracked_id` / `reference_id`, so this prim says *how to draw* a trajectory,
-/// not *where the spacecraft is*.
-#[derive(Component, Debug, Clone)]
-pub struct MissionTrajectoryDecl {
-    pub name: String,
-    pub tracked_id: i32,
-    pub reference_id: i32,
-    pub color: [f32; 4],
-    pub sampling_days: f64,
-    pub sampling_step: f64,
-    /// `"BodyFixed"` or `"Inertial"`.
-    pub frame: String,
-    pub user_visible: Option<bool>,
-    pub start_epoch_jd: Option<f64>,
-    pub end_epoch_jd: Option<f64>,
-}
-
-/// The mission's spacecraft marker — projection of `LunCoMissionSpacecraftAPI`.
-#[derive(Component, Debug, Clone)]
-pub struct MissionSpacecraftDecl {
-    pub name: String,
-    pub ephemeris_id: i32,
-    pub reference_id: i32,
-    pub scale: f32,
-    pub start_epoch_jd: Option<f64>,
-    pub end_epoch_jd: Option<f64>,
-    pub marker_radius_km: Option<f32>,
-    pub hit_radius_km: Option<f32>,
-    pub marker_color: Option<[f32; 4]>,
 }
 
 /// Stamped on a declaring prim entity once its trajectories/spacecraft have been
@@ -99,7 +47,13 @@ pub struct SpacecraftBillboard;
 
 pub fn spacecraft_billboard_system(
     mut q_billboards: Query<(&mut Transform, &ChildOf), With<SpacecraftBillboard>>,
-    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_embodiment_core::roles::LocalEmbodiment>)>,
+    q_camera: Query<
+        &GlobalTransform,
+        (
+            With<Camera>,
+            With<lunco_embodiment_core::roles::LocalEmbodiment>,
+        ),
+    >,
     q_global: Query<&GlobalTransform>,
 ) {
     let Some(cam_gtf) = q_camera.single().ok() else {

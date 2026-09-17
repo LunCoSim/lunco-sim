@@ -4,9 +4,10 @@
 //! [`lunco_camera_core`] and [`lunco_camera_runtime`]. This package realizes
 //! the avatar's celestial orbital mode, spring-arm mode, and collision-aware
 //! local locomotion in explicit BigSpace frames.
-//! Possession, focus, and follow authority remain in `lunco-avatar`; this
-//! package owns the BigSpace surface/orbit lifecycle and its camera-side
-//! transition commands. The generic celestial surface adapter remains in
+//! Control authority and scene interaction remain in `lunco-avatar`; this
+//! package owns focus/return transactions, interactive-camera initialization,
+//! the BigSpace surface/orbit lifecycle, and camera-side transition commands.
+//! The generic celestial surface adapter remains in
 //! `lunco-camera-celestial`. Application composition installs this package
 //! independently of `lunco-avatar`; the avatar authority package does not
 //! register or depend on this implementation.
@@ -38,8 +39,12 @@ pub(crate) mod handoff;
 mod locomotion;
 mod scroll_transit;
 mod spring_arm;
+mod subject;
+mod transactions;
 
 /// Realizes avatar camera modes that need source-specific spatial adaptation.
+/// It also consumes the typed subject-binding and release transactions emitted
+/// by avatar authority, keeping spatial pose and camera-mode changes together.
 ///
 /// The orbital mode uses the target body's explicit inertial BigSpace frame;
 /// the spring arm follows a vessel in its active local frame and filters the
@@ -80,6 +85,11 @@ impl Plugin for AvatarCelestialCameraPlugin {
             )
             .add_systems(Update, surface_mode_transition_system);
         app.add_systems(First, apply_pending_focus);
+        app.add_systems(Update, transactions::avatar_init_system);
+        transactions::register_orbit_history_hook(app);
+        app.add_observer(transactions::clear_orbit_view_history_on_twin_closed);
+        app.add_observer(subject::on_bind_camera_target);
+        app.add_observer(subject::on_clear_camera_binding);
         handoff::register(app);
         register_all_commands(app);
     }
@@ -169,7 +179,12 @@ fn apply_pending_focus(
     let Some(avatar_ent) = local_avatar.as_deref().and_then(|slot| slot.0) else {
         let message = "no authoritative LocalEmbodiment is available for local focus".to_string();
         warn!("FOCUS_ENTITY: {message}");
-        lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+        lunco_camera_core::replace_camera_diagnostic(
+            &mut diagnostics,
+            "avatar-camera",
+            "LocalEmbodiment",
+            Some(message),
+        );
         return;
     };
     let Ok((avatar_ent, mut tf, mut cell, child_of, ff_opt, _)) = q_avatar.get_mut(avatar_ent)
@@ -177,16 +192,31 @@ fn apply_pending_focus(
         let message =
             format!("authoritative LocalEmbodiment {avatar_ent:?} has no complete focus state");
         warn!("FOCUS_ENTITY: {message}");
-        lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+        lunco_camera_core::replace_camera_diagnostic(
+            &mut diagnostics,
+            "avatar-camera",
+            "LocalEmbodiment",
+            Some(message),
+        );
         return;
     };
-    lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, None);
+    lunco_camera_core::replace_camera_diagnostic(
+        &mut diagnostics,
+        "avatar-camera",
+        "LocalEmbodiment",
+        None,
+    );
     let Ok(grid) = q_grids.get(child_of.parent()) else {
         let message = format!(
             "authoritative LocalEmbodiment {avatar_ent:?} is not parented directly under a BigSpace Grid"
         );
         warn!("FOCUS_ENTITY: {message}");
-        lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+        lunco_camera_core::replace_camera_diagnostic(
+            &mut diagnostics,
+            "avatar-camera",
+            "LocalEmbodiment",
+            Some(message),
+        );
         return;
     };
     let avatar_pos = grid.grid_position_double(&cell, &tf);
@@ -204,7 +234,12 @@ fn apply_pending_focus(
                 "target {target:?} has no complete pose in the embodiment's BigSpace frame"
             );
             warn!("FOCUS_ENTITY: {message}");
-            lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+            lunco_camera_core::replace_camera_diagnostic(
+                &mut diagnostics,
+                "avatar-camera",
+                "LocalEmbodiment",
+                Some(message),
+            );
             return;
         };
         target_pos
@@ -250,7 +285,13 @@ fn apply_pending_focus(
 // Camera-side lifecycle commands are registered with the same reflection and
 // wire-command path as every other command. Their handlers live beside the
 // BigSpace realization that owns their spatial invariants.
-register_commands!(on_surface_teleport_command, on_leave_surface_command);
+register_commands!(
+    on_surface_teleport_command,
+    on_leave_surface_command,
+    subject::on_follow_command,
+    transactions::on_return_from_orbit,
+    transactions::on_focus_command,
+);
 
 /// Hysteresis thresholds for the avatar's surface-relative camera policy.
 ///

@@ -296,7 +296,7 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
 /// (`translation_x`) rather than bare, so there is no simulation port on any prim
 /// for this to shadow. Widening a name here — accepting `intensity`, say — would
 /// break that guarantee, because `inputs:intensity` is also stock UsdLux.
-pub struct ScenePortsPlugin;
+pub(crate) struct ScenePortsPlugin;
 
 impl Plugin for ScenePortsPlugin {
     fn build(&self, app: &mut App) {
@@ -304,7 +304,7 @@ impl Plugin for ScenePortsPlugin {
     }
 }
 
-pub fn build(app: &mut App) {
+pub(crate) fn build(app: &mut App) {
     app.add_observer(mark_point_light_surface_ready)
         .add_observer(mark_spot_light_surface_ready)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<PointLight>)
