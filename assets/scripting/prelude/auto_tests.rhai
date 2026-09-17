@@ -170,6 +170,7 @@ fn report_structured_verdict(report, title, channel) {
     let result_count = 0;
     let check_count = 0;
     let results = [];
+    let result_chunks = [];
     let verification = "";
     let requirement_count = 0;
     let requirement_names = [];
@@ -177,6 +178,7 @@ fn report_structured_verdict(report, title, channel) {
     let source_files = [];
     let source_revision_hex = "";
     let metrics = #{};
+    let failure_count = 0;
     if report != () {
         if report.source_revision != () { source_revision = report.source_revision; }
         if report.source_revision_hex != () {
@@ -192,6 +194,9 @@ fn report_structured_verdict(report, title, channel) {
             // PASS/FAIL line remains the runner envelope, while this payload
             // is the durable per-check evidence consumed by UI/CI clients.
             results = report.results;
+        }
+        if report.result_chunks != () {
+            result_chunks = report.result_chunks;
         }
         if report.check_count != () { check_count = report.check_count; }
         // Keep compatibility with older Twin observers that only supplied
@@ -219,8 +224,20 @@ fn report_structured_verdict(report, title, channel) {
                 }
             }
         }
+        if report.failure_count != () { failure_count = report.failure_count; }
     }
-    if failures.is_empty() && !ok { failures.push("requirement evaluation unavailable"); }
+    if result_count == 0 && report != () && report.streamed == true {
+        // Streamed evaluators intentionally do not retain a flattened result
+        // array. The check count is still the exact result count carried by
+        // the per-observation events.
+        result_count = check_count;
+    }
+    if failure_count == 0 { failure_count = raw_failures.len(); }
+    if failures.is_empty() && !ok {
+        failures.push(if failure_count > 0 {
+            failure_count.to_string() + " requirement observation(s) failed"
+        } else { "requirement evaluation unavailable" });
+    }
     // Rhai values have a bounded 64 KiB string/value budget.  A large
     // component can legitimately produce hundreds of typed observations, so
     // never attempt to emit the complete result table as one event.  Small
@@ -228,7 +245,8 @@ fn report_structured_verdict(report, title, channel) {
     // the same typed maps as individually bounded events and expose the count
     // in the summary. Consumers can reconstruct the exact table by grouping
     // on (channel, source_revision) and ordering by result_index.
-    let inline_results = result_count <= 64;
+    let chunked_results = result_chunks.len() > 1 || check_count > 64;
+    let inline_results = !chunked_results && result_count <= 64;
     let evidence = #{schema_version: 1, ok: ok, title: title, channel: channel,
         verdict: if ok { "pass" } else { "fail" },
         verification: verification, requirement_count: requirement_count,
@@ -236,24 +254,28 @@ fn report_structured_verdict(report, title, channel) {
         requirement_summary: requirement_summary,
         source_revision: source_revision, source_revision_hex: source_revision_hex,
         source_files: source_files, result_count: result_count,
-        failure_count: raw_failures.len(), evidence_chunked: !inline_results,
-        evidence_result_events: if inline_results { 0 } else { result_count },
+        failure_count: failure_count, evidence_chunked: !inline_results,
+        evidence_result_events: if inline_results { 0 } else { check_count },
         results: if inline_results { results } else { [] },
         failures: if inline_results { raw_failures } else { [] }, metrics: metrics};
     emit(channel + "_EVIDENCE", evidence);
     if !inline_results {
-        for result_index in 0..result_count {
-            emit(channel + "_EVIDENCE_RESULT", #{schema_version: 1,
-                title: title, channel: channel, verification: verification,
-                source_revision: source_revision,
-                source_revision_hex: source_revision_hex,
-                result_count: result_count, failure_count: raw_failures.len(),
-                result_index: result_index, result: results[result_index]});
+        let result_index = 0;
+        for chunk in result_chunks {
+            for result in chunk {
+                emit(channel + "_EVIDENCE_RESULT", #{schema_version: 1,
+                    title: title, channel: channel, verification: verification,
+                    source_revision: source_revision,
+                    source_revision_hex: source_revision_hex,
+                    result_count: check_count, failure_count: failure_count,
+                    result_index: result_index, result: result});
+                result_index += 1;
+            }
         }
     }
     print(channel + "_EVIDENCE source_revision=" + source_revision
         + " requirements=" + requirement_count + " checks=" + check_count
-        + " failures=" + raw_failures.len());
+        + " failures=" + failure_count);
     report_verdict(failures, title, channel)
 }
 
