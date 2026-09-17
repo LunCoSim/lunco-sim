@@ -654,11 +654,19 @@ editors and headless adapters can consume the state without linking the
 render-heavy surface.
 
 **`lunco-usd-viewport-ui`**
-Render-heavy USD preview surface. It owns offscreen images and egui texture
-registration, render cameras/lights, pointer interaction, projection binding,
-inspection queries, and the viewport panels. Preview/session state and typed
-commands come from `lunco-usd-viewport-core`; this package does not own
-Twin-browser lifecycle or document navigation.
+Workbench presentation adapter for the USD preview. It owns the egui viewport
+panels and translates panel geometry/pointer gestures into the typed runtime
+events. Preview/session state, offscreen images, render cameras/lights, pointer
+contracts, projection binding, inspection queries, and typed commands come from
+`lunco-usd-viewport-runtime`; this package does not own Twin-browser lifecycle
+or document navigation.
+
+**`lunco-usd-viewport-runtime`**
+Render runtime for document-backed USD preview sessions. It owns preview
+lifecycle, offscreen images and egui texture registration, render cameras and
+lights, projection readiness, render budgets, preview commands, inspection
+queries, and the runtime integration tests. It consumes the render-independent
+state from `lunco-usd-viewport-core` and does not register workbench panels.
 
 **`lunco-usd-bevy-camera`**
 Render-free camera adapter built on `lunco-usd-bevy-core`,

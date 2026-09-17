@@ -25,10 +25,10 @@ use bevy::math::{DVec3, Rect};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use lunco_doc::DocumentId;
-use lunco_usd_bevy_scene::{UsdPrimPath, is_preview_entity};
+use lunco_usd_bevy_scene::{is_preview_entity, UsdPrimPath};
 use lunco_usd_document::document::LayerId;
 use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState};
-use lunco_usd_viewport_ui::{USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID};
+use lunco_usd_viewport_runtime::{USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID};
 use lunco_viewport_core::PanelRect;
 use lunco_viewport_core::SceneViewport;
 use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
@@ -1447,11 +1447,9 @@ mod tests {
             ..Transform::IDENTITY
         };
 
-        assert!(
-            preview_global_to_local_transform(&proxy, None)
-                .and_then(|local| local_transform_pose(&local))
-                .is_none()
-        );
+        assert!(preview_global_to_local_transform(&proxy, None)
+            .and_then(|local| local_transform_pose(&local))
+            .is_none());
     }
 
     #[test]
@@ -1517,20 +1515,18 @@ mod tests {
             Some(&RigidBody::Dynamic)
         );
         assert!(app.world().get::<GizmoDragState>(vessel).is_none());
-        assert!(
-            app.world()
-                .get::<lunco_physics::KinematicDrive>(vessel)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .get::<lunco_physics::KinematicDrive>(vessel)
+            .is_none());
         assert_eq!(
             app.world().get::<LinearVelocity>(vessel).unwrap().0,
             DVec3::ZERO
         );
-        assert!(
-            app.world()
-                .get::<CustomPositionIntegration>(vessel)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .get::<CustomPositionIntegration>(vessel)
+            .is_none());
     }
 
     /// Dragging a prop that was never a rigid body must not MAKE it one.
@@ -1607,11 +1603,10 @@ mod tests {
              log 'has no mass or inertia' forever"
         );
         assert!(app.world().get::<GizmoDragState>(prop).is_none());
-        assert!(
-            app.world()
-                .get::<lunco_physics::KinematicDrive>(prop)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .get::<lunco_physics::KinematicDrive>(prop)
+            .is_none());
         assert!(app.world().get::<CustomPositionIntegration>(prop).is_none());
     }
 }

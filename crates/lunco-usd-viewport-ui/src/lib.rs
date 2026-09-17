@@ -1,11 +1,24 @@
-//! Interactive USD preview viewport.
+//! Workbench UI for the interactive USD preview viewport.
 //!
-//! This package owns preview-session state, offscreen render targets, viewport
-//! camera interaction, preview commands, and the viewport panels. Document and
-//! Twin-browser lifecycle presentation remains in `lunco-usd-ui`. Keeping this
-//! render-heavy surface separate means browser/document changes do not rebuild
-//! the viewport package and headless USD consumers do not depend on it.
+//! This package owns only the egui panels over the preview runtime. Session
+//! state, offscreen render targets, viewport camera interaction, preview
+//! commands, and query providers live in `lunco-usd-viewport-runtime`.
+//! Document and Twin-browser lifecycle presentation remains in `lunco-usd-ui`.
 
-pub mod viewport;
+use bevy::prelude::{App, Plugin};
+use lunco_workbench_core::WorkbenchPanelAppExt;
 
-pub use viewport::*;
+mod viewport;
+
+/// Install the USD preview workbench panels.
+///
+/// Add [`lunco_usd_viewport_runtime::UsdViewportPlugin`] separately to install
+/// the session and render runtime that these panels display.
+pub struct UsdViewportUiPlugin;
+
+impl Plugin for UsdViewportUiPlugin {
+    fn build(&self, app: &mut App) {
+        app.register_panel(viewport::UsdViewportPanel)
+            .register_instance_panel(viewport::UsdPreviewViewPanel);
+    }
+}

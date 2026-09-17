@@ -18,30 +18,14 @@ bevy = { workspace = true, features = [
     "bevy_anti_alias",
 ] }
 bevy_egui = { workspace = true }
-lunco-api = { path = "../lunco-api" }
-lunco-assets-core = { path = "../lunco-assets-core" }
-lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-render = { path = "../lunco-render" }
-lunco-settings = { path = "../lunco-settings" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
-lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
-lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
-lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-viewport-core = { path = "../lunco-usd-viewport-core" }
+lunco-usd-viewport-runtime = { path = "../lunco-usd-viewport-runtime" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
-lunco-workspace = { path = "../lunco-workspace" }
-openusd = { workspace = true }
-serde_json = { workspace = true }
-
-[dev-dependencies]
-lunco-usd-commands = { path = "../lunco-usd-commands" }
-lunco-usd-bevy = { path = "../lunco-usd-bevy" }
-lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
 
 [lints]
 workspace = true

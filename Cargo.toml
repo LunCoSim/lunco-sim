@@ -32,6 +32,7 @@ members = [
     "crates/lunco-luncosim-exposures",
     "crates/lunco-usd-ui",
     "crates/lunco-usd-viewport-ui",
+    "crates/lunco-usd-viewport-runtime",
     "crates/lunco-usd-viewport-core",
     "crates/lunco-viewport-core",
     "crates/lunco-luncosim-server",

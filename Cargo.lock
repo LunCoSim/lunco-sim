@@ -7862,7 +7862,7 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-document",
  "lunco-usd-viewport-core",
- "lunco-usd-viewport-ui",
+ "lunco-usd-viewport-runtime",
  "lunco-viewport-core",
  "lunco-workbench-core",
  "transform-gizmo-bevy",
@@ -7964,7 +7964,7 @@ dependencies = [
  "lunco-usd-sim-core",
  "lunco-usd-ui",
  "lunco-usd-viewport-core",
- "lunco-usd-viewport-ui",
+ "lunco-usd-viewport-runtime",
  "lunco-viewport-core",
  "lunco-workbench",
  "lunco-workbench-browser",
@@ -8086,6 +8086,7 @@ dependencies = [
  "lunco-usd-prim-tree-ui",
  "lunco-usd-sim-cosim",
  "lunco-usd-ui",
+ "lunco-usd-viewport-runtime",
  "lunco-usd-viewport-ui",
  "lunco-workbench",
  "lunco-workbench-browser",
@@ -9964,7 +9965,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-usd-viewport-ui"
+name = "lunco-usd-viewport-runtime"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
@@ -9987,10 +9988,25 @@ dependencies = [
  "lunco-usd-viewport-core",
  "lunco-viewport-core",
  "lunco-workbench-core",
- "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-usd-viewport-ui"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-usd-document",
+ "lunco-usd-viewport-core",
+ "lunco-usd-viewport-runtime",
+ "lunco-viewport-core",
+ "lunco-workbench-core",
+ "lunco-workbench-widgets",
 ]
 
 [[package]]

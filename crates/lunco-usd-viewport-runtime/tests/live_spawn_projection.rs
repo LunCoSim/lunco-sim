@@ -19,7 +19,7 @@ use lunco_usd_viewport_core::{
     CloseUsdPreview, FocusUsdPreview, OpenUsdPreview, OpenUsdPreviewView, UsdPreviewId,
     UsdPreviewViewId,
 };
-use lunco_usd_viewport_ui::UsdViewportPlugin;
+use lunco_usd_viewport_runtime::UsdViewportPlugin;
 
 mod support;
 
@@ -335,14 +335,16 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
     assert!(state.session(UsdPreviewId(1)).is_some());
     assert!(state.session(UsdPreviewId(2)).is_none());
     assert!(app.world().get_entity(second_root).is_err());
-    assert!(app
-        .world()
-        .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-        .coords_of(second_doc)
-        .is_none());
-    assert!(app
-        .world()
-        .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-        .coords_of(first_doc)
-        .is_some());
+    assert!(
+        app.world()
+            .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+            .coords_of(second_doc)
+            .is_none()
+    );
+    assert!(
+        app.world()
+            .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+            .coords_of(first_doc)
+            .is_some()
+    );
 }

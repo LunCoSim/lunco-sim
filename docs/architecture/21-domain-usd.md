@@ -836,7 +836,7 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms
 - `crates/lunco-usd-bevy-animation/src/lib.rs` — production animation planning, time-domain binding, and ECS sampling systems
 - `crates/lunco-usd-queries/tests/query_api.rs` — public inspection, edit-session, assembly-target, and document-sync query contracts
-- `crates/lunco-usd-viewport-ui/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
+- `crates/lunco-usd-viewport-runtime/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-avian-core/src/lib.rs` — Avian/BigSpace frame bridge and low-level bridge tests
 - `crates/lunco-usd-avian-filters/src/{filtered_pairs,collision_groups}.rs` — standard collision filtering, joint pair suppression, and Avian contact-hook mechanisms; runtime behavior is covered by the production Rhai scene-test assets
