@@ -2838,7 +2838,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         }
         // The engine handle is normally unique here (no task ctx outlives its
         // tick), but "normally" is not "always": a `RhaiTaskCtx` — or any
-        // re-entrant call back into the bridge from script/REPL input — holds an
+        // re-entrant call back into the bridge from script/RunRhai input — holds an
         // `Arc` clone, and script input is untrusted. This used to
         // `.expect("engine Arc must be unique outside a task tick")`, i.e. a
         // script could **take down the whole application**. It must not: a
@@ -3343,7 +3343,7 @@ pub fn eval_with_world_as(
 
     // A fresh engine per call keeps state isolated; cheap relative to the work.
     //
-    // It shares the world's script registry, so an `import` typed at the REPL
+    // It shares the world's script registry, so an `import` submitted through RunRhai
     // resolves exactly as it would inside a scenario. A private registry here would
     // make the REPL a place where imports mysteriously fail — the kind of
     // inconsistency that costs an hour to diagnose.
@@ -3487,7 +3487,7 @@ mod tests {
 
     /// **H6** — a re-entrant call into the bridge must not take down the app.
     ///
-    /// A live `RhaiTaskCtx` (or any script/REPL call that re-enters the bridge)
+    /// A live `RhaiTaskCtx` (or any script/RunRhai call that re-enters the bridge)
     /// can hold an `Arc<Engine>` clone while maintenance runs. In that case the
     /// rebuild is deferred, the current generation remains authoritative, and
     /// maintenance retries on the next tick.

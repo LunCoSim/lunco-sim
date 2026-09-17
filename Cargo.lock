@@ -8878,7 +8878,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
- "crossbeam-channel",
  "getrandom 0.3.4",
  "libloading",
  "lunco-api",

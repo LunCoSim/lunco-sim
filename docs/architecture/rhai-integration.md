@@ -54,8 +54,8 @@ participants. Python does not implement `ScenarioRuntime` or execute
 `ScriptedModel` lifecycle hooks; Python scenario lifecycle support remains
 explicitly planned in `lunco-scripting/src/scenario.rs`.
 The native shared-library probe is lazy: the scripting plugin keeps Python
-`Uninitialized` until a Python command, participant, or REPL request needs the
-runtime. A Python participant then resolves availability at the USD bind seam;
+`Uninitialized` until a Python command or participant needs the runtime. A
+Python participant then resolves availability at the USD bind seam;
 an unavailable interpreter is reported as a terminal participant error.
 
 ### Unified document authoring
