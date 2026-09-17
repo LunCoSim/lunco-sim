@@ -181,11 +181,12 @@ pub(crate) fn render_diagram_canvas(
             })
             .unwrap_or(false);
         let library_state = ctx.resource::<lunco_assets_core::library::LibraryLoadState>();
-        let library_resident = crate::library_remote::global_parsed_source_bundle().is_some()
-            || ctx
-                .resource::<crate::engine_resource::ModelicaEngineHandle>()
-                .and_then(|handle| handle.try_lock())
-                .is_some_and(|engine| engine.source_set_installed("source-bundle"));
+        let library_resident =
+            lunco_modelica_library::source_library::global_parsed_source_bundle().is_some()
+                || ctx
+                    .resource::<crate::engine_resource::ModelicaEngineHandle>()
+                    .and_then(|handle| handle.try_lock())
+                    .is_some_and(|engine| engine.source_set_installed("source-bundle"));
         // Live load detail (phase + %) while the bundle is still arriving,
         // so the diagram shows *why* the icons are gray and how far along
         // the download/parse is — not just a static "loading" string.

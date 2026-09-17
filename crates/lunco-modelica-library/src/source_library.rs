@@ -1,4 +1,4 @@
-//! source library bundle loader.
+//! Source-library bundle loader and runtime admission.
 //!
 //! Inserts [`LibraryAssetSource`] and [`LibraryLoadState`] into the world.
 //!
@@ -60,8 +60,8 @@ static GLOBAL_PARSED_SOURCE_BUNDLE: OnceLock<
 static SOURCE_BUNDLE_DECODE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Read the pre-parsed source library bundle if any has been installed.
-pub fn global_parsed_source_bundle(
-) -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
+pub fn global_parsed_source_bundle()
+-> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
     GLOBAL_PARSED_SOURCE_BUNDLE.get()
 }
 
@@ -89,8 +89,8 @@ fn install_global_parsed_source_bundle(
 ///   `package.mo` wrappers) on every drill-in.
 /// - On **wasm** there is no synchronous disk path, so a miss just
 ///   returns `None` (the worker transfer fills the slot asynchronously).
-pub fn parsed_source_bundle(
-) -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
+pub fn parsed_source_bundle()
+-> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
     if let Some(bundle) = GLOBAL_PARSED_SOURCE_BUNDLE.get() {
         return Some(bundle);
     }
@@ -144,8 +144,8 @@ pub fn parsed_source_bundle(
 /// undecodable bundle (rumoca-version-stale, truncated, or a pre-zstd raw
 /// bundle) so the caller cold-parses the source root and rewrites it.
 #[cfg(not(target_arch = "wasm32"))]
-fn read_parsed_bundle_file(
-) -> Result<Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>, String> {
+fn read_parsed_bundle_file()
+-> Result<Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>, String> {
     let Some((_, file)) =
         lunco_assets_core::library::library_open(std::path::Path::new("parsed-library.bin"))
     else {
@@ -521,8 +521,8 @@ fn kick_web_library_fetcher(
     ));
 }
 
-/// Plugin that owns source library asset loading. Add once during app build.
-pub struct LibraryRemotePlugin;
+/// Plugin that owns source-library asset loading. Add once during app build.
+pub struct SourceLibraryPlugin;
 
 /// Web-only user intent for the source library bundle fetcher. Native download
 /// requests remain owned by the generic dataset registry and data panel.
@@ -549,7 +549,7 @@ fn on_library_install_action(
     request.0 = true;
 }
 
-impl Plugin for LibraryRemotePlugin {
+impl Plugin for SourceLibraryPlugin {
     fn build(&self, app: &mut App) {
         lunco_settings::ensure_download_settings(app);
         app.init_resource::<LibraryLoadState>();
@@ -557,7 +557,7 @@ impl Plugin for LibraryRemotePlugin {
         // settings.json so the Settings menu and source resolver share one
         // source of truth.
         use lunco_settings::AppSettingsExt;
-        app.register_settings_section::<crate::modelica_library_settings::LibrarySettings>();
+        app.register_settings_section::<crate::settings::LibrarySettings>();
 
         #[cfg(target_arch = "wasm32")]
         app.add_observer(on_library_install_action);
@@ -570,9 +570,7 @@ impl Plugin for LibraryRemotePlugin {
         // are optional host capabilities composed by `lunco-modelica-assets`.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let settings = app
-                .world()
-                .resource::<crate::modelica_library_settings::LibrarySettings>();
+            let settings = app.world().resource::<crate::settings::LibrarySettings>();
             let resolved_root = configured_native_library_root(settings);
 
             if let Some(root) = resolved_root {
@@ -586,7 +584,9 @@ impl Plugin for LibraryRemotePlugin {
                     uncompressed_bytes: 0,
                 });
             } else {
-                info!("[source library] no on-disk root — source-library provisioning is not composed");
+                info!(
+                    "[source library] no on-disk root — source-library provisioning is not composed"
+                );
                 app.insert_resource(LibraryLoadState::NotStarted);
             }
 
@@ -621,7 +621,7 @@ impl Plugin for LibraryRemotePlugin {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn configured_native_library_root(
-    settings: &crate::modelica_library_settings::LibrarySettings,
+    settings: &crate::settings::LibrarySettings,
 ) -> Option<std::path::PathBuf> {
     // A settings-level override wins: the user explicitly selected a local
     // Modelica checkout or system installation.
@@ -755,8 +755,8 @@ pub fn log_library_state_transition(s: &LibraryLoadState) {
     }
 }
 
-// The source library-state → status-bus mirror moved to `crate::ui::core_observers`
-// (reactive UI layer). Core here only owns `LibraryLoadState` + `LibraryLoadPhase`.
+// The source library-state → status-bus mirror belongs to the UI adapter.
+// This package owns `LibraryLoadState` + `LibraryLoadPhase`.
 
 // ─── Web fetcher implementation ─────────────────────────────────────
 

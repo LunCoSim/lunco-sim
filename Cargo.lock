@@ -8171,6 +8171,7 @@ dependencies = [
  "lunco-modelica-ast",
  "lunco-modelica-core",
  "lunco-modelica-index",
+ "lunco-modelica-library",
  "rayon",
  "regex",
  "rumoca-compile",
@@ -8204,10 +8205,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bevy",
- "bincode 2.0.1",
- "console_error_panic_hook",
  "getrandom 0.3.4",
- "js-sys",
  "log",
  "lunco-api",
  "lunco-assets-core",
@@ -8219,20 +8217,17 @@ dependencies = [
  "lunco-modelica-ast",
  "lunco-modelica-document",
  "lunco-modelica-index",
+ "lunco-modelica-library",
  "lunco-modelica-runtime",
  "lunco-port-core",
- "lunco-settings",
  "lunco-storage",
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-workspace",
  "rumoca-compile",
- "ruzstd 0.7.3",
  "serde",
  "serde_json",
  "tempfile",
- "wasm-bindgen",
- "wasm-bindgen-futures",
  "web-sys",
  "web-time",
 ]
@@ -8283,6 +8278,7 @@ dependencies = [
  "lunco-modelica-core",
  "lunco-modelica-document",
  "lunco-modelica-index",
+ "lunco-modelica-library",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
  "lunco-modelica-telemetry",
@@ -8334,6 +8330,25 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "lunco-modelica-library"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bincode 2.0.1",
+ "lunco-assets-core",
+ "lunco-doc",
+ "lunco-modelica-index",
+ "lunco-settings",
+ "rumoca-compile",
+ "ruzstd 0.7.3",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -8412,6 +8427,7 @@ dependencies = [
  "lunco-modelica-execution",
  "lunco-modelica-icon-ui",
  "lunco-modelica-index",
+ "lunco-modelica-library",
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
  "lunco-scripting",

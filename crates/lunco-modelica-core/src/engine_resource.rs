@@ -46,8 +46,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::engine::ModelicaEngine;
-use crate::worker_bridge::ModelicaWorkerBridge;
 use lunco_doc::{Document, DocumentId};
+use lunco_modelica_library::worker_bridge::ModelicaWorkerBridge;
 
 /// Process-wide accessor for the workbench's engine handle. Set
 /// once during plugin init and read from non-Bevy contexts (static
@@ -767,7 +767,7 @@ pub fn drive_engine_sync(
                 // `Modelica/` (and the extra-library trees) was
                 // pre-parsed at build time and bincode-shipped in
                 // `parsed-<sha>.bin.zst`; on wasm those ASTs live in
-                // `crate::library_remote::global_parsed_source_bundle()` keyed by
+                // `lunco_modelica_library::source_library::global_parsed_source_bundle()` keyed by
                 // their original source library-relative path
                 // (`Modelica/Blocks/Sources.mo`, etc.). If the doc
                 // we're about to parse came from one of those files,
@@ -788,12 +788,13 @@ pub fn drive_engine_sync(
                             });
                     origin_path.and_then(|path| {
                         let key = path.to_string_lossy().to_string();
-                        crate::library_remote::global_parsed_source_bundle().and_then(|bundle| {
-                            bundle
-                                .iter()
-                                .find(|(k, _)| k == &key)
-                                .map(|(_, ast)| ast.clone())
-                        })
+                        lunco_modelica_library::source_library::global_parsed_source_bundle()
+                            .and_then(|bundle| {
+                                bundle
+                                    .iter()
+                                    .find(|(k, _)| k == &key)
+                                    .map(|(_, ast)| ast.clone())
+                            })
                     })
                 };
                 if let Some(ast) = cached_ast {
@@ -1099,7 +1100,7 @@ pub struct SourceRootBecameReady {
 /// most once per session — flips [`SourceBundleBootstrapState`] to `Done` and idles.
 ///
 /// **The parsed source slot is the readiness predicate.** Install fires iff
-/// `library_remote::global_parsed_source_bundle()` is populated (the in-process slot holds the
+/// `source_library::global_parsed_source_bundle()` is populated (the in-process slot holds the
 /// parsed `Vec<(uri, StoredDefinition)>`); install is a clone plus the engine's
 /// source-set boundary, with no re-parsing. `LibraryLoadState::Ready` only means
 /// that the source tree/index is available; native fills the parsed slot lazily
@@ -1168,7 +1169,8 @@ fn drive_source_bundle_bootstrap(
     // the update thread; copying the definitions and building the source index
     // happen on the worker. The install still uses the one shared Modelica
     // session, so all readers observe the same standard Modelica namespace.
-    let Some(docs) = crate::library_remote::global_parsed_source_bundle().cloned() else {
+    let Some(docs) = lunco_modelica_library::source_library::global_parsed_source_bundle().cloned()
+    else {
         return;
     };
     let handle = handle.clone();

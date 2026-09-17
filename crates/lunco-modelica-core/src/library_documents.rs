@@ -23,7 +23,7 @@ pub fn load_library_class(
     qualified: &str,
 ) -> Result<ModelicaDocument, String> {
     #[cfg(target_arch = "wasm32")]
-    crate::library_remote::ensure_library_source_unpacked();
+    lunco_modelica_library::source_library::ensure_library_source_unpacked();
 
     let full_source = if let Some(bytes) = lunco_assets_core::library::library_read(path) {
         String::from_utf8(bytes)
@@ -35,12 +35,13 @@ pub fn load_library_class(
     let short_name = qualified.rsplit('.').next().unwrap_or(qualified);
     let parent_pkg = qualified.rsplit_once('.').map_or("", |(parent, _)| parent);
     let key = path.to_string_lossy().to_string();
-    let bundled_ast = crate::library_remote::parsed_source_bundle().and_then(|bundle| {
-        bundle
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, ast)| ast.clone())
-    });
+    let bundled_ast =
+        lunco_modelica_library::source_library::parsed_source_bundle().and_then(|bundle| {
+            bundle
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, ast)| ast.clone())
+        });
     let bundle_hit = bundled_ast.is_some();
 
     if !bundle_hit {

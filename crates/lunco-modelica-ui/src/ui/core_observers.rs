@@ -1,7 +1,7 @@
 //! UI-reactive observers of CORE state.
 //!
 //! These systems are the *reactive UI layer built on top of the core*: they
-//! read core domain state (e.g. [`crate::library_remote::LibraryLoadState`]) and
+//! read core domain state (e.g. [`lunco_modelica_library::source_library::LibraryLoadState`]) and
 //! project it into UI surfaces (the workbench status bus, console, plots).
 //! The core never references these surfaces — it just owns the observable
 //! state. All of this is `ui`-feature only; a headless build has no observers

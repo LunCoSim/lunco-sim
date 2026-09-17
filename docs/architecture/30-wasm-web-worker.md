@@ -56,7 +56,7 @@ a transport layer that bridges the channels to the worker over
    `WireResult::Log("ready")`, and parks.
 4. **Source-library handoff.** The main page's source-library fetcher keeps the downloaded
    `parsed-*.bin.zst` or `sources-*.tar.zst` bytes compressed and gives them to
-   `library_remote::drain_library_load_slot`. The transport posts the compressed parsed
+   `source_library::drain_library_load_slot`. The transport posts the compressed parsed
    bundle to the worker as `InstallParsedLibraryCompressed`; the worker owns
    decompression, bincode deserialization, and installation into its own
    `GLOBAL_PARSED_SOURCE_BUNDLE`. The primary worker transfers raw decoded bincode bytes
@@ -76,7 +76,7 @@ a transport layer that bridges the channels to the worker over
      `catch_unwind` wraps the call so a panic surfaces as
      `WireResult::Log("PANIC during {label}: {msg}")` instead of silent death.
    - `InstallParsedLibraryCompressed(bytes)` → worker-owned decompress, deserialize,
-     and `library_remote::install_global_parsed_source_bundle_pub(parsed)`.
+     and `source_library::install_global_parsed_source_bundle_pub(parsed)`.
    - `InstallLibraryIndexFromSource(bytes)` → worker-owned editor-index decode,
      sent back in bounded metadata chunks.
    - `Ping(tag)` → `WireResult::Log("pong: {tag} (source_docs={})")`.
@@ -229,7 +229,7 @@ there is no page-thread untar/parse/decompression fallback.
 | `[worker] PANIC during Compile X: ...`      | rumoca panic inside worker                    | Surfaced via `catch_unwind` + `WireResult::Log`                    |
 | `Simulation worker crashed and restarted`   | Result with `Entity::PLACEHOLDER` (test path) | Cosmetic; only fires from `__lc_test_dispatch_compile`              |
 | `[worker_transport] post_message failed`    | Worker died, browser refused message          | Browser DevTools → Application → Service Workers / Workers panel    |
-| UI stutters during source-library install  | Main-side chunked AST deserialization        | `library_remote::drive_library_main_decode`; no page-thread parse/decompress |
+| UI stutters during source-library install  | Main-side chunked AST deserialization        | `source_library::drive_library_main_decode`; no page-thread parse/decompress |
 
 The worker's own `web_sys::console::log_1` lines (e.g. `[lunica_worker]
 starting`) DO appear in the page console in Chrome — Chrome merges

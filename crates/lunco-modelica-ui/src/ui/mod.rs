@@ -1033,10 +1033,10 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     // Current state line.
     let state = ctx.resource::<LibraryLoadState>().cloned();
 
-    // If the Modelica UI is active, the LibrarySettings resource MUST exist
-    // by architectural design (ModelicaPlugin adds ModelicaCorePlugin adds LibraryRemotePlugin).
+    // If the Modelica UI is active, the LibrarySettings resource is installed
+    // by SourceLibraryPlugin during ModelicaCorePlugin setup.
     let Some(mut settings) = ctx
-        .resource::<crate::modelica_library_settings::LibrarySettings>()
+        .resource::<lunco_modelica_library::LibrarySettings>()
         .cloned()
     else {
         return;
@@ -1201,7 +1201,9 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                     )
                     .clicked()
                 {
-                    ctx.trigger(crate::library_remote::LibraryInstallAction::Install);
+                    ctx.trigger(
+                        lunco_modelica_library::source_library::LibraryInstallAction::Install,
+                    );
                 }
             } else if install_failed {
                 if ui
@@ -1212,7 +1214,9 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                     )
                     .clicked()
                 {
-                    ctx.trigger(crate::library_remote::LibraryInstallAction::Reinstall);
+                    ctx.trigger(
+                        lunco_modelica_library::source_library::LibraryInstallAction::Reinstall,
+                    );
                 }
             } else if install_ready
                 && ui
@@ -1223,7 +1227,9 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                     )
                     .clicked()
             {
-                ctx.trigger(crate::library_remote::LibraryInstallAction::Reinstall);
+                ctx.trigger(
+                    lunco_modelica_library::source_library::LibraryInstallAction::Reinstall,
+                );
             }
         });
     }

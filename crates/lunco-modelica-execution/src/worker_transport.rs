@@ -45,11 +45,11 @@ use bevy::prelude::*;
 use crossbeam_channel::Sender;
 use js_sys::Uint8Array;
 use lunco_worker_transport::{Callbacks, WorkerPool as WorkerTransport};
-use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::lock_ext::LockExt;
-use lunco_modelica_core::worker_bridge::{WorkerParseDone, WorkerParseFailed};
+use lunco_modelica_library::worker_bridge::{WorkerParseDone, WorkerParseFailed};
 use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 
 /// Wire-format envelope for the postMessage transport.
@@ -80,7 +80,8 @@ pub enum WireMessage {
     /// The worker decompresses once, then — *if* `provide_to_main` — ships the
     /// decoded bincode bytes back to the main thread as a transferred
     /// `ArrayBuffer`, so the main thread's resolution/autocomplete heap is filled
-    /// by *deserialize only* (see `library_remote::ingest_worker_decoded_library`).
+    /// by *deserialize only* (see
+    /// `source_library::ingest_worker_decoded_library`).
     ///
     /// With a worker pool, only the **primary** (worker 0) gets
     /// `provide_to_main = true` — the main thread needs exactly one decoded copy,
@@ -632,7 +633,7 @@ fn route_wire_result(idx: usize, data: JsValue) {
     if data.is_instance_of::<js_sys::ArrayBuffer>() {
         let buf: js_sys::ArrayBuffer = data.unchecked_into();
         let decoded = Uint8Array::new(&buf).to_vec();
-        lunco_modelica_core::library_remote::ingest_worker_decoded_library(decoded);
+        lunco_modelica_library::source_library::ingest_worker_decoded_library(decoded);
         return;
     }
     let bytes: Vec<u8> = match Uint8Array::new(&data).to_vec() {
@@ -667,16 +668,16 @@ fn route_wire_result(idx: usize, data: JsValue) {
             bundled,
             done,
         }) => {
-            lunco_modelica_core::library_remote::ingest_worker_library_index_chunk(
+            lunco_modelica_library::source_library::ingest_worker_library_index_chunk(
                 components, bundled, done,
             );
         }
         Ok(WireResult::LibraryIndexFailed { error }) => {
-            lunco_modelica_core::library_remote::fail_worker_library_index(error);
+            lunco_modelica_library::source_library::fail_worker_library_index(error);
         }
         Ok(WireResult::LibraryFailed { error }) => {
             fail_worker_pipeline(error.clone());
-            lunco_modelica_core::library_remote::fail_worker_library(error);
+            lunco_modelica_library::source_library::fail_worker_library(error);
         }
         Ok(WireResult::ParseDocumentDone {
             doc_id,

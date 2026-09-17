@@ -259,7 +259,7 @@ impl ModelicaCompiler {
     /// may contain any number of authored libraries; root identities are
     /// derived from their `within` declarations rather than selected by name.
     pub fn ensure_source_bundle_installed(&mut self) -> bool {
-        let Some(parsed) = library_remote::parsed_source_bundle() else {
+        let Some(parsed) = lunco_modelica_library::source_library::parsed_source_bundle() else {
             return false;
         };
         let docs = (**parsed).clone();
@@ -1027,12 +1027,9 @@ fn diagnostics_from_strict_report(
         .collect()
 }
 
-pub mod library_remote;
-pub mod modelica_library_settings;
 /// Bundled Modelica models for web deployment.
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
-pub mod worker_bridge;
 
 /// Shareable model links (encode model source into a URL fragment).
 pub mod model_share;
@@ -1044,8 +1041,8 @@ pub struct ModelicaCorePlugin;
 
 impl Plugin for ModelicaCorePlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<lunco_modelica_library::worker_bridge::ModelicaWorkerBridge>();
         build_modelica_core(app);
-        app.init_resource::<worker_bridge::ModelicaWorkerBridge>();
         // Runtime model-input control is a core command, not a UI command.
         // Register it here so headless and workbench hosts expose the same
         // reflected command contract.
@@ -1161,10 +1158,10 @@ fn sync_workspace_on_doc_saved(
     }
 }
 fn build_modelica_core(app: &mut App) {
-    // Ensure source library remote management is present (fetching, settings, status).
-    // The domain is incomplete without source library access.
-    if !app.is_plugin_added::<library_remote::LibraryRemotePlugin>() {
-        app.add_plugins(library_remote::LibraryRemotePlugin);
+    // Ensure source-library admission is present. The compiler host consumes
+    // this generic capability without owning its browser transport details.
+    if !app.is_plugin_added::<lunco_modelica_library::SourceLibraryPlugin>() {
+        app.add_plugins(lunco_modelica_library::SourceLibraryPlugin);
     }
 
     // Register the `.mo` asset loader so domain code can fetch source

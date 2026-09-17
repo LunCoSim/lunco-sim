@@ -16,7 +16,7 @@
 //! ## Design intent
 //!
 //! Generalises the source-bundle load path
-//! ([`crate::library_remote::LibraryRemotePlugin`]) so that every source the
+//! ([`lunco_modelica_library::SourceLibraryPlugin`]) so that every source the
 //! compiler needs goes through one registry with one state machine.
 //! Adding a fourth system library, a new bundled example, or a
 //! workspace folder becomes a data change, not new plumbing.

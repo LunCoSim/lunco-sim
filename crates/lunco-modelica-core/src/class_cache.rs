@@ -196,12 +196,13 @@ pub fn peek_or_load_class_blocking(
     // one target AST here leaves sibling types (for example
     // `Continuous.Filter` and `Sources.Step`) absent from the session, which
     // makes diagram projection report permanent Loading placeholders.
-    let library_bundle = crate::library_remote::parsed_source_bundle().and_then(|bundle| {
-        bundle
-            .iter()
-            .any(|(candidate, _)| candidate == &uri)
-            .then_some(bundle)
-    });
+    let library_bundle =
+        lunco_modelica_library::source_library::parsed_source_bundle().and_then(|bundle| {
+            bundle
+                .iter()
+                .any(|(candidate, _)| candidate == &uri)
+                .then_some(bundle)
+        });
     if let Some(bundle) = library_bundle {
         let mut engine = handle.lock();
         if !engine.source_set_installed("source-bundle") {

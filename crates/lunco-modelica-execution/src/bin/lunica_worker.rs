@@ -32,7 +32,7 @@
 //! ~19 MB zstd blob, decompressed + bincode-decoded here, off the main thread).
 //! The worker installs it and answers `WireResult::LibraryReady`; with
 //! `provide_to_main` it also hands the decoded bytes back to the page
-//! (`library_remote::ingest_worker_decoded_library`) for bounded main-thread
+//! (`source_library::ingest_worker_decoded_library`) for bounded main-thread
 //! deserialization.
 
 // Wasm32-only binary; the desktop stub below keeps `cargo build` for the
@@ -76,13 +76,13 @@ mod wasm {
         }
     }
 
-    use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
     use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
     use lunco_modelica_execution::worker::{
-        ModelicaWorkerState, panic_result_for_command, process_worker_command,
+        panic_result_for_command, process_worker_command, ModelicaWorkerState,
     };
 
     thread_local! {
@@ -125,7 +125,7 @@ mod wasm {
     /// Ship the decompressed source library bincode bytes to the main thread as a *transferred*
     /// `ArrayBuffer` (zero-copy move, not a structured-clone copy). Posted as a bare
     /// `ArrayBuffer` — the only non-`Uint8Array` message in the protocol — which the
-    /// main `onmessage` handler routes to `library_remote::ingest_worker_decoded_library`.
+    /// main `onmessage` handler routes to `source_library::ingest_worker_decoded_library`.
     /// Sending the raw bytes (rather than a bincode `WireResult`) avoids re-encoding
     /// ~165 MB and lets the transfer be zero-copy.
     fn post_decoded_library_transfer(scope: &DedicatedWorkerGlobalScope, bytes: Vec<u8>) {
@@ -544,14 +544,14 @@ mod wasm {
                     // heap. Non-primary pool workers skip that transfer — the main
                     // thread needs exactly one copy and would dedupe the rest.
                     let started = web_time::Instant::now();
-                    match lunco_modelica_core::library_remote::decompress_parsed_bundle(&bytes) {
+                    match lunco_modelica_library::source_library::decompress_parsed_bundle(&bytes) {
                         Ok(decoded) => {
-                            match lunco_modelica_core::library_remote::deserialize_parsed_bundle(
+                            match lunco_modelica_library::source_library::deserialize_parsed_bundle(
                                 &decoded,
                             ) {
                                 Ok(parsed) => {
                                     let count = parsed.len();
-                                    lunco_modelica_core::library_remote::install_global_parsed_source_bundle_pub(
+                                    lunco_modelica_library::source_library::install_global_parsed_source_bundle_pub(
                                         parsed,
                                     );
                                     // Ship the decoded bytes to main (transferred
@@ -601,7 +601,7 @@ mod wasm {
                     }
                 }
                 WireMessage::InstallLibraryIndexFromSource { bytes } => {
-                    match lunco_modelica_core::library_remote::load_library_index_from_source_bundle(
+                    match lunco_modelica_library::source_library::load_library_index_from_source_bundle(
                         &bytes,
                     ) {
                         Ok(index) => post_library_index_chunks(&scope_for_cb, index),
@@ -615,7 +615,7 @@ mod wasm {
                         &scope_for_cb,
                         format!(
                             "pong: {tag} (library={})",
-                            lunco_modelica_core::library_remote::global_parsed_source_bundle()
+                            lunco_modelica_library::source_library::global_parsed_source_bundle()
                                 .map(|m| m.len())
                                 .unwrap_or(0)
                         ),

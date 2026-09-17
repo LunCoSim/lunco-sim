@@ -23,7 +23,7 @@ pub(crate) fn library_tree_id(qualified: &str) -> String {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn scan_library_inmem(package_path: &str) -> Vec<PackageNode> {
-    if crate::library_remote::global_parsed_source_bundle().is_none() {
+    if lunco_modelica_library::source_library::global_parsed_source_bundle().is_none() {
         return Vec::new();
     }
     let tree = library_inmem_index();
@@ -70,7 +70,7 @@ pub(crate) fn library_inmem_top_level_libs() -> Vec<String> {
     // Don't touch the `library_inmem_index()` OnceLock before the parsed bundle is
     // resident — it would cache an empty tree permanently (same guard as
     // `scan_library_inmem`).
-    if crate::library_remote::global_parsed_source_bundle().is_none() {
+    if lunco_modelica_library::source_library::global_parsed_source_bundle().is_none() {
         return Vec::new();
     }
     let tree = library_inmem_index();
@@ -100,7 +100,7 @@ fn build_library_inmem_index(
     use std::collections::HashMap;
     let mut tree: HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>> =
         HashMap::new();
-    let Some(parsed) = crate::library_remote::global_parsed_source_bundle() else {
+    let Some(parsed) = lunco_modelica_library::source_library::global_parsed_source_bundle() else {
         return tree;
     };
 

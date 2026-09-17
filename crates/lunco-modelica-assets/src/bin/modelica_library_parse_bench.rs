@@ -63,7 +63,7 @@ mod native {
             "bundle" => {
                 // Time loading the cached parsed-library.bin (the warm fast path):
                 // zstd + bincode decode of the prebuilt bundle, no parsing.
-                match lunco_modelica_core::library_remote::parsed_source_bundle() {
+                match lunco_modelica_library::source_library::parsed_source_bundle() {
                     Some(b) => println!(
                         "bundle-decode: {} docs in {:.2}s",
                         b.len(),

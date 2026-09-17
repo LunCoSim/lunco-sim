@@ -27,8 +27,9 @@ tracy = ["bevy/trace_tracy"]
 [dependencies]
 bevy.workspace = true
 # The solver worker and Fast Run stack live in `lunco-modelica-execution`.
-# This package keeps only the compiler/document runtime and its generic bridge,
-# so compiler-only consumers do not inherit the solver dependency closure.
+# Source-library artifacts and the optional worker callback seam live in
+# `lunco-modelica-library`, so compiler-only consumers do not inherit their
+# browser transport implementation.
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
@@ -37,7 +38,6 @@ lunco-doc = { path = "../lunco-doc" }
 # Core document-lifecycle events; its egui systems come back via `ui` below.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
-lunco-settings = { path = "../lunco-settings" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 # base64url encode/decode for shareable model links (see `model_share.rs`).
@@ -48,23 +48,14 @@ base64 = { workspace = true }
 # Required because `std::time::Instant::now()` panics with
 # "time not implemented on this platform" on wasm32-unknown-unknown.
 web-time = { workspace = true }
-# Pre-parsed source bundle deserialiser. Same encoding as rumoca's
-# on-disk artifact cache — the wasm fetcher decodes a Vec of
-# (uri, StoredDefinition) shipped at build time, skipping a ~27-min
-# per-file parse on the page.
-bincode = { workspace = true }
-# Pure-Rust decoder for the native and web parsed-source bundles. The host
-# asset/indexer boundary owns the zstd encoder; runtime consumers only decode.
-ruzstd = "0.7"
-# Raster decoders used by egui_extras' `all_loaders`. Only the formats
-# actually present in source-library Resources/Images are enabled to keep the
-# compile surface small.
+# The source-library package owns bundle decoding and browser fetch state.
 lunco-experiments = { path = "../lunco-experiments" }
 # FACTS for the `modelica` lint domain (`../lunco-modelica-ast/src/lint_facts.rs`) are `HookValue`, the same
 # typed shape every other domain hands its authored rules.
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
+lunco-modelica-library = { path = "../lunco-modelica-library" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 rumoca-compile = { workspace = true }
 serde = { workspace = true }
@@ -115,54 +106,15 @@ log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"
 # Web-specific: wasm32-unknown-unknown needs JS interop for console output,
 # panic hooks, and RNG (std::time is unavailable).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
 # bevy_math → rand pulls getrandom 0.3, which on wasm needs an explicit backend.
 # The compiler/document runtime still links Bevy on wasm, so the browser-crypto
 # (`wasm_js`) feature must be enabled here; build_web.sh sets the matching
 # `--cfg getrandom_backend="wasm_js"` (cfg + feature are both required).
 getrandom = { version = "0.3", features = ["wasm_js"] }
-# `Response`, `Request`, `RequestInit`, `Headers` for the source fetcher
-# (see `src/library_remote.rs`); the rest predate this work.
-web-sys = { workspace = true, features = [
-    "console",
-    "Document",
-    "Element",
-    "HtmlElement",
-    "HtmlInputElement",
-    "CssStyleDeclaration",
-    "Window",
-    "Cache",
-    "CacheStorage",
-    "File",
-    "FileList",
-    "FileReader",
-    "Blob",
-    "Request",
-    "RequestInit",
-    "RequestMode",
-    "Response",
-    "Headers",
-    "Storage",
-    # `?example=…` URL parameter parsing in lunica.rs.
-    "Location",
-    "UrlSearchParams",
-    # Clipboard wiring for the wasm code editor.
-    # `Navigator` + `Clipboard` for the menu's async paste fallback;
-    # `ClipboardEvent` + `DataTransfer` for the synchronous paste-event
-    # interception (Ctrl/Cmd+V); `KeyboardEvent` +
-    # `AddEventListenerOptions` for the capture-phase keydown
-    # interception that lets the browser fire the native paste event
-    # at all.  See `ui/wasm_clipboard.rs`.
-    "Navigator",
-    "Clipboard",
-    "ClipboardEvent",
-    "DataTransfer",
-    "KeyboardEvent",
-    "AddEventListenerOptions",
-] }
-js-sys = { workspace = true }
-console_error_panic_hook = { workspace = true }
+# `Location` and `UrlSearchParams` support share-link boot routing in
+# `src/model_share.rs`; source-library fetch features live in
+# `lunco-modelica-library`.
+web-sys = { workspace = true, features = ["Window", "Location"] }
 [package.metadata.cargo-machete]
 # Feature-only browser RNG backend for transitive Bevy/Rumoca dependencies.
 ignored = ["getrandom"]

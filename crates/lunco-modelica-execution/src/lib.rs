@@ -2,14 +2,14 @@
 //!
 //! This package owns the expensive, change-prone part of Modelica integration:
 //! solver sessions, worker scheduling, Fast Runs, and the browser worker wire.
-//! [`lunco_modelica_core`] remains the reusable compiler/document package and
-//! exposes only the typed bridge needed by the wasm parser and source-library
-//! handoff.
+//! [`lunco_modelica_core`] remains the reusable compiler/document package.
+//! The shared parser/source-library callback seam is owned by
+//! [`lunco_modelica_library`].
 
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 #[cfg(target_arch = "wasm32")]
-use lunco_modelica_core::worker_bridge::ModelicaWorkerBridge;
+use lunco_modelica_library::worker_bridge::ModelicaWorkerBridge;
 use lunco_modelica_runtime::{
     CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet, SimSampleStream,
 };
