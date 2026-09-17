@@ -15,7 +15,9 @@ members = [
     "crates/lunco-input-ui",
     "crates/lunco-avatar",
     "crates/lunco-avatar-core",
+    "crates/lunco-avatar-input",
     "crates/lunco-avatar-camera-core",
+    "crates/lunco-avatar-camera",
     "crates/lunco-avatar-policy",
     "crates/lunco-camera-core",
     "crates/lunco-camera-celestial",
@@ -29,6 +31,8 @@ members = [
     "crates/lunco-luncosim-exposures",
     "crates/lunco-usd-ui",
     "crates/lunco-usd-viewport-ui",
+    "crates/lunco-usd-viewport-core",
+    "crates/lunco-viewport-core",
     "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",
@@ -51,6 +55,7 @@ members = [
     "crates/lunco-sysml",
     "crates/lunco-sysml-rhai",
     "crates/lunco-usd-avian",
+    "crates/lunco-usd-avian-joints",
     "crates/lunco-usd-avian-contracts",
     "crates/lunco-usd-avian-reader",
     "crates/lunco-usd-avian-core",
@@ -75,6 +80,7 @@ members = [
     "crates/lunco-usd-authoring",
     "crates/lunco-usd-geometry",
     "crates/lunco-usd-sim",
+    "crates/lunco-usd-sim-authoring",
     "crates/lunco-usd-sim-core",
     "crates/lunco-usd-sim-cosim",
     "crates/lunco-usd-sim-domain",
@@ -485,6 +491,7 @@ multihash-codetable = { version = "0.2", default-features = false, features = ["
 # "0.19" resolving ahead of bevy "0.19.1") risks subtle ABI/derive
 # breakage. Keep every entry == the `bevy` pin.
 bevy_reflect = "0.19.1"
+bevy_math = "0.19.1"
 bevy_mesh = "0.19.1"
 bevy_shader = "0.19.1"
 bevy_asset = "0.19.1"

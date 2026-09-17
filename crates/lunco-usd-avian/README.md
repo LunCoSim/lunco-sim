@@ -22,18 +22,20 @@ The main Bevy plugin that sets up the physics mapping logic. It registers necess
 When an entity is tagged with a `UsdPrimPath`, the crate looks up the Prim and maps:
 *   **RigidBody** — an applied `PhysicsRigidBodyAPI` is the only thing that makes a prim a body; its own `physics:rigidBodyEnabled` (default true) says whether that body is simulated → `RigidBody`, with **mass-properties** `physics:mass` / `physics:diagonalInertia` / `physics:centerOfMass` → the Avian override components (`Mass`/`AngularInertia`/`CenterOfMass`, shared with the runtime mass-props ports).
 *   **Colliders** — every `UsdGeom` shape: `Cube`→cuboid, `Sphere`, `Cylinder`, `Cone`, `Capsule`, `Mesh`→trimesh (DEM grids→heightfield), `Plane`→thin cuboid. Compound bodies via child `PhysicsCollisionAPI`.
-*   **Joints** — see below. Built by a deferred system (matches `physics:body0/1` paths → entities, gated on Avian island-admission) so it survives async USD loads.
+*   **Joints** — see below. The deferred USD projector matches `physics:body0/1` paths to entities, then passes normalized facts to `lunco-usd-avian-joints`, which owns native admission so it survives async USD loads.
 
-### 3. Joints (the single home for Avian joint construction)
+### 3. Joints
 Standard `UsdPhysics` joint prims → Avian joints — `RevoluteJoint`, `PrismaticJoint`,
 `FixedJoint`, `SphericalJoint` (cone/twist limits), `DistanceJoint` (min/max). A
 generic `PhysicsD6Joint` is **reduced** to the primitive matching its free DOFs
 (per-DOF `PhysicsLimitAPI`). `UsdPhysicsDriveAPI` (`drive:{angular,linear}:physics:
 {targetPosition,targetVelocity,maxForce}`) configures the joint motor at load.
-`wheel_revolute_joint` is the one programmatic joint (the physical-wheel hinge),
-exposed here so *all* joint-building lives in this crate. Scalar physics attrs are
-read **f32-first** (`read_scalar_attribute`) — Omniverse authors `float`, and a
-`::<f64>`-only read silently drops them. Full schema map: [`docs/architecture/21-domain-usd.md`](../../docs/architecture/21-domain-usd.md#physics-joints).
+The USD projector owns schema interpretation; `lunco-usd-avian-joints` owns the
+native constructors, collision suppression, seating, solver-island admission,
+and detach ordering. Its `wheel_revolute_joint` path is shared by synthesized
+vehicle hinges. Scalar physics attrs are read **f32-first** (`read_scalar_attribute`)
+— Omniverse authors `float`, and a `::<f64>`-only read silently drops them. Full
+schema map: [`docs/architecture/21-domain-usd.md`](../../docs/architecture/21-domain-usd.md#physics-joints).
 
 ### 4. Components
 *   **`UsdPrimPath`**: links a Bevy entity to a Prim in a USD stage.

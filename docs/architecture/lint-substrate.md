@@ -126,7 +126,7 @@ those properties from the attached collider tree and density. The latter is
 reported as `realization = derived` in facts and is still the implicit
 `SpringDamper` runtime path. A positive pure ForceBased damper remains the exact
 USD force law because Avian has no implicit damping-only motor model. `gear_drives` is semantic output from the
-`lunco-usd-sim` reader for `PhysxPhysicsGearJoint`; its force and acceleration
+`lunco-usd-sim-authoring` reader for `PhysxPhysicsGearJoint`; its force and acceleration
 realizations are implicit per substep, so positive coefficients have no guessed
 asset-specific stiffness cap. Invalid values are retained and rejected by
 policy before a run.

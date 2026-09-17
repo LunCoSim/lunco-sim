@@ -13,7 +13,8 @@ use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_commands::UsdCommandsPlugin;
 use lunco_usd_core::commands::ApplyUsdOp;
 use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
-use lunco_usd_viewport_ui::{OpenUsdPreview, UsdPreviewId, UsdViewportPlugin, UsdViewportState};
+use lunco_usd_viewport_core::{OpenUsdPreview, UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_ui::UsdViewportPlugin;
 
 mod support;
 

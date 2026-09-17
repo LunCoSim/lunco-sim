@@ -1762,6 +1762,7 @@ impl Plugin for LunCoSimCorePlugin {
             })
             .add_plugins(lunco_celestial_spatial::CelestialPlugin)
             .add_plugins(lunco_camera_celestial::CelestialSurfaceCameraPlugin)
+            .add_plugins(lunco_avatar_camera::AvatarCelestialCameraPlugin)
             // Real VSOP2013/ELP body positions on ALL platforms (wasm too) —
             // this is the explicit provider required by orbital scenes.
             .add_plugins(lunco_celestial_ephemeris::EphemerisPlugin)
@@ -1977,7 +1978,7 @@ impl Plugin for LunCoSimCorePlugin {
         // deterministic physics, and the crate links no render code.
         app.add_plugins(lunco_usd_terrain::UsdTerrainPlugin);
         // The activation gate stays here — it is the assembly point that sees both the
-        // terrain request and `lunco-usd-sim`'s `GroundColliderPending`.
+        // terrain request and the USD simulation readiness contract.
         app.add_systems(
             Update,
             track_ground_collider_pending.after(lunco_usd_terrain::UsdTerrainSet::Bridge),
@@ -2019,7 +2020,7 @@ fn track_ground_collider_pending(
             With<lunco_usd_terrain::DemDatasetPending>,
         )>,
     >,
-    mut pending: ResMut<lunco_usd_sim::GroundColliderPending>,
+    mut pending: ResMut<lunco_usd_sim_core::GroundColliderPending>,
 ) {
     pending.0 = !building.is_empty();
 }
@@ -2032,7 +2033,7 @@ mod ground_collider_gate_tests {
     fn only_an_active_dem_request_holds_dynamic_activation() {
         let mut app = App::new();
         app.insert_resource(Time::<()>::default())
-            .init_resource::<lunco_usd_sim::GroundColliderPending>()
+            .init_resource::<lunco_usd_sim_core::GroundColliderPending>()
             .add_systems(Update, track_ground_collider_pending);
 
         // A loaded USD stage contains many prims that are not terrain. They do
@@ -2045,7 +2046,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             !app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
 
@@ -2063,7 +2064,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
 
@@ -2073,7 +2074,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             !app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
     }
@@ -2081,7 +2082,7 @@ mod ground_collider_gate_tests {
     #[test]
     fn an_uninstalled_twin_dem_keeps_dynamic_activation_held() {
         let mut app = App::new();
-        app.init_resource::<lunco_usd_sim::GroundColliderPending>()
+        app.init_resource::<lunco_usd_sim_core::GroundColliderPending>()
             .add_systems(Update, track_ground_collider_pending);
 
         let pending = app
@@ -2093,7 +2094,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
 
@@ -2101,7 +2102,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             !app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
     }

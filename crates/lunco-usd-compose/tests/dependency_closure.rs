@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use lunco_assets_core::{
     asset_path::normalize, transitive_file_closure, transitive_file_closure_with,
 };
-use lunco_usd_compose::{is_usd_layer, layer_dependency_arcs};
+use lunco_usd_compose::{compose_file_to_stage_with_roots, is_usd_layer, layer_dependency_arcs};
 
 #[test]
 fn follows_composition_and_asset_attribute_dependencies() {
@@ -49,4 +49,34 @@ fn delegates_schemed_reference_resolution_to_the_asset_caller() {
         layer_dependency_arcs,
     );
     assert!(closure.contains(&normalize(&rover)), "{closure:?}");
+}
+
+#[test]
+fn composes_available_siblings_when_one_layer_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let scene = dir.path().join("scene.usda");
+    let available = dir.path().join("available.usda");
+    lunco_storage::write_file_sync(
+        &scene,
+        br#"#usda 1.0
+(
+    subLayers = [
+        @missing.usda@,
+        @available.usda@
+    ]
+)
+def Xform "Root" {}
+"#,
+    )
+    .unwrap();
+    lunco_storage::write_file_sync(
+        &available,
+        br#"#usda 1.0
+def Xform "Available" {}
+"#,
+    )
+    .unwrap();
+
+    compose_file_to_stage_with_roots(&scene, None, None)
+        .expect("a missing sibling layer must not discard available USD content");
 }

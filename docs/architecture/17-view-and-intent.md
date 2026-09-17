@@ -8,13 +8,17 @@
 
 **Status: implemented in layers.** The `ViewPoint` / `CameraDevice` names
 described in §1–§5 remain an aspirational ontology and are not required
-components. The reusable implementation is split across four owners:
+components. The reusable implementation is split across focused owners:
 `lunco-usd-bevy-camera` decodes standard USD cameras and camera roles,
 `lunco-camera-core` carries reusable render-free rig contracts,
 `lunco-camera-runtime` realizes generic interactive camera modes,
 `lunco-avatar-core` carries avatar lifecycle/command contracts, `lunco-scene-camera`
-exposes script/API camera transactions, and `lunco-avatar` is the specialized
-owner of raw input translation, possession, and BigSpace-specific pose solvers.
+exposes script/API camera transactions, `lunco-avatar-input` is the specialized
+owner of raw input translation, `lunco-avatar` owns possession and transition
+commands, and `lunco-avatar-camera` owns celestial BigSpace orbital placement,
+vessel spring-arm realization, and collision-aware local locomotion. Avatar
+transition state is in
+`lunco-avatar-camera-core`.
 Generic input response and clip precision policy live in
 `lunco-camera-runtime`/`lunco-camera-core`; Rhai selects and tunes presentation
 policy through the reflected command surface.
@@ -44,8 +48,11 @@ LunCoSim decouples human interaction from physical execution using five distinct
 > Today the concrete rig components (`SpringArmCamera`, `OrbitCamera`,
 > `FreeFlightCamera`, `SurfaceCamera`) are backend-neutral contracts in
 > `lunco-camera-core`; `lunco-camera-runtime` supplies the generic free-flight,
-> surface, input-policy, and clip-plane mechanisms, while `lunco-avatar` supplies source-specific
-> possession, orbit, spring-arm, and BigSpace solvers. Standard
+> surface, input-policy, and clip-plane mechanisms, while `lunco-avatar-input`
+> supplies semantic input projection, `lunco-avatar` supplies possession and
+> transition logic, `lunco-avatar-camera` supplies celestial orbital placement,
+> vessel follow, and collision-aware local locomotion, and
+> `lunco-camera-celestial` supplies surface-frame adaptation. Standard
 > USD projection, mounted cameras, camera paths, and selection live in
 > `lunco-usd-bevy-camera`. `lunco-render-bevy` binds render intent to a
 > `Camera3d`, while `lunco-render` remains render-pipeline-free.
@@ -64,8 +71,10 @@ Representing a sensing hardware unit.
 ### **Renderer / Blender (Visual)** — *today: `lunco-camera-runtime` + `lunco-avatar` + `lunco-avatar-ui`*
 The rendering bridge.
 - **Crates**: `lunco-camera-runtime` (generic camera-mode realization),
-  `lunco-avatar` (`LunCoAvatarPlugin`, avatar input and source-specific camera
-  solvers), the optional `lunco-avatar-ui` egui adapter, and the focused
+  `lunco-avatar-input` (avatar input projection), `lunco-avatar`
+  (`LunCoAvatarPlugin`, possession and transition logic),
+  `lunco-avatar-camera` (celestial/vessel placement and local locomotion), the optional
+  `lunco-avatar-ui` egui adapter, and the focused
   `lunco-avatar-core`/`lunco-avatar-policy` contracts. Sun/shadow in
   `lunco-render`.
 - **Purpose**: Drives a Bevy `Camera3d`; the persistent `OriginAnchor` tracks
@@ -112,14 +121,15 @@ over automated camera ownership:
 ## 5. Headless Compatibility
 The simulation core (`lunco-celestial`, `lunco-core`) exposes scene facts,
 spatial poses, and typed semantic/control values. Camera solvers and device
-translation are supplied by the specialized avatar runtime, while Bevy's
+translation are supplied by focused camera/input adapters, while Bevy's
 rendering pipeline is attached by the render adapter.
 - **Bots and Modelica** can produce continuous pose/aim/math values through
   authored ports or state, while a camera adapter consumes those values.
 - **Server** instances run the full spatial logic without a GPU.
-- **Clients** add **`CameraRuntimePlugin`** (`lunco-camera-runtime`) and
+- **Clients** add **`CameraRuntimePlugin`** (`lunco-camera-runtime`),
+  **`AvatarCelestialCameraPlugin`** (`lunco-avatar-camera`), and
   **`LunCoAvatarPlugin`** (`lunco-avatar`) for the local avatar's input,
-  possession, and source-specific solvers. Add **`AvatarUiPlugin`**
+  possession, and camera transitions. Add **`AvatarUiPlugin`**
   (`lunco-avatar-ui`) when egui presentation is needed; post-processing /
   lighting come from `lunco-render`.
 
@@ -230,25 +240,30 @@ The *behavior contracts* of the free/possession cameras — `SpringArmCamera`,
 `OrbitCamera`, `FreeFlightCamera`, `SurfaceCamera` — live in
 `lunco-camera-core`. Generic mode exclusivity, free-flight orientation, and
 surface-frame pose writing, validated input response, and clip precision live in
-`lunco-camera-runtime`/`lunco-camera-core`; avatar-owned
-BigSpace solvers and transitions stay in `lunco-avatar`; the avatar-only orbit
-return snapshot is in `lunco-avatar-camera-core`. Avatar lifecycle and
+`lunco-camera-runtime`/`lunco-camera-core`; semantic input projection is in
+`lunco-avatar-input`, avatar-owned possession and transitions stay in
+`lunco-avatar`, while celestial BigSpace orbital placement, vessel spring-arm
+realization, and collision-aware local locomotion are in `lunco-avatar-camera`;
+avatar-only orbit return
+state is in `lunco-avatar-camera-core`. Avatar lifecycle and
 possession commands remain in
 `lunco-avatar-core`. The viewport reconciler decides *which* camera is shown; a rig
 decides *how* its pose is solved. They compose: possession changes the avatar
 camera's rig without changing which camera the viewport shows.
 
-The celestial surface adapter is `lunco-camera-celestial`. It resolves the
+The celestial camera adapter is `lunco-camera-celestial`. It resolves the
 camera's body-fixed ENU frame from its own live BigSpace pose and
 `GravityBody` binding, then publishes the backend-neutral `SurfaceCameraFrame`.
 It also owns the celestial-body query used for adaptive perspective clip
-planes; the avatar runtime does not write projection precision.
+planes. `lunco-avatar-camera` places avatar orbital cameras in explicit
+body-centered inertial grids; the avatar runtime does not write
+celestial projection precision or orbital placement.
 The generic runtime consumes that contract without importing celestial or
 BigSpace types, and avatar interaction does not own this conversion.
 
-`lunco-avatar` is the default raw-input owner. It is the only layer that turns
-the configured keyboard/gamepad/mouse surface into `UserIntent` for the local
-avatar. `lunco-usd-sim`, USD composition, celestial, physics, and generic
+`lunco-avatar-input` is the default raw-input owner. It is the only layer that
+turns the configured keyboard/gamepad/mouse surface into `UserIntent` for the
+local avatar. `lunco-usd-sim`, USD composition, celestial, physics, and generic
 camera projection must not import an input-map or controller crate. An editor
 or networking adapter may read device state only when it is itself the
 specialized owner of that interaction, and it must publish the same typed

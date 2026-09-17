@@ -1,12 +1,13 @@
 //! Avatar-specific camera transition contracts.
 //!
 //! Generic camera modes and pose math live in [`lunco_camera_core`]. This
-//! package owns only the state needed to leave an avatar's interactive orbit
-//! and restore its previous BigSpace branch and behavior.
+//! package owns the state needed to leave an avatar's interactive orbit, retain
+//! its transient presentation history, and restore its previous BigSpace branch
+//! and behavior.
 
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
-use lunco_camera_core::{FreeFlightCamera, SpringArmCamera, SurfaceCamera};
+use lunco_camera_core::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 use lunco_environment::GravityBody;
 
 /// Camera behavior captured before entering an orbital view.
@@ -89,3 +90,100 @@ pub struct CurrentRegionArrival;
 /// Marks an orbit camera whose arm is derived from its current position.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct RadialArrival;
+
+/// Marks an orbital camera whose pose changed through local user input.
+///
+/// The avatar transition owner consumes this marker when orbit mode ends so a
+/// settled presentation pose can be retained without making the celestial
+/// spatial writer depend on the avatar runtime.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct OrbitUserInput;
+
+/// Shared exponential wheel sensitivity for avatar surface and orbital views.
+pub const CAMERA_ZOOM_SENSITIVITY: f32 = 5.0;
+
+/// Surface altitude at which the avatar's continuous wheel gesture enters or
+/// leaves the celestial orbital view.
+pub const SURFACE_ORBIT_HANDOFF_ALTITUDE_M: f64 = 50_000.0;
+
+/// One settled user-controlled pose for a celestial body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OrbitPose {
+    yaw: f32,
+    pitch: f32,
+    distance: f64,
+    damping: Option<f32>,
+    vertical_offset: f32,
+}
+
+impl OrbitPose {
+    /// Capture a finite, usable pose from an orbital camera.
+    pub fn from_camera(camera: &OrbitCamera) -> Option<Self> {
+        let pose = Self {
+            yaw: camera.yaw,
+            pitch: camera.pitch,
+            distance: camera.distance,
+            damping: camera.damping,
+            vertical_offset: camera.vertical_offset,
+        };
+        (pose.yaw.is_finite()
+            && pose.pitch.is_finite()
+            && pose.distance.is_finite()
+            && pose.distance > 0.0
+            && pose.vertical_offset.is_finite()
+            && pose.damping.is_none_or(f32::is_finite))
+        .then_some(pose)
+    }
+
+    /// Stored yaw in radians.
+    pub fn yaw(&self) -> f32 {
+        self.yaw
+    }
+
+    /// Stored pitch in radians.
+    pub fn pitch(&self) -> f32 {
+        self.pitch
+    }
+
+    /// Stored radial distance in metres.
+    pub fn distance(&self) -> f64 {
+        self.distance
+    }
+
+    /// Stored optional camera damping.
+    pub fn damping(&self) -> Option<f32> {
+        self.damping
+    }
+
+    /// Stored vertical offset in metres.
+    pub fn vertical_offset(&self) -> f32 {
+        self.vertical_offset
+    }
+}
+
+/// Per-avatar orbital presentation history, keyed by stable body identity.
+///
+/// This state is local to the avatar: orbital poses are user presentation
+/// state, not a scene-wide celestial fact.
+#[derive(Component, Clone, Debug, Default)]
+pub struct OrbitViewHistory {
+    poses: Vec<(i32, OrbitPose)>,
+}
+
+impl OrbitViewHistory {
+    /// Return the last settled pose remembered for `body`.
+    pub fn pose(&self, body: i32) -> Option<OrbitPose> {
+        self.poses
+            .iter()
+            .find_map(|(id, pose)| (*id == body).then_some(*pose))
+    }
+
+    /// Remember a settled pose for `body`.
+    pub fn remember(&mut self, body: i32, pose: OrbitPose) {
+        if let Some((_, stored)) = self.poses.iter_mut().find(|(id, _)| *id == body) {
+            *stored = pose;
+        } else {
+            self.poses.push((body, pose));
+        }
+    }
+}

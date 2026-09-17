@@ -65,21 +65,32 @@ use lunco_api::executor::{finish_command_result, PendingApiRequest};
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_assets_core::twin_source::TwinRoots;
-use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, Command, OpId};
+use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, OpId};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed};
 use lunco_render::{
     scene_camera_look_with_profile, GraphicsCameraDefaults, LightGraphicsDefaults,
     RenderQualityProfile, RenderingQualitySettings,
 };
-use lunco_settings::{AppSettingsExt, SettingsSection};
+use lunco_settings::AppSettingsExt;
 use lunco_usd_bevy_core::{is_descendant_or_self, UsdStageAsset};
 use lunco_usd_bevy_scene::{
-    UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
-    UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision,
+    is_preview_entity, UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending,
+    UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision,
 };
+use lunco_usd_viewport_core::{
+    ApplyUsdInspectionPreset, CloseUsdPreview, CloseUsdPreviewView, DeleteUsdInspectionPreset,
+    ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView, FrameUsdPreviewSelection,
+    FrameUsdPreviewView, OpenUsdPreview, OpenUsdPreviewView, OrbitCamera, PanUsdPreviewView,
+    ResetUsdPreviewView, SaveUsdInspectionPreset, SetUsdPreviewProjection, SetUsdPreviewTextLayer,
+    SetUsdPreviewViewMode, UsdInspectionPreset, UsdInspectionSettings, UsdPreviewExplodeAction,
+    UsdPreviewExplodeState, UsdPreviewExplodedPart, UsdPreviewId, UsdPreviewProjection,
+    UsdPreviewSession, UsdPreviewTextLayer, UsdPreviewView, UsdPreviewViewId, UsdPreviewViewMode,
+    UsdViewportState, ZoomUsdPreviewView,
+};
+use lunco_viewport_core::PanelRect;
 use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
-use lunco_workbench_core::viewport::{PanelRect, PanelRects};
+use lunco_workbench_core::viewport::PanelRects;
 use lunco_workbench_core::{
     commands::{CloseTab, OpenTab},
     source::OpenTwinSource,
@@ -89,7 +100,6 @@ use lunco_workbench_core::{
 };
 use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
 use openusd::sdf::Path as SdfPath;
-use serde::{Deserialize, Serialize};
 
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_document::document::{LayerId, UsdDocument};
@@ -207,6 +217,34 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
     }
 }
 
+/// Read-only query for the persisted USD inspection preset names.
+pub struct InspectUsdInspectionPresetsProvider;
+
+impl ApiQueryProvider for InspectUsdInspectionPresetsProvider {
+    fn name(&self) -> &'static str {
+        "InspectUsdInspectionPresets"
+    }
+
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+        let presets = world
+            .get_resource::<UsdInspectionSettings>()
+            .map(|settings| {
+                settings
+                    .presets
+                    .iter()
+                    .map(|preset| {
+                        serde_json::json!({
+                            "name": preset.name,
+                            "projection": preset.projection.as_str(),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        ApiResponse::ok(serde_json::json!({ "presets": presets }))
+    }
+}
+
 /// Initial placeholder dimensions for the offscreen render target.
 /// Tiny on purpose: `resize_viewport_image` resizes the asset to the
 /// actual panel rect on the first frame after the panel has been
@@ -252,6 +290,50 @@ struct UsdPreviewFrameVisibility {
     pixels: u64,
 }
 
+/// Render-only resources for one preview view. The session and presentation
+/// state live in `lunco-usd-viewport-core`; this map keeps GPU/egui handles at
+/// the render boundary so editor consumers do not depend on them.
+struct UsdPreviewRenderTarget {
+    image: Handle<Image>,
+    tex_id: Option<egui::TextureId>,
+}
+
+#[derive(Resource, Default)]
+struct UsdPreviewRenderTargets {
+    views: HashMap<UsdPreviewViewId, UsdPreviewRenderTarget>,
+}
+
+impl UsdPreviewRenderTargets {
+    fn insert(&mut self, view: UsdPreviewViewId, target: UsdPreviewRenderTarget) {
+        self.views.insert(view, target);
+    }
+
+    fn remove(&mut self, view: UsdPreviewViewId) -> Option<UsdPreviewRenderTarget> {
+        self.views.remove(&view)
+    }
+
+    fn get(&self, view: UsdPreviewViewId) -> Option<&UsdPreviewRenderTarget> {
+        self.views.get(&view)
+    }
+}
+
+#[derive(Resource, Default)]
+struct PendingUsdPreviewTextReads {
+    next_request: u64,
+    tasks: Vec<PendingUsdPreviewTextRead>,
+}
+
+struct PendingUsdPreviewTextRead {
+    preview: UsdPreviewId,
+    doc: DocumentId,
+    generation: u64,
+    request: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    task: Task<Result<(String, String), String>>,
+    #[cfg(target_arch = "wasm32")]
+    result: crossbeam_channel::Receiver<Result<(String, String), String>>,
+}
+
 /// `RenderLayers` channel used to isolate USD preview rendering from
 /// the main simulation world. Every entity in the preview scene
 /// (camera, light, scene_root, and propagated descendants) lives on
@@ -260,13 +342,8 @@ struct UsdPreviewFrameVisibility {
 /// the preview camera never sees the live scene. Layer 0 is Bevy's
 /// default; using layer 1 here keeps us clear of any third-party
 /// systems that might assume layer 0.
+#[cfg(test)]
 const FIRST_PREVIEW_RENDER_LAYER: usize = 1;
-const LAST_PREVIEW_RENDER_LAYER: usize = 31;
-
-/// Stable preview identity used by the desktop Assembly editor. Agents and
-/// additional editor surfaces use their own explicit ids, so opening another
-/// document never retargets this session or any other session.
-pub const EDITOR_PREVIEW_ID: UsdPreviewId = UsdPreviewId(1);
 
 /// Plugin that wires the viewport pipeline. Must be added together
 /// with `DefaultPlugins` (or any plugin set that ships
@@ -286,6 +363,7 @@ impl Plugin for UsdViewportPlugin {
         query_registry.register(InspectUsdViewportProvider);
         query_registry.register(InspectUsdInspectionPresetsProvider);
         app.init_resource::<PendingUsdPreviewTextReads>();
+        app.init_resource::<UsdPreviewRenderTargets>();
         app.init_resource::<UsdPreviewRenderBudget>();
         app.init_resource::<UsdPreviewFrameVisibility>();
         app.init_resource::<RenderingQualitySettings>();
@@ -531,747 +609,6 @@ fn on_usd_document_ready(
     });
 }
 
-/// Pointer-driven orbit camera (CAD-style preview). Anchored on a `target`
-/// point in scene space; primary-drag pans, secondary-drag orbits,
-/// middle-drag pans, and scroll zooms. The camera state is presentation state owned by one
-/// [`UsdPreviewView`], never by the projected USD stage.
-#[derive(Debug, Clone)]
-pub struct OrbitCamera {
-    /// Yaw rotation around +Y (radians).
-    pub yaw: f32,
-    /// Pitch rotation up/down (radians); clamped to avoid gimbal flip.
-    pub pitch: f32,
-    /// Distance from target. Scroll wheel scales it geometrically.
-    pub distance: f32,
-    /// Point the camera orbits around.
-    pub target: Vec3,
-    /// Radians per drag-pixel for yaw + pitch.
-    pub drag_sensitivity: f32,
-    /// Fractional distance change per scroll unit (0.001 ≈ 0.1% per px).
-    pub zoom_sensitivity: f32,
-    /// Lower/upper clamps on `distance` so the user can't fly into
-    /// the target or out to infinity.
-    pub min_distance: f32,
-    pub max_distance: f32,
-    /// Lower/upper clamps on orthographic view scale.
-    pub min_orthographic_scale: f32,
-    pub max_orthographic_scale: f32,
-    /// `pitch.abs()` is clamped below this so we never look exactly
-    /// straight up/down (LookAt with Vec3::Y is undefined there).
-    pub pitch_clamp: f32,
-}
-
-impl Default for OrbitCamera {
-    fn default() -> Self {
-        // The default pose frames the origin while leaving the camera
-        // interactive through the orbit controls.
-        Self {
-            yaw: 0.6747,
-            pitch: 0.4435,
-            distance: 7.07,
-            target: Vec3::ZERO,
-            drag_sensitivity: 0.008,
-            zoom_sensitivity: 0.0015,
-            min_distance: 0.5,
-            max_distance: 5_000.0,
-            min_orthographic_scale: 0.01,
-            max_orthographic_scale: 5_000.0,
-            pitch_clamp: std::f32::consts::FRAC_PI_2 - 0.05,
-        }
-    }
-}
-
-impl OrbitCamera {
-    /// Camera world-space position derived from the orbit parameters.
-    pub fn position(&self) -> Vec3 {
-        let cp = self.pitch.cos();
-        let sp = self.pitch.sin();
-        let cy = self.yaw.cos();
-        let sy = self.yaw.sin();
-        self.target + Vec3::new(sy * cp, sp, cy * cp) * self.distance
-    }
-
-    /// Apply a drag delta (pixels) from the egui image response.
-    /// Inverted-Y so dragging down tilts the camera down (Blender
-    /// convention).
-    pub fn apply_drag(&mut self, delta: egui::Vec2) {
-        self.yaw -= delta.x * self.drag_sensitivity;
-        self.pitch = (self.pitch + delta.y * self.drag_sensitivity)
-            .clamp(-self.pitch_clamp, self.pitch_clamp);
-    }
-
-    /// Pan the orbit target in the camera's screen plane.
-    ///
-    /// `delta` and `viewport_size` are egui logical points. The conversion is
-    /// derived from the active presentation projection, so perspective pans
-    /// track the orbit target at any distance and orthographic pans remain
-    /// independent of the orbit distance. A positive screen-Y delta moves the
-    /// target up so the rendered assembly follows the pointer downward.
-    pub fn apply_pan(
-        &mut self,
-        delta: egui::Vec2,
-        viewport_size: Vec2,
-        projection: &Projection,
-        mode: UsdPreviewProjection,
-        orthographic_scale: f32,
-    ) -> bool {
-        let Some(world_delta) =
-            self.pan_delta(delta, viewport_size, projection, mode, orthographic_scale)
-        else {
-            return false;
-        };
-        self.target += world_delta;
-        true
-    }
-
-    fn pan_delta(
-        &self,
-        delta: egui::Vec2,
-        viewport_size: Vec2,
-        projection: &Projection,
-        mode: UsdPreviewProjection,
-        orthographic_scale: f32,
-    ) -> Option<Vec3> {
-        if !delta.is_finite()
-            || !viewport_size.is_finite()
-            || viewport_size.x <= f32::EPSILON
-            || viewport_size.y <= f32::EPSILON
-        {
-            return None;
-        }
-
-        let aspect_ratio = viewport_size.x / viewport_size.y;
-        let vertical_extent = match (mode, projection) {
-            (UsdPreviewProjection::Perspective, Projection::Perspective(projection)) => {
-                if !projection.fov.is_finite()
-                    || projection.fov <= 0.0
-                    || projection.fov >= std::f32::consts::PI
-                    || !self.distance.is_finite()
-                    || self.distance <= 0.0
-                {
-                    return None;
-                }
-                2.0 * self.distance * (projection.fov * 0.5).tan()
-            }
-            (UsdPreviewProjection::Orthographic, Projection::Orthographic(_)) => {
-                if !orthographic_scale.is_finite() || orthographic_scale <= 0.0 {
-                    return None;
-                }
-                2.0 * orthographic_scale
-            }
-            _ => return None,
-        };
-        let horizontal_extent = vertical_extent * aspect_ratio;
-        let transform = self.transform();
-        let right = transform.rotation * Vec3::X;
-        let up = transform.rotation * Vec3::Y;
-        Some(
-            -right * (delta.x * horizontal_extent / viewport_size.x)
-                + up * (delta.y * vertical_extent / viewport_size.y),
-        )
-    }
-
-    /// Return the multiplicative zoom factor represented by one scroll delta.
-    /// Orthographic views use the same input curve on their projection scale.
-    pub fn zoom_factor(&self, scroll_y: f32) -> f32 {
-        (1.0 - scroll_y * self.zoom_sensitivity).clamp(0.1, 10.0)
-    }
-
-    /// Apply a scroll delta (vertical scroll wheel, pixels).
-    pub fn apply_zoom(&mut self, scroll_y: f32) {
-        let factor = self.zoom_factor(scroll_y);
-        self.distance = (self.distance * factor).clamp(self.min_distance, self.max_distance);
-    }
-
-    /// Build the transform the camera entity should carry this frame.
-    pub fn transform(&self) -> Transform {
-        Transform::from_translation(self.position()).looking_at(self.target, Vec3::Y)
-    }
-}
-
-/// Projection mode of one USD preview view. This is a presentation choice;
-/// authored `UsdGeomCamera` projection remains owned by the document and is
-/// never rewritten by an editor camera gesture.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize,
-)]
-#[reflect(Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UsdPreviewProjection {
-    #[default]
-    Perspective,
-    Orthographic,
-}
-
-impl UsdPreviewProjection {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Perspective => "perspective",
-            Self::Orthographic => "orthographic",
-        }
-    }
-}
-
-/// Presentation mode of one USD preview view. Both modes are views over the
-/// same document-backed preview session; switching mode never creates another
-/// document, stage, projection, or camera.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize,
-)]
-#[reflect(Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UsdPreviewViewMode {
-    #[default]
-    Visual,
-    Text,
-}
-
-impl UsdPreviewViewMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Visual => "visual",
-            Self::Text => "text",
-        }
-    }
-}
-
-/// Which document-layer serialization the USD preview Text mode displays.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize,
-)]
-#[reflect(Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UsdPreviewTextLayer {
-    #[default]
-    Authored,
-    Composed,
-}
-
-impl UsdPreviewTextLayer {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Authored => "authored",
-            Self::Composed => "composed",
-        }
-    }
-}
-
-/// Operation applied to the transient presentation pose of a USD preview.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UsdPreviewExplodeAction {
-    Enable,
-    Update,
-    Reset,
-}
-
-impl UsdPreviewExplodeAction {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Enable => "enable",
-            Self::Update => "update",
-            Self::Reset => "reset",
-        }
-    }
-}
-
-/// Principal axis of an explode operation in the selected assembly's local
-/// coordinate frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum UsdPreviewExplodeAxis {
-    X,
-    Y,
-    Z,
-}
-
-impl UsdPreviewExplodeAxis {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::X => "X",
-            Self::Y => "Y",
-            Self::Z => "Z",
-        }
-    }
-
-    fn vector(self) -> Vec3 {
-        match self {
-            Self::X => Vec3::X,
-            Self::Y => Vec3::Y,
-            Self::Z => Vec3::Z,
-        }
-    }
-}
-
-/// Stable identity of one isolated USD preview session.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Reflect, serde::Serialize, serde::Deserialize,
-)]
-pub struct UsdPreviewId(pub u64);
-
-impl Default for UsdPreviewId {
-    fn default() -> Self {
-        EDITOR_PREVIEW_ID
-    }
-}
-
-impl UsdPreviewId {
-    /// Derive the document-backed preview identity used by the Twin Browser
-    /// for one admitted USD document. The value follows the workbench's
-    /// `DocumentId.raw()` instance convention, keeping the handle stable and
-    /// safe for the JSON/Rhai numeric transport.
-    pub const fn for_document(doc: DocumentId) -> Self {
-        Self(doc.raw())
-    }
-}
-
-/// Stable identity of one presentation view over a USD preview session.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Reflect, serde::Serialize, serde::Deserialize,
-)]
-pub struct UsdPreviewViewId(pub u64);
-
-/// One isolated USD preview session. The document and edit layer are explicit;
-/// the session owns only the projected USD stage and scene root. Presentation
-/// resources live in [`UsdPreviewView`] so additional views share projection
-/// state instead of duplicating the stage.
-pub struct UsdPreviewSession {
-    id: UsdPreviewId,
-    doc: DocumentId,
-    edit_target: LayerId,
-    scene_root: Entity,
-    stage_handle: Handle<UsdStageAsset>,
-    render_layer: usize,
-    projected_generation: u64,
-    projection_ready: bool,
-    primary_view: UsdPreviewViewId,
-    explode: Option<UsdPreviewExplodeState>,
-    text: UsdPreviewTextState,
-}
-
-/// The asynchronous authored/composed text snapshot shared by every view of a
-/// preview session. The requested generation is separate from the displayed
-/// generation so a document edit can coalesce behind one in-flight read
-/// without briefly replacing the text with an older snapshot.
-#[derive(Debug, Clone, Default)]
-struct UsdPreviewTextState {
-    requested_generation: Option<u64>,
-    displayed_generation: Option<u64>,
-    authored: Option<String>,
-    composed: Option<String>,
-    loading: bool,
-    error: Option<String>,
-    request: u64,
-}
-
-#[derive(Resource, Default)]
-struct PendingUsdPreviewTextReads {
-    next_request: u64,
-    tasks: Vec<PendingUsdPreviewTextRead>,
-}
-
-struct PendingUsdPreviewTextRead {
-    preview: UsdPreviewId,
-    doc: DocumentId,
-    generation: u64,
-    request: u64,
-    #[cfg(not(target_arch = "wasm32"))]
-    task: Task<Result<(String, String), String>>,
-    #[cfg(target_arch = "wasm32")]
-    result: crossbeam_channel::Receiver<Result<(String, String), String>>,
-}
-
-/// The complete baseline for one session's transient explode presentation.
-/// Baselines are captured before the first offset is applied and are never
-/// derived from an already-exploded pose.
-#[derive(Clone)]
-struct UsdPreviewExplodeState {
-    assembly: String,
-    parts: Vec<UsdPreviewExplodedPart>,
-    axis: UsdPreviewExplodeAxis,
-    spacing: f32,
-    assembly_to_root: Mat4,
-}
-
-#[derive(Clone)]
-struct UsdPreviewExplodedPart {
-    path: String,
-    entity: Entity,
-    baseline: Transform,
-    parent_to_root: Mat4,
-}
-
-impl UsdPreviewSession {
-    pub fn id(&self) -> UsdPreviewId {
-        self.id
-    }
-
-    pub fn doc(&self) -> DocumentId {
-        self.doc
-    }
-
-    pub fn edit_target(&self) -> &LayerId {
-        &self.edit_target
-    }
-
-    pub fn stage_handle(&self) -> &Handle<UsdStageAsset> {
-        &self.stage_handle
-    }
-
-    pub fn scene_root(&self) -> Entity {
-        self.scene_root
-    }
-
-    pub fn primary_view(&self) -> UsdPreviewViewId {
-        self.primary_view
-    }
-
-    pub fn render_layer(&self) -> usize {
-        self.render_layer
-    }
-
-    pub fn projected_generation(&self) -> u64 {
-        self.projected_generation
-    }
-
-    /// Whether the current document generation has completed the preview's
-    /// structural USD projection and all queued CPU mesh work.
-    pub fn projection_ready(&self) -> bool {
-        self.projection_ready
-    }
-
-    /// Whether the authored and composed text snapshot matches the current
-    /// document generation.
-    pub fn text_ready(&self) -> bool {
-        self.text.displayed_generation == self.text.requested_generation
-            && self.text.authored.is_some()
-            && self.text.composed.is_some()
-    }
-}
-
-/// Presentation resources for one USD preview view. All views belonging to a
-/// session share its scene root, stage handle, and render layer, but have
-/// independent camera state and render targets.
-pub struct UsdPreviewView {
-    id: UsdPreviewViewId,
-    preview: UsdPreviewId,
-    image: Handle<Image>,
-    tex_id: Option<egui::TextureId>,
-    camera: Entity,
-    light: Entity,
-    orbit: OrbitCamera,
-    projection: UsdPreviewProjection,
-    orthographic_scale: f32,
-    auto_frame: bool,
-    mode: UsdPreviewViewMode,
-    text_layer: UsdPreviewTextLayer,
-    /// The exact egui image rectangle from the last visible paint pass.
-    ///
-    /// The preview camera renders to an image that is then placed inside a
-    /// panel with controls above it. Keeping the image rect, rather than the
-    /// whole panel rect, gives input consumers one authoritative mapping for
-    /// preview picking and gizmo handles.
-    interactive_rect: Option<PanelRect>,
-    /// Exact composed path awaiting a bounds frame. The path is resolved
-    /// against this view's preview lease, never against the live scene.
-    frame_target: Option<String>,
-    /// Name of the persisted presentation preset currently applied.
-    active_preset: Option<String>,
-}
-
-impl UsdPreviewView {
-    pub fn id(&self) -> UsdPreviewViewId {
-        self.id
-    }
-
-    pub fn preview(&self) -> UsdPreviewId {
-        self.preview
-    }
-
-    pub fn image(&self) -> &Handle<Image> {
-        &self.image
-    }
-
-    pub fn camera(&self) -> Entity {
-        self.camera
-    }
-
-    pub fn light(&self) -> Entity {
-        self.light
-    }
-
-    pub fn orbit(&self) -> &OrbitCamera {
-        &self.orbit
-    }
-
-    pub fn projection(&self) -> UsdPreviewProjection {
-        self.projection
-    }
-
-    pub fn orthographic_scale(&self) -> f32 {
-        self.orthographic_scale
-    }
-
-    pub fn texture_id(&self) -> Option<egui::TextureId> {
-        self.tex_id
-    }
-
-    pub fn mode(&self) -> UsdPreviewViewMode {
-        self.mode
-    }
-
-    pub fn text_layer(&self) -> UsdPreviewTextLayer {
-        self.text_layer
-    }
-
-    pub fn interactive_rect(&self) -> Option<PanelRect> {
-        self.interactive_rect
-    }
-
-    pub fn active_preset(&self) -> Option<&str> {
-        self.active_preset.as_deref()
-    }
-}
-
-/// Session-scoped USD preview registry. Every session owns one projected stage
-/// root and render layer; every view owns one render target/camera/light. The
-/// dock may paint several views at once, while hidden views are inactive.
-#[derive(Resource, Default)]
-pub struct UsdViewportState {
-    sessions: HashMap<UsdPreviewId, UsdPreviewSession>,
-    views: HashMap<UsdPreviewViewId, UsdPreviewView>,
-    focused: Option<UsdPreviewId>,
-    focused_view: Option<UsdPreviewViewId>,
-    next_view_id: u64,
-}
-
-impl UsdViewportState {
-    pub fn focused_preview_id(&self) -> Option<UsdPreviewId> {
-        self.focused
-    }
-
-    pub fn focused_session(&self) -> Option<&UsdPreviewSession> {
-        self.focused.and_then(|id| self.sessions.get(&id))
-    }
-
-    pub fn focused_view_id(&self) -> Option<UsdPreviewViewId> {
-        self.focused_view
-    }
-
-    pub fn focused_view(&self) -> Option<&UsdPreviewView> {
-        self.focused_view.and_then(|id| self.views.get(&id))
-    }
-
-    pub fn session(&self, id: UsdPreviewId) -> Option<&UsdPreviewSession> {
-        self.sessions.get(&id)
-    }
-
-    /// All open preview sessions. Native editor view-models use this iterator
-    /// to derive state for every document independently; the dock paints the
-    /// focused session and any open instance views.
-    pub fn sessions(&self) -> impl Iterator<Item = &UsdPreviewSession> {
-        self.sessions.values()
-    }
-
-    pub fn session_count(&self) -> usize {
-        self.sessions.len()
-    }
-
-    pub fn view(&self, id: UsdPreviewViewId) -> Option<&UsdPreviewView> {
-        self.views.get(&id)
-    }
-
-    pub fn views(&self) -> impl Iterator<Item = &UsdPreviewView> {
-        self.views.values()
-    }
-
-    pub fn view_count(&self) -> usize {
-        self.views.len()
-    }
-
-    /// Return the next unused view identity for a UI action that needs to
-    /// enqueue an explicit `OpenUsdPreviewView` command. `None` means the
-    /// finite identity space is exhausted.
-    pub fn next_view_id(&self) -> Option<UsdPreviewViewId> {
-        let mut id = self.next_view_id.max(1);
-        while self.views.contains_key(&UsdPreviewViewId(id)) {
-            id = id.checked_add(1)?;
-        }
-        Some(UsdPreviewViewId(id))
-    }
-
-    pub fn has_preview_for(&self, doc: DocumentId) -> bool {
-        self.sessions.values().any(|session| session.doc == doc)
-    }
-
-    /// Return the existing session for a document, if one is already open.
-    /// Browser admission uses this before deriving a document-scoped id so an
-    /// explicitly opened session remains the single presentation owner.
-    pub fn preview_for_document(&self, doc: DocumentId) -> Option<UsdPreviewId> {
-        self.sessions
-            .values()
-            .filter(|session| session.doc == doc)
-            .map(UsdPreviewSession::id)
-            .min_by_key(|preview| preview.0)
-    }
-
-    pub fn focused_doc(&self) -> Option<DocumentId> {
-        self.focused_session().map(UsdPreviewSession::doc)
-    }
-
-    pub fn focused_stage_handle(&self) -> Option<&Handle<UsdStageAsset>> {
-        self.focused_session().map(UsdPreviewSession::stage_handle)
-    }
-
-    pub fn focused_scene_root(&self) -> Option<Entity> {
-        self.focused_session().map(UsdPreviewSession::scene_root)
-    }
-
-    pub fn focused_edit_target(&self) -> Option<&LayerId> {
-        self.focused_session().map(UsdPreviewSession::edit_target)
-    }
-
-    pub(crate) fn session_ids_for_doc(&self, doc: DocumentId) -> Vec<UsdPreviewId> {
-        self.sessions
-            .values()
-            .filter(|session| session.doc == doc)
-            .map(UsdPreviewSession::id)
-            .collect()
-    }
-
-    pub(crate) fn preview_docs(&self) -> impl Iterator<Item = DocumentId> + '_ {
-        self.sessions.values().map(UsdPreviewSession::doc)
-    }
-
-    fn render_layer_available_for(&self, replacing: Option<UsdPreviewId>) -> Option<usize> {
-        (FIRST_PREVIEW_RENDER_LAYER..=LAST_PREVIEW_RENDER_LAYER).find(|layer| {
-            self.sessions
-                .iter()
-                .all(|(id, session)| Some(*id) == replacing || session.render_layer != *layer)
-        })
-    }
-
-    fn insert(&mut self, session: UsdPreviewSession) {
-        self.focused = Some(session.id);
-        self.focused_view = Some(session.primary_view);
-        self.sessions.insert(session.id, session);
-    }
-
-    fn remove(&mut self, id: UsdPreviewId) -> Option<(UsdPreviewSession, Vec<UsdPreviewView>)> {
-        let session = self.sessions.remove(&id)?;
-        let mut views = Vec::new();
-        let stored_views = std::mem::take(&mut self.views);
-        for (view_id, view) in stored_views {
-            if view.preview == id {
-                views.push(view);
-            } else {
-                self.views.insert(view_id, view);
-            }
-        }
-        if self.focused == Some(id) {
-            self.focused = None;
-            self.focused_view = None;
-            self.focus_first_view();
-        }
-        Some((session, views))
-    }
-
-    fn focus(&mut self, id: UsdPreviewId) -> bool {
-        let Some(session) = self.sessions.get(&id) else {
-            return false;
-        };
-        if self.views.contains_key(&session.primary_view) {
-            self.focused = Some(id);
-            self.focused_view = Some(session.primary_view);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn focus_view(&mut self, id: UsdPreviewViewId) -> bool {
-        let Some(view) = self.views.get(&id) else {
-            return false;
-        };
-        if self.sessions.contains_key(&view.preview) {
-            self.focused = Some(view.preview);
-            self.focused_view = Some(id);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn focus_first_view(&mut self) {
-        let Some(view) = self.views.values().min_by_key(|view| view.id.0) else {
-            return;
-        };
-        self.focused = Some(view.preview);
-        self.focused_view = Some(view.id);
-    }
-
-    fn reserve_view_id(&mut self) -> Option<UsdPreviewViewId> {
-        let id = self.next_view_id()?;
-        self.next_view_id = id.0.saturating_add(1);
-        Some(id)
-    }
-
-    fn insert_view(&mut self, view: UsdPreviewView) -> Result<(), Box<UsdPreviewView>> {
-        if view.id.0 == 0 || !self.sessions.contains_key(&view.preview) {
-            return Err(Box::new(view));
-        }
-        let id = view.id;
-        if self.views.contains_key(&id) {
-            return Err(Box::new(view));
-        }
-        self.views.insert(id, view);
-        self.next_view_id = self.next_view_id.max(id.0.saturating_add(1));
-        Ok(())
-    }
-
-    fn remove_view(&mut self, id: UsdPreviewViewId) -> Option<UsdPreviewView> {
-        let view = self.views.remove(&id)?;
-        if self.focused_view == Some(id) {
-            self.focused_view = None;
-            self.focused = None;
-            self.focus_first_view();
-        }
-        Some(view)
-    }
-
-    fn view_mut(&mut self, id: UsdPreviewViewId) -> Option<&mut UsdPreviewView> {
-        self.views.get_mut(&id)
-    }
-
-    fn session_mut(&mut self, id: UsdPreviewId) -> Option<&mut UsdPreviewSession> {
-        self.sessions.get_mut(&id)
-    }
-
-    /// Invalidate preview presentation before a document generation is
-    /// projected. A stale generation must not remain editable while its USD
-    /// entities are being rebuilt.
-    pub(crate) fn invalidate_projection(&mut self, doc: DocumentId) -> Vec<(Entity, Transform)> {
-        let mut restores = Vec::new();
-        for session in self
-            .sessions
-            .values_mut()
-            .filter(|session| session.doc == doc)
-        {
-            if let Some(explode) = session.explode.take() {
-                restores.extend(
-                    explode
-                        .parts
-                        .into_iter()
-                        .map(|part| (part.entity, part.baseline)),
-                );
-            }
-            session.projected_generation = 0;
-            session.projection_ready = false;
-        }
-        restores
-    }
-}
-
 /// UI measurement emitted by the viewport panel after egui lays out its body.
 /// The observer owns the workbench interaction resources; the panel only
 /// publishes this narrow fact.
@@ -1442,50 +779,6 @@ fn reconcile_preview_projection_state(
     }
 }
 
-/// Return whether an entity belongs to a preview's authoritative hierarchy.
-///
-/// The preview root itself is included. The bounded walk prevents malformed
-/// ECS hierarchies from turning a selection or readiness query into an
-/// unbounded loop.
-pub fn is_preview_entity(entity: Entity, root: Entity, parents: &Query<&ChildOf>) -> bool {
-    if entity == root {
-        return true;
-    }
-    let mut current = entity;
-    for _ in 0..1024 {
-        let Ok(parent) = parents.get(current) else {
-            return false;
-        };
-        current = parent.parent();
-        if current == root {
-            return true;
-        }
-    }
-    false
-}
-
-/// Resolve an optional sub-selection or primary selection against one preview
-/// lease. The stage handle and hierarchy root both have to match the lease;
-/// entity IDs alone are not stable across preview reloads.
-pub fn selected_entity_in_preview(
-    session: &UsdPreviewSession,
-    selected: Option<Entity>,
-    target: Option<Entity>,
-    q_paths: &Query<&UsdPrimPath>,
-    q_parents: &Query<&ChildOf>,
-) -> Option<Entity> {
-    let belongs = |entity: Entity| {
-        q_paths.get(entity).is_ok_and(|path| {
-            path.stage_handle.id() == session.stage_handle().id()
-                && is_preview_entity(entity, session.scene_root(), q_parents)
-        })
-    };
-
-    target
-        .filter(|entity| belongs(*entity))
-        .or_else(|| selected.filter(|entity| belongs(*entity)))
-}
-
 /// Pointer input emitted by the viewport panel. Camera state and the camera
 /// entity are updated by the observer, outside the egui paint borrow.
 #[derive(Event, Clone, Copy, Debug)]
@@ -1627,11 +920,16 @@ fn on_viewport_orbit_input(
     let Some(view) = state.view_mut(input.view) else {
         return;
     };
+    let perspective_fov = match &*projection {
+        Projection::Perspective(projection) => Some(projection.fov),
+        Projection::Orthographic(_) => None,
+        Projection::Custom(_) => None,
+    };
     if input.pan != egui::Vec2::ZERO
         && !view.orbit.apply_pan(
-            input.pan,
+            [input.pan.x, input.pan.y],
             Vec2::new(input.viewport_size.x, input.viewport_size.y),
-            &projection,
+            perspective_fov,
             view.projection,
             view.orthographic_scale,
         )
@@ -1639,7 +937,7 @@ fn on_viewport_orbit_input(
         return;
     }
     if input.drag != egui::Vec2::ZERO {
-        view.orbit.apply_drag(input.drag);
+        view.orbit.apply_drag([input.drag.x, input.drag.y]);
     }
     if input.scroll_y != 0.0 {
         match view.projection {
@@ -1705,19 +1003,15 @@ fn create_preview_session(
 
     world.flush();
 
-    Some(UsdPreviewSession {
+    Some(UsdPreviewSession::new(
         id,
         doc,
         edit_target,
         scene_root,
         stage_handle,
         render_layer,
-        projected_generation: 0,
-        projection_ready: false,
         primary_view,
-        explode: None,
-        text: UsdPreviewTextState::default(),
-    })
+    ))
 }
 
 /// Allocate one presentation view over an existing session. This function
@@ -1729,7 +1023,7 @@ fn create_preview_view(
     view: UsdPreviewViewId,
     render_layer: usize,
     profile: RenderQualityProfile,
-) -> Option<UsdPreviewView> {
+) -> Option<(UsdPreviewView, UsdPreviewRenderTarget)> {
     if view.0 == 0 || !world.contains_resource::<Assets<Image>>() {
         return None;
     }
@@ -1787,23 +1081,10 @@ fn create_preview_view(
         ))
         .id();
     world.flush();
-    Some(UsdPreviewView {
-        id: view,
-        preview,
-        image,
-        tex_id,
-        camera,
-        light,
-        orbit: OrbitCamera::default(),
-        projection: UsdPreviewProjection::default(),
-        orthographic_scale: 1.0,
-        auto_frame: true,
-        mode: UsdPreviewViewMode::default(),
-        text_layer: UsdPreviewTextLayer::default(),
-        interactive_rect: None,
-        frame_target: None,
-        active_preset: None,
-    })
+    Some((
+        UsdPreviewView::new(view, preview, camera, light),
+        UsdPreviewRenderTarget { image, tex_id },
+    ))
 }
 
 /// Frame a newly projected view around the actual visual bounds of its USD
@@ -1984,7 +1265,7 @@ fn propagate_preview_render_layer(
         return;
     }
 
-    for session in state.sessions.values() {
+    for session in state.sessions() {
         let preview_layers = RenderLayers::layer(session.render_layer);
         // Iterative DFS over one preview session. USD scenes are shallow
         // (tens-to-hundreds of prims), so a small local stack is sufficient.
@@ -2036,6 +1317,7 @@ fn resize_viewport_image(
     // the workbench UI plugin, absent in lifecycle / headless tests.
     rects: Option<Res<PanelRects>>,
     state: Res<UsdViewportState>,
+    render_targets: Res<UsdPreviewRenderTargets>,
     budget: Res<UsdPreviewRenderBudget>,
     images: Option<ResMut<Assets<Image>>>,
     mut last_applied: Local<HashMap<UsdPreviewViewId, UVec2>>,
@@ -2064,7 +1346,10 @@ fn resize_viewport_image(
         if !first_apply && dx < RESIZE_DELTA_PX && dy < RESIZE_DELTA_PX {
             continue;
         }
-        if let Some(mut image) = images.get_mut(view.image()) {
+        let Some(render_target) = render_targets.get(view.id()) else {
+            continue;
+        };
+        if let Some(mut image) = images.get_mut(&render_target.image) {
             image.resize(Extent3d {
                 width: target.x.max(1),
                 height: target.y.max(1),
@@ -2158,239 +1443,6 @@ fn validated_preview_profile(world: &World) -> Result<RenderQualityProfile, Stri
 /// and updates that lease in place; another document replaces only that
 /// explicit lease. Other sessions keep their roots, cameras, and stages
 /// untouched.
-#[Command(default)]
-pub struct OpenUsdPreview {
-    /// Stable caller-owned identity of the preview session.
-    pub preview: UsdPreviewId,
-    /// The USD document to render.
-    pub doc_id: DocumentId,
-    /// The authored layer to use for editor mutations made from this preview.
-    pub edit_target: LayerId,
-}
-
-/// Focus an already-open preview session in the USD dock.
-#[Command(default)]
-pub struct FocusUsdPreview {
-    pub preview: UsdPreviewId,
-}
-
-/// Open an additional presentation view over an existing USD preview session.
-/// The view id is explicit so persisted layouts and agents can address the
-/// exact camera without relying on tab order or display names.
-#[Command(default)]
-pub struct OpenUsdPreviewView {
-    pub preview: UsdPreviewId,
-    pub view: UsdPreviewViewId,
-}
-
-/// Focus one presentation view and its parent USD preview session.
-#[Command(default)]
-pub struct FocusUsdPreviewView {
-    pub view: UsdPreviewViewId,
-}
-
-/// Close one presentation view. Closing the final view also closes its parent
-/// preview session because a session without a presentation view cannot be
-/// reached from the editor.
-#[Command(default)]
-pub struct CloseUsdPreviewView {
-    pub view: UsdPreviewViewId,
-}
-
-/// Close one preview session and release all of its presentation resources.
-#[Command(default)]
-pub struct CloseUsdPreview {
-    pub preview: UsdPreviewId,
-}
-
-/// Change only the presentation mode of one existing USD preview view.
-#[Command]
-pub struct SetUsdPreviewViewMode {
-    pub view: UsdPreviewViewId,
-    pub mode: UsdPreviewViewMode,
-}
-
-/// Change which authored/composed snapshot the Text mode displays.
-#[Command]
-pub struct SetUsdPreviewTextLayer {
-    pub view: UsdPreviewViewId,
-    pub layer: UsdPreviewTextLayer,
-}
-
-/// Change the projection of one isolated USD preview view. This changes only
-/// the editor camera; authored USD camera opinions stay read-only presentation
-/// input and are never rewritten by a navigation gesture.
-#[Command]
-pub struct SetUsdPreviewProjection {
-    pub view: UsdPreviewViewId,
-    pub projection: UsdPreviewProjection,
-}
-
-/// Fit one preview view to the projected visual bounds of its USD stage.
-#[Command]
-pub struct FrameUsdPreviewView {
-    pub view: UsdPreviewViewId,
-}
-
-/// Fit one preview view to the visual bounds of an exact composed prim
-/// subtree. Selection/reveal remains owned by the Editor selection surface;
-/// this command only changes presentation camera state.
-#[Command]
-pub struct FrameUsdPreviewSelection {
-    pub preview: UsdPreviewId,
-    pub view: UsdPreviewViewId,
-    pub path: String,
-}
-
-/// Restore one preview view's default orbit pose and fit it to its stage.
-#[Command]
-pub struct ResetUsdPreviewView {
-    pub view: UsdPreviewViewId,
-}
-
-/// Pan one preview view in egui logical screen points. The view converts the
-/// delta to its camera plane using the current projection and render-target
-/// viewport.
-#[Command]
-pub struct PanUsdPreviewView {
-    pub view: UsdPreviewViewId,
-    pub delta: [f32; 2],
-}
-
-/// Zoom one preview view by a positive multiplicative factor. Perspective
-/// views change orbit distance; orthographic views change projection scale.
-#[Command]
-pub struct ZoomUsdPreviewView {
-    pub view: UsdPreviewViewId,
-    pub factor: f32,
-}
-
-/// One named, view-only camera/inspection presentation preset. Presets are
-/// intentionally independent of authored USD cameras and never mutate a
-/// document.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UsdInspectionPreset {
-    pub name: String,
-    pub projection: UsdPreviewProjection,
-    pub target: [f32; 3],
-    pub yaw: f32,
-    pub pitch: f32,
-    pub distance: f32,
-    pub orthographic_scale: f32,
-}
-
-/// Persisted presentation presets for the USD editor. This is one slice of
-/// the shared settings document, not a feature-local file.
-#[derive(Resource, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct UsdInspectionSettings {
-    pub presets: Vec<UsdInspectionPreset>,
-}
-
-impl SettingsSection for UsdInspectionSettings {
-    const KEY: &'static str = "usd_inspection";
-
-    fn validate_section(&self) -> Result<(), String> {
-        if self.presets.len() > 32 {
-            return Err("at most 32 USD inspection presets are supported".to_string());
-        }
-        for preset in &self.presets {
-            if preset.name.trim().is_empty() || preset.name.len() > 96 {
-                return Err("USD inspection preset names must be 1..=96 characters".to_string());
-            }
-            let values = [
-                preset.target[0],
-                preset.target[1],
-                preset.target[2],
-                preset.yaw,
-                preset.pitch,
-                preset.distance,
-                preset.orthographic_scale,
-            ];
-            if !values.iter().all(|value| value.is_finite())
-                || preset.distance <= 0.0
-                || preset.orthographic_scale <= 0.0
-            {
-                return Err(format!(
-                    "USD inspection preset '{}' is not finite",
-                    preset.name
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Save the current presentation pose under one explicit settings name.
-#[Command]
-pub struct SaveUsdInspectionPreset {
-    pub view: UsdPreviewViewId,
-    pub name: String,
-}
-
-/// Apply one persisted presentation preset to an explicit preview view.
-#[Command]
-pub struct ApplyUsdInspectionPreset {
-    pub view: UsdPreviewViewId,
-    pub name: String,
-}
-
-/// Delete one persisted presentation preset.
-#[Command]
-pub struct DeleteUsdInspectionPreset {
-    pub name: String,
-}
-
-/// Read the persisted USD inspection preset names and current view state.
-pub struct InspectUsdInspectionPresetsProvider;
-
-impl ApiQueryProvider for InspectUsdInspectionPresetsProvider {
-    fn name(&self) -> &'static str {
-        "InspectUsdInspectionPresets"
-    }
-
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let presets = world
-            .get_resource::<UsdInspectionSettings>()
-            .map(|settings| {
-                settings
-                    .presets
-                    .iter()
-                    .map(|preset| {
-                        serde_json::json!({
-                            "name": preset.name,
-                            "projection": preset.projection.as_str(),
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        ApiResponse::ok(serde_json::json!({ "presets": presets }))
-    }
-}
-
-/// Apply a transient, session-scoped explode pose to an explicit USD preview.
-/// This command changes only projected Bevy transforms; it never enters the
-/// USD document, journal, save state, or simulation projection.
-#[Command]
-pub struct ExplodeUsdPreview {
-    pub preview: UsdPreviewId,
-    pub doc_id: DocumentId,
-    /// Exact composed `kind = "assembly"` prim path.
-    pub assembly: String,
-    /// Exact composed prim paths below `assembly`. Rust sorts these paths for
-    /// stable offsets, so repeated calls do not depend on caller ordering.
-    pub parts: Vec<String>,
-    pub action: UsdPreviewExplodeAction,
-    /// Required for `enable` and `update`; `null` is accepted for `reset`.
-    #[serde(default)]
-    #[reflect(default)]
-    pub axis: Option<UsdPreviewExplodeAxis>,
-    /// Required for `enable` and `update`; `null` is accepted for `reset`.
-    #[serde(default)]
-    #[reflect(default)]
-    pub spacing: Option<f32>,
-}
-
 #[on_command(OpenUsdPreview)]
 fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
     let command = trigger.event();
@@ -2506,7 +1558,7 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             return;
         };
         world.resource_mut::<UsdViewportState>().insert(session);
-        let Some(view) =
+        let Some((view, render_target)) =
             create_preview_view(world, preview, primary_view, render_layer, preview_profile)
         else {
             let _ = remove_preview_session(world, preview);
@@ -2517,6 +1569,9 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             );
             return;
         };
+        world
+            .resource_mut::<UsdPreviewRenderTargets>()
+            .insert(primary_view, render_target);
         if let Err(view) = world.resource_mut::<UsdViewportState>().insert_view(view) {
             despawn_preview_view(world, *view);
             let _ = remove_preview_session(world, preview);
@@ -2578,7 +1633,8 @@ fn on_open_usd_preview_view(trigger: On<OpenUsdPreviewView>, mut commands: Comma
                 return;
             }
         };
-        let Some(view_state) = create_preview_view(world, preview, view, render_layer, profile)
+        let Some((view_state, render_target)) =
+            create_preview_view(world, preview, view, render_layer, profile)
         else {
             report_preview_error(
                 world,
@@ -2587,6 +1643,9 @@ fn on_open_usd_preview_view(trigger: On<OpenUsdPreviewView>, mut commands: Comma
             );
             return;
         };
+        world
+            .resource_mut::<UsdPreviewRenderTargets>()
+            .insert(view, render_target);
         if let Err(view_state) = world
             .resource_mut::<UsdViewportState>()
             .insert_view(view_state)
@@ -2976,7 +2035,7 @@ fn on_delete_usd_inspection_preset(trigger: On<DeleteUsdInspectionPreset>, mut c
             );
             return;
         }
-        for view in world.resource_mut::<UsdViewportState>().views.values_mut() {
+        for view in world.resource_mut::<UsdViewportState>().views_mut() {
             if view.active_preset.as_deref() == Some(name.as_str()) {
                 view.active_preset = None;
             }
@@ -3076,10 +2135,15 @@ fn on_pan_usd_preview_view(trigger: On<PanUsdPreviewView>, mut commands: Command
             let view_state = viewport
                 .view_mut(view)
                 .expect("preview view remains registered");
+            let perspective_fov = match &projection {
+                Projection::Perspective(projection) => Some(projection.fov),
+                Projection::Orthographic(_) => None,
+                Projection::Custom(_) => None,
+            };
             let applied = view_state.orbit.apply_pan(
-                egui::Vec2::new(delta[0], delta[1]),
+                delta,
                 viewport_size,
-                &projection,
+                perspective_fov,
                 mode,
                 orthographic_scale,
             );
@@ -3909,11 +2973,17 @@ fn despawn_preview_view(world: &mut World, view: UsdPreviewView) {
     if let Ok(entity) = world.get_entity_mut(view.light) {
         entity.despawn();
     }
+    let Some(render_target) = world
+        .resource_mut::<UsdPreviewRenderTargets>()
+        .remove(view.id)
+    else {
+        return;
+    };
     if let Some(mut textures) = world.get_resource_mut::<EguiUserTextures>() {
-        textures.remove_image(view.image.id());
+        textures.remove_image(render_target.image.id());
     }
     if let Some(mut images) = world.get_resource_mut::<Assets<Image>>() {
-        images.remove(view.image.id());
+        images.remove(render_target.image.id());
     }
 }
 
@@ -4144,7 +3214,11 @@ fn render_preview_view(
     view_id: UsdPreviewViewId,
     singleton: bool,
 ) {
-    let (tex_id, focused_doc, next_view, projection, mode, text_layer, active_preset) = ctx
+    let tex_id = ctx
+        .resource::<UsdPreviewRenderTargets>()
+        .and_then(|targets| targets.get(view_id))
+        .and_then(|target| target.tex_id);
+    let (focused_doc, next_view, projection, mode, text_layer, active_preset) = ctx
         .resource::<UsdViewportState>()
         .and_then(|state| {
             let view = state.view(view_id)?;
@@ -4154,7 +3228,6 @@ fn render_preview_view(
                 .flatten()
                 .map(|view| (session.id(), view));
             Some((
-                view.texture_id(),
                 Some(session.doc()),
                 next_view,
                 view.projection(),
@@ -4165,7 +3238,6 @@ fn render_preview_view(
         })
         .unwrap_or_else(|| {
             (
-                None,
                 None,
                 None,
                 UsdPreviewProjection::default(),
@@ -4632,6 +3704,7 @@ mod tests {
     use lunco_render::SceneCamera;
     use lunco_usd_commands::UsdCommandsPlugin;
     use lunco_usd_document::document::UsdOp;
+    use lunco_usd_viewport_core::UsdPreviewExplodeAxis;
     /// Without any rendering plugins (`Assets<Image>` absent), opening a
     /// document does not allocate a preview session or panic.
     #[test]
@@ -4999,7 +4072,7 @@ mod tests {
             view_id,
         )
         .expect("preview session resources are available");
-        let view = create_preview_view(
+        let (view, _) = create_preview_view(
             app.world_mut(),
             preview,
             view_id,
@@ -5091,7 +4164,7 @@ mod tests {
             view_id,
         )
         .expect("preview session resources are available");
-        let view = create_preview_view(
+        let (view, _) = create_preview_view(
             app.world_mut(),
             preview,
             view_id,
@@ -5331,7 +4404,7 @@ mod tests {
             UsdPreviewViewId(1),
         )
         .expect("preview resources are available");
-        let view = create_preview_view(
+        let (view, _) = create_preview_view(
             app.world_mut(),
             UsdPreviewId(1),
             UsdPreviewViewId(1),
@@ -5383,7 +4456,7 @@ mod tests {
         let profile = RenderingQualitySettings::default()
             .validated_profile()
             .expect("default quality is valid");
-        let first_view = create_preview_view(
+        let (first_view, _) = create_preview_view(
             app.world_mut(),
             UsdPreviewId(1),
             UsdPreviewViewId(1),
@@ -5391,7 +4464,7 @@ mod tests {
             profile,
         )
         .expect("first view resources are available");
-        let second_view = create_preview_view(
+        let (second_view, _) = create_preview_view(
             app.world_mut(),
             UsdPreviewId(1),
             UsdPreviewViewId(2),
@@ -5446,99 +4519,6 @@ mod tests {
             },
         )
         .is_none());
-    }
-
-    #[test]
-    fn orbit_pan_and_zoom_keep_view_state_finite() {
-        let mut orbit = OrbitCamera::default();
-        let original_target = orbit.target;
-        let original_distance = orbit.distance;
-
-        let projection = preview_projection(UsdPreviewProjection::Perspective, 1.0);
-        assert!(orbit.apply_pan(
-            egui::Vec2::new(40.0, -18.0),
-            Vec2::new(800.0, 600.0),
-            &projection,
-            UsdPreviewProjection::Perspective,
-            1.0,
-        ));
-        orbit.apply_zoom(12.0);
-
-        assert_ne!(orbit.target, original_target);
-        assert!(orbit.target.is_finite());
-        assert!(orbit.distance.is_finite());
-        assert!(orbit.distance < original_distance);
-        assert!((orbit.zoom_factor(12.0) - 0.982).abs() < 1.0e-6);
-    }
-
-    #[test]
-    fn preview_pan_follows_pointer_in_both_screen_axes() {
-        let projection = preview_projection(UsdPreviewProjection::Perspective, 1.0);
-        let mut orbit = OrbitCamera::default();
-        let transform = orbit.transform();
-        let right = transform.rotation * Vec3::X;
-        let up = transform.rotation * Vec3::Y;
-
-        assert!(orbit.apply_pan(
-            egui::Vec2::new(20.0, 30.0),
-            Vec2::new(800.0, 600.0),
-            &projection,
-            UsdPreviewProjection::Perspective,
-            1.0,
-        ));
-
-        let target_delta = orbit.target;
-        assert!(target_delta.dot(right) < 0.0);
-        assert!(target_delta.dot(up) > 0.0);
-    }
-
-    #[test]
-    fn preview_pan_uses_projection_scale_not_fixed_sensitivity() {
-        let perspective = preview_projection(UsdPreviewProjection::Perspective, 1.0);
-        let mut near = OrbitCamera {
-            distance: 2.0,
-            ..Default::default()
-        };
-        let mut far = near.clone();
-        far.distance = 4.0;
-        assert!(near.apply_pan(
-            egui::Vec2::new(40.0, 20.0),
-            Vec2::new(800.0, 600.0),
-            &perspective,
-            UsdPreviewProjection::Perspective,
-            1.0,
-        ));
-        assert!(far.apply_pan(
-            egui::Vec2::new(40.0, 20.0),
-            Vec2::new(800.0, 600.0),
-            &perspective,
-            UsdPreviewProjection::Perspective,
-            1.0,
-        ));
-        assert!((far.target.length() / near.target.length() - 2.0).abs() < 1.0e-5);
-
-        let orthographic = preview_projection(UsdPreviewProjection::Orthographic, 2.0);
-        let mut low = OrbitCamera {
-            distance: 2.0,
-            ..Default::default()
-        };
-        let mut high = low.clone();
-        high.distance = 200.0;
-        assert!(low.apply_pan(
-            egui::Vec2::new(40.0, 20.0),
-            Vec2::new(800.0, 600.0),
-            &orthographic,
-            UsdPreviewProjection::Orthographic,
-            2.0,
-        ));
-        assert!(high.apply_pan(
-            egui::Vec2::new(40.0, 20.0),
-            Vec2::new(800.0, 600.0),
-            &orthographic,
-            UsdPreviewProjection::Orthographic,
-            2.0,
-        ));
-        assert!((high.target.length() - low.target.length()).abs() < 1.0e-5);
     }
 
     #[test]
@@ -5609,7 +4589,7 @@ mod tests {
         let profile = RenderingQualitySettings::default()
             .validated_profile()
             .expect("default quality is valid");
-        let first_view = create_preview_view(
+        let (first_view, first_render_target) = create_preview_view(
             app.world_mut(),
             UsdPreviewId(1),
             UsdPreviewViewId(1),
@@ -5617,7 +4597,7 @@ mod tests {
             profile,
         )
         .expect("first view resources are available");
-        let second_view = create_preview_view(
+        let (second_view, second_render_target) = create_preview_view(
             app.world_mut(),
             UsdPreviewId(1),
             UsdPreviewViewId(2),
@@ -5627,8 +4607,8 @@ mod tests {
         .expect("second view resources are available");
         let first_camera = first_view.camera();
         let second_camera = second_view.camera();
-        let first_image = first_view.image().clone();
-        let second_image = second_view.image().clone();
+        let first_image = first_render_target.image.clone();
+        let second_image = second_render_target.image.clone();
         assert!(state.insert_view(first_view).is_ok());
         assert!(state.insert_view(second_view).is_ok());
 

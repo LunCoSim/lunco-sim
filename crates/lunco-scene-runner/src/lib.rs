@@ -159,8 +159,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use lunco_core::SimTick;
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
+use lunco_core::SimTick;
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_core::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
@@ -778,11 +778,11 @@ fn participants_ready(world: &mut World) -> bool {
 
     let mut q_pending = world.query_filtered::<(), Or<(
         With<lunco_usd_avian_contracts::PendingUsdJoint>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::SphericalJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::DistanceJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::SphericalJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::DistanceJoint>>,
     )>>();
     q_pending.iter(world).next().is_none()
 }
@@ -805,11 +805,11 @@ fn physics_admission_ready(world: &mut World) -> bool {
         With<lunco_usd_avian_contracts::ShouldBeDynamic>,
         With<lunco_core::PhysicsStatePending>,
         With<lunco_usd_avian_contracts::PendingUsdJoint>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::SphericalJoint>>,
-        With<lunco_usd_avian::PendingJoint<avian3d::prelude::DistanceJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::SphericalJoint>>,
+        With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::DistanceJoint>>,
     )>>();
     q_pending.iter(world).next().is_none()
 }
@@ -907,11 +907,11 @@ fn log_participant_readiness_blockers(world: &mut World) {
     let mut pending_joints = world
         .query_filtered::<(Entity, Option<&lunco_usd_bevy_scene::UsdPrimPath>), Or<(
             With<lunco_usd_avian_contracts::PendingUsdJoint>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::SphericalJoint>>,
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::DistanceJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::SphericalJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::DistanceJoint>>,
         )>>();
     for (entity, path) in pending_joints.iter(world) {
         warn!(
@@ -987,7 +987,7 @@ fn log_scene_readiness_blockers(world: &mut World) {
         .get_resource::<lunco_usd_sim_cosim::SceneLoadInFlight>()
         .is_some();
     let ground_pending = world
-        .get_resource::<lunco_usd_sim::GroundColliderPending>()
+        .get_resource::<lunco_usd_sim_core::GroundColliderPending>()
         .is_some_and(|pending| pending.0);
     let mut prims = world.query::<(
         &lunco_usd_bevy_scene::UsdPrimPath,
@@ -1269,7 +1269,7 @@ pub fn run() -> u8 {
                 .is_none();
             let gate_clear = !app
                 .world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0;
             if load_finished
                 && all_processed
@@ -1311,7 +1311,7 @@ pub fn run() -> u8 {
             .is_none()
         && !app
             .world()
-            .resource::<lunco_usd_sim::GroundColliderPending>()
+            .resource::<lunco_usd_sim_core::GroundColliderPending>()
             .0
         && modelica_sources_terminal(app.world_mut());
     if !scene_ready {
@@ -1528,7 +1528,7 @@ pub fn run() -> u8 {
         #[cfg(feature = "ui")]
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
-                use lunco_luncosim_edit_ui::selection::{Selected, compute_selection_aabb};
+                use lunco_luncosim_edit_ui::selection::{compute_selection_aabb, Selected};
                 use lunco_usd_bevy_scene::UsdPrimPath;
 
                 let target_ent = {

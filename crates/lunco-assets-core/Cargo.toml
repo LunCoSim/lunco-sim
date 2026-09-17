@@ -24,6 +24,7 @@ name = "build_asset_manifest"
 path = "src/bin/build_asset_manifest.rs"
 
 [dev-dependencies]
+futures-lite = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

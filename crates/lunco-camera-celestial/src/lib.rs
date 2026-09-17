@@ -3,8 +3,8 @@
 //! [`lunco_camera_core`] owns the backend-neutral `SurfaceCameraFrame`
 //! contract and [`lunco_camera_runtime`] consumes it. This package is the
 //! narrow adapter that resolves that contract from a live BigSpace hierarchy
-//! and a [`lunco_environment::GravityBody`] binding. It does not define camera
-//! modes, input policy, or avatar behavior.
+//! and a [`lunco_environment::GravityBody`] binding. Avatar-specific orbital
+//! placement is supplied by `lunco-avatar-camera`.
 
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};

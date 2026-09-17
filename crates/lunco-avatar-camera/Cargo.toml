@@ -1,0 +1,28 @@
+[package]
+name = "lunco-avatar-camera"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Avatar-specific BigSpace camera and locomotion realization for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+avian3d = { workspace = true }
+big_space = { workspace = true }
+lunco-avatar-camera-core = { path = "../lunco-avatar-camera-core" }
+lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-avatar-policy = { path = "../lunco-avatar-policy" }
+lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-core = { path = "../lunco-core" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
+lunco-port-core = { path = "../lunco-port-core" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-spatial = { path = "../lunco-spatial" }
+lunco-time = { path = "../lunco-time" }
+lunco-workspace = { path = "../lunco-workspace" }
+
+[lints]
+workspace = true

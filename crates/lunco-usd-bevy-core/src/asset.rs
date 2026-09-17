@@ -13,6 +13,7 @@ use bevy::prelude::{Asset, TypePath};
 
 use crate::compose::fetch_layer_closure;
 use crate::UsdStageProjectionPlan;
+use lunco_assets_core::asset_path::anchor_of;
 
 /// A Bevy asset representing a loaded, composed USD stage.
 ///
@@ -92,15 +93,10 @@ impl AssetLoader for UsdLoader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
 
-        // Preserve a named Bevy asset source when anchoring relative USD arcs.
-        // `LoadContext::path()` does not include the source scheme by itself.
-        let path = load_context.path();
-        let root_asset_path = match path.source() {
-            bevy::asset::io::AssetSourceId::Name(name) => {
-                format!("{}://{}", name, path.path().to_string_lossy())
-            }
-            bevy::asset::io::AssetSourceId::Default => path.path().to_string_lossy().into_owned(),
-        };
+        // Preserve the named Bevy asset source when anchoring relative USD
+        // arcs. The asset-path module owns both scheme reconstruction and
+        // platform separator normalization.
+        let root_asset_path = anchor_of(load_context.path());
 
         let recipe = fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
         UsdStageAsset::from_recipe(recipe)

@@ -31,6 +31,7 @@ api = [
 bevy = { workspace = true, features = ["bevy_render", "bevy_light", "bevy_pbr"] }
 bevy_egui = { workspace = true }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workbench-file-ops = { path = "../lunco-workbench-file-ops" }
 lunco-workbench-text-editor = { path = "../lunco-workbench-text-editor" }

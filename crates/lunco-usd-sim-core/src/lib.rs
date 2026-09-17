@@ -7,6 +7,7 @@
 //! the dependency of the other.
 
 use bevy_ecs::prelude::*;
+use bevy_math::{Quat, Vec3};
 
 /// Ordered phases shared by the USD simulation projections.
 ///
@@ -49,4 +50,40 @@ pub struct PendingDifferential {
     pub max_force: f64,
     /// Authored drive type.
     pub drive_type: lunco_mobility::DifferentialDriveType,
+}
+
+/// Set while a ground provider's static collider is still building.
+///
+/// The application-level terrain coordinator owns the flag, while the USD
+/// simulation projector consumes it at the dynamic-body admission boundary.
+/// Keeping this readiness contract here lets scene runners observe the same
+/// state without depending on the full vehicle projector.
+#[derive(Resource, Default)]
+pub struct GroundColliderPending(pub bool);
+
+/// State needed to display and animate a joint-based wheel.
+///
+/// The vehicle projector owns the physical wheel, while render and editor
+/// systems consume this shared component to identify its visual child and
+/// reconstruct proxy motion. Keeping the data contract here prevents those
+/// consumers from depending on the complete vehicle projector.
+#[derive(Component, Debug, Clone)]
+pub struct PhysicalWheel {
+    /// The visual mesh child (the entity whose local rotation we author on a
+    /// client proxy). `None` if the wheel prim carried no mesh.
+    pub visual_entity: Option<Entity>,
+    /// Rolling radius (m); the proxy roll rate is `ω = v_long / r`.
+    pub wheel_radius: f32,
+    /// Authored wheel width (m), retained so a live width edit can rebuild the
+    /// collider instead of changing density while leaving the old shape in place.
+    pub wheel_width: f32,
+    /// Visual base orientation (the USD cylinder `axis`). The roll axle is
+    /// `axis_rot · Y` and the visual base composes as `roll · axis_rot`.
+    pub axis_rot: Quat,
+    /// Integrated roll angle (rad), wrapped to `[0, 2π)`. Client display state;
+    /// unused on the host (the body carries the real rotation there).
+    pub spin_angle: f32,
+    /// Wheel mount offset in the enclosing vehicle frame. A client proxy can
+    /// reconstruct the wheel's position as `chassis_pos + chassis_rot · mount_local`.
+    pub mount_local: Vec3,
 }

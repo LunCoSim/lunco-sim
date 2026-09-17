@@ -406,7 +406,7 @@ adding a stronger boundary.
 Rust retains only mechanisms that the production surface cannot observe without
 inventing test-only APIs: the generic USD-to-`SimConnection` derived-cache
 system (`tests/usd_connection_mechanics.rs`), pure wheel-parameter validation in
-`src/wheel_params.rs`, and the lower-level USD document/projection
+`lunco-usd-sim-authoring/src/wheel_params.rs`, and the lower-level USD document/projection
 tests in their owning crates. The separate wheel/tire/suspension target contract
 is now an authored `wheel_attachment_contract` USD + Rhai gate. Raw authoring
 facts that do not require Bevy or Avian stay with

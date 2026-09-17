@@ -74,6 +74,21 @@ impl Default for UsdBillboard {
     }
 }
 
+/// Geodetic values a billboard can interpolate.
+///
+/// This is deliberately a scene-owned value type rather than a dependency on
+/// the celestial projection. A renderer or another scene fact provider can
+/// supply these values without importing the astronomy implementation.
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub struct BillboardGeo {
+    /// Latitude in degrees.
+    pub lat_deg: f64,
+    /// Longitude in degrees.
+    pub lon_deg: f64,
+    /// Height above the body datum in metres.
+    pub height_m: f64,
+}
+
 /// Values a billboard can interpolate. Assembled per frame by the renderer.
 #[derive(Default, Clone, Copy)]
 pub struct BillboardFacts<'a> {
@@ -82,7 +97,7 @@ pub struct BillboardFacts<'a> {
     pub index: Option<usize>,
     /// `None` when the scene is not site-anchored — geo tokens then render as
     /// `—` rather than a fabricated zero.
-    pub geo: Option<lunco_celestial::Geodetic>,
+    pub geo: Option<BillboardGeo>,
 }
 
 /// Expand `{...}` placeholders in `template`.
@@ -167,7 +182,11 @@ mod tests {
             name: "W3",
             label: None,
             index: None,
-            geo: Some(lunco_celestial::Geodetic::new(26.03713, 3.65841, -1950.88)),
+            geo: Some(BillboardGeo {
+                lat_deg: 26.03713,
+                lon_deg: 3.65841,
+                height_m: -1950.88,
+            }),
         }
     }
 

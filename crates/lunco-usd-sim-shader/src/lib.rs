@@ -46,6 +46,9 @@ use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
 
+/// Port backend for shader parameters driven by USD connections.
+pub mod ports;
+
 /// Marks a prim whose `ShaderLook` authoring has been evaluated, so the
 /// every-frame query collapses to empty once the scene settles. We mark a prim
 /// resolved whether or not it actually wanted a shader (a non-shader prim is

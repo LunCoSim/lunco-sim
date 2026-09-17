@@ -74,9 +74,11 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, smoothing defaults, pose-transition state, adaptive clip-plane math, camera input accumulators, and the `camera.default_presentation` policy-hook contract. Device translation, rendering, and UI adapters consume these contracts. |
 | **`lunco-camera-runtime`** | Generic interactive camera realization: camera-mode exclusivity, frame-handoff rebasing, free-flight/surface pose writers, persisted camera-input settings, and the typed `SetCameraInput` command over the camera-core contracts. Rhai authors presentation policy through the generic command surface. |
 | **`lunco-avatar-core`** | Backend-neutral avatar contracts: ECS role markers and the derived local-avatar index, possession/focus command payloads, transient notification command/queue types, and the USD-to-avatar handoff schedule. Camera solvers, input translation, and presentation adapters are supplied by specialized runtime crates. |
-| **`lunco-avatar-camera-core`** | Avatar-specific camera transition contracts: BigSpace orbit-return state and arrival markers. It depends on the generic camera contracts without making generic camera consumers carry avatar frame state. |
+| **`lunco-avatar-camera-core`** | Avatar-specific camera transition contracts: BigSpace orbit-return state, transient orbit history, arrival/input markers, and surface/orbit handoff constants. It depends on the generic camera contracts without making generic camera consumers carry avatar frame state. |
+| **`lunco-avatar-input`** | Avatar-specific semantic input runtime: pointer look, unit-normalized wheel zoom, camera behavior updates, and pause/cancel intents. It consumes shared control and camera contracts without coupling input changes to possession/authority implementation. |
 | **`lunco-avatar-policy`** | Twin-scoped avatar safety policy and physical collision-controller settings. It is shared directly by the runtime and UI, so the UI does not depend on the monolithic avatar implementation. |
-| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: possession/focus systems, local input-to-intent translation, and source-specific camera solvers. Generic camera realization lives in `lunco-camera-runtime`; `lunco-avatar-ui` supplies optional egui presentation. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
+| **`lunco-avatar-camera`** | Avatar-specific camera realization: explicit inertial BigSpace orbital placement, bounded body resolution, vessel spring-arm follow, collision-aware local locomotion, and both sides of the surface/orbit handoff. It consumes avatar camera contracts as a focused runtime package. |
+| **`lunco-avatar`** | Headless-safe specialized local-avatar runtime: possession/focus systems and avatar-side camera transitions. Semantic input projection lives in `lunco-avatar-input`; generic camera realization lives in `lunco-camera-runtime`, avatar-specific camera placement and locomotion in `lunco-avatar-camera`, and optional egui presentation in `lunco-avatar-ui`. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
 | **`lunco-avatar-ui`** | Optional egui presentation adapter for `lunco-camera-core`, `lunco-avatar-core`, and `lunco-avatar-policy`: avatar status panel, camera/name-tag and notification overlays, and the Avatar settings row. It does not depend on the avatar runtime implementation. |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Specialized vessel-control adapter: translates semantic `UserIntent` actions into authored port writes, handles control authority and input injection, and yields a vessel to its owning session (spec 034). Shared keymap settings live in `lunco-input-core`. |
@@ -97,7 +99,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-runtime`** | Application-level USD runtime boundary: scene admission, Twin-backed stage loading, runtime persistence, live document-to-stage projection, and composition of visual, diagnostics, physics, simulation, and document-command plugins. |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
-| **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, visual-split markers, preview/ancestry ownership, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
+| **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, visual-split markers, preview/ancestry ownership, authored billboard contracts, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, projection cursors, user-ownership events, and the live-projection wake signal. It owns no stage loading, composition, rendering, or UI. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection/look-at intent, camera roles/pose, mounted/cinematic camera pose, camera-track selection, the `camera.default_presentation` fact/decision boundary, and the single-authority viewport-camera reconciler. It contains no avatar behavior parser or raw input mapping and does not own geometry math or visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
@@ -109,11 +111,13 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-avian-filters`** | Render-free USD/Avian collision-filter boundary: interprets standard `PhysicsFilteredPairsAPI` and `PhysicsCollisionGroup`, owns transient joint-pair suppression, and installs the single Avian collision/contact hook. |
 | **`lunco-usd-avian-contracts`** | Shared USD/Avian ECS carriers and normalized joint-drive contract used by physics projection, readiness, queries, and co-simulation; contains no stage traversal or projection systems. |
 | **`lunco-usd-avian-reader`** | Shared render-free composed OpenUSD physics readers for collider geometry, joint topology/limits/drives, and typed physics attributes. Reused by the runtime Avian projector and authored-stage lint without owning Bevy systems or lifecycle. |
-| **`lunco-usd-avian`** | Physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. Its USD physics-material reader is isolated from the main projection module. It consumes the independent collision-filter package and `lunco-usd-avian-reader`; lint fact production is in `lunco-usd-avian-lint`. |
+| **`lunco-usd-avian-joints`** | Reusable native Avian joint boundary: typed constructors, joint-pair filtering, seating, solver-island admission, and graph-safe detach. It consumes shared contracts and is usable by authored USD and synthesized mechanisms. |
+| **`lunco-usd-avian`** | USD physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to normalized Avian joint plans and body/collider components. Native joint lifecycle is owned by `lunco-usd-avian-joints`; its USD physics-material reader is isolated from the main projection module. It consumes the independent collision-filter package and `lunco-usd-avian-reader`; lint fact production is in `lunco-usd-avian-lint`. |
 | **`lunco-usd-actuation`** | Render-free composed USD force/torque actuator reader. It converts authored actuator geometry and limits into generic co-simulation components without depending on the Avian runtime projection. |
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
-| **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, and pending differential contract used by vehicle and cosim projectors. It contains no projection systems. |
+| **`lunco-usd-sim-authoring`** | Render-free composed readers for PhysX vehicle wheel-attachment and gear-drive authoring, shared by vehicle projection and scene validation; it also publishes the corresponding typed USD lint facts. |
+| **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, pending differential contract, physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, and scene-runner packages. It contains no projection systems. |
 | **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, scene lifecycle, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`. |
 | **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
 | **`lunco-usd-sim-domain`** | Render-free USD domain projection: its public `network` module reads and validates component-network facts, `synthesis` owns Rhai-backed policies and generated-plan contracts, and the parent module owns Modelica member-class lifecycle plus ECS projection. Generic USD actuator lowering lives in `lunco-usd-actuation`; its optional API query providers live in `lunco-usd-sim-domain-api`. |
@@ -154,6 +158,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, tab/source-view commands, scene display state, pending close state, panel registration, perspective layout plans, menu contributions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
+| **`lunco-viewport-core`** | Small renderer-independent measured viewport geometry contract. Owns the physical-pixel `PanelRect` value shared by scene, camera, editor, and shell adapters without coupling that value to egui or the Workbench implementation. |
 | **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization (isolated in its private `src/layout.rs` module), `bevy_egui` rendering, panel-host consumption, viewport integration, and shell-owned command observers. It consumes the focused Workbench capability crates plus `lunco-workbench-core`; headless adapters use the core contract without linking this shell. |
 | **`lunco-workbench-guided-ui`** | Optional application-level guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
@@ -403,11 +408,12 @@ types here prevents the camera runtime from depending on the high-fan-out
 `lunco-core` package and keeps editor implementation details out of consumers.
 
 **`lunco-avatar`**
-Headless-safe local-avatar runtime. Implements possession/focus observers,
-input intent projection, and the BigSpace-aware orbit/spring-arm camera solvers
-described by `lunco-camera-core` and `lunco-avatar-core`. Generic camera mode
+Headless-safe local-avatar runtime. Implements possession/focus observers and
+avatar-side camera transitions. Avatar-specific semantic input projection lives
+in `lunco-avatar-input`; generic camera mode
 exclusivity, input policy, clip-plane math, and free-flight/surface pose writers
-live in `lunco-camera-runtime`/`lunco-camera-core`; optional egui presentation is supplied by
+live in `lunco-camera-runtime`/`lunco-camera-core`; celestial orbital placement
+lives in `lunco-avatar-camera`; optional egui presentation is supplied by
 `lunco-avatar-ui`. The viewport reconciler in `lunco-usd-bevy-camera` owns which
 camera is shown.
 
@@ -416,9 +422,25 @@ Backend-neutral avatar contract package. Its `roles` module owns the `Avatar`, `
 
 **`lunco-avatar-camera-core`**
 Avatar-specific camera transition contract package. Owns the BigSpace-backed
-`OrbitViewReturn` snapshot, its captured behavior variants, and orbit arrival
-markers. Generic camera consumers use `lunco-camera-core` without acquiring
-these avatar-only frame and restoration types.
+`OrbitViewReturn` snapshot, transient `OrbitViewHistory`, `OrbitUserInput`,
+orbit arrival markers, and shared surface/orbit handoff constants. Generic
+camera consumers use `lunco-camera-core` without acquiring these avatar-only
+frame and restoration types.
+
+**`lunco-avatar-input`**
+Avatar-specific semantic input runtime. It converts the shared `Look`, `Zoom`,
+`Pause`, and `Cancel` intents into camera input and avatar actions, including
+OS scroll-unit normalization and egui/editor ownership gates. It is a
+production runtime package, not a test-only boundary; possession and session
+authority remain in `lunco-avatar`.
+
+**`lunco-avatar-camera`**
+Avatar-specific camera realization package. Its `AvatarCelestialCameraPlugin`
+owns BigSpace orbital placement, vessel spring-arm follow, collision-aware
+free-flight/surface locomotion, and the complete surface/orbit scroll handoff
+for avatar entities. Generic celestial surface-frame publication remains in
+`lunco-camera-celestial`, while possession and focus transitions remain in
+`lunco-avatar`.
 
 **`lunco-avatar-policy`**
 Owns the generic workspace-setting interpretation for avatar soil collision and
@@ -442,9 +464,10 @@ while Rhai can author presentation policy through the command surface.
 
 **`lunco-camera-celestial`**
 Celestial spatial adapter for the generic `SurfaceCameraFrame` contract and
-adaptive perspective clip planes. It resolves a camera's body-fixed ENU basis
-and celestial bounds from live BigSpace poses, keeping those conversions out of
-generic camera and avatar interaction packages.
+adaptive perspective clip planes. It resolves body-fixed ENU bases and
+celestial bounds from live BigSpace poses, keeping those conversions out of
+generic camera and avatar interaction packages. Avatar-specific orbital
+placement is owned by `lunco-avatar-camera`.
 
 **`lunco-avatar-ui`**
 Optional egui presentation adapter for `lunco-camera-core`,
@@ -550,8 +573,8 @@ those adapters do not rebuild this reader/composition package.
 Render-free ECS contract between USD projection domains. It owns `UsdPrimPath`,
 `UsdSceneProjected`, `UsdSceneRoot`, `UsdPreviewOnly`, `UsdAnimated`, the
 projection ordering boundaries, visual-split markers, and the
-stage revision/ancestry helpers, plus the shared USD primitive and indexed-mesh
-readers and the composed collision/placement envelope readers in
+stage revision/ancestry helpers, authored billboard contracts, plus the shared
+USD primitive and indexed-mesh readers and the composed collision/placement envelope readers in
 `lunco_usd_bevy_scene::collision` (`collision_aabb`, `prim_geometry_aabb`, and
 `ObjectAabb`). Avian, terrain, and other headless projections depend on this
 package without depending on the visual mesh/camera/light adapter; the visual
@@ -573,8 +596,25 @@ on the command/runtime boundary.
 **`lunco-usd-ui`**
 Interactive USD browser and document presentation. Owns workbench sections, loaded-stage and scene-file views, browser dispatch, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd-commands`. Add `lunco-usd-viewport-ui` when an application needs the render-heavy preview surface.
 
+**`lunco-viewport-core`**
+Small renderer-independent viewport geometry contract. It owns the physical-pixel
+`PanelRect` value used to pass measured panel bounds across render, scene, and
+editor packages without coupling those contracts to egui or the Workbench shell.
+
+**`lunco-usd-viewport-core`**
+Render-independent USD preview contracts. It owns preview/session/view
+identities, document-backed projection state, camera pose math, preview
+commands, inspection settings, and selection resolution. It does not own
+offscreen images, egui textures, render cameras, or viewport panels, so USD
+editors and headless adapters can consume the state without linking the
+render-heavy surface.
+
 **`lunco-usd-viewport-ui`**
-Render-heavy USD preview surface. Owns preview sessions/views, offscreen cameras and images, viewport interaction, inspection commands/queries, and the viewport panels. It consumes the document and projection APIs but does not own Twin-browser lifecycle or document navigation.
+Render-heavy USD preview surface. It owns offscreen images and egui texture
+registration, render cameras/lights, pointer interaction, projection binding,
+inspection queries, and the viewport panels. Preview/session state and typed
+commands come from `lunco-usd-viewport-core`; this package does not own
+Twin-browser lifecycle or document navigation.
 
 **`lunco-usd-bevy-camera`**
 Render-free camera adapter built on `lunco-usd-bevy-core`,
@@ -645,14 +685,20 @@ reader does not rebuild the bridge implementation.
 Shared ECS carriers crossing the USD physics, vehicle, readiness, query, and
 co-simulation packages. It owns `PendingUsdJoint`, joint-drive data, scene
 ownership, dynamic-admission, and authored-velocity markers, while the runtime
-projector remains the owner of stage traversal and joint construction.
+projector remains the owner of stage traversal and authored-fact translation.
+
+**`lunco-usd-avian-joints`**
+Reusable native Avian joint boundary. It owns typed joint construction,
+joint-pair filtering, initial seating, solver-island admission, and graph-safe
+detach for authored USD and synthesized mechanisms.
 
 **`lunco-usd-avian`**
 Physics projection for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas —
 rigid bodies + mass-properties, all collider shapes, and **all joints**
 (revolute/prismatic/fixed/spherical/distance, D6-reduced) with
-`UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for USD-driven
-Avian joint construction (including the programmatic wheel hinge). It consumes
+`UsdPhysicsDriveAPI` motor drive — to normalized Avian joint plans and
+body/collider components. Native joint construction and lifecycle live in
+`lunco-usd-avian-joints`, including the programmatic wheel hinge. It consumes
 the separate Avian/BigSpace core bridge. Runtime-only; its Rust tests cover
 low-level mechanics with in-memory USDA fixtures, while shipped asset/runtime
 assertions are owned by the Rhai scene-test gate. Lint fact extraction is
@@ -675,11 +721,18 @@ the runtime physics package.
 **`lunco-usd-sim`**
 Specialized vehicle metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels). Its `UsdSimPlugin` is independent from the USD cosim translator; direct USD physics lowering remains in `lunco-usd-avian`.
 
+**`lunco-usd-sim-authoring`**
+Render-free composed readers for the standard PhysX vehicle wheel-attachment
+topology and gear-drive values. It is shared by `lunco-usd-sim` and
+`lunco-scene-validation`, and publishes the typed facts consumed by the USD
+Rhai lint policy. Runtime ECS resynchronization remains in `lunco-usd-sim`.
+
 **`lunco-usd-sim-core`**
 Small production contract package shared by the vehicle and USD cosim
-projectors. It owns `UsdSimSet`, `UsdSimProcessed`, and
-`PendingDifferential`, keeping those contracts out of either large
-implementation crate.
+projectors and scene readiness. It owns `UsdSimSet`, `UsdSimProcessed`,
+`PendingDifferential`, and `GroundColliderPending`, keeping shared contracts
+out of either large implementation crate and allowing scene runners to avoid
+the full vehicle projector.
 
 **`lunco-usd-sim-cosim`**
 USD-to-cosim translator and scene lifecycle package. `UsdSimCosimPlugin`

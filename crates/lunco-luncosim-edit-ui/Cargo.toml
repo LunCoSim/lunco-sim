@@ -56,10 +56,11 @@ lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-usd-viewport-core = { path = "../lunco-usd-viewport-core" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-workspace = { path = "../lunco-workspace" }
-lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-render = { path = "../lunco-render" }

@@ -30,10 +30,10 @@ use std::path::{Component, Path, PathBuf};
 /// subsystems from inventing their own scheme reassembly and disagreeing about
 /// the `Default` source, which has no scheme prefix at all.
 pub fn anchor_of(path: &AssetPath) -> String {
-    let p = path.path().to_string_lossy();
+    let p = slashed(path.path());
     match path.source() {
         AssetSourceId::Name(name) => format!("{name}://{p}"),
-        AssetSourceId::Default => p.into_owned(),
+        AssetSourceId::Default => p,
     }
 }
 
@@ -54,11 +54,8 @@ pub fn source_relative_uri(path: &AssetPath, relative: &str) -> Option<String> {
             Some(crate::engine_asset_uri(&relative))
         }
         AssetSourceId::Name(name) => {
-            let root = path
-                .path()
-                .components()
-                .next()
-                .and_then(|component| component.as_os_str().to_str())?;
+            let path = slashed(path.path());
+            let root = path.split('/').next().filter(|root| !root.is_empty())?;
             Some(uri(name, &format!("{root}/{relative}")))
         }
     }
@@ -321,6 +318,21 @@ mod tests {
             source_relative_uri(&library, "textures/albedo.png").as_deref(),
             Some("lunco://textures/albedo.png")
         );
+    }
+
+    #[test]
+    fn source_relative_uri_normalizes_windows_source_paths() {
+        let path = AssetPath::parse(r"twin://moonbase\scenes\main.usda").into_owned();
+        assert_eq!(
+            source_relative_uri(&path, r"textures\albedo.png").as_deref(),
+            Some("twin://moonbase/textures/albedo.png")
+        );
+    }
+
+    #[test]
+    fn anchor_of_normalizes_platform_separators() {
+        let path = AssetPath::parse(r"twin://moonbase\scenes\main.usda").into_owned();
+        assert_eq!(anchor_of(&path), "twin://moonbase/scenes/main.usda");
     }
 
     #[test]

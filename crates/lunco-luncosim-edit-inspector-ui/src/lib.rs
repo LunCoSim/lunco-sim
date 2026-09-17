@@ -8,7 +8,7 @@
 
 use bevy::prelude::*;
 use lunco_scene_selection::{SelectedEntities, SelectionTarget};
-use lunco_usd_viewport_ui::UsdViewportState;
+use lunco_usd_viewport_core::UsdViewportState;
 use lunco_workbench_core::WorkbenchPanelAppExt;
 use lunco_workbench_core::view_model::ViewModelAppExt;
 

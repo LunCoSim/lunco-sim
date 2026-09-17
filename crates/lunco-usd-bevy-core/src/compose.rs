@@ -40,6 +40,17 @@ use lunco_usd_compose::{
     check_stage_closure_limits, child_layer_ids, LuncoUsdResolver, SharedLayerBytes,
 };
 
+fn is_missing_asset_read(error: &ReadAssetBytesError) -> bool {
+    match error {
+        ReadAssetBytesError::AssetReaderError(AssetReaderError::NotFound(_)) => true,
+        ReadAssetBytesError::AssetReaderError(AssetReaderError::Io(error)) => {
+            error.kind() == std::io::ErrorKind::NotFound
+        }
+        ReadAssetBytesError::Io { source, .. } => source.kind() == std::io::ErrorKind::NotFound,
+        _ => false,
+    }
+}
+
 /// Async BFS that fetches the available transitive `.usda` layer closure into
 /// an in-memory, `Send` [`StageRecipe`]. The loader composes this recipe and
 /// builds the initial `UsdStageProjectionPlan` before publishing the asset. The
@@ -113,7 +124,7 @@ pub async fn fetch_layer_closure_with_limits(
                 .await
             {
                 Ok(fetched) => fetched,
-                Err(ReadAssetBytesError::AssetReaderError(AssetReaderError::NotFound(_))) => {
+                Err(error) if is_missing_asset_read(&error) => {
                     missing_ids.insert(child_id.clone());
                     dependency_diagnostics.push(StageDependencyDiagnostic::missing(
                         id.clone(),
@@ -158,6 +169,26 @@ pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedL
         .open(&recipe.root_id)
         .map_err(|e| anyhow!("USD composition error: {e}"))?;
     Ok((stage, shared))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_not_found_reads_are_recoverable() {
+        let not_found = ReadAssetBytesError::Io {
+            path: "vessels/markers/waypoint.usda".into(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        let denied = ReadAssetBytesError::Io {
+            path: "vessels/markers/waypoint.usda".into(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+
+        assert!(is_missing_asset_read(&not_found));
+        assert!(!is_missing_asset_read(&denied));
+    }
 }
 
 /// Compose a USD layer from disk into a **live** [`Stage`] (read through

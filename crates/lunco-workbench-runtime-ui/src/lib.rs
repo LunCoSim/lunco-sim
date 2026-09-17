@@ -2909,7 +2909,7 @@ mod tests {
         let panel = PanelId("right_inspector");
         rects.record(
             panel,
-            lunco_workbench_core::viewport::PanelRect {
+            lunco_viewport_core::PanelRect {
                 origin: UVec2::new(800, 100),
                 size: UVec2::new(400, 600),
             },

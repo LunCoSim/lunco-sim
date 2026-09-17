@@ -16,7 +16,9 @@ use lunco_usd_authoring::author::normalize_value_literal;
 use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages, stage_convention};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_document::document::{LayerId, UsdOp};
-use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_core::{
+    UsdPreviewId, UsdPreviewSession, UsdViewportState, selected_entity_in_preview,
+};
 use openusd::sdf::Path as SdfPath;
 
 const JOINT_TYPES: &[&str] = &[
@@ -251,7 +253,7 @@ pub fn produce_usd_joint_view(
             continue;
         }
 
-        let Some(entity) = lunco_usd_viewport_ui::selected_entity_in_preview(
+        let Some(entity) = selected_entity_in_preview(
             session,
             selected
                 .as_deref()
@@ -392,7 +394,7 @@ fn preview_body_path(targets: &[String]) -> Option<&str> {
 
 fn preview_body_transform(
     path: &str,
-    session: &lunco_usd_viewport_ui::UsdPreviewSession,
+    session: &UsdPreviewSession,
     q_prims: &Query<(Entity, &UsdPrimPath, &GlobalTransform)>,
     q_globals: &Query<&GlobalTransform>,
     q_parents: &Query<&ChildOf>,
@@ -406,11 +408,7 @@ fn preview_body_transform(
         .find(|(entity, prim, _)| {
             prim.stage_handle.id() == session.stage_handle().id()
                 && prim.path == path
-                && lunco_usd_viewport_ui::is_preview_entity(
-                    *entity,
-                    session.scene_root(),
-                    q_parents,
-                )
+                && lunco_usd_bevy_scene::is_preview_entity(*entity, session.scene_root(), q_parents)
         })
         .map(|(_, _, transform)| *transform)
 }
@@ -510,7 +508,7 @@ pub(crate) fn draw_usd_joint_preview_viz(
     let Some(entity) = view.entity else {
         return;
     };
-    if !lunco_usd_viewport_ui::is_preview_entity(entity, session.scene_root(), &q_parents) {
+    if !lunco_usd_bevy_scene::is_preview_entity(entity, session.scene_root(), &q_parents) {
         return;
     }
 

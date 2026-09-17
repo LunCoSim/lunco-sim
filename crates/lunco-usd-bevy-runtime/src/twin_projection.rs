@@ -387,18 +387,28 @@ pub(crate) fn sync_stage_dependency_diagnostics(
     const PRODUCER: &str = "usd-composition";
     const MISSING_DEPENDENCY: &str = "USD_COMPOSITION_MISSING_DEPENDENCY";
 
-    let stage_event = events.read().count() > 0;
-    if !stage_event && added_prims.is_empty() {
+    let mut saw_stage_event = false;
+    let mut stage_ids = events
+        .read()
+        .filter_map(|event| {
+            saw_stage_event = true;
+            match event {
+                bevy::asset::AssetEvent::Added { id }
+                | bevy::asset::AssetEvent::Modified { id }
+                | bevy::asset::AssetEvent::LoadedWithDependencies { id } => Some(*id),
+                bevy::asset::AssetEvent::Removed { .. }
+                | bevy::asset::AssetEvent::Unused { .. } => None,
+            }
+        })
+        .collect::<HashSet<_>>();
+    if !saw_stage_event && added_prims.is_empty() {
         return;
     }
     let Some(stages) = stages else {
         return;
     };
 
-    let stage_ids = prims
-        .iter()
-        .map(|prim| prim.stage_handle.id())
-        .collect::<HashSet<_>>();
+    stage_ids.extend(prims.iter().map(|prim| prim.stage_handle.id()));
     let mut findings = Vec::new();
     for stage_id in stage_ids {
         let Some(asset) = stages.get(stage_id) else {
@@ -1327,10 +1337,10 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                     .get_non_send::<CanonicalStages>()
                     .and_then(|s| s.get(scene_id))
                     .is_some_and(|cs| {
-                        lunco_usd_sim::wheel_params::claims_edit(&cs.view(), &sp, name)
+                        lunco_usd_sim::wheel_runtime::claims_edit(&cs.view(), &sp, name)
                     });
                 if claimed {
-                    lunco_usd_sim::wheel_params::resync_wheels_for_stage(world, scene_id);
+                    lunco_usd_sim::wheel_runtime::resync_wheels_for_stage(world, scene_id);
                     return;
                 }
             }
@@ -2155,6 +2165,57 @@ mod tests {
     use lunco_usd_document::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    #[test]
+    fn dependency_diagnostics_publish_without_projected_prims() {
+        use bevy::asset::AssetApp;
+        use lunco_usd_compose::recipe::{StageDependencyDiagnostic, StageRecipe};
+
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>()
+            .init_resource::<lunco_core::RuntimeDiagnostics>()
+            .add_message::<bevy::asset::AssetEvent<UsdStageAsset>>()
+            .add_systems(Update, sync_stage_dependency_diagnostics);
+
+        let mut recipe = StageRecipe::from_source("scene.usda", TINY);
+        recipe
+            .dependency_diagnostics
+            .push(StageDependencyDiagnostic::missing(
+                "scene.usda",
+                "lunco://markers/route_point.usda",
+            ));
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset::from_recipe(recipe).expect("prepare stage asset"));
+        app.world_mut()
+            .resource_mut::<Messages<bevy::asset::AssetEvent<UsdStageAsset>>>()
+            .write(bevy::asset::AssetEvent::Added { id: handle.id() });
+
+        app.update();
+
+        let diagnostics = &app
+            .world()
+            .resource::<lunco_core::RuntimeDiagnostics>()
+            .findings;
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "USD_COMPOSITION_MISSING_DEPENDENCY");
+        assert_eq!(
+            diagnostics[0].subject,
+            "scene.usda -> lunco://markers/route_point.usda"
+        );
+
+        app.world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .remove(handle.id());
+        app.update();
+        assert!(app
+            .world()
+            .resource::<lunco_core::RuntimeDiagnostics>()
+            .findings
+            .is_empty());
+    }
 
     #[test]
     fn component_refresh_policy_accepts_only_explicit_actions() {

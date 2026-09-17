@@ -115,7 +115,7 @@
 //
 //   facts.gear_drives[]  #{ path, valid, realization, ratio, rest_offset,
 //                           target_velocity, stiffness, damping, max_force }
-//       semantic facts produced by the `lunco-usd-sim` gear reader. The
+//       semantic facts produced by the `lunco-usd-sim-authoring` gear reader. The
 //       realization is the implicit force/acceleration solve installed by the
 //       mobility owner; invalid authored values are retained so policy can
 //       report them instead of allowing the runtime refusal to be discovered

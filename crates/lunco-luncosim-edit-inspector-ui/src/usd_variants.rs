@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use lunco_usd_bevy_core::{UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState, selected_entity_in_preview};
 use openusd::sdf::Path as SdfPath;
 
 /// One variant set on a preview session's selected prim.
@@ -115,7 +115,7 @@ pub fn produce_usd_variant_view(
             continue;
         }
 
-        let Some(entity) = lunco_usd_viewport_ui::selected_entity_in_preview(
+        let Some(entity) = selected_entity_in_preview(
             session,
             selected
                 .as_deref()

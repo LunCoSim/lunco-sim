@@ -840,7 +840,7 @@ pub(crate) fn refresh_edited_prims_live(
                 .and_then(|s| s.get(id))
                 .zip(SdfPath::new(prim).ok())
                 .is_some_and(|(cs, sp)| {
-                    lunco_usd_sim::wheel_params::claims_edit(&cs.view(), &sp, attr)
+                    lunco_usd_sim::wheel_runtime::claims_edit(&cs.view(), &sp, attr)
                 });
             if claimed {
                 wheels_dirty = true;
@@ -916,7 +916,7 @@ pub(crate) fn refresh_edited_prims_live(
     }
 
     if wheels_dirty {
-        lunco_usd_sim::wheel_params::resync_wheels_for_stage(world, id);
+        lunco_usd_sim::wheel_runtime::resync_wheels_for_stage(world, id);
     }
 
     for (owner, resolved) in program_updates {

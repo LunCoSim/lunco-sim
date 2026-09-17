@@ -73,7 +73,7 @@ pub(crate) struct EditorSessionSelection {
 /// that projection belongs to and restores it after focus changes.
 #[derive(Resource, Default)]
 pub(crate) struct EditorSessionSelections {
-    pub(crate) sessions: HashMap<lunco_usd_viewport_ui::UsdPreviewId, EditorSessionSelection>,
+    pub(crate) sessions: HashMap<lunco_usd_viewport_core::UsdPreviewId, EditorSessionSelection>,
     /// Live-scene selection remains entity-keyed because it is not an authored
     /// USD preview lease and never crosses into an Editor preview.
     live: LiveSceneSelection,
@@ -87,27 +87,27 @@ struct LiveSceneSelection {
 
 fn preview_path_for_entity(
     entity: Entity,
-    preview: &lunco_usd_viewport_ui::UsdPreviewSession,
+    preview: &lunco_usd_viewport_core::UsdPreviewSession,
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<String> {
     q_paths.get(entity).ok().and_then(|(_, path)| {
         (path.stage_handle.id() == preview.stage_handle().id()
-            && lunco_usd_viewport_ui::is_preview_entity(entity, preview.scene_root(), q_parents))
+            && lunco_usd_bevy_scene::is_preview_entity(entity, preview.scene_root(), q_parents))
         .then(|| path.path.clone())
     })
 }
 
 fn preview_entity_for_path(
     path: &str,
-    preview: &lunco_usd_viewport_ui::UsdPreviewSession,
+    preview: &lunco_usd_viewport_core::UsdPreviewSession,
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
     let mut matches = q_paths.iter().filter_map(|(entity, prim)| {
         (prim.stage_handle.id() == preview.stage_handle().id()
             && prim.path == path
-            && lunco_usd_viewport_ui::is_preview_entity(entity, preview.scene_root(), q_parents))
+            && lunco_usd_bevy_scene::is_preview_entity(entity, preview.scene_root(), q_parents))
         .then_some(entity)
     });
     let entity = matches.next()?;
@@ -121,7 +121,7 @@ fn preview_entity_for_path(
 /// `SelectionTarget` are synchronized projections used by existing panels and
 /// gizmo systems.
 fn sync_editor_session_selection(
-    viewport: Option<Res<lunco_usd_viewport_ui::UsdViewportState>>,
+    viewport: Option<Res<lunco_usd_viewport_core::UsdViewportState>>,
     mut selected: ResMut<lunco_scene_selection::SelectedEntities>,
     mut inspector_target: ResMut<lunco_scene_selection::SelectionTarget>,
     q_paths: Query<(Entity, &UsdPrimPath)>,
@@ -129,7 +129,7 @@ fn sync_editor_session_selection(
     q_selected: Query<Entity, With<crate::selection::Selected>>,
     mut commands: Commands,
     mut sessions: ResMut<EditorSessionSelections>,
-    mut last_preview: Local<Option<lunco_usd_viewport_ui::UsdPreviewId>>,
+    mut last_preview: Local<Option<lunco_usd_viewport_core::UsdPreviewId>>,
 ) {
     let focused = viewport
         .as_deref()

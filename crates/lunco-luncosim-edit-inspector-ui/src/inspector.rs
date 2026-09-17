@@ -470,7 +470,7 @@ fn preview_authoring_context(
     entity: Entity,
 ) -> Option<(lunco_doc::DocumentId, LayerId, u64)> {
     world
-        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
+        .resource::<lunco_usd_viewport_core::UsdViewportState>()
         .sessions()
         .filter(|session| session.projection_ready())
         .find_map(|session| {
@@ -1292,7 +1292,7 @@ impl DeleteSelectionIntent<'_, '_> {
 /// review state; it does not infer a document from an ECS entity.
 fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     let Some((preview, doc, edit_target, projected_generation, projection_ready)) = ctx
-        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
+        .resource::<lunco_usd_viewport_core::UsdViewportState>()
         .and_then(|viewport| {
             viewport.focused_session().map(|session| {
                 (
@@ -1386,7 +1386,7 @@ fn focused_preview_transform_context(
     entity: Entity,
 ) -> Option<PreviewTransformContext> {
     let prim = ctx.get::<UsdPrimPath>(entity)?;
-    let viewport = ctx.resource::<lunco_usd_viewport_ui::UsdViewportState>()?;
+    let viewport = ctx.resource::<lunco_usd_viewport_core::UsdViewportState>()?;
     let session = viewport.focused_session()?;
     if !session.projection_ready() {
         return None;
@@ -1767,7 +1767,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     // USD-authored (`lunco:wheel:*`, `lunco:suspension:*`, `physxVehicle*`)
     // and surface as derived sliders via `usd_parameters_section` (customData
     // UI hints). Edits go through `ApplyUsdOp` and re-derive the spawned
-    // components in place (`lunco_usd_sim::wheel_params::resync_wheels_for_stage`)
+    // components in place (`lunco_usd_sim::wheel_runtime::resync_wheels_for_stage`)
     // — the direct-ECS sliders that used to live here bypassed the document,
     // so their edits neither persisted, journaled, nor replicated, and the
     // resync would now overwrite them on the next document change.
@@ -1939,7 +1939,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
         .resource::<lunco_scene_selection::SelectionTarget>()
         .and_then(|t| t.part);
     let (preview, doc, edit_target, target, path, generation, kind, params): (
-        lunco_usd_viewport_ui::UsdPreviewId,
+        lunco_usd_viewport_core::UsdPreviewId,
         lunco_doc::DocumentId,
         LayerId,
         Entity,
@@ -1948,7 +1948,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
         Option<String>,
         Vec<crate::usd_params::UsdParam>,
     ) = match ctx
-        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
+        .resource::<lunco_usd_viewport_core::UsdViewportState>()
         .and_then(|viewport| {
             ctx.resource::<crate::usd_params::UsdParamView>()
                 .and_then(|views| views.focused(viewport))
@@ -2283,7 +2283,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
 /// identical opinion, and each dispatch costs a whole-subtree rebuild.
 fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     let (prim_path, sets) = match ctx
-        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
+        .resource::<lunco_usd_viewport_core::UsdViewportState>()
         .and_then(|viewport| {
             ctx.resource::<crate::usd_variants::UsdVariantView>()
                 .and_then(|views| views.focused(viewport))
@@ -2366,7 +2366,7 @@ fn attach_joint_from(
 /// socket frame math ran in the producer; it needs the `!Send` stage).
 fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     let (host_path, items, diagnostics) = match ctx
-        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
+        .resource::<lunco_usd_viewport_core::UsdViewportState>()
         .and_then(|viewport| {
             ctx.resource::<crate::usd_mount::UsdMountView>()
                 .and_then(|views| views.focused(viewport))

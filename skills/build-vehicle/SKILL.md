@@ -156,7 +156,7 @@ def Xform "MyRover" (
 ## Wheel physics: one parameter set, two realizations
 
 Both wheel kinds read the SAME attributes through ONE strict reader
-(`lunco-usd-sim/src/wheel_params.rs`). Only force generation differs:
+(`lunco-usd-sim-authoring/src/wheel_params.rs`). Only force generation differs:
 
 - **raycast** (default): analytical spring + traction force at the hub.
   Requires a composed suspension.

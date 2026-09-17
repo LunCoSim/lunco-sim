@@ -27,7 +27,7 @@ use avian3d::prelude::{
 };
 use bevy::prelude::*;
 use lunco_mobility::{JointedWheelTire, WheelBodyMount, WheelRaycast};
-use lunco_usd_sim::PhysicalWheel;
+use lunco_usd_sim_core::PhysicalWheel;
 
 // ── Visual constants ─────────────────────────────────────────────────────
 

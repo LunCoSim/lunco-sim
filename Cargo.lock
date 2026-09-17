@@ -7136,6 +7136,7 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "dirs",
+ "futures-lite",
  "include_dir",
  "js-sys",
  "lunco-core",
@@ -7217,15 +7218,13 @@ dependencies = [
 name = "lunco-avatar"
 version = "0.6.0-dev"
 dependencies = [
- "avian3d",
  "bevy",
  "big_space",
  "leafwing-input-manager",
  "lunco-avatar-camera-core",
  "lunco-avatar-core",
- "lunco-avatar-policy",
+ "lunco-avatar-input",
  "lunco-camera-core",
- "lunco-camera-runtime",
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-control-core",
@@ -7236,7 +7235,6 @@ dependencies = [
  "lunco-environment",
  "lunco-input-core",
  "lunco-interaction-core",
- "lunco-physics",
  "lunco-port-core",
  "lunco-render",
  "lunco-settings",
@@ -7245,6 +7243,29 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-workspace",
  "serde",
+]
+
+[[package]]
+name = "lunco-avatar-camera"
+version = "0.1.0-dev"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "big_space",
+ "lunco-avatar-camera-core",
+ "lunco-avatar-core",
+ "lunco-avatar-policy",
+ "lunco-camera-core",
+ "lunco-celestial",
+ "lunco-celestial-spatial",
+ "lunco-core",
+ "lunco-environment",
+ "lunco-interaction-core",
+ "lunco-physics",
+ "lunco-port-core",
+ "lunco-spatial",
+ "lunco-time",
+ "lunco-workspace",
 ]
 
 [[package]]
@@ -7263,6 +7284,26 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
+]
+
+[[package]]
+name = "lunco-avatar-input"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "big_space",
+ "lunco-avatar-camera-core",
+ "lunco-avatar-core",
+ "lunco-camera-core",
+ "lunco-camera-runtime",
+ "lunco-celestial",
+ "lunco-celestial-spatial",
+ "lunco-control-core",
+ "lunco-core",
+ "lunco-cosim-core",
+ "lunco-interaction-core",
+ "lunco-spatial",
+ "lunco-time",
 ]
 
 [[package]]
@@ -7697,6 +7738,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-avatar",
+ "lunco-avatar-camera",
  "lunco-camera-celestial",
  "lunco-camera-runtime",
  "lunco-celestial-ephemeris",
@@ -7741,7 +7783,7 @@ dependencies = [
  "lunco-usd-bevy-twin",
  "lunco-usd-core",
  "lunco-usd-document",
- "lunco-usd-sim",
+ "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
  "lunco-usd-sim-domain",
  "lunco-usd-terrain",
@@ -7796,7 +7838,9 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-document",
+ "lunco-usd-viewport-core",
  "lunco-usd-viewport-ui",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "transform-gizmo-bevy",
 ]
@@ -7839,7 +7883,7 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-data",
  "lunco-usd-document",
- "lunco-usd-viewport-ui",
+ "lunco-usd-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
  "openusd",
@@ -7891,8 +7935,9 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-document",
  "lunco-usd-geometry",
- "lunco-usd-sim",
+ "lunco-usd-sim-core",
  "lunco-usd-ui",
+ "lunco-usd-viewport-core",
  "lunco-usd-viewport-ui",
  "lunco-workbench",
  "lunco-workbench-browser",
@@ -8646,12 +8691,11 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-time",
  "lunco-twin",
- "lunco-usd-avian",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
+ "lunco-usd-avian-joints",
  "lunco-usd-bevy-scene",
  "lunco-usd-document",
- "lunco-usd-sim",
  "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
 ]
@@ -8698,7 +8742,7 @@ dependencies = [
  "lunco-usd-bevy-twin",
  "lunco-usd-compose",
  "lunco-usd-document",
- "lunco-usd-sim",
+ "lunco-usd-sim-authoring",
  "lunco-workspace",
  "openusd",
  "rhai",
@@ -9118,11 +9162,11 @@ dependencies = [
  "lunco-core",
  "lunco-environment",
  "lunco-physics",
- "lunco-spatial",
  "lunco-storage",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
  "lunco-usd-avian-filters",
+ "lunco-usd-avian-joints",
  "lunco-usd-avian-reader",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -9163,6 +9207,17 @@ dependencies = [
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-avian-joints"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-physics",
+ "lunco-usd-avian-contracts",
+ "lunco-usd-avian-filters",
 ]
 
 [[package]]
@@ -9483,7 +9538,7 @@ dependencies = [
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
- "lunco-usd-viewport-ui",
+ "lunco-usd-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
  "openusd",
@@ -9516,13 +9571,11 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-avatar-core",
- "lunco-celestial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
  "lunco-cosim-core",
  "lunco-environment",
- "lunco-hooks",
  "lunco-materials",
  "lunco-mobility",
  "lunco-physics",
@@ -9530,20 +9583,33 @@ dependencies = [
  "lunco-render",
  "lunco-spatial",
  "lunco-usd-actuation",
- "lunco-usd-avian",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-filters",
+ "lunco-usd-avian-joints",
  "lunco-usd-avian-reader",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
+ "lunco-usd-sim-authoring",
  "lunco-usd-sim-celestial",
  "lunco-usd-sim-core",
  "lunco-usd-sim-shader",
  "lunco-usd-sim-telemetry",
  "openusd",
  "web-time",
+]
+
+[[package]]
+name = "lunco-usd-sim-authoring"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bevy_math",
+ "lunco-hooks",
+ "lunco-mobility",
+ "lunco-usd-bevy-core",
+ "openusd",
 ]
 
 [[package]]
@@ -9566,6 +9632,7 @@ name = "lunco-usd-sim-core"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "bevy_math",
  "lunco-mobility",
 ]
 
@@ -9619,9 +9686,9 @@ dependencies = [
  "lunco-port-core",
  "lunco-render",
  "lunco-signal",
- "lunco-usd-avian",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
+ "lunco-usd-avian-joints",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -9744,7 +9811,7 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-data",
  "lunco-usd-document",
- "lunco-usd-viewport-ui",
+ "lunco-usd-viewport-core",
  "lunco-workbench",
  "lunco-workbench-browser",
  "lunco-workbench-core",
@@ -9755,6 +9822,21 @@ dependencies = [
  "openusd",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "lunco-usd-viewport-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-settings",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-document",
+ "lunco-viewport-core",
+ "serde",
 ]
 
 [[package]]
@@ -9778,12 +9860,20 @@ dependencies = [
  "lunco-usd-commands",
  "lunco-usd-core",
  "lunco-usd-document",
+ "lunco-usd-viewport-core",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
- "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-viewport-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
 ]
 
 [[package]]
@@ -9844,6 +9934,7 @@ dependencies = [
  "lunco-theme",
  "lunco-time",
  "lunco-twin",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-file-ops",
  "lunco-workbench-state",
@@ -9879,6 +9970,7 @@ dependencies = [
  "bevy",
  "egui",
  "lunco-core",
+ "lunco-viewport-core",
  "serde",
 ]
 
@@ -9948,6 +10040,7 @@ dependencies = [
  "lunco-status-core",
  "lunco-theme",
  "lunco-twin",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-state",
  "lunco-workspace",
