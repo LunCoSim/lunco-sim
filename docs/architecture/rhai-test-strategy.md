@@ -222,8 +222,11 @@ recipes and their acceptance scenes stay in the owning Twin.
    the asset and stage validation it reuses; the scene mutation crate does not
    own test inventory.
    Omission means deterministic headless execution; `TEST_KIND = "graphics"`
-   selects the GPU-backed renderer, while `TEST_KIND = "editor"` selects the
-   production windowed host for document/preview/selection workflows.
+   selects the GPU-backed pixel-capture renderer, `TEST_KIND =
+   "render-contract"` selects the GPU-backed offscreen host for render
+   diagnostics that intentionally do not produce a pixel take, and `TEST_KIND =
+   "editor"` selects the production windowed host for document/preview/selection
+   workflows.
    `scripts/run_scene_tests.sh` consumes this result and does not maintain a
    second scene or execution-domain classifier.
 
