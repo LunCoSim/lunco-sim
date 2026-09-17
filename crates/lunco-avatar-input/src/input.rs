@@ -1,4 +1,18 @@
-use super::*;
+use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
+use lunco_avatar_camera_core::OrbitUserInput;
+use lunco_avatar_core::commands::ReleaseVessel;
+use lunco_avatar_core::roles::{Avatar, LocalAvatar};
+use lunco_camera_core::{
+    CameraZoomInput, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
+    SurfaceRelativeMode,
+};
+use lunco_camera_runtime::{CameraInputSettings, body_orbit_look_scale};
+use lunco_celestial::CelestialBody;
+use lunco_celestial_spatial::{LocalGravityField, surface_axes_in_grid};
+use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
+use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 
 // ─── Intent & Input ──────────────────────────────────────────────────────────
 
@@ -9,7 +23,7 @@ use super::*;
 /// shared port path (leafwing `ActionState` → `ControlBinding` → `SetPorts` →
 /// FSW `forward`/`side`/`up` → `apply_fly`), exactly like a vessel. This system
 /// keeps only the look axis, which stays mouse-direct until the P2 camera decouple.
-pub(super) fn capture_avatar_intent(
+pub(crate) fn capture_avatar_intent(
     mut q_avatar: Query<
         (Entity, &IntentState, &mut IntentAnalogState),
         (With<Avatar>, With<LocalAvatar>),
@@ -49,7 +63,7 @@ pub(super) fn capture_avatar_intent(
 /// Bevy preserves the unit supplied by the OS/device. Leafwing's
 /// `MouseScrollAxis` exposes only a scalar, so using that axis here loses the
 /// distinction and makes pixel-mode touchpads produce enormous zoom deltas.
-pub(super) fn normalized_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
+pub(crate) fn normalized_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
     match scroll.unit {
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
@@ -61,7 +75,7 @@ pub(super) fn normalized_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
 /// Camera zoom is presentation state, not a vessel control port. It consumes the
 /// unit-preserving Bevy input at this boundary, then accumulates it per avatar for
 /// the active camera behavior to consume + reset.
-pub(super) fn collect_camera_zoom(
+pub(crate) fn collect_camera_zoom(
     time: Res<Time<Real>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
     drag_mode: Option<Res<lunco_interaction_core::DragModeActive>>,
@@ -87,7 +101,7 @@ pub(super) fn collect_camera_zoom(
 ///
 /// In surface mode, CTRL+look applies yaw around `local_up` and pitch around
 /// the yawed-right axis, matching the surface-relative camera orientation.
-pub(super) fn avatar_behavior_input_system(
+pub(crate) fn avatar_behavior_input_system(
     q_avatar: Query<
         (&IntentAnalogState, Option<&SurfaceRelativeMode>),
         (With<Avatar>, With<LocalAvatar>),
@@ -216,7 +230,7 @@ pub(super) fn avatar_behavior_input_system(
 /// reaching here. Keeping the angle conversion in one function makes the
 /// right-button path identical for free-flight, orbit, spring-arm, and surface
 /// cameras; no camera mode is allowed to reinterpret a raw mouse button.
-pub(super) fn look_angles(
+pub(crate) fn look_angles(
     yaw: f32,
     pitch: f32,
     look_delta: Vec2,
@@ -230,7 +244,7 @@ pub(super) fn look_angles(
     (yaw, pitch)
 }
 
-pub(super) fn avatar_global_hotkeys(
+pub(crate) fn avatar_global_hotkeys(
     q_avatar: Query<&IntentState, (With<Avatar>, With<LocalAvatar>)>,
     transport: Option<Res<TimeTransport>>,
     mut commands: Commands,
@@ -244,5 +258,68 @@ pub(super) fn avatar_global_hotkeys(
                 });
             }
         }
+    }
+}
+
+/// The semantic cancel intent releases the current avatar camera/control mode.
+pub(crate) fn avatar_escape_possession(
+    q_avatar: Query<
+        (Entity, &IntentState),
+        (
+            With<Avatar>,
+            With<LocalAvatar>,
+            Or<(
+                With<lunco_cosim_core::ControlLink>,
+                With<SpringArmCamera>,
+                With<OrbitCamera>,
+            )>,
+        ),
+    >,
+    cursor_mode: lunco_core::CursorModeActive,
+    mut commands: Commands,
+) {
+    if cursor_mode.any() {
+        return;
+    }
+    for (entity, intent) in q_avatar.iter() {
+        if intent.just_pressed(&UserIntent::Cancel) {
+            commands.trigger(ReleaseVessel { target: entity });
+        }
+    }
+}
+
+/// Run condition for keyboard-owned avatar actions.
+pub(crate) fn scene_keyboard_active(focus: Res<lunco_control_core::EguiFocus>) -> bool {
+    !focus.wants_keyboard
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroll_units_are_normalized_before_zoom() {
+        let line = AccumulatedMouseScroll {
+            delta: Vec2::new(0.0, 1.0),
+            unit: MouseScrollUnit::Line,
+        };
+        let pixel = AccumulatedMouseScroll {
+            delta: Vec2::new(0.0, MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR),
+            unit: MouseScrollUnit::Pixel,
+        };
+        assert_eq!(normalized_scroll_delta(&line), 1.0);
+        assert_eq!(normalized_scroll_delta(&pixel), 1.0);
+    }
+
+    #[test]
+    fn semantic_look_intent_rotates_camera_angles() {
+        let settings = CameraInputSettings {
+            look_radians_per_pointer_unit: 0.01,
+            ..default()
+        };
+        let (yaw, pitch) = look_angles(0.0, 0.0, Vec2::new(10.0, -5.0), &settings, 1.0);
+
+        assert!((yaw + 0.1).abs() < 1.0e-6);
+        assert!((pitch - 0.05).abs() < 1.0e-6);
     }
 }

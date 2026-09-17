@@ -1,7 +1,8 @@
 //! Implementation of the local presentation embodiment and interaction surface.
 //!
-//! This crate defines the [Avatar] entity, which handles camera input,
-//! focus transitions, and vessel possession. The camera architecture uses
+//! This crate defines the [Avatar] entity, which handles focus transitions,
+//! vessel possession, and avatar-side camera transactions. Semantic input is
+//! projected by `lunco-avatar-input`. The camera architecture uses
 //! composable behavior components (`SpringArmCamera`, `OrbitCamera`, `FreeFlightCamera`) rather
 //! than a monolithic state machine, enabling modular frame-aware operation
 //! and explicit transitions between reference frames.
@@ -24,7 +25,6 @@ use avian3d::prelude::{
     Collider, MoveAndSlide, MoveAndSlideConfig, MoveAndSlideHitResponse, SpatialQueryFilter,
 };
 use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
-use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
@@ -47,7 +47,6 @@ use lunco_camera_core::{
     AdaptiveNearPlane, CameraUpdateSet, CameraZoomInput, FollowAttitude, FreeFlightCamera,
     FreeFlightSettings, OrbitCamera, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
-use lunco_camera_runtime::{body_orbit_look_scale, CameraInputSettings};
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
 use lunco_core::{on_command, register_commands, CelestialBody, Spacecraft};
 use lunco_core_session::commands::UpdateProfile;
@@ -76,17 +75,10 @@ use lunco_celestial_spatial::{
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings};
 use lunco_spatial::attach::migrate_to_grid;
-use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
 
 mod camera;
-mod input;
 use camera::freeflight_scroll_transit_system;
-use input::{
-    avatar_behavior_input_system, avatar_global_hotkeys, capture_avatar_intent, collect_camera_zoom,
-};
-#[cfg(test)]
-use input::{look_angles, normalized_scroll_delta};
 
 // Render-bound screenshots and deterministic offline recording are owned by
 // `lunco-capture`; this crate remains responsible for camera intent,
@@ -319,8 +311,8 @@ impl Plugin for LunCoAvatarPlugin {
         if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
             app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
         }
-        if !app.is_plugin_added::<lunco_camera_runtime::CameraRuntimePlugin>() {
-            app.add_plugins(lunco_camera_runtime::CameraRuntimePlugin);
+        if !app.is_plugin_added::<lunco_avatar_input::AvatarInputPlugin>() {
+            app.add_plugins(lunco_avatar_input::AvatarInputPlugin);
         }
         register_orbit_history_hook(app);
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
@@ -417,10 +409,6 @@ impl Plugin for LunCoAvatarPlugin {
                 enforce_ownership,
                 sync_profile,
                 tick_notifications,
-                // Mouse-wheel → per-avatar zoom accumulator, sourced from the `Zoom`
-                // intent and gated on egui pointer capture (replaces the old egui
-                // `CameraScroll` bridges). Runs before the camera systems consume it.
-                collect_camera_zoom,
             ),
         );
         // USD projection and celestial projection publish scene entities in
@@ -435,28 +423,6 @@ impl Plugin for LunCoAvatarPlugin {
                 .chain()
                 .in_set(AvatarSceneHandoffSet),
         );
-        // Mouse-look capture + apply. Pointer intents — gated internally on
-        // `EguiFocus.wants_pointer` (look_delta is zeroed while a panel holds the
-        // pointer), NOT on keyboard focus, so typing never freezes the camera.
-        app.add_systems(
-            Update,
-            // The second system consumes the analog state written by the first.
-            // Keep this explicit: Bevy otherwise treats the tuple as unordered,
-            // which makes a right-drag intermittently apply one frame late or not
-            // at all when the camera system samples the old zero delta.
-            (capture_avatar_intent, avatar_behavior_input_system).chain(),
-        );
-
-        // Discrete KEYBOARD intents: `Cancel` (release possession/follow) and the
-        // `Pause` hotkey. Gated so a key typed into a focused egui field doesn't
-        // fire them. `Cancel`/Backspace is the two-step Esc pattern: while a field
-        // is focused egui consumes the key (guard suppresses the intent); once
-        // defocused, the next press acts.
-        app.add_systems(
-            Update,
-            (avatar_escape_possession, avatar_global_hotkeys).run_if(scene_keyboard_active),
-        );
-
         // Incremental camera modes are stepped at a constant 60 Hz and eased by
         // `InteractionEased`.  Surface mode is derived directly from its gravity
         // frame and is therefore a direct single-writer mode. The chase camera is different: it follows the body's
@@ -789,18 +755,6 @@ fn reset_easing_before_spatial_rebase(
     for mut eased in &mut q {
         eased.reset();
     }
-}
-
-/// Run-condition: `true` when the 3D scene may consume raw keyboard input —
-/// i.e. egui is NOT holding the keyboard (no focused text field / drag-value).
-///
-/// [`lunco_control_core::EguiFocus`] is published each frame by `lunco-workbench` from
-/// the primary egui context's `wants_keyboard_input()`. On a headless binary
-/// nothing writes it, so it stays default (`false`) and the gate is always open.
-/// One-frame latency (the flag reflects the previous egui pass) is imperceptible
-/// for held input.
-fn scene_keyboard_active(focus: Res<lunco_control_core::EguiFocus>) -> bool {
-    !focus.wants_keyboard
 }
 
 /// Local avatars are command endpoints with an authored-equivalent
@@ -1520,42 +1474,6 @@ pub fn avatar_raycast_possession(
             target,
             bind_camera: true,
         });
-    }
-}
-
-/// The `Cancel` intent (default `Backspace`) releases possession, plain follow
-/// **and** body-orbit focus — all unwind through the same `ReleaseVessel` path
-/// (which strips ControlLink, SpringArm, OrbitCamera, interpolation, and
-/// reinstates a free-flight camera).
-///
-/// Reads the intent (not the raw key) so it flows through the shared
-/// `UserIntent` vocabulary; the system is `run_if(scene_keyboard_active)` gated so
-/// a `Backspace` typed into a focused egui field edits text instead (the two-step
-/// Esc/defocus pattern).
-fn avatar_escape_possession(
-    q_avatar: Query<
-        (Entity, &IntentState),
-        (
-            With<Avatar>,
-            With<LocalAvatar>,
-            Or<(With<ControlLink>, With<SpringArmCamera>, With<OrbitCamera>)>,
-        ),
-    >,
-    cursor_mode: lunco_core::CursorModeActive,
-    mut commands: Commands,
-) {
-    // `Cancel` unwinds the active cursor mode first. While a spawn ghost, terrain
-    // brush, or authored script tool owns the pointer, Cancel belongs to that mode,
-    // not to possession. With nothing up, Cancel means
-    // what it always did and releases the vessel. Same gate family the click handlers
-    // already honour, so keyboard and mouse agree on who owns the interaction.
-    if cursor_mode.any() {
-        return;
-    }
-    for (entity, intent) in q_avatar.iter() {
-        if intent.just_pressed(&UserIntent::Cancel) {
-            commands.trigger(ReleaseVessel { target: entity });
-        }
     }
 }
 
@@ -3754,38 +3672,6 @@ mod tests {
             ),
             None
         );
-    }
-
-    #[test]
-    fn scroll_units_are_normalized_before_zoom() {
-        let line = AccumulatedMouseScroll {
-            delta: Vec2::new(0.0, 1.0),
-            unit: MouseScrollUnit::Line,
-        };
-        let pixel = AccumulatedMouseScroll {
-            delta: Vec2::new(0.0, MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR),
-            unit: MouseScrollUnit::Pixel,
-        };
-        assert_eq!(normalized_scroll_delta(&line), 1.0);
-        assert_eq!(normalized_scroll_delta(&pixel), 1.0);
-    }
-
-    #[test]
-    fn semantic_look_intent_rotates_camera_angles() {
-        let settings = CameraInputSettings {
-            look_radians_per_pointer_unit: 0.01,
-            ..default()
-        };
-        let mut yaw = 0.0;
-        let mut pitch = 0.0;
-
-        // This is the delta produced by the configured pointer-button chord.
-        // Positive horizontal motion turns the camera left, and upward motion
-        // raises the view, matching the live camera convention.
-        (yaw, pitch) = look_angles(yaw, pitch, Vec2::new(10.0, -5.0), &settings, 1.0);
-
-        assert!((yaw + 0.1).abs() < 1.0e-6);
-        assert!((pitch - 0.05).abs() < 1.0e-6);
     }
 
     #[test]

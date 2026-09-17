@@ -1,0 +1,25 @@
+[package]
+name = "lunco-avatar-input"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Avatar-specific semantic input and camera-input projection for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_camera"] }
+big_space = { workspace = true }
+lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-avatar-camera-core = { path = "../lunco-avatar-camera-core" }
+lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-camera-runtime = { path = "../lunco-camera-runtime" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-control-core = { path = "../lunco-control-core" }
+lunco-core = { path = "../lunco-core" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
+lunco-spatial = { path = "../lunco-spatial" }
+lunco-time = { path = "../lunco-time" }
+
+[lints]
+workspace = true

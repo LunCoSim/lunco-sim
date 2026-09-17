@@ -24,10 +24,10 @@ lunco-controller = { path = "../lunco-controller" }
 lunco-input-core = { path = "../lunco-input-core" }
 lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-avatar-input = { path = "../lunco-avatar-input" }
 lunco-avatar-camera-core = { path = "../lunco-avatar-camera-core" }
 lunco-avatar-policy = { path = "../lunco-avatar-policy" }
 lunco-camera-core = { path = "../lunco-camera-core" }
-lunco-camera-runtime = { path = "../lunco-camera-runtime" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }

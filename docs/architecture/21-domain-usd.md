@@ -584,7 +584,9 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
   never changes pose authority. Aim either camera with `lunco:cameraLookAt`.
 
 - **Avatar behavior:** `LunCoAvatarAPI` only marks the local avatar role. The
-  initial interactive rig is generic Rust substrate; Rhai selects free-flight,
+  initial interactive rig is generic Rust substrate; the avatar-specific
+  `lunco-avatar-input` adapter projects shared semantic intents into camera
+  behavior; Rhai selects free-flight,
   orbit, follow, or another composed behavior through the camera command/API
   surface. USD does not carry a camera-mode field.
 - **Switching:** cameras spawn inactive; make one the active view with

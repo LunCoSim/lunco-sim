@@ -15,6 +15,7 @@ members = [
     "crates/lunco-input-ui",
     "crates/lunco-avatar",
     "crates/lunco-avatar-core",
+    "crates/lunco-avatar-input",
     "crates/lunco-avatar-camera-core",
     "crates/lunco-avatar-camera",
     "crates/lunco-avatar-policy",

@@ -1,6 +1,7 @@
 # LunCoSim Avatar Camera System
 
-Avatar owns local input, possession, and avatar-side camera transitions.
+Avatar owns possession and avatar-side camera transitions. Semantic pointer and
+keyboard projection is supplied by `lunco-avatar-input`.
 The reusable camera contracts and generic free-flight/surface pose writers are
 in `lunco-camera-core` and `lunco-camera-runtime`; celestial ENU frame
 resolution is supplied by `lunco-camera-celestial`; avatar orbital placement is
