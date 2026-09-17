@@ -14,11 +14,12 @@ components. The reusable implementation is split across focused owners:
 `lunco-camera-runtime` realizes generic interactive camera modes,
 `lunco-embodiment-core` carries embodiment role contracts, `lunco-scene-camera`
 exposes script/API camera transactions, `lunco-avatar-input` is the specialized
-owner of raw input translation, `lunco-avatar` owns control authority, follow
-policy, and scene interaction, and `lunco-avatar-camera` owns celestial
-BigSpace orbital placement, focus/return transactions, interactive-camera
-initialization, surface/orbit lifecycle commands, vessel spring-arm
-realization, and collision-aware local locomotion. Embodiment transition state is in
+owner of raw input translation, `lunco-avatar` owns control authority and scene
+interaction, and `lunco-avatar-camera` owns typed subject-binding/release
+transactions, follow, celestial BigSpace orbital placement, focus/return
+transactions, interactive-camera initialization, surface/orbit lifecycle
+commands, vessel spring-arm realization, and collision-aware local locomotion.
+Embodiment transition state is in
 `lunco-avatar-camera-core`.
 Generic input response, the one-writer interaction-easing rule, and clip
 precision policy live in `lunco-camera-runtime`/`lunco-camera-core`; Rhai
@@ -50,11 +51,11 @@ LunCoSim decouples human interaction from physical execution using five distinct
 > `FreeFlightCamera`, `SurfaceCamera`) are backend-neutral contracts in
 > `lunco-camera-core`; `lunco-camera-runtime` supplies the generic free-flight,
 > surface, input-policy, and clip-plane mechanisms, while `lunco-avatar-input`
-> supplies semantic input projection, `lunco-avatar` supplies control authority,
-> follow policy, and scene interaction, `lunco-avatar-camera` supplies celestial
-> orbital placement, focus/return transactions, interactive-camera
-> initialization, surface/orbit lifecycle, vessel follow, and collision-aware local
-> locomotion, and
+> supplies semantic input projection, `lunco-avatar` supplies control authority
+> and scene interaction, `lunco-avatar-camera` supplies typed subject-binding/
+> release transactions, follow, celestial orbital placement, focus/return
+> transactions, interactive-camera initialization, surface/orbit lifecycle,
+> vessel follow, and collision-aware local locomotion, and
 > `lunco-camera-celestial` supplies surface-frame adaptation. Standard
 > USD projection, mounted cameras, camera paths, and selection live in
 > `lunco-usd-bevy-camera`. `lunco-render-bevy` binds render intent to a
@@ -101,7 +102,11 @@ relationships. Generic authored-camera selection and camera-path commands do
 not need an embodiment and are handled by `lunco-usd-bevy-camera`.
 `FocusTarget`, `FollowTarget`, `ReturnFromOrbit`, `SetCameraInput`, and
 `SetCameraLookAt` are generic camera contracts; `AcquireControl` is the
-high-level embodiment composition of the generic control relationship.
+high-level embodiment composition of the generic control relationship. After
+committing authority, avatar emits `BindCameraTarget` when requested;
+`lunco-avatar-camera` realizes that presentation transaction.
+`ReleaseControlSource` emits `ClearCameraBinding`, so control release and
+camera restoration have separate owners.
 `lunco-scene-camera` resolves scene/API targets and queues `PendingFocus`, while
 `lunco-avatar-camera` consumes that request when its specialized camera
 authority is present. Surface/orbit
@@ -252,12 +257,13 @@ The *behavior contracts* of the free/possession cameras — `SpringArmCamera`,
 `lunco-camera-core`. Generic mode exclusivity, free-flight orientation, and
 surface-frame pose writing, validated input response, and clip precision live in
 `lunco-camera-runtime`/`lunco-camera-core`; semantic input projection is in
-`lunco-avatar-input`, avatar-owned control authority, follow policy, and scene
-interaction stay in `lunco-avatar`, while celestial BigSpace orbital
-placement, focus/return transactions, interactive-camera initialization,
-surface/orbit lifecycle, vessel spring-arm realization, and collision-aware
-local locomotion are in `lunco-avatar-camera`; avatar-only orbit return
-state is in `lunco-avatar-camera-core`. Embodiment lifecycle remains in
+`lunco-avatar-input`, avatar-owned control authority and scene interaction stay
+in `lunco-avatar`, while typed subject-binding/release transactions, follow,
+celestial BigSpace orbital placement, focus/return transactions,
+interactive-camera initialization, surface/orbit lifecycle, vessel spring-arm
+realization, and collision-aware local locomotion are in
+`lunco-avatar-camera`; avatar-only orbit return state is in
+`lunco-avatar-camera-core`. Embodiment lifecycle remains in
 `lunco-embodiment-core`; generic control relationship commands are in
 `lunco-control-core`, and generic camera commands are in `lunco-camera-core`. The
 viewport reconciler decides *which* camera is shown; a rig

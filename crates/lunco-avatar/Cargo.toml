@@ -18,7 +18,6 @@ bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"]
 # should look" — stated without naming a render pipeline.
 lunco-render = { path = "../lunco-render" }
 lunco-notifications-core = { path = "../lunco-notifications-core" }
-big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-input-core = { path = "../lunco-input-core" }
@@ -28,9 +27,6 @@ lunco-avatar-camera-core = { path = "../lunco-avatar-camera-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
-lunco-celestial = { path = "../lunco-celestial", default-features = false }
-lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
-lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }

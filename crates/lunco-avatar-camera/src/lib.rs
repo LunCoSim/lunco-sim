@@ -39,9 +39,12 @@ pub(crate) mod handoff;
 mod locomotion;
 mod scroll_transit;
 mod spring_arm;
+mod subject;
 mod transactions;
 
 /// Realizes avatar camera modes that need source-specific spatial adaptation.
+/// It also consumes the typed subject-binding and release transactions emitted
+/// by avatar authority, keeping spatial pose and camera-mode changes together.
 ///
 /// The orbital mode uses the target body's explicit inertial BigSpace frame;
 /// the spring arm follows a vessel in its active local frame and filters the
@@ -85,6 +88,8 @@ impl Plugin for AvatarCelestialCameraPlugin {
         app.add_systems(Update, transactions::avatar_init_system);
         transactions::register_orbit_history_hook(app);
         app.add_observer(transactions::clear_orbit_view_history_on_twin_closed);
+        app.add_observer(subject::on_bind_camera_target);
+        app.add_observer(subject::on_clear_camera_binding);
         handoff::register(app);
         register_all_commands(app);
     }
@@ -283,6 +288,7 @@ fn apply_pending_focus(
 register_commands!(
     on_surface_teleport_command,
     on_leave_surface_command,
+    subject::on_follow_command,
     transactions::on_return_from_orbit,
     transactions::on_focus_command,
 );

@@ -23,6 +23,31 @@ pub struct CameraUpdateSet;
 #[derive(Event, Clone, Copy, Debug, Default)]
 pub struct RequestLocalEmbodimentView;
 
+/// Request a camera adapter to bind a camera rig to a moving subject.
+///
+/// The event is emitted after a control owner has committed an optional
+/// presentation binding. It carries the resolved camera entity, so the
+/// camera adapter does not need to select an entity by ECS order or know how
+/// control authority was established. The event does not mutate control
+/// authority or the producer's control link.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct BindCameraTarget {
+    /// Camera rig receiving the subject binding.
+    pub camera: Entity,
+    /// Subject whose pose the camera should present.
+    pub target: Entity,
+}
+
+/// Request a camera adapter to leave a subject-bound presentation mode.
+///
+/// Control authority is a separate transaction owned by the caller. This
+/// event only hands camera-mode cleanup to the camera realization.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct ClearCameraBinding {
+    /// Camera rig leaving subject-bound presentation.
+    pub camera: Entity,
+}
+
 /// A focus request retained until the owning camera adapter can apply it at a
 /// frame boundary. The request carries only generic entity identity and a
 /// presentation distance; spatial interpretation belongs to the active camera
