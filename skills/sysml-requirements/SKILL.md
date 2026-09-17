@@ -246,6 +246,23 @@ active Twin, the generic tool uses:
 let source = sysml_requirements::source();
 ```
 
+When a policy needs several literals, select them in one bounded request and
+reuse the returned report:
+
+```rhai
+let source = sysml_requirements::source_with_attributes([
+    "Project::Vehicle::massKg", "Project::Vehicle::wheelRadiusM"
+]);
+if source.ok != true { throw(source.error); }
+let mass = sysml_requirements::number(source, "Project::Vehicle::massKg");
+let radius = sysml_requirements::number(source, "Project::Vehicle::wheelRadiusM");
+```
+
+This avoids one source-set validation and JSON projection per literal. Keep the
+report local to the evaluation or task-construction boundary; do not turn it
+into a mutable global cache. Qualified selectors are preferred, and ambiguous
+short selectors remain an explicit error.
+
 That call is read-only. It fails visibly when there is no active Twin, no
 indexed SysML source, a parser diagnostic, a registry error, or a registry
 verification name that does not exist in the source set. Do not add a fallback

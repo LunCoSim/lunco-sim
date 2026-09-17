@@ -557,3 +557,28 @@ fn source() {
     // engine's value budget.
     query("ValidateSysml", #{path: "twin://" + name, compact: true, attributes: []})
 }
+
+/// Build one bounded source projection for a group of literals.
+///
+/// Callers that need several parameters should use this once and then pass the
+/// returned report to `number`/`text`.  Sending one `ValidateSysml` request per
+/// literal is both slower and needlessly repeats Twin source-set validation.
+/// The selector is deliberately forwarded unchanged: qualified names preserve
+/// ownership, while a short name that maps to multiple definitions remains
+/// visible through `attribute_collisions` and is rejected by `attribute`.
+fn source_with_attributes(names) {
+    let name = twin_name();
+    if name == "" { return #{ok: false, error: "active Twin is unavailable"}; }
+    if names == () || type_of(names) != "array" {
+        return #{ok: false, error: "SysML attribute selector must be an array"};
+    }
+    let selected = [];
+    for literal in names {
+        if type_of(literal) != "string" || literal == "" {
+            return #{ok: false, error: "SysML attribute selector contains an invalid name"};
+        }
+        if !selected.contains(literal) { selected.push(literal); }
+    }
+    query("ValidateSysml", #{path: "twin://" + name,
+        compact: true, attributes: selected})
+}
