@@ -38,6 +38,7 @@
 //! event both publish the same queue marker; `process_queued_usd_visuals` is the
 //! single reader and marks each projected entity with `UsdSceneProjected`.
 
+use bevy::asset::AssetId;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
@@ -410,6 +411,7 @@ fn instantiate_usd_prim(
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     quality: lunco_render::RenderQualityProfile,
+    live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
 ) {
     let id = prim_path.stage_handle.id();
     let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
@@ -439,6 +441,7 @@ fn instantiate_usd_prim(
         meshes,
         quality,
         stage_generation,
+        live_child_keys,
     );
 }
 
@@ -466,6 +469,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
     meshes: &mut Assets<Mesh>,
     quality: lunco_render::RenderQualityProfile,
     stage_generation: u64,
+    live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
 ) {
     let convention = match stage_convention(reader) {
         Ok(convention) => convention,
@@ -1222,6 +1226,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             instance_projection,
             is_high_precision_parent,
             is_grid_entity,
+            live_child_keys,
             commands,
         );
     }
@@ -1518,6 +1523,7 @@ fn commit_usd_children<R: UsdRead>(
     instance_projection: Option<&UsdInstanceProjection>,
     is_high_precision_parent: bool,
     is_grid_entity: bool,
+    live_child_keys: &mut std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>,
     commands: &mut Commands,
 ) {
     // Child order is part of the structural admission contract.  Readers may
@@ -1529,6 +1535,15 @@ fn commit_usd_children<R: UsdRead>(
     children.sort_by_key(|path| path.to_string());
     for child_path in children {
         if !reader.is_active(&child_path) {
+            continue;
+        }
+        // A structural sink batch can contain both a newly-added parent and
+        // one of its descendants. The incremental bridge creates the
+        // descendant immediately, while the parent's normal projection also
+        // queues it. Keep one child identity per parent/stage/path so that
+        // the same USD prim cannot acquire two live ECS projections.
+        let child_key = (parent, stage_handle.id(), child_path.to_string());
+        if !live_child_keys.insert(child_key) {
             continue;
         }
 
@@ -1853,6 +1868,7 @@ fn process_queued_usd_visuals(
     >,
     q_grid: Query<(), With<big_space::prelude::Grid>>,
     q_child_of: Query<&ChildOf>,
+    q_live_paths: Query<(Entity, &UsdPrimPath, Option<&ChildOf>)>,
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     q_entities: Query<Entity>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
@@ -1891,6 +1907,15 @@ fn process_queued_usd_visuals(
     // the canonical topology/indexes.
     let mut queued: Vec<_> = q.iter().collect();
     queued.sort_by(|left, right| left.1.path.cmp(&right.1.path));
+
+    // Include already projected and already queued children. The parent
+    // projection may run after an incremental descendant spawn, so a query
+    // limited to the pending queue would still admit the same child twice.
+    let mut live_child_keys = std::collections::HashSet::new();
+    for (_entity, path, child_of) in &q_live_paths {
+        let Some(child_of) = child_of else { continue };
+        live_child_keys.insert((child_of.parent(), path.stage_handle.id(), path.path.clone()));
+    }
 
     for (entity, prim_path, vis, tf, is_instance_root, member, instance_projection) in queued {
         if projected != 0 && started.elapsed() >= settings.frame_budget {
@@ -1949,6 +1974,7 @@ fn process_queued_usd_visuals(
             &asset_server,
             &mut meshes,
             requested_profile,
+            &mut live_child_keys,
         );
         projected += 1;
     }

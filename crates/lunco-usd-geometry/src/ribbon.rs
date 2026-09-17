@@ -163,6 +163,34 @@ mod tests {
     }
 
     #[test]
+    fn nonperiodic_ribbon_stops_at_the_last_point() {
+        let points = [
+            RibbonPoint {
+                position: DVec3::ZERO,
+                normal: DVec3::Y,
+            },
+            RibbonPoint {
+                position: DVec3::X,
+                normal: DVec3::Y,
+            },
+            RibbonPoint {
+                position: DVec3::new(2.0, 0.0, 0.5),
+                normal: DVec3::Y,
+            },
+        ];
+        let mesh = build_ribbon_mesh(&points, DVec3::ZERO, &[0.2], 0.0, false)
+            .expect("non-periodic ribbon");
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            panic!("ribbon must be indexed")
+        };
+        assert_eq!(
+            indices,
+            &[0, 1, 2, 2, 1, 3, 2, 3, 4, 4, 3, 5],
+            "an open ribbon has only consecutive segments"
+        );
+    }
+
+    #[test]
     fn degenerate_authored_normals_are_rejected() {
         let points = [
             RibbonPoint {
