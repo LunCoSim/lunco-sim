@@ -47,6 +47,22 @@ pub struct RemoteEmbodiment {
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TheLocalEmbodiment(pub Option<Entity>);
 
+/// Resolve an explicitly requested embodiment or the process-local one.
+///
+/// An omitted entity is an instruction to use the authoritative local role;
+/// it is not permission to select an arbitrary entity by ECS order.
+pub fn resolve_requested_or_local(
+    requested: Option<Entity>,
+    local: Option<&TheLocalEmbodiment>,
+) -> Result<Entity, String> {
+    match requested {
+        Some(entity) => Ok(entity),
+        None => local
+            .and_then(|slot| slot.0)
+            .ok_or_else(|| "no authoritative local embodiment is available".to_string()),
+    }
+}
+
 /// Installs the embodiment role hooks and their derived local-embodiment lookup.
 pub struct EmbodimentCorePlugin;
 

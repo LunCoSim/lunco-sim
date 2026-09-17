@@ -20,8 +20,8 @@ lunco-render = { path = "../lunco-render" }
 lunco-notifications-core = { path = "../lunco-notifications-core" }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
-lunco-input-core = { path = "../lunco-input-core" }
 lunco-interaction-core = { path = "../lunco-interaction-core" }
+lunco-input-core = { path = "../lunco-input-core" }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-avatar-input = { path = "../lunco-avatar-input" }
 lunco-avatar-camera-core = { path = "../lunco-avatar-camera-core" }
@@ -38,7 +38,6 @@ lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-time = { path = "../lunco-time" }
 lunco-settings = { path = "../lunco-settings" }
-lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 
 [lints]

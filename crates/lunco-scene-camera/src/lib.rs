@@ -114,7 +114,12 @@ pub fn on_set_camera_look_at(
     let Ok((mut tf, cell, child_of, pose)) = q_camera.get_mut(cmd.camera) else {
         let message = format!("camera {:?} has no complete spatial pose", cmd.camera);
         warn!("SET_CAMERA: {message}");
-        lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+        lunco_camera_core::replace_camera_diagnostic(
+            &mut diagnostics,
+            "scene-focus",
+            "PendingFocus",
+            Some(message),
+        );
         return;
     };
     let current_pose = pose.as_deref().copied().unwrap_or_default();
@@ -126,10 +131,20 @@ pub fn on_set_camera_look_at(
         };
         let message = format!("camera {entity:?} pose is owned by {owner}");
         warn!("SET_CAMERA: {message}");
-        lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+        lunco_camera_core::replace_camera_diagnostic(
+            &mut diagnostics,
+            "scene-focus",
+            "PendingFocus",
+            Some(message),
+        );
         return;
     }
-    lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, None);
+    lunco_camera_core::replace_camera_diagnostic(
+        &mut diagnostics,
+        "scene-focus",
+        "PendingFocus",
+        None,
+    );
     // Explicit camera coordinates use the same active physics frame as
     // MoveEntity and route projection. Never select a grid by marker/component
     // type here: render and physics roots may legitimately differ.
@@ -137,7 +152,12 @@ pub fn on_set_camera_look_at(
     let Ok(grid) = q_grids.get(root) else {
         let message = format!("active physics frame {root:?} has no Grid component");
         warn!("SET_CAMERA: {message}");
-        lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+        lunco_camera_core::replace_camera_diagnostic(
+            &mut diagnostics,
+            "scene-focus",
+            "PendingFocus",
+            Some(message),
+        );
         return;
     };
     let look = cmd.target - cmd.eye;
