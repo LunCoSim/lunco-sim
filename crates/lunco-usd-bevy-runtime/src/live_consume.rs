@@ -18,7 +18,7 @@ use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::Path as SdfPath;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The attribute a move edit (`UsdOp::SetTranslate`) records as `InfoOnly`.
 const TRANSLATE_ATTR: &str = "xformOp:translate";
@@ -33,6 +33,51 @@ pub(crate) struct TransformEditChannels {
     pub(crate) translate: bool,
     pub(crate) rotate: bool,
     pub(crate) scale: bool,
+}
+
+/// A document generation whose typed operations have been applied to a live
+/// canonical stage and is waiting for the read-side projection boundary.
+///
+/// Some valid stage edits do not produce a structural/info-only sink notice:
+/// a rebuilt stage starts with an empty sink, and an idempotent authored value
+/// can be absorbed by the stage without a visible delta. The document sync
+/// owner records those stages here so the live projector can still close the
+/// document-to-ECS handoff after the stage is ready.
+#[derive(Clone, Copy)]
+struct PendingStageProjection {
+    doc: lunco_doc::DocumentId,
+    stage_id: AssetId<UsdStageAsset>,
+    generation: u64,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct PendingStageProjections {
+    stages: HashMap<AssetId<UsdStageAsset>, PendingStageProjection>,
+}
+
+pub(crate) fn queue_stage_projection(
+    world: &mut World,
+    doc: lunco_doc::DocumentId,
+    stage_id: AssetId<UsdStageAsset>,
+    generation: u64,
+) {
+    world
+        .resource_mut::<PendingStageProjections>()
+        .stages
+        .insert(
+            stage_id,
+            PendingStageProjection {
+                doc,
+                stage_id,
+                generation,
+            },
+        );
+}
+
+fn remove_pending_stage_projection(world: &mut World, stage_id: AssetId<UsdStageAsset>) {
+    if let Some(mut pending) = world.get_resource_mut::<PendingStageProjections>() {
+        pending.stages.remove(&stage_id);
+    }
 }
 
 impl TransformEditChannels {
@@ -203,9 +248,51 @@ fn find_program_owner(
         .map(|(entity, _, _)| entity)
 }
 
-fn mark_stage_projected(world: &mut World, stage_id: AssetId<UsdStageAsset>) {
+fn mark_stage_projected(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+) -> Option<(lunco_doc::DocumentId, u64)> {
     if let Some(mut backed) = world.get_resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>() {
-        backed.mark_stage_projected(stage_id);
+        return backed.mark_stage_projected(stage_id);
+    }
+    None
+}
+
+/// Publish the generic document-to-ECS projection boundary after the stage
+/// cursor has been advanced. Authored policies use this event to invalidate
+/// cached composed topology when an edit was committed in the same frame that
+/// its live entities were still being reconciled.
+fn publish_stage_projected(world: &mut World, doc: lunco_doc::DocumentId, generation: u64) {
+    let mut data = BTreeMap::new();
+    data.insert(
+        "doc_id".to_string(),
+        lunco_core::TelemetryValue::I64(doc.raw() as i64),
+    );
+    data.insert(
+        "generation".to_string(),
+        lunco_core::TelemetryValue::I64(generation as i64),
+    );
+    world.trigger(lunco_core::TelemetryEvent {
+        name: "usd.document.projected".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Info,
+        data: lunco_core::TelemetryValue::Map(data),
+        timestamp: 0.0,
+    });
+}
+
+fn publish_pending_stage_projections(world: &mut World) {
+    let pending = world
+        .get_resource_mut::<PendingStageProjections>()
+        .map(|mut pending| std::mem::take(&mut pending.stages))
+        .unwrap_or_default();
+    for projection in pending.into_values() {
+        let projected = world
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+            .mark_document_projected(projection.doc, projection.stage_id, projection.generation);
+        if let Some((doc, generation)) = projected {
+            publish_stage_projected(world, doc, generation);
+        }
     }
 }
 
@@ -282,12 +369,14 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     // Phase 1: drain the sink inboxes (owned + `Send`), releasing the borrow.
     let batches = world.non_send_mut::<CanonicalStages>().drain_all_changes();
     if batches.is_empty() {
+        publish_pending_stage_projections(world);
         return;
     }
 
     let mut projected_anything = false;
     let mut connection_paths_changed = false;
     let mut input_defaults_changed = false;
+    let mut projected_stages = HashSet::new();
     for (id, changes) in batches {
         let authored_transform_edits = world
             .get_resource_mut::<LiveTransformEditHints>()
@@ -315,7 +404,11 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         }
 
         if resynced.is_empty() && info_only.is_empty() && authored_transform_edits.is_empty() {
-            mark_stage_projected(world, id);
+            if let Some((doc, generation)) = mark_stage_projected(world, id) {
+                publish_stage_projected(world, doc, generation);
+                remove_pending_stage_projection(world, id);
+                projected_stages.insert(id);
+            }
             continue;
         }
         projected_anything = true;
@@ -348,7 +441,31 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         // sink batch has been reconciled into the live ECS projection. A query
         // that runs before this boundary receives an explicit "projection is
         // not current" result instead of stale composed data.
-        mark_stage_projected(world, id);
+        if let Some((doc, generation)) = mark_stage_projected(world, id) {
+            publish_stage_projected(world, doc, generation);
+            remove_pending_stage_projection(world, id);
+            projected_stages.insert(id);
+        }
+    }
+
+    // A rebuild has already reconciled its full scene, while an idempotent
+    // author may have no sink delta at all. Close those pending handoffs after
+    // every sink-bearing stage has been handled, preserving one generic event
+    // boundary for both projection paths.
+    let pending = world
+        .get_resource_mut::<PendingStageProjections>()
+        .map(|mut pending| std::mem::take(&mut pending.stages))
+        .unwrap_or_default();
+    for projection in pending.into_values() {
+        if projected_stages.contains(&projection.stage_id) {
+            continue;
+        }
+        let projected = world
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+            .mark_document_projected(projection.doc, projection.stage_id, projection.generation);
+        if let Some((doc, generation)) = projected {
+            publish_stage_projected(world, doc, generation);
+        }
     }
 
     // Connections are derived from native `connectionPaths` by

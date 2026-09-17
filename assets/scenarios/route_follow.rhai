@@ -382,6 +382,7 @@ fn current_zone(me, state) {
     let doc = state.route_document;
     if point == () || doc == () { return (); }
     let result = query("QueryUsdPrim", #{
+        doc_id: doc,
         path: point + "/Trigger",
         attrs: ["lunco:triggerZone"],
     });
@@ -466,7 +467,7 @@ fn drive_current_point(me, state) {
         if stopped.ok == true { state.safe_stopped = true; }
         return #{ result: stopped, state: state };
     }
-    if state.commanded_path == point && state.commanded_revision == state.route_revision {
+    if state.commanded_path == point && state.commanded_view_key == state.route_view_key {
         return #{ result: #{ ok: true }, state: state };
     }
     let target = find_path(point);
@@ -486,6 +487,7 @@ fn drive_current_point(me, state) {
     }
     state.commanded_path = point;
     state.commanded_revision = state.route_revision;
+    state.commanded_view_key = state.route_view_key;
     state.safe_stopped = false;
     #{ result: #{ ok: true }, state: state }
 }
@@ -507,23 +509,33 @@ fn refresh_route_view(me, state) {
             state: state,
         };
     }
-    if state.route_revision == revision && !state.marker_sync_pending {
-        return #{ result: #{ ok: true, revision: revision }, state: state };
+    // The document generation also advances for disposable view overlays. Read
+    // the authored route geometry first and invalidate only when its typed
+    // identity/placement key changes (or marker state is explicitly dirty).
+    let read = waypoint_editor::route_positions(doc, state.route_path);
+    if read == () || read.ok != true {
+        return #{
+            result: if read == () {
+                route_failure("the route stage is not synchronized")
+            } else { read },
+            state: state,
+        };
+    }
+    let view_key = waypoint_editor::route_view_key(read);
+    if view_key == () {
+        return #{
+            result: route_failure("the route view key cannot be derived"),
+            state: state,
+        };
+    }
+    if state.route_view_key == view_key && !state.marker_sync_pending {
+        return #{ result: #{ ok: true, revision: revision, view_key: view_key }, state: state };
     }
     // A document generation may replace children, the subject relationship, or
     // authored enablement. Drop all derived facts before reading the snapshot.
     state.subject_id = ();
     state.subject_path = ();
-    let points = route_children(me);
-    if points == () {
-        let failure = route_failure("the route points are not synchronized");
-        failure.retryable = true;
-        return #{
-            result: failure,
-            state: state,
-        };
-    }
-    state.route_points = points;
+    state.route_points = read.paths;
     state.safe_stopped = false;
     let result = waypoint_editor::ensure_ribbon(#{
         doc_id: doc,
@@ -552,9 +564,10 @@ fn refresh_route_view(me, state) {
         state.marker_sync_pending = false;
     }
     // The ribbon itself is a runtime edit and may advance the document
-    // generation. Capture the post-edit revision so the task does not issue
-    // the same write again on its next step.
+    // generation. Capture the post-edit revision for observers, while the
+    // view key remains the idempotence boundary for this presentation.
     let post_revision = route_revision_for(state);
+    state.route_view_key = view_key;
     let subject_state = route_subject_state_for(me, state);
     state.subject_id = subject_state.subject;
     if subject_state.path != () { state.subject_path = subject_state.path; }
@@ -562,6 +575,7 @@ fn refresh_route_view(me, state) {
         result: #{
             ok: true,
             revision: if post_revision == () { revision } else { post_revision },
+            view_key: view_key,
         },
         state: state,
     }
@@ -661,6 +675,10 @@ fn start_route(me, state) {
     if owner != () && (local == () || owner != local) {
         return route_failure("the route subject is controlled by another session");
     }
+    // Possession and program execution share the session's authority. A local
+    // human possession is already the valid owner of the subject; claiming it
+    // a second time would manufacture a competing owner and the authority
+    // layer must reject that. Only an unowned subject needs a program claim.
     if owner == () {
         let claimed = claim_control(subject);
         if claimed == () || claimed.ok != true {
@@ -683,6 +701,7 @@ fn apply_toggle_transition(me, state, enabled) {
             state.current_path = ();
             state.commanded_path = ();
             state.commanded_revision = ();
+            state.commanded_view_key = ();
             state.completed = false;
             state.visited_points = #{};
             state.marker_sync_pending = true;
@@ -722,6 +741,7 @@ fn on_start(me, ctx) {
     this.claimed_here = false;
     this.commanded_path = ();
     this.commanded_revision = ();
+    this.commanded_view_key = ();
     this.completed = false;
     this.visited_points = #{};
     this.marker_sync_pending = true;
@@ -729,6 +749,7 @@ fn on_start(me, ctx) {
     this.enabled = route_enabled_from_usd(me);
     this.selected = route_is_selected(me);
     this.route_revision = ();
+    this.route_view_key = ();
     this.route_error = "";
     this.start_requested = false;
     let refreshed = refresh_route_view(me, this);
@@ -740,6 +761,7 @@ fn on_start(me, ctx) {
         }
     } else {
         this.route_revision = view.revision;
+        this.route_view_key = view.view_key;
     }
     if this.selected {
         let stopped = ensure_route_safe_stop(me, this);
@@ -755,6 +777,15 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
+    if evt.name == "usd.document.projected" && evt.value != ()
+        && evt.value["doc_id"] == this.route_document {
+        // The document generation can be committed before the live ECS
+        // structural sink has spawned every child. The next typed route read
+        // validates the identity/placement key; disposable view changes keep
+        // the key stable and therefore cannot trigger a redraw loop.
+        this.route_revision = ();
+        return;
+    }
     if evt.name == "program.selected" {
         this.selected = evt.value != () && evt.value["path"] == this.program_path;
         if !this.selected && this.enabled {
@@ -802,6 +833,7 @@ fn on_event(me, evt, ctx) {
             this.current_path = ();
             this.commanded_path = ();
             this.commanded_revision = ();
+            this.commanded_view_key = ();
             this.completed = false;
             this.visited_points = #{};
             this.marker_sync_pending = true;
@@ -826,6 +858,7 @@ fn on_event(me, evt, ctx) {
         this.current_path = ();
         this.commanded_path = ();
         this.commanded_revision = ();
+        this.commanded_view_key = ();
         let points = route_children_for(me, this);
         if points != () && this.route_index >= points.len() {
             this.safe_stopped = false;
@@ -889,6 +922,7 @@ fn route_task_tick(m) {
         return false;
     }
     this.route_revision = view.revision;
+    this.route_view_key = view.view_key;
     // Selection state is a transient USD projection and may appear one
     // frame after a program hot-reload. Reconcile it at the same cadence
     // as the route view before driving; no route-specific Rust state is

@@ -32,7 +32,7 @@ fn ui_hint() { "Use the configured add-point gesture on terrain to append a poin
 fn on_pointer(context) {
     if context == () { return #{ ok: true, changed: false, handled: false }; }
     if pointer_intent(context, "route.add_point") {
-        let point = pointer_point(context);
+        let point = pointer_surface_point(context);
         if point.ok != true { return failure(point.error); }
         return on_click(context);
     }
@@ -184,7 +184,12 @@ fn sync_marker_states(doc, route, visited) {
 fn route_edit_path(context) {
     let explicit = context["route_path"];
     if explicit != () && explicit != "" {
-        return explicit;
+        // Callers may carry a selected program identity rather than its
+        // containing route scope. Normalize both forms at this policy
+        // boundary so a program prim can never become an AddPrim parent.
+        return canonical_route_path(
+            context["doc_id"], explicit, subject_path(context),
+        );
     }
     let doc = context["doc_id"];
     let subject = subject_path(context);
@@ -259,10 +264,34 @@ fn route_for_path(doc, path, subject) {
         if is_route_program(doc, current, subject) {
             return route_parent_path(current);
         }
+        if is_route_scope(doc, current, subject) {
+            return current;
+        }
         if current == "/" { break; }
         current = route_parent_path(current);
         if current == () { break; }
     }
+    ()
+}
+
+fn is_route_scope(doc, path, subject) {
+    if path == () || path == "" { return false; }
+    let result = query("QueryUsdPrim", #{ path: path, children: true });
+    if result == () || result.ok == false || result.children == () {
+        return false;
+    }
+    for child in result.children {
+        if is_route_program(doc, child, subject) { return true; }
+    }
+    false
+}
+
+fn canonical_route_path(doc, path, subject) {
+    if doc == () || path == () || path == "" { return (); }
+    if is_route_program(doc, path, subject) {
+        return route_parent_path(path);
+    }
+    if is_route_scope(doc, path, subject) { return path; }
     ()
 }
 
@@ -348,6 +377,39 @@ fn direct_route_point(doc, path, route) {
     trigger.authored_in_document == true
 }
 
+fn route_point_screen_radius() { 36.0 }
+
+// Route-point domes are transparent, pass-through annotations. A renderer may
+// therefore report the terrain below them as the picked mesh even when the
+// operator clicked the visible dome. Resolve the nearest authored point in the
+// active render viewport so the policy still receives the intended semantic
+// target without making the marker a physics collider or blocking the rover.
+fn route_point_at_screen(context, route) {
+    if context == () || context.screen_position == () { return (); }
+    let screen = context.screen_position;
+    let children = query("QueryUsdPrim", #{ path: route, children: true });
+    if children == () || children.ok == false || children.children == () {
+        return ();
+    }
+    let nearest = ();
+    let nearest_distance = route_point_screen_radius();
+    for child in children.children {
+        if !is_route_point(context.doc_id, child) { continue; }
+        let marker = find_path(child + "/Dome");
+        if marker < 0 { continue; }
+        let projected = viewport_position(marker);
+        if projected == () || projected.len() != 2 { continue; }
+        let dx = projected[0] - screen[0];
+        let dy = projected[1] - screen[1];
+        let distance = (dx * dx + dy * dy).sqrt();
+        if distance <= nearest_distance {
+            nearest = child;
+            nearest_distance = distance;
+        }
+    }
+    nearest
+}
+
 fn context_route_point(context, route) {
     if context == () { return (); }
     let doc = context["doc_id"];
@@ -362,7 +424,7 @@ fn context_route_point(context, route) {
         let direct = direct_route_point(doc, path, route);
         if direct { return path; }
     }
-    ()
+    route_point_at_screen(context, route)
 }
 
 fn next_point_name(doc, route) {
@@ -396,7 +458,8 @@ fn next_point_name(doc, route) {
 
 // Read the route points from one settled composed-stage generation. The
 // result feeds only the disposable ribbon view; authored route points remain
-// the document's durable state.
+// the document's durable state. `paths` is the stable identity portion of the
+// view key, so a transient ribbon revision cannot invalidate itself.
 fn route_positions(doc, route) {
     let document_gen = generation(doc);
     if document_gen == () {
@@ -408,6 +471,7 @@ fn route_positions(doc, route) {
         children: true,
     });
     let positions = [];
+    let paths = [];
     if result == () || result.ok == false || result.children == () {
         return #{ ok: false, retryable: true, error: "route stage is not synchronized" };
     }
@@ -429,8 +493,27 @@ fn route_positions(doc, route) {
                 error: "route point has no authored position" };
         }
         positions.push(point.attrs["xformOp:translate"]);
+        paths.push(child);
     }
-    #{ ok: true, points: positions }
+    #{ ok: true, paths: paths, points: positions }
+}
+
+// A route view depends on authored point identity and placement, not on the
+// document generation used by disposable runtime presentation edits. Keep the
+// key at the policy boundary so the generic live projector does not need to
+// know that a particular consumer is a route ribbon.
+fn route_view_key(read) {
+    if read == () || read.paths == () || read.points == ()
+        || read.paths.len() != read.points.len() {
+        return ();
+    }
+    let key = "";
+    for i in 0..read.paths.len() {
+        let point = read.points[i];
+        key += read.paths[i] + ":" + point[0].to_string() + ","
+            + point[1].to_string() + "," + point[2].to_string() + ";";
+    }
+    key
 }
 
 // Sample the authoritative DEM for presentation points. If a Twin has no
@@ -753,13 +836,22 @@ fn ensure_ribbon(context) {
     if context == () || context.doc_id == () || context.route_path == () {
         return failure("route view has no explicit document or route path");
     }
-    let read = route_positions(context.doc_id, context.route_path);
+    let route = canonical_route_path(context.doc_id, context.route_path, ());
+    if route == () {
+        return failure("route view path is not an authored program scope");
+    }
+    let read = route_positions(context.doc_id, route);
     if read.ok != true { return read; }
-    let ops = ribbon_ops(context.doc_id, context.route_path, read.points);
+    let ops = ribbon_ops(context.doc_id, route, read.points);
     apply_view_ops(context.doc_id, "Update route ribbon", ops)
 }
 
 fn marker_ops(doc, route, position) {
+    let route = canonical_route_path(doc, route, ());
+    if route == () {
+        return #{ ok: false,
+            error: "selected path is not an authored route program scope" };
+    }
     let name = next_point_name(doc, route);
     if name == () {
         return #{ ok: false,
@@ -800,7 +892,7 @@ fn on_click(context) {
     if context == () || context.doc_id == () || context.scene_root_path == () {
         return failure("click has no active document or scene root");
     }
-    let pointer = pointer_point(context);
+    let pointer = pointer_surface_point(context);
     if pointer.ok != true { return failure(pointer.error); }
     let route = route_edit_path(context);
     if route == () {

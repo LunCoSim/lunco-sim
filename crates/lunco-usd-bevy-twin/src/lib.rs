@@ -97,15 +97,43 @@ impl DocBackedTwinScenes {
         })
     }
 
-    /// Mark the canonical-stage sink for `stage_id` as consumed.
-    pub fn mark_stage_projected(&mut self, stage_id: AssetId<UsdStageAsset>) {
-        if let Some(scene) = self
+    /// Mark the canonical-stage sink for `stage_id` as consumed and return the
+    /// document generation that is now visible through the live stage.
+    pub fn mark_stage_projected(
+        &mut self,
+        stage_id: AssetId<UsdStageAsset>,
+    ) -> Option<(DocumentId, u64)> {
+        if let Some((doc, scene)) = self
             .map
-            .values_mut()
-            .find(|scene| scene.stage_id == Some(stage_id))
+            .iter_mut()
+            .find(|(_, scene)| scene.stage_id == Some(stage_id))
         {
             scene.synced_generation = scene.applied_generation;
+            return scene
+                .applied_generation
+                .map(|generation| (*doc, generation));
         }
+        None
+    }
+
+    /// Close the projection cursor for a document after the runtime projector
+    /// has reconciled the stage selected by the document projector.
+    ///
+    /// The document identity is the durable handoff key.  The stage id is
+    /// carried as an integrity check, but the cursor is not rediscovered from
+    /// an ECS entity or an asset-path lookup at this boundary.
+    pub fn mark_document_projected(
+        &mut self,
+        doc: DocumentId,
+        stage_id: AssetId<UsdStageAsset>,
+        generation: u64,
+    ) -> Option<(DocumentId, u64)> {
+        let scene = self.map.get_mut(&doc)?;
+        if scene.stage_id != Some(stage_id) || scene.applied_generation != Some(generation) {
+            return None;
+        }
+        scene.synced_generation = Some(generation);
+        Some((doc, generation))
     }
 
     /// Record that the initial composed source already represents `generation`.

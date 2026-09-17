@@ -497,6 +497,11 @@ fn on_runtime_ui_action(
                 dropdowns.toggle(&key);
                 return;
             }
+            commands.trigger(lunco_scripting::commands::RunRhaiToolHook {
+                tool: "runtime_ui".to_owned(),
+                hook: "on_action".to_owned(),
+                args: lunco_core::TelemetryValue::String(action.clone()),
+            });
             commands.trigger(lunco_core::TelemetryEvent {
                 name: "runtime.ui.action".to_owned(),
                 source: 0,
@@ -1635,7 +1640,7 @@ mod tests {
         properties.insert("height".to_owned(), ExposureValue::Number(240.0));
         let exposure = ExposureSurface {
             properties,
-            ..Default::default()
+            ..default()
         };
         assert_eq!(runtime_ui_dimension(&exposure, "width"), Some(280.0));
         assert_eq!(runtime_ui_dimension(&exposure, "height"), Some(240.0));

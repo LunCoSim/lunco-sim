@@ -80,6 +80,15 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     selected: Res<'w, SelectedEntities>,
     local_avatar: Res<'w, TheLocalAvatar>,
     q_links: Query<'w, 's, &'static ControlLink>,
+    q_scene_cameras: Query<
+        'w,
+        's,
+        (&'static Camera, &'static GlobalTransform),
+        (With<Camera3d>, With<lunco_render::SceneCamera>),
+    >,
+    q_lod_tiles: Query<'w, 's, &'static lunco_terrain_surface::stream_viz::LodTileOf>,
+    viewport: Res<'w, lunco_core::SceneViewport>,
+    surface: lunco_terrain_surface::GridSurfaceQuery<'w, 's>,
     input_bindings: Res<'w, InputBindingsSettings>,
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
     asset_server: Res<'w, AssetServer>,
@@ -153,6 +162,10 @@ pub(crate) fn on_scene_click_script_tool(
         &world.asset_server,
         &world.coordinates,
         &world.input_bindings,
+        &world.q_scene_cameras,
+        &world.q_lod_tiles,
+        &world.viewport,
+        &world.surface,
     );
     commands.trigger(lunco_scripting::commands::RunRhaiTool {
         tool,
@@ -182,6 +195,13 @@ fn scene_tool_context(
     asset_server: &AssetServer,
     coordinates: &ActiveFrameCoordinates<'_, '_>,
     input_bindings: &InputBindingsSettings,
+    q_scene_cameras: &Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera3d>, With<lunco_render::SceneCamera>),
+    >,
+    q_lod_tiles: &Query<&lunco_terrain_surface::stream_viz::LodTileOf>,
+    viewport: &lunco_core::SceneViewport,
+    surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> TelemetryValue {
     let mut cursor = click.entity;
     let root = loop {
@@ -347,8 +367,34 @@ fn scene_tool_context(
             ));
         }
     }
-    if let Some(position) = click.hit.position {
-        let render_position = RenderPos::from_render_f32(position);
+    if let Some(surface_position) =
+        pointer_surface_render_position(click, q_scene_cameras, viewport, surface)
+    {
+        let surface_position = RenderPos(surface_position);
+        context.push((
+            "surface_render_position".to_string(),
+            coordinate_point(surface_position.0, RENDER_FRAME_NAME, "terrain_surface"),
+        ));
+        if let Some(surface_world_position) = coordinates.render_to_active(surface_position) {
+            context.push((
+                "surface_world_position".to_string(),
+                coordinate_point(
+                    surface_world_position.0,
+                    ACTIVE_FRAME_NAME,
+                    "terrain_surface",
+                ),
+            ));
+        }
+    }
+    if let Some(position) = canonical_pointer_render_position(
+        click,
+        q_parents,
+        q_lod_tiles,
+        q_scene_cameras,
+        viewport,
+        surface,
+    ) {
+        let render_position = RenderPos(position);
         context.push((
             "render_position".to_string(),
             coordinate_point(render_position.0, RENDER_FRAME_NAME, "pointer_hit"),
@@ -366,6 +412,99 @@ fn scene_tool_context(
         }
     }
     tool_map(context)
+}
+
+/// Return a hit in the renderer's floating-origin frame.
+///
+/// The mesh picker reports positions in the picked entity's local frame. That
+/// is valid for an ordinary prop, but a streamed terrain tile is nested under
+/// BigSpace and its local hit can be near zero even when the terrain is ~2 km
+/// below the body datum. The analytic surface query already owns the canonical
+/// screen-ray → active-grid conversion, so use it whenever its surface is the
+/// nearest hit. Props and vehicles keep the mesh pick unchanged.
+fn canonical_pointer_render_position(
+    click: &Pointer<Click>,
+    q_parents: &Query<&ChildOf>,
+    q_lod_tiles: &Query<&lunco_terrain_surface::stream_viz::LodTileOf>,
+    q_scene_cameras: &Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera3d>, With<lunco_render::SceneCamera>),
+    >,
+    viewport: &lunco_core::SceneViewport,
+    surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
+) -> Option<bevy::math::DVec3> {
+    let mesh_position = click.hit.position?.as_dvec3();
+    let Some(camera_entity) = viewport.active_camera else {
+        return Some(mesh_position);
+    };
+    let Ok((camera, camera_transform)) = q_scene_cameras.get(camera_entity) else {
+        return Some(mesh_position);
+    };
+    let Some(surface_position) =
+        pointer_surface_render_position(click, q_scene_cameras, viewport, surface)
+    else {
+        return Some(mesh_position);
+    };
+    let Some(ray) = lunco_core::scene_click_ray(
+        false,
+        camera,
+        camera_transform,
+        click.pointer_location.position,
+    ) else {
+        return Some(mesh_position);
+    };
+    let Some(terrain_hit) = surface.raycast_render(
+        RenderPos(ray.origin.as_dvec3()),
+        ray.direction,
+        f64::INFINITY,
+    ) else {
+        return Some(mesh_position);
+    };
+
+    let hit_is_terrain = std::iter::successors(Some(click.entity), |entity| {
+        q_parents.get(*entity).ok().map(|parent| parent.0)
+    })
+    .any(|entity| {
+        entity == terrain_hit.terrain
+            || q_lod_tiles
+                .get(entity)
+                .is_ok_and(|tile| tile.0 == terrain_hit.terrain)
+    });
+    let mesh_depth = f64::from(click.hit.depth);
+    let terrain_is_nearest = terrain_hit.distance <= mesh_depth + 0.5;
+    if hit_is_terrain || terrain_is_nearest {
+        return Some(surface_position);
+    }
+    Some(mesh_position)
+}
+
+/// Resolve the analytic terrain point below a scene pointer in the renderer's
+/// floating-origin frame. This is a second, explicitly named coordinate fact:
+/// the ordinary mesh hit may be local to a streamed tile, while this value is
+/// suitable for terrain-aware authored tools.
+fn pointer_surface_render_position(
+    click: &Pointer<Click>,
+    q_scene_cameras: &Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera3d>, With<lunco_render::SceneCamera>),
+    >,
+    viewport: &lunco_core::SceneViewport,
+    surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
+) -> Option<bevy::math::DVec3> {
+    let camera_entity = viewport.active_camera?;
+    let (camera, camera_transform) = q_scene_cameras.get(camera_entity).ok()?;
+    let ray = lunco_core::scene_click_ray(
+        false,
+        camera,
+        camera_transform,
+        click.pointer_location.position,
+    )?;
+    let terrain_hit = surface.raycast_render(
+        RenderPos(ray.origin.as_dvec3()),
+        ray.direction,
+        f64::INFINITY,
+    )?;
+    surface.to_render(terrain_hit.point).map(|point| point.0)
 }
 
 /// Encode a point for the Rhai coordinate contract. The values stay native
@@ -452,6 +591,10 @@ pub(crate) fn on_scene_pointer_event(
         &world.asset_server,
         &world.coordinates,
         &world.input_bindings,
+        &world.q_scene_cameras,
+        &world.q_lod_tiles,
+        &world.viewport,
+        &world.surface,
     );
     let source = world
         .q_ids

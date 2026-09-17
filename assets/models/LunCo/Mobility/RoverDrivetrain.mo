@@ -21,6 +21,7 @@ model RoverDrivetrain
   input Real throttle "Normalized forward command, -1..1";
   input Real steer "Normalized right command, -1..1";
   input Real autopilot_enable "1 while Modelica waypoint guidance owns the drive";
+  input Real program_active "1 while the authored program owns the drive";
   input Real autopilot_target_x "Waypoint X in the active physics frame (m)";
   input Real autopilot_target_z "Waypoint Z in the active physics frame (m)";
   input Real autopilot_speed "Forward throttle limit";
@@ -34,7 +35,9 @@ model RoverDrivetrain
 
   RoverAutopilotGuidance guidance;
   Real piloted_gate "Clamped possession signal";
-  Real guidance_gate "Unpossessed waypoint-guidance authority";
+  Real program_gate "Clamped authored-program authority";
+  Real guidance_gate "Authored-program waypoint-guidance authority";
+  Real manual_gate "Local manual authority outside an authored program";
   Real selected_throttle;
   Real selected_steer;
 
@@ -59,12 +62,12 @@ equation
   guidance.turn_only = autopilot_turn_only;
 
   piloted_gate = max(0.0, min(1.0, piloted));
-  guidance_gate = (1.0 - piloted_gate) * max(0.0, min(1.0, autopilot_enable));
+  program_gate = max(0.0, min(1.0, program_active));
+  guidance_gate = program_gate * max(0.0, min(1.0, autopilot_enable));
+  manual_gate = piloted_gate * (1.0 - program_gate);
   guidance.enabled = guidance_gate;
-  selected_throttle = piloted_gate * throttle +
-    (1.0 - piloted_gate) * guidance.throttle_cmd;
-  selected_steer = piloted_gate * steer +
-    (1.0 - piloted_gate) * guidance.steer_cmd;
+  selected_throttle = manual_gate * throttle + guidance_gate * guidance.throttle_cmd;
+  selected_steer = manual_gate * steer + guidance_gate * guidance.steer_cmd;
 
   // First-order lag toward the authored skid law. `steer` adds on the left
   // and subtracts on the right, so +steer yaws right.

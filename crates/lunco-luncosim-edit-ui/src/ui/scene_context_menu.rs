@@ -12,6 +12,7 @@ use lunco_scripting::ui_bridge::{ScriptMenuItem, ScriptUiRequest};
 struct PendingMenu {
     screen_position: [f32; 2],
     items: Vec<ScriptMenuItem>,
+    dismiss_on_next_input: bool,
 }
 
 #[derive(Resource, Default)]
@@ -31,6 +32,10 @@ pub fn on_script_ui_request(
             state.pending = Some(PendingMenu {
                 screen_position: *screen_position,
                 items: items.clone(),
+                // The request is raised from the same pointer transaction
+                // that opened the menu. Do not treat that transaction as an
+                // outside click when the popup is first painted.
+                dismiss_on_next_input: false,
             });
         }
     }
@@ -44,6 +49,12 @@ pub fn draw_scene_context_menu(
     let Some(menu) = state.pending.clone() else {
         return;
     };
+    let dismiss_on_input = menu.dismiss_on_next_input;
+    if !dismiss_on_input {
+        if let Some(pending) = state.pending.as_mut() {
+            pending.dismiss_on_next_input = true;
+        }
+    }
     let Ok(ctx) = egui_contexts.ctx_mut() else {
         return;
     };
@@ -75,8 +86,9 @@ pub fn draw_scene_context_menu(
         return;
     }
 
-    let clicked_elsewhere =
-        ctx.input(|input| input.pointer.any_click()) && !response.response.hovered();
+    let clicked_elsewhere = dismiss_on_input
+        && ctx.input(|input| input.pointer.any_click())
+        && !response.response.hovered();
     if clicked_elsewhere {
         state.pending = None;
     }

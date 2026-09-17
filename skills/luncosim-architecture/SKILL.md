@@ -37,12 +37,13 @@ warnings.
 
 ### Rhai task callback contract
 
-Task leaves use one callback form: an anonymous closure `|me| ...`. `me` is the
-host entity id, while `this` is the persistent scenario-state map bound by the
-native task driver. Named `Fn("...")` pointers are not task leaves. Named Rhai
-helpers remain ordinary callable policy and may be invoked explicitly from an
-anonymous task closure. This keeps one positional contract and lets the native
-kernel bind state without a compatibility path.
+Task leaves accept anonymous closures (`|me| ...`) or named script callbacks
+(`Fn("name")`, declared `fn name(me)`). `me` is the host entity id; both forms
+receive persistent state as the driver-bound `this`. The native task driver owns
+progression and state transfer. Rhai map parameters are value/copy-on-write
+values: a helper that assigns a state field must return the updated map, and
+the lifecycle callback must assign it back to `this`. Do not rely on helper
+side effects to persist task state.
 
 ## Plugin and crate layering
 
