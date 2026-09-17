@@ -131,18 +131,36 @@ fn verification_name(report, expected) {
 // observation loop small and gives all callers (not only the shared Twin
 // helper) the same source-backed identity behavior.  The returned records are
 // still the authored checks with only their identity fields normalized.
-fn _resolve_check_identities(report, checks) {
+fn _resolve_indexed_identity(index, expected, kind) {
+    if expected == () || expected == "" {
+        return #{ok: false, error: "SysML " + kind + " identity is missing"};
+    }
+    let found = index[expected];
+    if found == () {
+        return #{ok: false,
+            error: "SysML " + kind + " identity is missing: " + expected};
+    }
+    if found == "<ambiguous>" {
+        return #{ok: false,
+            error: "ambiguous SysML " + kind + " identity: " + expected};
+    }
+    #{ok: true, name: found}
+}
+
+fn _resolve_check_identities(checks, indexes) {
     let resolved = [];
     for check in checks {
         if check == () || check.requirement == () || check.verification == () {
             return #{ok: false, check_id: if check == () { "<invalid>" } else { check.id },
                 error: "check requires requirement and verification identities"};
         }
-        let requirement = requirement_name(report, check.requirement);
+        let requirement = _resolve_indexed_identity(indexes.requirement_identities,
+            check.requirement, "requirement");
         if requirement.ok != true {
             return #{ok: false, check_id: check.id, error: requirement.error};
         }
-        let verification = verification_name(report, check.verification);
+        let verification = _resolve_indexed_identity(indexes.verification_identities,
+            check.verification, "verification");
         if verification.ok != true {
             return #{ok: false, check_id: check.id, error: verification.error};
         }
@@ -304,12 +322,38 @@ fn _verification_covers(report, requirement, verification_name) {
 // quadratic and can exhaust Rhai's per-tick operation budget.
 fn _indexes(report) {
     let requirements = #{};
+    let requirement_identities = #{};
     if report.requirement_records != () {
         for record in report.requirement_records {
             let name = _record_name(record);
             if name != "" {
                 requirements[name] = true;
                 requirements[_short_name(name)] = true;
+                if requirement_identities[name] == () {
+                    requirement_identities[name] = name;
+                }
+                let short = _short_name(name);
+                if requirement_identities[short] == () {
+                    requirement_identities[short] = name;
+                } else if requirement_identities[short] != name {
+                    requirement_identities[short] = "<ambiguous>";
+                }
+            }
+        }
+    }
+    let verification_identities = #{};
+    if report.verification_records != () {
+        for verification in report.verification_records {
+            let name = _record_name(verification);
+            if name == "" { continue; }
+            if verification_identities[name] == () {
+                verification_identities[name] = name;
+            }
+            let short = _short_name(name);
+            if verification_identities[short] == () {
+                verification_identities[short] = name;
+            } else if verification_identities[short] != name {
+                verification_identities[short] = "<ambiguous>";
             }
         }
     }
@@ -327,7 +371,9 @@ fn _indexes(report) {
             }
         }
     }
-    #{requirements: requirements, coverage: coverage}
+    #{requirements: requirements, coverage: coverage,
+      requirement_identities: requirement_identities,
+      verification_identities: verification_identities}
 }
 
 fn _indexed_requirement(indexes, expected) {
@@ -592,7 +638,8 @@ fn evaluate(source_report, checks) {
     if source_report == () || source_report.ok != true {
         return #{ok: false, results: [], failures: ["SysML source report is unavailable"]};
     }
-    let identities = _resolve_check_identities(source_report, checks);
+    let indexes = _indexes(source_report);
+    let identities = _resolve_check_identities(checks, indexes);
     if identities.ok != true {
         let failure = #{ok: false, id: identities.check_id,
             error: identities.error};
@@ -600,7 +647,6 @@ fn evaluate(source_report, checks) {
             check_count: 0, requirement_count: 0, failure_count: 1};
     }
     checks = identities.checks;
-    let indexes = _indexes(source_report);
     for check in checks {
         let result = _check_one(source_report, check, indexes);
         // Stamp the authored identity on every result, including helper
