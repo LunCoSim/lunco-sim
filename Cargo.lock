@@ -7725,7 +7725,6 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-workspace",
  "serde_json",
- "velopack",
 ]
 
 [[package]]
@@ -8962,7 +8961,6 @@ dependencies = [
  "lunco-hooks-rhai",
  "lunco-input-core",
  "lunco-physics",
- "lunco-port-core",
  "lunco-readiness",
  "lunco-scripting-bridge-core",
  "lunco-scripting-bridge-spatial",

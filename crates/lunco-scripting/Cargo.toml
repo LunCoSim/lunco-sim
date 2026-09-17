@@ -27,7 +27,6 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # lunco-core. The API discovers it by reflection (AppTypeRegistry) — no direct
 # lunco-api dep. Lua remains only a reserved language id; it has no command.
 lunco-core = { path = "../lunco-core" }
-lunco-port-core = { path = "../lunco-port-core" }
 lunco-spatial = { path = "../lunco-spatial", optional = true }
 lunco-core-session = { path = "../lunco-core-session" }
 # The Rhai tutorial bridge reads the shared resolved keymap. Optional so

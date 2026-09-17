@@ -56,8 +56,6 @@ lunco-rhai-repl = { path = "../lunco-rhai-repl" }
 # harness is a separate native edge so runner edits do not rebuild this GUI
 # composition crate.
 lunco-scene-runner = { path = "../lunco-scene-runner", default-features = false }
-# Native desktop startup hooks for the windowed `luncosim`.
-velopack = { version = "=1.2.110-ge826545", optional = true, features = ["public-utils"] }
 
 [features]
 # `ui` + `api-transport` are on by default so native `cargo run --bin luncosim`
@@ -77,8 +75,8 @@ default = ["ui", "api-transport", "transport-http", "sysml"]
 # render features, window configuration, capture, and presentation.
 ui = [
     "dep:bevy",
-    "dep:velopack",
     "dep:lunco-luncosim-ui",
+    "lunco-luncosim-ui/updates",
     "lunco-scene-runner/ui",
     "lunco-luncosim-ui/avatar-ui",
 ]

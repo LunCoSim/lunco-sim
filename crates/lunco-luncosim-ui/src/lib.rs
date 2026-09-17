@@ -28,6 +28,17 @@ pub use ui::{
     add_runtime_ui_layer, InitialScenePath, LunCoSimUiConfig, LunCoSimUiPlugin, WindowIconBytes,
 };
 
+/// Run the native package-manager startup hook before CLI dispatch.
+///
+/// The application binary calls this at process start when its UI composition
+/// enables the `updates` feature. Keeping the hook beside the update surface
+/// gives the updater one owner and lets headless/UI-shell consumers omit the
+/// Velopack dependency entirely.
+#[cfg(all(feature = "updates", not(target_arch = "wasm32")))]
+pub fn initialize_velopack() {
+    velopack::VelopackApp::build().run();
+}
+
 /// Rasterized 64x64 RGBA bytes for the native LunCoSim window icon.
 pub fn window_icon_bytes() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/luncosim-icon.rgba"))

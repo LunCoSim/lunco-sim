@@ -37,7 +37,7 @@ mod scenario_fixture;
 mod tutorial_menu;
 /// Native Velopack update checks and package installation. WASM has no native
 /// process/update helper and intentionally does not compile this module.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "updates", not(target_arch = "wasm32")))]
 mod update;
 /// Typed intent emitted by the authored terrain-progress surface.
 #[derive(Event, Clone, Debug)]
@@ -231,7 +231,7 @@ impl Plugin for LunCoSimUiPlugin {
                 ),
             );
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(feature = "updates", not(target_arch = "wasm32")))]
         app.add_plugins(update::UpdatePlugin);
         if args.iter().any(|arg| arg == "--windowed-ui") {
             app.insert_resource(lunco_workbench::OfflineRecordingPresentation {

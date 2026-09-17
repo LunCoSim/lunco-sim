@@ -23,8 +23,6 @@ use lunco_modelica_core::ModelicaCorePlugin as CoreModelicaPlugin;
 use lunco_modelica_execution::ModelicaExecutionPlugin;
 
 #[cfg(feature = "ui")]
-#[cfg(feature = "ui")]
-#[cfg(feature = "ui")]
 /// UI configuration for the Modelica workbench.
 #[derive(Resource, Clone, Debug)]
 pub struct ModelicaUiConfig {

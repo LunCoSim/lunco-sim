@@ -2,12 +2,11 @@
 //! `lunco-luncosim-ui`; the headless `luncosim-server` uses the core directly.
 
 fn main() -> lunco_luncosim_core::AppExit {
-    // Velopack must see the original process before CLI dispatch. It handles
-    // install/update hooks and applies a package that was downloaded during a
-    // previous run. It does not perform the GitHub update check; that remains
-    // an explicit native GUI operation in the Updates settings menu.
+    // The UI package owns the Velopack process hook. It must see the original
+    // process before CLI dispatch. It does not perform the GitHub update check;
+    // that remains an explicit native GUI operation in the Updates menu.
     #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
-    velopack::VelopackApp::build().run();
+    lunco_luncosim_ui::initialize_velopack();
 
     #[cfg(not(target_family = "wasm"))]
     if std::env::args()
