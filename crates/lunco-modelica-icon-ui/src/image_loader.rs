@@ -156,14 +156,13 @@ impl ModelicaImageLoader {
     /// (defence-in-depth: a malformed URI must not climb out of the source library root).
     fn resolve_uri(uri: &str) -> Option<std::path::PathBuf> {
         let rest = uri.strip_prefix("modelica://")?;
-        // Strip a leading "Modelica/" if present so both
-        // `modelica://Modelica/Resources/…` (source library-internal) and
-        // `modelica:///Resources/…` resolve the same way.
-        let rel: &str = rest.strip_prefix("Modelica/").unwrap_or(rest);
-        if rel.split('/').any(|seg| seg == "..") {
-            return None;
-        }
-        Some(std::path::Path::new("Modelica").join(rel))
+        // The URI authority is part of the authored library-relative path.
+        // Do not assume the Modelica Standard Library (or any other package)
+        // owns the resource. A leading slash is accepted as the URI's
+        // package-root spelling, then the shared asset validator rejects
+        // traversal, drives, and platform-specific separators.
+        let rel = rest.strip_prefix('/').unwrap_or(rest);
+        lunco_assets_core::asset_path::relative_path(rel)
     }
 }
 

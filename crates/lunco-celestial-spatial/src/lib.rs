@@ -18,7 +18,6 @@ use lunco_environment::{Gravity, GravityBody};
 
 mod big_space_setup;
 pub mod cadence;
-mod embedded_assets;
 mod globe_lod;
 mod gravity;
 mod imagery;
@@ -36,7 +35,6 @@ pub mod commands;
 pub use commands::*;
 
 pub use big_space_setup::*;
-pub use embedded_assets::*;
 pub use globe_lod::{GlobeLod, GlobeLodBudget};
 pub use gravity::*;
 pub use link::*;
@@ -120,9 +118,6 @@ impl Plugin for CelestialPlugin {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
-        // EmbeddedAssetsPlugin embeds mission data on wasm32, no-op on desktop.
-        app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
-
         // Terrain is now in lunco-terrain crate — register it here (guarded:
         // the sandbox adds it directly as well).
         if !app.is_plugin_added::<lunco_terrain_globe::TerrainPlugin>() {

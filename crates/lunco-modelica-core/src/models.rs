@@ -1,10 +1,8 @@
-//! Bundled Modelica example models — the domain view.
+//! Modelica example models — the domain view.
 //!
-//! The raw embed lives in the asset-owning crate
-//! ([`lunco_assets_core::models`]): every `*.mo` under `assets/models/` is baked in
-//! at compile time (wasm has no filesystem) and handed here as `(filename,
-//! source)` pairs. Drop a new `.mo` file in, rebuild, and it appears in the
-//! Welcome tab — no edits to this file required.
+//! Model source is external authored data. The asset-owning crate provides the
+//! storage-backed inventory; this module adds only Modelica-specific metadata
+//! such as the optional tagline shown by the UI.
 //!
 //! This module adds the Modelica-specific interpretation on top: the
 //! [`BundledModel`] view and per-model **tagline** parsing (one-liners shown
@@ -21,23 +19,23 @@
 //! Modelica keyword.
 
 /// One bundled example.
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 pub struct BundledModel {
     /// Filename (e.g. `"RocketEngine.mo"`), relative to
     /// `assets/models/`.
-    pub filename: &'static str,
-    /// Embedded source text.
-    pub source: &'static str,
+    pub filename: String,
+    /// External source text read through the asset boundary.
+    pub source: String,
     /// Short description for the Welcome tab / tooltips. Taken from
     /// the `// tagline: …` header marker when present; empty
     /// otherwise.
-    pub tagline: &'static str,
+    pub tagline: String,
 }
 
 /// Extract the `// tagline: …` header from a `.mo` source, if
 /// present. Scans the leading comment block only and stops at the
 /// first real Modelica line.
-fn extract_tagline(source: &str) -> &str {
+fn extract_tagline(source: &str) -> String {
     for line in source.lines() {
         let t = line.trim();
         if t.is_empty() {
@@ -45,7 +43,7 @@ fn extract_tagline(source: &str) -> &str {
         }
         for prefix in ["// tagline:", "//! tagline:", "//tagline:"] {
             if let Some(rest) = t.strip_prefix(prefix) {
-                return rest.trim();
+                return rest.trim().to_owned();
             }
         }
         if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
@@ -53,26 +51,25 @@ fn extract_tagline(source: &str) -> &str {
         }
         break;
     }
-    ""
+    String::new()
 }
 
 /// All bundled models, sorted by filename (stable across desktop/wasm). Builds
-/// the list fresh every call (cheap — enumerates the in-memory embed owned by
-/// [`lunco_assets_core::models`]) and layers on the Modelica tagline parse.
-pub fn bundled_models() -> Vec<BundledModel> {
-    lunco_assets_core::models::model_files()
+/// the list fresh every call and layers on the Modelica tagline parse.
+pub fn bundled_models() -> Result<Vec<BundledModel>, String> {
+    Ok(lunco_assets_core::models::model_files()?
         .into_iter()
         .map(|(filename, source)| BundledModel {
             filename,
+            tagline: extract_tagline(&source),
             source,
-            tagline: extract_tagline(source),
         })
-        .collect()
+        .collect())
 }
 
 /// Get a bundled model's source by filename. Case-sensitive match on the
 /// basename. Thin re-export of [`lunco_assets_core::models::model_source`].
-pub fn get_model(filename: &str) -> Option<&'static str> {
+pub fn get_model(filename: &str) -> Result<Option<String>, String> {
     lunco_assets_core::models::model_source(filename)
 }
 

@@ -84,8 +84,8 @@ does not duplicate component geometry or requirements.
   explicitly with `--features networking`; ordinary GUI and test runs do not
   bind multiplayer ports.
 - `server` — lean headless build: API + networking host, NO `ui`. Build with
-  `--no-default-features --features server`. Skips `celestial`.
-- `celestial` — bundled Earth texture + Artemis-II ephemeris (10s of MB).
+  `--no-default-features --features server`. Celestial data is external and
+  loaded through the runtime asset and dataset pipelines.
 - `recording`, `tracy`, `net-diag` — opt-in diagnostics/tools.
 
 The simulation-facing asset and component features (`mesh`/`light`/`window`)

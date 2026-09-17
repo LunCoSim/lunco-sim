@@ -77,7 +77,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 
 | Query | Parameters | Description |
 |---|---|---|
-| `ListBundled` | `{}` | List embedded example models (`bundled://`) and the complete source inventory (`sources[]`) used by authored validation. |
+| `ListBundled` | `{}` | List the runtime example-model inventory (`bundled://` ids retained for the API contract) and the complete source inventory (`sources[]`) used by authored validation. |
 | `ListOpenDocuments` | `{}` | List all documents currently open in the workspace, including origin and dirty state. |
 | `ListRecentFiles` | `{}` | List recently opened files and Twins from `recents.json`. |
 | `ListTwin` | `{"offset": u64, "limit": u64}` | List files in the currently active Twin folder. |

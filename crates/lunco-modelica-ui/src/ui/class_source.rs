@@ -2,7 +2,7 @@
 //!
 //! Single source-of-truth for *where a class's source lives*, across
 //! every backend the workbench knows: the source library / third-party index, the
-//! filesystem library roots, already-open documents, and the embedded
+//! filesystem library roots, already-open documents, and runtime asset
 //! bundled examples.
 //!
 //! Before this, each consumer that needed a class's source *by name*
@@ -57,13 +57,13 @@ pub(crate) fn find_open_doc_with_class(
     })
 }
 
-/// Embedded bundled example source for a qualified name, keyed by its
+/// External bundled example source for a qualified name, keyed by its
 /// head segment (`AnnotatedRocketStage.RocketStage` →
 /// `AnnotatedRocketStage.mo`). Bundled files are named after their
 /// top-level class. Pure (no `World`), so it's unit-testable.
-pub(crate) fn bundled_source_for(qualified: &str) -> Option<&'static str> {
+pub(crate) fn bundled_source_for(qualified: &str) -> Option<String> {
     let head = qualified.split('.').next().unwrap_or(qualified);
-    crate::models::get_model(&format!("{head}.mo"))
+    crate::models::get_model(&format!("{head}.mo")).ok().flatten()
 }
 
 /// Resolve `qualified` to its source text across all backends, in the
@@ -105,7 +105,7 @@ pub(crate) fn resolve_class_source(world: &World, qualified: &str) -> Option<Res
 
     // 3) Embedded bundled example.
     bundled_source_for(qualified).map(|src| ResolvedClassSource {
-        source: src.to_string(),
+        source: src,
         origin_path: None,
     })
 }

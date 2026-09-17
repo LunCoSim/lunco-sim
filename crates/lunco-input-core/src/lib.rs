@@ -3,7 +3,9 @@
 //! This package owns the user-editable keymap and its projection into Bevy's
 //! semantic [`leafwing_input_manager`] map. Vessel actuation remains in
 //! `lunco-controller`; UI/help/tutorial consumers depend on this small input
-//! contract instead of pulling the controller's simulation adapter.
+//! contract instead of pulling the controller's simulation adapter. The
+//! application supplies the authored defaults at runtime; this crate contains
+//! no repository-relative asset path or compiled product keymap.
 
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::InputMap;
@@ -11,10 +13,6 @@ use lunco_control_core::UserIntent;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
-/// The bundled default keymap data. It is embedded so the same resolved
-/// defaults are available on native and wasm targets without direct file I/O.
-const KEYBINDINGS_JSON: &str = include_str!("../../../assets/config/keybindings.json");
 
 fn default_look_button() -> String {
     "Right".into()
@@ -58,7 +56,10 @@ fn pointer_button_matches(configured: &str, event: &str) -> bool {
 }
 
 #[derive(Deserialize)]
-struct InputBindingsFile {
+struct InputBindingsDocument {
+    #[serde(default)]
+    #[serde(rename = "kind")]
+    _kind: Option<String>,
     #[serde(flatten)]
     bindings: BTreeMap<String, Vec<KeyCode>>,
     #[serde(default = "default_look_button")]
@@ -67,18 +68,15 @@ struct InputBindingsFile {
     pointer_bindings: BTreeMap<String, Vec<PointerBinding>>,
 }
 
-fn bundled_input_bindings() -> InputBindingsFile {
-    serde_json::from_str(KEYBINDINGS_JSON)
-        .expect("assets/config/keybindings.json must be valid input settings")
-}
-
 /// Resolved user input settings shared by avatar control, UI help, tutorials,
 /// input injection, and authored pointer tools.
 ///
-/// Deserialization is an override layer over the bundled defaults: omitted
-/// entries inherit the current bundled values while an explicit empty array
-/// remains unbound.
-#[derive(Resource, Reflect, Serialize, Clone, PartialEq, Debug)]
+/// The application supplies defaults from its authored input document through
+/// [`Self::apply_defaults_json`]. This contract crate deliberately contains no
+/// asset path or compiled product keymap; until the application installs those
+/// defaults, the settings remain invalid and input projection reports that
+/// state.
+#[derive(Resource, Reflect, Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[reflect(Resource)]
 pub struct InputBindingsSettings {
     /// Semantic intent name to Bevy key names.
@@ -94,41 +92,11 @@ pub struct InputBindingsSettings {
 
 impl Default for InputBindingsSettings {
     fn default() -> Self {
-        let bundled = bundled_input_bindings();
         Self {
-            bindings: bundled.bindings,
-            look_button: bundled.look_button,
-            pointer_bindings: bundled.pointer_bindings,
+            bindings: BTreeMap::new(),
+            look_button: String::new(),
+            pointer_bindings: BTreeMap::new(),
         }
-    }
-}
-
-impl<'de> Deserialize<'de> for InputBindingsSettings {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct StoredInputBindings {
-            #[serde(flatten)]
-            bindings: BTreeMap<String, Vec<KeyCode>>,
-            #[serde(default = "default_look_button")]
-            look_button: String,
-            #[serde(default)]
-            pointer_bindings: BTreeMap<String, Vec<PointerBinding>>,
-        }
-
-        let stored = StoredInputBindings::deserialize(deserializer)?;
-        let bundled = bundled_input_bindings();
-        let mut bindings = bundled.bindings;
-        let mut pointer_bindings = bundled.pointer_bindings;
-        bindings.extend(stored.bindings);
-        pointer_bindings.extend(stored.pointer_bindings);
-        Ok(Self {
-            bindings,
-            look_button: stored.look_button,
-            pointer_bindings,
-        })
     }
 }
 
@@ -162,6 +130,45 @@ impl SettingsSection for InputBindingsSettings {
 }
 
 impl InputBindingsSettings {
+    /// Parse an authored input-binding document without applying it to the
+    /// live settings resource.
+    pub fn from_json(json: &str) -> Result<Self, String> {
+        let document: InputBindingsDocument = serde_json::from_str(json)
+            .map_err(|error| format!("invalid input bindings: {error}"))?;
+        let settings = Self {
+            bindings: document.bindings,
+            look_button: document.look_button,
+            pointer_bindings: document.pointer_bindings,
+        };
+        settings.validate_section()?;
+        Ok(settings)
+    }
+
+    /// Merge an authored default document into this settings section.
+    ///
+    /// Persisted values remain authoritative, while omitted values inherit the
+    /// current application defaults. This is intentionally a runtime operation:
+    /// the application owns which asset is the default and can reload it without
+    /// recompiling this input contract crate.
+    pub fn apply_defaults_json(&mut self, json: &str) -> Result<(), String> {
+        let defaults = Self::from_json(json)?;
+
+        let stored_bindings = std::mem::take(&mut self.bindings);
+        let stored_pointer_bindings = std::mem::take(&mut self.pointer_bindings);
+        let stored_look_button = std::mem::take(&mut self.look_button);
+
+        self.bindings = defaults.bindings;
+        self.bindings.extend(stored_bindings);
+        self.pointer_bindings = defaults.pointer_bindings;
+        self.pointer_bindings.extend(stored_pointer_bindings);
+        self.look_button = if stored_look_button.trim().is_empty() {
+            defaults.look_button
+        } else {
+            stored_look_button
+        };
+        self.validate_section()
+    }
+
     /// Build the live leafwing map from the resolved settings section.
     pub fn input_map(&self) -> Result<InputMap<UserIntent>, String> {
         let bindings = self.key_bindings()?;
@@ -268,8 +275,7 @@ pub fn key_label(keys: &[KeyCode]) -> String {
 
 /// Parse input settings JSON and build its semantic input map.
 pub fn input_map_from_json(json: &str) -> Result<InputMap<UserIntent>, String> {
-    let settings: InputBindingsSettings =
-        serde_json::from_str(json).map_err(|error| format!("invalid input bindings: {error}"))?;
+    let settings = InputBindingsSettings::from_json(json)?;
     settings.input_map()
 }
 
@@ -328,6 +334,34 @@ mod tests {
         ActionState, Buttonlike, DualAxislike, InputManagerPlugin, MouseMove,
     };
 
+    fn test_bindings() -> InputBindingsSettings {
+        InputBindingsSettings::from_json(
+            r#"{
+                "look_button": "Right",
+                "forward": ["KeyW"],
+                "backward": ["KeyS"],
+                "left": ["KeyA"],
+                "right": ["KeyD"],
+                "yaw_right": ["KeyE"],
+                "yaw_left": ["KeyQ"],
+                "speed_boost": ["ShiftLeft", "ShiftRight"],
+                "action": ["KeyF"],
+                "thrust": ["Space"],
+                "brake": ["Space"],
+                "release": ["KeyG"],
+                "switch_mode": ["KeyV"],
+                "pause": ["KeyP"],
+                "cancel": ["Backspace", "Escape"],
+                "delete_selection": ["Delete"],
+                "pointer_bindings": {
+                    "route.add_point": [{"button": "Left", "alt": true}],
+                    "route.context": [{"button": "Right"}]
+                }
+            }"#,
+        )
+        .expect("valid input test fixture")
+    }
+
     #[test]
     fn configured_pointer_button_reaches_the_semantic_axis() {
         let mut app = App::new();
@@ -377,7 +411,7 @@ mod tests {
 
     #[test]
     fn pointer_intents_are_exact_and_configurable() {
-        let settings = InputBindingsSettings::default();
+        let settings = test_bindings();
         assert_eq!(
             settings.pointer_intents("primary", true, false, false),
             vec!["route.add_point".to_string()]
@@ -416,7 +450,7 @@ mod tests {
 
     #[test]
     fn labels_and_persisted_overrides_follow_the_shared_keymap() {
-        let settings = InputBindingsSettings::default();
+        let settings = test_bindings();
         assert_eq!(settings.key_code("W").unwrap(), Some(KeyCode::KeyW));
         assert_eq!(settings.key_code("KeyG").unwrap(), Some(KeyCode::KeyG));
         assert_eq!(settings.key_code("not-bound").unwrap(), None);
@@ -439,8 +473,8 @@ mod tests {
     }
 
     #[test]
-    fn bundled_keybindings_parse_and_build() {
-        let settings = InputBindingsSettings::default();
+    fn authored_keybindings_parse_and_build() {
+        let settings = test_bindings();
         settings
             .validate_section()
             .expect("bundled keybindings must be valid");

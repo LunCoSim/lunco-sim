@@ -48,5 +48,5 @@ app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin); // overrides the de
 
 ## Status
 
-Working. Analytical positions + declared mission datasets; embedded-ephemeris
-constructor (`new_with_embedded_ephemeris`) for bundled data on web.
+Working. Analytical positions plus declared mission datasets loaded through
+the runtime asset and dataset pipelines on every platform.

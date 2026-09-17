@@ -60,13 +60,16 @@ production Rhai test.
 
 ## Runtime policy selection
 
-Application policies are selected at simulation startup from
-`assets/scripting/policy/index.toml`. The manifest has one `[startup]` entry.
-That entry names the Rhai function that receives the manifest-resolved policy
-records and installs them through the private typed bootstrap binding. Each
+Application policies are selected at simulation startup from the unique
+authored TOML manifest marked `kind = "lunco.policy.v1"` in the runtime asset
+tree. The repository ships that manifest at
+`assets/scripting/policy/index.toml`, but its location is not a Rust path
+contract. The manifest has one `[startup]` entry. That entry names the Rhai
+function that receives the manifest-resolved policy records and installs them
+through the private typed bootstrap binding. Each
 `[[policies]]` entry names a hook id, a relative Rhai source file, an entry
 function, and its determinism/required declaration. A Twin may provide an
-independent `policies/index.toml` under its own root; its records are merged
+independent policy manifest under its own root; its records are merged
 with application records (Twin entries replace the same hook id) and its own
 startup function receives the Twin records that it owns when that Twin becomes
 active. A Twin manifest with policy records must declare its own `[startup]`;
@@ -90,7 +93,7 @@ seam is only a notification, its contract should instead return `Unit`.
 For example, a Twin can keep its lifecycle policy beside its authored Twin:
 
 ```toml
-# <twin-root>/policies/index.toml
+# <twin-root>/<policy-manifest>.toml
 [startup]
 source = "startup.rhai"
 entry = "install_twin_policies"
@@ -108,7 +111,9 @@ that it does not replace.
 The startup function is the only bootstrap convention in each scope. It is
 authored behavior and can choose installation order/reporting, while Rust
 retains the generic typed installer, owner-contract validation, and cleanup
-boundary. There is no second hardcoded list of policy files in the engine.
+boundary. There is no second hardcoded list of policy files or source roles in
+the engine. The `scripting.source.classify` policy similarly decides whether a
+loaded Rhai asset is prelude, a tool library, or unrelated scenario content.
 
 The same process supports a large behavior surface: each subsystem declares
 its own seam beside its owner, and the link-collected catalog exposes all

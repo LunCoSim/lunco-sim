@@ -6,6 +6,7 @@ license.workspace = true
 description = "Lightweight LunCoSim asset identity, resolution, storage, and source integration"
 
 [dependencies]
+anyhow = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-core = { path = "../lunco-core" }
 lunco-settings = { path = "../lunco-settings" }
@@ -16,7 +17,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
-include_dir = "0.7"
 dirs = "5"
 
 [[bin]]

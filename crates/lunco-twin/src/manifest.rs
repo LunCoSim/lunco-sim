@@ -23,6 +23,9 @@ fn storage_io(e: StorageError) -> std::io::Error {
 /// Name of the Twin manifest file at the root of a Twin folder.
 pub const MANIFEST_FILENAME: &str = "twin.toml";
 
+/// Directory where host-owned experiment results are persisted inside a Twin.
+pub const RESULTS_DIR_NAME: &str = "results";
+
 /// The parsed contents of `twin.toml`.
 ///
 /// Kept deliberately small. Fields are added as concrete UI flows need

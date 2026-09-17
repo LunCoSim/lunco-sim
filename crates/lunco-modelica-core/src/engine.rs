@@ -562,15 +562,18 @@ impl ModelicaEngine {
             return false;
         }
         if !lunco_assets_core::models::package_roots_live()
-            .iter()
-            .any(|candidate| candidate == root)
+            .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root))
         {
             return false;
         }
-        let files = lunco_assets_core::models::package_files_live(root);
-        if files.is_empty() {
-            return false;
-        }
+        let files = match lunco_assets_core::models::package_files_live(root) {
+            Ok(files) if !files.is_empty() => files,
+            Ok(_) => return false,
+            Err(error) => {
+                bevy::log::warn!("[ModelicaEngine] cannot load package `{root}`: {error}");
+                return false;
+            }
+        };
         match self.load_library_files(root, &format!("bundled:{root}"), files) {
             Ok(_) => self.has_class(root),
             Err(_) => false,

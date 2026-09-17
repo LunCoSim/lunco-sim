@@ -68,7 +68,7 @@ fn main() {
         }
     };
 
-    let out = dir.join("manifest.json");
+    let out = lunco_assets_core::asset_manifest_path(&dir);
     if let Err(e) = std::fs::write(&out, json) {
         eprintln!(
             "build_asset_manifest: could not write {}: {e}",

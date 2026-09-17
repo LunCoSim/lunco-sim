@@ -14,9 +14,52 @@ use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::program::{ProgramAttachSpec, ProgramInput, ProgramOutput};
 use lunco_usd_document::document::LayerId;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+use serde::Deserialize;
+
+const PROGRAM_CONTRACTS_KIND: &str = "lunco.program-contracts.v1";
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ProgramContractManifest {
+    #[serde(rename = "kind")]
+    _kind: String,
+    programs: Vec<ProgramContract>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ProgramContract {
+    source_asset: String,
+    #[serde(default)]
+    inputs: Vec<ProgramInputContract>,
+    #[serde(default)]
+    outputs: Vec<ProgramOutputContract>,
+    #[serde(default)]
+    realtime_safe: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ProgramInputContract {
+    name: String,
+    type_name: String,
+    #[serde(default)]
+    default_value: Option<f64>,
+    #[serde(default)]
+    connection: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ProgramOutputContract {
+    name: String,
+    type_name: String,
+    #[serde(default)]
+    connections: Vec<String>,
+}
 
 /// A discovered `.mo` or `.py` source that can be offered by the palette.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ProgramChoice {
     /// Asset-server address of the source.
     pub asset_path: String,
@@ -24,6 +67,8 @@ pub(crate) struct ProgramChoice {
     pub label: String,
     /// Source extension without the dot.
     pub extension: String,
+    /// Optional authored port contract for this source.
+    contract: Option<ProgramContract>,
 }
 
 impl ProgramChoice {
@@ -71,48 +116,34 @@ impl ProgramChoice {
             realtime_safe: false,
         };
 
-        // The shipped balloon sources have a documented scalar contract. Keep
-        // this content-level convenience here; the Rust command remains generic
-        // and arbitrary sources are still attachable without this special case.
-        if matches!(
-            self.asset_path.as_str(),
-            "models/Balloon.mo"
-                | "lunco://models/Balloon.mo"
-                | "models/GreenBalloon.py"
-                | "lunco://models/GreenBalloon.py"
-        ) {
-            spec.inputs = vec![
-                ProgramInput {
-                    name: "height".into(),
-                    type_name: "float".into(),
-                    default_value: None,
-                    connection: Some(format!("{host}.outputs:position_y")),
-                },
-                ProgramInput {
-                    name: "velocity".into(),
-                    type_name: "float".into(),
-                    default_value: None,
-                    connection: Some(format!("{host}.outputs:velocity_y")),
-                },
-                ProgramInput {
-                    name: "rho0".into(),
-                    type_name: "float".into(),
-                    default_value: Some(1.225),
-                    connection: None,
-                },
-                ProgramInput {
-                    name: "gravity".into(),
-                    type_name: "float".into(),
-                    default_value: Some(1.62),
-                    connection: None,
-                },
-            ];
-            spec.outputs.push(ProgramOutput {
-                name: "netForce".into(),
-                type_name: "float".into(),
-                connections: vec![format!("{host}.inputs:force_y")],
-            });
-            spec.realtime_safe = true;
+        if let Some(contract) = &self.contract {
+            spec.inputs = contract
+                .inputs
+                .iter()
+                .map(|input| ProgramInput {
+                    name: input.name.clone(),
+                    type_name: input.type_name.clone(),
+                    default_value: input.default_value,
+                    connection: input
+                        .connection
+                        .as_deref()
+                        .map(|connection| connection.replace("{host}", host)),
+                })
+                .collect();
+            spec.outputs = contract
+                .outputs
+                .iter()
+                .map(|output| ProgramOutput {
+                    name: output.name.clone(),
+                    type_name: output.type_name.clone(),
+                    connections: output
+                        .connections
+                        .iter()
+                        .map(|connection| connection.replace("{host}", host))
+                        .collect(),
+                })
+                .collect();
+            spec.realtime_safe = contract.realtime_safe;
         }
 
         spec
@@ -126,10 +157,13 @@ pub(crate) struct ProgramCatalog {
     pub ready: bool,
     pub error: Option<String>,
     pub entries: Vec<ProgramChoice>,
+    contracts_ready: bool,
+    contracts_error: Option<String>,
+    contracts: Vec<ProgramContract>,
 }
 
 /// Which program the next scene click will attach.
-#[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Resource, Default, Debug, Clone, PartialEq)]
 pub(crate) enum AttachState {
     /// Scene clicks retain their normal behavior.
     #[default]
@@ -158,18 +192,103 @@ pub(crate) fn drain_program_catalog(
                         asset_path: asset.asset_path,
                         label: asset.rel,
                         extension,
+                        contract: None,
                     })
                 })
                 .collect();
             catalog
                 .entries
                 .sort_by(|a, b| a.asset_path.cmp(&b.asset_path));
+            apply_program_contracts(&mut catalog);
         }
         Err(error) => {
             catalog.ready = false;
             catalog.entries.clear();
             catalog.error = Some(error.to_string());
         }
+    }
+}
+
+/// Load authored program contracts through the shared text-asset catalog and
+/// attach them to the discovered source choices. A source without a contract
+/// remains a valid generic effects-only program; a malformed contract is
+/// reported without preventing unrelated sources from being listed.
+pub(crate) fn sync_program_contracts(
+    text_catalog: Option<Res<lunco_assets_core::TextAssetCatalog>>,
+    text_assets: Option<Res<Assets<lunco_assets_core::TextAsset>>>,
+    asset_server: Option<Res<AssetServer>>,
+    mut catalog: ResMut<ProgramCatalog>,
+) {
+    if catalog.contracts_ready {
+        return;
+    }
+    let (Some(text_catalog), Some(text_assets), Some(asset_server)) =
+        (text_catalog, text_assets, asset_server)
+    else {
+        return;
+    };
+    if !text_catalog.ready() {
+        return;
+    }
+
+    let mut pending = false;
+    let mut manifests = Vec::new();
+    for entry in text_catalog.entries() {
+        let Some(asset) = text_assets.get(&entry.handle) else {
+            if !asset_server
+                .get_load_state(entry.handle.id())
+                .is_some_and(|state| state.is_failed())
+            {
+                pending = true;
+            }
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&asset.text) else {
+            continue;
+        };
+        if value.get("kind").and_then(serde_json::Value::as_str)
+            != Some(PROGRAM_CONTRACTS_KIND)
+        {
+            continue;
+        }
+        match serde_json::from_value::<ProgramContractManifest>(value) {
+            Ok(manifest) => manifests.push(manifest),
+            Err(error) => {
+                catalog.contracts_error = Some(format!(
+                    "invalid program contract manifest `{}`: {error}",
+                    entry.asset_path
+                ));
+            }
+        }
+    }
+    if pending {
+        return;
+    }
+    if manifests.len() > 1 {
+        catalog.contracts_error = Some(format!(
+            "more than one asset is marked {PROGRAM_CONTRACTS_KIND}"
+        ));
+    } else if let Some(manifest) = manifests.pop() {
+        catalog.contracts = manifest.programs;
+    } else {
+        catalog.contracts_error = Some(format!(
+            "runtime asset listing contains no asset marked {PROGRAM_CONTRACTS_KIND}"
+        ));
+    }
+    catalog.contracts_ready = true;
+    apply_program_contracts(&mut catalog);
+}
+
+fn apply_program_contracts(catalog: &mut ProgramCatalog) {
+    for choice in &mut catalog.entries {
+        choice.contract = catalog
+            .contracts
+            .iter()
+            .find(|contract| {
+                lunco_assets_core::engine_asset_rel(&contract.source_asset)
+                    == lunco_assets_core::engine_asset_rel(&choice.asset_path)
+            })
+            .cloned();
     }
 }
 
@@ -182,6 +301,9 @@ pub(crate) fn clear_program_catalog_on_twin_closed(
     catalog.ready = false;
     catalog.error = None;
     catalog.entries.clear();
+    catalog.contracts_ready = false;
+    catalog.contracts_error = None;
+    catalog.contracts.clear();
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -249,11 +371,12 @@ fn models_palette_content(
         ui.separator();
     }
 
-    let Some((catalog_ready, catalog_error, entries)) =
+    let Some((catalog_ready, catalog_error, contracts_error, entries)) =
         ctx.resource::<ProgramCatalog>().map(|catalog| {
             (
                 catalog.ready,
                 catalog.error.clone(),
+                catalog.contracts_error.clone(),
                 catalog.entries.clone(),
             )
         })
@@ -268,6 +391,9 @@ fn models_palette_content(
     if let Some(error) = catalog_error {
         ui.colored_label(tokens.error, format!("Model catalog error: {error}"));
         return;
+    }
+    if let Some(error) = contracts_error {
+        ui.colored_label(tokens.warning, format!("Model contract catalog: {error}"));
     }
     if entries.is_empty() {
         ui.label(egui::RichText::new("No .mo or .py sources discovered.").weak());

@@ -47,7 +47,7 @@ impl PackageTreeCache {
             .map(|lib| super::library_tree::library_root_node(lib))
             .collect();
 
-        // Bundled models are available from the embedded asset inventory before
+        // Bundled models are available from the runtime asset inventory before
         // the optional editor index has been decoded. Always keep this root
         // last; the generated index enriches it through its readiness event.
         roots.push(PackageNode::Category {
@@ -134,18 +134,25 @@ impl Default for PackageTreeCache {
     }
 }
 
-/// Initial bundled-models tree from the asset-owned embedded inventory.
+/// Initial example tree from the external asset inventory.
 /// `LibraryEditorIndexBecameReady` replaces these leaves with the generated tree
 /// after its decode completes off-thread.
 fn build_bundled_tree() -> Vec<PackageNode> {
-    crate::models::bundled_models()
+    let models = match crate::models::bundled_models() {
+        Ok(models) => models,
+        Err(error) => {
+            bevy::log::error!("[modelica-package-tree] example inventory failed: {error}");
+            return Vec::new();
+        }
+    };
+    models
         .iter()
         .map(|m| PackageNode::Model {
             id: format!("bundled://{}", m.filename),
             name: m
                 .filename
                 .strip_suffix(".mo")
-                .unwrap_or(m.filename)
+                .unwrap_or(&m.filename)
                 .to_string(),
             library: ModelSource::Bundled,
             class_kind: Some(lunco_modelica_index::index::ClassKind::Model),

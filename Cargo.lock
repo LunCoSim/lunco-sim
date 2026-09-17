@@ -5821,25 +5821,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
 
 [[package]]
-name = "include_dir"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
-dependencies = [
- "include_dir_macros",
-]
-
-[[package]]
-name = "include_dir_macros"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7133,11 +7114,11 @@ dependencies = [
 name = "lunco-assets-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bevy",
  "crossbeam-channel",
  "dirs",
  "futures-lite",
- "include_dir",
  "js-sys",
  "lunco-core",
  "lunco-settings",
@@ -7723,6 +7704,7 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-api-transport",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
@@ -7770,6 +7752,7 @@ dependencies = [
  "lunco-environment",
  "lunco-experiments",
  "lunco-hardware",
+ "lunco-input-core",
  "lunco-luncosim-exposures",
  "lunco-mobility",
  "lunco-modelica-api",
@@ -8714,6 +8697,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "big_space",
+ "lunco-assets-core",
  "lunco-celestial-spatial-core",
  "lunco-core",
  "lunco-cosim",
@@ -9805,6 +9789,7 @@ dependencies = [
  "lunco-render",
  "lunco-spatial",
  "lunco-usd-actuation",
+ "lunco-usd-avian",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-filters",
  "lunco-usd-avian-joints",
@@ -9922,7 +9907,6 @@ name = "lunco-usd-sim-domain"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-assets-core",
  "lunco-core",
  "lunco-cosim-core",
  "lunco-doc",
@@ -10272,6 +10256,7 @@ dependencies = [
  "bevy_egui",
  "bevy_flair",
  "bevy_hui",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-hooks",
  "lunco-render",

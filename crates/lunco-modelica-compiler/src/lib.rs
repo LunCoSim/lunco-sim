@@ -74,7 +74,7 @@ pub struct ModelicaCompiler {
     installed_roots: std::collections::HashSet<String>,
     /// Root segments referenced by the active source document. This is the
     /// compiler's parsed view of the current Modelica search path and keeps
-    /// an unresolved reference from loading unrelated embedded packages.
+    /// an unresolved reference from loading unrelated external packages.
     requested_source_roots: std::collections::HashSet<String>,
     /// URIs of the user documents currently seated as overlays in this
     /// reused session (NOT the resident source roots). Every compile is
@@ -167,21 +167,20 @@ impl ModelicaCompiler {
     }
 
     /// Seat a shipped Modelica library into this session by its TOP-LEVEL name,
-    /// once. A root such as `LunCo` maps to `assets/models/LunCo`, a standard
-    /// structured package (`package.mo` + `package.order` + members).
+    /// once. A root such as `LunCo` maps to the engine Modelica library's
+    /// standard structured package (`package.mo` + `package.order` + members).
     ///
     /// This is MODELICAPATH lookup: the root segment of a qualified name names a
     /// library, the library is loaded whole, and everything below resolves inside
     /// the loaded tree from the members' own `within` declarations. Idempotent and
     /// cheap on repeat.
     ///
-    /// DISK FIRST on native; the embedded snapshot is the wasm source. Both copies exist — `assets/models`
-    /// on the filesystem, and the `include_dir!` snapshot baked into the binary — and
-    /// they drift the moment anyone edits a `.mo` without rebuilding. The disk tree is
+    /// The runtime asset tree is the source on native; browser consumers use the
+    /// Bevy `ModelicaSource` loader. There is one source of truth, so an edited `.mo`
+    /// cannot be compiled from a stale second copy. The disk tree is
     /// the one Bevy's AssetServer serves, so it is what `info:sourceAsset`
     /// already reads; taking the library from anywhere else would make an edited
     /// member compile as its last-built self while the scene loaded the new text.
-    /// The embedded copy is for wasm, which has no filesystem to read.
     ///
     /// A library member is seated through [`Self::seat_user_source`] like any other
     /// user model, one document per `.mo`, so the bound-`input` strip applies to it.
@@ -197,10 +196,13 @@ impl ModelicaCompiler {
         }
         let live_dir = lunco_assets_core::models_package_root_path(root);
         let files = lunco_assets_core::models::package_files_live(root);
-        if !files.is_empty() {
+        if let Ok(files) = files {
+            if files.is_empty() {
+                return false;
+            }
             let (label, source) = match live_dir {
                 Some(dir) => (dir.display().to_string(), "the live asset tree"),
-                None => (format!("embedded:{root}"), "the embedded snapshot"),
+                None => (root.to_owned(), "the configured Modelica asset library"),
             };
             log::info!(
                 "[ModelicaCompiler] seated library `{root}` from {source} ({})",
@@ -231,14 +233,14 @@ impl ModelicaCompiler {
         // source-root admission covers both package and example entries in the
         // asset inventory.
         let filename = format!("{root}.mo");
-        let Some(source) = lunco_assets_core::models::model_source(&filename) else {
+        let Ok(Some(source)) = lunco_assets_core::models::model_source(&filename) else {
             return false;
         };
         log::info!("[ModelicaCompiler] seated bundled root `{root}` ({filename})",);
         let report = self.seat_library_files(
             root,
             &format!("bundled:{filename}"),
-            vec![(filename, source.to_string())],
+            vec![(filename, source)],
         );
         if !report.diagnostics.is_empty() || report.inserted_file_count == 0 {
             log::error!(
@@ -317,8 +319,7 @@ impl ModelicaCompiler {
             if !self.ensure_source_root_installed(&root) {
                 return Err(format!(
                     "`{qualified}` declares `within {within};`, but no library `{root}` \
-                     could be seated (looked for `assets/models/{root}/package.mo`, then \
-                     the embedded snapshot)"
+                     could be seated from the configured Modelica asset library"
                 ));
             }
             return self.compile_loaded(&qualified);

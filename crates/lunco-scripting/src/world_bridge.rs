@@ -686,21 +686,17 @@ fn apply_dynamic_fields(
 /// Compile the split prelude into one AST (per-file compile + `AST::merge`).
 ///
 /// The prelude is the ergonomic policy layer (drive/distance/arrived/nav/HUD/…)
-/// authored in rhai. Its topic files live under `assets/scripting/prelude/` and are
-/// embedded + enumerated by [`lunco_assets_core::scripting::prelude_files`] (the
-/// asset-owning crate) — sorted by stem for a deterministic merge, the files
-/// being pure `fn` definitions so order is semantically irrelevant. Flat
-/// namespace + embedded, identical to compiling one concatenated string, but a
+/// authored in Rhai. Its topic files are selected by the source-classification
+/// policy and supplied by the runtime asset pipeline — sorted by path for a deterministic
+/// merge, the files being pure `fn` definitions so order is semantically
+/// irrelevant. Flat namespace, identical to compiling one concatenated string, but a
 /// syntax error is logged with the offending file's name and a position relative
 /// to that file (error locality). Both prelude uses — the global module and the
 /// per-scenario `prelude_ast` merge — go through here.
-pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, String> {
-    // Disk-first (edit -> restart, no rebuild) on native; embedded is the
-    // authoritative source on wasm and installed builds without an asset tree.
-    // Once a source set is selected, an authored parse error is terminal for
-    // this engine construction. Running stale embedded helpers would make the
-    // visible source disagree with the policy actually executing.
-    let files = lunco_assets_core::scripting::prelude_files()?;
+pub(crate) fn compile_prelude_set_for_runtime(
+    engine: &Engine,
+    files: Vec<(String, String)>,
+) -> Result<AST, String> {
     compile_prelude_set(engine, files)
 }
 
@@ -921,8 +917,8 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
     acc.ok_or_else(|| "active Rhai prelude is empty".to_string())
 }
 
-/// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded
-/// prelude loaded as a global module, and the same sandbox caps as the one-shot
+/// Build the base rhai [`Engine`] with the World-bridge verbs registered and the
+/// same sandbox caps as the one-shot
 /// backend.
 ///
 /// `sources` backs `import`. Passing it is not optional in practice: a bare
@@ -930,11 +926,9 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 /// relative to the process working directory — a sandbox escape in a system that
 /// otherwise routes every asset through a scoped source. Installing ours closes it.
 ///
-/// # Panics
-///
-/// Panics if the embedded prelude cannot compile or cannot be installed as the
-/// global module. An engine without its prelude is not a valid runtime.
-pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSources) -> Engine {
+fn build_world_engine_base(
+    sources: lunco_assets_core::script_source::ScriptSources,
+) -> Engine {
     let mut engine = Engine::new();
 
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
@@ -2172,21 +2166,76 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
         }
     });
 
-    // Load the embedded prelude as a global module so its helpers are callable
-    // unqualified (e.g. `drive(r, 1.0, 0.0)`). Compiled against the same engine
-    // so the wrappers can reach the native verbs above.
-    let prelude = compile_prelude(&engine)
-        .unwrap_or_else(|error| panic!("embedded Rhai prelude must compile: {error}"));
-    let module = rhai::Module::eval_ast_as_new(rhai::Scope::new(), &prelude, &engine)
-        .unwrap_or_else(|error| panic!("embedded Rhai prelude must build: {error}"));
-    engine.register_global_module(module.into());
-
     // Register the importable tool libraries as static modules (callable as
-    // `libname::fn`). AFTER the prelude global module so their functions can
-    // resolve prelude helpers at run time.
+    // `libname::fn`). The source-defined tools are populated by the runtime
+    // asset pipeline; a later generation rebuilds this engine.
     crate::tool_libs::bind_registered_tools(&mut engine);
 
     engine
+}
+
+pub(crate) fn prelude_files_from_sources(
+    sources: &lunco_assets_core::script_source::ScriptSources,
+) -> Result<Vec<(String, String)>, String> {
+    let mut files = Vec::new();
+    for id in sources.ids() {
+        if !id.ends_with(".rhai") {
+            continue;
+        }
+        if !matches!(
+            crate::tool_libs::classify_source(&id)?,
+            Some(crate::tool_libs::ScriptSourceRole::Prelude)
+        ) {
+            continue;
+        }
+        if let Some(source) = sources.get(&id) {
+            files.push((id, source));
+        }
+    }
+    if files.is_empty() {
+        return Err("Rhai prelude assets are not loaded".to_string());
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(files)
+}
+
+fn install_prelude_on_engine(
+    engine: &mut Engine,
+    files: Vec<(String, String)>,
+) -> Result<AST, String> {
+    let prelude = compile_prelude_set(engine, files)?;
+    let module = rhai::Module::eval_ast_as_new(rhai::Scope::new(), &prelude, engine)
+        .map_err(|error| format!("Rhai prelude module failed to build: {error}"))?;
+    engine.register_global_module(module.into());
+    Ok(prelude)
+}
+
+/// Build a complete world engine from the external runtime asset tree.
+///
+/// Native callers read the same asset paths used by Bevy. Browser callers must
+/// first publish the loaded prelude sources into `ScriptSources`; if they have
+/// not arrived yet this returns a diagnostic instead of evaluating a partial
+/// engine.
+pub fn build_world_engine(
+    sources: lunco_assets_core::script_source::ScriptSources,
+) -> Result<Engine, String> {
+    let files = {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let authored = lunco_assets_core::scripting::rhai_sources()?;
+            for (id, source) in &authored {
+                sources.insert(id.clone(), source.clone());
+            }
+            prelude_files_from_sources(&sources)?
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            prelude_files_from_sources(&sources)?
+        }
+    };
+    let mut engine = build_world_engine_base(sources);
+    install_prelude_on_engine(&mut engine, files)?;
+    Ok(engine)
 }
 
 /// Validate a candidate tool against a production world engine without
@@ -2198,7 +2247,7 @@ pub fn validate_tool_library(
     source: &str,
     sources: lunco_assets_core::script_source::ScriptSources,
 ) -> Result<Vec<String>, String> {
-    let engine = build_world_engine(sources);
+    let engine = build_world_engine(sources)?;
     lunco_tools_rhai::validate_rhai_tool_with_engine(name, source, &engine)
 }
 
@@ -2486,6 +2535,11 @@ pub struct RhaiScenarioRuntime {
     /// global module too, for the runtime-resolution path used while a script's
     /// own body executes.
     prelude_ast: AST,
+    /// The external prelude sources used to build `prelude_ast`, retained for
+    /// a later engine rebuild when a tool library changes.
+    prelude_files: Vec<(String, String)>,
+    /// Whether the authored prelude has been installed into this runtime.
+    prelude_ready: bool,
     /// Tool-library generation the engine's static modules were built from; a
     /// mismatch rebuilds the engine so removed modules stop being callable too.
     tool_gen: u64,
@@ -2502,16 +2556,17 @@ impl Default for RhaiScenarioRuntime {
         // resolver are the same map — a script loaded later is importable without
         // rebuilding the engine.
         let sources = lunco_assets_core::script_source::ScriptSources::default();
-        let mut engine = build_world_engine(sources.clone());
+        let mut engine = build_world_engine_base(sources.clone());
         engine.on_print(|s| info!("[rhai] {s}"));
-        let prelude_ast =
-            compile_prelude(&engine).unwrap_or_else(|e| panic!("prelude must compile: {e}"));
         Self {
             engine: std::sync::Arc::new(engine),
             states: std::collections::HashMap::new(),
             compiled: std::collections::HashMap::new(),
-            prelude_ast,
-            // build_world_engine already refreshed at the current generation.
+            prelude_ast: AST::empty(),
+            prelude_files: Vec::new(),
+            prelude_ready: false,
+            // The base engine is built before authored tools arrive. The first
+            // asset generation refresh binds them into the complete engine.
             tool_gen: crate::tool_libs::generation(),
             sources,
         }
@@ -2527,9 +2582,194 @@ impl RhaiScenarioRuntime {
     pub fn script_sources(&self) -> lunco_assets_core::script_source::ScriptSources {
         self.sources.clone()
     }
+
+    /// Whether the installed prelude is byte-for-byte the candidate assembled
+    /// from the current asset generation.
+    pub(crate) fn prelude_matches(&self, files: &[(String, String)]) -> bool {
+        self.prelude_ready && self.prelude_files == files
+    }
+
+    /// Install the externally loaded prelude as the runtime's global module and
+    /// merge source functions into future scenario ASTs.
+    pub(crate) fn install_prelude(
+        &mut self,
+        files: Vec<(String, String)>,
+    ) -> Result<(), String> {
+        let mut rebuilt = build_world_engine_base(self.sources.clone());
+        rebuilt.on_print(|s| info!("[rhai] {s}"));
+        let prelude_ast = install_prelude_on_engine(&mut rebuilt, files.clone())?;
+        self.engine = std::sync::Arc::new(rebuilt);
+        self.prelude_ast = prelude_ast;
+        self.prelude_files = files;
+        self.prelude_ready = true;
+        self.tool_gen = crate::tool_libs::generation();
+        Ok(())
+    }
+}
+
+/// Readiness and failure state for the externally loaded application Rhai
+/// prelude. Scenario execution stays closed until the complete prelude is
+/// available, while tool sources are admitted independently.
+#[derive(Resource, Default)]
+pub(crate) struct RhaiRuntimeStatus {
+    ready: bool,
+    error: Option<String>,
+}
+
+/// Gate scenario execution on the authored prelude being installed.
+pub(crate) fn rhai_runtime_ready(
+    status: Option<Res<RhaiRuntimeStatus>>,
+) -> bool {
+    status.is_some_and(|status| status.ready)
+}
+
+/// Install authored Rhai source files after the asset pipeline has loaded them.
+///
+/// This is deliberately event-adjacent startup work, not a per-tick directory
+/// walk. The asset handles are retained by [`source_asset::BuiltinRhaiAssets`];
+/// edits arrive through Bevy's normal asset events and are visible to the next
+/// engine generation.
+pub(crate) fn prepare_builtin_rhai_assets(
+    manifest: Option<Res<lunco_assets_core::discovery::AssetManifest>>,
+    builtins: Option<ResMut<crate::source_asset::BuiltinRhaiAssets>>,
+    assets: Option<Res<Assets<crate::source_asset::RhaiSource>>>,
+    asset_server: Option<Res<AssetServer>>,
+    sources: Option<Res<lunco_assets_core::script_source::ScriptSources>>,
+    driver: Option<ResMut<crate::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
+    mut status: ResMut<RhaiRuntimeStatus>,
+) {
+    let (Some(manifest), Some(mut builtins), Some(assets), Some(asset_server), Some(sources), Some(mut driver)) =
+        (manifest, builtins, assets, asset_server, sources, driver)
+    else {
+        return;
+    };
+    if !manifest.ready() {
+        return;
+    }
+
+    let hook_generation = lunco_hooks::generation();
+    let mut prelude_handles = Vec::new();
+    for (rel, handle) in builtins.handles.clone() {
+        let role = match crate::tool_libs::classify_source(&rel) {
+            Ok(role) => role,
+            Err(error) => {
+                let message = format!("Rhai source classification rejected {rel}: {error}");
+                if status.error.as_deref() != Some(&message) {
+                    error!("[rhai] {message}");
+                }
+                status.ready = false;
+                status.error = Some(message);
+                return;
+            }
+        };
+        if matches!(role, Some(crate::tool_libs::ScriptSourceRole::Prelude)) {
+            prelude_handles.push((rel.clone(), handle.clone()));
+        }
+        let Some(source) = assets.get(handle.id()) else {
+            if asset_server
+                .recursive_dependency_load_state(handle.id())
+                .is_failed()
+            {
+                error!("[rhai] failed to load built-in source {rel}");
+            }
+            continue;
+        };
+        sources.insert(rel.clone(), source.text.clone());
+        if builtins
+            .processed
+            .get(&rel)
+            .is_some_and(|(text, generation)| text == &source.text && *generation == hook_generation)
+        {
+            continue;
+        }
+        match role {
+            Some(crate::tool_libs::ScriptSourceRole::Tool(name)) => {
+                crate::tool_libs::register_tool_library(&name, &source.text);
+                info!("[rhai] activated tool library '{name}' from {rel}");
+            }
+            Some(crate::tool_libs::ScriptSourceRole::Prelude) | None => {}
+        }
+        builtins
+            .processed
+            .insert(rel.clone(), (source.text.clone(), hook_generation));
+    }
+
+    if prelude_handles.is_empty() {
+        let message = "asset classification produced no Rhai prelude sources".to_string();
+        if status.error.as_deref() != Some(&message) {
+            error!("[rhai] {message}");
+        }
+        status.ready = false;
+        status.error = Some(message);
+        return;
+    }
+
+    let mut prelude = Vec::with_capacity(prelude_handles.len());
+    for (rel, handle) in prelude_handles {
+        if asset_server
+            .recursive_dependency_load_state(handle.id())
+            .is_failed()
+        {
+            let message = format!("failed to load Rhai prelude asset {rel}");
+            if status.error.as_deref() != Some(&message) {
+                error!("[rhai] {message}");
+            }
+            status.ready = false;
+            status.error = Some(message);
+            return;
+        }
+        if !asset_server.is_loaded_with_dependencies(&handle) {
+            // Keep execution closed until every policy-selected prelude source
+            // and its imports are present. A partial prelude is executable Rhai
+            // but an invalid runtime contract: scenes could compile against one
+            // subset and never see helpers arriving later.
+            status.ready = false;
+            status.error = None;
+            return;
+        }
+        let Some(source) = assets.get(handle.id()) else {
+            let message = format!("loaded Rhai prelude asset {rel} has no text asset");
+            if status.error.as_deref() != Some(&message) {
+                error!("[rhai] {message}");
+            }
+            status.ready = false;
+            status.error = Some(message);
+            return;
+        };
+        prelude.push((rel, source.text.clone()));
+    }
+
+    prelude.sort_by(|left, right| left.0.cmp(&right.0));
+    if driver.runtime.prelude_matches(&prelude) {
+        status.ready = true;
+        status.error = None;
+        return;
+    }
+
+    status.ready = false;
+    match driver.runtime.install_prelude(prelude) {
+        Ok(()) => {
+            driver.invalidate();
+            status.ready = true;
+            status.error = None;
+            info!("[rhai] authored prelude is ready");
+        }
+        Err(error) => {
+            let message = format!("Rhai prelude rejected: {error}");
+            if status.error.as_deref() != Some(&message) {
+                error!("[rhai] {message}");
+                status.error = Some(message);
+            }
+        }
+    }
 }
 
 impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
+    fn invalidate(&mut self) {
+        self.states.clear();
+        self.compiled.clear();
+    }
+
     fn compile(
         &mut self,
         entity: Entity,
@@ -2845,13 +3085,27 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // contended rebuild is deferred, never fatal.
         match std::sync::Arc::get_mut(&mut self.engine) {
             Some(engine) => {
-                let mut rebuilt = build_world_engine(self.sources.clone());
+                let mut rebuilt = build_world_engine_base(self.sources.clone());
                 rebuilt.on_print(|s| info!("[rhai] {s}"));
-                let prelude_ast = compile_prelude(&rebuilt)
-                    .unwrap_or_else(|e| panic!("prelude must compile: {e}"));
-                *engine = rebuilt;
-                self.prelude_ast = prelude_ast;
-                self.tool_gen = cur;
+                // A runtime may receive tool changes before its asynchronous
+                // prelude asset has arrived. Rebuild the base engine in that
+                // state; scenario execution remains gated by
+                // `RhaiRuntimeStatus` until a real prelude is installed.
+                let prelude = if self.prelude_files.is_empty() {
+                    Ok(AST::empty())
+                } else {
+                    install_prelude_on_engine(&mut rebuilt, self.prelude_files.clone())
+                };
+                match prelude {
+                    Ok(prelude_ast) => {
+                        *engine = rebuilt;
+                        self.prelude_ast = prelude_ast;
+                        self.tool_gen = cur;
+                    }
+                    Err(error) => {
+                        bevy::log::error!("[rhai] prelude rebuild failed: {error}");
+                    }
+                }
             }
             None => {
                 // `tool_gen` is deliberately NOT advanced — the next `maintain`
@@ -3351,7 +3605,7 @@ pub fn eval_with_world_as(
         .get_resource::<lunco_assets_core::script_source::ScriptSources>()
         .cloned()
         .unwrap_or_default();
-    let mut engine = build_world_engine(sources);
+    let mut engine = build_world_engine(sources)?;
 
     let out = Arc::new(Mutex::new(String::new()));
     let sink = out.clone();
@@ -3411,7 +3665,7 @@ pub fn eval_tool_with_world_as(
         .get_resource::<lunco_assets_core::script_source::ScriptSources>()
         .cloned()
         .unwrap_or_default();
-    let mut engine = build_world_engine(sources);
+    let mut engine = build_world_engine(sources)?;
     let out = Arc::new(Mutex::new(String::new()));
     let sink = out.clone();
     engine.on_print(move |s| {
@@ -3445,11 +3699,9 @@ pub fn eval_tool_with_world_as(
 
 #[cfg(test)]
 mod tests {
-    //! Syntax-validate the embedded prelude + shipped example scenarios. Rust's
-    //! `cargo check` can't see inside the `.rhai` files (they're `include_str!`),
-    //! so a parse error would otherwise only surface when the engine is built.
-    //! `compile` checks syntax (unresolved function
-    //! calls resolve at runtime, so calling prelude verbs here is fine).
+    //! Test the generic Rhai bridge and compiler mechanics. Authored scripts are
+    //! validated by the production `scripting_asset_contracts` scene so adding
+    //! or editing a `.rhai` file does not require rebuilding this crate.
 
     use bevy::math::DVec3;
     use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
@@ -3495,7 +3747,7 @@ mod tests {
     fn reentrant_engine_borrow_defers_reload_instead_of_panicking() {
         use crate::scenario::ScenarioRuntime;
 
-        crate::tool_libs::register_builtins();
+        let _registry_guard = crate::tool_libs::registry_test_guard();
         let mut rt = super::RhaiScenarioRuntime::default();
 
         // Simulate the re-entrant call: something else (a task ctx, a nested
@@ -3536,6 +3788,7 @@ mod tests {
     fn removed_tool_is_not_callable_after_engine_maintenance() {
         use crate::scenario::ScenarioRuntime;
 
+        let _registry_guard = crate::tool_libs::registry_test_guard();
         let name = "h6_removed_tool_probe";
         crate::tool_libs::register_tool_library(name, "fn ping() { 42 }");
         let mut rt = super::RhaiScenarioRuntime::default();
@@ -3716,64 +3969,6 @@ mod tests {
         assert_eq!(pending.last().map(|(_, source)| *source), Some(258));
     }
 
-    #[test]
-    fn mission_driver_accepts_transient_event_identities() {
-        let mut engine = rhai::Engine::new();
-        crate::rhai_limits::apply(&mut engine);
-        let ast = super::compile_prelude(&engine).expect("prelude must compile");
-        let mut scope = rhai::Scope::new();
-        let mut this = Dynamic::from_map(Map::new());
-        let result = engine.call_fn_with_options::<Dynamic>(
-            rhai::CallFnOptions::new()
-                .eval_ast(false)
-                .rewind_scope(false)
-                .bind_this_ptr(&mut this),
-            &mut scope,
-            &ast,
-            "__run_mission",
-            [
-                Dynamic::from_int(1),
-                Dynamic::from_array(Vec::new()),
-                Dynamic::from_map(Map::new()),
-            ],
-        );
-        drop(result.expect("mission driver must use the new transient event argument"));
-    }
-
-    #[test]
-    fn prelude_and_examples_parse() {
-        // Use the SAME raised expr-depth the scenario engine uses at runtime — the
-        // prelude's sequencer legitimately needs it; a stock engine's lower default
-        // rejects it.
-        let mut engine = rhai::Engine::new();
-        crate::rhai_limits::apply(&mut engine);
-        super::compile_prelude(&engine).expect("prelude must parse");
-
-        // Every embedded example scenario, built-in tool library, AND bundled
-        // runtime scenario must parse — all enumerated from the asset-owning
-        // crate, so new files are covered automatically (no hand-kept list here).
-        // The bundled scenarios include the lander auto-land GUIDANCE, so a
-        // syntax slip can't silently disable auto-land at scene load.
-        let examples = lunco_assets_core::scripting::examples();
-        let tools = lunco_assets_core::scripting::tool_libraries();
-        let scenarios = lunco_assets_core::scripting::scenarios();
-        assert!(
-            !examples.is_empty() && !tools.is_empty() && !scenarios.is_empty(),
-            "embedded scripting assets empty"
-        );
-        for (name, src) in examples.into_iter().chain(tools).chain(scenarios) {
-            engine
-                .compile(src)
-                .unwrap_or_else(|e| panic!("{name}.rhai failed to parse: {e}"));
-        }
-    }
-
-    #[test]
-    fn prelude_loads_as_module() {
-        // The full build path: verbs + prelude-as-global-module must succeed.
-        let _engine = super::build_world_engine(Default::default());
-    }
-
     /// A top-level `const` must be readable from inside a `fn` body.
     ///
     /// Rhai fns are pure and cannot see script-level state at runtime, so this
@@ -3823,7 +4018,7 @@ mod tests {
     fn engine_with_sibling(sibling_id: &str, sibling_src: &str) -> rhai::Engine {
         let sources = lunco_assets_core::script_source::ScriptSources::default();
         sources.insert(sibling_id, sibling_src);
-        super::build_world_engine(sources)
+        super::build_world_engine_base(sources)
     }
 
     /// TASK A: a BARE relative `import` resolves against the scenario's own asset
@@ -3968,7 +4163,7 @@ mod tests {
 
     #[test]
     fn native_task_callback_preserves_bound_this() {
-        let engine = super::build_world_engine(Default::default());
+        let engine = super::build_world_engine_base(Default::default());
         let src = r#"
             fn make_action() { |me| { this.count += me; this.count } }
         "#;
@@ -4019,7 +4214,7 @@ mod tests {
     /// program with `eval_ast(false)`, i.e. today's behaviour and cost.
     #[test]
     fn a_script_without_imports_builds_no_imports_ast() {
-        let engine = super::build_world_engine(Default::default());
+        let engine = super::build_world_engine_base(Default::default());
         let src = "fn on_tick(me, ctx) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
         assert!(super::build_hoisted_ast(&engine, src, &full, None)
@@ -4161,284 +4356,6 @@ mod tests {
             )
             .expect("global::TIP_DEG must resolve inside a fn");
         assert_eq!(got, 40.0);
-    }
-
-    #[test]
-    fn dt_and_elapsed_read_the_fixed_clock() {
-        use bevy::prelude::*;
-        use bevy::time::{Fixed, Time};
-        let mut world = World::new();
-        let mut t: Time<Fixed> = Time::from_hz(60.0);
-        // Directly advance the fixed clock one step so delta/elapsed are set.
-        t.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
-        world.insert_resource(t);
-        world.insert_resource(lunco_core::SimTick(1));
-
-        let dt: f64 = super::eval_with_world(&mut world, "dt()")
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert!((dt - 1.0 / 60.0).abs() < 1e-9, "dt() was {dt}");
-
-        let el: f64 = super::eval_with_world(&mut world, "elapsed_seconds()")
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert!((el - 1.0 / 60.0).abs() < 1e-9, "elapsed_seconds() was {el}");
-    }
-
-    #[test]
-    fn elapsed_uses_admitted_sim_tick_when_the_fixed_clock_has_scheduler_overstep() {
-        use bevy::prelude::*;
-        use bevy::time::{Fixed, Time};
-        let mut world = World::new();
-        let mut fixed: Time<Fixed> = Time::from_hz(60.0);
-        // Simulate a fixed clock that accumulated bookkeeping while a causal
-        // barrier was held: its elapsed value is intentionally ahead of the
-        // admitted simulation tick.
-        fixed.advance_by(std::time::Duration::from_secs(2));
-        world.insert_resource(fixed);
-        world.insert_resource(lunco_core::SimTick(3));
-
-        let elapsed: f64 = super::eval_with_world(&mut world, "elapsed_seconds()")
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert!(
-            (elapsed - 3.0 / 60.0).abs() < 1e-9,
-            "elapsed_seconds() was {elapsed}"
-        );
-    }
-
-    #[test]
-    fn missing_fixed_clock_is_reported_as_a_terminal_contract_fault() {
-        use bevy::prelude::World;
-        let mut world = World::new();
-        world.insert_resource(lunco_core::RuntimeFaults::default());
-        let dt: f64 = super::eval_with_world(&mut world, "dt()")
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert!(
-            dt.is_nan(),
-            "missing fixed clock must not receive a default: {dt}"
-        );
-        assert_eq!(
-            world
-                .resource::<lunco_core::RuntimeFaults>()
-                .first
-                .as_ref()
-                .unwrap()
-                .kind,
-            "fixed-clock-missing"
-        );
-    }
-
-    #[test]
-    fn clock_snapshot_exposes_the_deterministic_spine_and_barrier() {
-        use bevy::prelude::*;
-        use bevy::time::{Fixed, Real, Time, Virtual};
-
-        let mut world = World::new();
-        let mut fixed = Time::<Fixed>::from_hz(60.0);
-        fixed.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
-        let mut virtual_time = Time::<Virtual>::default();
-        virtual_time.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
-        let mut real = Time::<Real>::default();
-        real.advance_by(std::time::Duration::from_secs_f64(0.25));
-        world.insert_resource(fixed);
-        world.insert_resource(virtual_time);
-        world.insert_resource(real);
-        world.insert_resource(Time::<lunco_physics::Physics>::default());
-        world.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
-            Some(1),
-        ));
-        world.insert_resource(lunco_core::SimTick(42));
-        world.insert_resource(lunco_time::WorldTime {
-            epoch_jd: 2_451_545.5,
-            sim_secs: 0.7,
-            met_secs: 1.2,
-        });
-        world.insert_resource(lunco_time::MissionClock::anchored(2_451_545.0, 4));
-        world.insert_resource(lunco_time::TimeTransport::default());
-        world.insert_resource(lunco_core::SimulationBarrier {
-            held: true,
-            active_participants: 3,
-            shared_clock_participants: 2,
-            worst_lag_secs: 0.02,
-            worst_entity: None,
-        });
-
-        let value = super::eval_with_world(
-            &mut world,
-            r#"
-                let c = clock_snapshot();
-                if c.sim_tick == 42 && c.fixed_dt_s > 0.016 &&
-                   c.world_sim_s == 0.7 && c.barrier_held &&
-                   c.barrier_active_participants == 3 &&
-                   c.physics_deterministic && c.physics_compute_threads == 1 &&
-                   c.wall_time_deterministic == false &&
-                   c.deterministic_master == "sim_tick" { 1 } else { 0 }
-            "#,
-        )
-        .unwrap();
-        assert_eq!(value.trim(), "1", "clock snapshot was {value}");
-    }
-
-    #[test]
-    fn clock_snapshot_reports_missing_physics_admission_loudly() {
-        use bevy::prelude::*;
-        use bevy::time::{Fixed, Time, Virtual};
-
-        let mut world = World::new();
-        world.insert_resource(Time::<Fixed>::from_hz(60.0));
-        world.insert_resource(Time::<Virtual>::default());
-        world.insert_resource(lunco_core::SimTick(0));
-        world.insert_resource(lunco_core::RuntimeFaults::default());
-
-        let value = super::eval_with_world(
-            &mut world,
-            r#"
-                let c = clock_snapshot();
-                if c.physics_contract_ok == false &&
-                   c.physics_deterministic == false &&
-                   c.physics_contract_error.contains("absent") { 1 } else { 0 }
-            "#,
-        )
-        .unwrap();
-        assert_eq!(value.trim(), "1", "clock snapshot was {value}");
-        assert_eq!(
-            world
-                .resource::<lunco_core::RuntimeFaults>()
-                .first
-                .as_ref()
-                .unwrap()
-                .kind,
-            "physics-determinism-missing"
-        );
-    }
-
-    #[test]
-    fn selection_toolkit_closures_work_across_the_prelude_module() {
-        use bevy::prelude::World;
-        let mut world = World::new();
-        // min_by/max_by/count_where take rhai closures and `.call` them from
-        // inside the prelude global module — validate that boundary works.
-        let code = r#"
-            let xs = [#{id:1,v:5}, #{id:2,v:2}, #{id:3,v:9}];
-            let lo = min_by(xs, |e| e.v);
-            let hi = max_by(xs, |e| e.v);
-            let n  = count_where(xs, |e| e.v > 3);
-            [lo.id, hi.id, n]
-        "#;
-        let out = super::eval_with_world(&mut world, code).unwrap();
-        assert_eq!(out.trim(), "[2, 3, 2]", "got {out}");
-    }
-
-    #[test]
-    fn collision_helpers_resolve_the_other_party() {
-        use bevy::prelude::World;
-        let mut world = World::new();
-        // A COLLISION_START between gid 10 and gid 20: from 10's view, the other
-        // party is 20; `entered` is true for a START, `exited` false.
-        let code = r#"
-            let evt = #{ name: "COLLISION_START", value: "10:20" };
-            [ collision_other(evt, 10), collision_other(evt, 20),
-              entered(evt, 10), exited(evt, 10),
-              collision_other(evt, 99) == () ]
-        "#;
-        let out = super::eval_with_world(&mut world, code).unwrap();
-        // rhai prints the array as [20, 10, true, false, true]
-        assert_eq!(out.trim(), "[20, 10, true, false, true]", "got {out}");
-    }
-
-    #[test]
-    fn zone_helpers_match_named_trigger_volumes() {
-        use bevy::prelude::World;
-        let mut world = World::new();
-        // An `enter:pad_2` pulse: value is the entrant gid (42). zone_of strips
-        // the prefix; entered_zone/exited_zone match by name. (Assert bools only,
-        // so the check doesn't depend on how rhai quotes strings in an array.)
-        let code = r#"
-            let evt = #{ name: "enter:pad_2", value: 42 };
-            [ zone_of(evt) == "pad_2", entered_zone(evt, "pad_2"), entered_zone(evt, "bay"),
-              exited_zone(#{ name: "exit:bay" }, "bay"), zone_of(#{ name: "COLLISION_START" }) == () ]
-        "#;
-        let out = super::eval_with_world(&mut world, code).unwrap();
-        assert_eq!(out.trim(), "[true, true, false, true, true]", "got {out}");
-    }
-
-    #[test]
-    fn hierarchy_verbs_walk_parent_children_and_name() {
-        use bevy::prelude::*;
-        use lunco_api::registry::ApiEntityRegistry;
-        use lunco_core::GlobalEntityId;
-
-        let mut world = World::new();
-        world.init_resource::<ApiEntityRegistry>();
-        world.register_component::<lunco_port_core::InputPorts>();
-        let parent = world.spawn(Name::new("base")).id();
-        // Inserting ChildOf fires the relationship hook → parent gains Children.
-        let child = world.spawn((Name::new("arm"), ChildOf(parent))).id();
-        {
-            let mut reg = world.resource_mut::<ApiEntityRegistry>();
-            reg.assign(parent, GlobalEntityId::from_raw(100));
-            reg.assign(child, GlobalEntityId::from_raw(200));
-        }
-
-        // name() reverse-lookup, parent() up, children() down, and the () cases.
-        let code = r#"
-            [ name(100) == "Base", name(200) == "Arm",
-              parent(200), children(100).len(), children(100)[0],
-              name(999) == (), parent(100) == () ]
-        "#;
-        let out = super::eval_with_world(&mut world, code).unwrap();
-        assert_eq!(
-            out.trim(),
-            "[true, true, 100, 1, 200, true, true]",
-            "got {out}"
-        );
-    }
-
-    #[test]
-    fn list_entities_exposes_authored_catalog_identity_separately_from_name() {
-        use bevy::prelude::*;
-        use lunco_api::registry::ApiEntityRegistry;
-        use lunco_core::GlobalEntityId;
-
-        let mut world = World::new();
-        world.init_resource::<ApiEntityRegistry>();
-        world.register_component::<lunco_port_core::InputPorts>();
-        let frame = world
-            .spawn(lunco_spatial::WorldGridConfig::default().grid())
-            .id();
-        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
-        let real = world
-            .spawn((
-                Name::new("/Scene/solar_tower_123"),
-                lunco_core::CatalogEntryId("solar_tower".into()),
-            ))
-            .id();
-        let lookalike = world.spawn(Name::new("Solar Panel")).id();
-        {
-            let mut reg = world.resource_mut::<ApiEntityRegistry>();
-            reg.assign(real, GlobalEntityId::from_raw(100));
-            reg.assign(lookalike, GlobalEntityId::from_raw(200));
-        }
-
-        let code = r#"
-            let items = list_entities();
-            [
-                items.some(|e| e.catalog_id == "solar_tower" && e.name == "Solar Tower"),
-                items.some(|e| e.name == "Solar Panel" && e.catalog_id == ""),
-            ]
-        "#;
-        let out = super::eval_with_world(&mut world, code).unwrap();
-        assert_eq!(out.trim(), "[true, true]", "got {out}");
     }
 
     #[test]

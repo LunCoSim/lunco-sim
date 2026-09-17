@@ -37,6 +37,8 @@ use crate::models::bundled_models;
 use crate::ui::welcome_progress::ExampleProgress;
 use lunco_modelica_index::visual_diagram::library_class_library;
 
+const EXAMPLE_PATHS_KIND: &str = "lunco.modelica-example-paths.v1";
+
 /// Panel id.
 pub const WELCOME_PANEL_ID: PanelId = PanelId("modelica_welcome");
 
@@ -70,8 +72,7 @@ pub struct ExamplePath {
 }
 
 /// Open registry of example paths rendered by the [`WelcomePanel`]. Seeded
-/// from the embedded `assets/modelica/example_paths.json` (via the
-/// `lunco-assets` crate) in [`ExamplePathRegistry::with_builtins`]; any plugin
+/// from an external authored asset by its semantic kind; any plugin
 /// can [`register`](Self::register) more — the example paths are editable **data**,
 /// not a `const` array welded into the render (spec 011 §6). Class-based (open
 /// source library classes to read/run), lunica-local example navigation data.
@@ -82,22 +83,109 @@ pub struct ExamplePathRegistry {
 }
 
 impl ExamplePathRegistry {
-    /// A registry seeded from the embedded example-paths data file. On a parse
-    /// error (should never happen — the JSON is compiled in) logs and returns an
-    /// empty registry so the panel degrades gracefully rather than panicking.
-    pub fn with_builtins() -> Self {
-        match serde_json::from_str::<Self>(lunco_assets_core::modelica::example_paths_json()) {
-            Ok(reg) => reg,
-            Err(e) => {
-                warn!("[welcome] example_paths.json parse failed: {e}");
-                Self::default()
-            }
-        }
-    }
-
     /// Append a path to the registry.
     pub fn register(&mut self, path: ExamplePath) {
         self.paths.push(path);
+    }
+}
+
+/// Lifecycle of the external example catalog.
+#[derive(Resource, Clone, Debug, Default)]
+pub enum ExamplePathCatalogState {
+    /// The asset request is in flight.
+    #[default]
+    Loading,
+    /// The catalog is available to the panel.
+    Ready,
+    /// The asset could not be loaded or parsed.
+    Failed(String),
+}
+
+/// Candidate external JSON assets from which the example-path catalog is
+/// discovered by its authored kind.
+#[derive(Resource, Clone, Debug)]
+pub struct ExamplePathCatalogAssets(pub Vec<(String, Handle<lunco_assets_core::TextAsset>)>);
+
+/// Begin loading the example catalog through Bevy's platform-neutral asset
+/// path. The file is selected from the runtime manifest by its authored kind,
+/// so its location is not a Rust contract.
+pub fn load_example_path_catalog(
+    mut commands: Commands,
+    text_assets: Option<Res<lunco_assets_core::TextAssetCatalog>>,
+    existing: Option<Res<ExamplePathCatalogAssets>>,
+) {
+    let Some(text_assets) = text_assets else {
+        return;
+    };
+    if existing.is_some() || !text_assets.ready() {
+        return;
+    }
+    let candidates = text_assets
+        .entries()
+        .iter()
+        .filter(|entry| entry.asset_path.ends_with(".json"))
+        .map(|entry| (entry.asset_path.clone(), entry.handle.clone()))
+        .collect::<Vec<_>>();
+    commands.insert_resource(ExamplePathCatalogAssets(candidates));
+    commands.insert_resource(ExamplePathCatalogState::Loading);
+}
+
+/// Publish the catalog only after the external text asset is ready.
+pub fn update_example_path_catalog(
+    server: Option<Res<AssetServer>>,
+    assets: Option<Res<Assets<lunco_assets_core::TextAsset>>>,
+    candidates: Option<Res<ExamplePathCatalogAssets>>,
+    mut registry: ResMut<ExamplePathRegistry>,
+    mut state: ResMut<ExamplePathCatalogState>,
+) {
+    let (Some(server), Some(assets)) = (server, assets) else {
+        return;
+    };
+    let Some(candidates) = candidates else {
+        *state = ExamplePathCatalogState::Failed(
+            "example catalog asset candidates were not installed".to_string(),
+        );
+        return;
+    };
+    if matches!(*state, ExamplePathCatalogState::Ready | ExamplePathCatalogState::Failed(_)) {
+        return;
+    }
+    let mut pending = false;
+    let mut found = None;
+    let mut error = None;
+    for (path, handle) in &candidates.0 {
+        let Some(asset) = assets.get(handle) else {
+            if !server.get_load_state(handle.id()).is_some_and(|state| state.is_failed()) {
+                pending = true;
+            }
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&asset.text) else {
+            continue;
+        };
+        if value.get("kind").and_then(serde_json::Value::as_str) != Some(EXAMPLE_PATHS_KIND) {
+            continue;
+        }
+        match serde_json::from_value::<ExamplePathRegistry>(value) {
+            Ok(loaded) if found.is_none() => found = Some(loaded),
+            Ok(_) => error = Some(format!("more than one asset is marked {EXAMPLE_PATHS_KIND}")),
+            Err(parse_error) => {
+                error = Some(format!("{path}: invalid example-path catalog: {parse_error}"))
+            }
+        }
+    }
+    if pending {
+        return;
+    }
+    if let Some(error) = error {
+        *state = ExamplePathCatalogState::Failed(error);
+    } else if let Some(loaded) = found {
+        registry.paths = loaded.paths;
+        *state = ExamplePathCatalogState::Ready;
+    } else {
+        *state = ExamplePathCatalogState::Failed(format!(
+            "runtime asset listing contains no asset marked {EXAMPLE_PATHS_KIND}"
+        ));
     }
 }
 
@@ -235,7 +323,7 @@ impl Panel for WelcomePanel {
         let mut open_folder = false;
         let mut open_file = false;
         let mut open_library: Option<String> = None;
-        let mut open_bundled: Option<&'static str> = None;
+        let mut open_bundled: Option<String> = None;
 
         // Theme tokens.
         let theme = ctx
@@ -266,11 +354,24 @@ impl Panel for WelcomePanel {
 
         // example-path catalog — a registry resource (was a `const` array),
         // so the render reads data and other plugins can contribute paths.
-        // Falls back to the built-ins if the resource wasn't inserted.
-        let registry: ExamplePathRegistry = ctx
-            .resource::<ExamplePathRegistry>()
-            .cloned()
-            .unwrap_or_else(ExamplePathRegistry::with_builtins);
+        let Some(registry) = ctx.resource::<ExamplePathRegistry>().cloned() else {
+            ui.colored_label(
+                theme.tokens.error,
+                "Example catalog is unavailable; check the external asset library.",
+            );
+            return;
+        };
+        if let Some(state) = ctx.resource::<ExamplePathCatalogState>() {
+            match state {
+                ExamplePathCatalogState::Loading => {
+                    ui.colored_label(theme.tokens.text_subdued, "Loading example catalog…");
+                }
+                ExamplePathCatalogState::Failed(error) => {
+                    ui.colored_label(theme.tokens.error, format!("Example catalog: {error}"));
+                }
+                ExamplePathCatalogState::Ready => {}
+            }
+        }
 
         // Pull + mutate per-panel UI state from egui's data bag.
         let state_id = egui::Id::new(STATE_ID);
@@ -349,7 +450,16 @@ impl Panel for WelcomePanel {
                 // own authored models" escape hatch. Keeps the
                 // fold above scroll dominated by the guided
                 // content without hiding the demos entirely.
-                let bundled = bundled_models();
+                let bundled = match bundled_models() {
+                    Ok(models) => models,
+                    Err(error) => {
+                        ui.colored_label(
+                            theme.tokens.error,
+                            format!("LunCoSim demos unavailable: {error}"),
+                        );
+                        return;
+                    }
+                };
                 egui::CollapsingHeader::new(
                     egui::RichText::new(format!("LunCoSim demos ({} bundled)", bundled.len()))
                         .size(14.0)
@@ -380,8 +490,10 @@ impl Panel for WelcomePanel {
                         }
                         ui.horizontal(|ui| {
                             for entry in [left, right].into_iter().flatten() {
-                                let display =
-                                    entry.filename.strip_suffix(".mo").unwrap_or(entry.filename);
+                                let display = entry
+                                    .filename
+                                    .strip_suffix(".mo")
+                                    .unwrap_or(&entry.filename);
                                 let resp = ui
                                     .add_sized(
                                         [col_w, row_h],
@@ -401,7 +513,7 @@ impl Panel for WelcomePanel {
                                 );
                                 // Trim tagline so both cards stay
                                 // one-line and visually aligned.
-                                let tagline = entry.tagline;
+                                let tagline = &entry.tagline;
                                 let tagline = if tagline.chars().count() > 64 {
                                     let mut s: String = tagline.chars().take(64).collect();
                                     s.push('…');
@@ -417,7 +529,7 @@ impl Panel for WelcomePanel {
                                     muted,
                                 );
                                 if resp.clicked() {
-                                    open_bundled = Some(entry.filename);
+                                    open_bundled = Some(entry.filename.clone());
                                 }
                             }
                         });
@@ -874,7 +986,10 @@ impl Panel for WelcomePanel {
             ctx.trigger(lunco_workbench_file_ops::ShowOpenFilePicker {});
         }
         if let Some(filename) = open_bundled {
-            let stem = filename.strip_suffix(".mo").unwrap_or(filename).to_string();
+            let stem = filename
+                .strip_suffix(".mo")
+                .unwrap_or(&filename)
+                .to_string();
             // Welcome card click is deliberate → pinned tab.
             ctx.trigger(
                 crate::ui::panels::package_browser::OpenPackageClassRequested {
@@ -902,21 +1017,4 @@ impl Panel for WelcomePanel {
 mod example_path_tests {
     use super::*;
 
-    /// The embedded `example_paths.json` must deserialize into the registry
-    /// shape — guards against JSON/struct drift (which would otherwise degrade
-    /// silently to an empty panel via the `with_builtins` fallback).
-    #[test]
-    fn builtins_parse_from_embedded_json() {
-        let reg = ExamplePathRegistry::with_builtins();
-        assert_eq!(reg.paths.len(), 4, "expected 4 built-in example paths");
-        assert!(
-            reg.paths.iter().all(|p| p.steps.len() >= 4),
-            "each path should carry 4..=6 steps",
-        );
-        assert_eq!(reg.paths[0].title, "Circuits 101");
-        assert_eq!(
-            reg.paths[0].steps[0].qualified,
-            "Modelica.Electrical.Analog.Examples.ChuaCircuit",
-        );
-    }
 }

@@ -1003,7 +1003,7 @@ fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn parse_native_library_bundle() -> Vec<(String, StoredDefinition)> {
     use rayon::prelude::*;
-    let library_root = lunco_assets_core::source_library_dir("library");
+    let library_root = lunco_modelica_library::source_library::source_library_cache_dir();
     let (root_dirs, companion_files) = native_library_roots(&library_root);
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for (dir, _prefix) in &root_dirs {
@@ -1104,7 +1104,7 @@ pub fn run_with_cancel(
     let library_root = opts
         .source_root
         .clone()
-        .unwrap_or_else(|| lunco_assets_core::source_library_dir("library"));
+        .unwrap_or_else(lunco_modelica_library::source_library::source_library_cache_dir);
     if !library_root.is_dir() {
         println!("[indexer] source root not found at {:?}", library_root);
         return;
@@ -1168,7 +1168,7 @@ pub fn run_with_cancel(
     );
 
     // Bundled examples — small `.mo` files compiled into the workbench
-    // binary at runtime via `include_dir!()`. Pre-parse their class
+    // binary at runtime from the external asset tree. Pre-parse their class
     // hierarchy here so the Package Browser can render them with
     // proper kind badges and expandable inner classes (matches source library /
     // workspace docs) without paying any parse cost at startup.
@@ -1187,7 +1187,9 @@ pub fn run_with_cancel(
         components: &'a [lunco_modelica_index::index::ClassEntry],
         bundled: &'a [lunco_modelica_index::package_tree::types::PackageNode],
     }
-    let output_path = library_root.join("library_index.json");
+    let output_path = library_root.join(
+        lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME,
+    );
     let index = LocalLibraryIndex {
         components: &components,
         bundled: &bundled_nodes,
@@ -1211,7 +1213,9 @@ pub fn run_with_cancel(
     // package keeps a wasm-safe empty library surface.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let bundle_path = library_root.join("parsed-library.bin");
+        let bundle_path = library_root.join(
+            lunco_modelica_library::source_library::PARSED_LIBRARY_BUNDLE_FILE_NAME,
+        );
         let t_bundle = Instant::now();
         match write_parsed_bundle(&bundle_path, &indexer.parsed_bundle) {
             Ok(()) => {
@@ -1246,14 +1250,13 @@ pub fn run_with_cancel(
 }
 
 /// Parse every bundled `.mo` (compiled into `lunco_modelica` via
-/// `include_dir!`) and produce `PackageNode`s ready for the runtime
+/// the external asset inventory and produce `PackageNode`s ready for the runtime
 /// Package Browser to clone directly. No intermediate shape: the
 /// indexer emits the exact tree the browser consumes, so the
 /// runtime side is a trivial deserialise.
 ///
-/// Pure function over the in-memory `bundled_models()` list — no
-/// disk I/O beyond what `include_dir!` already inlined at compile
-/// time, so the cost is `n * parse(file)`, ≤ ~10 small files.
+/// Pure function over the external example inventory. The asset boundary has
+/// already loaded the source text; this function only parses each document.
 fn scan_bundled_examples() -> Vec<lunco_modelica_index::package_tree::types::PackageNode> {
     use lunco_modelica_core::models::bundled_models;
 
@@ -1263,13 +1266,16 @@ fn scan_bundled_examples() -> Vec<lunco_modelica_index::package_tree::types::Pac
     // nested class list, including `partial connector` siblings
     // that the bare `parse_to_recovered_ast` recovery parser
     // truncates after the first error-ish token.
-    bundled_models()
+    let Ok(models) = bundled_models() else {
+        return Vec::new();
+    };
+    models
         .into_iter()
         .filter_map(|m| {
-            let syntax = lunco_modelica_ast::parse_to_syntax(m.source, m.filename);
+            let syntax = lunco_modelica_ast::parse_to_syntax(&m.source, &m.filename);
             let ast = syntax.best_effort();
             let (top_short, top_class) = ast.classes.iter().next()?;
-            Some(bundled_class_node(m.filename, top_short, top_class, ""))
+            Some(bundled_class_node(&m.filename, top_short, top_class, ""))
         })
         .collect()
 }

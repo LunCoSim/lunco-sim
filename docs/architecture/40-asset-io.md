@@ -43,6 +43,12 @@ several hours tracing four separate instances (mio in `lunco-api`,
 The fix isn't a smarter function; it's a rule that any code reading a
 shippable asset goes through one path that works on both targets.
 
+Known engine layout is owned by `lunco-assets-core` as well. Consumers use its
+helpers for Modelica sources, scene tests, shaders, and the runtime manifest
+instead of joining `assets`, `models`, `scenes`, `shaders`, or
+`manifest.json` themselves. Modelica source-library artifact filenames are
+validated before they enter the library URL namespace.
+
 ## The one path: `AssetServer::load(...)`
 
 Define an `Asset` + `AssetLoader` per source class once. Domain code
@@ -74,7 +80,7 @@ Wins beyond wasm support:
 - **Hot reload.** Edit the `.mo` file, AssetServer re-emits, drain re-fires.
 - **Change detection.** `AssetEvent<ModelicaSource>` for free.
 - **Single resolver.** Asset paths route through the registered
-  `AssetSource` (default `assets://`, plus `embedded://`, future
+  `AssetSource` (the authored `lunco://` and `twin://` sources, plus future
   `https://`, `lunco://`), so swapping out where the bytes come
   from doesn't ripple into domain code.
 
@@ -121,15 +127,16 @@ domain crate. Loaders are normally dumb (parse to bytes / utf-8 / domain AST);
 Bevy dependencies. That is required because Rhai resolves imports synchronously
 while the scenario is running. The owning scenario handle is not published to
 the runtime until Bevy reports its recursive dependency graph ready, so a
-referenced scenario loads only itself and its imports — never every `.rhai` in
-the manifest or open Twins.
+referenced scenario loads only itself and its imports. Application-owned Rhai
+sources are discovered from the runtime manifest; the authored tool-activation
+policy decides which of those sources become callable libraries.
 
 ## Allow-list
 
 Three classes of crate legitimately bypass `AssetServer`:
 
 - **Filesystem-owning crates.** `lunco-assets-core` (asset roots, source
-  resolution, and embedded asset access), `lunco-assets-download`
+  resolution, and runtime asset access), `lunco-assets-download`
   (download/extract/install), `lunco-assets-processing` (native processing),
   `lunco-assets` (worker lifecycle and CLI composition),
   `lunco-modelica-assets` (native Modelica packaging and indexing tools),
@@ -212,7 +219,7 @@ no manual hunt.
 | `lunco-usd-commands/src/lib.rs` usd document load | ✅ reads through the storage abstraction |
 | Modelica source-root admission | ✅ `lunco-modelica-core` owns registry/lifecycle state; filesystem enumeration is delegated to `lunco-assets-core::discovery::read_files_with_extension`, and the compiler host parses and seats the returned source files |
 | `lunco-modelica-library/source_library.rs` source-library fetch | ✅ owns source-library admission and browser fetch state; the wasm worker handoff is a typed bridge implemented by `lunco-modelica-execution`, so compiler-only consumers do not own the fetch implementation |
-| `lunco-modelica-core::models::bundled_models()` `include_str!` | ⚠️ candidate for `EmbeddedAssetSource` registration so it looks like every other asset path |
+| `lunco-assets-core::models` runtime inventory | ✅ reads the authored `assets/models/` tree through `lunco-storage`; no compiled snapshot or embedded fallback |
 
 ## Related foot-guns (same rule applies)
 

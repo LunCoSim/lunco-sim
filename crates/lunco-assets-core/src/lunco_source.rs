@@ -75,11 +75,10 @@ pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> 
         Some(rel) => Some(assets_root?.join(crate::asset_path::relative_path(rel)?)),
         None => {
             let p = PathBuf::from(id);
-            Some(if p.is_absolute() {
-                p
-            } else {
-                Path::new("/").join(id)
-            })
+            // A scheme-less relative id has no owning root. Do not invent one
+            // from the Unix filesystem root: that is wrong on Windows and
+            // would make an unanchored reference depend on the host CWD.
+            p.is_absolute().then_some(p)
         }
     }
 }
@@ -273,6 +272,16 @@ mod tests {
                 "unsafe library id must be rejected: {id}"
             );
         }
+    }
+
+    #[test]
+    fn unanchored_relative_ids_are_not_assigned_a_host_root() {
+        assert_eq!(id_to_disk_path("scenes/scene.usda", None), None);
+        let absolute = std::env::temp_dir().join("lunco-absolute-scene.usda");
+        assert_eq!(
+            id_to_disk_path(&absolute.to_string_lossy(), None),
+            Some(absolute)
+        );
     }
 
     #[test]

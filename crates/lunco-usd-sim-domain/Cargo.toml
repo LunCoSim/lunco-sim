@@ -26,7 +26,6 @@ lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 
 [dev-dependencies]
-lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }

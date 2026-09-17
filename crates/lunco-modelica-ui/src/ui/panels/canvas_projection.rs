@@ -556,7 +556,7 @@ pub fn import_model_to_diagram_from_ast(
             .join(".");
         if !pkg.is_empty() {
             if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
-                if let Ok(pkg_ast) = lunco_modelica_ast::parse_to_ast(bundled, "within-pkg.mo") {
+                if let Ok(pkg_ast) = lunco_modelica_ast::parse_to_ast(&bundled, "within-pkg.mo") {
                     for (_top_name, top_class) in pkg_ast.classes.iter() {
                         for (nested_name, nested_class) in top_class.classes.iter() {
                             register_local_class(

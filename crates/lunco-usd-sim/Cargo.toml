@@ -53,4 +53,5 @@ web-time = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }

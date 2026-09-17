@@ -8,8 +8,8 @@
 //!
 //! Catalog *discovery* lives in ONE place — `lunco-scene-catalog`'s
 //! `maintain_catalogs`, which scans engine + Twin shaders via the shared
-//! `lunco_assets_core::discovery` walk. This module only seeds the wasm-safe defaults in
-//! [`ShaderCatalog::default`].
+//! `lunco_assets_core::discovery` walk. This module does not embed or name a
+//! shader file.
 
 use bevy::prelude::*;
 
@@ -68,18 +68,7 @@ impl ShaderCatalog {
 
 impl Default for ShaderCatalog {
     fn default() -> Self {
-        // The prop-safe dynamic shaders that ship in `assets/shaders`. Terrain
-        // shaders (regolith/terrain_shadow) are excluded: they declare engine
-        // fields only the terrain entity's horizon system fills, so they would
-        // render black on a prop (see [`is_prop_pickable_source`]).
-        let entries = ["balloon", "solar_panel", "wheel"]
-            .iter()
-            .map(|n| ShaderEntry {
-                path: format!("shaders/{n}.wgsl"),
-                label: humanize_shader_name(n),
-            })
-            .collect();
-        Self { entries }
+        Self { entries: Vec::new() }
     }
 }
 

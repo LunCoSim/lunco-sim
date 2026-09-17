@@ -7,7 +7,7 @@ Companion to [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.
 rather than scenes.
 
 The implementation is split by change and dependency cost. `lunco-assets-core`
-owns identity, resolution, storage-facing readers, embedded sources, and
+owns identity, resolution, storage-facing readers, runtime sources, and
 discovery. `lunco-assets-datasets` owns the lightweight manifest and lifecycle
 contract. Native provisioning is layered on top: `lunco-assets-transport` owns
 HTTP byte policy, `lunco-assets-download` owns manifest-aware verification and
@@ -261,9 +261,12 @@ grows a "just fetch it at startup" line — the ephemeris crate had exactly that
 | Bevy worker lifecycle and CLI composition | `lunco-assets` |
 | declaring datasets + reporting what it loaded | the domain crate |
 | listing and requesting | the UI (knows no dataset by name) |
+| engine Modelica source URI | `lunco-assets-core::engine_model_asset_uri` |
+| engine scene-test root | `lunco-assets-core::engine_scene_tests_root` |
+| asset manifest path/URL | `lunco-assets-core::asset_manifest_path` / `asset_manifest_url` |
 
-Registration follows what is OPEN, not what exists: a crate registers its
-embedded manifest once, and a Twin's `Assets.toml` is discovered after that
+Registration follows what is OPEN, not what exists: the runtime asset manifest
+describes the delivered library, and a Twin's `Assets.toml` is discovered after that
 Twin mounts. Workspace `TwinAdded` announces ownership; `TwinRoots` then emits
 the typed `TwinAssetMounted` postcondition only after the exact `twin://`
 authority is registered. Asset-consuming domains use that postcondition rather

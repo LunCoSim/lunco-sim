@@ -18,6 +18,8 @@ use std::path::Path;
 
 use super::{SCENARIO_MENU_HEIGHT, SCENARIO_MENU_MAX_WIDTH, SCENARIO_MENU_MIN_WIDTH};
 
+const TUTORIAL_CATALOG_KIND: &str = "lunco.tutorial-catalog.v1";
+
 #[derive(Debug, Clone, Deserialize)]
 struct TutorialMenuEntry {
     track: String,
@@ -35,15 +37,23 @@ struct TutorialMenuFile {
     tutorials: Vec<TutorialMenuEntry>,
 }
 
+struct PendingBundledCatalog {
+    asset_path: String,
+    handle: Handle<lunco_assets_core::TextAsset>,
+}
+
 struct PendingTwinCatalog {
     twin: String,
-    task: Task<Result<TutorialMenuFile, String>>,
+    task: Task<Result<Option<TutorialMenuFile>, String>>,
 }
 
 #[derive(Resource, Default)]
 struct TutorialMenuCatalog {
     entries: Vec<TutorialMenuEntry>,
     error: Option<String>,
+    bundled_candidates: Vec<PendingBundledCatalog>,
+    bundled_scan_started: bool,
+    bundled_ready: bool,
     twin_entries: BTreeMap<String, Vec<TutorialMenuEntry>>,
     loaded_twins: BTreeSet<String>,
     pending_twins: HashMap<String, PendingTwinCatalog>,
@@ -53,26 +63,102 @@ pub(crate) struct TutorialMenuPlugin;
 
 impl Plugin for TutorialMenuPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(load_catalog())
+        app.init_resource::<TutorialMenuCatalog>()
             .add_systems(Startup, register_tutorial_menu)
-            .add_systems(Update, sync_twin_tutorial_catalogs);
+            .add_systems(
+                Update,
+                (sync_bundled_tutorial_catalog, sync_twin_tutorial_catalogs).chain(),
+            );
     }
 }
 
-fn load_catalog() -> TutorialMenuCatalog {
-    match serde_json::from_str::<TutorialMenuFile>(
-        &lunco_assets_core::tutorials::tutorial_catalog_json(),
-    ) {
-        Ok(file) => TutorialMenuCatalog {
-            entries: file.tutorials,
-            error: None,
-            ..default()
-        },
-        Err(error) => TutorialMenuCatalog {
-            entries: Vec::new(),
-            error: Some(error.to_string()),
-            ..default()
-        },
+/// Discover the application-owned tutorial catalog from the runtime asset
+/// listing and load it through the generic text asset pipeline. The catalog is
+/// identified by its authored kind, not by a Rust path convention; adding or
+/// relocating the file therefore does not require a core rebuild.
+fn sync_bundled_tutorial_catalog(
+    mut catalog: ResMut<TutorialMenuCatalog>,
+    text_assets: Option<Res<lunco_assets_core::TextAssetCatalog>>,
+    asset_server: Option<Res<AssetServer>>,
+    assets: Option<Res<Assets<lunco_assets_core::TextAsset>>>,
+) {
+    let Some(text_assets) = text_assets else {
+        return;
+    };
+    if !text_assets.ready() {
+        return;
+    }
+
+    if !catalog.bundled_scan_started {
+        catalog.bundled_candidates = text_assets
+            .entries()
+            .iter()
+            .filter(|entry| entry.asset_path.ends_with(".json"))
+            .map(|entry| PendingBundledCatalog {
+                asset_path: entry.asset_path.clone(),
+                handle: entry.handle.clone(),
+            })
+            .collect();
+        catalog.bundled_scan_started = true;
+    }
+
+    let Some(assets) = assets else {
+        return;
+    };
+
+    let candidates = std::mem::take(&mut catalog.bundled_candidates);
+    let mut pending = Vec::new();
+    let mut match_found = None;
+    let mut catalog_error = None;
+
+    for candidate in candidates {
+        let Some(asset) = assets.get(&candidate.handle) else {
+            let failed = asset_server.as_ref().is_some_and(|server| {
+                server
+                    .get_load_state(candidate.handle.id())
+                    .is_some_and(|state| state.is_failed())
+            });
+            if !failed {
+                pending.push(candidate);
+            }
+            continue;
+        };
+
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&asset.text) else {
+            continue;
+        };
+        if value.get("kind").and_then(serde_json::Value::as_str)
+            != Some(TUTORIAL_CATALOG_KIND)
+        {
+            continue;
+        }
+
+        match serde_json::from_value::<TutorialMenuFile>(value) {
+            Ok(file) if match_found.is_none() => match_found = Some(file),
+            Ok(_) => {
+                catalog_error = Some(format!(
+                    "more than one runtime asset is marked {TUTORIAL_CATALOG_KIND}"
+                ));
+            }
+            Err(error) => {
+                catalog_error = Some(format!("{}: invalid tutorial catalog: {error}", candidate.asset_path));
+            }
+        }
+    }
+
+    catalog.bundled_candidates = pending;
+    if catalog.bundled_candidates.is_empty() {
+        catalog.bundled_ready = true;
+        if let Some(error) = catalog_error {
+            catalog.error = Some(error);
+        } else if let Some(file) = match_found {
+            catalog.entries = file.tutorials;
+            catalog.error = None;
+        } else {
+            catalog.error = Some(format!(
+                "runtime asset listing contains no asset marked {TUTORIAL_CATALOG_KIND}"
+            ));
+        }
     }
 }
 
@@ -111,13 +197,14 @@ fn register_tutorial_menu(world: &mut World) {
         ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
         ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
 
-        let Some((bundled, twin_entries, catalog_error, loading_twins)) =
+        let Some((bundled, twin_entries, catalog_error, loading_twins, bundled_ready)) =
             ctx.resource::<TutorialMenuCatalog>().map(|catalog| {
                 (
                     catalog.entries.clone(),
                     catalog.twin_entries.clone(),
                     catalog.error.clone(),
                     !catalog.pending_twins.is_empty(),
+                    catalog.bundled_ready,
                 )
             })
         else {
@@ -135,6 +222,14 @@ fn register_tutorial_menu(world: &mut World) {
                     .italics(),
             );
             ui.label(egui::RichText::new(error).weak().small());
+            return;
+        }
+        if !bundled_ready && bundled.is_empty() && twin_entries.values().all(Vec::is_empty) {
+            ui.label(
+                egui::RichText::new("Loading tutorial catalog…")
+                    .weak()
+                    .italics(),
+            );
             return;
         }
         if bundled.is_empty() && twin_entries.values().all(Vec::is_empty) {
@@ -212,8 +307,9 @@ fn twin_asset_uri(twin: &str, reference: &str) -> String {
     lunco_assets_core::twin_uri(twin, Path::new(reference))
 }
 
-/// Read Twin tutorial metadata through the shared asset/storage boundary. The
-/// menu never walks a Twin itself and never reads its files on the UI thread.
+/// Read Twin tutorial metadata through the shared discovery and storage
+/// boundaries. The menu does not implement its own traversal and never reads
+/// Twin files on the UI thread.
 fn sync_twin_tutorial_catalogs(
     mut catalog: ResMut<TutorialMenuCatalog>,
     roots: Res<lunco_assets_core::TwinRoots>,
@@ -236,31 +332,91 @@ fn sync_twin_tutorial_catalogs(
     let Some(settings) = settings else {
         return;
     };
-    let mut requests = Vec::new();
-    for name in names {
-        if catalog.loaded_twins.contains(&name) || catalog.pending_twins.contains_key(&name) {
-            continue;
-        }
-        let path = lunco_assets_core::twin_uri(&name, Path::new("sim/tutorials/catalog.json"));
-        let Ok(Some(asset)) = lunco_assets_core::discovery::resolve_asset(&manifest, &roots, &path)
-        else {
-            // A Twin may legitimately have no menu catalog. It remains a valid
-            // Twin; only its lessons are absent from this application menu.
+    let names_to_load = names
+        .iter()
+        .filter(|name| {
+            !catalog.loaded_twins.contains(*name) && !catalog.pending_twins.contains_key(*name)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (&manifest, &settings);
+        // Twin roots are not enumerable in the browser. A Twin may still be
+        // loaded through an explicit asset URI, but it cannot contribute an
+        // undiscoverable menu catalog here.
+        for name in names_to_load {
             catalog.loaded_twins.insert(name);
-            continue;
-        };
-        let settings = settings.clone();
-        requests.push((name, asset, settings));
+        }
     }
-    for (name, asset, settings) in requests {
-        let task = AsyncComputeTaskPool::get().spawn(async move {
-            let text = lunco_assets_core::asset_read::read_asset_text(&asset, &settings).await?;
-            serde_json::from_str::<TutorialMenuFile>(&text)
-                .map_err(|error| format!("{}: invalid tutorial catalog: {error}", asset.rel))
-        });
-        catalog
-            .pending_twins
-            .insert(name.clone(), PendingTwinCatalog { twin: name, task });
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let twin_json_assets = if names_to_load.is_empty() {
+            Vec::new()
+        } else {
+            match lunco_assets_core::discovery::list_assets(&manifest, &roots, "json") {
+                Ok(assets) => assets
+                    .into_iter()
+                    .filter(|asset| asset.twin.is_some())
+                    .collect::<Vec<_>>(),
+                Err(error) => {
+                    let message = format!("could not enumerate Twin JSON assets: {error}");
+                    if catalog.error.as_deref() != Some(&message) {
+                        error!("[tutorials] {message}");
+                    }
+                    catalog.error = Some(message);
+                    return;
+                }
+            }
+        };
+
+        let mut requests = Vec::new();
+        for name in names_to_load {
+            let candidates = twin_json_assets
+                .iter()
+                .filter(|asset| asset.twin.as_deref() == Some(name.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            if candidates.is_empty() {
+                // A Twin may legitimately have no menu catalog. It remains a
+                // valid Twin; only a JSON asset carrying the tutorial-catalog
+                // kind is meaningful to this application-owned menu.
+                catalog.loaded_twins.insert(name);
+                continue;
+            }
+            requests.push((name, candidates, settings.clone()));
+        }
+
+        for (name, candidates, settings) in requests {
+            let twin_name = name.clone();
+            let task = AsyncComputeTaskPool::get().spawn(async move {
+                let mut found = None;
+                for asset in candidates {
+                    let text = lunco_assets_core::asset_read::read_asset_text(&asset, &settings).await?;
+                    let value = serde_json::from_str::<serde_json::Value>(&text)
+                        .map_err(|error| format!("{}: invalid JSON: {error}", asset.rel))?;
+                    if value.get("kind").and_then(serde_json::Value::as_str)
+                        != Some(TUTORIAL_CATALOG_KIND)
+                    {
+                        continue;
+                    }
+                    let file = serde_json::from_value::<TutorialMenuFile>(value)
+                        .map_err(|error| format!("{}: invalid tutorial catalog: {error}", asset.rel))?;
+                    if found.is_some() {
+                        return Err(format!(
+                            "Twin `{twin_name}` has more than one asset marked {TUTORIAL_CATALOG_KIND}"
+                        ));
+                    }
+                    found = Some(file);
+                }
+                Ok(found)
+            });
+            catalog
+                .pending_twins
+                .insert(name.clone(), PendingTwinCatalog { twin: name, task });
+        }
     }
 
     let mut finished = Vec::new();
@@ -273,9 +429,10 @@ fn sync_twin_tutorial_catalogs(
         catalog.pending_twins.remove(&name);
         catalog.loaded_twins.insert(name.clone());
         match result {
-            Ok(file) => {
+            Ok(Some(file)) => {
                 catalog.twin_entries.insert(name, file.tutorials);
             }
+            Ok(None) => {}
             Err(error) => {
                 error!("[tutorials] could not load Twin catalog: {error}");
             }

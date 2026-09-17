@@ -8,7 +8,7 @@
 //!     thread for rumoca compiles.
 //!   - **wasm** (`scripts/build_web.sh build lunica`) — renders into
 //!     the `<canvas id="bevy">` from `web/index.html`, embeds the bundled
-//!     models via `include_str!`, supports `?example=<file>` deep-linking,
+//!     models from the external asset library, with `?example=<file>` deep-linking,
 //!     and (via [`ModelicaWorkbenchPlugin`]) wires the JS clipboard
 //!     bridge, localStorage autosave, and the off-thread compile worker.
 //!
@@ -17,7 +17,7 @@
 //! Desktop and web lived in separate sources (`lunica.rs` + `lunica_web.rs`)
 //! and **drifted**: the web build silently lacked the `WinitSettings`
 //! frame-pacing fix that cured the "UI vanishes on zoom" bug on native,
-//! and the embedded-in-sandbox copy lacked clipboard + autosave. They are
+//! and the legacy sandbox copy lacked clipboard + autosave. They are
 //! now one `fn main()` with `#[cfg(target_arch = "wasm32")]` branches —
 //! the same unification `crates/lunco-luncosim/src/bin/luncosim.rs` already
 //! uses for its desktop+web entry. wasm-bindgen (`--target web`) runs
@@ -35,11 +35,9 @@ use bevy::prelude::*;
 use lunco_modelica_ui::ModelicaWorkbenchPlugin;
 
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaSource};
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
-use lunco_modelica_ui::models::bundled_models;
-#[cfg(all(target_arch = "wasm32", feature = "ui"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
@@ -106,52 +104,8 @@ fn main() {
     #[cfg(target_arch = "wasm32")]
     let headless = false;
 
-    // ── wasm-only: pick the bundled model to auto-open ──────────────
-    //
-    //   /                                 → open nothing (Welcome / restore)
-    //   /?example=AnnotatedRocketStage.mo → AnnotatedRocketStage
-    //   /?example=Battery                 → Battery (.mo auto-appended)
-    //
-    // Only auto-open a tab when the URL explicitly asks (`?example=`). On
-    // a bare `/` we land on Welcome and let `wasm_autosave`'s restore
-    // path reopen whatever the user had last. Unknown names warn and fall
-    // back to the first bundled model so a stale bookmark doesn't break.
-    #[cfg(all(target_arch = "wasm32", feature = "ui"))]
-    let chosen: Option<lunco_modelica_ui::models::BundledModel> = {
-        let models = bundled_models();
-        let fallback = models.first().expect("at least one bundled model");
-        let url_example: Option<String> = web_sys::window()
-            .and_then(|w| w.location().search().ok())
-            .and_then(|s| {
-                web_sys::UrlSearchParams::new_with_str(s.trim_start_matches('?'))
-                    .ok()
-                    .and_then(|p| p.get("example"))
-            });
-        url_example.as_deref().map(|name| {
-            let matches = |candidate: &str| {
-                let n_with_ext = if name.ends_with(".mo") {
-                    name.to_string()
-                } else {
-                    format!("{name}.mo")
-                };
-                candidate == name || candidate == n_with_ext
-            };
-            models
-                .iter()
-                .find(|m| matches(m.filename))
-                .copied()
-                .unwrap_or_else(|| {
-                    bevy::log::warn!(
-                        "[lunica] ?example={name:?} not found in bundled models — \
-                         falling back to {}",
-                        fallback.filename
-                    );
-                    *fallback
-                })
-        })
-    };
-
     let mut app = App::new();
+    lunco_assets_core::register_lunco_asset_sources(&mut app);
 
     // Physics fixed timestep (lunco_core::FIXED_HZ). Modelica stepping runs in
     // FixedUpdate so the worker receives a predictable per-tick dt.
@@ -172,6 +126,7 @@ fn main() {
     // `ModelicaCorePlugin` plus `ModelicaExecutionPlugin`. Mirrors
     // `lunco_luncosim`'s Core/Ui/Headless split.
     app.add_plugins(default_plugins(headless));
+    lunco_assets_core::register_lunco_asset_types(&mut app);
 
     // GUI (native windowed, or wasm — always windowed). The whole workbench:
     // WorkbenchPlugin + ModelicaPlugin + clipboard, autosave, worker. Same
@@ -237,7 +192,7 @@ fn main() {
         app.insert_resource(virtual_time);
     }
 
-    // wasm-only boot wiring: auto-open the chosen bundled model, and hide
+    // wasm-only boot wiring: request the explicitly selected external model, and hide
     // the HTML loader once the first egui frame has painted. The whole
     // web-workbench wiring depends on the `ui` feature (it touches
     // `lunco_modelica_ui::ui` / `lunco_workbench`), so it's gated on it too —
@@ -245,13 +200,9 @@ fn main() {
     // fails to compile.
     #[cfg(all(target_arch = "wasm32", feature = "ui"))]
     {
-        if let Some(model) = chosen {
-            app.insert_resource(BundledModelInfo {
-                default_filename: model.filename.to_string(),
-                default_source: model.source.to_string(),
-            })
-            .add_systems(Startup, setup_web_workbench);
-        }
+        app.init_resource::<WebWorkbenchRequest>()
+            .add_systems(Update, request_web_workbench)
+            .add_systems(Update, setup_web_workbench);
     }
 
     app.run();
@@ -388,21 +339,105 @@ fn install_panic_hook() {
 // wasm-only boot helpers
 // ─────────────────────────────────────────────────────────────────────
 
-/// Resource holding the default model info passed to the startup system.
+/// External model requested by the `?example=` URL parameter.
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
 #[derive(Resource)]
 struct BundledModelInfo {
-    default_filename: String,
-    default_source: String,
+    asset_path: String,
+    source: Handle<ModelicaSource>,
 }
+
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
+#[derive(Resource, Default)]
+struct WebWorkbenchRequest {
+    requested_name: Option<String>,
+    resolved: bool,
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
+#[derive(Resource)]
+struct WebWorkbenchStarted;
 
 /// Marker component for the initial workbench entity.
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
 #[derive(Component)]
 struct WebWorkbench;
 
-/// Spawns the initial Modelica document tab with the bundled model named
-/// by `?example=`. Only registered when such a model was chosen.
+/// Resolve the explicitly named Modelica deep link against the runtime asset
+/// manifest. The URL names a model, not a storage directory: the manifest is
+/// the authority for which `.mo` assets exist in this bundle.
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
+fn request_web_workbench(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    manifest: Res<lunco_assets_core::discovery::AssetManifest>,
+    mut request: ResMut<WebWorkbenchRequest>,
+    started: Option<Res<WebWorkbenchStarted>>,
+) {
+    if started.is_some() || request.resolved {
+        return;
+    }
+    if request.requested_name.is_none() {
+        request.requested_name = web_sys::window()
+            .and_then(|window| window.location().search().ok())
+            .and_then(|search| {
+                web_sys::UrlSearchParams::new_with_str(search.trim_start_matches('?'))
+                    .ok()
+                    .and_then(|params| params.get("example"))
+            });
+    }
+    let Some(requested_name) = request.requested_name.as_deref() else {
+        return;
+    };
+    if !manifest.ready() {
+        return;
+    }
+
+    let requested_file = if requested_name.ends_with(".mo") {
+        requested_name.to_owned()
+    } else {
+        format!("{requested_name}.mo")
+    };
+    let candidates: Vec<&String> = manifest
+        .rels()
+        .iter()
+        .filter(|path| {
+            Path::new(path)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
+                && Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == requested_file)
+        })
+        .collect();
+    request.resolved = true;
+
+    let asset_path = match candidates.as_slice() {
+        [asset_path] => (*asset_path).clone(),
+        [] => {
+            bevy::log::error!(
+                "[lunica] Modelica deep link `{requested_name}` is not present in the runtime asset manifest"
+            );
+            commands.insert_resource(WebWorkbenchStarted);
+            return;
+        }
+        _ => {
+            bevy::log::error!(
+                "[lunica] Modelica deep link `{requested_name}` is ambiguous in the runtime asset manifest"
+            );
+            commands.insert_resource(WebWorkbenchStarted);
+            return;
+        }
+    };
+    commands.insert_resource(BundledModelInfo {
+        source: server.load(asset_path.clone()),
+        asset_path,
+    });
+}
+
+/// Spawn the initial Modelica document after its external asset is loaded.
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
 fn setup_web_workbench(
     mut commands: Commands,
@@ -411,12 +446,32 @@ fn setup_web_workbench(
     mut doc_registry: ResMut<
         lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
     >,
-    compile_states: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
+    mut compile_states: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
     mut model_tabs: ResMut<lunco_modelica_ui::model_tabs::ModelTabs>,
-    model_info: Res<BundledModelInfo>,
+    model_info: Option<Res<BundledModelInfo>>,
+    sources: Res<Assets<ModelicaSource>>,
+    server: Res<AssetServer>,
+    started: Option<Res<WebWorkbenchStarted>>,
 ) {
-    let model_path = PathBuf::from(&model_info.default_filename);
-    let source = model_info.default_source.clone();
+    if started.is_some() {
+        return;
+    }
+    let Some(model_info) = model_info else {
+        return;
+    };
+    let Some(asset) = sources.get(&model_info.source) else {
+        if server.load_state(&model_info.source).is_failed() {
+            bevy::log::error!(
+                "[lunica] external Modelica asset failed to load: {}",
+                model_info.asset_path
+            );
+            commands.insert_resource(WebWorkbenchStarted);
+        }
+        return;
+    };
+    commands.insert_resource(WebWorkbenchStarted);
+    let model_path = PathBuf::from(&model_info.asset_path);
+    let source = asset.text.clone();
     let model_name = lunco_modelica_ast::ast_extract::extract_model_name(&source)
         .unwrap_or_else(|| "Model".to_string());
     let initial_params = lunco_modelica_ast::ast_extract::extract_parameters(&source);

@@ -1,4 +1,5 @@
 {
+  "kind": "lunco.runtime-ui-manifest.v1",
   "surfaces": [
     {
       "id": "lunica-schema",

@@ -580,16 +580,11 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
 
 /// The shipped `lunco://` root for a parse-only tool.
 ///
-/// A deployed binary runs from the workspace/application directory, which is
-/// the same CWD-based root the AssetServer uses. Cargo tests instead run from
-/// the crate directory, so use the compile-time workspace layout only when the
-/// runtime root is absent.
+/// Asset-root discovery is shared with the runtime AssetServer. Keeping this
+/// function as a thin owner call means validation never guesses a repository
+/// layout from the crate's manifest directory.
 pub(crate) fn engine_assets_root() -> PathBuf {
-    let runtime_root = lunco_assets_core::assets_dir_abs();
-    if runtime_root.is_dir() {
-        return runtime_root;
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+    lunco_assets_core::assets_dir_abs()
 }
 
 // ─── .wgsl ──────────────────────────────────────────────────────────────────

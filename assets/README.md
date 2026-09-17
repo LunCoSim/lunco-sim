@@ -34,7 +34,7 @@ between independently valid parts belong in the USD assembly that uses them.
 | `scenarios/` | reusable Rhai scenario programs |
 | `scenarios/` | reusable Rhai task programs |
 | `scripting/lib/` | importable Rhai helpers |
-| `scripting/policy/` | policy hooks |
+| `scripting/policy/` | policy hooks and the application policy manifest |
 | `tutorials/` | lesson Rhai, optional lesson worlds, and authored lesson data |
 | `missions/` | mission data and orchestration entrypoints |
 | `shaders/` | WGSL materials |
@@ -53,6 +53,12 @@ rg --files assets -g '*.usda' -g '*.mo' -g '*.rhai'
 The filesystem is the discovery manifest. Do not add a second hand-maintained
 registry. A concise README beside a domain is for navigation; runtime identity
 stays in the asset and its `defaultPrim`.
+
+The application policy manifest is identified by
+`kind = "lunco.policy.v1"`. Its `scripting.source.classify` policy assigns
+authored Rhai sources to the prelude, tool libraries, or ordinary scenario
+content. Rust loads the source tree through the asset/storage layer and applies
+that decision; source directories are not repeated in Rust registries.
 
 ## Canonical reusable entrypoints
 
@@ -85,9 +91,10 @@ stays in the asset and its `defaultPrim`.
   controller mount when the controller needs vehicle-frame direction.
 - One prim has one defining spec per layer/variant. Extend it inside that spec;
   do not create a sibling `def` and `over` with competing opinions.
-- A lesson is selected from `tutorials/catalog.json`. Its Rhai source and
-  optional USD scene are passed to the generic scenario launcher; the scene is
-  ordinary USD composition and does not require a tutorial schema.
+- A lesson catalog is the unique JSON asset marked
+  `kind = "lunco.tutorial-catalog.v1"`. Its Rhai source and optional USD scene
+  are passed to the generic scenario launcher; the scene is ordinary USD
+  composition and does not require a tutorial schema.
 
 ## Validation
 

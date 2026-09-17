@@ -112,7 +112,7 @@ pub fn on_source_bundle_became_ready(
 }
 
 /// Refresh the bundled examples tree once the generated editor index arrives.
-/// The embedded model inventory is already available at boot, so this update
+/// The runtime model inventory is already available at boot, so this update
 /// only replaces its flat presentation with the richer authored tree.
 pub fn on_library_editor_index_became_ready(
     _trigger: On<lunco_modelica_index::visual_diagram::LibraryEditorIndexBecameReady>,
@@ -514,12 +514,13 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
             filename: filename_for_task.clone(),
         };
         let result = match crate::models::get_model(&filename_for_task) {
-            Some(source_text) => Ok(lunco_modelica_document::ModelicaDocument::with_origin(
+            Ok(Some(source_text)) => Ok(lunco_modelica_document::ModelicaDocument::with_origin(
                 reserved_doc_id,
-                source_text.to_string(),
+                source_text,
                 origin,
             )),
-            None => Err(format!("Bundled model not found: {filename_for_task}")),
+            Ok(None) => Err(format!("Bundled model not found: {filename_for_task}")),
+            Err(error) => Err(error),
         };
         crate::package_tree::cache::FileLoadResult {
             doc_id: reserved_doc_id,

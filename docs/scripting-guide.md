@@ -1111,16 +1111,20 @@ signature with `lunco_hooks::declare_hook!`, Rust supplies a small fact map,
 and an authored Rhai function returns the declared type. The declaration is
 collected automatically from the owner; there is no central hook list.
 
-Application policy selection is authored in
+Application policy selection is authored in the uniquely marked
+`kind = "lunco.policy.v1"` manifest in the runtime asset library, shipped in
 [`assets/scripting/policy/index.toml`](../assets/scripting/policy/index.toml)
 and loaded at simulation startup. Its single `[startup]` function receives the
 resolved policy records and installs every `[[policies]]` entry through the
-typed bootstrap surface. A Twin may add its own `policies/index.toml` with a
+typed bootstrap surface. A Twin may add its own uniquely marked policy manifest with a
 separate `[startup]` function; the Twin function receives its authored entries,
 which replace matching application policies when the Twin is active. Use
 `list_hooks()` to inspect the reflected
 `parameters: [{name, type}]` and `output` contract, `policy_status()` to read
 load diagnostics, and `invoke_hook(id, [args])` to call an installed function.
+The `scripting.source.classify` policy receives each loaded Rhai asset id and
+decides whether it is prelude, a tool library, or unrelated scenario content;
+Rust applies that typed decision without encoding a source directory layout.
 With native-provider support enabled, `policy_status().native_plugins` reports
 loaded provider ids and admission failures through the same status object.
 

@@ -1284,6 +1284,30 @@ mod tests {
     use lunco_control_core::UserIntent;
     use lunco_input_core::resolved_input_label;
 
+    fn test_bindings() -> InputBindingsSettings {
+        InputBindingsSettings::from_json(
+            r#"{
+                "look_button": "Right",
+                "forward": ["KeyW"],
+                "backward": ["KeyS"],
+                "left": ["KeyA"],
+                "right": ["KeyD"],
+                "yaw_right": ["KeyE"],
+                "yaw_left": ["KeyQ"],
+                "speed_boost": ["ShiftLeft", "ShiftRight"],
+                "action": ["KeyF"],
+                "thrust": ["Space"],
+                "brake": ["Space"],
+                "release": ["KeyG"],
+                "switch_mode": ["KeyV"],
+                "pause": ["KeyP"],
+                "cancel": ["Backspace", "Escape"],
+                "delete_selection": ["Delete"]
+            }"#,
+        )
+        .expect("valid input test fixture")
+    }
+
     #[derive(Resource, Default)]
     struct WindowInputObserved {
         aggregate: Vec<WindowEvent>,
@@ -1527,7 +1551,7 @@ mod tests {
 
     #[test]
     fn lander_intent_labels_and_port_signs_are_data_driven() {
-        let settings = InputBindingsSettings::default();
+        let settings = test_bindings();
         assert_eq!(
             resolved_input_label(&settings, UserIntent::MoveForward),
             "W"
@@ -1618,7 +1642,7 @@ mod tests {
 
     #[test]
     fn autopilot_action_is_separate_from_contextual_space_controls() {
-        let bindings = InputBindingsSettings::default().key_bindings().unwrap();
+        let bindings = test_bindings().key_bindings().unwrap();
         let action = bindings
             .iter()
             .find(|(intent, _)| *intent == UserIntent::Action)
@@ -1645,7 +1669,7 @@ mod tests {
             "free-flight boost must come from the shared semantic keymap"
         );
 
-        let input_map = InputBindingsSettings::default().input_map().unwrap();
+        let input_map = test_bindings().input_map().unwrap();
         assert_eq!(
             input_map
                 .get_buttonlike(&UserIntent::SpeedBoost)
@@ -1683,7 +1707,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ActionState::<UserIntent>::default(),
-                InputBindingsSettings::default().input_map().unwrap(),
+                test_bindings().input_map().unwrap(),
             ))
             .id();
 
@@ -1784,7 +1808,7 @@ mod tests {
             .spawn((
                 ControlLink { target: vessel },
                 ActionState::<UserIntent>::default(),
-                InputBindingsSettings::default().input_map().unwrap(),
+                test_bindings().input_map().unwrap(),
             ))
             .id();
 
@@ -1826,7 +1850,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ActionState::<UserIntent>::default(),
-                InputBindingsSettings::default().input_map().unwrap(),
+                test_bindings().input_map().unwrap(),
             ))
             .id();
 

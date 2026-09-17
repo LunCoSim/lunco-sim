@@ -63,18 +63,17 @@ lunco-api = { path = "../lunco-api", optional = true }
 # rhai; the registry itself is dependency-light.
 lunco-tools = { path = "../lunco-tools", optional = true }
 lunco-tools-rhai = { path = "../lunco-tools-rhai", optional = true }
-# `policy→rhai` hooks: compile+register the built-in `assets/scripting/policy/*.rhai`
+# `policy→rhai` hooks: compile+register the authored policy manifest and sources
 # decision functions (spec 034 control-authority) under their hook ids at startup.
 lunco-hooks = { path = "../lunco-hooks", optional = true }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
 # Optional native hook providers. The loader stays out of the hook registry and
 # is enabled only by application builds that explicitly accept Twin plugins.
 lunco-hooks-native = { path = "../lunco-hooks-native", optional = true }
-# The prelude + built-in tool libraries + example scenarios are authored under
-# `assets/scripting/` and embedded at compile time (wasm has no fs). That embed
-# is owned by lunco-assets-core (the shared asset-access crate) — we consume it via
-# `lunco_assets_core::scripting::{prelude_files, tool_libraries, examples}`. Drop a
-# `.rhai` in the folder, rebuild, and it's picked up with no code edit here.
+# The prelude, tools, examples, and policies are authored under
+# `assets/scripting/` and loaded through the shared asset/storage boundary. Drop
+# a `.rhai` in the shipped asset tree; the runtime manifest and authored policy
+# decide how it is used without rebuilding this crate.
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 # Twin persistence: the `TwinAdded` event + `WorkspaceResource` (twin→root path)

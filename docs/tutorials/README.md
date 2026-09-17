@@ -14,8 +14,9 @@ tutorial-specific route after the task shape is clear.
 
 ## In-app lessons
 
-The app menu reads `assets/tutorials/catalog.json` and exposes one submenu per
-entry's `track`; lesson rows remain in authored catalog order inside that
+The app menu discovers the unique runtime JSON asset marked
+`kind = "lunco.tutorial-catalog.v1"` and exposes one submenu per entry's
+`track`; lesson rows remain in authored catalog order inside that
 submenu. A selected entry submits the generic `RunScenarioAsset` command with a
 script, optional scene, parameters, and `ScenarioReloadPolicy::Restart`. The
 command does not open a layer itself:
@@ -26,7 +27,7 @@ The shared `lunco-workbench-guided-ui` package and Rhai prelude provide hints,
 spotlights, coach cards, and objectives. They are reusable presentation and
 scenario mechanisms, not tutorial ownership. Native asset loading rereads
 authored files where supported, so Rhai and catalog edits can be replayed
-without rebuilding the Rust core; wasm uses the embedded asset copy.
+without rebuilding the Rust core; wasm uses the same delivered asset tree.
 
 The catalog is ordinary JSON presentation data, not a USD curriculum. Lesson
 worlds remain ordinary USD scenes using standard composition (`subLayers`,

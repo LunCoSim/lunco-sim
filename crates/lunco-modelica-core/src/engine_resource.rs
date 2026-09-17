@@ -177,15 +177,22 @@ impl ModelicaEngineHandle {
                     }
                 }
                 bevy::log::info!("[ModelicaLibrary] loading source root `{root}` asynchronously");
-                let files = lunco_assets_core::models::package_files_live(&root);
-                let mut parsed = Vec::with_capacity(files.len());
-                let mut diagnostics = Vec::new();
-                for (uri, source) in files {
-                    match lunco_modelica_ast::parse_to_ast(&source, &uri) {
-                        Ok(ast) => parsed.push((uri, ast)),
-                        Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
+                let (parsed, diagnostics) = match
+                    lunco_assets_core::models::package_files_live(&root)
+                {
+                    Ok(files) => {
+                        let mut parsed = Vec::with_capacity(files.len());
+                        let mut diagnostics = Vec::new();
+                        for (uri, source) in files {
+                            match lunco_modelica_ast::parse_to_ast(&source, &uri) {
+                                Ok(ast) => parsed.push((uri, ast)),
+                                Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
+                            }
+                        }
+                        (parsed, diagnostics)
                     }
-                }
+                    Err(error) => (Vec::new(), vec![error]),
+                };
                 let mut engine = handle.lock();
                 let count = engine.finish_source_root_load(&root, parsed, diagnostics);
                 handle.wake_sync();

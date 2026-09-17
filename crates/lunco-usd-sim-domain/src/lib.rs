@@ -1812,7 +1812,9 @@ mod tests {
             "synth.acausal-network",
             "synthesize",
             lunco_assets_core::scripting::policy("synth_acausal_network")
-                .expect("shipped synthesis policy"),
+                .expect("shipped synthesis policy")
+                .expect("synthesis policy source exists")
+                .as_str(),
             true,
         )
         .expect("shipped synthesis policy compiles");
@@ -2317,7 +2319,9 @@ def Scope "Rig"
             "synth.actuator-wrench",
             "synthesize",
             lunco_assets_core::scripting::policy("synth_actuator_wrench")
-                .expect("shipped actuator policy"),
+                .expect("shipped actuator policy")
+                .expect("actuator policy source exists")
+                .as_str(),
             true,
         )
         .expect("actuator policy compiles");

@@ -1,4 +1,4 @@
-// Complete shipped-Modelica lint acceptance.
+// Complete runtime-Modelica lint acceptance.
 //
 // The engine exposes source identity through ListBundled and parse/lint facts
 // through ValidateAsset. This script owns the iteration and verdict, keeping
@@ -36,7 +36,7 @@ fn on_tick(me, ctx) {
     }
     print("[modelica-lint] checked " +
           if inventory == () || inventory.sources == () { "0" } else { inventory.sources.len() } +
-          " embedded sources");
+          " runtime sources");
     this.done = true;
     report_verdict(failures, "MODELICA LINT", "MODELICA_LINT");
 }

@@ -74,7 +74,7 @@ pub use manifest::{
     glob_matches, ComponentManifest, DownloadManifest, JournalManifest, ModelicaExternal,
     ModelicaManifest, NativePluginManifest, SysmlManifest, TwinChildRef, TwinManifest,
     TwinSettingValue, UsdManifest, VerificationCase, VerificationManifest, DEFAULT_SCENE_GLOBS,
-    MANIFEST_FILENAME,
+    MANIFEST_FILENAME, RESULTS_DIR_NAME,
 };
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
@@ -83,6 +83,11 @@ pub use lunco_doc;
 pub use lunco_storage;
 
 use lunco_storage::StorageHandle;
+
+/// Return the Twin-owned directory for persisted experiment results.
+pub fn results_dir(root: impl AsRef<Path>) -> PathBuf {
+    root.as_ref().join(RESULTS_DIR_NAME)
+}
 
 /// A component together with the exact Twin-owned verification harness it
 /// selects.  Returning the pair from one API keeps runners from reimplementing

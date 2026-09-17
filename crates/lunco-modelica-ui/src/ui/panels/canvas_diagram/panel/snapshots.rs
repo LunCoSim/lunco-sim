@@ -48,9 +48,9 @@ fn bundled_member_bounds(pkg: &str, ty: &str, member: &str) -> (Option<f64>, Opt
             return Some(i.clone());
         }
         let src = crate::ui::class_source::bundled_source_for(pkg)?;
-        let ast = lunco_modelica_ast::parse_to_ast(src, "input-bounds.mo").ok()?;
+        let ast = lunco_modelica_ast::parse_to_ast(&src, "input-bounds.mo").ok()?;
         let mut index = lunco_modelica_index::index::ModelicaIndex::new();
-        index.rebuild_with_errors(&ast, src, false);
+        index.rebuild_with_errors(&ast, &src, false);
         let rc = std::rc::Rc::new(index);
         c.borrow_mut().insert(pkg.to_string(), rc.clone());
         Some(rc)

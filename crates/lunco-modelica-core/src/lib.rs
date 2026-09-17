@@ -265,7 +265,7 @@ fn build_modelica_core(app: &mut App) {
         app.add_plugins(lunco_modelica_runtime::ModelicaSourceAssetPlugin);
     }
 
-    if let Some(library) = lunco_assets_core::source_library_root_path("library") {
+    if let Some(library) = lunco_modelica_library::source_library::source_library_root_path() {
         std::env::set_var("MODELICAPATH", library.to_string_lossy().to_string());
     }
 

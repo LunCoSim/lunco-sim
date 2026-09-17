@@ -1,0 +1,31 @@
+{
+  "kind": "lunco.program-contracts.v1",
+  "programs": [
+    {
+      "source_asset": "models/Balloon.mo",
+      "realtime_safe": true,
+      "inputs": [
+        { "name": "height", "type_name": "float", "connection": "{host}.outputs:position_y" },
+        { "name": "velocity", "type_name": "float", "connection": "{host}.outputs:velocity_y" },
+        { "name": "rho0", "type_name": "float", "default_value": 1.225 },
+        { "name": "gravity", "type_name": "float", "default_value": 1.62 }
+      ],
+      "outputs": [
+        { "name": "netForce", "type_name": "float", "connections": ["{host}.inputs:force_y"] }
+      ]
+    },
+    {
+      "source_asset": "models/GreenBalloon.py",
+      "realtime_safe": true,
+      "inputs": [
+        { "name": "height", "type_name": "float", "connection": "{host}.outputs:position_y" },
+        { "name": "velocity", "type_name": "float", "connection": "{host}.outputs:velocity_y" },
+        { "name": "rho0", "type_name": "float", "default_value": 1.225 },
+        { "name": "gravity", "type_name": "float", "default_value": 1.62 }
+      ],
+      "outputs": [
+        { "name": "netForce", "type_name": "float", "connections": ["{host}.inputs:force_y"] }
+      ]
+    }
+  ]
+}

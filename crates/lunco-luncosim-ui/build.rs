@@ -5,13 +5,17 @@
 //! not compile this graphics toolchain.
 
 use std::path::Path;
+use std::path::PathBuf;
 
 fn main() {
-    let project_dir = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let project_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let icon_svg = project_dir
-        .join("../../assets/icons/svg")
+    let assets_root = asset_root(&project_dir);
+    println!("cargo:rerun-if-env-changed=LUNCO_ASSET_ROOT");
+    let icon_svg = assets_root
+        .join("icons")
+        .join("svg")
         .join(platform_icon_name(&target_os));
     println!("cargo:rerun-if-changed={}", icon_svg.display());
     println!("cargo:rerun-if-env-changed=LUNCOSIM_ICON_OUTPUT_DIR");
@@ -40,6 +44,30 @@ fn main() {
     if let Some(icon_output_dir) = std::env::var_os("LUNCOSIM_ICON_OUTPUT_DIR") {
         write_package_icons(&tree, &target_os, Path::new(&icon_output_dir));
     }
+}
+
+fn asset_root(manifest_dir: &Path) -> PathBuf {
+    if let Some(configured) = std::env::var_os("LUNCO_ASSET_ROOT") {
+        let root = PathBuf::from(configured);
+        if root.is_dir() {
+            return root;
+        }
+        panic!(
+            "LUNCO_ASSET_ROOT must name an existing asset directory, got {}",
+            root.display()
+        );
+    }
+
+    manifest_dir
+        .ancestors()
+        .map(|parent| parent.join("assets"))
+        .find(|candidate| candidate.is_dir())
+        .unwrap_or_else(|| {
+            panic!(
+                "could not find the LunCoSim asset directory above {}",
+                manifest_dir.display()
+            )
+        })
 }
 
 fn platform_icon_name(target_os: &str) -> &'static str {

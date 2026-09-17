@@ -74,7 +74,7 @@ required = false
 
 The manifest's single `[startup]` entry names the Rhai function that receives
 and installs all resolved policy records. The application manifest is loaded
-at simulation startup. A Twin may provide its own `policies/index.toml`; its
+at simulation startup. A Twin may provide its own uniquely marked policy manifest; its
 matching entries replace application records before its own startup function
 runs when that Twin becomes active. The Twin startup function receives the
 Twin-owned records; application policies remain active for seams the Twin does

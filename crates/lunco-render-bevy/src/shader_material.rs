@@ -62,7 +62,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
-use bevy::shader::{Shader, Source as ShaderSource};
+use bevy::shader::{Shader, ShaderImport, Source as ShaderSource};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
@@ -439,60 +439,70 @@ impl Material for ShaderMaterial {
 /// downstream consumer (e.g. the wheel physics/visual split).
 pub struct ShaderMaterialPlugin;
 
-/// Keeps the shared `lunco::horizon` WGSL module (heightfield shadow
-/// ray-march) loaded so `#import lunco::horizon::sun_visibility` resolves in
-/// any per-instance shader.
-#[derive(Resource)]
-pub struct HorizonMarchModule {
-    pub(crate) _handle: Handle<bevy::shader::Shader>,
-}
-
-/// Keeps the shared `lunco::pbr_lit` WGSL module (PBR-lit mode) loaded so
-/// `#import lunco::pbr_lit::lit` resolves in any per-instance shader — letting
-/// a self-describing shader opt into bevy's full lighting without hand-copying
-/// the PbrInput boilerplate.
-#[derive(Resource)]
-pub struct PbrLitModule {
-    pub(crate) _handle: Handle<bevy::shader::Shader>,
-}
-
-/// Keeps the shared `lunco::lunar` WGSL module (lunar regolith photometry —
-/// Lommel-Seeliger + opposition surge) loaded so `#import lunco::lunar` resolves
-/// in the terrain shaders.
-#[derive(Resource)]
-pub struct LunarBrdfModule {
-    pub(crate) _handle: Handle<bevy::shader::Shader>,
-}
-
-/// Keeps the shared `lunco::noise` WGSL module (procedural value noise — the
-/// hash/vnoise/fbm family) loaded so `#import lunco::noise` resolves in the
-/// terrain and starfield shaders.
-#[derive(Resource)]
-pub struct NoiseModule {
-    pub(crate) _handle: Handle<bevy::shader::Shader>,
-}
-
-/// Keeps the shared `lunco::terrain` WGSL module (the regolith surface kernel —
-/// `ramp`/`aa_fade`/`layer_height`/`bump_layer`, plus the native-vs-web noise
-/// split behind `LUNCO_NOISE_2D`) loaded so `#import lunco::terrain` resolves in
-/// every terrain shader.
+/// Retains runtime WGSL assets that declare a custom import path.
 ///
-/// A missing entry here is SILENT and total: the import fails to resolve, the
-/// whole material fails to compose, and the terrain draws with no shader at all —
-/// flat untextured grey, which reads as "the ground went transparent" rather than
-/// as a shader error. Anything under `#define_import_path` needs a line here.
-#[derive(Resource)]
-pub struct TerrainSurfaceModule {
-    pub(crate) _handle: Handle<bevy::shader::Shader>,
+/// Bevy's shader composer resolves `#import lunco::…` from loaded shader
+/// assets. The runtime manifest is the source of truth for which files exist,
+/// so the render boundary discovers and retains import modules without a Rust
+/// list of filenames. New modules therefore become ordinary authored WGSL
+/// files.
+#[derive(Resource, Default)]
+struct ShaderImportCatalog {
+    candidates: Vec<(String, Handle<Shader>)>,
+    modules: Vec<Handle<Shader>>,
+    scan_started: bool,
+    ready: bool,
 }
 
-/// Keeps the shared `lunco::transfer` WGSL module (the value→colour plane of
-/// Data → Transfer → Blend) loaded so `#import lunco::transfer` resolves in the
-/// terrain shaders. The GPU twin of `lunco_terrain_core::transfer` — one ramp,
-/// so the terrain diagnostic material and the legend explaining it cannot disagree.
-#[derive(Resource)]
-pub struct TransferModule {
-    pub(crate) _handle: Handle<bevy::shader::Shader>,
+fn discover_shader_import_modules(
+    mut catalog: ResMut<ShaderImportCatalog>,
+    manifest: Option<Res<lunco_assets_core::discovery::AssetManifest>>,
+    server: Option<Res<AssetServer>>,
+    shaders: Option<Res<Assets<Shader>>>,
+) {
+    if catalog.ready {
+        return;
+    }
+    let (Some(manifest), Some(server), Some(shaders)) = (manifest, server, shaders) else {
+        return;
+    };
+    if !manifest.ready() {
+        return;
+    }
+    if !catalog.scan_started {
+        catalog.candidates = manifest
+            .rels()
+            .iter()
+            .filter(|path| path.ends_with(".wgsl"))
+            .map(|path| (path.clone(), server.load(path.clone())))
+            .collect();
+        catalog.scan_started = true;
+    }
+
+    let mut pending = false;
+    let mut discovered_modules = Vec::new();
+    for (path, handle) in &catalog.candidates {
+        let Some(shader) = shaders.get(handle) else {
+            if server
+                .get_load_state(handle.id())
+                .is_some_and(|load_state| !load_state.is_failed())
+            {
+                pending = true;
+            } else {
+                error!("shader import module could not be loaded: {path}");
+            }
+            continue;
+        };
+        if matches!(shader.import_path, ShaderImport::Custom(_))
+            && !catalog.modules.iter().any(|loaded| loaded == handle)
+        {
+            discovered_modules.push(handle.clone());
+        }
+    }
+    catalog.modules.extend(discovered_modules);
+    if !pending {
+        catalog.ready = true;
+    }
 }
 
 impl Plugin for ShaderMaterialPlugin {
@@ -500,44 +510,12 @@ impl Plugin for ShaderMaterialPlugin {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
         app.init_resource::<ShaderSchemas>();
         app.init_resource::<ShaderCatalog>();
+        app.init_resource::<ShaderImportCatalog>();
         // Reflect each shader's `Material` struct → per-material `ParamSchema`.
-        app.add_systems(Update, reflect_shader_schemas);
-        // Catalog discovery lives in ONE place — `lunco-scene-catalog`'
-        // `maintain_catalogs`, which scans engine + Twin shaders via the shared
-        // `lunco_assets_core::discovery` walk. This crate only seeds the wasm-safe
-        // defaults in `ShaderCatalog::default`.
-        let module = app
-            .world()
-            .resource::<AssetServer>()
-            .load("shaders/horizon_march.wgsl");
-        app.insert_resource(HorizonMarchModule { _handle: module });
-        let pbr_lit = app
-            .world()
-            .resource::<AssetServer>()
-            .load("shaders/pbr_lit.wgsl");
-        app.insert_resource(PbrLitModule { _handle: pbr_lit });
-        let lunar = app
-            .world()
-            .resource::<AssetServer>()
-            .load("shaders/lunar_brdf.wgsl");
-        app.insert_resource(LunarBrdfModule { _handle: lunar });
-        let noise = app
-            .world()
-            .resource::<AssetServer>()
-            .load("shaders/lunco_noise.wgsl");
-        app.insert_resource(NoiseModule { _handle: noise });
-        let terrain_surface = app
-            .world()
-            .resource::<AssetServer>()
-            .load("shaders/terrain_surface.wgsl");
-        app.insert_resource(TerrainSurfaceModule {
-            _handle: terrain_surface,
-        });
-        let transfer = app
-            .world()
-            .resource::<AssetServer>()
-            .load("shaders/transfer.wgsl");
-        app.insert_resource(TransferModule { _handle: transfer });
+        app.add_systems(
+            Update,
+            (discover_shader_import_modules, reflect_shader_schemas).chain(),
+        );
     }
 }
 

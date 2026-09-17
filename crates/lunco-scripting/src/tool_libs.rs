@@ -12,9 +12,37 @@
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_hooks::HookValue;
 use rhai::Engine;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
+
+/// Policy seam that classifies one loaded Rhai source.
+///
+/// The Rust side supplies only the canonical asset id. The policy returns a
+/// role map such as `#{ role: "prelude" }`, `#{ role: "tool", name: "..." }`,
+/// or `#{ role: "ignore" }`. Source categorisation and naming stay authored,
+/// while loading and registration remain generic native operations.
+pub const SOURCE_CLASSIFY_HOOK: &str = "scripting.source.classify";
+
+#[cfg(test)]
+pub(crate) fn registry_test_guard() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+lunco_hooks::declare_hook! {
+    id: SOURCE_CLASSIFY_HOOK,
+    owner: "lunco-scripting",
+    description: "Classify loaded Rhai sources as prelude, tool, or ignored content.",
+    signature: [asset_id: String],
+    output: Map,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
 
 /// Process-global tool registries still need an ECS lifecycle owner. This
 /// resource records exactly which names the active Twin installed and what
@@ -95,28 +123,9 @@ impl TwinToolLibraries {
     }
 }
 
-/// Seed the built-in tools (idempotent). Call once at plugin build, BEFORE the
-/// runtime engine is created, so they bind immediately:
-///   - every `assets/scripting/tools/*.rhai` — a rhai-source library, name = stem
-///     (`formation`, `survey`, `debug_viz`, …). Native checkouts read the
-///     editable files at startup through
-///     [`lunco_assets_core::scripting::active_tool_libraries`]; packaged and wasm
-///     builds use the embedded source. Add or replace a file without a Rust
-///     rebuild. The runtime Twin scan ([`load_tool_libraries_from_dir`]) remains
-///     the native-only, user-authored counterpart. The scan only reads source;
-///     the active-Twin observer installs it through [`TwinToolLibraries`] so
-///     ownership and restoration stay in one place.
-///   - `mathx` — a NATIVE (Rust) tool, proving the backend-agnostic abstraction:
-///     the same `name::fn(...)` call site works whether the tool is rhai or Rust.
-///     It only contributes `lerp`; scalar math such as `hypot` is already part
-///     of Rhai's Rust-backed `BasicMathPackage` and is not shadowed here.
-pub fn register_builtins() {
-    let tools = lunco_assets_core::scripting::active_tool_libraries().unwrap_or_else(|error| {
-        panic!("active Rhai tool libraries must be readable: {error}");
-    });
-    for (name, src) in tools {
-        lunco_tools_rhai::register_rhai_tool(&name, &src);
-    }
+/// Register the small native tool that is part of the generic scripting
+/// substrate. Source-defined tools are installed by the Bevy asset pipeline.
+pub(crate) fn register_native_builtins() {
     lunco_tools_rhai::register_native_tool("mathx", vec!["lerp/3".into()], |_engine| {
         let mut m = rhai::Module::new();
         m.set_native_fn("lerp", |a: f64, b: f64, t: f64| Ok(a + (b - a) * t));
@@ -131,41 +140,82 @@ pub fn register_tool_library(name: &str, source: &str) {
     lunco_tools_rhai::register_rhai_tool(name, source);
 }
 
+/// Apply the authored source-classification policy to one loaded source.
+///
+/// `Ok(None)` means the source is ignored or no optional policy is active. A
+/// malformed policy result is an explicit source diagnostic; it never turns an
+/// arbitrary Rhai file into a prelude or callable library by default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptSourceRole {
+    /// Install this source into the global prelude module.
+    Prelude,
+    /// Register this source as a named callable tool library.
+    Tool(String),
+}
+
+pub fn classify_source(asset_id: &str) -> Result<Option<ScriptSourceRole>, String> {
+    let Some(result) = lunco_hooks::invoke(
+        SOURCE_CLASSIFY_HOOK,
+        &[HookValue::str(asset_id.to_owned())],
+    ) else {
+        return Ok(None);
+    };
+    let value = result.map_err(|error| error.to_string())?;
+    let Some(role) = value.get("role").and_then(HookValue::as_str) else {
+        return Err("source classification policy returned no string `role`".into());
+    };
+    match role {
+        "prelude" => Ok(Some(ScriptSourceRole::Prelude)),
+        "ignore" => Ok(None),
+        "tool" => {
+            let Some(name) = value.get("name").and_then(HookValue::as_str) else {
+                return Err(
+                    "source classification policy selected a tool without a string `name`"
+                        .into(),
+                );
+            };
+            crate::names::validate_file_stem(name)
+                .map_err(|error| format!("source classification returned invalid tool name: {error}"))?;
+            Ok(Some(ScriptSourceRole::Tool(name.to_owned())))
+        }
+        other => Err(format!(
+            "source classification policy returned unknown role '{other}'"
+        )),
+    }
+}
+
 // ── Twin persistence (shared tool libraries → files) ─────────────────────────
 //
 // Per-entity scenarios live embedded in USD prims (a separate path); shared,
-// reusable `name::fn` tool libraries persist as plain `<twin>/tools/*.rhai`
-// files — the file IS the source of truth, durable across restarts by
-// construction. On twin open we scan that dir and register each; the
-// `RegisterToolLibrary` command path can mirror an in-memory registration back
-// to disk via [`save_tool_library_file`]. Native-only (no filesystem on wasm).
+// reusable tool sources persist as ordinary files beneath the Twin's authored
+// tool source root. The source-classification policy chooses which candidates
+// become `name::fn` libraries and what namespace they receive. On Twin open we
+// scan that root and register each selected source; the RegisterToolLibrary
+// command path can mirror an in-memory registration back to disk via
+// [`save_tool_library_file`]. Native-only (no filesystem on wasm).
 
 /// Sub-directory under a Twin root that holds shared rhai tool libraries.
 pub const TOOLS_DIR: &str = "tools";
 
-/// Scan `<root>/tools/*.rhai` and register each as a tool library (the file
-/// stem is the library name). Returns the names loaded. A single unreadable
-/// file is logged and skipped — never blocks the rest. Native-only.
-// `disallowed_methods` bans `std::fs` because it silently fails on wasm. This fn
-// is `cfg(not(wasm32))`, so that failure mode is unreachable — it does not exist
-// on the web target at all. Scoped to this fn, not the module, so the lint stays
-// live for anything wasm-reachable added here later.
-#[allow(clippy::disallowed_methods)]
+/// Scan the Twin's authored tool source root and return `(asset_id, source)`
+/// candidates. The asset id is passed to [`classify_source`] so the policy,
+/// rather than this filesystem helper, decides whether to activate a source
+/// and what name it receives. A single unreadable file is logged and skipped;
+/// it never blocks the rest. Native-only.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_tool_libraries_from_dir(root: &std::path::Path) -> Vec<(String, String)> {
+pub fn load_tool_sources_from_dir(root: &std::path::Path) -> Vec<(String, String)> {
     let dir = root.join(TOOLS_DIR);
     let mut loaded = Vec::new();
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
+    let entries = match lunco_storage::read_directory_sync(&dir) {
+        Ok(entries) => entries,
         // No tools/ dir is the common case (twin has none) — not an error.
         Err(_) => return loaded,
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in entries {
         if path.extension().and_then(|e| e.to_str()) != Some("rhai") {
             continue;
         }
-        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+        let Some(filename) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
         match lunco_storage::read_file_sync(&path)
@@ -173,21 +223,18 @@ pub fn load_tool_libraries_from_dir(root: &std::path::Path) -> Vec<(String, Stri
             .and_then(|bytes| String::from_utf8(bytes).ok())
         {
             Some(source) => {
-                loaded.push((name.to_string(), source));
+                loaded.push((format!("{TOOLS_DIR}/{filename}"), source));
             }
             None => warn!("[tool_libs] failed to read {}", path.display()),
         }
     }
-    loaded.sort();
+    loaded.sort_by(|left, right| left.0.cmp(&right.0));
     loaded
 }
 
 /// Persist a tool library's source to `<root>/tools/<name>.rhai` (creating the
 /// dir if needed). The on-disk counterpart of [`register_tool_library`], so an
 /// interactively-registered library survives a restart. Native-only.
-// See `load_tool_libraries_from_dir` — native-only, so the wasm foot-gun the
-// `disallowed_methods` ban guards against cannot occur here.
-#[allow(clippy::disallowed_methods)]
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_tool_library_file(
     root: &std::path::Path,
@@ -199,6 +246,28 @@ pub fn save_tool_library_file(
     let path = dir.join(format!("{name}.rhai"));
     lunco_storage::write_file_sync(&path, source.as_bytes())?;
     Ok(path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_twin_tool_sources(
+    twin: lunco_workspace::TwinId,
+    sources: &[(String, String)],
+    scoped: &mut TwinToolLibraries,
+) {
+    for (asset_id, source) in sources {
+        let policy_id = format!("twin://{asset_id}");
+        match classify_source(&policy_id) {
+            Ok(Some(ScriptSourceRole::Tool(name))) => {
+                if let Err(error) = scoped.register(twin, &name, &source) {
+                    error!("[tool_libs] failed to install '{name}': {error}");
+                }
+            }
+            Ok(Some(ScriptSourceRole::Prelude)) | Ok(None) => {}
+            Err(error) => {
+                warn!("[tool_libs] source classification rejected {policy_id}: {error}");
+            }
+        }
+    }
 }
 
 /// Observer: on Twin open, replace the active scoped tool libraries with every
@@ -221,19 +290,16 @@ pub fn sync_tools_on_twin_added(
     };
     scoped.activate(twin_id);
     #[cfg(not(target_arch = "wasm32"))]
-    let loaded = load_tool_libraries_from_dir(&twin.root);
+    let loaded = load_tool_sources_from_dir(&twin.root);
+    #[cfg(not(target_arch = "wasm32"))]
+    install_twin_tool_sources(twin_id, &loaded, &mut scoped);
     #[cfg(target_arch = "wasm32")]
     let loaded: Vec<(String, String)> = Vec::new();
-    for (name, source) in &loaded {
-        if let Err(error) = scoped.register(twin_id, name, source) {
-            error!("[tool_libs] failed to install '{name}' for Twin: {error}");
-        }
-    }
     if !loaded.is_empty() {
         info!(
-            "[tool_libs] loaded {} tool librar{} from Twin: {loaded:?}",
+            "[tool_libs] classified {} Twin tool source{}: {loaded:?}",
             loaded.len(),
-            if loaded.len() == 1 { "y" } else { "ies" },
+            if loaded.len() == 1 { "" } else { "s" },
         );
     }
 }
@@ -260,14 +326,9 @@ pub fn wind_down_tools_on_twin_closed(
     };
     scoped.activate(active);
     #[cfg(not(target_arch = "wasm32"))]
-    let loaded = load_tool_libraries_from_dir(&twin.root);
-    #[cfg(target_arch = "wasm32")]
-    let loaded: Vec<(String, String)> = Vec::new();
-    for (name, source) in &loaded {
-        if let Err(error) = scoped.register(active, name, source) {
-            error!("[tool_libs] failed to install '{name}' for Twin: {error}");
-        }
-    }
+    let loaded = load_tool_sources_from_dir(&twin.root);
+    #[cfg(not(target_arch = "wasm32"))]
+    install_twin_tool_sources(active, &loaded, &mut scoped);
 }
 
 /// Registry generation (changes when a tool is registered, replaced, or
@@ -340,7 +401,10 @@ impl ApiQueryProvider for GetToolLibraryProvider {
                     .get_resource::<lunco_assets_core::script_source::ScriptSources>()
                     .cloned()
                     .unwrap_or_default();
-                let engine = crate::world_bridge::build_world_engine(sources);
+                let engine = match crate::world_bridge::build_world_engine(sources) {
+                    Ok(engine) => engine,
+                    Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
+                };
                 let binding = lunco_tools_rhai::inspect_tool_with_engine(&tool, &engine);
                 let scope = world
                     .get_resource::<TwinToolLibraries>()
@@ -383,54 +447,11 @@ pub fn register_queries(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// `register_builtins` discovers EVERY `assets/scripting/tools/*.rhai` (the
-    /// drop-a-file contract) plus the native `mathx` — no per-tool code edit.
-    #[test]
-    fn builtins_scanned_from_embedded_dir() {
-        register_builtins();
-        let names = lunco_tools::names();
-        for expected in [
-            "assembly_edit",
-            "assembly_ui",
-            "formation",
-            "survey",
-            "debug_viz",
-            "gizmo",
-            "nurbs",
-            "mathx",
-        ] {
-            assert!(
-                names.contains(&expected.to_string()),
-                "missing built-in {expected}"
-            );
-        }
-        // Every embedded tool `.rhai` registered under its stem — future files
-        // are picked up automatically, this guards the scan against silent drops.
-        for (stem, _) in lunco_assets_core::scripting::tool_libraries() {
-            assert!(
-                names.contains(&stem.to_string()),
-                "embedded {stem}.rhai not registered"
-            );
-        }
-
-        // Compile every discovered source tool through the same registry
-        // resolver used by the production engine. This catches a malformed
-        // or missing imported tool at the boundary where it would otherwise
-        // become an Editor menu with no callable implementation.
-        let mut engine = Engine::new();
-        lunco_hooks_rhai::rhai_limits::apply(&mut engine);
-        engine.set_module_resolver(lunco_tools_rhai::ToolModuleResolver::new());
-        let errors = lunco_tools_rhai::bind_registered_tools(&mut engine);
-        assert!(
-            errors.is_empty(),
-            "built-in tool binding errors: {errors:?}"
-        );
-    }
-
-    /// `save_tool_library_file` → `load_tool_libraries_from_dir` round-trips;
+    /// `save_tool_library_file` → `load_tool_sources_from_dir` round-trips;
     /// installation is a separate scoped operation.
     #[test]
     fn tool_library_file_save_load_roundtrip() {
+        let _registry_guard = registry_test_guard();
         let temp = tempfile::tempdir().expect("tool library test directory");
         let root = temp.path();
 
@@ -439,14 +460,17 @@ mod tests {
         assert!(lunco_storage::read_file_sync(&path).is_ok());
         assert_eq!(path, root.join("tools").join("persist_probe.rhai"));
 
-        let loaded = load_tool_libraries_from_dir(&root);
-        assert_eq!(loaded, vec![("persist_probe".to_string(), src.to_string())]);
+        let loaded = load_tool_sources_from_dir(&root);
+        assert_eq!(
+            loaded,
+            vec![("tools/persist_probe.rhai".to_string(), src.to_string())]
+        );
 
         // The scoped owner installs the source into the global binding registry.
         let twin = lunco_workspace::TwinId::new(1);
         let mut scoped = TwinToolLibraries::default();
         scoped.activate(twin);
-        scoped.register(twin, &loaded[0].0, &loaded[0].1).unwrap();
+        scoped.register(twin, "persist_probe", &loaded[0].1).unwrap();
         let tool = lunco_tools::get("persist_probe").expect("registered");
         assert_eq!(tool.backend(), "rhai");
         assert_eq!(tool.source(), Some(src));
@@ -454,11 +478,12 @@ mod tests {
         assert!(lunco_tools::get("persist_probe").is_none());
     }
 
-    /// A missing `tools/` dir is the common case — yields no libraries, no error.
+    /// A missing tool source dir is the common case — yields no libraries, no error.
     #[test]
     fn missing_tools_dir_is_empty_not_error() {
+        let _registry_guard = registry_test_guard();
         let temp = tempfile::tempdir().expect("tool library test directory");
         let root = temp.path();
-        assert!(load_tool_libraries_from_dir(&root).is_empty());
+        assert!(load_tool_sources_from_dir(&root).is_empty());
     }
 }

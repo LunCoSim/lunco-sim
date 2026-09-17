@@ -23,7 +23,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): process-wide live document handle allocation, the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo. |
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, document-identity command payloads such as `rename::RenameOpenDocument`, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
-| **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, embedded sources, discovery, and storage-facing readers. |
+| **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, runtime source loading, discovery, and storage-facing readers. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, lifecycle state, and Bevy registry/command events. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
 | **`lunco-assets-transport`** | Small native HTTP transport boundary: shared timeout, retry/backoff, and resumable byte-transfer primitives. It has no manifest, archive, raster, or Bevy dependency. |
 | **`lunco-assets-download`** | Manifest-aware native download, SHA-256 verification, archive extraction, staging, and atomic source installation. It has no Bevy or raster-processing dependency. |
@@ -301,7 +301,7 @@ backend and architectural stubs for future OPFS/IndexedDB and remote backends.
 **`lunco-assets-core`**
 The lightweight runtime asset boundary. It owns canonical `lunco://` and
 `twin://` identities, cache and Twin-root resolution, Bevy source registration,
-embedded Modelica/mission/tutorial/Rhai sources, and project asset discovery.
+runtime Modelica/mission/tutorial/Rhai sources, and project asset discovery.
 It intentionally excludes HTTP, archive, raster, SVG, GeoTIFF, and native
 process dependencies.
 
@@ -530,9 +530,11 @@ Physical actuator and sensor implementations. Bridges `Port` values to the `avia
 
 **`lunco-input-core`**
 Shared input settings and projection. It owns the persisted `InputBindingsSettings`
-section, bundled `assets/config/keybindings.json` defaults, semantic labels,
-pointer-chord resolution, and Leafwing `InputMap` construction. UI, avatar,
-controller, and Rhai consumers use this focused contract directly.
+section, semantic labels, pointer-chord resolution, and Leafwing `InputMap`
+construction. The application supplies the authored default document through
+the runtime asset pipeline (`lunco.input-bindings.v1`); this contract crate has
+no compiled-in asset path or product keymap. UI, avatar, controller, and Rhai
+consumers use this focused contract directly.
 
 **`lunco-input-ui`**
 Optional egui adapter for the shared input state. It owns the input overlay

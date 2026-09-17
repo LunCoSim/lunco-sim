@@ -14,7 +14,7 @@ There are two implementation forms for the same contract:
 
 | Provider | Installation | Appropriate work |
 |---|---|---|
-| Rhai policy | Application or Twin `policies/index.toml` startup manifest | Changeable policy, routing, lifecycle, scenario glue, and authored behavior |
+| Rhai policy | Application or Twin uniquely marked policy manifest | Changeable policy, routing, lifecycle, scenario glue, and authored behavior |
 | Native provider | Twin `[[native_plugins]]` manifest entry | Trusted, expensive, or platform-specific computation behind an existing hook |
 
 Rhai policies do not create a second command or hook registry. Native providers

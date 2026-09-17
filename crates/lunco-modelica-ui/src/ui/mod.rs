@@ -796,7 +796,16 @@ impl Plugin for ModelicaUiPlugin {
                     ),
                 ),
             )
-            .insert_resource(panels::welcome::ExamplePathRegistry::with_builtins())
+            .init_resource::<panels::welcome::ExamplePathRegistry>()
+            .init_resource::<panels::welcome::ExamplePathCatalogState>()
+            .add_systems(
+                Update,
+                (
+                    panels::welcome::load_example_path_catalog,
+                    panels::welcome::update_example_path_catalog,
+                )
+                    .chain(),
+            )
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
             .register_instance_panel(panels::graphs::ModelicaPlotPanel)
@@ -1099,7 +1108,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
 
     // Resolved on-disk path. May be the explicit-install destination, the
     // workspace `.cache/library/`, or a user-supplied override.
-    let root = lunco_assets_core::source_library_root_path("library");
+    let root = lunco_modelica_library::source_library::source_library_root_path();
     match root.as_ref() {
         Some(p) => {
             ui.horizontal(|ui| {

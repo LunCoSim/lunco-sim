@@ -69,6 +69,7 @@ mod native {
     /// doesn't match (the bincode'd `StoredDefinition` layout is rumoca-version
     /// sensitive). Bump the shared const when the rumoca AST shape changes.
     use lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
+    use lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME;
 
     pub(super) fn run() {
         let args: Vec<String> = std::env::args().collect();
@@ -110,7 +111,7 @@ mod native {
         };
 
         if source_roots.is_empty() {
-            let Some(root) = lunco_assets_core::source_library_root_path("library") else {
+            let Some(root) = lunco_modelica_library::source_library::source_library_root_path() else {
                 eprintln!(
                     "error: no source root on disk (run `lunco-assets -- download` first \
                  or pass --source-root)"
@@ -150,7 +151,7 @@ mod native {
         // web runtime reads it via `LibraryAssetSource::read("library_index.json")` to
         // populate `library_component_library()` — without this the palette ships
         // empty on wasm.
-        let index_path = source_roots[0].join("library_index.json");
+        let index_path = source_roots[0].join(LIBRARY_INDEX_FILE_NAME);
         if index_path.is_file() {
             entries.push((source_roots[0].clone(), index_path));
         } else {
@@ -236,7 +237,9 @@ mod native {
             // requested exclusion policy with a cached artifact.
             "excluded_packages": exclude,
         });
-        let manifest_path = out_dir.join("manifest.json");
+        let manifest_path = out_dir.join(
+            lunco_modelica_library::source_library::SOURCE_LIBRARY_MANIFEST_FILE_NAME,
+        );
         let manifest_bytes = serde_json::to_vec_pretty(&manifest).expect("serialise manifest");
         fs::write(&manifest_path, &manifest_bytes).expect("write manifest");
 
