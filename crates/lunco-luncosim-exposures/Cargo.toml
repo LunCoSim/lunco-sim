@@ -13,6 +13,7 @@ big_space = { workspace = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-spatial = { path = "../lunco-spatial" }

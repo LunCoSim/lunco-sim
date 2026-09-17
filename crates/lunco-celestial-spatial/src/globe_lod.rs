@@ -18,21 +18,21 @@ use std::sync::Arc;
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::*;
 use lunco_materials::{ShaderLook, ShaderLookReady};
 use lunco_render::SceneCamera;
-use lunco_terrain_core::{normal_at_bounded, CompositeHeightSource, HeightSource, Square};
+use lunco_terrain_core::{CompositeHeightSource, HeightSource, Square, normal_at_bounded};
 use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
 use lunco_terrain_globe::{
-    create_quadsphere_tile_mesh, GlobeHandoff as GlobeHandoffGeometry, GlobeSurfacePatch,
-    TerrainTile, TileCoord,
+    GlobeHandoff as GlobeHandoffGeometry, GlobeSurfacePatch, TerrainTile, TileCoord,
+    create_quadsphere_tile_mesh,
 };
 use lunco_terrain_surface::SurfaceOracle;
 use lunco_viewport_core::SceneViewport;
 
-/// Per-body live-LOD context read by [`update_globe_lod`] to stream cube-sphere
-/// tiles.
+/// Per-body live-LOD context read by the runtime LOD system to stream
+/// cube-sphere tiles.
 #[derive(Component)]
 pub struct GlobeLod {
     /// Body radius (m) — tile vertices ride this sphere.
@@ -1491,12 +1491,16 @@ mod tests {
     #[test]
     fn flat_site_handoff_owns_the_authored_datum_inside_its_square() {
         let handoff = GlobeHandoff::new_flat(DVec3::X, DVec3::Z, DVec3::Y, 1_737_400.0, 0.0, 100.0);
-        assert!(handoff
-            .geometry()
-            .contains(DVec3::new(1.0, 0.00001, 0.00001).normalize()));
-        assert!(!handoff
-            .geometry()
-            .contains(DVec3::new(1.0, 0.001, 0.0).normalize()));
+        assert!(
+            handoff
+                .geometry()
+                .contains(DVec3::new(1.0, 0.00001, 0.00001).normalize())
+        );
+        assert!(
+            !handoff
+                .geometry()
+                .contains(DVec3::new(1.0, 0.001, 0.0).normalize())
+        );
         let patch = handoff.patch();
         assert_eq!(patch.source.height_at(0.0, 0.0), 0.0);
         assert_eq!(patch.source.height_at(50.0, -50.0), 0.0);

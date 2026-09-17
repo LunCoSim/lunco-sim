@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 
 use crate::frame_index::ReferenceFrameIndex;
-use lunco_celestial::geo::{body_fixed_to_geodetic, Geodetic, GeodeticAnchor, SiteAnchor};
+use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor, body_fixed_to_geodetic};
 use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame};
 
 /// Position in the scene's authored topocentric frame.
@@ -136,8 +136,8 @@ impl SurfacePoseQuery<'_, '_> {
 mod tests {
     use super::*;
     use crate::frame_index::update_reference_frame_index;
-    use lunco_celestial::geo::{geodetic_to_body_fixed, LocalTangentFrame};
     use lunco_celestial::MOON_MEAN_RADIUS_M;
+    use lunco_celestial::geo::{LocalTangentFrame, geodetic_to_body_fixed};
 
     fn scene_to_body_rotation(anchor: &Geodetic) -> DQuat {
         let tangent = LocalTangentFrame::body_fixed(anchor, MOON_MEAN_RADIUS_M);

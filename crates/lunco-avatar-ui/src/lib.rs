@@ -1,23 +1,24 @@
 //! Avatar UI panels — camera mode display and surface coordinates.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt};
 
 use lunco_avatar_core::notifications::ScreenNotifications;
 use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_avatar_policy::{
-    avatar_soil_collision_policy, AvatarSoilCollisionPolicy, AVATAR_ALLOW_THROUGH_SOIL_SETTING,
+    AVATAR_ALLOW_THROUGH_SOIL_SETTING, AvatarSoilCollisionPolicy, avatar_soil_collision_policy,
 };
 use lunco_camera_core::CameraFollow;
 use lunco_celestial::CelestialBody;
-use lunco_celestial_spatial::{LeaveSurface, LocalGravityField, SurfacePoseQuery};
+use lunco_celestial_spatial::LeaveSurface;
+use lunco_celestial_spatial_core::{LocalGravityField, SurfacePoseQuery};
 use lunco_control_core::{ControlBinding, UserIntent};
 use lunco_core::GlobalEntityId;
 use lunco_core_session::{SessionProfiles, SessionRegistry};
 use lunco_cosim_core::ControlLink;
-use lunco_input_core::{resolved_input_label, InputBindingsSettings};
+use lunco_input_core::{InputBindingsSettings, resolved_input_label};
 
 use lunco_camera_core::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 

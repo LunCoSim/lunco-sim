@@ -11,7 +11,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_camera_core::{
     CameraPoseLock, CameraRig, CameraUpdateSet, SurfaceCamera, SurfaceCameraFrame,
 };
-use lunco_celestial_spatial::surface_axes_for_grid_position;
+use lunco_celestial_spatial_core::surface_axes_for_grid_position;
 use lunco_core::CelestialBody;
 use lunco_environment::GravityBody;
 

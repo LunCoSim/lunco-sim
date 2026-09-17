@@ -13,7 +13,9 @@ This crate implements the reusable, representation-independent celestial model:
 
 **What it does NOT contain:**
 - BigSpace, ECS scene hierarchy, terrain, rendering, UI, or runtime asset
-  loading (see [`lunco-celestial-spatial`](../lunco-celestial-spatial/))
+  loading (see [`lunco-celestial-spatial-core`](../lunco-celestial-spatial-core/)
+  for shared frame contracts and [`lunco-celestial-spatial`](../lunco-celestial-spatial/)
+  for runtime projection)
 - A high-fidelity ephemeris implementation (see
   [`lunco-celestial-ephemeris`](../lunco-celestial-ephemeris/))
 
@@ -44,7 +46,9 @@ lunco-celestial/src/
 ## Multiplayer
 
 **Server (headless):** Uses this package for semantic ephemeris and frame state.
-**Client (rendering):** Adds `lunco-celestial-spatial` and its scene systems.
+**Client (rendering):** Adds `lunco-celestial-spatial` and its scene systems;
+consumers that only need the shared frame contracts add
+`lunco-celestial-spatial-core`.
 
 Time (via `lunco_time::WorldTime` / `TimeTransport`) and body positions are **authoritative** — all clients receive the same ephemeris data from the server.
 

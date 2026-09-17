@@ -6,7 +6,7 @@
 //! compile this crate.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use lunco_workbench_runtime_ui as runtime_ui;
 
 use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
@@ -448,7 +448,7 @@ fn on_runtime_ui_action(
         ),
     >,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
-    orbital_pin: Option<Res<lunco_celestial_spatial::OrbitalViewPin>>,
+    orbital_pin: Option<Res<lunco_celestial_spatial_core::OrbitalViewPin>>,
     manifests: Res<Assets<runtime_ui::RuntimeUiManifest>>,
     manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
@@ -1612,8 +1612,8 @@ fn clean_scene_name(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        runtime_ui_dimension, scenario_registry_diagnostic, scenario_registry_status_message,
-        RuntimeUiDropdownState,
+        RuntimeUiDropdownState, runtime_ui_dimension, scenario_registry_diagnostic,
+        scenario_registry_status_message,
     };
     use lunco_core::exposure::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;
@@ -1640,7 +1640,7 @@ mod tests {
         properties.insert("height".to_owned(), ExposureValue::Number(240.0));
         let exposure = ExposureSurface {
             properties,
-            ..default()
+            ..Default::default()
         };
         assert_eq!(runtime_ui_dimension(&exposure, "width"), Some(280.0));
         assert_eq!(runtime_ui_dimension(&exposure, "height"), Some(240.0));

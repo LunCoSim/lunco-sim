@@ -23,9 +23,9 @@ use lunco_camera_core::{
     OrbitCamera, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
     math::{apply_scroll_zoom, camera_decay_alpha, surface_camera_angles, surface_camera_rotation},
 };
-use lunco_celestial_spatial::{
-    LeaveSurface, LocalGravityField, TeleportToSurface, surface_axes_for_grid_position,
-    surface_axes_in_grid,
+use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
+use lunco_celestial_spatial_core::{
+    LocalGravityField, surface_axes_for_grid_position, surface_axes_in_grid,
 };
 use lunco_core::{CelestialBody, Spacecraft, on_command, register_commands};
 use lunco_environment::{GravityBody, GravityProvider};
@@ -51,8 +51,8 @@ impl Plugin for AvatarCelestialCameraPlugin {
         }
         app.init_resource::<CameraDefaults>()
             .init_resource::<lunco_avatar_policy::AvatarCollisionSettings>()
-            .init_resource::<lunco_celestial_spatial::ReferenceFrameIndex>()
-            .init_resource::<lunco_celestial_spatial::OrbitalViewPin>()
+            .init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>()
+            .init_resource::<lunco_celestial_spatial_core::OrbitalViewPin>()
             .init_resource::<SurfaceModeThreshold>()
             .register_type::<lunco_avatar_policy::AvatarCollisionSettings>()
             .register_type::<SurfaceModeThreshold>()
@@ -541,7 +541,7 @@ fn orbit_system(
         ),
     >,
     q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
-    frame_index: Res<lunco_celestial_spatial::ReferenceFrameIndex>,
+    frame_index: Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<(Entity, &CelestialBody)>,
@@ -553,7 +553,7 @@ fn orbit_system(
     q_children: Query<&Children>,
     mut commands: Commands,
     mut log_countdown: Local<u32>,
-    mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
+    mut orbital_pin: Option<ResMut<lunco_celestial_spatial_core::OrbitalViewPin>>,
 ) {
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
         return;
@@ -695,7 +695,7 @@ fn orbit_system(
         if let (Some(body), Some(pin)) = (body, orbital_pin.as_mut()) {
             let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
             let direction = rotation.mul_vec3(Vec3::Z).as_dvec3();
-            let next_pin = lunco_celestial_spatial::OrbitalViewPin {
+            let next_pin = lunco_celestial_spatial_core::OrbitalViewPin {
                 active: true,
                 body: body.ephemeris_id,
                 dir: direction,
@@ -819,8 +819,11 @@ mod tests {
             .init_resource::<Time<Real>>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<CameraDefaults>()
-            .init_resource::<lunco_celestial_spatial::ReferenceFrameIndex>()
-            .add_systems(First, lunco_celestial_spatial::update_reference_frame_index)
+            .init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>()
+            .add_systems(
+                First,
+                lunco_celestial_spatial_core::update_reference_frame_index,
+            )
             .add_systems(Update, orbit_system);
 
         let root_grid = app

@@ -10,6 +10,7 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }

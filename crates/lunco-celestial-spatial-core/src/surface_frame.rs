@@ -9,7 +9,7 @@ use bevy::prelude::{ChildOf, Entity, Query, Transform};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_celestial::geo::LocalTangentFrame;
 
-use crate::LocalGravityField;
+use crate::components::LocalGravityField;
 
 /// Return the body's ENU tangent frame in an entity's immediate Grid frame.
 pub fn surface_axes_in_grid<F: bevy::ecs::query::QueryFilter>(

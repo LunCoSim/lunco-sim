@@ -53,6 +53,7 @@ big_space = { workspace = true }
 # one-way dependency: `lunco-celestial` does not depend on this adapter.
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 # Heavy VSOP2013/ELP/EOP integration lives in the sibling crate
 # `lunco-celestial-ephemeris`. This crate only defines the
 # `EphemerisProvider` trait and a no-op default; apps that need real

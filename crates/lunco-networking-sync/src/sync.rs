@@ -299,7 +299,7 @@ pub struct InboundClientCtx<'w, 's> {
     journal: Option<ResMut<'w, JournalResource>>,
     // Named-frame conversion service for observer AOI reports. A sender's
     // private Grid nesting never crosses the network boundary.
-    frame_index: Res<'w, lunco_celestial_spatial::ReferenceFrameIndex>,
+    frame_index: Res<'w, lunco_celestial_spatial_core::ReferenceFrameIndex>,
     active_physics_frame: Res<'w, ActivePhysicsFrame>,
     frame_parents: Query<'w, 's, &'static ChildOf>,
     frame_grids: Query<'w, 's, &'static Grid>,
@@ -1325,7 +1325,7 @@ pub fn drain_sync_inbox(
                 // sender cells and local mounts never cross this boundary.
                 if role.is_host() && sender != SessionId::LOCAL {
                     let Some((world_position, _)) =
-                        lunco_celestial_spatial::transform_pose_between_reference_frames(
+                        lunco_celestial_spatial_core::transform_pose_between_reference_frames(
                             DVec3::from_array(vc.center.position_m),
                             DQuat::IDENTITY,
                             vc.center.frame,
@@ -1647,7 +1647,7 @@ pub fn gather_snapshot(
     // vessel forever on a long-lived host (review N1, failure C).
     mut applied: ResMut<AppliedInputSeq>,
     active_physics_frame: Res<ActivePhysicsFrame>,
-    frame_index: Res<lunco_celestial_spatial::ReferenceFrameIndex>,
+    frame_index: Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
     q_frame_parents: Query<&ChildOf>,
     q_frames: Query<&ReferenceFrame>,
     q_grids: Query<&Grid>,
@@ -2479,7 +2479,7 @@ pub struct AvatarPoseContext<'w, 's> {
     parents: Query<'w, 's, &'static ChildOf>,
     grids: Query<'w, 's, &'static Grid>,
     spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
-    frame_index: Res<'w, lunco_celestial_spatial::ReferenceFrameIndex>,
+    frame_index: Res<'w, lunco_celestial_spatial_core::ReferenceFrameIndex>,
 }
 
 impl AvatarPoseContext<'_, '_> {
@@ -2540,7 +2540,7 @@ fn snap_avatars_to(
         ),
         With<LocalAvatar>,
     >,
-    frame_index: &lunco_celestial_spatial::ReferenceFrameIndex,
+    frame_index: &lunco_celestial_spatial_core::ReferenceFrameIndex,
     q_frames: &Query<&ReferenceFrame>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
@@ -2647,7 +2647,7 @@ mod framed_avatar_pose_tests {
     fn apply_once(
         mut commands: Commands,
         incoming: Res<Incoming>,
-        frame_index: Res<lunco_celestial_spatial::ReferenceFrameIndex>,
+        frame_index: Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
         mut avatars: Query<
             (
                 Entity,
@@ -2704,10 +2704,13 @@ mod framed_avatar_pose_tests {
     #[test]
     fn capture_exports_f64_pose_in_inherited_semantic_frame() {
         let mut app = App::new();
-        app.init_resource::<lunco_celestial_spatial::ReferenceFrameIndex>()
+        app.init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>()
             .init_resource::<lunco_avatar_core::roles::TheLocalAvatar>()
             .init_resource::<Captured>()
-            .add_systems(First, lunco_celestial_spatial::update_reference_frame_index)
+            .add_systems(
+                First,
+                lunco_celestial_spatial_core::update_reference_frame_index,
+            )
             .add_systems(Update, capture_once);
         let (_, surface) = semantic_surface(app.world_mut());
         let avatar = app
@@ -2748,9 +2751,12 @@ mod framed_avatar_pose_tests {
             },
         };
         let mut app = App::new();
-        app.init_resource::<lunco_celestial_spatial::ReferenceFrameIndex>()
+        app.init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>()
             .insert_resource(Incoming(pose))
-            .add_systems(First, lunco_celestial_spatial::update_reference_frame_index)
+            .add_systems(
+                First,
+                lunco_celestial_spatial_core::update_reference_frame_index,
+            )
             .add_systems(Update, apply_once);
         let (_, surface) = semantic_surface(app.world_mut());
         let avatar = app
@@ -2831,7 +2837,7 @@ pub fn apply_tutorial_mirroring(
         ),
         With<LocalAvatar>,
     >,
-    frame_index: Res<lunco_celestial_spatial::ReferenceFrameIndex>,
+    frame_index: Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
     q_frames: Query<&ReferenceFrame>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,

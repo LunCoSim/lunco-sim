@@ -10,7 +10,7 @@ use lunco_camera_core::{
 };
 use lunco_camera_runtime::{CameraInputSettings, body_orbit_look_scale};
 use lunco_celestial::CelestialBody;
-use lunco_celestial_spatial::{LocalGravityField, surface_axes_in_grid};
+use lunco_celestial_spatial_core::{LocalGravityField, surface_axes_in_grid};
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 

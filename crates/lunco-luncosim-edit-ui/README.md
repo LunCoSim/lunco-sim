@@ -46,7 +46,7 @@ adapts viewport gestures to the shared selection resource.
 
 ## Gizmo System
 
-The transform gizmo respects `lunco_celestial_spatial::OrbitalViewPin.active` only for
+The transform gizmo respects `lunco_celestial_spatial_core::OrbitalViewPin.active` only for
 the live scene presentation. A focused isolated USD preview owns its own
 camera and remains editable while the mounted simulation uses orbital
 presentation. Selection remains intact; no second planetary-mode flag or proxy

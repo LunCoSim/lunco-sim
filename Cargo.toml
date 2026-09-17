@@ -36,6 +36,7 @@ members = [
     "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",
+    "crates/lunco-celestial-spatial-core",
     "crates/lunco-celestial-spatial",
     "crates/lunco-celestial-ephemeris",
     "crates/lunco-hardware",

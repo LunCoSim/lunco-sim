@@ -5,6 +5,7 @@ use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
 use lunco_celestial::geo::solar_tangent_frame;
 use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
+use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_spatial::coords::world_position_seeded;
 use lunco_time::WorldTime;
@@ -136,7 +137,7 @@ pub fn sun_emit_direction(
 ///
 /// The Sun sits at the heliocentre, so the Moon→Sun direction is just
 /// `-ecliptic_to_bevy(global_position(Moon)).raw()` (mirrors the solar-panel pointing
-/// in [`crate::missions`]). A `DirectionalLight` emits along its local forward
+/// in the mission integration). A `DirectionalLight` emits along its local forward
 /// (`-Z`) and rays travel FROM the Sun INTO the scene, so the semantic state
 /// stores the opposite look direction. The scene sun is identified structurally
 /// by excluding Earthshine and scoped preview lights; ambiguity is an authored
@@ -170,7 +171,7 @@ pub fn update_sun_light_system(
     >,
     // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
     q_site: Query<&lunco_celestial::geo::GeodeticAnchor, With<lunco_celestial::geo::SiteAnchor>>,
-    orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
+    orbital_pin: Option<Res<OrbitalViewPin>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     // Last reported sun elevation, so the aim is logged on material change only.
     mut last_logged_elevation: Local<f32>,

@@ -49,7 +49,7 @@ fn app_with_registry() -> App {
     });
     app.add_systems(
         Update,
-        lunco_celestial::placement::sync_terrain_body_curvature,
+        lunco_celestial_spatial::placement::sync_terrain_body_curvature,
     );
     app
 }

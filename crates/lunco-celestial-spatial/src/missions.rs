@@ -15,9 +15,9 @@
 use crate::trajectories::{
     TrajectoryFrame, TrajectoryPath, TrajectoryRuntimeState, TrajectoryView,
 };
-use crate::ReferenceFrameIndex;
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
+use lunco_celestial_spatial_core::ReferenceFrameIndex;
 use lunco_render::{PbrLook, WorldLabel};
 
 /// Ids of the missions spawned into the current scene. Diagnostic/UI only — the
@@ -32,7 +32,8 @@ pub struct MissionRegistry {
 /// projection of USD's `LunCoMissionAPI`.
 ///
 /// **This is the switch that turns a mission on**, exactly as
-/// [`CelestialBodyDecl`](crate::CelestialBodyDecl) is the switch for the sky, and
+/// [`CelestialBodyDecl`](lunco_celestial_spatial_core::CelestialBodyDecl) is the
+/// switch for the sky, and
 /// it is deliberately a SEPARATE switch: a scene that wants the Moon has not
 /// thereby asked for Artemis II.
 #[derive(Component, Debug, Clone)]

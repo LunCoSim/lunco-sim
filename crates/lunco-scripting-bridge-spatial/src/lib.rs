@@ -53,10 +53,10 @@ pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
             Query<(Option<&CellCoord>, &Transform)>,
             Query<(Entity, &lunco_celestial::GeodeticAnchor), With<lunco_celestial::SiteAnchor>>,
             Res<lunco_celestial::CelestialBodyRegistry>,
-            Res<lunco_celestial_spatial::ReferenceFrameIndex>,
+            Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
         )> = SystemState::new(world);
         let (q_parents, q_grids, q_spatial, q_site, bodies, frame_index) = state.get(world).ok()?;
-        lunco_celestial_spatial::resolve_surface_pose(
+        lunco_celestial_spatial_core::resolve_surface_pose(
             entity,
             &q_site,
             &bodies,

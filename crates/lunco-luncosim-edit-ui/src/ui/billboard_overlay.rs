@@ -14,7 +14,7 @@
 //! camera-relative poses used by the mesh renderer, so a label cannot combine
 //! an interpolated render pose with an independently sampled grid pose. The
 //! Geodetic text (`{lat}`, `{lon}`, `{height}`) comes from
-//! [`lunco_celestial_spatial::SurfacePoseQuery`], which resolves the entity in the
+//! [`lunco_celestial_spatial_core::SurfacePoseQuery`], which resolves the entity in the
 //! explicit body-fixed frame. Root-world coordinates are never interpreted as
 //! site ENU.
 //!
@@ -41,7 +41,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::world_vector;
 use lunco_usd_bevy_scene::billboard::{
-    render_billboard, BillboardFacts, BillboardGeo, BillboardIndex, UsdBillboard,
+    BillboardFacts, BillboardGeo, BillboardIndex, UsdBillboard, render_billboard,
 };
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 
@@ -81,7 +81,7 @@ pub fn draw_billboard_overlay(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    surface_pose: lunco_celestial_spatial::SurfacePoseQuery,
+    surface_pose: lunco_celestial_spatial_core::SurfacePoseQuery,
     scene_viewport: Res<lunco_viewport_core::SceneViewport>,
     panel_rects: Option<Res<PanelRects>>,
     mut egui_ctx: bevy_egui::EguiContexts,

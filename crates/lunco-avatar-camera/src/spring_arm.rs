@@ -11,7 +11,7 @@ use lunco_camera_core::{
         surface_camera_rotation,
     },
 };
-use lunco_celestial_spatial::{
+use lunco_celestial_spatial_core::{
     LocalGravityField, gravity_up_in_grid, surface_axes_for_grid_position,
 };
 use lunco_physics::GridSpatialQuery;

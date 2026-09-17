@@ -20,7 +20,7 @@ use lunco_camera_core::{
     FreeFlightCamera, FreeFlightSettings, SurfaceCamera, SurfaceRelativeMode,
     math::camera_move_direction,
 };
-use lunco_celestial_spatial::{LocalGravityField, gravity_up_in_grid};
+use lunco_celestial_spatial_core::{LocalGravityField, gravity_up_in_grid};
 use lunco_core::NON_PHYSICAL_QUERY_LAYERS;
 use lunco_interaction_core::DragModeActive;
 use lunco_port_core::InputPorts;

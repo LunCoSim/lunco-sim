@@ -15,8 +15,8 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_core::roles::{Avatar, LocalAvatar, TheLocalAvatar};
-use lunco_celestial_spatial::OrbitalViewPin;
 use lunco_celestial_spatial::link::LinkState;
+use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_core::exposure::{
     EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
 };
@@ -616,7 +616,7 @@ struct DrivenVessel {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DrivenVesselPose {
     /// Canonical site/body-fixed coordinates in a site-anchored scene.
-    Surface(lunco_celestial_spatial::SurfacePose),
+    Surface(lunco_celestial_spatial_core::SurfacePose),
     /// Explicit non-celestial sandbox coordinates.
     World {
         position: lunco_spatial::coords::GridPos,
@@ -657,7 +657,7 @@ impl DrivenVesselPose {
 /// coordinate readout.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct GeodeticHud<'w, 's> {
-    surface_pose: lunco_celestial_spatial::SurfacePoseQuery<'w, 's>,
+    surface_pose: lunco_celestial_spatial_core::SurfacePoseQuery<'w, 's>,
 }
 
 /// The tilt bands to paint, in degrees: (amber, red).
@@ -916,7 +916,7 @@ fn resolve_driven(
     q_ids: &Query<(Entity, &GlobalEntityId)>,
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
-    surface_pose: &lunco_celestial_spatial::SurfacePoseQuery,
+    surface_pose: &lunco_celestial_spatial_core::SurfacePoseQuery,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.get(local_avatar.0?).ok()?.target;
     let pose = match surface_pose.site_count() {
@@ -1129,13 +1129,15 @@ mod exposure_schedule_tests {
 mod exposure_tests {
     use super::*;
 
-    fn lunar_surface_pose(geo: lunco_celestial::Geodetic) -> lunco_celestial_spatial::SurfacePose {
-        lunco_celestial_spatial::SurfacePose {
+    fn lunar_surface_pose(
+        geo: lunco_celestial::Geodetic,
+    ) -> lunco_celestial_spatial_core::SurfacePose {
+        lunco_celestial_spatial_core::SurfacePose {
             site: Entity::from_bits(1),
             body: 301,
-            site_position: lunco_celestial_spatial::SitePosition(DVec3::ZERO),
+            site_position: lunco_celestial_spatial_core::SitePosition(DVec3::ZERO),
             site_rotation: DQuat::IDENTITY,
-            body_fixed_position: lunco_celestial_spatial::BodyFixedPosition(DVec3::ZERO),
+            body_fixed_position: lunco_celestial_spatial_core::BodyFixedPosition(DVec3::ZERO),
             body_fixed_rotation: DQuat::IDENTITY,
             geodetic: geo,
         }
@@ -1768,7 +1770,7 @@ fn publish_celestial_capability(
     orbital_pin: Option<&OrbitalViewPin>,
     local_avatar: &TheLocalAvatar,
     avatars: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
-    surface_pose: &lunco_celestial_spatial::SurfacePoseQuery,
+    surface_pose: &lunco_celestial_spatial_core::SurfacePoseQuery,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) {
     let mut moon = false;
@@ -1861,7 +1863,7 @@ fn project_lunar_map(
     map_visible: bool,
     moon_present: bool,
     active_body: Option<i32>,
-    pose: Option<lunco_celestial_spatial::SurfacePose>,
+    pose: Option<lunco_celestial_spatial_core::SurfacePose>,
 ) -> LunarMapProjection {
     if !map_visible || !moon_present {
         return LunarMapProjection::hidden();

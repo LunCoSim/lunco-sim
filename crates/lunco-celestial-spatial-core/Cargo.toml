@@ -1,0 +1,15 @@
+[package]
+name = "lunco-celestial-spatial-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Reusable celestial frame and surface-coordinate contracts for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_camera"] }
+big_space = { workspace = true }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-spatial = { path = "../lunco-spatial" }
+
+[lints]
+workspace = true
