@@ -287,7 +287,7 @@ fn on_tick(me, ctx) {
         // frame/button padding places the row hit area to the right of the
         // anchor. Use the center of that generic row, not the marker itself.
         this.delete_x = this.point_x + 60.0;
-        this.delete_y = this.point_y + 28.0;
+        this.delete_y = this.point_y + 40.0;
         input_pointer_move(this.point_x, this.point_y);
         input_pointer_press("secondary", this.point_x, this.point_y);
         this.phase = 15;
