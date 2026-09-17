@@ -31,9 +31,10 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_celestial_spatial::link::LinkState;
 use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
-use lunco_core::{GlobalEntityId, SceneViewport, ScriptParams};
+use lunco_core::{GlobalEntityId, ScriptParams};
 use lunco_render::{CommunicationLineSettings, SceneCamera};
 use lunco_spatial::coords::{world_pose, GridPos};
+use lunco_viewport_core::SceneViewport;
 
 /// The `info:id` the beam part authors.
 const DRIVER_ID: &str = "link_beams";

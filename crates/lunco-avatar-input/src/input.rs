@@ -275,7 +275,7 @@ pub(crate) fn avatar_escape_possession(
             )>,
         ),
     >,
-    cursor_mode: lunco_core::CursorModeActive,
+    cursor_mode: lunco_interaction_core::CursorModeActive,
     mut commands: Commands,
 ) {
     if cursor_mode.any() {

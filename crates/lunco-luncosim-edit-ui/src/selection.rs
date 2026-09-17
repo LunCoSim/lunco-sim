@@ -618,11 +618,11 @@ fn find_prim_part(
 pub fn on_scene_click_select(
     mut click: On<Pointer<Click>>,
     spawn_state: Res<SpawnState>,
-    terrain_tool_active: Res<lunco_core::TerrainToolActive>,
-    armed_script_tool: Res<lunco_core::ArmedScriptTool>,
+    terrain_tool_active: Res<lunco_interaction_core::TerrainToolActive>,
+    armed_script_tool: Res<lunco_interaction_core::ArmedScriptTool>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
-    scene_interaction: Res<lunco_core::SceneInteractionMode>,
+    scene_interaction: Res<lunco_interaction_core::SceneInteractionMode>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_mobility: Query<Entity, With<lunco_core::MobilityRoot>>,
     q_prims: Query<Entity, With<lunco_usd_bevy_scene::UsdPrimPath>>,
@@ -722,13 +722,13 @@ pub fn on_scene_click_select(
 /// "back out" at once, and the intent already stands down while an Inspector field has
 /// keyboard focus (so Backspace there edits text).
 ///
-/// Gated on [`lunco_core::CursorModeActive`] so Cancel unwinds the INNERMOST mode
+/// Gated on [`lunco_interaction_core::CursorModeActive`] so Cancel unwinds the INNERMOST mode
 /// first: while a waypoint placement/menu, the spawn ghost or the terrain brush is up,
 /// that Cancel belongs to the mode — clearing the selection as a side effect would be
 /// two undos for one keypress.
 pub fn handle_deselect_keys(
     cancel: lunco_control_core::CancelIntent,
-    cursor_mode: lunco_core::CursorModeActive,
+    cursor_mode: lunco_interaction_core::CursorModeActive,
     q_selected_old: Query<Entity, With<Selected>>,
     mut selected: ResMut<SelectedEntities>,
     mut inspector_target: ResMut<SelectionTarget>,

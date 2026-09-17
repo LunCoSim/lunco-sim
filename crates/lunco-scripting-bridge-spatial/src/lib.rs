@@ -12,10 +12,10 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_core::CelestialBody;
-use lunco_scripting_bridge_core::{resolve_entity, vec3_value, with_world, ValueBuilder};
+use lunco_scripting_bridge_core::{ValueBuilder, resolve_entity, vec3_value, with_world};
 use lunco_spatial::{
-    coords::{GridPos, VehicleFrame},
     NavigationCommand, SteeringGeometry,
+    coords::{GridPos, VehicleFrame},
 };
 
 /// `world_pos(id)` — f64 position in the active simulation frame, or `None`.
@@ -147,7 +147,7 @@ pub fn viewport_position(gid: u64) -> Option<Vec2> {
         let mut state: SystemState<(
             Query<&GlobalTransform>,
             Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<lunco_render::SceneCamera>)>,
-            Res<lunco_core::SceneViewport>,
+            Res<lunco_viewport_core::SceneViewport>,
         )> = SystemState::new(world);
         let (q_transforms, q_cameras, scene_viewport) = state.get(world).ok()?;
         let camera_entity = scene_viewport.active_camera?;

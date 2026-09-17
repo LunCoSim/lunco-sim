@@ -20,7 +20,6 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::*;
-use lunco_core::SceneViewport;
 use lunco_materials::{ShaderLook, ShaderLookReady};
 use lunco_render::SceneCamera;
 use lunco_terrain_core::{normal_at_bounded, CompositeHeightSource, HeightSource, Square};
@@ -30,6 +29,7 @@ use lunco_terrain_globe::{
     TerrainTile, TileCoord,
 };
 use lunco_terrain_surface::SurfaceOracle;
+use lunco_viewport_core::SceneViewport;
 
 /// Per-body live-LOD context read by [`update_globe_lod`] to stream cube-sphere
 /// tiles.

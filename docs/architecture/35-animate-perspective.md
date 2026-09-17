@@ -54,7 +54,7 @@ the timeline as data.
 | **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd-document/src/document.rs`) — each the other's inverse, with first-xform `xformOpOrder` authoring | Editor Inspector and `assembly_edit` use the existing operations; the full timeline remains future work |
 | Journaled/undoable apply | `ApplyUsdOp { doc_id, parent_gen, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair | shared undo (UI+CLI+agent) |
 | Attribute literal → typed value | `parse_attribute_value` (`usd-core/src/author.rs:186`) | UI only supplies a string |
-| Camera switch (single target) | explicit selection (`SetActiveCamera` for the director, `SetUserCamera`/`ObserveAvatar` for the operator) → `ActivateCamera` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy-camera/src/camera_switch.rs`) | one viewport authority |
+| Camera switch (single target) | explicit selection (`SetActiveCamera` for the director, `SetUserCamera`/`ObserveAvatar` for the operator) → `ActivateCamera` → `lunco_viewport_core::SceneViewport::active_camera`, reconciled each frame (`usd-bevy-camera/src/camera_switch.rs`) | one viewport authority |
 | Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`usd-bevy-camera/src/camera_mount.rs`) | |
 | Event bus (jump-target source) | `TelemetryEvent { name, source, … }` (XTCE/YAMCS-aligned); `emit()`/`wait_for()`; `TriggerZone`/`portEvents` authored markers | |
 | Declarative timeline data | JSON steps with exactly one operation word (`move_to`, `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`) persisted in `<twin>/timelines/*.json`; `RunTimeline`/`Register`/`List`/`Get` (`lunco-scripting/commands.rs`) | |
@@ -273,7 +273,7 @@ interaction lift; 7 is optional pipeline interchange.
 ## Related
 
 - [17-view-and-intent](17-view-and-intent.md) — camera selection / viewport
-  single-authority (`SetActiveCamera` → `SceneViewport`).
+  single-authority (`SetActiveCamera` → `lunco_viewport_core::SceneViewport`).
 - [18-unified-journal-and-history](18-unified-journal-and-history.md) — the
   journal that records every keyframe edit (undo/redo, shared authors).
 - [19-unified-time-and-clock](19-unified-time-and-clock.md) — `Playback` /

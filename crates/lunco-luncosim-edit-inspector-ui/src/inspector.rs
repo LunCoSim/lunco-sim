@@ -852,7 +852,7 @@ pub fn populate_inspector_view(world: &mut World) {
 
     // ── Camera.
     let active_camera = world
-        .get_resource::<lunco_core::SceneViewport>()
+        .get_resource::<lunco_viewport_core::SceneViewport>()
         .and_then(|viewport| viewport.active_camera);
     let exposure_ev100 = active_camera
         .and_then(|entity| world.get::<Exposure>(entity))
@@ -964,7 +964,7 @@ pub(crate) fn inspector_inputs_changed(
     ambient: Option<Res<bevy::light::GlobalAmbientLight>>,
     // The SAME sun the producer reads (non-preview, non-fill), so the comparison
     // is against the value that would land in the view.
-    viewport: Option<Res<lunco_core::SceneViewport>>,
+    viewport: Option<Res<lunco_viewport_core::SceneViewport>>,
     lights: Query<
         (
             &Transform,
@@ -1100,7 +1100,7 @@ mod tests {
     #[derive(Resource, Default)]
     struct ProducerRuns(u32);
 
-    fn touch_viewport(mut viewport: ResMut<lunco_core::SceneViewport>) {
+    fn touch_viewport(mut viewport: ResMut<lunco_viewport_core::SceneViewport>) {
         // A mutable resource borrow marks the resource changed even though its
         // presentation binding remains identical. The Inspector gate must use
         // the binding value, not this incidental change tick.
@@ -1117,7 +1117,7 @@ mod tests {
         app.insert_resource(Time::<()>::default())
             .insert_resource(SelectedEntities::default())
             .insert_resource(InspectorView::default())
-            .insert_resource(lunco_core::SceneViewport::default())
+            .insert_resource(lunco_viewport_core::SceneViewport::default())
             .init_resource::<ProducerRuns>()
             .add_systems(
                 Update,
@@ -1247,7 +1247,7 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
 /// rebindable and never fires while an egui field or cursor tool owns input.
 pub fn delete_selected_on_intent(
     delete: DeleteSelectionIntent,
-    cursor_mode: lunco_core::CursorModeActive,
+    cursor_mode: lunco_interaction_core::CursorModeActive,
     selected: Res<SelectedEntities>,
     mut commands: Commands,
 ) {

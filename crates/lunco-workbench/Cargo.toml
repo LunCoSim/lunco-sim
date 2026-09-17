@@ -37,6 +37,7 @@ lunco-workbench-file-ops = { path = "../lunco-workbench-file-ops" }
 lunco-workbench-text-editor = { path = "../lunco-workbench-text-editor" }
 lunco-workbench-state = { path = "../lunco-workbench-state" }
 lunco-workbench-window = { path = "../lunco-workbench-window" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-status-core = { path = "../lunco-status-core" }
 # Screenshot commands and GPU readback live in the production capture capability;
 # keeping this dependency optional preserves the shell-only build.

@@ -29,7 +29,7 @@ Rhai/UI/API intent
 Rhai chooses *which* target and *which* diagnostic policy to show. Rust owns
 target validation, lifecycle, geometry projection, BigSpace conversion, render
 isolation, and cleanup. No diagnostic operation writes USD, Avian state,
-`SceneViewport`, or a physics command port.
+`lunco_viewport_core::SceneViewport`, or a physics command port.
 
 The existing `physics_viz.rs`, `joint_viz.rs`, and `physics_gizmo.rs` are the
 source-backed implementation precedents: they already use immediate-mode
@@ -47,7 +47,7 @@ contracts; they are not silently folded into a global visual registry.
 |---|---|---|
 | Target identity | `GlobalEntityId` / resolved USD prim identity in the active Twin | command resolver and `StageView`/ECS lookup |
 | Scene validity | `SceneMountState` and the active scene root | lease admission and snapshot invalidation |
-| Camera selection | `SceneViewport.active_camera`, reconciled by `lunco-usd-bevy-camera::camera_switch` | camera diagnostic snapshot |
+| Camera selection | `lunco_viewport_core::SceneViewport.active_camera`, reconciled by `lunco-usd-bevy-camera::camera_switch` | camera diagnostic snapshot |
 | Camera intent | `lunco_render::SceneCamera` plus Bevy `Projection`/`Camera` | camera diagnostic snapshot |
 | Camera render pose | propagated `GlobalTransform` in the render frame | Gizmos draw pass only |
 | Physical frame | `ActivePhysicsFrame`, `GridAnchor`, and BigSpace attachment helpers | target pose conversion; never guessed from camera state |
@@ -128,12 +128,12 @@ different camera:
 - the camera frame uses the camera entity's render-frame rotation and the
   established camera forward axis (`-Z`), with an explicit triad at the camera
   origin;
-- `SceneViewport.active_camera == target` and the reconciled `Camera::is_active`
+- `lunco_viewport_core::SceneViewport.active_camera == target` and the reconciled `Camera::is_active`
   are shown as status facts, but the diagnostic never writes either one;
 - a missing, non-finite, or unsupported projection is an error marker, not a
   guessed unit frustum.
 
-The viewport rectangle comes from `SceneViewport.rect`. A render target or
+The viewport rectangle comes from `lunco_viewport_core::SceneViewport.rect`. A render target or
 sensor camera is not promoted to the main window by scanning active cameras.
 The existing viewport reconciler remains the sole writer of window-camera
 activation.
@@ -244,7 +244,7 @@ binary.
   projection;
 - supported collider shape/compound lowering preserves the Avian local frame;
 - equal snapshots do not mark meshes, transforms, or physics state changed;
-- no command path mutates USD, `SceneViewport`, Avian bodies, or ports.
+- no command path mutates USD, `lunco_viewport_core::SceneViewport`, Avian bodies, or ports.
 
 ### Authored negative and lifecycle fixture
 

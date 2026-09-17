@@ -15,6 +15,11 @@ pub mod math;
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct CameraUpdateSet;
 
+/// Presentation intent emitted by an avatar workflow that explicitly returns
+/// the operator to the local avatar view.
+#[derive(Event, Clone, Copy, Debug, Default)]
+pub struct RequestLocalAvatarView;
+
 /// Hook seam for an application's initial presentation decision.
 ///
 /// Camera runtimes supply derived facts and realize the policy's closed

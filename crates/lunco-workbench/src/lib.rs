@@ -798,7 +798,7 @@ impl Plugin for WorkbenchPlugin {
         app.init_resource::<WorkbenchLayout>()
             .init_resource::<WorkbenchMenuRegistry>()
             .init_resource::<WorkbenchSnapshot>()
-            .init_resource::<lunco_core::SceneInteractionMode>()
+            .init_resource::<lunco_interaction_core::SceneInteractionMode>()
             .init_resource::<OfflineRecordingPresentation>()
             .init_resource::<PendingTabRequests>()
             .init_resource::<PendingLayoutRequests>()

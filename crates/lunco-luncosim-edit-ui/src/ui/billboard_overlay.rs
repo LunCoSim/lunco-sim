@@ -82,7 +82,7 @@ pub fn draw_billboard_overlay(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     surface_pose: lunco_celestial_spatial::SurfacePoseQuery,
-    scene_viewport: Res<lunco_core::SceneViewport>,
+    scene_viewport: Res<lunco_viewport_core::SceneViewport>,
     panel_rects: Option<Res<PanelRects>>,
     mut egui_ctx: bevy_egui::EguiContexts,
     theme: Option<Res<lunco_theme::Theme>>,

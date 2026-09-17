@@ -79,10 +79,10 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 use lunco_control_core::{IntentState, LocalIntentSurface};
-use lunco_core::SceneViewport;
 use lunco_input_core::InputBindingsSettings;
 use lunco_render::SceneCamera;
 use lunco_viewport_core::PanelRect;
+use lunco_viewport_core::SceneViewport;
 use lunco_workbench_core::presentation::ViewportPlaceholder;
 use lunco_workbench_core::scene_pick::{EguiPointerState, ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
@@ -305,14 +305,14 @@ pub(crate) fn ensure_egui_host(
     }
 }
 
-/// Push the workbench's scene visibility into [`SceneViewport`](lunco_core::SceneViewport).
+/// Push the workbench's scene visibility into [`SceneViewport`](lunco_viewport_core::SceneViewport).
 /// The scene camera remains full-window; the measured dock leaf is independent
 /// geometry consumed by the occlusion/picking gate. This system deliberately
 /// does NOT touch `Camera::is_active` or `Camera::viewport` so the workbench and
 /// the camera switch stop fighting over them.
 pub(crate) fn apply_workbench_viewport(
     layout: Option<Res<crate::WorkbenchLayout>>,
-    vp: Option<ResMut<lunco_core::SceneViewport>>,
+    vp: Option<ResMut<lunco_viewport_core::SceneViewport>>,
 ) {
     // The workbench contributes data only; `lunco-usd-bevy` remains the single
     // authority that actuates `Camera::is_active` and `Camera::viewport`.
@@ -709,7 +709,7 @@ impl Plugin for WorkbenchViewportPlugin {
             )
             .add_systems(
                 PostUpdate,
-                apply_workbench_viewport.in_set(lunco_core::SceneViewportSet::Publish),
+                apply_workbench_viewport.in_set(lunco_viewport_core::SceneViewportSet::Publish),
             );
     }
 }

@@ -390,7 +390,7 @@ impl Plugin for SceneEditUiPlugin {
         app.add_plugins(edit_gizmo::SceneEditGizmoPlugin)
             .init_resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
             .init_resource::<scene_context_menu::SceneContextMenuState>()
-            .init_resource::<lunco_core::ArmedScriptTool>()
+            .init_resource::<lunco_interaction_core::ArmedScriptTool>()
             .init_resource::<crate::script_tools::ScenePointerDispatch>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
         app.world_mut()
@@ -410,7 +410,7 @@ impl Plugin for SceneEditUiPlugin {
             )
                 .chain()
                 .after(bevy::transform::TransformSystems::Propagate)
-                .after(lunco_core::SceneViewportSet::Reconcile)
+                .after(lunco_viewport_core::SceneViewportSet::Reconcile)
                 .before(bevy::camera::CameraUpdateSystems),
         );
         app.add_systems(
@@ -846,8 +846,8 @@ impl Perspective for ViewPerspective {
     fn scene_visible_when_docked(&self) -> bool {
         true
     }
-    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
-        lunco_core::SceneInteractionMode::Simulation
+    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
+        lunco_interaction_core::SceneInteractionMode::Simulation
     }
     fn layout(&self) -> PerspectiveLayoutPlan {
         PerspectiveLayoutPlan::new()
@@ -868,8 +868,8 @@ impl Perspective for BuildPerspective {
     fn title(&self) -> String {
         "⚒ Build".into()
     }
-    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
-        lunco_core::SceneInteractionMode::Editor
+    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
+        lunco_interaction_core::SceneInteractionMode::Editor
     }
     fn layout_revision(&self) -> u32 {
         // Revision 3 completes the Graphs instance in the bottom-center
@@ -921,8 +921,8 @@ impl Perspective for EditorPerspective {
     fn show_in_switcher(&self) -> bool {
         true
     }
-    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
-        lunco_core::SceneInteractionMode::Editor
+    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
+        lunco_interaction_core::SceneInteractionMode::Editor
     }
     fn layout_revision(&self) -> u32 {
         // The editor now opens directly on the prim tree. Invalidate the
@@ -976,8 +976,8 @@ impl Perspective for TerrainPerspective {
     fn show_in_switcher(&self) -> bool {
         false
     }
-    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
-        lunco_core::SceneInteractionMode::Editor
+    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
+        lunco_interaction_core::SceneInteractionMode::Editor
     }
     fn layout(&self) -> PerspectiveLayoutPlan {
         PerspectiveLayoutPlan {
@@ -1006,19 +1006,19 @@ mod tests {
     fn perspectives_assign_primary_scene_click_ownership() {
         assert_eq!(
             ViewPerspective.scene_interaction_mode(),
-            lunco_core::SceneInteractionMode::Simulation
+            lunco_interaction_core::SceneInteractionMode::Simulation
         );
         assert_eq!(
             BuildPerspective.scene_interaction_mode(),
-            lunco_core::SceneInteractionMode::Editor
+            lunco_interaction_core::SceneInteractionMode::Editor
         );
         assert_eq!(
             EditorPerspective.scene_interaction_mode(),
-            lunco_core::SceneInteractionMode::Editor
+            lunco_interaction_core::SceneInteractionMode::Editor
         );
         assert_eq!(
             TerrainPerspective.scene_interaction_mode(),
-            lunco_core::SceneInteractionMode::Editor
+            lunco_interaction_core::SceneInteractionMode::Editor
         );
     }
 

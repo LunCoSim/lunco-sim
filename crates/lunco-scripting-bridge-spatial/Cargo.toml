@@ -18,6 +18,7 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-render = { path = "../lunco-render" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-spatial = { path = "../lunco-spatial" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 
 [lints]
 workspace = true

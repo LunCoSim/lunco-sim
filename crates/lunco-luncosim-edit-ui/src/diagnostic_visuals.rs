@@ -11,10 +11,10 @@ use bevy::prelude::*;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_core::{
     on_command, register_commands, Ack, Command, GlobalEntityId, OpId, SceneMountState,
-    SceneViewport,
 };
 use lunco_render::SceneCamera;
 use lunco_usd_bevy_scene::UsdSceneRoot;
+use lunco_viewport_core::SceneViewport;
 use serde_json::json;
 use std::collections::HashMap;
 

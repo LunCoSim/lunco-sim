@@ -68,6 +68,7 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-scripting = { path = "../lunco-scripting" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 
 [dev-dependencies]
 lunco-usd-compose = { path = "../lunco-usd-compose" }

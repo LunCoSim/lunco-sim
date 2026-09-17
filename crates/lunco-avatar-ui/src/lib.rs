@@ -494,7 +494,7 @@ pub fn draw_rover_name_tags(
     registry: Res<SessionRegistry>,
     profiles: Res<SessionProfiles>,
     settings: Res<RoverNameTagSettings>,
-    scene_viewport: Option<Res<lunco_core::SceneViewport>>,
+    scene_viewport: Option<Res<lunco_viewport_core::SceneViewport>>,
     panel_rects: Option<Res<PanelRects>>,
     net_role: Option<Res<lunco_core_session::NetworkRole>>,
     q_camera: Query<(&Camera, &GlobalTransform), (With<Avatar>, With<LocalAvatar>)>,

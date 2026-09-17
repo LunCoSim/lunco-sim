@@ -36,6 +36,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-environment = { path = "../lunco-environment" }
 # Typed avatar lifecycle and role handoff only. Camera behavior and all raw
 # input translation belong to `lunco-avatar` and the authored Rhai layer.

@@ -7241,6 +7241,7 @@ dependencies = [
  "lunco-spatial",
  "lunco-time",
  "lunco-usd-bevy-scene",
+ "lunco-viewport-core",
  "lunco-workspace",
 ]
 
@@ -7298,7 +7299,6 @@ dependencies = [
  "lunco-celestial",
  "lunco-celestial-spatial",
  "lunco-control-core",
- "lunco-core",
  "lunco-cosim-core",
  "lunco-interaction-core",
  "lunco-spatial",
@@ -7330,6 +7330,7 @@ dependencies = [
  "lunco-cosim-core",
  "lunco-input-core",
  "lunco-theme",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workspace",
 ]
@@ -7398,6 +7399,7 @@ dependencies = [
  "lunco-status-core",
  "lunco-storage",
  "lunco-tools-bevy",
+ "lunco-viewport-core",
  "serde_json",
  "web-time",
 ]
@@ -7456,6 +7458,7 @@ dependencies = [
  "lunco-terrain-globe",
  "lunco-terrain-surface",
  "lunco-time",
+ "lunco-viewport-core",
  "serde",
  "serde_json",
 ]
@@ -7822,6 +7825,7 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
+ "lunco-viewport-core",
 ]
 
 [[package]]
@@ -7872,6 +7876,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
+ "lunco-interaction-core",
  "lunco-materials",
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
@@ -7892,6 +7897,7 @@ dependencies = [
  "lunco-usd-data",
  "lunco-usd-document",
  "lunco-usd-viewport-core",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
  "openusd",
@@ -7947,6 +7953,7 @@ dependencies = [
  "lunco-usd-ui",
  "lunco-usd-viewport-core",
  "lunco-usd-viewport-ui",
+ "lunco-viewport-core",
  "lunco-workbench",
  "lunco-workbench-browser",
  "lunco-workbench-core",
@@ -8594,6 +8601,7 @@ dependencies = [
  "lunco-render",
  "lunco-spatial",
  "lunco-terrain-surface",
+ "lunco-viewport-core",
 ]
 
 [[package]]
@@ -8904,6 +8912,7 @@ dependencies = [
  "lunco-render",
  "lunco-scripting-bridge-core",
  "lunco-spatial",
+ "lunco-viewport-core",
 ]
 
 [[package]]
@@ -9382,6 +9391,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-data",
  "lunco-usd-geometry",
+ "lunco-viewport-core",
  "openusd",
 ]
 
@@ -9670,6 +9680,7 @@ dependencies = [
  "lunco-cosim",
  "lunco-cosim-core",
  "lunco-environment",
+ "lunco-interaction-core",
  "lunco-materials",
  "lunco-mobility",
  "lunco-physics",
@@ -10019,6 +10030,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-input-core",
  "lunco-input-ui",
+ "lunco-interaction-core",
  "lunco-render",
  "lunco-render-recovery",
  "lunco-settings",
@@ -10062,6 +10074,7 @@ dependencies = [
  "bevy",
  "egui",
  "lunco-core",
+ "lunco-interaction-core",
  "lunco-viewport-core",
  "serde",
 ]
@@ -10114,6 +10127,7 @@ dependencies = [
  "bevy_egui",
  "lunco-core",
  "lunco-theme",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
 ]

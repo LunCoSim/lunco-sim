@@ -1050,7 +1050,7 @@ fn process_usd_sim_prim_read(
     // primary-button pass-through part to Bevy's `Pickable` component.  This
     // keeps transparent markers usable by every scene and preserves the same
     // contract for future marker assets.
-    if let Some(policy) = lunco_core::ScenePointerPolicy::from_usd(
+    if let Some(policy) = lunco_interaction_core::ScenePointerPolicy::from_usd(
         reader.text(&sdf_path, "lunco:interaction:left").as_deref(),
         reader.text(&sdf_path, "lunco:interaction:right").as_deref(),
     ) {

@@ -45,6 +45,7 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 # the raw ray query — the sensing is simulation (it must run headless, so `lunco-cosim`
 # is render-free and never names `Gizmos`); the BEAM is not. `sensor_beams.rs` draws
 # it from the sensor's already-stored result, re-casting nothing.

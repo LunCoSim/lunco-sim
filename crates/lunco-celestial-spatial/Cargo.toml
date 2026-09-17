@@ -92,6 +92,7 @@ lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 # non-exclusive). No cycle: terrain-surface does not depend on celestial.
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-terrain-core = { path = "../lunco-terrain-core" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 
 # NOTE: `ureq` used to live here for an ephemeris-download path that no longer
 # exists in this crate (zero references in `src/`). Ephemeris fetching is

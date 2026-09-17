@@ -165,7 +165,7 @@ and USD standards rather than inventing bespoke types, and follows a strict
 
 ### 6.2 The Viewport is the single source of truth
 
-`lunco_core::SceneViewport` models the main window's 3D viewport (à la an
+`lunco_viewport_core::SceneViewport` models the main window's 3D viewport (à la an
 Omniverse Viewport, which owns an active `camera`):
 
 | Field | Meaning | Written by |
@@ -177,7 +177,7 @@ Omniverse Viewport, which owns an active `camera`):
 An authored selection is retained as `(stage, USD prim path)` and re-resolved
 after re-projection; the ECS entity is only the current realization. A command
 or camera track changes the selection intent, while exactly **one** system writes
-`SceneViewport::active_camera`, window-camera `is_active`, and `viewport`:
+`lunco_viewport_core::SceneViewport::active_camera`, window-camera `is_active`, and `viewport`:
 `lunco-usd-bevy-camera`'s **`reconcile_scene_viewport`**. It actuates the viewport
 (`is_active = bound-camera && visible`) and relocates the persistent
 `OriginAnchor` to the active camera's f64 `WorldGrid` cell. A

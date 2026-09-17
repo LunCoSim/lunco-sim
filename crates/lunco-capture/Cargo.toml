@@ -22,6 +22,7 @@ lunco-render = { path = "../lunco-render" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-tools-bevy = { path = "../lunco-tools-bevy" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 serde_json = { workspace = true }
 web-time = { workspace = true }
 

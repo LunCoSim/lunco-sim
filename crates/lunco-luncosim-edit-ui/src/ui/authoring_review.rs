@@ -13,12 +13,13 @@ use lunco_avatar_core::roles::{Avatar, LocalAvatar, TheLocalAvatar};
 use lunco_camera_core::{OrbitCamera, SpringArmCamera};
 use lunco_core::{
     entity_display_name, CatalogEntryId, GlobalEntityId, RuntimeDiagnostics, RuntimeFaults,
-    SceneMountState, SceneViewport,
+    SceneMountState,
 };
 use lunco_cosim_core::ControlLink;
 use lunco_render::SceneCamera;
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_viewport_core::SceneViewport;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 
 use crate::diagnostic_visuals::{DiagnosticVisualKind, DiagnosticVisualStore};

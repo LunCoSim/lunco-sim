@@ -12,6 +12,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-theme = { path = "../lunco-theme" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 
 [lints]
 workspace = true

@@ -98,7 +98,7 @@ impl Plugin for SceneEditInspectorUiPlugin {
                     .before(bevy::camera::CameraUpdateSystems),
             )
                 .chain()
-                .after(lunco_core::SceneViewportSet::Reconcile),
+                .after(lunco_viewport_core::SceneViewportSet::Reconcile),
         );
 
         app.init_resource::<usd_animation::UsdAnimationView>();

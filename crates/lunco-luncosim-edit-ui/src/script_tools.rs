@@ -87,7 +87,7 @@ pub(crate) struct SceneToolWorld<'w, 's> {
         (With<Camera3d>, With<lunco_render::SceneCamera>),
     >,
     q_lod_tiles: Query<'w, 's, &'static lunco_terrain_surface::stream_viz::LodTileOf>,
-    viewport: Res<'w, lunco_core::SceneViewport>,
+    viewport: Res<'w, lunco_viewport_core::SceneViewport>,
     surface: lunco_terrain_surface::GridSurfaceQuery<'w, 's>,
     input_bindings: Res<'w, InputBindingsSettings>,
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
@@ -102,7 +102,7 @@ pub(crate) struct SceneToolWorld<'w, 's> {
 /// which is the whole point of `CancelIntent` being a shared intent rather than
 /// a `KeyCode::Escape` test per tool.
 pub fn disarm_script_tool_on_cancel(
-    mut armed: ResMut<lunco_core::ArmedScriptTool>,
+    mut armed: ResMut<lunco_interaction_core::ArmedScriptTool>,
     cancel: lunco_control_core::CancelIntent,
 ) {
     if armed.armed() && cancel.just_pressed() {
@@ -116,7 +116,7 @@ pub fn disarm_script_tool_on_cancel(
 /// on open), so the armed name can outlive the tool it names. Without this the
 /// palette would show nothing armed while clicks still went to a dead namespace
 /// and failed one snippet at a time.
-pub fn forget_missing_script_tool(mut armed: ResMut<lunco_core::ArmedScriptTool>) {
+pub fn forget_missing_script_tool(mut armed: ResMut<lunco_interaction_core::ArmedScriptTool>) {
     let Some(name) = armed.0.clone() else { return };
     if !lunco_tools::has_function(&name, lunco_tools::UI_CLICK_FN) {
         warn!("[script-tool] '{name}' is no longer registered — disarming");
@@ -130,7 +130,7 @@ pub fn forget_missing_script_tool(mut armed: ResMut<lunco_core::ArmedScriptTool>
 /// on positions rather than entities.
 pub(crate) fn on_scene_click_script_tool(
     mut click: On<Pointer<Click>>,
-    armed: Res<lunco_core::ArmedScriptTool>,
+    armed: Res<lunco_interaction_core::ArmedScriptTool>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
     world: SceneToolWorld,
@@ -200,7 +200,7 @@ fn scene_tool_context(
         (With<Camera3d>, With<lunco_render::SceneCamera>),
     >,
     q_lod_tiles: &Query<&lunco_terrain_surface::stream_viz::LodTileOf>,
-    viewport: &lunco_core::SceneViewport,
+    viewport: &lunco_viewport_core::SceneViewport,
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> TelemetryValue {
     let mut cursor = click.entity;
@@ -430,7 +430,7 @@ fn canonical_pointer_render_position(
         (&Camera, &GlobalTransform),
         (With<Camera3d>, With<lunco_render::SceneCamera>),
     >,
-    viewport: &lunco_core::SceneViewport,
+    viewport: &lunco_viewport_core::SceneViewport,
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> Option<bevy::math::DVec3> {
     let mesh_position = click.hit.position?.as_dvec3();
@@ -445,7 +445,7 @@ fn canonical_pointer_render_position(
     else {
         return Some(mesh_position);
     };
-    let Some(ray) = lunco_core::scene_click_ray(
+    let Some(ray) = lunco_viewport_core::scene_click_ray(
         false,
         camera,
         camera_transform,
@@ -488,12 +488,12 @@ fn pointer_surface_render_position(
         (&Camera, &GlobalTransform),
         (With<Camera3d>, With<lunco_render::SceneCamera>),
     >,
-    viewport: &lunco_core::SceneViewport,
+    viewport: &lunco_viewport_core::SceneViewport,
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> Option<bevy::math::DVec3> {
     let camera_entity = viewport.active_camera?;
     let (camera, camera_transform) = q_scene_cameras.get(camera_entity).ok()?;
-    let ray = lunco_core::scene_click_ray(
+    let ray = lunco_viewport_core::scene_click_ray(
         false,
         camera,
         camera_transform,
@@ -543,9 +543,9 @@ fn coordinate_point(position: bevy::math::DVec3, frame: &str, source: &str) -> T
 pub(crate) fn on_scene_pointer_event(
     click: On<Pointer<Click>>,
     keys: Res<ButtonInput<KeyCode>>,
-    armed: Res<lunco_core::ArmedScriptTool>,
+    armed: Res<lunco_interaction_core::ArmedScriptTool>,
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
-    terrain_active: Res<lunco_core::TerrainToolActive>,
+    terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,

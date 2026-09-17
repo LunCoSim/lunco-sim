@@ -26,7 +26,7 @@ use bevy::math::{DQuat, EulerRot};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, register_commands, Command, SceneViewport};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::SceneCamera;
 use lunco_time::{ControlAnimation, Playback, TransportMode};
@@ -36,6 +36,7 @@ use lunco_usd_core::commands::ApplyUsdOp;
 use lunco_usd_document::document::UsdDocument;
 use lunco_usd_document::document::{LayerId, UsdOp};
 use lunco_usd_geometry::curve::{eval_curve, eval_curve_tangent};
+use lunco_viewport_core::SceneViewport;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use super::authoring_paths::{join_prim, prim_exists};

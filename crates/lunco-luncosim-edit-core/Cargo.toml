@@ -34,6 +34,7 @@ lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 # Terrain shader-mode selector (Lit / Debug-LOD / Plain) in the Inspector.
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 
 [lints]
 workspace = true

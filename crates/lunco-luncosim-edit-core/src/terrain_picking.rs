@@ -10,9 +10,9 @@
 use bevy::picking::backend::ray::RayMap;
 use bevy::picking::backend::{HitData, PointerHits};
 use bevy::prelude::*;
-use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
 use lunco_terrain_surface::GridSurfaceQuery;
+use lunco_viewport_core::SceneViewport;
 
 /// Report the analytic terrain under each scene-camera pointer ray.
 ///

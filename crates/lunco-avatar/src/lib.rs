@@ -309,10 +309,10 @@ impl Plugin for LunCoAvatarPlugin {
         // missing `Res`. Guarantee them here — `init_resource` is idempotent, so
         // a host that inserts its own (luncosim) keeps that value.
         app.init_resource::<lunco_interaction_core::DragModeActive>();
-        app.init_resource::<lunco_core::SpawnToolActive>();
-        app.init_resource::<lunco_core::TerrainToolActive>();
-        app.init_resource::<lunco_core::ArmedScriptTool>();
-        app.init_resource::<lunco_core::SceneInteractionMode>();
+        app.init_resource::<lunco_interaction_core::SpawnToolActive>();
+        app.init_resource::<lunco_interaction_core::TerrainToolActive>();
+        app.init_resource::<lunco_interaction_core::ArmedScriptTool>();
+        app.init_resource::<lunco_interaction_core::SceneInteractionMode>();
         app.add_observer(avatar_raycast_possession);
         // Native avatar construction receives the resolved command policy;
         // composed USD avatars receive the same policy from their `Controls` scope.
@@ -965,7 +965,7 @@ const CELESTIAL_CLICK_FOCUS: bool = false;
 #[derive(bevy::ecs::system::SystemParam)]
 /// Shared scene-click mode and egui gate for the avatar pointer observer.
 pub struct SceneInteractionGate<'w> {
-    mode: Res<'w, lunco_core::SceneInteractionMode>,
+    mode: Res<'w, lunco_interaction_core::SceneInteractionMode>,
     egui_focus: Res<'w, lunco_control_core::EguiFocus>,
 }
 
@@ -983,9 +983,9 @@ pub fn avatar_raycast_possession(
     >,
     scene_interaction: SceneInteractionGate,
     drag_mode_active: Res<lunco_interaction_core::DragModeActive>,
-    spawn_tool_active: Res<lunco_core::SpawnToolActive>,
-    terrain_tool_active: Res<lunco_core::TerrainToolActive>,
-    armed_script_tool: Res<lunco_core::ArmedScriptTool>,
+    spawn_tool_active: Res<lunco_interaction_core::SpawnToolActive>,
+    terrain_tool_active: Res<lunco_interaction_core::TerrainToolActive>,
+    armed_script_tool: Res<lunco_interaction_core::ArmedScriptTool>,
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
@@ -1051,7 +1051,7 @@ pub fn avatar_raycast_possession(
     // `hit.position.is_none()` chrome check). Returns `None` on an egui-chrome
     // click; the ray drives the analytic hit-sphere tests (celestial bodies /
     // spacecraft, which have no pickable mesh) alongside the mesh pick.
-    let Some(ray) = lunco_core::scene_click_ray(
+    let Some(ray) = lunco_viewport_core::scene_click_ray(
         scene_interaction.egui_focus.wants_pointer,
         camera,
         cam_gtf,
@@ -1255,7 +1255,7 @@ fn on_return_from_orbit(
     if let Some(pin) = orbital_pin.as_mut() {
         pin.active = false;
     }
-    commands.trigger(lunco_core::RequestLocalAvatarView);
+    commands.trigger(lunco_camera_core::RequestLocalAvatarView);
     info!("ORBITAL EXIT: restored exact pre-orbit camera transaction");
 }
 
@@ -1498,7 +1498,7 @@ fn on_release_command(
     // Give the viewport back to the player's own eye through the shared camera
     // intent. The camera subsystem resolves the LocalAvatar and records this as
     // an explicit user selection; it never falls through to another camera.
-    commands.trigger(lunco_core::RequestLocalAvatarView);
+    commands.trigger(lunco_camera_core::RequestLocalAvatarView);
     info!(
         "Released possession → camera at local {:?} (surface={})",
         local_translation, is_surface

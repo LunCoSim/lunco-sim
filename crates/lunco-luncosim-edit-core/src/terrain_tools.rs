@@ -89,7 +89,7 @@ const STRENGTH_MAX: f32 = 50.0;
 #[derive(Component)]
 pub struct TerrainBrushGhost;
 
-/// Mirror the armed state into the shared [`lunco_core::TerrainToolActive`] gate
+/// Mirror the armed state into the shared [`lunco_interaction_core::TerrainToolActive`] gate
 /// (read by possession + selection so they stand down while sculpting) and
 /// disarm on Cancel. Keyboard-driven, so it stays a plain system.
 ///
@@ -98,7 +98,7 @@ pub struct TerrainBrushGhost;
 /// vocabulary with every other "back out" and follows a rebind.
 pub fn terrain_tool_state_system(
     mut state: ResMut<TerrainToolState>,
-    mut active: ResMut<lunco_core::TerrainToolActive>,
+    mut active: ResMut<lunco_interaction_core::TerrainToolActive>,
     cancel: lunco_control_core::CancelIntent,
 ) {
     active.0 = state.armed();
@@ -176,7 +176,7 @@ pub fn update_terrain_brush_ghost(
         (&Camera, &GlobalTransform, &bevy::camera::RenderTarget),
         (With<Camera3d>, With<SceneCamera>),
     >,
-    viewport: Res<lunco_core::SceneViewport>,
+    viewport: Res<lunco_viewport_core::SceneViewport>,
     windows: Query<&Window, With<PrimaryWindow>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
     mut q_ghost: Query<
@@ -314,7 +314,7 @@ pub fn update_terrain_brush_ghost(
 ///
 /// Registered as a global `On<Pointer<Click>>` observer. Only acts while a
 /// brush is armed; possession + selection stand down via
-/// [`lunco_core::TerrainToolActive`], so the click is ours. `hit.position` is
+/// [`lunco_interaction_core::TerrainToolActive`], so the click is ours. `hit.position` is
 /// the world point on the terrain mesh — no manual ray-cast. Emits the same
 /// [`BrushTerrain`] / [`FlattenTerrain`] command the scripting / API paths use.
 pub fn on_scene_click_terrain(
@@ -326,7 +326,7 @@ pub fn on_scene_click_terrain(
     // this observer thinks the tool is armed while selection still thinks it is not
     // (or vice-versa) — a click that both sculpts AND selects/possesses. One gate,
     // one source of truth.
-    active: Res<lunco_core::TerrainToolActive>,
+    active: Res<lunco_interaction_core::TerrainToolActive>,
     keys: Res<ButtonInput<KeyCode>>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     mut commands: Commands,

@@ -194,7 +194,7 @@ impl Plugin for CelestialPlugin {
         // Globe LOD consumes the shared presentation binding, not Bevy's
         // render activation flag. Keep the binding substrate available in
         // standalone celestial hosts as well as the full USD application.
-        app.init_resource::<lunco_core::SceneViewport>();
+        app.init_resource::<lunco_viewport_core::SceneViewport>();
         // Celestial shell geometry uses the same authoritative graphics
         // settings as USD projection. Initialise the documented default here
         // so setup does not substitute a private Balanced profile.

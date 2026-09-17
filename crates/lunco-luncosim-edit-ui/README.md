@@ -80,7 +80,7 @@ measured preview image rectangle: a visible focused USD preview camera receives
 the standard `GizmoCamera` marker and its logical `GizmoOptions::viewport_rect`.
 The maintained gizmo picking backend applies that same rectangle before
 testing handles, so rendered and interactive coordinates stay in one space.
-When no preview owns the editor, `SceneViewport::active_camera` remains the
+When no preview owns the editor, `lunco_viewport_core::SceneViewport::active_camera` remains the
 live window-camera owner. Singleton and separate preview tabs both publish
 their offscreen scene ownership through `ScenePickGate`, so the global egui
 focus gate cannot suppress a valid preview-handle drag or leak it into the live

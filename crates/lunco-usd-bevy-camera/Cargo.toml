@@ -19,6 +19,7 @@ lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 lunco-usd-data = { path = "../lunco-usd-data" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 openusd = { workspace = true }
 
 [dev-dependencies]

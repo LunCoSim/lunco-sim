@@ -133,8 +133,8 @@ pub trait Perspective: Send + Sync + 'static {
         false
     }
     /// Which subsystem owns a plain primary scene click in this perspective.
-    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
-        lunco_core::SceneInteractionMode::Simulation
+    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
+        lunco_interaction_core::SceneInteractionMode::Simulation
     }
     /// Revision of the authored default layout.
     fn layout_revision(&self) -> u32 {

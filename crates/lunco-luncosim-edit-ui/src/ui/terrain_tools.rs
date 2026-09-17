@@ -28,7 +28,7 @@ pub(crate) enum TerrainUiAction {
 pub(crate) fn on_terrain_ui_action(
     trigger: On<TerrainUiAction>,
     mut terrain: ResMut<TerrainToolState>,
-    mut script: ResMut<lunco_core::ArmedScriptTool>,
+    mut script: ResMut<lunco_interaction_core::ArmedScriptTool>,
 ) {
     match &trigger.event() {
         TerrainUiAction::SetTerrain {
@@ -164,7 +164,7 @@ fn script_tools_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_th
     ui.heading("Tools");
 
     let armed = ctx
-        .resource::<lunco_core::ArmedScriptTool>()
+        .resource::<lunco_interaction_core::ArmedScriptTool>()
         .and_then(|a| a.0.clone());
 
     ui.horizontal_wrapped(|ui| {
