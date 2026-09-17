@@ -501,8 +501,12 @@ pub struct UsdPreviewView {
     pub preview: UsdPreviewId,
     /// Camera entity created by the render adapter.
     pub camera: Entity,
-    /// Light entity created by the render adapter.
+    /// Key light entity created by the render adapter.
     pub light: Entity,
+    /// Shadow-free presentation fill created with the key light. Keeping this
+    /// handle in the view state makes the presentation rig lifecycle explicit:
+    /// closing a view cannot leak a light into another assembly or document.
+    pub fill_light: Entity,
     /// Camera pose.
     pub orbit: OrbitCamera,
     /// Presentation projection.
@@ -525,12 +529,19 @@ pub struct UsdPreviewView {
 
 impl UsdPreviewView {
     /// Create presentation state around render-owned camera and light entities.
-    pub fn new(id: UsdPreviewViewId, preview: UsdPreviewId, camera: Entity, light: Entity) -> Self {
+    pub fn new(
+        id: UsdPreviewViewId,
+        preview: UsdPreviewId,
+        camera: Entity,
+        light: Entity,
+        fill_light: Entity,
+    ) -> Self {
         Self {
             id,
             preview,
             camera,
             light,
+            fill_light,
             orbit: OrbitCamera::default(),
             projection: UsdPreviewProjection::default(),
             orthographic_scale: 1.0,

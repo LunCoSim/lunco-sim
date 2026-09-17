@@ -1094,9 +1094,31 @@ fn create_preview_view(
             Name::new(format!("UsdPreviewSun-{}-{}", preview.0, view.0)),
         ))
         .id();
+    // A physical lunar scene can legitimately have near-black shadow cores,
+    // but an editor preview must still expose the shape of an assembly. This
+    // presentation-only, shadow-free fill is scoped to this view's render
+    // layer and tracked in the view state so its lifecycle is deterministic.
+    let fill_light = commands
+        .spawn((
+            DirectionalLight {
+                color: Color::linear_rgb(0.55, 0.62, 0.75),
+                illuminance: profile.distant_light_default_illuminance * 0.12,
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            LightGraphicsDefaults {
+                intensity_uses_graphics_default: true,
+                intensity_scale: 1.0,
+                range_uses_graphics_default: false,
+            },
+            Transform::from_xyz(-5.0, 6.0, -5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            RenderLayers::layer(render_layer),
+            Name::new(format!("UsdPreviewFill-{}-{}", preview.0, view.0)),
+        ))
+        .id();
     world.flush();
     Some((
-        UsdPreviewView::new(view, preview, camera, light),
+        UsdPreviewView::new(view, preview, camera, light, fill_light),
         UsdPreviewRenderTarget { image, tex_id },
     ))
 }
@@ -2985,6 +3007,9 @@ fn despawn_preview_view(world: &mut World, view: UsdPreviewView) {
         entity.despawn();
     }
     if let Ok(entity) = world.get_entity_mut(view.light) {
+        entity.despawn();
+    }
+    if let Ok(entity) = world.get_entity_mut(view.fill_light) {
         entity.despawn();
     }
     let Some(render_target) = world
