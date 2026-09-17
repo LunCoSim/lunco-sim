@@ -1,10 +1,10 @@
 //! USD preview sessions and views.
 //!
 //! A session owns one projected composed USD stage. Views are presentation
-//! surfaces over that stage: each has its own camera, light, orbit pose, and
-//! render target, while all views of one session share the same scene root and
-//! render layer. This keeps multi-view editing cheap and prevents hidden dock
-//! tabs from consuming a render pass.
+//! surfaces over that stage: each has its own camera, key/fill presentation
+//! rig, orbit pose, and render target, while all views of one session share the
+//! same scene root and render layer. This keeps multi-view editing cheap and
+//! prevents hidden dock tabs from consuming a render pass.
 //!
 //! The singleton panel paints the focused view, while the instance panel can
 //! display any view in a dock tab or split. The body is a real Bevy 3D render;
@@ -1080,9 +1080,33 @@ fn create_preview_view(
             Name::new(format!("UsdPreviewSun-{}-{}", preview.0, view.0)),
         ))
         .id();
+    // A physical lunar scene can legitimately have near-black shadow cores,
+    // but an editor preview must still expose the shape of an assembly. This
+    // is a presentation-only, shadow-free fill: it is scoped to this view's
+    // render layer, never enters the authored USD stage, and is tracked for
+    // deterministic teardown. Its lower intensity preserves the key's
+    // direction and material response without the blown-out two-key look.
+    let fill_light = commands
+        .spawn((
+            DirectionalLight {
+                color: Color::linear_rgb(0.55, 0.62, 0.75),
+                illuminance: profile.distant_light_default_illuminance * 0.12,
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            LightGraphicsDefaults {
+                intensity_uses_graphics_default: true,
+                intensity_scale: 1.0,
+                range_uses_graphics_default: false,
+            },
+            Transform::from_xyz(-5.0, 6.0, -5.0).looking_at(Vec3::ZERO, Vec3::Y),
+            RenderLayers::layer(render_layer),
+            Name::new(format!("UsdPreviewFill-{}-{}", preview.0, view.0)),
+        ))
+        .id();
     world.flush();
     Some((
-        UsdPreviewView::new(view, preview, camera, light),
+        UsdPreviewView::new(view, preview, camera, light, fill_light),
         UsdPreviewRenderTarget { image, tex_id },
     ))
 }
@@ -2971,6 +2995,9 @@ fn despawn_preview_view(world: &mut World, view: UsdPreviewView) {
         entity.despawn();
     }
     if let Ok(entity) = world.get_entity_mut(view.light) {
+        entity.despawn();
+    }
+    if let Ok(entity) = world.get_entity_mut(view.fill_light) {
         entity.despawn();
     }
     let Some(render_target) = world
