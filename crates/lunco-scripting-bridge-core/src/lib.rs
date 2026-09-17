@@ -175,7 +175,14 @@ pub fn build_from_reflect<B: ValueBuilder>(
             return Some(b.int(*v as i64));
         }
         if let Some(v) = any.downcast_ref::<u64>() {
-            return Some(b.int(*v as i64));
+            // Rhai (and the generic `ValueBuilder` contract) has a signed
+            // native integer. Never cast a wide unsigned value through it:
+            // values above `i64::MAX` would wrap and silently lose identity.
+            return Some(if *v <= i64::MAX as u64 {
+                b.int(*v as i64)
+            } else {
+                b.string(&v.to_string())
+            });
         }
         if let Some(v) = any.downcast_ref::<bool>() {
             return Some(b.bool(*v));
@@ -252,6 +259,15 @@ pub fn build_from_json<B: ValueBuilder>(b: &B, v: &serde_json::Value) -> B::Valu
         J::Number(n) => {
             if let Some(i) = n.as_i64() {
                 b.int(i)
+            } else if let Some(u) = n.as_u64() {
+                // JSON can represent the full unsigned 64-bit range. Keep
+                // values outside the backend's signed integer range as text
+                // rather than converting through f64 and losing bits.
+                if u <= i64::MAX as u64 {
+                    b.int(u as i64)
+                } else {
+                    b.string(&u.to_string())
+                }
             } else {
                 b.float(n.as_f64().unwrap_or(0.0))
             }

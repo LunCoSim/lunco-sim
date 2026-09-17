@@ -106,6 +106,7 @@ getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
 ignored = ["getrandom"]
 
 [dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
