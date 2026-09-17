@@ -1,6 +1,6 @@
 //! Source-scanning guards for the rumoca workaround chokepoints
 //! (`docs/architecture/29-rumoca-workarounds.md`). The guards scan both the
-//! compiler package and this execution package so moving a runtime seam cannot
+//! compiler package and the runtime packages so moving a runtime seam cannot
 //! accidentally leave the compiler-side invariants untested.
 //!
 //! A workaround only works if EVERY path goes through it. These bugs are all
@@ -59,13 +59,18 @@ fn code_only(source: &str) -> String {
 /// a resolved `SolverSpec` plus `SolverParams` into rumoca's options. The two
 /// policy entry points state parameters and delegate to it, never construct:
 /// * `lunco_modelica_runner::stepper_options_from_bounds` — batch / offline / FastRun
-/// * `worker::live_stepper_options` — live co-sim (`t_end = u32::MAX`, no ceiling)
+/// * `lunco_modelica_worker::worker::live_stepper_options` — live co-sim (`t_end = u32::MAX`, no ceiling)
 ///
 /// Everything else — including `src/bin/` — must take options from one of those.
 #[test]
 fn sim_options_are_built_only_by_the_canonical_builders() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source_roots = [root.join("src"), root.join("../lunco-modelica-solver/src")];
+    let source_roots = [
+        root.join("src"),
+        root.join("../lunco-modelica-execution/src"),
+        root.join("../lunco-modelica-runner/src"),
+        root.join("../lunco-modelica-solver/src"),
+    ];
 
     let mut offenders = Vec::new();
     for source_root in source_roots {
@@ -110,7 +115,11 @@ fn sim_options_are_built_only_by_the_canonical_builders() {
 #[test]
 fn source_is_never_regenerated_through_the_rumoca_emitter() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source_roots = [root.join("src"), root.join("../lunco-modelica-core/src")];
+    let source_roots = [
+        root.join("src"),
+        root.join("../lunco-modelica-execution/src"),
+        root.join("../lunco-modelica-core/src"),
+    ];
 
     let mut offenders = Vec::new();
     for source_root in source_roots {

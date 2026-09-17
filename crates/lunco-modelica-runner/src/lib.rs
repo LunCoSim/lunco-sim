@@ -14,8 +14,6 @@ use crossbeam_channel::Sender;
 use lunco_experiments::{ExperimentId, RunBounds, RunUpdate};
 use std::sync::Arc;
 
-mod lock_ext;
-
 pub mod run_bounds;
 pub mod runner;
 

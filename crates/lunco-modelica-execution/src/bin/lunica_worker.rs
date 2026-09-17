@@ -2,7 +2,7 @@
 //!
 //! Runs inside a Web Worker with its own wasm linear memory. Listens for
 //! bincode-serialized `ModelicaCommand` messages from the main page, drives
-//! them through the same `worker::process_worker_command` dispatch the native
+//! them through the same `lunco_modelica_worker::worker::process_worker_command` dispatch the native
 //! worker uses, and `postMessage`s each `ModelicaResult` back.
 //!
 //! Why a separate bin
@@ -12,7 +12,7 @@
 //! which is a separate JS thread with a separate wasm instance — moves the
 //! blocking work off the page's main thread without needing nightly Rust
 //! atomics or `SharedArrayBuffer`. The native build is unchanged: it still
-//! uses `worker::modelica_worker` on a real `std::thread`.
+//! uses `lunco_modelica_worker::worker::modelica_worker` on a real `std::thread`.
 //!
 //! State
 //! -----
@@ -76,13 +76,13 @@ mod wasm {
         }
     }
 
+    use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
-    use wasm_bindgen::JsCast;
     use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-    use lunco_modelica_execution::worker::{
-        panic_result_for_command, process_worker_command, ModelicaWorkerState,
+    use lunco_modelica_worker::worker::{
+        ModelicaWorkerState, panic_result_for_command, process_worker_command,
     };
 
     thread_local! {

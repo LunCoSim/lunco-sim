@@ -47,7 +47,8 @@ fn compile_str_keeps_bound_input_as_runtime_slot() {
 ///
 /// If this test starts failing, the clamp is gone: the horizon plumbing in
 /// `stepper_options_from_bounds` can be revisited, and the live path's
-/// `t_end = u32::MAX` sentinel in `worker::live_stepper_options` with it.
+/// `t_end = u32::MAX` sentinel in
+/// `lunco_modelica_worker::worker::live_stepper_options` with it.
 #[test]
 fn simulation_session_clamps_advance_at_t_end() {
     let source = "model HorizonFixture\n  Real x(start = 0, fixed = true);\nequation\n  der(x) = 1;\nend HorizonFixture;\n";

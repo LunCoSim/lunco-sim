@@ -22,11 +22,6 @@ use lunco_modelica_runtime::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaResult, NoticeLevel,
     SimSampleBatch, SimSampleStream,
 };
-#[cfg(test)]
-use lunco_modelica_runtime::{
-    DEFAULT_COMMUNICATION_PERIOD_SECS, resolve_communication_period_secs,
-    validate_communication_period_secs,
-};
 use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
 
@@ -3301,12 +3296,12 @@ mod macro_step_tests {
 
         assert_eq!(
             model.validated_communication_period_secs().unwrap(),
-            DEFAULT_COMMUNICATION_PERIOD_SECS
+            lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
         );
         model.reset_communication_schedule().unwrap();
         assert_eq!(
             model.next_communication_time,
-            3.25 + DEFAULT_COMMUNICATION_PERIOD_SECS
+            3.25 + lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
         );
     }
 
@@ -3331,18 +3326,36 @@ mod macro_step_tests {
             assert!(model.reset_communication_schedule().is_err());
             assert_eq!(
                 model.next_communication_time,
-                DEFAULT_COMMUNICATION_PERIOD_SECS
+                lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
             );
         }
     }
 
     #[test]
     fn communication_schedule_must_be_representable_and_bounded() {
-        assert!(validate_communication_period_secs(DEFAULT_COMMUNICATION_PERIOD_SECS).is_ok());
-        assert!(validate_communication_period_secs(lunco_core::SECS_PER_TICK).is_ok());
-        assert!(validate_communication_period_secs(3.0 * lunco_core::SECS_PER_TICK).is_ok());
-        assert!(validate_communication_period_secs(0.13).is_err());
-        assert!(validate_communication_period_secs(MAX_MACRO_STEP_DT + LIVE_MICRO_DT).is_err());
+        assert!(
+            lunco_modelica_runtime::validate_communication_period_secs(
+                lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
+            )
+            .is_ok()
+        );
+        assert!(
+            lunco_modelica_runtime::validate_communication_period_secs(lunco_core::SECS_PER_TICK)
+                .is_ok()
+        );
+        assert!(
+            lunco_modelica_runtime::validate_communication_period_secs(
+                3.0 * lunco_core::SECS_PER_TICK
+            )
+            .is_ok()
+        );
+        assert!(lunco_modelica_runtime::validate_communication_period_secs(0.13).is_err());
+        assert!(
+            lunco_modelica_runtime::validate_communication_period_secs(
+                MAX_MACRO_STEP_DT + LIVE_MICRO_DT
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -3400,11 +3413,13 @@ mod macro_step_tests {
     #[test]
     fn resolves_only_omitted_period_to_the_documented_default() {
         assert_eq!(
-            resolve_communication_period_secs(false, None).unwrap(),
-            DEFAULT_COMMUNICATION_PERIOD_SECS
+            lunco_modelica_runtime::resolve_communication_period_secs(false, None).unwrap(),
+            lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
         );
-        assert!(resolve_communication_period_secs(true, None).is_err());
-        assert!(resolve_communication_period_secs(true, Some(0.13)).is_err());
+        assert!(lunco_modelica_runtime::resolve_communication_period_secs(true, None).is_err());
+        assert!(
+            lunco_modelica_runtime::resolve_communication_period_secs(true, Some(0.13)).is_err()
+        );
     }
 
     #[test]

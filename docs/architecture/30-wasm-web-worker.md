@@ -8,7 +8,7 @@ How the browser build keeps the UI responsive while rumoca compiles a model.
 
 `wasm32-unknown-unknown` has no native thread API available to the runtime.
 The Modelica worker therefore runs in a dedicated Web Worker. Native already
-has the same ownership boundary — `lunco_modelica_execution::worker::modelica_worker` on a
+has the same ownership boundary — `lunco_modelica_worker::worker::modelica_worker` on a
 `std::thread` exchanging crossbeam messages — and the web transport mirrors
 that boundary without nightly Rust, atomics, or `SharedArrayBuffer`.
 
@@ -71,7 +71,7 @@ a transport layer that bridges the channels to the worker over
    receives an explicit lifecycle failure; simulation is never run on the page
    thread and commands never remain queued indefinitely.
 6. **Worker dispatch.** Worker `onmessage` decodes the envelope:
-   - `Command(cmd)` → `lunco_modelica_execution::worker::process_worker_command(state, cmd, |r| post_result(r))`.
+   - `Command(cmd)` → `lunco_modelica_worker::worker::process_worker_command(state, cmd, |r| post_result(r))`.
      This is the single wasm command-dispatch path.
      `catch_unwind` wraps the call so a panic surfaces as
      `WireResult::Log("PANIC during {label}: {msg}")` instead of silent death.
@@ -83,7 +83,7 @@ a transport layer that bridges the channels to the worker over
 7. **Result fan-in.** Worker posts each `WireResult` back. Main's
    `onmessage` decodes:
    - `Result(r)` → `tx_res.send(r)` — picked up by the existing
-     `worker::handle_modelica_responses` system.
+     `lunco_modelica_worker::worker::handle_modelica_responses` system.
    - `Log(line)` → `bevy::log::info!("[worker] {line}")` — surfaces in
      the page Console panel. Web Workers have a separate console context
      that page DevTools can't see, so without this any worker activity
@@ -126,11 +126,11 @@ Native unchanged. The serde derives are no-ops at runtime.
 `lunco-modelica-execution/src/bin/lunica_worker.rs` are
 `#![cfg(target_arch = "wasm32")]` end-to-end. The wasm worker owns the
 `ModelicaWorkerState` and dispatches through
-`lunco_modelica_execution::worker::process_worker_command`;
+`lunco_modelica_worker::worker::process_worker_command`;
 `lunco-modelica-runner` receives the worker's Fast Run callbacks through the
 typed transport registration installed by the execution host;
 there is no main-thread Modelica fallback. The native
-`lunco_modelica_execution::worker::modelica_worker` loop
+`lunco_modelica_worker::worker::modelica_worker` loop
 keeps its native dispatch and ownership of `SimulationSession` values.
 
 ## Build (`scripts/build_web.sh build lunica`)
@@ -258,8 +258,8 @@ step runs on the page thread.
   as native today.
 - **Worker bundle size.** The worker is built from `lunco-modelica-execution`,
   which composes the compiler core without linking the workbench UI graph.
-  Further size work should target the execution package's actual
-  Rumoca/source closure.
+  Further size work should target the worker package's actual Rumoca/source
+  closure and keep the execution host limited to transport adapters.
 
 ## Prerequisites
 

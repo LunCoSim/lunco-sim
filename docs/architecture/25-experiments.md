@@ -8,8 +8,9 @@
 
 **Implemented.** `lunco-experiments` shipped — `Experiment`, `RunResult`,
 `RunStatus`, `ExperimentRegistry`, `ExperimentRunner` (trait), `ExperimentsPlugin`,
-with `lunco-modelica-runner` providing the `ModelicaRunner` backend and
-`lunco-modelica-execution` providing worker lifecycle and transport.
+with `lunco-modelica-runner` providing the `ModelicaRunner` backend,
+`lunco-modelica-worker` providing the stateful worker engine, and
+`lunco-modelica-execution` providing host lifecycle and transport.
 Owner: lunica/modelica.
 Related: `13-twin-and-workflow.md`, `14-simulation-layers.md`, `22-domain-cosim.md`, `30-wasm-web-worker.md`.
 
@@ -62,8 +63,12 @@ lunco-modelica-runner/
   compile-once DAE cache and source-string override injector
   shared batch/interactive run paths and run-bound resolution
 
+lunco-modelica-worker/
+  stateful Modelica worker engine and live co-simulation bridge
+  native worker loop, command dispatch, and worker-local caches
+
 lunco-modelica-execution/
-  native worker lifecycle and wasm WebWorkerTransport
+  native worker launch and wasm WebWorkerTransport
   typed callback installation for the runner's wasm dispatch seam
 
 lunco-modelica-ui/
@@ -82,7 +87,8 @@ lunco-viz-core/                       Render-free visualization identifiers
 ```
 
 `lunco-modelica-runner` depends on `lunco-experiments` and the compiler core;
-`lunco-modelica-execution` composes it with the worker lifecycle. The generic
+`lunco-modelica-execution` composes the runner and worker engine with platform
+transport. The generic
 `lunco-experiments` package does not depend on either Modelica package or
 `rumoca-*`.
 

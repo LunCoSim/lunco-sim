@@ -50,6 +50,7 @@ members = [
     "crates/lunco-modelica-core",
     "crates/lunco-modelica-library",
     "crates/lunco-modelica-runner",
+    "crates/lunco-modelica-worker",
     "crates/lunco-modelica-execution",
     "crates/lunco-modelica-document",
     "crates/lunco-modelica-solver",

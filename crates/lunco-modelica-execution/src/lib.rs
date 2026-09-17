@@ -1,8 +1,9 @@
 //! Modelica execution and transport adapters.
 //!
 //! This package owns the expensive, change-prone part of Modelica integration:
-//! solver sessions, worker scheduling, Fast Runs, and the browser worker wire.
-//! [`lunco_modelica_core`] remains the reusable compiler/document package.
+//! solver host assembly and the browser worker wire.
+//! [`lunco_modelica_core`] remains the reusable compiler/document package;
+//! [`lunco_modelica_worker`] owns the stateful worker engine.
 //! The shared parser/source-library callback seam is owned by
 //! [`lunco_modelica_library`].
 
@@ -16,7 +17,6 @@ use lunco_modelica_runtime::{
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
-pub mod worker;
 #[cfg(target_arch = "wasm32")]
 pub mod worker_transport;
 
@@ -41,7 +41,7 @@ impl Plugin for ModelicaExecutionPlugin {
         let (tx_res, rx_res) = unbounded();
 
         #[cfg(not(target_arch = "wasm32"))]
-        thread::spawn(move || worker::modelica_worker(rx_cmd, tx_res));
+        thread::spawn(move || lunco_modelica_worker::worker::modelica_worker(rx_cmd, tx_res));
 
         #[cfg(not(target_arch = "wasm32"))]
         app.insert_resource(ModelicaChannels {
@@ -90,16 +90,17 @@ impl Plugin for ModelicaExecutionPlugin {
         app.configure_sets(Update, ModelicaSet::HandleResponses);
         app.configure_sets(FixedUpdate, ModelicaSet::SpawnRequests);
         app.add_plugins(lunco_modelica_telemetry::ModelicaTelemetryPlugin);
-        app.init_resource::<worker::CosimLag>();
+        app.init_resource::<lunco_modelica_worker::worker::CosimLag>();
         app.register_type::<ModelicaModel>()
-            .add_observer(worker::on_remove_modelica)
+            .add_observer(lunco_modelica_worker::worker::on_remove_modelica)
             .add_systems(
                 Update,
-                worker::handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
+                lunco_modelica_worker::worker::handle_modelica_responses
+                    .in_set(ModelicaSet::HandleResponses),
             )
             .add_systems(
                 FixedUpdate,
-                worker::spawn_modelica_requests
+                lunco_modelica_worker::worker::spawn_modelica_requests
                     .in_set(ModelicaSet::SpawnRequests)
                     .run_if(lunco_time::simulation_is_running),
             );
@@ -126,8 +127,9 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(ModelicaExecutionPlugin);
         assert!(app.world().contains_resource::<ModelicaChannels>());
-        assert!(app
-            .world()
-            .contains_resource::<lunco_modelica_runner::ModelicaRunnerResource>());
+        assert!(
+            app.world()
+                .contains_resource::<lunco_modelica_runner::ModelicaRunnerResource>()
+        );
     }
 }

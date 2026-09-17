@@ -26,7 +26,7 @@
 //! can't be applied at the DAE level (non-top-level param/input, or a
 //! non-scalar value) is a hard error, not a recompile with different source.
 
-use crate::lock_ext::LockExt;
+use lunco_core::LockExt;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(not(target_arch = "wasm32"))]
 use std::hash::{Hash, Hasher};
@@ -1149,7 +1149,7 @@ impl RunSink for ChannelSink {
 ///
 /// Background: docs/numeric-experiments/README.md § Known working solver configurations
 ///
-/// The worker's live interactive sim (`worker::build_stepper`) previously had
+/// The worker's live interactive sim (`lunco_modelica_worker::worker::build_stepper`) previously had
 /// its OWN defaults (`rtol = 1e-3`, `atol = 1e-6`) with *no* solver selection,
 /// silently running BDF where the batch path runs TR-BDF2. `build_stepper` now
 /// delegates here, collapsing that divergence: one tolerance default, one
@@ -1167,7 +1167,8 @@ impl RunSink for ChannelSink {
 /// **Batch only.** The LIVE interactive/co-simulated path deliberately does NOT
 /// share this policy: an adaptive-implicit solver whose step sequence comes
 /// from per-machine error estimates must not run inside the client-predicted
-/// fixed-step loop. It has its own configuration in `worker::live_stepper_options`
+/// fixed-step loop. It has its own configuration in
+/// `lunco_modelica_worker::worker::live_stepper_options`
 /// (explicit family, fixed micro-step ladder, fixed tolerance). The two surfaces
 /// are meant to differ here — see
 /// `docs/architecture/28-modelica-realtime-physics.md` §2a.

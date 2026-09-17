@@ -147,10 +147,10 @@ stage and synthesizer query set. The system retains the same trigger guard for
 direct system invocation, while the production schedule owns the idle-frame
 skip.
 
-Before a USD-owned Modelica participant is submitted to the execution worker,
+Before a USD-owned Modelica participant is submitted to the Modelica worker,
 the compiler's source-root admission step seats every dependency discoverable
-from the source text (bundled roots and MSL when available). The execution
-worker then performs one DAE compile against the settled session. A later compile is valid only for
+from the source text (bundled roots and MSL when available). The worker
+then performs one DAE compile against the settled session. A later compile is valid only for
 an actual authored source/topology change or an explicit library-set change;
 normal scene projection and solver stepping do not recompile an unchanged USD
 participant.
@@ -316,10 +316,10 @@ than an error. Two consequences, both deliberate:
   `lunco_modelica_runner::stepper_options_from_bounds`, which carries the run's
   real horizon through. Nothing else may hand-roll `SimOptions`.
 - The live path is driven by `step(dt)` forever and has no horizon, so
-  `worker::live_stepper_options` sets `t_end = u32::MAX` as an explicit
+  `lunco_modelica_worker::worker::live_stepper_options` sets `t_end = u32::MAX` as an explicit
   "no ceiling" sentinel.
 
-`crates/lunco-modelica-execution/tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end` pins
+`crates/lunco-modelica-worker/tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end` pins
 this behaviour with an inline mechanism fixture, so a future rumoca bump that
 drops the clamp fails loudly without coupling the Rust target to shipped assets.
 
@@ -1271,7 +1271,8 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 ### Source
 
 - [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — compiler/document crate root
-- [`../../crates/lunco-modelica-execution/`](../../crates/lunco-modelica-execution/) — worker, solver, and experiment execution crate
+- [`../../crates/lunco-modelica-worker/`](../../crates/lunco-modelica-worker/) — stateful worker, live solver, and co-simulation bridge
+- [`../../crates/lunco-modelica-execution/`](../../crates/lunco-modelica-execution/) — host plugin, transport, and execution adapters
 - [`../../crates/lunco-modelica-document/`](../../crates/lunco-modelica-document/) — `ModelicaDocument`, op set, apply pipeline, and source-editing seams
 - [`../../crates/lunco-modelica-api/`](../../crates/lunco-modelica-api/) — transport-free Modelica queries and document edit commands
 - [`../../crates/lunco-modelica-ast/`](../../crates/lunco-modelica-ast/) — normalized Rumoca parse boundary, AST projections, and Modelica lint facts

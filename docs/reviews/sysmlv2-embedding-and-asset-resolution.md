@@ -215,8 +215,9 @@ session:
   and defers strict target compilation;
 - `lunco-modelica-ast` wraps those APIs and exposes only pure parsing/fact
   extraction, while `lunco-modelica-core` owns Bevy/compiler integration and
-  `lunco-modelica-execution` owns workers, generations,
-  document ops, and journal integration.
+  `lunco-modelica-worker` owns worker execution and simulation, while
+  `lunco-modelica-execution` owns host transport and generation/document
+  integration.
 
 SysML should reuse the same lifecycle decisions: tagged parse results,
 source-set revisions, immutable read snapshots, tolerant diagnostics, and
