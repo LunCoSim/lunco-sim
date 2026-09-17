@@ -19,7 +19,6 @@ bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"]
 lunco-render = { path = "../lunco-render" }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
-serde = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
 lunco-input-core = { path = "../lunco-input-core" }
 lunco-interaction-core = { path = "../lunco-interaction-core" }

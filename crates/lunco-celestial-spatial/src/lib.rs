@@ -32,9 +32,6 @@ mod trajectories;
 pub mod wifi;
 
 pub mod commands;
-/// UI panels for celestial time control and body browser.
-#[cfg(feature = "ui")]
-pub mod ui;
 pub use commands::*;
 
 pub use big_space_setup::*;

@@ -7434,7 +7434,6 @@ version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
- "bevy_egui",
  "bevy_mesh",
  "big_space",
  "futures-lite",
@@ -7457,10 +7456,7 @@ dependencies = [
  "lunco-terrain-core",
  "lunco-terrain-globe",
  "lunco-terrain-surface",
- "lunco-theme",
  "lunco-time",
- "lunco-workbench-core",
- "lunco-workbench-widgets",
  "serde",
  "serde_json",
 ]
