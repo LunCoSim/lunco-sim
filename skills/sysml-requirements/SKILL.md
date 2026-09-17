@@ -339,6 +339,7 @@ Available generic check kinds are:
 | Kind | Observation | Important fields |
 |---|---|---|
 | `coverage` | requirement/verification traceability only | no USD path |
+| `assert` | source-derived predicate, including cross-component interface checks | `ok`, optional `actual`, `expected`, `error`; no USD path |
 | `exists` | prim exists, optionally has type and visibility | `path`, `expected_type`, `visible` |
 | `children` | required child prims exist and are visible | `paths`, `visible` |
 | `attribute` | scalar USD attribute is near a SysML literal | `path`, `attr`, `expected_attr`, `tolerance` |

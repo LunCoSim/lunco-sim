@@ -342,6 +342,30 @@ fn _check_one(report, check, indexes) {
             actual: actual, expected: expected};
     }
 
+    // A source-derived assertion has no USD path.  Twin-authored Rhai uses
+    // this for cross-component contracts (for example, a ramp envelope
+    // derived from the FLIP wheel stations) while retaining the same
+    // requirement/verification coverage and structured evidence as a USD
+    // observation.  The predicate itself is computed by the Twin; this
+    // generic branch only records the result and enforces loud failure.
+    if check.kind == "assert" {
+        if check.ok == () {
+            return _failure(check, "source-derived assertion did not provide a boolean result");
+        }
+        let actual = if check.actual == () { () } else { check.actual };
+        let expected = if check.expected == () { () } else { check.expected };
+        if check.ok != true {
+            let message = if check.error == () || check.error == ""
+                { "source-derived assertion failed" } else { check.error };
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement, verification: check.verification,
+                kind: check.kind, error: message, actual: actual, expected: expected};
+        }
+        return #{ok: true, id: check.id, component: check.component,
+            requirement: check.requirement, verification: check.verification,
+            kind: check.kind, actual: actual, expected: expected};
+    }
+
     if check.path == () || check.path == "" {
         return _failure(check, "USD observation path is missing");
     }

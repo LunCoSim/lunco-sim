@@ -86,7 +86,7 @@ Rhai observer, and verdict channel) before constructing the simulation. The
 registry is metadata, not another requirement source; thresholds and units
 remain in SysML literals.
 
-Supported observations are `exists`, `children`, `attribute`,
+Supported observations are `assert`, `exists`, `children`, `attribute`,
 `attribute_component`, `extent_component`, `bounds_component`,
 `attribute_equals`, `relationship`, and `coverage`. `expected_attr` reads a
 literal SysML attribute by its qualified source name, so numeric limits are not
@@ -95,6 +95,13 @@ map and intentionally omits a duplicate short-name map; every collision is
 therefore explicit rather than silently selecting one component's literal.
 Every check carries a component and requirement ID, producing a per-component
 evidence record with the source revision and exact USD path.
+
+An `assert` check is the pathless counterpart for a source-derived predicate.
+The Twin Rhai observer computes the predicate from typed SysML values (for
+example, deriving a ramp width from another component's wheel stations), then
+passes `{ kind: "assert", ok: ..., actual: ..., expected: ..., error: ... }` to
+the same evaluator. Coverage and structured failure handling remain identical;
+the evaluator never invents a value or turns a missing predicate into a pass.
 
 This is deliberately a subset of SysML v2 verification semantics: requirement
 definitions/usages, subjects, attributes, and verification-case `verify`
