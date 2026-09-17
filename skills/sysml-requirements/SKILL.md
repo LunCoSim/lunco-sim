@@ -170,6 +170,15 @@ The current supported subset is source-backed and deterministic:
   requirement/verification names; short names are preferred in repeated
   arrays to avoid duplicating package prefixes.
 
+The shared `sysml_requirements::evaluate` call resolves those short identities
+once against the mounted source report and rewrites each check to the
+canonical qualified name before observing USD or source-derived predicates.
+Missing or colliding identities fail the evaluation; observers must not add a
+package-prefix guess or a second registry.  Use
+`sysml_requirements::requirement_name(report, id)` and
+`sysml_requirements::verification_name(report, id)` when a canonical identity
+is needed before constructing additional evidence.
+
 It does not provide a full SysML/KerML execution engine. Do not promise or
 silently emulate interface definitions, arbitrary expressions and constraints,
 parametrics, state machines, behaviors, allocations/refinements, a full SysML

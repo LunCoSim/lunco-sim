@@ -72,13 +72,85 @@ fn _short_name(name) {
     parts[parts.len() - 1]
 }
 
-fn _find_requirement(report, expected) {
-    if report == () || report.requirement_records == () { return (); }
+// Resolve an authored requirement usage to its canonical qualified identity.
+// Twin observers may use a short local ID (for example `wheel001`) to keep a
+// repeated check table compact, but the source report is the only authority
+// for the package-qualified name.  Never choose between collisions: a short
+// ID that occurs more than once is an authored error and must be reported.
+fn requirement_name(report, expected) {
+    if report == () || report.requirement_records == ()
+        || expected == () || expected == "" {
+        return #{ok: false, error: "SysML requirement identity is missing"};
+    }
+    let found = ();
     for record in report.requirement_records {
         let name = _record_name(record);
-        if name == expected || _short_name(name) == expected { return record; }
+        if name == expected || _short_name(name) == expected {
+            if found != () {
+                return #{ok: false,
+                    error: "ambiguous SysML requirement identity: " + expected};
+            }
+            found = name;
+        }
     }
-    ()
+    if found == () {
+        return #{ok: false,
+            error: "SysML requirement usage is missing: " + expected};
+    }
+    #{ok: true, name: found}
+}
+
+// Resolve a verification case using the same source-backed identity rule as
+// requirements.  Registry names and evidence names therefore converge on the
+// exact qualified SysML case instead of each observer carrying a package
+// prefix that can drift from its source.
+fn verification_name(report, expected) {
+    if report == () || report.verification_records == ()
+        || expected == () || expected == "" {
+        return #{ok: false, error: "SysML verification identity is missing"};
+    }
+    let found = ();
+    for record in report.verification_records {
+        let name = _record_name(record);
+        if name == expected || _short_name(name) == expected {
+            if found != () {
+                return #{ok: false,
+                    error: "ambiguous SysML verification identity: " + expected};
+            }
+            found = name;
+        }
+    }
+    if found == () {
+        return #{ok: false,
+            error: "SysML verification case is missing: " + expected};
+    }
+    #{ok: true, name: found}
+}
+
+// Canonicalize every check once before evaluation.  This keeps the hot
+// observation loop small and gives all callers (not only the shared Twin
+// helper) the same source-backed identity behavior.  The returned records are
+// still the authored checks with only their identity fields normalized.
+fn _resolve_check_identities(report, checks) {
+    let resolved = [];
+    for check in checks {
+        if check == () || check.requirement == () || check.verification == () {
+            return #{ok: false, check_id: if check == () { "<invalid>" } else { check.id },
+                error: "check requires requirement and verification identities"};
+        }
+        let requirement = requirement_name(report, check.requirement);
+        if requirement.ok != true {
+            return #{ok: false, check_id: check.id, error: requirement.error};
+        }
+        let verification = verification_name(report, check.verification);
+        if verification.ok != true {
+            return #{ok: false, check_id: check.id, error: verification.error};
+        }
+        check.requirement = requirement.name;
+        check.verification = verification.name;
+        resolved.push(check);
+    }
+    #{ok: true, checks: resolved}
 }
 
 // Resolve a Twin component and its verification case from the native
@@ -520,6 +592,14 @@ fn evaluate(source_report, checks) {
     if source_report == () || source_report.ok != true {
         return #{ok: false, results: [], failures: ["SysML source report is unavailable"]};
     }
+    let identities = _resolve_check_identities(source_report, checks);
+    if identities.ok != true {
+        let failure = #{ok: false, id: identities.check_id,
+            error: identities.error};
+        return #{ok: false, results: [failure], failures: [failure],
+            check_count: 0, requirement_count: 0, failure_count: 1};
+    }
+    checks = identities.checks;
     let indexes = _indexes(source_report);
     for check in checks {
         let result = _check_one(source_report, check, indexes);
