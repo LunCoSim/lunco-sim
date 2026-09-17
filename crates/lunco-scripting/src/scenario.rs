@@ -152,6 +152,7 @@ mod readiness_gate_tests {
         let mut app = App::new();
         app.init_resource::<ScenarioExecutionGate>()
             .init_resource::<ScenarioReadinessArm>()
+            .init_resource::<ScenarioSceneGeneration>()
             .init_resource::<ReadinessState>()
             .add_observer(close_scenarios_for_scene_transition)
             .add_observer(arm_scenarios_after_scene_composition)
@@ -672,7 +673,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // returned without draining whenever no scenario is active (the common
         // case) `pending` would grow without bound (review H1). Dropping events
         // with no scenario to consume them is correct — there's nothing to deliver.
-        let events: Vec<TelemetryEvent> = world
+        // Move the batch out so script hooks can run without holding a World
+        // resource borrow. The vector is recycled below after the batch has
+        // been delivered; dropping it every fixed pass would force a fresh
+        // allocation for the next render/control event burst.
+        let mut events: Vec<TelemetryEvent> = world
             .get_resource_mut::<ScriptEventInbox>()
             .map(|mut inbox| std::mem::take(&mut inbox.pending))
             .unwrap_or_default();
@@ -682,6 +687,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             .get_resource::<ScenarioDriver<R>>()
             .is_some_and(|d| d.fsm.keys().any(|e| !live.contains(e)));
         if work.is_empty() && !needs_teardown {
+            // No scenario can consume this batch. Preserve the allocation for
+            // the next pass, but intentionally discard the events themselves.
+            events.clear();
+            if let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
+                inbox.pending = events;
+            }
             return;
         }
 
@@ -855,6 +866,15 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 }
             }
         }
+
+        // Keep the inbox's backing allocation hot without retaining delivered
+        // payloads. This matters for control paths that publish one telemetry
+        // event per fixed tick: the queue remains bounded and allocation-free
+        // after the first burst.
+        events.clear();
+        if let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
+            inbox.pending = events;
+        }
     }
 
     /// Live introspection of `entity`'s scenario: the neutral FSM state joined
@@ -904,16 +924,58 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
 // relay) is a SIMULATION subsystem, not this substrate — scripts would send/recv
 // over it via the command/query API and get real delays/dropouts back.
 
+/// Maximum number of full telemetry events that may wait for one scenario pass.
+///
+/// The producer clock is not necessarily the fixed simulation clock: UI and
+/// interaction events can arrive on `Update` while a causal participant holds
+/// the fixed schedule. A bound is therefore required even though the driver
+/// normally drains the inbox every pass. Exceeding it is a simulation fault,
+/// not a reason to discard mission events silently.
+pub const SCRIPT_EVENT_INBOX_CAPACITY: usize = 4096;
+
 /// Pass-delayed inbox of `TelemetryEvent`s destined for scenario `on_event`
 /// hooks. An observer ([`collect_script_events`]) clones every fired event here;
 /// the driver drains it at the start of the next driver pass (the next fixed
 /// simulation pass while running, or the next `Update` pass while paused).
 /// Delivery remains deterministic and language-neutral: order never depends on
-/// system scheduling.
-#[derive(Resource, Default)]
+/// system scheduling. If producers outrun the driver, the inbox refuses new
+/// events and requests a loud application exit rather than growing until the
+/// simulation becomes progressively slower or drops a control edge.
+#[derive(Resource, Debug)]
 pub struct ScriptEventInbox {
     /// Events awaiting delivery on the next driver pass.
     pub pending: Vec<TelemetryEvent>,
+    /// Whether the fixed-capacity boundary has been crossed.
+    pub overflowed: bool,
+    /// Number of events refused after the boundary was crossed.
+    pub dropped: u64,
+}
+
+impl Default for ScriptEventInbox {
+    fn default() -> Self {
+        Self {
+            pending: Vec::with_capacity(SCRIPT_EVENT_INBOX_CAPACITY),
+            overflowed: false,
+            dropped: 0,
+        }
+    }
+}
+
+impl ScriptEventInbox {
+    /// Enqueue one event while preserving FIFO order.
+    ///
+    /// `false` is an explicit overflow signal. The caller owns the policy for
+    /// surfacing it (the runtime observer terminates the app); no event is
+    /// silently evicted from the front of the queue.
+    pub fn enqueue(&mut self, event: TelemetryEvent) -> bool {
+        if self.pending.len() >= SCRIPT_EVENT_INBOX_CAPACITY {
+            self.overflowed = true;
+            self.dropped = self.dropped.saturating_add(1);
+            return false;
+        }
+        self.pending.push(event);
+        true
+    }
 }
 
 /// Observer: mirror every fired `TelemetryEvent` into the scenario inbox. Reuses
@@ -929,6 +991,51 @@ pub struct ScriptEventInbox {
 /// (local input, client-side emits); host-authoritative game events reach it only
 /// once they are explicitly replicated — a scoped follow-up, not this collector's
 /// concern.
-pub fn collect_script_events(trigger: On<TelemetryEvent>, mut inbox: ResMut<ScriptEventInbox>) {
-    inbox.pending.push(trigger.event().clone());
+pub fn collect_script_events(
+    trigger: On<TelemetryEvent>,
+    mut inbox: ResMut<ScriptEventInbox>,
+    mut commands: Commands,
+) {
+    if inbox.enqueue(trigger.event().clone()) {
+        return;
+    }
+    // Send the terminal signal only once. The first rejected event is enough
+    // to identify the fault; additional events are counted without producing a
+    // second message or another log line.
+    if inbox.dropped == 1 {
+        error!(
+            "[scripting] telemetry event inbox overflowed at {} events; refusing further events and stopping the application",
+            SCRIPT_EVENT_INBOX_CAPACITY
+        );
+        commands.write_message(AppExit::error());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ScriptEventInbox, SCRIPT_EVENT_INBOX_CAPACITY};
+    use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+
+    fn event(index: usize) -> TelemetryEvent {
+        TelemetryEvent {
+            name: format!("event:{index}"),
+            source: 0,
+            severity: Severity::Info,
+            data: TelemetryValue::F64(index as f64),
+            timestamp: index as f64,
+        }
+    }
+
+    #[test]
+    fn event_inbox_is_bounded_and_reports_overflow() {
+        let mut inbox = ScriptEventInbox::default();
+        for index in 0..SCRIPT_EVENT_INBOX_CAPACITY {
+            assert!(inbox.enqueue(event(index)));
+        }
+        assert_eq!(inbox.pending.len(), SCRIPT_EVENT_INBOX_CAPACITY);
+        assert!(!inbox.enqueue(event(SCRIPT_EVENT_INBOX_CAPACITY)));
+        assert!(inbox.overflowed);
+        assert_eq!(inbox.dropped, 1);
+        assert_eq!(inbox.pending[0].name, "event:0");
+    }
 }
