@@ -7219,7 +7219,6 @@ name = "lunco-avatar"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
- "big_space",
  "leafwing-input-manager",
  "lunco-avatar-camera-core",
  "lunco-avatar-input",
