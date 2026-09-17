@@ -142,7 +142,8 @@ External communication, ECS replication, telemetry extraction, and distributed a
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-networking`** | Multiplayer layer: transport-agnostic replication, authentication, and collaborative edit logs. Host-authoritative planes broadcast on connect + change: the **journal plane** (convergent op-log merge), the **scenario plane** (CID asset manifest + scenario sync), the **scripted-policy plane** (rhai merge/authorize/drive-kernel hooks distributed so every peer runs the identical one), and per-peer AOI snapshot routing. |
+| **`lunco-networking-core`** | Transport-independent client netcode: snapshot interpolation, ownership prediction, rollback/reconciliation, correction smoothing, and their session state. It has no WebTransport/lightyear dependency. |
+| **`lunco-networking`** | Multiplayer replication and lightyear WebTransport adapter. Host-authoritative planes broadcast on connect + change: the **journal plane** (convergent op-log merge), the **scenario plane** (CID asset manifest + scenario sync), the **scripted-policy plane** (rhai merge/authorize/drive-kernel hooks distributed so every peer runs the identical one), and per-peer AOI snapshot routing. |
 | **`lunco-api-contracts`** | Pure API wire envelopes and shared API endpoint constants. It has no ECS or language-runtime dependency, so native clients and transport adapters compile against the same contract without linking the runtime. |
 | **`lunco-api-client`** | Generic native command-API client. It owns endpoint configuration and HTTP request/response handling; it knows no Rhai command or simulator implementation. |
 | **`lunco-api`** | ECS API runtime: typed command/query execution, reflection-based discovery, entity identity, and response/telemetry infrastructure. Its internal requests are converted to/from `lunco-api-contracts` only at transport edges. |
@@ -783,10 +784,23 @@ Custom shader appearance **intent** — **render-free**. Holds `ShaderLook` (a `
 **`lunco-networking`**
 Multiplayer transport adapter. Handles ECS replication, transport abstraction (UDP/WebSockets), and collaborative editing. Physics snapshots and camera/perspective state transfer f64 named-frame state; capture/apply automatically convert between each peer's private `ActivePhysicsFrame` and the semantic frame. No `CellCoord` is a public/wire reference-frame identity.
 
+Client prediction, rollback, interpolation, and prediction session resources
+live in the transport-independent `lunco-networking-core` package. The
+WebTransport adapter feeds its snapshot inbox and owns lightyear/server
+connection setup, so transport changes do not rebuild the prediction package.
+
 Its optional `layout-sync` feature carries `WorkbenchSnapshot` and perspective
 command payloads through `lunco-workbench-core` only; it does not depend on the
 concrete egui docking shell. The `ui` feature enables that contract layer for
 the in-sim overlays and menu bridge.
+
+**`lunco-networking-core`**
+Transport-independent client netcode. Owns snapshot interpolation, local
+ownership prediction, rollback/reconciliation, correction smoothing, and the
+resources exchanged with the replication wire. It depends on the simulation
+and Avian contracts needed to execute prediction, but not on a network
+transport; `lunco-networking` supplies incoming snapshots and composes it for
+networked applications.
 
 **`lunco-api`**
 Transport-free API core. Owns typed command/query contracts, reflection-based discovery and execution, and the process-local entity registry used by external control and inspection. Native HTTP and browser transports live in `lunco-api-transport`.

@@ -81,7 +81,8 @@ protocol and (planned) external bridges:
 ┌─── Domain Code (lunco-mobility, lunco-celestial, lunco-obc) ──────┐
 │  Port(f64), SimConnection, DVec3, Typed Commands                  │
 └──────────────────────┬────────────────────────────────────────────┘
-                       │  lunco-networking (transport adapter)
+                       │  lunco-networking-core (prediction/session state)
+                       │      └── lunco-networking (lightyear transport adapter)
     ┌──────────────────┼──────────────────┐
     ▼                  ▼                  ▼
  Internal game     CCSDS / YAMCS     DDS / ROS2
@@ -170,7 +171,8 @@ so there is zero networking footprint.
 
 ```
 lunco-mobility → lunco-networking (optional, feature: networking)
-lunco-networking           → lunco-core (for GlobalEntityId / Provenance types only)
+lunco-networking → lunco-networking-core (only with feature: networking)
+lunco-networking-core → lunco-core / lunco-core-session (simulation contracts)
 ```
 
 **As-built, replication policy is derived from the USD scene, not from a central
@@ -305,8 +307,9 @@ fn apply_drive_commands(mut query: Query<(&DriveCommand, &mut GlobalTransform)>)
 }
 ```
 
-That's it. Replication, prediction, auth, identity, and (planned) CCSDS/YAMCS export — all
-handled by the `lunco-networking` plugin registered at startup.
+That's it. Replication and transport are handled by `lunco-networking`; prediction
+and reconciliation are handled by `lunco-networking-core`. The application
+composes both through the networking feature.
 
 ---
 

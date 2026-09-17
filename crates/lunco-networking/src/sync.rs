@@ -37,15 +37,15 @@ use big_space::prelude::{CellCoord, Grid};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::session::{IncomingSnapshots, SnapshotSample};
 use leafwing_input_manager::prelude::ActionState;
-use lunco_avatar_core::roles::{AvatarCorePlugin, LocalAvatar, TheLocalAvatar};
+use lunco_avatar_core::roles::{AvatarCorePlugin, LocalAvatar};
 use lunco_core::{GlobalEntityId, Mutation, OpId, SessionId, SimTick, SyncChannel};
 use lunco_core_session::{
     authorize, AppliedInputSeq, LocalSession, NetReplicate, NetSpawn, NetworkRole,
     PendingReplicatedSpawns, ReplicatedSpawn, SessionProfiles, SessionRegistry, SyncApplyGuard,
 };
 use lunco_doc::DocumentId;
+use lunco_networking_core::session::{IncomingSnapshots, SnapshotSample};
 use lunco_spatial::ActivePhysicsFrame;
 
 use lunco_api::executor::{authz_target_gid, globalize_command_ids, resolve_command_ids};
@@ -3298,7 +3298,7 @@ impl Plugin for SyncPlugin {
             // Wire-fed snapshot inbox (review C7: moved out of core's always-on
             // set — pushed by `drain_sync_inbox` here, drained by the prediction
             // ingest; nothing outside this crate touches it).
-            .init_resource::<crate::session::IncomingSnapshots>()
+            .init_resource::<lunco_networking_core::session::IncomingSnapshots>()
             .init_resource::<NetworkConfig>()
             .init_resource::<CursorSettings>()
             .init_resource::<TutorialSettings>()

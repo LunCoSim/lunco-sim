@@ -1909,7 +1909,7 @@ impl Plugin for LunCoSimCorePlugin {
             // here, in `LunCoSimCorePlugin`, so BOTH the GUI and the headless server
             // get it exactly once; gated on `networking` like every other
             // `lunco_networking` use in this crate.
-            app.add_plugins(lunco_networking::prediction::NetcodePredictionPlugin);
+            app.add_plugins(lunco_networking_core::prediction::NetcodePredictionPlugin);
             // Scenario distribution Phase 4: once a connected client has fully
             // downloaded the host's advertised scenario, load its entry scene from
             // the cache mounted as a Twin root (read-only consume). The bridge lives here —

@@ -73,6 +73,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-storage = { path = "../lunco-storage" }
 lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
 lunco-networking = { path = "../lunco-networking", optional = true, default-features = false }
+lunco-networking-core = { path = "../lunco-networking-core", optional = true }
 lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -92,6 +93,7 @@ api-transport = [
 transport-http = ["lunco-api-transport/transport-http", "lunco-networking?/transport-http"]
 networking = [
     "dep:lunco-networking",
+    "dep:lunco-networking-core",
     "lunco-networking/networking",
     "lunco-luncosim-exposures/networking",
     "api-transport",

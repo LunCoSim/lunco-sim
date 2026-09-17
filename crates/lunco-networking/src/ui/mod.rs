@@ -69,14 +69,14 @@ fn on_net_disconnect_request(_trigger: On<NetDisconnectRequest>, mut commands: C
     commands.trigger(LeaveServer {});
 }
 
-/// While a deep link is awaiting confirmation ([`crate::session::PendingConnect`]), draw a modal
+/// While a deep link is awaiting confirmation ([`crate::connection_state::PendingConnect`]), draw a modal
 /// "Connect to X? [Join] [Cancel]". *Join* dispatches [`JoinServer`] with the
 /// link's address + digest; either choice clears the pending request. Gating an
 /// unsolicited link behind an explicit click stops a planted `luncosim://` /
 /// `?connect=` link from silently redirecting the session.
 fn draw_pending_connect_prompt(
     mut contexts: EguiContexts,
-    mut pending: ResMut<crate::session::PendingConnect>,
+    mut pending: ResMut<crate::connection_state::PendingConnect>,
     mut commands: Commands,
 ) {
     let Some(req) = pending.request.clone() else {

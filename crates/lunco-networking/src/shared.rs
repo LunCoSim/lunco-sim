@@ -175,9 +175,9 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
     // deep-link seeding, the ui confirm modal, net-diag's divergence report —
     // can take `Res`/`ResMut` without ordering worries. The always-on session
     // substrate itself is installed by `LunCoCoreSessionPlugin` at the host.
-    app.init_resource::<crate::session::PendingConnect>();
-    app.init_resource::<crate::session::IncomingSnapshots>();
-    app.init_resource::<crate::session::DivergenceStats>();
+    app.init_resource::<crate::connection_state::PendingConnect>();
+    app.init_resource::<lunco_networking_core::session::IncomingSnapshots>();
+    app.init_resource::<lunco_networking_core::session::DivergenceStats>();
 
     // The transport-agnostic wire (codec, capture/apply, snapshots) the lightyear
     // ferry below drives. Both Host and Client need it.

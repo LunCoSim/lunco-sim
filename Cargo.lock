@@ -7242,7 +7242,6 @@ dependencies = [
  "lunco-time",
  "lunco-usd-bevy-scene",
  "lunco-workspace",
- "serde",
 ]
 
 [[package]]
@@ -7755,6 +7754,7 @@ dependencies = [
  "lunco-modelica-execution",
  "lunco-modelica-runtime",
  "lunco-networking",
+ "lunco-networking-core",
  "lunco-obstacle-field",
  "lunco-physics",
  "lunco-scene-authoring",
@@ -8440,8 +8440,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-hash",
- "lunco-physics",
- "lunco-port-core",
+ "lunco-networking-core",
  "lunco-scripting",
  "lunco-settings",
  "lunco-spatial",
@@ -8460,6 +8459,20 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wtransport",
+]
+
+[[package]]
+name = "lunco-networking-core"
+version = "0.1.0-dev"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-api",
+ "lunco-core",
+ "lunco-core-session",
+ "lunco-physics",
+ "lunco-port-core",
+ "lunco-spatial",
 ]
 
 [[package]]

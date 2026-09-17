@@ -116,6 +116,7 @@ members = [
     "crates/lunco-modelica-runtime",
     "crates/lunco-materials",
     "crates/lunco-networking",
+    "crates/lunco-networking-core",
     "crates/lunco-command-macro",
     "crates/lunco-terrain-globe",
     "crates/lunco-terrain-core",

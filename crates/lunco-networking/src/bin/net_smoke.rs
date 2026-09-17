@@ -478,10 +478,10 @@ fn client_drive_cadence(
 }
 
 /// Client-side snapshot apply for this stand-in rover. The production path is
-/// `lunco_networking::prediction::apply_incoming_snapshots`.
+/// `lunco_networking_core::prediction::apply_incoming_snapshots`.
 fn test_apply_snapshots(
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    mut snaps: ResMut<lunco_networking::session::IncomingSnapshots>,
+    mut snaps: ResMut<lunco_networking_core::session::IncomingSnapshots>,
     mut q: Query<&mut Transform>,
 ) {
     if snaps.0.is_empty() {

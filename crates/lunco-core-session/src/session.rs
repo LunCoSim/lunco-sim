@@ -27,7 +27,7 @@
 //! wire layer itself (the deep-link `PendingConnect` gate, the wire
 //! `SnapshotSample`/`IncomingSnapshots`, the `DivergenceStats` desync gauge,
 //! `PendingCorrection`, `ContactPredictable`) moved to
-//! `lunco-networking/src/session.rs` — new net-only state belongs there, not here.
+//! `lunco-networking-core/src/session.rs` — new net-only state belongs there, not here.
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;

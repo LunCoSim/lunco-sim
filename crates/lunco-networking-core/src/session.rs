@@ -1,39 +1,13 @@
-//! Wire-fed session state owned by the networking adapter.
+//! Wire-fed prediction state owned by the transport-independent netcode core.
 //!
 //! These types are produced and consumed exclusively by this crate: the wire
-//! snapshot sample, deep-link confirmation gate, prediction contact gate,
-//! desync gauge, and reconcile residual. Resources here are initialized by the
-//! plugins whose systems read them ([`crate::sync::SyncPlugin`],
+//! snapshot sample, prediction contact gate, desync gauge, and reconcile
+//! residual. Resources here are initialized by the plugins whose systems read
+//! them (the `lunco-networking` sync adapter and
 //! [`crate::prediction::NetcodePredictionPlugin`]).
 
 use bevy::prelude::*;
 use std::collections::HashMap;
-
-/// A connect request that arrived from an **untrusted deep link** (a clicked
-/// `luncosim://connect?…` link, or the web `?connect=…#digest`) and is awaiting
-/// the user's confirmation. Unlike the menu's
-/// [`NetConnectRequest`](lunco_core_session::NetConnectRequest) (an explicit
-/// in-app click), a link could be planted by a third party to silently redirect
-/// the session, so the UI shows a "Connect to X? [Join] [Cancel]" prompt while
-/// this is `Some`; only on *Join* does it become a `JoinServer`. The networking
-/// adapter seeds it (native arg parse / wasm URL); the UI clears it on either
-/// choice. Both the seeder and the confirm modal live in this crate
-/// (`client` / `single_instance` / `ui`), so unlike [`lunco_core_session::NetStatus`]
-/// this is not an always-on seam.
-#[derive(Resource, Clone, Debug, Default)]
-pub struct PendingConnect {
-    /// The pending link, or `None` when nothing awaits confirmation.
-    pub request: Option<PendingConnectRequest>,
-}
-
-/// The address + optional cert digest a [`PendingConnect`] is asking to dial.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingConnectRequest {
-    /// `host:port` — hostname or `ip:port`.
-    pub address: String,
-    /// Self-signed cert digest to pin, or empty for CA validation.
-    pub digest: String,
-}
 
 /// **Contact-prediction eligibility:** this non-owned replicated body *may* be
 /// promoted to a locally-`Dynamic` [`lunco_core_session::PredictedDynamic`] body, but

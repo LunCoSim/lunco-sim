@@ -18,24 +18,14 @@
 
 use bevy::prelude::*;
 
+#[cfg(feature = "networking")]
+pub(crate) mod connection_state;
+
 /// Connect deep-link URL format (`luncosim://connect?address=…&digest=…` and the
 /// web `?connect=…#digest` form) — pure, always compiled so the host's invite
 /// link builder and the native arg parser work regardless of the `networking`
 /// feature.
 pub mod connect_link;
-
-/// Client-side netcode over avian bodies: snapshot interpolation, prediction,
-/// rollback, reconciliation and correction smoothing (`NetcodePredictionPlugin`).
-/// Always compiled — it names no lightyear type, only
-/// the always-on `lunco-core-session` substrate, so it costs nothing in a build
-/// without the `networking` feature (every system self-guards on `NetworkRole`).
-pub mod prediction;
-
-/// Wire-fed session state: the deep-link confirm gate, the wire snapshot sample,
-/// the prediction contact gate, the desync gauge, and the reconcile residual.
-/// Every producer and consumer is in this crate. Always compiled — plain data,
-/// no lightyear type named.
-pub mod session;
 
 /// The **bytes plane**: fetch a scenario's CID-addressed assets over HTTP rather
 /// than streaming them through the reliable QUIC channel (which queues without
