@@ -9424,6 +9424,23 @@ dependencies = [
 name = "lunco-usd-bevy-runtime"
 version = "0.1.0"
 dependencies = [
+ "bevy",
+ "lunco-usd-avian",
+ "lunco-usd-bevy",
+ "lunco-usd-bevy-animation",
+ "lunco-usd-bevy-diagnostics",
+ "lunco-usd-bevy-runtime-core",
+ "lunco-usd-commands",
+ "lunco-usd-sim",
+ "lunco-usd-sim-cosim",
+ "lunco-usd-sim-cosim-api",
+ "lunco-usd-sim-domain-api",
+]
+
+[[package]]
+name = "lunco-usd-bevy-runtime-core"
+version = "0.1.0-dev"
+dependencies = [
  "avian3d",
  "bevy",
  "big_space",
@@ -9438,22 +9455,16 @@ dependencies = [
  "lunco-twin",
  "lunco-usd-authoring",
  "lunco-usd-avian",
- "lunco-usd-bevy",
- "lunco-usd-bevy-animation",
  "lunco-usd-bevy-core",
- "lunco-usd-bevy-diagnostics",
  "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-twin",
- "lunco-usd-commands",
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-usd-document",
  "lunco-usd-sim",
  "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
- "lunco-usd-sim-cosim-api",
- "lunco-usd-sim-domain-api",
  "lunco-usd-sim-shader",
  "lunco-workspace",
  "openusd",
@@ -9898,7 +9909,7 @@ dependencies = [
  "lunco-settings",
  "lunco-usd-bevy",
  "lunco-usd-bevy-core",
- "lunco-usd-bevy-runtime",
+ "lunco-usd-bevy-runtime-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-twin",
  "lunco-usd-commands",

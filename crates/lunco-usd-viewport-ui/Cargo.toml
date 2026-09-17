@@ -41,7 +41,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 lunco-usd-commands = { path = "../lunco-usd-commands" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
-lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
+lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
 
 [lints]
 workspace = true

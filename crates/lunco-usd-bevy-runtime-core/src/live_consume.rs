@@ -205,7 +205,7 @@ impl LiveTransformEditHints {
 
 /// Record a successful typed transform authoring operation. The resource
 /// is optional for small headless projection tests that construct only the sink
-/// bridge; production installs it with `UsdSceneRuntimePlugin`.
+/// bridge; production installs it with this package's `UsdSceneRuntimePlugin`.
 pub(crate) fn mark_live_transform(
     world: &mut World,
     stage: AssetId<UsdStageAsset>,
@@ -1057,9 +1057,9 @@ pub(crate) fn reconcile_structural_live(
                 lunco_usd_sim_cosim::scene::despawn_usd_subtree(world, entity);
             }
             (true, None) => {
-                let parent_path =
-                    path.rsplit_once('/')
-                        .map(|(prefix, _)| if prefix.is_empty() { "/" } else { prefix });
+                let parent_path = path
+                    .rsplit_once('/')
+                    .map(|(prefix, _)| if prefix.is_empty() { "/" } else { prefix });
                 let Some(parent_path) = parent_path else {
                     continue;
                 };

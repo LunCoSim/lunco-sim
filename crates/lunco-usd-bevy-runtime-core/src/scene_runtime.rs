@@ -9,16 +9,16 @@ use bevy::prelude::*;
 use lunco_core::{on_command, register_commands};
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
-use lunco_usd_bevy_core::{source::UsdSourceText, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdStageAsset, source::UsdSourceText};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
-use lunco_usd_core::commands::{is_usd_path, EmptyViewportReason};
+use lunco_usd_core::commands::{EmptyViewportReason, is_usd_path};
 use lunco_usd_document::document::UsdDocument;
-use lunco_usd_sim_cosim::scene::{
-    clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
-    ClearScene, LoadScene, SceneEntities,
-};
 use lunco_usd_sim_cosim::SceneLoadInFlight;
-use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
+use lunco_usd_sim_cosim::scene::{
+    ClearScene, LoadScene, SceneEntities, clear_scene_entities, resolve_root_prim,
+    spawn_scene_root_world, validate_scene_address,
+};
+use lunco_workspace::open::{PendingTwinOpens, TwinOpenMode, spawn_twin_scan};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 
 /// Telemetry mnemonic for a default Twin scene whose authoritative source did

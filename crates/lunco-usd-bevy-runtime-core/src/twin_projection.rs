@@ -55,7 +55,7 @@ use bevy::prelude::*;
 use lunco_assets_core::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy_core::{
-    source::UsdSourceText, UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan,
+    UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan, source::UsdSourceText,
 };
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued, UsdSceneRoot,
@@ -547,10 +547,16 @@ pub(crate) fn drain_pending_twin_docs(
 /// the live edit reaches the settled generation. Drops entries whose document
 /// has closed.
 /// Serialize a doc-backed scene's composed source into its twin overlay (the
-/// persistence / next-load source) and mark it overlay-synced at `gen`. O(stage) — a
+/// persistence / next-load source) and mark it overlay-synced at `generation`. O(stage) — a
 /// whole-stage recompose + serialize — so call it only once the document has SETTLED
 /// (see the settle step in [`sync_twin_overlays`]), never on every edit.
-fn write_twin_overlay(world: &mut World, doc: DocumentId, name: &str, rel: &str, gen: u64) -> bool {
+fn write_twin_overlay(
+    world: &mut World,
+    doc: DocumentId,
+    name: &str,
+    rel: &str,
+    generation: u64,
+) -> bool {
     let composed_source = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)
@@ -566,7 +572,7 @@ fn write_twin_overlay(world: &mut World, doc: DocumentId, name: &str, rel: &str,
         }
         world
             .resource_mut::<DocBackedTwinScenes>()
-            .mark_overlay_synced(doc, gen);
+            .mark_overlay_synced(doc, generation);
         true
     } else {
         false
@@ -937,7 +943,7 @@ const COMPONENT_REFRESH_POLICY_HOOK: &str = "usd.component_refresh";
 
 lunco_hooks::declare_hook! {
     id: COMPONENT_REFRESH_POLICY_HOOK,
-    owner: "lunco-usd-bevy-runtime",
+    owner: "lunco-usd-bevy-runtime-core",
     description: "Choose whether a changed USD component layer propagates to dependent stages.",
     signature: [ctx: Map],
     output: Map,
@@ -2210,11 +2216,12 @@ mod tests {
             .resource_mut::<Assets<UsdStageAsset>>()
             .remove(handle.id());
         app.update();
-        assert!(app
-            .world()
-            .resource::<lunco_core::RuntimeDiagnostics>()
-            .findings
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2241,11 +2248,13 @@ mod tests {
             Ok(ComponentRefreshDecision::Reject)
         );
         assert!(parse_component_refresh_decision(&HookValue::Unit).is_err());
-        assert!(parse_component_refresh_decision(&HookValue::map([(
-            "action",
-            HookValue::str("unknown"),
-        )]))
-        .is_err());
+        assert!(
+            parse_component_refresh_decision(&HookValue::map([(
+                "action",
+                HookValue::str("unknown"),
+            )]))
+            .is_err()
+        );
     }
 
     #[test]
@@ -2481,24 +2490,27 @@ mod tests {
             PathBuf::from("/twins/incoming"),
         );
 
-        assert!(!app
-            .world()
-            .resource::<PendingTwinDocs>()
-            .has_terminal_source_event());
+        assert!(
+            !app.world()
+                .resource::<PendingTwinDocs>()
+                .has_terminal_source_event()
+        );
         app.world_mut()
             .resource_mut::<Messages<bevy::asset::AssetEvent<UsdSourceText>>>()
             .write(bevy::asset::AssetEvent::Added { id: handle.id() });
         app.update();
 
-        assert!(app
-            .world()
-            .resource::<PendingTwinDocs>()
-            .has_terminal_source_event());
-        assert!(app
-            .world()
-            .resource::<PendingTwinDocs>()
-            .ready
-            .contains(&handle.id()));
+        assert!(
+            app.world()
+                .resource::<PendingTwinDocs>()
+                .has_terminal_source_event()
+        );
+        assert!(
+            app.world()
+                .resource::<PendingTwinDocs>()
+                .ready
+                .contains(&handle.id())
+        );
     }
 
     #[test]

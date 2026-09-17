@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_bevy::UsdVisualPlugin;
 use lunco_usd_bevy_core::UsdStageAsset;
-use lunco_usd_bevy_runtime::UsdSceneRuntimePlugin;
+use lunco_usd_bevy_runtime_core::UsdSceneRuntimePlugin;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_commands::UsdCommandsPlugin;
 use lunco_usd_core::commands::ApplyUsdOp;

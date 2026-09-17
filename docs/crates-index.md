@@ -96,7 +96,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
 | **`lunco-usd-commands`** | Headless USD document and authoring command boundary: document kind registration, open/new/save/undo/redo, document lifecycle, and typed USD authoring commands. It owns no scene admission or visual projection. |
-| **`lunco-usd-bevy-runtime`** | Application-level USD runtime boundary: scene admission, Twin-backed stage loading, runtime persistence, live document-to-stage projection, and composition of visual, diagnostics, physics, simulation, and document-command plugins. |
+| **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, runtime persistence, and live document-to-stage projection. |
+| **`lunco-usd-bevy-runtime`** | Application-level composition of the USD runtime, visual, diagnostics, physics, simulation, and document-command plugins. |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, visual-split markers, preview/ancestry ownership, authored billboard contracts, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
@@ -531,8 +532,8 @@ Headless USD document and authoring command boundary. It registers the USD
 document kind, owns file/open/save and document-lifecycle observers, and lowers
 typed USD document commands through the canonical journal path. Scene
 admission, Twin-backed stage loading, and live document projection belong to
-`lunco-usd-bevy-runtime`, so document-only hosts can use this package without
-the scene runtime closure.
+`lunco-usd-bevy-runtime-core`, so document-only hosts can use this package
+without the complete visual/simulation bundle.
 
 **`lunco-usd-queries`**
 UI-free public query providers for the USD document boundary. It owns
@@ -542,13 +543,17 @@ state, journal, and mounted stage without depending on runtime orchestration
 or UI presentation. Its public query contracts are tested in
 `crates/lunco-usd-queries/tests/query_api.rs`.
 
+**`lunco-usd-bevy-runtime-core`**
+Headless-safe scene runtime boundary. Installs scene admission, Twin-backed
+stage loading, runtime persistence, and live document-to-stage projection. It
+does not assemble the complete visual, diagnostics, physics, simulation, or
+document-command bundle.
+
 **`lunco-usd-bevy-runtime`**
-Application-level runtime boundary. Installs scene admission, Twin-backed
-stage loading, runtime persistence, and live document-to-stage projection,
-then composes the visual USD projector, visual diagnostics, Avian physics, USD
-simulation, and document commands as one complete runtime bundle. Applications
-that need a smaller closure can install the document command or projection
-plugins independently.
+Application-level composition boundary. Installs the visual USD projector,
+visual diagnostics, Avian physics, USD simulation, document commands, and
+`lunco-usd-bevy-runtime-core` as one complete runtime bundle. Applications that
+need only scene admission and live projection can depend on the core package.
 
 **`lunco-usd-geometry`**
 Render-free reusable geometry substrate for USD projections: USD BasisCurves

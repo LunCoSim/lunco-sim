@@ -3,36 +3,16 @@ name = "lunco-usd-bevy-runtime"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "USD scene admission, live projection, and application runtime composition"
+description = "Application-level USD runtime plugin composition"
 
 [dependencies]
 bevy = { workspace = true }
-big_space = { workspace = true }
-openusd = { workspace = true }
-lunco-assets-core = { path = "../lunco-assets-core" }
-lunco-core = { path = "../lunco-core" }
-lunco-core-session = { path = "../lunco-core-session" }
-lunco-doc = { path = "../lunco-doc" }
-lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-hooks = { path = "../lunco-hooks" }
-lunco-render = { path = "../lunco-render" }
-lunco-storage = { path = "../lunco-storage" }
-lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
-lunco-usd-authoring = { path = "../lunco-usd-authoring" }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
-lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
-lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
-lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
-lunco-usd-compose = { path = "../lunco-usd-compose" }
-lunco-usd-core = { path = "../lunco-usd-core" }
-lunco-usd-document = { path = "../lunco-usd-document" }
-lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
-lunco-workspace = { path = "../lunco-workspace" }
+lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
 lunco-usd-commands = { path = "../lunco-usd-commands" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-animation = { path = "../lunco-usd-bevy-animation" }
 lunco-usd-bevy-diagnostics = { path = "../lunco-usd-bevy-diagnostics" }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-sim-cosim-api = { path = "../lunco-usd-sim-cosim-api", optional = true }
@@ -46,8 +26,3 @@ api = [
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-avian3d = { workspace = true }
-lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
-tempfile = { workspace = true }
