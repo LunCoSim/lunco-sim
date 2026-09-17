@@ -2080,6 +2080,26 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
             }
         });
     });
+    // subscribe_from(name, source) — source-scoped form for event-heavy
+    // scenes. It lets a mission receive a high-rate command only from the
+    // vehicle it owns. A negative source is a hard script error; callers must
+    // resolve an authored entity with find() and fail loudly if it is absent.
+    engine.register_fn(
+        "subscribe_from",
+        |name: ImmutableString, source: i64| -> Result<(), Box<rhai::EvalAltResult>> {
+            if source < 0 {
+                return Err(json_boundary_error(
+                    "subscribe_from requires a non-negative source gid".to_string(),
+                ));
+            }
+            SUBS_ACCUM.with(|s| {
+                if let Some(a) = s.borrow_mut().as_mut() {
+                    a.exact_sources.push((name.into(), source as u64));
+                }
+            });
+            Ok(())
+        },
+    );
     // subscribe_prefix(pfx) — receive every event whose name starts with `pfx`
     // (e.g. "enter:" for all zone-enters). Same on_start-only semantics.
     engine.register_fn("subscribe_prefix", |pfx: ImmutableString| {
@@ -2323,7 +2343,8 @@ const COMPILED_CACHE_CAP: usize = 512;
 const SCRIPT_EVENT_BUFFER_CAPACITY: usize = 256;
 
 /// Which events a scenario wants delivered to its `on_event` — **per-entity
-/// state** (set at runtime in `on_start` via `subscribe`/`subscribe_prefix`), so
+/// state** (set at runtime in `on_start` via `subscribe`, `subscribe_prefix`,
+/// or `subscribe_from`), so
 /// it is NOT part of the shared [`CompiledProgram`]. Default [`All`] = every
 /// event (behaviour-identical to no filter). A scenario that subscribes trades a
 /// tiny footgun (forget a name ⇒ that event skips its `on_event`) for skipping
@@ -2334,20 +2355,32 @@ enum EventFilter {
     /// safe, it just means "all", never a silent drop).
     #[default]
     All,
-    /// Only events whose name is in `exact` or starts with a `prefixes` entry
-    /// (e.g. `subscribe_prefix("enter:")` for every zone-enter).
+    /// Only events whose name is in `exact`, starts with a `prefixes` entry
+    /// (e.g. `subscribe_prefix("enter:")` for every zone-enter), or matches an
+    /// exact `(name, source_gid)` subscription.
     Named {
         exact: std::collections::HashSet<String>,
         prefixes: Vec<String>,
+        /// Exact event names paired with an emitter gid. Ordinary `exact`
+        /// names remain source-agnostic.
+        exact_sources: std::collections::HashMap<String, std::collections::HashSet<u64>>,
     },
 }
 
 impl EventFilter {
-    fn matches(&self, name: &str) -> bool {
+    fn matches(&self, name: &str, source: u64) -> bool {
         match self {
             EventFilter::All => true,
-            EventFilter::Named { exact, prefixes } => {
-                exact.contains(name) || prefixes.iter().any(|p| name.starts_with(p.as_str()))
+            EventFilter::Named {
+                exact,
+                prefixes,
+                exact_sources,
+            } => {
+                exact.contains(name)
+                    || prefixes.iter().any(|p| name.starts_with(p.as_str()))
+                    || exact_sources
+                        .get(name)
+                        .is_some_and(|sources| sources.contains(&source))
             }
         }
     }
@@ -2355,10 +2388,13 @@ impl EventFilter {
 
 /// Accumulates `subscribe()` calls made during the CURRENT `on_start` (see
 /// [`SUBS_ACCUM`]); harvested into the entity's [`EventFilter`] right after.
+/// Source-scoped entries are kept as `(name, gid)` pairs until harvest so the
+/// hot event path can use a borrowed name lookup without allocating.
 #[derive(Default)]
 struct SubsAccum {
     exact: Vec<String>,
     prefixes: Vec<String>,
+    exact_sources: Vec<(String, u64)>,
 }
 
 impl SubsAccum {
@@ -2369,6 +2405,13 @@ impl SubsAccum {
             EventFilter::Named {
                 exact: self.exact.into_iter().collect(),
                 prefixes: self.prefixes,
+                exact_sources: self.exact_sources.into_iter().fold(
+                    std::collections::HashMap::new(),
+                    |mut sources, (name, gid)| {
+                        sources.entry(name).or_default().insert(gid);
+                        sources
+                    },
+                ),
             }
         }
     }
@@ -2664,7 +2707,12 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             ScenarioHook::Stop => &[],
         };
         let mut driver_err = None;
-        let pending_events = if matches!(hook, ScenarioHook::Tick) {
+        // Reuse the per-scenario event buffer across ticks.  The old
+        // `mem::take` path dropped the Vec after every projection, so a
+        // long-running mission repeatedly allocated capacity even when its
+        // bounded queue stayed empty.  Keep ownership local while the native
+        // drivers consume the snapshot, then return the allocation below.
+        let mut pending_events = if matches!(hook, ScenarioHook::Tick) {
             std::mem::take(&mut st.pending_events)
         } else {
             Vec::new()
@@ -2706,8 +2754,14 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 }
             }
         }
-        user.or(driver_err)
-            .map(|(msg, pos)| rhai_diagnostic(msg, pos))
+        let diagnostic = user
+            .or(driver_err)
+            .map(|(msg, pos)| rhai_diagnostic(msg, pos));
+        if matches!(hook, ScenarioHook::Tick) {
+            pending_events.clear();
+            st.pending_events = pending_events;
+        }
+        diagnostic
     }
 
     fn deliver_event(
@@ -2734,7 +2788,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // call entirely. Task and mission drivers consume the already-buffered
         // bounded identity projection on the next fixed pass.
         let (hook_ast, eval_ast) = st.program.hook_target();
-        let user = if st.program.mask.event && st.filter.matches(&event.name) {
+        let user = if st.program.mask.event && st.filter.matches(&event.name, event.source) {
             let evt = bridge_core::build_event(&RhaiBuilder, event);
             call_event_hook(
                 &self.engine,
@@ -3399,6 +3453,36 @@ mod tests {
 
     use bevy::math::DVec3;
     use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+
+    #[test]
+    fn source_scoped_event_filter_accepts_only_the_declared_emitter() {
+        let filter = super::EventFilter::Named {
+            exact: std::collections::HashSet::new(),
+            prefixes: Vec::new(),
+            exact_sources: std::collections::HashMap::from([(
+                "cmd:SetPorts".to_string(),
+                std::collections::HashSet::from([7]),
+            )]),
+        };
+        assert!(filter.matches("cmd:SetPorts", 7));
+        assert!(!filter.matches("cmd:SetPorts", 8));
+        assert!(!filter.matches("cmd:DetachJoint", 7));
+    }
+
+    #[test]
+    fn source_scoped_event_filter_stays_compatible_with_name_subscription() {
+        let filter = super::EventFilter::Named {
+            exact: std::collections::HashSet::from(["lander_touchdown".to_string()]),
+            prefixes: Vec::new(),
+            exact_sources: std::collections::HashMap::from([(
+                "cmd:SetPorts".to_string(),
+                std::collections::HashSet::from([7]),
+            )]),
+        };
+        assert!(filter.matches("lander_touchdown", 1));
+        assert!(filter.matches("cmd:SetPorts", 7));
+        assert!(!filter.matches("cmd:SetPorts", 8));
+    }
     use rhai::{Dynamic, Map};
 
     /// **H6** — a re-entrant call into the bridge must not take down the app.
@@ -3647,7 +3731,11 @@ mod tests {
             &mut scope,
             &ast,
             "__run_mission",
-            [Dynamic::from_int(1), Dynamic::from_array(Vec::new())],
+            [
+                Dynamic::from_int(1),
+                Dynamic::from_array(Vec::new()),
+                Dynamic::from_map(Map::new()),
+            ],
         );
         drop(result.expect("mission driver must use the new transient event argument"));
     }
@@ -3797,7 +3885,10 @@ mod tests {
                 &mut scope,
                 &full,
                 "on_tick",
-                [rhai::Dynamic::from_int(1)],
+                [
+                    rhai::Dynamic::from_int(1),
+                    rhai::Dynamic::from_map(Map::new()),
+                ],
             )
             .expect_err("without the imports AST this must fail");
         assert!(
@@ -3819,7 +3910,10 @@ mod tests {
                 &mut scope,
                 &imports_ast,
                 "on_tick",
-                [rhai::Dynamic::from_int(1)],
+                [
+                    rhai::Dynamic::from_int(1),
+                    rhai::Dynamic::from_map(Map::new()),
+                ],
             )
             .expect("the hoisted import should make `cam` resolvable inside on_tick");
         assert_eq!(got, 7);

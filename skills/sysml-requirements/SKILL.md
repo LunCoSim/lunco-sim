@@ -246,18 +246,41 @@ active Twin, the generic tool uses:
 let source = sysml_requirements::source();
 ```
 
+When a policy needs several literals, select them in one bounded request and
+reuse the returned report:
+
+```rhai
+let source = sysml_requirements::source_with_attributes([
+    "Project::Vehicle::massKg", "Project::Vehicle::wheelRadiusM"
+]);
+if source.ok != true { throw(source.error); }
+let mass = sysml_requirements::number(source, "Project::Vehicle::massKg");
+let radius = sysml_requirements::number(source, "Project::Vehicle::wheelRadiusM");
+```
+
+This avoids one source-set validation and JSON projection per literal. Keep the
+report local to the evaluation or task-construction boundary; do not turn it
+into a mutable global cache. Qualified selectors are preferred, and ambiguous
+short selectors remain an explicit error.
+
 That call is read-only. It fails visibly when there is no active Twin, no
 indexed SysML source, a parser diagnostic, a registry error, or a registry
 verification name that does not exist in the source set. Do not add a fallback
 that lets a test run against copied requirements.
 
-The compact report includes `requirements`, `attributes` (currently keyed by
-the source attribute's short name),
+The compact report includes `requirements`, `attributes` (an intentionally
+empty compatibility slot), `attributes_qualified` (the identity-preserving
+map keyed by each qualified SysML name), `attribute_collisions`,
 `requirement_records`, `verification_cases`, `verification_records`,
 `verification_registry`, `verification_registry_errors`, `source_files`,
 `source_revision`, and `source_revision_hex`. Use native report maps in Rhai;
-use JSON only at an external/logging boundary. The full non-compact report
-also exposes `attributes_qualified` and `attribute_collisions` for tooling.
+use JSON only at an external/logging boundary. `attributes: []` is a bounded
+selection request: the generic `sysml_requirements::attribute` helper resolves
+the requested qualified literal through the same validated provider and fails
+on ambiguity or absence. Callers that need several literals should request
+them together through the provider's `attributes` selector; never reconstruct
+a short-name map, because colliding component attributes must remain
+distinct.
 
 For a component-owned observer, resolve the manifest binding through the
 generic helper instead of repeating scene/script or qualified-verification
@@ -316,6 +339,7 @@ Available generic check kinds are:
 | Kind | Observation | Important fields |
 |---|---|---|
 | `coverage` | requirement/verification traceability only | no USD path |
+| `assert` | source-derived predicate, including cross-component interface checks | `ok`, optional `actual`, `expected`, `error`; no USD path |
 | `exists` | prim exists, optionally has type and visibility | `path`, `expected_type`, `visible` |
 | `children` | required child prims exist and are visible | `paths`, `visible` |
 | `attribute` | scalar USD attribute is near a SysML literal | `path`, `attr`, `expected_attr`, `tolerance` |

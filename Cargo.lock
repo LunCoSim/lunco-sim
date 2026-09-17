@@ -8897,6 +8897,7 @@ dependencies = [
  "rhai",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

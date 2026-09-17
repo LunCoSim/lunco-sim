@@ -342,6 +342,30 @@ fn _check_one(report, check, indexes) {
             actual: actual, expected: expected};
     }
 
+    // A source-derived assertion has no USD path.  Twin-authored Rhai uses
+    // this for cross-component contracts (for example, a ramp envelope
+    // derived from the FLIP wheel stations) while retaining the same
+    // requirement/verification coverage and structured evidence as a USD
+    // observation.  The predicate itself is computed by the Twin; this
+    // generic branch only records the result and enforces loud failure.
+    if check.kind == "assert" {
+        if check.ok == () {
+            return _failure(check, "source-derived assertion did not provide a boolean result");
+        }
+        let actual = if check.actual == () { () } else { check.actual };
+        let expected = if check.expected == () { () } else { check.expected };
+        if check.ok != true {
+            let message = if check.error == () || check.error == ""
+                { "source-derived assertion failed" } else { check.error };
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement, verification: check.verification,
+                kind: check.kind, error: message, actual: actual, expected: expected};
+        }
+        return #{ok: true, id: check.id, component: check.component,
+            requirement: check.requirement, verification: check.verification,
+            kind: check.kind, actual: actual, expected: expected};
+    }
+
     if check.path == () || check.path == "" {
         return _failure(check, "USD observation path is missing");
     }
@@ -556,4 +580,29 @@ fn source() {
     // so adding another subsystem cannot make every Rhai test exceed the
     // engine's value budget.
     query("ValidateSysml", #{path: "twin://" + name, compact: true, attributes: []})
+}
+
+/// Build one bounded source projection for a group of literals.
+///
+/// Callers that need several parameters should use this once and then pass the
+/// returned report to `number`/`text`.  Sending one `ValidateSysml` request per
+/// literal is both slower and needlessly repeats Twin source-set validation.
+/// The selector is deliberately forwarded unchanged: qualified names preserve
+/// ownership, while a short name that maps to multiple definitions remains
+/// visible through `attribute_collisions` and is rejected by `attribute`.
+fn source_with_attributes(names) {
+    let name = twin_name();
+    if name == "" { return #{ok: false, error: "active Twin is unavailable"}; }
+    if names == () || type_of(names) != "array" {
+        return #{ok: false, error: "SysML attribute selector must be an array"};
+    }
+    let selected = [];
+    for literal in names {
+        if type_of(literal) != "string" || literal == "" {
+            return #{ok: false, error: "SysML attribute selector contains an invalid name"};
+        }
+        if !selected.contains(literal) { selected.push(literal); }
+    }
+    query("ValidateSysml", #{path: "twin://" + name,
+        compact: true, attributes: selected})
 }
