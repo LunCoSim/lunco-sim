@@ -2,7 +2,7 @@
 //!
 //! The heavy work lives here in Rust (and thus serves every scripting language):
 //! a cadence-gated pairwise sweep over direct [`LinkNode`] and radio
-//! [`crate::WifiNode`]
+//! [`lunco_celestial_spatial_core::WifiNode`]
 //! entities that computes the geometry — range, local elevation, analytic body
 //! occlusion, and terrain occlusion (via the generic `TerrainRaycast` query) —
 //! then asks a
@@ -236,7 +236,7 @@ pub(crate) fn link_solve_due(
     config: Option<Res<LinkConfig>>,
     world_time: Option<Res<WorldTime>>,
     state: Res<LinkSolverState>,
-    nodes: Query<(), Or<(With<LinkNode>, With<crate::wifi::WifiNode>)>>,
+    nodes: Query<(), Or<(With<LinkNode>, With<lunco_celestial_spatial_core::WifiNode>)>>,
 ) -> bool {
     if nodes.iter().take(2).count() < 2 {
         return false;
@@ -306,7 +306,7 @@ pub(crate) fn update_links(
     )>,
     q_wifi: Query<(
         Entity,
-        &crate::wifi::WifiNode,
+        &lunco_celestial_spatial_core::WifiNode,
         &SolarFramePose,
         Option<&Name>,
         Option<&lunco_core::GlobalEntityId>,
@@ -1760,7 +1760,7 @@ mod tests {
         let a = world
             .spawn((
                 lunco_core::GlobalEntityId::from_raw(GID_A),
-                crate::wifi::WifiNode { max_range_m: 100.0 },
+                lunco_celestial_spatial_core::WifiNode { max_range_m: 100.0 },
                 SolarFramePose {
                     pos: DVec3::ZERO,
                     rotation: DQuat::IDENTITY,
@@ -1772,7 +1772,7 @@ mod tests {
         let b = world
             .spawn((
                 lunco_core::GlobalEntityId::from_raw(GID_B),
-                crate::wifi::WifiNode { max_range_m: 100.0 },
+                lunco_celestial_spatial_core::WifiNode { max_range_m: 100.0 },
                 SolarFramePose {
                     pos: DVec3::new(10.0, 0.0, 0.0),
                     rotation: DQuat::IDENTITY,

@@ -9743,7 +9743,6 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-celestial",
- "lunco-celestial-spatial",
  "lunco-celestial-spatial-core",
  "lunco-environment",
  "lunco-time",

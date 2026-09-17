@@ -106,3 +106,34 @@ pub struct LinkPeer {
     /// Authored role of the peer.
     pub class: Option<String>,
 }
+
+/// A scene-authored short-range radio endpoint.
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct WifiNode {
+    /// Maximum radio range in metres for this endpoint.
+    pub max_range_m: f64,
+}
+
+/// One endpoint's resolved short-range radio peers.
+#[derive(Component, Debug, Clone, Default, Reflect)]
+#[reflect(Component)]
+pub struct WifiState {
+    /// Peers resolved for this endpoint at the last radio projection pass.
+    pub peers: Vec<WifiPeer>,
+}
+
+/// One resolved short-range radio peer.
+#[derive(Debug, Clone, Reflect)]
+pub struct WifiPeer {
+    /// Stable global id of the peer.
+    pub peer: u64,
+    /// Whether both endpoints' range limits permit the connection.
+    pub connected: bool,
+    /// Geometric range in metres.
+    pub range_m: f64,
+    /// One-way propagation time in seconds.
+    pub light_time_s: f64,
+    /// Authored role of the peer.
+    pub class: Option<String>,
+}

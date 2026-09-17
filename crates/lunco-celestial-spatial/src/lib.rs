@@ -162,7 +162,7 @@ impl Plugin for CelestialPlugin {
         // over (docs 10/12) — plus the solar-pose tracking system that feeds
         // the sole `SolarFramePose` reader path, including scene-local prims.
         queries::register_celestial_queries(app);
-        app.register_type::<pose::SolarTracked>();
+        app.register_type::<lunco_celestial_spatial_core::SolarTracked>();
         app.add_systems(
             Update,
             pose::update_solar_poses.run_if(cadence::tracked_needs_solve()),
@@ -181,8 +181,8 @@ impl Plugin for CelestialPlugin {
         app.register_type::<lunco_celestial_spatial_core::LinkOccluder>();
         app.register_type::<lunco_celestial_spatial_core::LinkState>();
         app.register_type::<lunco_celestial_spatial_core::LinkGeometryState>();
-        app.register_type::<wifi::WifiNode>();
-        app.register_type::<wifi::WifiState>();
+        app.register_type::<lunco_celestial_spatial_core::WifiNode>();
+        app.register_type::<lunco_celestial_spatial_core::WifiState>();
         link::register_all_commands(app);
         app.add_observer(
             lunco_port_core::ports::bump_port_topology_on_add::<

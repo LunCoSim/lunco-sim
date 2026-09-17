@@ -9,31 +9,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use lunco_celestial_spatial_core::LinkGeometryState;
-
-/// A scene-authored rover radio endpoint.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct WifiNode {
-    /// Maximum radio range in metres for this endpoint.
-    pub max_range_m: f64,
-}
-
-/// One endpoint's resolved Wi-Fi peers.
-#[derive(Component, Debug, Clone, Default, Reflect)]
-#[reflect(Component)]
-pub struct WifiState {
-    pub peers: Vec<WifiPeer>,
-}
-
-#[derive(Debug, Clone, Reflect)]
-pub struct WifiPeer {
-    pub peer: u64,
-    pub connected: bool,
-    pub range_m: f64,
-    pub light_time_s: f64,
-    pub class: Option<String>,
-}
+use lunco_celestial_spatial_core::{LinkGeometryState, WifiNode, WifiPeer, WifiState};
 
 /// Wi-Fi is a projection of `WifiNode` settings and the generic link geometry.
 /// Rebuild it only when one of those inputs changes; stable frames have no new

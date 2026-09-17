@@ -363,12 +363,14 @@ Headless celestial semantics. Owns the canonical body catalog and named semantic
 The lightweight ECS boundary for celestial spatial facts. It owns the semantic
 frame-to-grid index, canonical site/body-fixed pose query, ENU surface-frame
 helpers, scene body declarations, orbital-view state, the cached local gravity
-fact, and the published `LinkNode`, `LinkState`, `LinkGeometryState`, peer, and
+fact, authored mission declarations, the solar-tracking marker, and the
+published `LinkNode`, `LinkState`, `LinkGeometryState`, Wi-Fi, peer, and
 occluder components consumed by cameras, avatars, networking, scripting,
-telemetry, and UI. It depends only on the semantic celestial package, generic
-spatial coordinates, and the Bevy/BigSpace types required by those contracts.
-It does not install a celestial runtime or pull terrain, globe, link solving,
-imagery, trajectory, cadence, or asset integration.
+telemetry, USD projection, and UI. It depends only on the semantic celestial
+package, generic spatial coordinates, and the Bevy/BigSpace types required by
+those contracts. It does not install a celestial runtime or pull terrain,
+globe, link solving, imagery, trajectory sampling, cadence, or asset
+integration.
 
 **`lunco-celestial-spatial`**
 Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, globe/imagery integration, links, trajectories, cadence, and runtime commands. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
