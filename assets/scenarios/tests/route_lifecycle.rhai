@@ -168,7 +168,7 @@ fn color_matches(actual, expected) {
 }
 
 fn context(doc, path, position) {
-    #{
+    let value = #{
         button: "primary",
         screen_position: [64.0, 64.0],
         doc_id: doc,
@@ -182,8 +182,12 @@ fn context(doc, path, position) {
         hit_entity_id: if path == () { () } else { find_path(path) },
         modifiers: #{ alt: true, shift: false, ctrl: false },
         pointer_intents: ["route.add_point"],
-        world_position: point3(position, "active_physics"),
+        world_position: if position == () { () } else { point3(position, "active_physics") },
+    };
+    if position != () {
+        value.surface_world_position = point3(position, "active_physics");
     }
+    value
 }
 
 fn modified_context(doc, path, position, modifiers) {
@@ -268,11 +272,11 @@ fn on_event(me, evt, ctx) {
     if evt.name == "program_switch_hold_started" { this.hold_started += 1; }
     if evt.name == "program.ready" && this.phase >= 101
         && evt.value != () && evt.value["path"] == this.program_path {
-        let current = query("InspectUsdDocument", #{ doc_id: this.doc });
-        if current != () && current.ok != false
-            && evt.value["generation"] == current.generation {
-            this.route_ready = true;
-        }
+        // The readiness event is emitted by the newly started program. A
+        // disposable presentation edit may advance the document generation
+        // before this broadcast is delivered, so the event's path is the
+        // lifecycle identity and the generation is diagnostic context only.
+        this.route_ready = true;
     }
 }
 
@@ -359,13 +363,17 @@ fn on_tick(me, ctx) {
         if !this.program_switch_complete {
             this.program_switch_subject = find(SUBJECT_PATH);
             this.route_ready = false;
+            // The source-edit command may restart the replacement program
+            // before it returns. Enter the observation phase first so a
+            // lifecycle edge emitted by the new source cannot be lost at the
+            // old phase boundary.
+            this.phase = 100;
             let switched = program_editor::switch_source(
                 this.doc,
                 this.program_path,
                 "lunco://scenarios/tests/program_switch_hold.rhai",
             );
             if !switched.ok { this.checks.push(t_true(false, switched.error)); finish(this); return; }
-            this.phase = 100;
             return;
         }
         let terrain_pointer = selected_route_context(
