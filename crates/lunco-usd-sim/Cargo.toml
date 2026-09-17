@@ -24,6 +24,7 @@ lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }
 lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-usd-actuation = { path = "../lunco-usd-actuation" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
+lunco-usd-sim-authoring = { path = "../lunco-usd-sim-authoring" }
 # `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set).
 # `lunco-materials` is render-free: `shader_material.rs` (the `AsBindGroup` that
 # pulled `bevy_pbr`) moved to `lunco-render-bevy` on 2026-07-13, so this crate's
@@ -41,10 +42,6 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
-# Hook substrate for authored policies and typed USD lint facts for the custom
-# PhysxPhysicsGearJoint projection. Rules remain authored in
-# assets/scripting/policy/lint_usd.rhai.
-lunco-hooks = { path = "../lunco-hooks" }
 # Declares what a loading scene is still waiting on — see `src/readiness.rs`.
 lunco-physics = { path = "../lunco-physics" }
 avian3d = { workspace = true }

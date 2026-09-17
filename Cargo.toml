@@ -79,6 +79,7 @@ members = [
     "crates/lunco-usd-authoring",
     "crates/lunco-usd-geometry",
     "crates/lunco-usd-sim",
+    "crates/lunco-usd-sim-authoring",
     "crates/lunco-usd-sim-core",
     "crates/lunco-usd-sim-cosim",
     "crates/lunco-usd-sim-domain",

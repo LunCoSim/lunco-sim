@@ -43,16 +43,10 @@
 //! `components/mobility/wheel.usda`, which every wheel composes — one authored
 //! set is what makes "same defaults for both variants" true.
 
-use avian3d::prelude::{Collider, Friction, RevoluteJoint};
-use bevy::asset::AssetId;
-use bevy::log::{error, info};
-use bevy::math::DVec3;
-use bevy::prelude::{Entity, World};
-use lunco_mobility::{JointedWheelTire, Suspension, TireLateralStiffnessGraph, WheelRaycast};
-use lunco_usd_bevy_core::read::{read_vec3_f64, UsdReadObject};
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
-use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_sim_core::PhysicalWheel;
+use bevy_ecs::entity::Entity;
+use bevy_math::DVec3;
+use lunco_mobility::{Suspension, TireLateralStiffnessGraph, WheelRaycast};
+use lunco_usd_bevy_core::read::{UsdReadObject, read_vec3_f64};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{HashMap, HashSet};
 
@@ -110,11 +104,13 @@ impl WheelAttachmentTopology {
         self.invalid_wheels.contains(wheel_path)
     }
 
-    pub(crate) fn bindings(&self) -> impl Iterator<Item = (&String, &WheelAttachmentBinding)> {
+    /// Iterate over valid wheel bindings in the composed stage.
+    pub fn bindings(&self) -> impl Iterator<Item = (&String, &WheelAttachmentBinding)> {
         self.bindings.iter()
     }
 
-    pub(crate) fn invalid_wheels(&self) -> impl Iterator<Item = &String> {
+    /// Iterate over wheel paths rejected by the authored topology resolver.
+    pub fn invalid_wheels(&self) -> impl Iterator<Item = &String> {
         self.invalid_wheels.iter()
     }
 }
@@ -137,17 +133,12 @@ pub fn collect_wheel_attachment_topology(reader: &dyn UsdReadObject) -> WheelAtt
         let wheel = match endpoint("physxVehicleWheelAttachment:wheel", "PhysxVehicleWheelAPI") {
             Ok(Some(target)) => target,
             Ok(None) => {
-                error!(
-                    "USD wheel attachment {} has neither a wheel relationship nor a direct PhysxVehicleWheelAPI",
-                    attachment
-                );
                 topology
                     .invalid_wheels
                     .insert(attachment.as_str().to_owned());
                 continue;
             }
-            Err(reason) => {
-                error!("USD wheel attachment {} is invalid: {}", attachment, reason);
+            Err(_reason) => {
                 topology
                     .invalid_wheels
                     .insert(attachment.as_str().to_owned());
@@ -161,15 +152,10 @@ pub fn collect_wheel_attachment_topology(reader: &dyn UsdReadObject) -> WheelAtt
         ) {
             Ok(Some(target)) => target,
             Ok(None) => {
-                error!(
-                    "USD wheel attachment {} for {} has neither a suspension relationship nor a direct PhysxVehicleSuspensionAPI",
-                    attachment, wheel
-                );
                 topology.invalid_wheels.insert(wheel.clone());
                 continue;
             }
-            Err(reason) => {
-                error!("USD wheel attachment {} is invalid: {}", attachment, reason);
+            Err(_reason) => {
                 topology.invalid_wheels.insert(wheel.clone());
                 continue;
             }
@@ -178,15 +164,10 @@ pub fn collect_wheel_attachment_topology(reader: &dyn UsdReadObject) -> WheelAtt
         let tire = match endpoint("physxVehicleWheelAttachment:tire", "PhysxVehicleTireAPI") {
             Ok(Some(target)) => target,
             Ok(None) => {
-                error!(
-                    "USD wheel attachment {} for {} has neither a tire relationship nor a direct PhysxVehicleTireAPI",
-                    attachment, wheel
-                );
                 topology.invalid_wheels.insert(wheel.clone());
                 continue;
             }
-            Err(reason) => {
-                error!("USD wheel attachment {} is invalid: {}", attachment, reason);
+            Err(_reason) => {
                 topology.invalid_wheels.insert(wheel.clone());
                 continue;
             }
@@ -196,19 +177,11 @@ pub fn collect_wheel_attachment_topology(reader: &dyn UsdReadObject) -> WheelAtt
             .attr_value(&attachment, "physxVehicleWheelAttachment:index")
             .and_then(|value| value.get::<i32>())
         else {
-            error!(
-                "USD wheel attachment {} has no valid physxVehicleWheelAttachment:index",
-                attachment
-            );
             topology.invalid_wheels.insert(wheel.clone());
             continue;
         };
 
         if topology.bindings.contains_key(&wheel) {
-            error!(
-                "USD wheel {} is targeted by more than one PhysxVehicleWheelAttachmentAPI; one attachment is required",
-                wheel
-            );
             topology.bindings.remove(&wheel);
             topology.invalid_wheels.insert(wheel);
             continue;
@@ -558,30 +531,6 @@ impl WheelParams {
     }
 }
 
-/// Resolve a wheel's attachment suspension prim via the standard attachment
-/// topology. The map belongs to one composed stage, so its keys are stage-local
-/// paths; independent instances retain independent topology maps.
-pub(crate) fn attachment_suspension_path(
-    wheel_path: &str,
-    wheel_attachment_targets: &HashMap<String, String>,
-) -> Option<SdfPath> {
-    wheel_attachment_targets
-        .get(wheel_path)
-        .and_then(|s| SdfPath::new(s).ok())
-}
-
-/// Resolve a wheel's attachment tire prim via the standard attachment
-/// topology. The map belongs to one composed stage, so its keys are stage-local
-/// paths; independent instances retain independent topology maps.
-pub(crate) fn attachment_tire_path(
-    wheel_path: &str,
-    wheel_attachment_tires: &HashMap<String, String>,
-) -> Option<SdfPath> {
-    wheel_attachment_tires
-        .get(wheel_path)
-        .and_then(|s| SdfPath::new(s).ok())
-}
-
 /// Read the three suspension attrs off one prim. `None` unless all three are
 /// authored — partial authoring is treated as missing (no per-field defaults).
 fn read_suspension_attrs(
@@ -777,298 +726,10 @@ fn validate_nonnegative(errors: &mut Vec<String>, name: &str, value: f64) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Live resync — the USD-based update path for spawned wheels.
-//
-// Wheel params are a PROJECTION of the document: the only writer is the USD
-// document itself (`ApplyUsdOp SetAttribute` → registry → the change funnels in
-// `twin_projection`/`live_consume`), and this module is how the projection
-// catches up — by RE-READING the composed stage, never by accepting values from
-// a side channel. Both funnels call [`resync_wheels_for_stage`] for edits that
-// [`claims_edit`] recognises, INSTEAD of their generic
-// `refresh_prim_subtree`/`reinstantiate_entity` path. That path is
-// actively destructive for wheels: it despawns the wheel's synthesized
-// `Port` children and visual child while `UsdSimProcessed` survives, so
-// the sim params are never re-derived, the solved joint boundary points at a dead
-// port, and the chassis-owned joint dangles. The resync mutates the spawned
-// components in place — entity ids, joints, `JointCollisionDisabled`, ports and
-// `UsdSimProcessed` are never touched.
-// ---------------------------------------------------------------------------
-
-/// Attribute families [`resync_wheels_for_stage`] claims from the generic
-/// refresh path. Prim-scoped where a name is not wheel-specific:
-/// `physxVehicleWheel:mass` is claimed only on a wheel prim — on a chassis it must keep
-/// the normal refresh path (mass overrides are rebuilt by `lunco-usd-avian`).
-pub fn claims_edit(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-    attr: &str,
-) -> bool {
-    if attr.starts_with("physxVehicleWheel:") {
-        return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
-    }
-    if attr == "lunco:wheel:headingAxis" {
-        return reader.has_api_schema(prim, "PhysxVehicleWheelAPI");
-    }
-    if attr.starts_with("lunco:suspension:") || attr.starts_with("physxVehicleSuspension:") {
-        return reader.has_api_schema(prim, "PhysxVehicleSuspensionAPI");
-    }
-    if attr.starts_with("lunco:tire:") || attr.starts_with("physxVehicleTire:") {
-        return reader.has_api_schema(prim, "PhysxVehicleTireAPI");
-    }
-    if matches!(attr, "physics:dynamicFriction" | "physics:staticFriction") {
-        return reader.has_api_schema(prim, "PhysxVehicleTireAPI");
-    }
-    if matches!(
-        attr,
-        "physxVehicleWheelAttachment:wheel"
-            | "physxVehicleWheelAttachment:tire"
-            | "physxVehicleWheelAttachment:suspension"
-            | "physxVehicleWheelAttachment:index"
-    ) {
-        return reader.has_api_schema(prim, "PhysxVehicleWheelAttachmentAPI");
-    }
-    false
-}
-
-/// One wheel's re-read result, staged so the `!Send` stage borrow is released
-/// before the world is mutated.
-struct WheelUpdate {
-    entity: Entity,
-    physical: bool,
-    params: WheelParams,
-    collider: Option<Collider>,
-}
-
-/// Re-derive every spawned wheel of `stage` from
-/// the live composed stage, IN PLACE. Resyncs ALL wheels of the stage rather
-/// than only the edited prim: suspension/tire attrs may be authored on a
-/// separate referenced prim (attachment topology), vehicle-level attrs fan out
-/// to every wheel, and a rover has ≤6 wheels — re-reading them all is cheap and
-/// makes the resync a fixed point (double-firing from both funnels is
-/// harmless).
-///
-/// A wheel whose re-read fails is a terminal authored-state error for the active
-/// scene. The resync raises the shared runtime fault and safety hold after the
-/// stage borrow is released; it never continues with stale wheel parameters.
-pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
-    // 1. Collect this stage's spawned wheels (plain data out).
-    let mut rows: Vec<(Entity, String, bool)> = Vec::new();
-    {
-        let mut q = world.query::<(
-            Entity,
-            &UsdPrimPath,
-            Option<&WheelRaycast>,
-            Option<&PhysicalWheel>,
-        )>();
-        for (e, prim, rc, pw) in q.iter(world) {
-            if prim.stage_handle.id() != id || (rc.is_none() && pw.is_none()) {
-                continue;
-            }
-            rows.push((e, prim.path.clone(), pw.is_some()));
-        }
-    }
-    if rows.is_empty() {
-        return;
-    }
-
-    // 2. Re-read under one short borrow of the `!Send` stage, then release it —
-    //    the appliers below mutate the world (same pattern as
-    //    `refresh_domes_live`).
-    let mut updates: Vec<WheelUpdate> = Vec::new();
-    let mut failures: Vec<(Option<Entity>, String, String)> = Vec::new();
-    {
-        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-            return;
-        };
-        let Some(cs) = stages.get(id) else { return };
-        let view = cs.view();
-        // This runs only for a stage-change resync, so rebuilding its small
-        // stage-local topology snapshot is correct and avoids coupling this
-        // exclusive live-edit path to the normal projector cache.
-        let mut topology = crate::StageJointTopology::default();
-        crate::collect_joint_scan_read(&view, &mut topology);
-        for (entity, path, physical) in &rows {
-            let Ok(sp) = SdfPath::new(path) else { continue };
-            if topology.invalid_wheel_attachments.contains(path) {
-                failures.push((
-                    Some(*entity),
-                    path.clone(),
-                    "malformed or ambiguous wheel attachment topology".to_owned(),
-                ));
-                continue;
-            }
-            let susp = topology
-                .wheel_attachment_targets
-                .get(path)
-                .and_then(|s| SdfPath::new(s).ok());
-            let tire = topology
-                .wheel_attachment_tires
-                .get(path)
-                .and_then(|s| SdfPath::new(s).ok());
-            match WheelParams::read(&view, &sp, susp.as_ref(), tire.as_ref()) {
-                Ok(params) => {
-                    let collider = if *physical {
-                        if !view
-                            .has_api_schema(&sp, openusd::schemas::physics::tokens::API_RIGID_BODY)
-                        {
-                            failures.push((
-                                Some(*entity),
-                                path.clone(),
-                                "missing authored PhysicsRigidBodyAPI".to_owned(),
-                            ));
-                            continue;
-                        }
-                        match lunco_usd_avian_reader::collider::authored_collider_from_usd(
-                            &view, &sp,
-                        ) {
-                            Ok(collider) => {
-                                Some(crate::oriented_wheel_collider(collider, params.axle_axis))
-                            }
-                            Err(error) => {
-                                failures.push((
-                                    Some(*entity),
-                                    path.clone(),
-                                    format!("invalid authored collision geometry: {error}"),
-                                ));
-                                continue;
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    updates.push(WheelUpdate {
-                        entity: *entity,
-                        physical: *physical,
-                        params,
-                        collider,
-                    });
-                }
-                Err(missing) => failures.push((
-                    Some(*entity),
-                    path.clone(),
-                    format!("missing or invalid required attributes: {missing:?}"),
-                )),
-            }
-        }
-    }
-
-    for (entity, subject, detail) in failures {
-        let first = world
-            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
-            .raise(
-                "usd-wheel-resync-invalid",
-                entity,
-                subject.clone(),
-                detail.clone(),
-            );
-        world
-            .get_resource_or_insert_with(lunco_physics::PhysicsHolds::default)
-            .set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-        if first {
-            error!("[wheel resync] terminal authored-state failure on {subject}: {detail}");
-        }
-    }
-
-    // 3. Apply in place. NEVER touch entity existence, `JointCollisionDisabled`,
-    //    `Position`, or `UsdSimProcessed`.
-    let wheel_count = updates.len();
-    for u in &updates {
-        if !u.physical {
-            if let Some(mut wheel) = world.get_mut::<WheelRaycast>(u.entity) {
-                u.params.apply_to_raycast(&mut wheel);
-            }
-            if let Some(mut susp) = world.get_mut::<Suspension>(u.entity) {
-                u.params.apply_to_suspension(&mut susp);
-            }
-            if let (Some(susp), Some(mut ray)) = (
-                u.params.suspension,
-                world.get_mut::<avian3d::prelude::RayCaster>(u.entity),
-            ) {
-                ray.origin = DVec3::new(
-                    0.0,
-                    lunco_mobility::strut_offset(susp.rest_length, u.params.radius),
-                    0.0,
-                );
-                ray.max_distance = lunco_mobility::suspension_ray_max_distance(susp.rest_length);
-            }
-            continue;
-        }
-
-        // Physical wheel: body-side numbers…
-        let (old_radius, old_width, axis_rot) = match world.get::<PhysicalWheel>(u.entity) {
-            Some(pw) => (pw.wheel_radius, pw.wheel_width, pw.axis_rot),
-            None => continue,
-        };
-        if let Some(mut pw) = world.get_mut::<PhysicalWheel>(u.entity) {
-            pw.wheel_radius = u.params.radius as f32;
-            pw.wheel_width = u.params.width as f32;
-        }
-        if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(u.entity) {
-            mass.0 = u.params.mass as f32;
-        }
-        if let Some(mut friction) = world.get_mut::<Friction>(u.entity) {
-            friction.dynamic_coefficient = u.params.friction_mu;
-            friction.static_coefficient = u.params.friction_mu;
-        }
-        if let Some(mut tire) = world.get_mut::<JointedWheelTire>(u.entity) {
-            tire.radius = u.params.radius;
-            tire.axle_inertia = u.params.axle_inertia();
-            tire.slip_stiffness = u.params.slip_stiffness;
-            tire.lateral_stiffness_graph = u.params.lateral_stiffness_graph;
-            tire.min_validated_speed = u.params.min_validated_speed;
-            tire.friction_mu = u.params.friction_mu;
-            tire.bearing_damping = u.params.bearing_damping;
-        }
-        // Keep the physical wheel's tensor in lock-step with the composed
-        // authored assembly MOI. Updating only density
-        // would leave an edited `physxVehicleWheel:moi` inert until a scene
-        // reload, while the raycast wheel would apply it immediately.
-        world.entity_mut(u.entity).insert((
-            crate::physical_wheel_angular_inertia(&u.params, axis_rot),
-            avian3d::prelude::NoAutoAngularInertia,
-        ));
-        // Reproject the authored collision geometry whenever the wheel's
-        // authored dimensions change. There is no parameter-derived collider
-        // fallback: a malformed or missing USD collision shape was recorded as
-        // a terminal resync failure above, so stale geometry is never retained.
-        if (old_radius as f64 - u.params.radius).abs() > 1e-6
-            || (old_width as f64 - u.params.width).abs() > 1e-6
-        {
-            let Some(collider) = u.collider.as_ref() else {
-                continue;
-            };
-            world.entity_mut(u.entity).insert(collider.clone());
-        }
-        // Update the synthesized wheel-joint torque boundary. Heading joints
-        // are independent authored revolute joints and are not part of this
-        // wheel-parameter resynchronization.
-        let mut joint_entity: Option<Entity> = None;
-        {
-            let mut q = world.query::<(Entity, &RevoluteJoint)>();
-            for (je, joint) in q.iter(world) {
-                if joint.body2 == u.entity {
-                    joint_entity = Some(je);
-                    break;
-                }
-            }
-        }
-        let Some(je) = joint_entity else { continue };
-        if let Some(mut actuator) = world.get_mut::<lunco_cosim::JointTorqueActuator>(je) {
-            actuator.brake_torque = u.params.brake_torque_max;
-            actuator.rotational_inertia = u.params.axle_inertia();
-        }
-    }
-    info!(
-        "[wheel resync] stage {:?}: re-derived {} wheel(s) in place",
-        id, wheel_count,
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::{validate_suspension_values, validate_wheel_values};
-    use bevy::math::DVec3;
+    use bevy_math::DVec3;
     use lunco_mobility::TireLateralStiffnessGraph;
 
     #[test]

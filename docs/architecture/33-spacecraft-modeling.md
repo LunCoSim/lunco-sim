@@ -194,7 +194,7 @@ joint, so this is a Rust **soft holonomic coupling**.
 
 ### G6 — Finish USD-driven dynamics tuning  **[DONE (tuning); maxForce intentionally not honored]**
 Every tuning knob of a dynamic vehicle is a USD attribute, read by **one strict
-reader** — `lunco_usd_sim::wheel_params` — that serves **both** wheel realizations
+reader** — `lunco_usd_sim_authoring::wheel_params` — that serves **both** wheel realizations
 (the analytical `WheelRaycast` and the jointed physical wheel).
 
 - **Required, not defaulted.** Each attribute the reader wants is mandatory; a

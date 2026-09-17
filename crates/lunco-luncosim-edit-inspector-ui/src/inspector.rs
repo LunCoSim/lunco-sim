@@ -1767,7 +1767,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     // USD-authored (`lunco:wheel:*`, `lunco:suspension:*`, `physxVehicle*`)
     // and surface as derived sliders via `usd_parameters_section` (customData
     // UI hints). Edits go through `ApplyUsdOp` and re-derive the spawned
-    // components in place (`lunco_usd_sim::wheel_params::resync_wheels_for_stage`)
+    // components in place (`lunco_usd_sim::wheel_runtime::resync_wheels_for_stage`)
     // — the direct-ECS sliders that used to live here bypassed the document,
     // so their edits neither persisted, journaled, nor replicated, and the
     // resync would now overwrite them on the next document change.

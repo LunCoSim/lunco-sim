@@ -45,8 +45,8 @@ use std::collections::{BTreeMap, HashMap};
 /// Build the complete USD lint fact map from every owner of a USD simulation
 /// projection. Standard `Physics*Joint` facts come from
 /// `lunco-usd-avian-lint`;
-/// `PhysxPhysicsGearJoint` facts come from the `lunco-usd-sim` reader that owns
-/// that projection. The policy sees one map and one authoritative value for
+/// `PhysxPhysicsGearJoint` facts come from the `lunco-usd-sim-authoring` reader
+/// that owns that projection. The policy sees one map and one authoritative value for
 /// each subject.
 pub(crate) fn usd_physics_facts(view: &StageView<'_>) -> H {
     usd_physics_facts_with_control_info(view).0
@@ -58,9 +58,9 @@ pub(crate) fn usd_physics_facts_with_control_info(
     view: &StageView<'_>,
 ) -> (H, Vec<serde_json::Value>) {
     let mut facts = lunco_usd_avian_lint::physics_facts(view);
-    lunco_usd_sim::lint::append_network_synthesizer_facts(view, &mut facts);
-    lunco_usd_sim::lint::append_gear_drive_facts(view, &mut facts);
-    lunco_usd_sim::lint::append_wheel_attachment_facts(view, &mut facts);
+    append_network_synthesizer_facts(view, &mut facts);
+    lunco_usd_sim_authoring::append_gear_drive_facts(view, &mut facts);
+    lunco_usd_sim_authoring::append_wheel_attachment_facts(view, &mut facts);
     let (bindings, info) = control_binding_facts(view);
     if let H::Map(entries) = &mut facts {
         entries.push(("runtime_connections".to_string(), H::Array(Vec::new())));
@@ -68,6 +68,57 @@ pub(crate) fn usd_physics_facts_with_control_info(
         entries.push(("control_bindings".to_string(), H::Array(bindings)));
     }
     (facts, info)
+}
+
+/// Add the domain owner selected by the same composed-USD classifier used by
+/// runtime domain projection. This is an aggregation concern: it enriches the
+/// complete validation fact table without coupling the vehicle authoring
+/// readers to Modelica/network policy.
+fn append_network_synthesizer_facts(view: &StageView<'_>, facts: &mut H) {
+    let H::Map(entries) = facts else {
+        return;
+    };
+    let Some((_, H::Array(scopes))) = entries.iter_mut().find(|(key, _)| key == "network_roots")
+    else {
+        return;
+    };
+
+    for scope in scopes {
+        let Some(path) = scope.get("path").and_then(H::as_str) else {
+            continue;
+        };
+        let Ok(root) = openusd::sdf::Path::new(path) else {
+            set_scope_fact(scope, "synthesizer", H::str("invalid"));
+            set_scope_fact(
+                scope,
+                "synthesizer_error",
+                H::str("network root path is not a valid absolute USD path"),
+            );
+            continue;
+        };
+
+        match lunco_usd_bevy_core::program::select_synthesizer_name(view, &root) {
+            Ok(name) => {
+                set_scope_fact(scope, "synthesizer", H::str(name));
+                set_scope_fact(scope, "synthesizer_error", H::str(""));
+            }
+            Err(error) => {
+                set_scope_fact(scope, "synthesizer", H::str("invalid"));
+                set_scope_fact(scope, "synthesizer_error", H::str(error));
+            }
+        }
+    }
+}
+
+fn set_scope_fact(scope: &mut H, key: &str, value: H) {
+    let H::Map(entries) = scope else {
+        return;
+    };
+    if let Some((_, existing)) = entries.iter_mut().find(|(name, _)| name == key) {
+        *existing = value;
+    } else {
+        entries.push((key.to_string(), value));
+    }
 }
 
 /// Project the composed controls shape into policy facts.
@@ -114,8 +165,8 @@ fn is_controls_scope(view: &impl UsdRead, prim: &openusd::sdf::Path) -> bool {
 /// Run the complete live USD lint pipeline over one composed stage.
 ///
 /// This aggregation point owns the cross-domain fact table: standard physics
-/// facts come from `lunco-usd-avian-lint`, while USD-sim owns its gear, wheel, and
-/// synthesizer projections. Callers must use this entry point rather than
+/// facts come from `lunco-usd-avian-lint`, while `lunco-usd-sim-authoring` owns
+/// its gear and wheel facts and this module owns synthesizer aggregation. Callers must use this entry point rather than
 /// linting a partial producer's facts.
 pub fn lint_stage(view: &StageView<'_>) -> Vec<lunco_lint::LintFinding> {
     lunco_lint::run_lint(

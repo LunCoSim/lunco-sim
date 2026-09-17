@@ -69,12 +69,16 @@ use lunco_cosim::{avian_queries::RaycastObservation, JointTorqueActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::wheel_kinematics::{body_point_velocity, wheel_hub_pose, wheel_roll_rate};
 use lunco_mobility::{
-    DifferentialCoupling, DifferentialDriveType, JointedWheelTire, Suspension, SuspensionPiston,
-    SuspensionSpring, WheelRaycast,
+    DifferentialCoupling, JointedWheelTire, Suspension, SuspensionPiston, SuspensionSpring,
+    WheelRaycast,
 };
 use lunco_port_core::{Port, PortSurface};
 use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
+use lunco_usd_sim_authoring::{
+    is_gear_drive, read_gear_drive_type, read_gear_drive_values, read_gear_ratio, GearDriveValues,
+    SuspensionParams, WheelParams,
+};
 use lunco_usd_sim_core::{
     GroundColliderPending, PendingDifferential, PhysicalWheel, UsdSimProcessed, UsdSimSet,
 };
@@ -82,8 +86,7 @@ use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
 
-pub mod wheel_params;
-use wheel_params::{SuspensionParams, WheelParams};
+pub mod wheel_runtime;
 
 /// Plugin for mapping simulation-specific USD schemas (like NVIDIA PhysX Vehicles)
 /// to LunCo's optimized simulation models.
@@ -435,7 +438,6 @@ impl Plugin for UsdSimPlugin {
     }
 }
 
-pub mod lint;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
@@ -684,7 +686,7 @@ fn collect_joint_scan_read(
         }
     }
 
-    let attachments = wheel_params::collect_wheel_attachment_topology(reader);
+    let attachments = lunco_usd_sim_authoring::collect_wheel_attachment_topology(reader);
     topology
         .invalid_wheel_attachments
         .extend(attachments.invalid_wheels().cloned());
@@ -708,135 +710,6 @@ fn collect_joint_scan_read(
 /// Per-prim sim-schema extractor (Pass 2) over the live composed [`UsdRead`]
 /// surface — maps one composed prim's authored `lunco:*` / PhysX-vehicle
 /// schemas to its sim/avatar/wheel components.
-#[allow(clippy::too_many_arguments)]
-fn read_gear_drive_real(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-    name: &str,
-    default: f64,
-    allow_infinity: bool,
-) -> Result<f64, ()> {
-    match reader.real(prim, name) {
-        Some(value) if value.is_finite() || (allow_infinity && value == f64::INFINITY) => Ok(value),
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(prim, name) => Err(()),
-        None => Ok(default),
-    }
-}
-
-pub(crate) fn is_gear_drive(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-) -> bool {
-    reader.type_name(prim).as_deref() == Some("PhysxPhysicsGearJoint")
-        && reader.has_api_schema(prim, "PhysicsDriveAPI:angular")
-}
-
-pub(crate) fn read_gear_ratio(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-) -> Option<f64> {
-    reader
-        .real(prim, "physxGearJoint:gearRatio")
-        .filter(|value| value.is_finite() && *value != 0.0)
-}
-
-fn read_gear_drive_values(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-) -> Result<(f64, f64, f64, f64, f64), ()> {
-    let rest_offset = read_gear_drive_real(
-        reader,
-        prim,
-        "drive:angular:physics:targetPosition",
-        0.0,
-        false,
-    )?;
-    let target_velocity = read_gear_drive_real(
-        reader,
-        prim,
-        "drive:angular:physics:targetVelocity",
-        0.0,
-        false,
-    )?;
-    let stiffness =
-        read_gear_drive_real(reader, prim, "drive:angular:physics:stiffness", 0.0, false)?;
-    let damping = read_gear_drive_real(reader, prim, "drive:angular:physics:damping", 0.0, false)?;
-    let max_force = read_gear_drive_real(
-        reader,
-        prim,
-        "drive:angular:physics:maxForce",
-        f64::INFINITY,
-        true,
-    )?;
-    if stiffness < 0.0 || damping < 0.0 || max_force < 0.0 {
-        return Err(());
-    }
-    Ok((rest_offset, target_velocity, stiffness, damping, max_force))
-}
-
-fn read_gear_drive_type(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-) -> Option<DifferentialDriveType> {
-    match reader.text(prim, "drive:angular:physics:type") {
-        Some(value) if value == "force" => Some(DifferentialDriveType::Force),
-        Some(value) if value == "acceleration" => Some(DifferentialDriveType::Acceleration),
-        Some(_) => None,
-        None if reader.has_authored_attribute(prim, "drive:angular:physics:type") => None,
-        None => Some(DifferentialDriveType::Force),
-    }
-}
-
-#[cfg(test)]
-mod gear_drive_tests {
-    use super::{read_gear_drive_type, read_gear_drive_values, DifferentialDriveType};
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_compose::recipe::StageRecipe;
-    use openusd::sdf::Path as SdfPath;
-
-    const FIXTURE: &str = r#"#usda 1.0
-def PhysxPhysicsGearJoint "Differential" (
-    prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-)
-{
-    float physxGearJoint:gearRatio = -1.0
-    float drive:angular:physics:targetPosition = 0.25
-    float drive:angular:physics:targetVelocity = 0.5
-    float drive:angular:physics:stiffness = 8000.0
-    float drive:angular:physics:damping = 1200.0
-    float drive:angular:physics:maxForce = 100.0
-    uniform token drive:angular:physics:type = "force"
-}
-"#;
-
-    #[test]
-    fn reads_standard_angular_drive_parameters_without_solver_defaults() {
-        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("gear.usda", FIXTURE))
-            .expect("gear fixture composes");
-        let view = stage.view();
-        let path = SdfPath::new("/Differential").expect("gear path");
-        assert_eq!(
-            read_gear_drive_values(&view, &path).expect("drive values"),
-            (0.25, 0.5, 8000.0, 1200.0, 100.0)
-        );
-        assert_eq!(
-            read_gear_drive_type(&view, &path),
-            Some(DifferentialDriveType::Force)
-        );
-    }
-
-    #[test]
-    fn rejects_negative_authored_drive_coefficients() {
-        let source = FIXTURE.replace("damping = 1200.0", "damping = -1.0");
-        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("gear.usda", &source))
-            .expect("gear fixture composes");
-        let view = stage.view();
-        let path = SdfPath::new("/Differential").expect("gear path");
-        assert!(read_gear_drive_values(&view, &path).is_err());
-    }
-}
-
 fn read_raycast_observation(
     reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
@@ -1512,8 +1385,13 @@ fn process_usd_sim_prim_read(
                 );
                 return;
             };
-            let Ok((rest_offset, target_velocity, stiffness, damping, max_force)) =
-                read_gear_drive_values(reader, &sdf_path)
+            let Ok(GearDriveValues {
+                rest_offset,
+                target_velocity,
+                stiffness,
+                damping,
+                max_force,
+            }) = read_gear_drive_values(reader, &sdf_path)
             else {
                 warn!(
                     "Gear joint {} has malformed angular PhysicsDriveAPI values; coupling ignored",
@@ -1576,7 +1454,7 @@ fn process_usd_sim_prim_read(
         }
         info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
-        // ONE unified read for BOTH wheel kinds (see `wheel_params`): every
+        // ONE unified read for BOTH wheel kinds (see the authoring reader): every
         // drivetrain/tire/inertia number plus suspension, resolved through the
         // standard attachment relationship or explicit direct wheel/suspension
         // composition. Strict — all missing required attrs are collected and the
@@ -1584,12 +1462,12 @@ fn process_usd_sim_prim_read(
         // components/mobility/wheel.usda, which every wheel composes.
         // Read BEFORE spawning the port entities so an invalid wheel
         // synthesizes nothing.
-        let attachment_susp = wheel_params::attachment_suspension_path(
+        let attachment_susp = wheel_runtime::attachment_suspension_path(
             &prim_path.path,
             &topology.wheel_attachment_targets,
         );
         let attachment_tire =
-            wheel_params::attachment_tire_path(&prim_path.path, &topology.wheel_attachment_tires);
+            wheel_runtime::attachment_tire_path(&prim_path.path, &topology.wheel_attachment_tires);
         let params = match WheelParams::read(
             reader,
             &sdf_path,

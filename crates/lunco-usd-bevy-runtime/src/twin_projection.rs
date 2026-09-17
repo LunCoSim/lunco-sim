@@ -1285,10 +1285,10 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                     .get_non_send::<CanonicalStages>()
                     .and_then(|s| s.get(scene_id))
                     .is_some_and(|cs| {
-                        lunco_usd_sim::wheel_params::claims_edit(&cs.view(), &sp, name)
+                        lunco_usd_sim::wheel_runtime::claims_edit(&cs.view(), &sp, name)
                     });
                 if claimed {
-                    lunco_usd_sim::wheel_params::resync_wheels_for_stage(world, scene_id);
+                    lunco_usd_sim::wheel_runtime::resync_wheels_for_stage(world, scene_id);
                     return;
                 }
             }

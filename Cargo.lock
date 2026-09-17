@@ -8718,7 +8718,7 @@ dependencies = [
  "lunco-usd-bevy-twin",
  "lunco-usd-compose",
  "lunco-usd-document",
- "lunco-usd-sim",
+ "lunco-usd-sim-authoring",
  "lunco-workspace",
  "openusd",
  "rhai",
@@ -9546,13 +9546,11 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-avatar-core",
- "lunco-celestial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
  "lunco-cosim-core",
  "lunco-environment",
- "lunco-hooks",
  "lunco-materials",
  "lunco-mobility",
  "lunco-physics",
@@ -9568,12 +9566,25 @@ dependencies = [
  "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
+ "lunco-usd-sim-authoring",
  "lunco-usd-sim-celestial",
  "lunco-usd-sim-core",
  "lunco-usd-sim-shader",
  "lunco-usd-sim-telemetry",
  "openusd",
  "web-time",
+]
+
+[[package]]
+name = "lunco-usd-sim-authoring"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bevy_math",
+ "lunco-hooks",
+ "lunco-mobility",
+ "lunco-usd-bevy-core",
+ "openusd",
 ]
 
 [[package]]

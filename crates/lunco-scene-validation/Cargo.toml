@@ -34,7 +34,7 @@ lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
-lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-usd-sim-authoring = { path = "../lunco-usd-sim-authoring" }
 lunco-workspace = { path = "../lunco-workspace" }
 rhai = { workspace = true }
 serde = { workspace = true }

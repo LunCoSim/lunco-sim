@@ -1031,7 +1031,7 @@ pub struct WheelRaycast {
 /// Every tunable below is zero here on purpose: `Default` exists only as the
 /// struct-update base for `WheelParams::to_wheel_raycast`, which immediately
 /// overwrites all of them from the composed stage via `apply_to_raycast`. The
-/// reader (`lunco_usd_sim::wheel_params`) requires each attribute and reports a
+/// reader (`lunco_usd_sim_authoring::wheel_params`) requires each attribute and reports a
 /// collected missing-attribute error, so an unauthored wheel FAILS rather than
 /// silently inheriting numbers nobody wrote. A zeroed wheel that ever reaches
 /// the world is therefore visibly inert (no drive, no grip) instead of quietly

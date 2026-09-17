@@ -524,7 +524,7 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
 
     // Every composed wheel must satisfy the ONE reader both wheel kinds spawn
     // through — `Err(missing)` here is exactly the refusal the spawner logs.
-    let attachment_topology = lunco_usd_sim::wheel_params::collect_wheel_attachment_topology(&view);
+    let attachment_topology = lunco_usd_sim_authoring::collect_wheel_attachment_topology(&view);
     let mut wheel_prims = Vec::new();
     for prim in view.prim_paths() {
         if !view.has_api_schema(&prim, "PhysxVehicleWheelAPI") {
@@ -550,7 +550,7 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
         };
         let suspension = openusd::sdf::Path::new(&attachment.suspension).ok();
         let tire = openusd::sdf::Path::new(&attachment.tire).ok();
-        match lunco_usd_sim::wheel_params::WheelParams::read(
+        match lunco_usd_sim_authoring::WheelParams::read(
             &view,
             &prim,
             suspension.as_ref(),

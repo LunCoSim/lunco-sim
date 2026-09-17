@@ -9,7 +9,7 @@
 > `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian-joints`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
-> `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
+> `lunco-usd-sim-authoring`, `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
 > `lunco-usd-sim-domain`, `lunco-usd-sim-domain-api`.
 
 Package ownership follows the same boundary: `lunco-usd-document` contains
@@ -67,6 +67,8 @@ reader used by the simulation projectors;
 `lunco-usd-sim-core` owns the small shared USD-simulation protocol, the
 physical-wheel display-state contract, and the ground-collider readiness
 contract observed by scene runners and editor systems;
+`lunco-usd-sim-authoring` owns the render-free composed readers for PhysX
+vehicle wheel attachments and gear drives, plus their authored lint facts;
 `lunco-usd-sim-domain` owns composed component-network and Modelica projection;
 `lunco-usd-sim-domain-api` owns optional generated-source API queries;
 `lunco-usd-sim` owns vehicle projection; `lunco-usd-sim-cosim` owns participant
