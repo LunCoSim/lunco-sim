@@ -1,14 +1,63 @@
-use super::*;
+use avian3d::prelude::MoveAndSlide;
+use bevy::math::DVec3;
+use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
+use lunco_avatar_camera_core::{
+    CAMERA_ZOOM_SENSITIVITY, OrbitReturnBehavior, OrbitViewHistory, OrbitViewReturn, RadialArrival,
+    SURFACE_ORBIT_HANDOFF_ALTITUDE_M,
+};
+use lunco_avatar_core::roles::{Avatar, LocalAvatar};
+use lunco_avatar_policy::{
+    AvatarCollisionSettings, AvatarSoilCollisionPolicy, avatar_soil_collision_policy,
+};
+use lunco_camera_core::{
+    CameraPoseLock, CameraZoomInput, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
+    SurfaceRelativeMode, math::zoom_factor,
+};
+use lunco_celestial::{GeodeticAnchor, SiteAnchor};
+use lunco_core::CelestialBody;
+use lunco_environment::GravityBody;
+use lunco_interaction_core::DragModeActive;
+use lunco_spatial::ActivePhysicsFrame;
+use lunco_workspace::WorkspaceResource;
 
-/// FreeFlightCamera system: moves the camera in absolute coordinates.
-///
-/// Only runs when `FreeFlightCamera` is the active camera mode.
-/// Position is set by `apply_fly`. This system
-/// applies yaw/pitch rotation from user input.
-///
-/// Note: `FreeFlightCamera` and `SurfaceCamera` are mutually exclusive.
-/// `SurfaceCamera` owns the surface-relative rotation policy; this system owns
-/// only the ecliptic free-flight rotation.
+use crate::locomotion::{
+    move_avatar_with_collision, report_avatar_policy_error, write_avatar_grid_position,
+};
+
+/// Select the pose for a surface-to-orbit scroll entry. The first entry has no
+/// avatar-owned orbital presentation to restore and must derive its arm from
+/// the live surface position; a later entry reuses the settled body pose.
+fn scroll_entry_orbit_camera(
+    target: Entity,
+    body: &CelestialBody,
+    radius_m: f64,
+    history: Option<&OrbitViewHistory>,
+) -> (OrbitCamera, bool) {
+    let saved_pose = history.and_then(|history| history.pose(body.ephemeris_id));
+    let camera = OrbitCamera {
+        target,
+        distance: saved_pose.map_or(radius_m * 3.0, |pose| pose.distance()),
+        yaw: saved_pose.map_or(0.0, |pose| pose.yaw()),
+        pitch: saved_pose.map_or(0.0, |pose| pose.pitch()),
+        damping: saved_pose.and_then(|pose| pose.damping()),
+        vertical_offset: saved_pose.map_or(0.0, |pose| pose.vertical_offset()),
+    };
+    (camera, saved_pose.is_none())
+}
+
+/// The body explicitly authored by the loaded site.
+fn site_body(
+    q_site: &Query<&GeodeticAnchor, With<SiteAnchor>>,
+    q_bodies: &Query<(Entity, &CelestialBody)>,
+) -> Option<(Entity, f64)> {
+    let anchor = q_site.single().ok()?;
+    let (ent, body) = q_bodies
+        .iter()
+        .find(|(_, body)| body.ephemeris_id == anchor.body)?;
+    Some((ent, body.radius_m))
+}
+
 /// Free-flight scroll transit — the ENTRY half of the scroll loop (the exit
 /// half is the ORBITAL SCROLL-THROUGH in `AvatarCelestialCameraPlugin`). On a site-anchored
 /// celestial scene, the wheel DOLLIES the free-flight camera along its LOOK
@@ -22,7 +71,7 @@ use super::*;
 /// continuous gesture from ground to orbit. The descent mirrors it:
 /// scroll-through at the floor releases back to free flight (pose parked in
 /// the pin on this entry), where scroll-in keeps dollying down.
-pub(super) fn freeflight_scroll_transit_system(
+pub(crate) fn freeflight_scroll_transit_system(
     mut commands: Commands,
     mut q_avatar: Query<
         (
@@ -37,7 +86,7 @@ pub(super) fn freeflight_scroll_transit_system(
             Option<&OrbitViewHistory>,
             Option<&GravityBody>,
             Has<SurfaceRelativeMode>,
-            Has<lunco_camera_core::CameraPoseLock>,
+            Has<CameraPoseLock>,
         ),
         (
             With<Avatar>,
@@ -50,13 +99,13 @@ pub(super) fn freeflight_scroll_transit_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
-    drag_mode: Option<Res<lunco_interaction_core::DragModeActive>>,
-    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    drag_mode: Option<Res<DragModeActive>>,
+    active_frame: Option<Res<ActivePhysicsFrame>>,
     move_and_slide: Option<MoveAndSlide<'_, '_>>,
     collision_settings: Res<AvatarCollisionSettings>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    workspace: Option<Res<WorkspaceResource>>,
     mut policy_error: Local<Option<String>>,
 ) {
     if drag_mode.is_some_and(|drag| drag.active) {
@@ -205,5 +254,50 @@ pub(super) fn freeflight_scroll_transit_system(
                 "SURFACE SCROLL-OUT: entering orbital view"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_scroll_entry_restores_saved_body_pose_without_radial_arrival() {
+        let body = CelestialBody {
+            name: "Moon".into(),
+            ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+            radius_m: 1_737_400.0,
+        };
+        let saved = OrbitCamera {
+            target: Entity::PLACEHOLDER,
+            distance: 8_000.0,
+            yaw: 0.7,
+            pitch: -0.3,
+            damping: Some(0.2),
+            vertical_offset: 4.0,
+        };
+        let mut history = OrbitViewHistory::default();
+        history.remember(
+            body.ephemeris_id,
+            lunco_avatar_camera_core::OrbitPose::from_camera(&saved)
+                .expect("finite saved orbit pose"),
+        );
+
+        let (restored, needs_radial_arrival) =
+            scroll_entry_orbit_camera(Entity::PLACEHOLDER, &body, body.radius_m, Some(&history));
+        assert!(!needs_radial_arrival);
+        assert_eq!(restored.target, saved.target);
+        assert_eq!(restored.distance, saved.distance);
+        assert_eq!(restored.yaw, saved.yaw);
+        assert_eq!(restored.pitch, saved.pitch);
+        assert_eq!(restored.damping, saved.damping);
+        assert_eq!(restored.vertical_offset, saved.vertical_offset);
+
+        let (first_entry, needs_radial_arrival) =
+            scroll_entry_orbit_camera(Entity::PLACEHOLDER, &body, body.radius_m, None);
+        assert!(needs_radial_arrival);
+        assert_eq!(first_entry.distance, body.radius_m * 3.0);
+        assert_eq!(first_entry.yaw, 0.0);
+        assert_eq!(first_entry.pitch, 0.0);
     }
 }

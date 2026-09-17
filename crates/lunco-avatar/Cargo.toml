@@ -17,7 +17,6 @@ bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"]
 # Camera INTENT: `SceneCamera` — "this entity is the scene camera, and this is how it
 # should look" — stated without naming a render pipeline.
 lunco-render = { path = "../lunco-render" }
-avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
@@ -26,7 +25,6 @@ lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-avatar-input = { path = "../lunco-avatar-input" }
 lunco-avatar-camera-core = { path = "../lunco-avatar-camera-core" }
-lunco-avatar-policy = { path = "../lunco-avatar-policy" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }

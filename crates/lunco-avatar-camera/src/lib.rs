@@ -2,8 +2,8 @@
 //!
 //! Generic camera contracts and camera-mode policy live in
 //! [`lunco_camera_core`] and [`lunco_camera_runtime`]. This package realizes
-//! the avatar's celestial orbital mode and spring-arm mode in explicit BigSpace
-//! frames.
+//! the avatar's celestial orbital mode, spring-arm mode, and collision-aware
+//! local locomotion in explicit BigSpace frames.
 //! Possession, focus, and transition commands remain in `lunco-avatar`; the
 //! generic celestial surface adapter remains in `lunco-camera-celestial`.
 
@@ -16,33 +16,49 @@ use lunco_avatar_camera_core::{
 use lunco_avatar_core::commands::ReturnFromOrbit;
 use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_camera_core::{
-    CameraDefaults, CameraPoseLock, CameraZoomInput, FreeFlightCamera, OrbitCamera,
-    SpringArmCamera, SurfaceCamera,
+    CameraDefaults, CameraPoseLock, CameraUpdateSet, CameraZoomInput, FreeFlightCamera,
+    OrbitCamera, SpringArmCamera, SurfaceCamera,
     math::{apply_scroll_zoom, camera_decay_alpha},
 };
 use lunco_core::{CelestialBody, Spacecraft};
 
 mod collision;
+mod locomotion;
+mod scroll_transit;
 mod spring_arm;
 
 /// Realizes avatar camera modes that need source-specific spatial adaptation.
 ///
 /// The orbital mode uses the target body's explicit inertial BigSpace frame;
 /// the spring arm follows a vessel in its active local frame and filters the
-/// followed assembly from its collision query.
+/// followed assembly from its collision query. Free-flight and surface camera
+/// modes use the same package's kinematic collision boundary and Grid writer.
 pub struct AvatarCelestialCameraPlugin;
 
 impl Plugin for AvatarCelestialCameraPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
         app.init_resource::<CameraDefaults>()
+            .init_resource::<lunco_avatar_policy::AvatarCollisionSettings>()
             .init_resource::<lunco_celestial_spatial::ReferenceFrameIndex>()
             .init_resource::<lunco_celestial_spatial::OrbitalViewPin>()
+            .register_type::<lunco_avatar_policy::AvatarCollisionSettings>()
             .add_systems(
                 PostUpdate,
                 (spring_arm::spring_arm_system, orbit_system)
                     .chain()
                     .after(lunco_time::InteractionRenderSet)
                     .before(TransformSystems::Propagate),
+            )
+            .add_systems(
+                lunco_time::InteractionSchedule,
+                scroll_transit::freeflight_scroll_transit_system.before(CameraUpdateSet),
+            )
+            .add_systems(
+                lunco_time::InteractionSchedule,
+                locomotion::apply_fly.after(CameraUpdateSet),
             );
     }
 }
