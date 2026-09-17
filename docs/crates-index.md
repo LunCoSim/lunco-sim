@@ -200,6 +200,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, generated-source metadata, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
+| **`lunco-modelica-telemetry`** | Render-free Modelica telemetry capability: retains landed solver variables in the shared signal registry, applies the shared rate/retention/channel policy, and publishes inspectable Modelica metadata. It is installed by the execution host and is separate from compiler/document ownership. |
 | **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
 | **`lunco-modelica-core`** | Headless Modelica compiler/document host: Rumoca compilation, source-root admission, source-library access, and UI-agnostic document/runtime contracts. It does not own solver workers, Fast Run execution, browser transport, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
 | **`lunco-modelica-execution`** | Modelica execution package: native solver workers, Fast Run/experiment execution, prepared-solve caching, and the wasm worker transport. It consumes the compiler core through typed contracts and keeps numerical/runtime dependencies out of compiler-only consumers. |
@@ -1041,6 +1042,14 @@ transport. The wasm adapter composes the generic
 routing remain Modelica-specific here. This package depends on the compiler
 core, while compiler-only consumers do not inherit its execution dependency
 closure.
+
+**`lunco-modelica-telemetry`**
+Render-free execution-side telemetry projection. It retains the current
+variables of landed `ModelicaModel` sessions in the shared `SignalRegistry`,
+uses `TelemetrySettings` for rate, retention, and channel limits, and attaches
+Modelica signal metadata from the authored document and generated layout. The
+execution host installs its plugin after worker responses; compiler/document
+hosts do not compile this projection.
 
 **`lunco-modelica-document`**
 Headless, render-free Modelica document package. It owns the canonical source

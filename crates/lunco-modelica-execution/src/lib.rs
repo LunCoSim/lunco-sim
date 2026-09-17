@@ -85,7 +85,6 @@ impl Plugin for ModelicaExecutionPlugin {
 
         app.init_resource::<lunco_signal::SimRegistry>();
         app.init_resource::<SimSampleStream>();
-        app.init_resource::<lunco_modelica_core::runtime_telemetry::RuntimeTelemetrySessions>();
         app.add_message::<ModelicaNotice>();
         app.add_message::<CompileRequested>();
 
@@ -109,17 +108,13 @@ impl Plugin for ModelicaExecutionPlugin {
 
         app.configure_sets(Update, ModelicaSet::HandleResponses);
         app.configure_sets(FixedUpdate, ModelicaSet::SpawnRequests);
+        app.add_plugins(lunco_modelica_telemetry::ModelicaTelemetryPlugin);
         app.init_resource::<worker::CosimLag>();
         app.register_type::<ModelicaModel>()
             .add_observer(worker::on_remove_modelica)
             .add_systems(
                 Update,
                 worker::handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
-            )
-            .add_systems(
-                Update,
-                lunco_modelica_core::runtime_telemetry::retain_modelica_runtime_state
-                    .after(ModelicaSet::HandleResponses),
             )
             .add_systems(
                 FixedUpdate,

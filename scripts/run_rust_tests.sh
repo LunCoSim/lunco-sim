@@ -9,7 +9,7 @@
 #   ./scripts/run_rust_tests.sh -p lunco-modelica-core --module rumoca_api_coverage
 #   ./scripts/run_rust_tests.sh -p lunco-usd-commands --file commands
 #   ./scripts/run_rust_tests.sh -p lunco-usd --filter integration_asset_loading::test_sandbox_scene_composes
-#   ./scripts/run_rust_tests.sh -p lunco-modelica-core --lib --filter runtime_telemetry::tests
+#   ./scripts/run_rust_tests.sh -p lunco-modelica-telemetry --lib --filter runtime_state
 
 set -euo pipefail
 

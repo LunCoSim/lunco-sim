@@ -22,7 +22,8 @@
 //! live in `lunco-modelica-execution`. Headless document and source-editing
 //! mechanics live in `lunco-modelica-document`, so compiler consumers do not
 //! compile this crate's document implementation merely to use that lower-level
-//! contract.
+//! contract. The execution-side Modelica telemetry projection is isolated in
+//! `lunco-modelica-telemetry`.
 use bevy::prelude::*;
 #[cfg(feature = "api")]
 use lunco_api::executor::DeferredCommandAppExt;
@@ -91,10 +92,6 @@ pub mod sim_default;
 /// run, what bounds to run it with). No `World`/UI deps — the `ui/` layer
 /// gathers inputs and calls down. See [`sim_target`].
 pub mod sim_target;
-
-/// Render-free retention of live Modelica variables in the shared telemetry
-/// registry.  Inspection does not depend on a plot binding or a UI plugin.
-pub mod runtime_telemetry;
 
 /// Core (UI-free) Modelica command helpers — `SetModelInput` application + sim-
 /// bounds resolution — shared by the egui workbench and the headless API server.

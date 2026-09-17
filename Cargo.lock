@@ -8222,9 +8222,7 @@ dependencies = [
  "lunco-modelica-runtime",
  "lunco-port-core",
  "lunco-settings",
- "lunco-signal",
  "lunco-storage",
- "lunco-telemetry",
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-workspace",
@@ -8287,6 +8285,7 @@ dependencies = [
  "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
+ "lunco-modelica-telemetry",
  "lunco-settings",
  "lunco-signal",
  "lunco-storage",
@@ -8365,6 +8364,21 @@ dependencies = [
  "rumoca-sim",
  "rumoca-solver-rk45",
  "web-time",
+]
+
+[[package]]
+name = "lunco-modelica-telemetry"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-modelica-ast",
+ "lunco-modelica-document",
+ "lunco-modelica-runtime",
+ "lunco-signal",
+ "lunco-telemetry",
 ]
 
 [[package]]
