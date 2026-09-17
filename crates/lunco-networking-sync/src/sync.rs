@@ -3350,10 +3350,6 @@ impl Plugin for SyncPlugin {
             // (`net_smoke --connect`) on its first drained message: the same
             // missing-resource class as `PendingAssetOffers` above.
             .init_resource::<PendingRunStatus>()
-            // Scripted-policy plane: the active rhai policy set (merge / authz /
-            // drive-kernel). Host-authoritative; clients fill it from the host's
-            // broadcast (`drain_sync_inbox`). Present on every peer.
-            .init_resource::<lunco_scripting::policy::ScriptedPolicyRegistry>()
             .register_settings_section::<CursorSettings>()
             .register_settings_section::<TutorialSettings>()
             .init_resource::<SyncChannelRegistry>()
