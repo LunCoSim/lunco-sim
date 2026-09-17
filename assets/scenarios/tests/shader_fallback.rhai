@@ -1,6 +1,6 @@
 // The assertion is the owning render-boundary diagnostic. An authored shader contract
 // must fail visibly; this scenario does not accept a renderer-selected material.
-const TEST_KIND = "graphics";
+const TEST_KIND = "render-contract";
 
 fn query_ok(record) {
     record != () && record.ok != false

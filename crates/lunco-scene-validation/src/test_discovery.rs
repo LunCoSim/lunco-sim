@@ -9,6 +9,7 @@
 //!
 //! ```rhai
 //! const TEST_KIND = "graphics";
+//! // or `"render-contract"` for GPU diagnostics without a pixel take,
 //! // or `"editor"` for workflows that require the production workbench.
 //! ```
 //!
@@ -27,6 +28,10 @@ pub const TEST_KIND_CONST: &str = "TEST_KIND";
 pub const HEADLESS_TEST_KIND: &str = "headless";
 /// The value for tests whose assertion consumes rendered pixels or UI output.
 pub const GRAPHICS_TEST_KIND: &str = "graphics";
+/// The value for tests whose assertion consumes GPU/render diagnostics but no
+/// pixel capture. These tests still run through the production offscreen GPU
+/// host, but do not require a valid color-phase item.
+pub const RENDER_CONTRACT_TEST_KIND: &str = "render-contract";
 /// The value for tests that require the windowed production editor.
 pub const EDITOR_TEST_KIND: &str = "editor";
 
@@ -37,6 +42,8 @@ pub enum SceneTestKind {
     Headless,
     /// Run through the offscreen renderer and inspect graphics output.
     Graphics,
+    /// Run through the offscreen renderer and inspect render diagnostics.
+    RenderContract,
     /// Run through the windowed production editor and inspect its UI/domain APIs.
     Editor,
 }
@@ -47,6 +54,7 @@ impl SceneTestKind {
         match self {
             Self::Headless => HEADLESS_TEST_KIND,
             Self::Graphics => GRAPHICS_TEST_KIND,
+            Self::RenderContract => RENDER_CONTRACT_TEST_KIND,
             Self::Editor => EDITOR_TEST_KIND,
         }
     }
@@ -87,14 +95,17 @@ pub fn classify_rhai_source(source: &str) -> Result<SceneTestKind, String> {
     }
 
     let value = value.into_string().map_err(|_| {
-        format!("`{TEST_KIND_CONST}` must be `\"headless\"`, `\"graphics\"`, or `\"editor\"`")
+        format!(
+            "`{TEST_KIND_CONST}` must be `\"headless\"`, `\"graphics\"`, `\"render-contract\"`, or `\"editor\"`"
+        )
     })?;
     match value.as_str() {
         HEADLESS_TEST_KIND => Ok(SceneTestKind::Headless),
         GRAPHICS_TEST_KIND => Ok(SceneTestKind::Graphics),
+        RENDER_CONTRACT_TEST_KIND => Ok(SceneTestKind::RenderContract),
         EDITOR_TEST_KIND => Ok(SceneTestKind::Editor),
         _ => Err(format!(
-            "`{TEST_KIND_CONST}` has unsupported value {value:?}; expected `{HEADLESS_TEST_KIND}`, `{GRAPHICS_TEST_KIND}`, or `{EDITOR_TEST_KIND}`"
+            "`{TEST_KIND_CONST}` has unsupported value {value:?}; expected `{HEADLESS_TEST_KIND}`, `{GRAPHICS_TEST_KIND}`, `{RENDER_CONTRACT_TEST_KIND}`, or `{EDITOR_TEST_KIND}`"
         )),
     }
 }
@@ -262,6 +273,14 @@ mod tests {
         assert_eq!(
             classify_rhai_source("const TEST_KIND = \"editor\";").unwrap(),
             SceneTestKind::Editor
+        );
+    }
+
+    #[test]
+    fn literal_render_contract_kind_is_static_and_deterministic() {
+        assert_eq!(
+            classify_rhai_source("const TEST_KIND = \"render-contract\";").unwrap(),
+            SceneTestKind::RenderContract
         );
     }
 

@@ -480,7 +480,7 @@ USAGE:
                [--threads N] [--jitter FRAC] [--seed U64] [--readiness-timeout SECS]
     luncosim test --list
 
-    --list                   Print `headless`/`graphics` and every discovered test scene,
+    --list                   Print the execution kind and every discovered test scene,
                              using the test Rhai program's literal TEST_KIND declaration.
     --scene PATH             REQUIRED. USD scene path. It may be relative to
                              assets/, relative to the current directory, or an

@@ -1611,6 +1611,7 @@ fn clean_scene_name(stem: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use bevy::prelude::default;
     use super::{
         RuntimeUiDropdownState, runtime_ui_dimension, scenario_registry_diagnostic,
         scenario_registry_status_message,
