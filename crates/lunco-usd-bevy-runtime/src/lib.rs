@@ -13,6 +13,8 @@ pub struct UsdPlugins;
 impl Plugin for UsdPlugins {
     fn build(&self, app: &mut App) {
         app.add_plugins((
+            lunco_usd_commands::UsdCommandsPlugin,
+            lunco_usd_bevy_runtime_core::UsdSceneRuntimePlugin,
             lunco_usd_bevy::UsdVisualPlugin,
             lunco_usd_bevy_animation::UsdAnimationPlugin,
             lunco_usd_bevy_diagnostics::UsdDiagnosticsPlugin,
@@ -24,9 +26,5 @@ impl Plugin for UsdPlugins {
         app.add_plugins(lunco_usd_sim_cosim_api::UsdSimCosimApiPlugin);
         #[cfg(feature = "api")]
         app.add_plugins(lunco_usd_sim_domain_api::UsdSimDomainApiPlugin);
-        app.add_plugins((
-            lunco_usd_commands::UsdCommandsPlugin,
-            lunco_usd_bevy_runtime_core::UsdSceneRuntimePlugin,
-        ));
     }
 }
