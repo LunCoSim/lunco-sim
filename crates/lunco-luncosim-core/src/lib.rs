@@ -16,9 +16,9 @@ use big_space::prelude::*;
 
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
-use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
+use lunco_cosim::CoSimPlugin;
 use lunco_environment::EnvironmentPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
 use lunco_mobility::LunCoMobilityPlugin;
@@ -28,15 +28,15 @@ use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
 use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
 use lunco_usd_avian_filters::filtered_pairs::UsdCollisionFilter;
-use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_core::program::{
     ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
 };
 use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime::UsdPlugins;
-use lunco_usd_bevy_scene::UsdPrimPath;
 #[cfg(feature = "networking")]
-use lunco_usd_sim_cosim::scene::LoadScene;
+use lunco_usd_bevy_runtime_core::scene::LoadScene;
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 /// Asset registration needed by USD authoring in a headless world. These are
 /// data stores only; no render plugin is installed here.
@@ -136,16 +136,14 @@ mod headless_composition_tests {
 
         assert!(app.is_plugin_added::<AssetPlugin>());
         assert!(app.world().get_resource::<AssetServer>().is_some());
-        assert!(
-            app.world()
-                .get_resource::<Assets<bevy::shader::Shader>>()
-                .is_some()
-        );
-        assert!(
-            app.world()
-                .get_resource::<Assets<bevy::image::Image>>()
-                .is_some()
-        );
+        assert!(app
+            .world()
+            .get_resource::<Assets<bevy::shader::Shader>>()
+            .is_some());
+        assert!(app
+            .world()
+            .get_resource::<Assets<bevy::image::Image>>()
+            .is_some());
     }
 }
 
@@ -1919,7 +1917,7 @@ impl Plugin for LunCoSimCorePlugin {
             // downloaded the host's advertised scenario, load its entry scene from
             // the cache mounted as a Twin root (read-only consume). The bridge lives here —
             // the assembly crate that owns both the wire (`lunco-networking`) and
-            // the scene loader (`lunco_usd_sim_cosim::scene::LoadScene`) — keeping each of those
+            // the scene loader (`lunco_usd_bevy_runtime_core::scene::LoadScene`) — keeping each of those
             // crates free of the other.
             app.add_systems(Update, load_ready_scenario);
             // Layer B: project peers' live journal edits onto the local scene

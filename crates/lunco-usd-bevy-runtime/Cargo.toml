@@ -19,6 +19,7 @@ lunco-usd-sim-cosim-api = { path = "../lunco-usd-sim-cosim-api", optional = true
 lunco-usd-sim-domain-api = { path = "../lunco-usd-sim-domain-api", optional = true }
 
 [features]
+python = ["lunco-usd-sim-cosim/python"]
 api = [
     "dep:lunco-usd-sim-cosim-api",
     "dep:lunco-usd-sim-domain-api",

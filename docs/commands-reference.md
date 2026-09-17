@@ -2807,7 +2807,7 @@ actually call, with the fields the deserializer actually accepts. See the
  loading its new scene.) Also useful standalone over the API / MCP as
  a "clear the world" verb.
 
-- *defined in:* `crates/lunco-usd-sim-cosim/src/scene.rs`
+- *defined in:* `crates/lunco-usd-bevy-runtime-core/src/scene.rs`
 - *fields:* none — call with `ClearScene` (no params)
 
 #### `LoadScene`
@@ -2839,7 +2839,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Without these ownership boundaries, repeated reloads accumulate stale
  workers or make an unrelated interactive document disappear.
 
-- *defined in:* `crates/lunco-usd-sim-cosim/src/scene.rs`
+- *defined in:* `crates/lunco-usd-bevy-runtime-core/src/scene.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2862,7 +2862,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Paired with `pause()` this is the "reload-then-freeze" one-liner the workflow
  wanted (`restart_scene(); pause();`).
 
-- *defined in:* `crates/lunco-usd-sim-cosim/src/scene.rs`
+- *defined in:* `crates/lunco-usd-bevy-runtime-core/src/scene.rs`
 
 | Field | Type | Description |
 |---|---|---|

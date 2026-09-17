@@ -23,21 +23,14 @@
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use big_space::prelude::{CellCoord, Grid};
 use lunco_core::telemetry::{ChannelSource, Parameter};
-use lunco_core::{
-    DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics, SceneTransition,
-    SceneTransitionAdmission, SceneTransitionAdmitted, SceneTransitionCompleted,
-    SceneTransitionCoordinator, SceneTransitionFailed, SceneTransitionIntent,
-    SceneTransitionRequest,
-};
+use lunco_core::{DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics};
 use lunco_cosim_core::{
     BindingEpochDirty, ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConnection,
     SimStatus, UsdSourcedCosim,
 };
-use lunco_doc::DocumentId;
 #[cfg(feature = "python")]
-use lunco_doc::DocumentOrigin;
+use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica_ast::ast_extract::parse_model_interface;
 use lunco_modelica_runtime::source_asset::ModelicaSource;
 use lunco_modelica_runtime::{
@@ -49,32 +42,26 @@ use lunco_scripting::doc::{ScriptDocument, ScriptLanguage};
 use lunco_scripting::python::{get_python_status, PythonStatus};
 #[cfg(feature = "python")]
 use lunco_scripting::source_asset::PythonSource;
-use lunco_scripting::{
-    doc::ScriptedModel, scenario::ScenarioDriver, world_bridge::RhaiScenarioRuntime,
-    SceneOwnedScript, ScriptRegistry,
-};
-use lunco_spatial::{OriginAnchor, WorldGrid};
+#[cfg(feature = "python")]
+use lunco_scripting::{doc::ScriptedModel, SceneOwnedScript, ScriptRegistry};
 use lunco_usd_bevy_core::read::read_authored_bool_strict;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{
-    canonical::CanonicalStages, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
-    UsdStageAsset, UsdWiringDirty,
+    canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
+    UsdWiringDirty,
 };
-use lunco_usd_bevy_scene::{
-    UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjectionQueued,
-    UsdSceneRoot,
-};
+use lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight;
+use lunco_usd_bevy_scene::UsdPrimPath;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
 use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
 use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule};
 
-/// Installs the USD-to-co-simulation projection and scene lifecycle systems.
+/// Installs USD-authored co-simulation participant and connection projection.
 pub struct UsdSimCosimPlugin;
 
 pub mod readiness;
-pub mod scene;
 pub mod sync;
 mod wiring;
 
@@ -328,52 +315,6 @@ struct ValidatedUsdModelicaPortContract {
     session_id: u64,
 }
 
-/// Scene transition transaction: set when a scene load is dispatched, cleared
-/// once the stage's awaiting, queued-projection, and pending-mesh visual phases
-/// have all drained.
-///
-/// Admission is serialized by [`SceneTransitionCoordinator`]. A second request
-/// never reclaims entities still owned by this asset/projection phase; it starts
-/// only after this transaction publishes a completed or failed edge.
-///
-/// The transaction is keyed by stage AssetId (not path string), so the clearing
-/// system can match it against UsdPrimPath::stage_handle.id() on draining
-/// `UsdSceneAwaitingStage` entities.
-#[derive(Resource)]
-pub struct SceneLoadInFlight {
-    /// Asset-relative path of the in-flight scene.
-    pub path: String,
-    /// Stage asset id of the in-flight load. Only the matching explicit asset
-    /// outcome may close this transaction.
-    pub stage_id: bevy::asset::AssetId<UsdStageAsset>,
-}
-
-/// Authoritative terminal asset outcome for a mounted scene stage.
-///
-/// The USD asset boundary publishes this from Bevy's load/failure messages.
-/// An already-loaded stage publishes `Loaded` from the mount command itself.
-/// Scene completion therefore advances from explicit outcomes, never from a
-/// per-frame readiness poll.
-#[derive(Message, Debug, Clone)]
-pub enum SceneStageAssetOutcome {
-    Loaded {
-        stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    },
-    Failed {
-        stage_id: bevy::asset::AssetId<UsdStageAsset>,
-        error: String,
-    },
-}
-
-/// Terminal stage outcomes survive until the bounded USD visual projection has
-/// drained the stage's queued prims. A loaded asset is therefore not allowed to
-/// close the scene transaction while descendants are still being projected.
-#[derive(Resource, Default)]
-struct PendingSceneStageOutcome {
-    stage_id: Option<bevy::asset::AssetId<UsdStageAsset>>,
-    outcome: Option<SceneStageAssetOutcome>,
-}
-
 /// Queued Modelica source load. Inserted by `process_usd_cosim_prims`;
 /// drained by `dispatch_loaded_modelica_sources` once the
 /// `Handle<ModelicaSource>` has resolved to bytes.
@@ -419,141 +360,6 @@ fn any_unwrapped_modelica(
     >,
 ) -> bool {
     !q.is_empty()
-}
-
-fn publish_loaded_scene_stage_outcomes(
-    mut events: MessageReader<AssetEvent<UsdStageAsset>>,
-    mut outcomes: MessageWriter<SceneStageAssetOutcome>,
-) {
-    for event in events.read() {
-        if let AssetEvent::LoadedWithDependencies { id } = event {
-            outcomes.write(SceneStageAssetOutcome::Loaded { stage_id: *id });
-        }
-    }
-}
-
-fn publish_failed_scene_stage_outcomes(
-    mut events: MessageReader<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>,
-    mut outcomes: MessageWriter<SceneStageAssetOutcome>,
-) {
-    for event in events.read() {
-        outcomes.write(SceneStageAssetOutcome::Failed {
-            stage_id: event.id,
-            error: event.error.to_string(),
-        });
-    }
-}
-
-/// Close the scene transaction from one explicit stage outcome.
-///
-/// Loaded outcomes arrive after `sync_usd_visuals`; failure outcomes arrive
-/// after the USD asset boundary has retired parked prims. A loaded outcome is
-/// retained while any awaiting prim, queued projection, or pending generated
-/// mesh remains and is committed at the first later `Last` edge with no visual
-/// phase outstanding. Camera presentation is validated by `lunco-usd-bevy` as
-/// a separate host-facing contract; it must not redefine whether the USD scene
-/// itself loaded.
-fn record_scene_load_terminal_outcome(
-    mut outcomes: MessageReader<SceneStageAssetOutcome>,
-    in_flight: Option<Res<SceneLoadInFlight>>,
-    coordinator: Res<SceneTransitionCoordinator>,
-    q_awaiting: Query<&UsdPrimPath, With<UsdSceneAwaitingStage>>,
-    q_projecting: Query<&UsdPrimPath, With<UsdSceneProjectionQueued>>,
-    q_pending_meshes: Query<&UsdPrimPath, With<UsdSceneGeometryPending>>,
-    q_lights: Query<&bevy::light::DirectionalLight>,
-    mut pending: ResMut<PendingSceneStageOutcome>,
-    mut commands: Commands,
-) {
-    let Some(g) = in_flight else {
-        outcomes.read().for_each(drop);
-        pending.stage_id = None;
-        pending.outcome = None;
-        return;
-    };
-    if pending.stage_id != Some(g.stage_id) {
-        pending.stage_id = None;
-        pending.outcome = None;
-    }
-    if let Some(matching) = outcomes
-        .read()
-        .filter(|outcome| match outcome {
-            SceneStageAssetOutcome::Loaded { stage_id }
-            | SceneStageAssetOutcome::Failed { stage_id, .. } => *stage_id == g.stage_id,
-        })
-        .last()
-        .cloned()
-    {
-        pending.stage_id = Some(g.stage_id);
-        pending.outcome = Some(matching);
-    }
-    let Some(outcome) = pending.outcome.clone() else {
-        return;
-    };
-    let Some(transition) = coordinator.active().cloned() else {
-        // The stage outcome is stale: the scene was cleared before its asset
-        // terminal message arrived. The clear path already removed the load
-        // identity, but keep this guard local so a malformed event cannot
-        // panic the process.
-        warn!("[scene] ignoring stage outcome without an active scene transaction");
-        commands.remove_resource::<SceneLoadInFlight>();
-        pending.stage_id = None;
-        pending.outcome = None;
-        return;
-    };
-    if !matches!(
-        &transition,
-        SceneTransition::Load { .. } | SceneTransition::Restart { .. }
-    ) {
-        // A load identity attached to a non-load transaction is a lifecycle
-        // violation. Turn it into a terminal failure so a queued replacement
-        // can proceed instead of leaving the coordinator permanently active.
-        let error = "scene load outcome arrived for a non-load transition".to_string();
-        warn!("[scene] {error}");
-        pending.outcome = None;
-        commands.remove_resource::<SceneLoadInFlight>();
-        commands.trigger(SceneTransitionFailed { transition, error });
-        return;
-    }
-
-    if let SceneStageAssetOutcome::Failed { error, .. } = outcome {
-        pending.outcome = None;
-        commands.remove_resource::<SceneLoadInFlight>();
-        commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
-        commands.trigger(SceneTransitionFailed { transition, error });
-        return;
-    }
-
-    let still_awaiting = q_awaiting
-        .iter()
-        .any(|prim| prim.stage_handle.id() == g.stage_id);
-    let still_projecting = q_projecting
-        .iter()
-        .any(|prim| prim.stage_handle.id() == g.stage_id);
-    let still_pending_meshes = q_pending_meshes
-        .iter()
-        .any(|prim| prim.stage_handle.id() == g.stage_id);
-    if still_awaiting || still_projecting || still_pending_meshes {
-        // The asset is loaded, but visual projection is intentionally paced and
-        // CPU-generated meshes may still be streaming. Keep the outcome until
-        // every phase of this stage's visual projection has drained; a scene
-        // load is not presentable while any of these ownership markers remain.
-        return;
-    }
-
-    // A scene that is meant to be visible must provide its light through USD
-    // (or the authored celestial bootstrap). Absence is reported, but it does
-    // not change the transaction outcome.
-    if q_lights.is_empty() {
-        error!(
-            "[scene] `{}` finished loading with no DirectionalLight — author a \\
-             UsdLux DistantLight or a celestial site anchor",
-            g.path
-        );
-    }
-    pending.outcome = None;
-    commands.remove_resource::<SceneLoadInFlight>();
-    commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
-    commands.trigger(SceneTransitionCompleted { transition });
 }
 
 pub(crate) fn process_usd_cosim_prims(
@@ -2228,11 +2034,6 @@ impl Plugin for UsdSimCosimPlugin {
             lunco_scripting::ScriptingSet.before(ModelicaSet::SpawnRequests),
         );
 
-        // Scene-owned scripting state must end at the same boundary as the USD
-        // entities that gave it meaning. This runs before clear_scene_entities'
-        // deferred despawns, so the outgoing hook still sees the outgoing world.
-        app.add_systems(lunco_core::SceneTeardown, scene::stop_scene_owned_scripts);
-
         // Ensure the source asset types this module's systems read/allocate are
         // registered. Idempotent — production registers these via the Modelica /
         // scripting plugins; doing it here lets minimal apps (headless tests using
@@ -2259,9 +2060,7 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_usd_sim_domain::ProjectionDirty>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
-            .init_resource::<UsdTelemetryProjectionIndex>()
-            .init_resource::<PendingSceneStageOutcome>()
-            .init_resource::<SceneTransitionCoordinator>();
+            .init_resource::<UsdTelemetryProjectionIndex>();
         app.add_observer(request_binding_epoch::<UsdPrimPath>)
             .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
             // Link port names are derived from the classes of the other authored
@@ -2287,19 +2086,12 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(request_binding_epoch::<PendingDifferential>)
             .add_observer(request_binding_epoch_on_remove::<PendingDifferential>)
             .add_observer(request_binding_epoch::<SimConnection>)
-            .add_observer(request_binding_epoch_on_remove::<SimConnection>)
-            .add_observer(scene::on_scene_transition_intent)
-            .add_observer(scene::execute_admitted_restart_scene)
-            .add_observer(scene::execute_admitted_clear_scene)
-            .add_observer(scene::on_scene_transition_completed)
-            .add_observer(scene::on_scene_transition_failed);
+            .add_observer(request_binding_epoch_on_remove::<SimConnection>);
         // USD source-load and contract failures use the same core notice stream as
         // the Modelica compiler, so the workbench console has one observable error
         // surface. `add_message` is idempotent when the Modelica plugin registered
         // it already.
         app.add_message::<lunco_modelica_runtime::ModelicaNotice>();
-        app.add_message::<SceneStageAssetOutcome>();
-
         // A scene that is still spawning, and an object whose model has not
         // compiled, are the two things this module knows are not ready. Declaring
         // them is part of driving them — see `crate::readiness`.
@@ -2320,45 +2112,6 @@ impl Plugin for UsdSimCosimPlugin {
             )
                 .chain()
                 .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),
-        );
-
-        app.add_systems(
-            Update,
-            (
-                publish_loaded_scene_stage_outcomes
-                    .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
-                    .run_if(on_message::<AssetEvent<UsdStageAsset>>),
-                publish_failed_scene_stage_outcomes
-                    .run_if(on_message::<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>),
-            ),
-        );
-
-        app.add_systems(
-            First,
-            (
-                // `chain` inserts the synchronization point that makes the admitted
-                // request visible here. Its trailing schedule flush applies the
-                // replacement teardown before PreUpdate/Update consumers can query
-                // the outgoing scene.
-                scene::dispatch_admitted_scene_transition
-                    .run_if(scene::has_admitted_scene_transition),
-                // Admitted-transition observers enqueue teardown and mount work;
-                // make that whole queue land at this lifecycle boundary instead of
-                // relying on Main's final implicit flush.
-                ApplyDeferred,
-            )
-                .chain(),
-        );
-
-        app.add_systems(
-            Last,
-            // The terminal outcome is consumed at the end of the projection frame.
-            // By `Last`, all USD, simulation, camera, render-binding, transform and
-            // physics projection systems have run. A loaded outcome is retained by
-            // `PendingSceneStageOutcome` while the bounded visual queue drains, so
-            // this tiny state check is the only multi-frame lifecycle bookkeeping;
-            // no heavyweight readiness scan runs on the UI thread.
-            record_scene_load_terminal_outcome,
         );
 
         app.add_systems(
@@ -2567,24 +2320,16 @@ impl Plugin for UsdSimCosimPlugin {
                     .before(PropagateCosimSet::Propagate),
             ),
         );
-
-        // Registers the LoadScene type + observer (see register_commands! below).
-        scene::register_all_commands(app);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{
-        dispatch_admitted_scene_transition, has_admitted_scene_transition,
-        on_scene_transition_completed, resolve_root_prim, validate_scene_address,
-    };
     use crate::sync::{
         copy_modelica_input_values, event_rising_edge, fire_connected_events, modelica_status,
         parse_event_severity, EventBinding,
     };
-
     #[derive(Resource, Default)]
     struct WiringRuns(usize);
 
@@ -2779,49 +2524,6 @@ mod tests {
         assert!(participants.topology_ready);
         assert!(!participants.entities.contains(&model));
         assert!(!participants.requires_barrier(model));
-    }
-
-    // ── resolve_root_prim ────────────────────────────────────────────
-    //
-    // `resolve_root_prim` no longer touches the filesystem: an explicit
-    // override wins, and an empty override yields the deferred-resolution
-    // sentinel (empty string). The actual `defaultPrim` lookup is done
-    // from the parsed stage in the visual projection pass
-    // (covered by `stage_default_prim` tests there) — correct on wasm too.
-
-    #[test]
-    fn resolve_root_prim_override_wins() {
-        assert_eq!(resolve_root_prim("scene.usda", "/Override"), "/Override");
-    }
-
-    #[test]
-    fn resolve_root_prim_empty_override_defers() {
-        // Empty override → empty sentinel; resolved downstream against
-        // the parsed stage, not here.
-        assert_eq!(resolve_root_prim("scene.usda", ""), "");
-    }
-
-    #[test]
-    fn scene_address_requires_a_registered_scheme_before_reload() {
-        assert_eq!(
-            validate_scene_address("lunco://scenes/luncosim/sandbox_scene.usda"),
-            Some("lunco://scenes/luncosim/sandbox_scene.usda".to_string())
-        );
-        assert_eq!(
-            validate_scene_address("twin://moonbase/scenes/sandbox_scene.usda"),
-            Some("twin://moonbase/scenes/sandbox_scene.usda".to_string())
-        );
-        assert_eq!(
-            validate_scene_address("scenes/luncosim/sandbox_scene.usda"),
-            None
-        );
-        assert_eq!(
-            validate_scene_address("/workspace/assets/scenes/luncosim/sandbox_scene.usda"),
-            None
-        );
-        assert_eq!(validate_scene_address("lunco://"), None);
-        assert_eq!(validate_scene_address("lunco://../scene.usda"), None);
-        assert_eq!(validate_scene_address("twin:///scene.usda"), None);
     }
 
     // ── interface published at parse, not at solve ───────────────────
@@ -3296,224 +2998,5 @@ mod tests {
             parse_event_severity("critical"),
             Some(lunco_core::Severity::Critical)
         );
-    }
-
-    #[derive(Resource, Default)]
-    struct ProjectionFrameQueued(bool);
-
-    #[derive(Resource)]
-    struct ProjectionWritesApplied;
-
-    #[derive(Resource, Default)]
-    struct AdmittedRequests(Vec<SceneTransitionRequest>);
-
-    #[derive(Resource, Default)]
-    struct CompletedTransitions(Vec<SceneTransition>);
-
-    #[test]
-    fn explicit_stage_outcome_commits_without_readiness_polling() {
-        let transition = SceneTransition::load("scene.usda", "/World");
-        let stage_id = Handle::<UsdStageAsset>::default().id();
-        let mut app = App::new();
-        app.add_message::<SceneStageAssetOutcome>()
-            .init_resource::<SceneTransitionCoordinator>()
-            .init_resource::<PendingSceneStageOutcome>()
-            .init_resource::<CompletedTransitions>()
-            .add_observer(on_scene_transition_completed)
-            .add_observer(
-                |trigger: On<SceneTransitionCompleted>,
-                 mut completed: ResMut<CompletedTransitions>| {
-                    completed.0.push(trigger.event().transition.clone());
-                },
-            )
-            .add_systems(
-                Last,
-                record_scene_load_terminal_outcome.run_if(on_message::<SceneStageAssetOutcome>),
-            );
-
-        {
-            let mut coordinator = app.world_mut().resource_mut::<SceneTransitionCoordinator>();
-            assert_eq!(
-                coordinator.admit(SceneTransitionRequest::load("scene.usda", "/World")),
-                SceneTransitionAdmission::Admitted
-            );
-            assert_eq!(
-                coordinator.take_admitted(),
-                Some(SceneTransitionRequest::load("scene.usda", "/World"))
-            );
-            coordinator.start(transition.clone());
-        }
-        app.insert_resource(SceneLoadInFlight {
-            path: "scene.usda".to_owned(),
-            stage_id,
-        });
-        app.world_mut()
-            .write_message(SceneStageAssetOutcome::Loaded { stage_id });
-
-        app.update();
-        assert!(!app.world().contains_resource::<SceneLoadInFlight>());
-        assert_eq!(
-            app.world().resource::<CompletedTransitions>().0,
-            vec![transition]
-        );
-        assert!(app
-            .world()
-            .resource::<SceneTransitionCoordinator>()
-            .active()
-            .is_none());
-    }
-
-    #[test]
-    fn loaded_stage_outcome_waits_for_bounded_visual_projection() {
-        let transition = SceneTransition::load("scene.usda", "/World");
-        let stage_id = Handle::<UsdStageAsset>::default().id();
-        let mut app = App::new();
-        app.add_message::<SceneStageAssetOutcome>()
-            .init_resource::<SceneTransitionCoordinator>()
-            .init_resource::<PendingSceneStageOutcome>()
-            .init_resource::<CompletedTransitions>()
-            .add_observer(on_scene_transition_completed)
-            .add_observer(
-                |trigger: On<SceneTransitionCompleted>,
-                 mut completed: ResMut<CompletedTransitions>| {
-                    completed.0.push(trigger.event().transition.clone());
-                },
-            )
-            .add_systems(Last, record_scene_load_terminal_outcome);
-
-        {
-            let mut coordinator = app.world_mut().resource_mut::<SceneTransitionCoordinator>();
-            assert_eq!(
-                coordinator.admit(SceneTransitionRequest::load("scene.usda", "/World")),
-                SceneTransitionAdmission::Admitted
-            );
-            coordinator
-                .take_admitted()
-                .expect("the first scene request is admitted");
-            coordinator.start(transition.clone());
-        }
-        let awaiting = app
-            .world_mut()
-            .spawn((
-                UsdPrimPath {
-                    stage_handle: Handle::default(),
-                    path: "/World/HeavyMesh".to_owned(),
-                },
-                UsdSceneAwaitingStage,
-                UsdSceneProjectionQueued,
-            ))
-            .id();
-        let pending_mesh = app
-            .world_mut()
-            .spawn((
-                UsdPrimPath {
-                    stage_handle: Handle::default(),
-                    path: "/World/HeavyMeshMesh".to_owned(),
-                },
-                UsdSceneGeometryPending,
-            ))
-            .id();
-        app.insert_resource(SceneLoadInFlight {
-            path: "scene.usda".to_owned(),
-            stage_id,
-        });
-        app.world_mut()
-            .write_message(SceneStageAssetOutcome::Loaded { stage_id });
-
-        app.update();
-        assert!(app.world().contains_resource::<SceneLoadInFlight>());
-        assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
-
-        app.world_mut()
-            .entity_mut(awaiting)
-            .remove::<UsdSceneAwaitingStage>();
-        app.update();
-        assert!(app.world().contains_resource::<SceneLoadInFlight>());
-        assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
-
-        app.world_mut()
-            .entity_mut(awaiting)
-            .remove::<UsdSceneProjectionQueued>();
-        app.update();
-        assert!(app.world().contains_resource::<SceneLoadInFlight>());
-        assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
-
-        app.world_mut()
-            .entity_mut(pending_mesh)
-            .remove::<UsdSceneGeometryPending>();
-        app.update();
-        assert!(!app.world().contains_resource::<SceneLoadInFlight>());
-        assert_eq!(
-            app.world().resource::<CompletedTransitions>().0,
-            vec![transition]
-        );
-    }
-
-    #[test]
-    fn queued_transition_starts_after_the_projection_frame_flushes() {
-        let first = SceneTransition::load("first.usda", "/World");
-        let first_for_completion = first.clone();
-        let second = SceneTransitionRequest::load("second.usda", "/World");
-        let mut app = App::new();
-        app.init_resource::<SceneTransitionCoordinator>()
-            .init_resource::<ProjectionFrameQueued>()
-            .init_resource::<AdmittedRequests>()
-            .add_observer(on_scene_transition_completed)
-            .add_observer(
-                |trigger: On<SceneTransitionAdmitted>,
-                 _flushed: Res<ProjectionWritesApplied>,
-                 mut admitted: ResMut<AdmittedRequests>| {
-                    admitted.0.push(trigger.event().request.clone());
-                },
-            )
-            .add_systems(
-                First,
-                (
-                    dispatch_admitted_scene_transition.run_if(has_admitted_scene_transition),
-                    ApplyDeferred,
-                )
-                    .chain(),
-            )
-            .add_systems(
-                Update,
-                |queued: Res<ProjectionFrameQueued>, mut commands: Commands| {
-                    if !queued.0 {
-                        commands.insert_resource(ProjectionWritesApplied);
-                    }
-                },
-            )
-            .add_systems(
-                Last,
-                move |mut queued: ResMut<ProjectionFrameQueued>, mut commands: Commands| {
-                    if !queued.0 {
-                        queued.0 = true;
-                        commands.trigger(SceneTransitionCompleted {
-                            transition: first_for_completion.clone(),
-                        });
-                    }
-                },
-            );
-
-        {
-            let mut coordinator = app.world_mut().resource_mut::<SceneTransitionCoordinator>();
-            assert_eq!(
-                coordinator.admit(SceneTransitionRequest::load("first.usda", "/World")),
-                SceneTransitionAdmission::Admitted
-            );
-            assert_eq!(
-                coordinator.take_admitted(),
-                Some(SceneTransitionRequest::load("first.usda", "/World"))
-            );
-            coordinator.start(first);
-            assert_eq!(
-                coordinator.admit(second.clone()),
-                SceneTransitionAdmission::Queued
-            );
-        }
-
-        app.update();
-        assert!(app.world().resource::<AdmittedRequests>().0.is_empty());
-        app.update();
-        assert_eq!(app.world().resource::<AdmittedRequests>().0, vec![second]);
     }
 }

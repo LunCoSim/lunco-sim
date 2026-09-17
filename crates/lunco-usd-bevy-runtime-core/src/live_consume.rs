@@ -474,7 +474,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     }
 
     // Connections are derived from native `connectionPaths` by
-    // `lunco_usd_sim_cosim::rewire_usd_connections`. Prim spawn/despawn triggers
+    // The USD co-simulation wiring owner. Prim spawn/despawn triggers
     // that system directly (change-detection); a `connectionPaths` **edit** on an
     // already-spawned prim is neither — use the typed native-field notice to
     // re-derive off the live stage. Standard authored `inputs:*` edits also
@@ -1064,12 +1064,12 @@ pub(crate) fn reconcile_structural_live(
                 {
                     pending.remove(id, path);
                 }
-                lunco_usd_sim_cosim::scene::despawn_usd_subtree(world, entity);
+                crate::scene::despawn_usd_subtree(world, entity);
             }
             (true, None) => {
-                let parent_path = path
-                    .rsplit_once('/')
-                    .map(|(prefix, _)| if prefix.is_empty() { "/" } else { prefix });
+                let parent_path =
+                    path.rsplit_once('/')
+                        .map(|(prefix, _)| if prefix.is_empty() { "/" } else { prefix });
                 let Some(parent_path) = parent_path else {
                     continue;
                 };
@@ -1105,12 +1105,9 @@ pub(crate) fn reconcile_structural_live(
                         .and_then(|stage| stage.view().text(&sp, "lunco:catalogId"))
                         .filter(|value| !value.trim().is_empty())
                 });
-                if let Some(entity) = lunco_usd_sim_cosim::scene::spawn_usd_child_under_parent(
-                    world,
-                    parent_entity,
-                    path,
-                    tf,
-                ) {
+                if let Some(entity) =
+                    crate::scene::spawn_usd_child_under_parent(world, parent_entity, path, tf)
+                {
                     if let Some(mut projection) = instance_projection {
                         projection.root = Some(entity);
                         world

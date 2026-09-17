@@ -76,7 +76,7 @@ vehicle wheel attachments and gear drives, plus their authored lint facts;
 `lunco-usd-sim-domain-api` owns optional generated-source API queries;
 `lunco-usd-sim` owns vehicle projection and registers its in-place wheel edit
 owner with the generic USD runtime; `lunco-usd-sim-cosim` owns participant
-discovery, wiring, readiness, and scene lifecycle; and
+discovery, wiring, readiness, and Modelica/script exchange; and
 `lunco-usd-sim-cosim-api` owns optional API query serialization. The application
 bundle installs the implementation plugins explicitly, so vehicle changes do
 not make the vehicle package depend on the 6.5k-line cosim implementation.

@@ -50,18 +50,18 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::scene::LoadScene;
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets_core::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy_core::{
-    UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan, source::UsdSourceText,
+    source::UsdSourceText, UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan,
 };
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued, UsdSceneRoot,
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake};
-use lunco_usd_sim_cosim::scene::LoadScene;
 
 use crate::scene_runtime::TWIN_SCENE_LOAD_FAILED;
 use lunco_doc::OpenOutcome;
@@ -2227,12 +2227,11 @@ mod tests {
             .resource_mut::<Assets<UsdStageAsset>>()
             .remove(handle.id());
         app.update();
-        assert!(
-            app.world()
-                .resource::<lunco_core::RuntimeDiagnostics>()
-                .findings
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<lunco_core::RuntimeDiagnostics>()
+            .findings
+            .is_empty());
     }
 
     #[test]
@@ -2259,13 +2258,11 @@ mod tests {
             Ok(ComponentRefreshDecision::Reject)
         );
         assert!(parse_component_refresh_decision(&HookValue::Unit).is_err());
-        assert!(
-            parse_component_refresh_decision(&HookValue::map([(
-                "action",
-                HookValue::str("unknown"),
-            )]))
-            .is_err()
-        );
+        assert!(parse_component_refresh_decision(&HookValue::map([(
+            "action",
+            HookValue::str("unknown"),
+        )]))
+        .is_err());
     }
 
     #[test]
@@ -2501,27 +2498,24 @@ mod tests {
             PathBuf::from("/twins/incoming"),
         );
 
-        assert!(
-            !app.world()
-                .resource::<PendingTwinDocs>()
-                .has_terminal_source_event()
-        );
+        assert!(!app
+            .world()
+            .resource::<PendingTwinDocs>()
+            .has_terminal_source_event());
         app.world_mut()
             .resource_mut::<Messages<bevy::asset::AssetEvent<UsdSourceText>>>()
             .write(bevy::asset::AssetEvent::Added { id: handle.id() });
         app.update();
 
-        assert!(
-            app.world()
-                .resource::<PendingTwinDocs>()
-                .has_terminal_source_event()
-        );
-        assert!(
-            app.world()
-                .resource::<PendingTwinDocs>()
-                .ready
-                .contains(&handle.id())
-        );
+        assert!(app
+            .world()
+            .resource::<PendingTwinDocs>()
+            .has_terminal_source_event());
+        assert!(app
+            .world()
+            .resource::<PendingTwinDocs>()
+            .ready
+            .contains(&handle.id()));
     }
 
     #[test]

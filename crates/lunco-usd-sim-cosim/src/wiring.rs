@@ -1,4 +1,5 @@
 use super::*;
+use lunco_usd_bevy_scene::UsdSceneAwaitingStage;
 
 /// (as opposed to authored some other way). [`rewire_usd_connections`] despawns
 /// every tagged edge and rebuilds the set from the composed stage, which is what

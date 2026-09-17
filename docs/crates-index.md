@@ -119,7 +119,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It registers the vehicle wheel owner with `lunco-usd-bevy-core` for in-place live edits. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
 | **`lunco-usd-sim-authoring`** | Render-free composed readers for PhysX vehicle wheel-attachment and gear-drive authoring, shared by vehicle projection and scene validation; it also publishes the corresponding typed USD lint facts. Runtime ECS resynchronization remains in `lunco-usd-sim`, registered through the generic live-edit owner in `lunco-usd-bevy-core`. |
 | **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, pending differential contract, physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, and scene-runner packages. It contains no projection systems. |
-| **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, scene lifecycle, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`. |
+| **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`; generic scene admission and mounting belong to `lunco-usd-bevy-runtime-core`. |
 | **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
 | **`lunco-usd-sim-domain`** | Render-free USD domain projection: its public `network` module reads and validates component-network facts, `synthesis` owns Rhai-backed policies and generated-plan contracts, and the parent module owns Modelica member-class lifecycle plus ECS projection. Generic USD actuator lowering lives in `lunco-usd-actuation`; its optional API query providers live in `lunco-usd-sim-domain-api`. |
 | **`lunco-usd-sim-domain-api`** | Optional API query providers for generated Modelica source inspection. Kept outside the render-free domain projector so its direct dependency set does not include the `lunco-api`/JSON query surface. |
@@ -546,9 +546,9 @@ or UI presentation. Its public query contracts are tested in
 
 **`lunco-usd-bevy-runtime-core`**
 Headless-safe scene runtime boundary. Installs scene admission, Twin-backed
-stage loading, runtime persistence, and live document-to-stage projection. It
-does not assemble the complete visual, diagnostics, physics, simulation, or
-document-command bundle.
+stage loading, runtime persistence, live document-to-stage projection, scene
+commands, and the stage terminal-outcome contract. It does not assemble the
+complete visual, diagnostics, physics, simulation, or document-command bundle.
 
 **`lunco-usd-bevy-runtime`**
 Application-level composition boundary. Installs the visual USD projector,
@@ -745,11 +745,11 @@ out of either large implementation crate and allowing scene runners to avoid
 the full vehicle projector.
 
 **`lunco-usd-sim-cosim`**
-USD-to-cosim translator and scene lifecycle package. `UsdSimCosimPlugin`
-installs source discovery, wiring, readiness, scene commands, telemetry
-projection independently from vehicle realization. The `scene` module owns
-scene commands and mount/teardown mechanics; `sync` owns the fixed-step
-Modelica/script port exchange and authored event projection. Its optional API
+USD-to-cosim translator. `UsdSimCosimPlugin` installs source discovery,
+wiring, readiness, telemetry projection, and the Modelica/script participant
+exchange independently from vehicle realization. Generic scene commands and
+mount/teardown mechanics live in `lunco-usd-bevy-runtime-core`; `sync` owns
+the fixed-step port exchange and authored event projection. Its optional API
 query providers live in `lunco-usd-sim-cosim-api`.
 
 **`lunco-usd-sim-cosim-api`**

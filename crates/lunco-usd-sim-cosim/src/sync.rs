@@ -4,9 +4,9 @@
 //! discovery has published the generic [`SimComponent`] surface.  It owns the
 //! per-tick copies between Modelica, Rhai/Python, and that surface, plus the
 //! event edge detector that turns authored `LunCoEvent` declarations into
-//! telemetry.  USD discovery, connection derivation, and scene lifecycle stay
-//! in the parent package and do not need to be recompiled when this exchange
-//! logic changes.
+//! telemetry. USD discovery and connection derivation stay in the parent
+//! package; scene admission and mounting belong to the USD runtime package.
+//! Changes to this exchange do not need to rebuild those owners.
 
 use bevy::prelude::*;
 use lunco_cosim_core::{SimComponent, SimStatus, UsdSourcedCosim};

@@ -984,7 +984,7 @@ fn log_participant_readiness_blockers(world: &mut World) {
 /// boolean would hide which owner failed to publish its completion marker.
 fn log_scene_readiness_blockers(world: &mut World) {
     let load_in_flight = world
-        .get_resource::<lunco_usd_sim_cosim::SceneLoadInFlight>()
+        .get_resource::<lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight>()
         .is_some();
     let ground_pending = world
         .get_resource::<lunco_usd_sim_core::GroundColliderPending>()
@@ -1248,7 +1248,7 @@ pub fn run() -> u8 {
             // one `UsdPrimPath` in the world.
             let load_done = app
                 .world()
-                .get_resource::<lunco_usd_sim_cosim::SceneLoadInFlight>()
+                .get_resource::<lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight>()
                 .is_none();
             let load_finished = load_done
                 && app
@@ -1292,7 +1292,7 @@ pub fn run() -> u8 {
 
     let scene_ready = app
         .world()
-        .get_resource::<lunco_usd_sim_cosim::SceneLoadInFlight>()
+        .get_resource::<lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight>()
         .is_none()
         && app
             .world_mut()

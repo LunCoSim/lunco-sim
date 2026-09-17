@@ -50,13 +50,13 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
+lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
-lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
@@ -102,7 +102,7 @@ networking = [
     "dep:lunco-twin-journal",
 ]
 net-diag = ["networking", "lunco-networking/net-diag"]
-python = ["lunco-scripting/python", "lunco-usd-sim-cosim/python"]
+python = ["lunco-scripting/python", "lunco-usd-bevy-runtime/python"]
 native-plugins = ["lunco-scripting/native-plugins"]
 sysml = ["dep:lunco-sysml"]
 

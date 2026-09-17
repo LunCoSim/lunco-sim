@@ -260,6 +260,12 @@ impl Plugin for LunCoScriptingPlugin {
                 scenario::open_scenarios_when_scene_ready.after(lunco_readiness::ReadinessSet),
             );
 
+        #[cfg(feature = "rhai")]
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            scenario::stop_scene_owned_scripts,
+        );
+
         #[cfg(feature = "python")]
         if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {
             app.add_plugins(source_asset::PythonSourceAssetPlugin);

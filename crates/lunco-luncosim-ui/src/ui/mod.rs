@@ -6,7 +6,7 @@
 //! compile this crate.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{egui, EguiContexts};
 use lunco_workbench_runtime_ui as runtime_ui;
 
 use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
@@ -314,7 +314,7 @@ impl Plugin for LunCoSimUiPlugin {
                 ),
             )
             .add_observer(
-                |t: On<lunco_usd_sim_cosim::scene::LoadScene>,
+                |t: On<lunco_usd_bevy_runtime_core::scene::LoadScene>,
                  current: Option<ResMut<CurrentScenePath>>,
                  current_name: Option<ResMut<CurrentSceneName>>,
                  hud: Option<ResMut<lunco_workbench_guided_ui::GuidedOverlay>>| {
@@ -1316,7 +1316,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 // `LoadScene` deliberately no-ops for the active `(stage, root)`.
                 // RestartScene is the lifecycle verb that clears the current world,
                 // invalidates the stage asset, and mounts a newly read source.
-                ctx.trigger(lunco_usd_sim_cosim::scene::RestartScene::default());
+                ctx.trigger(lunco_usd_bevy_runtime_core::scene::RestartScene::default());
                 ui.close();
             }
         });
@@ -1393,7 +1393,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                             continue;
                                         }
                                     };
-                                    ctx.trigger(lunco_usd_sim_cosim::scene::LoadScene {
+                                    ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
                                         path,
                                         root_prim: String::new(),
                                     });
@@ -1529,7 +1529,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                 None => resp,
                             };
                             if resp.clicked() {
-                                    ctx.trigger(lunco_usd_sim_cosim::scene::LoadScene {
+                                    ctx.trigger(lunco_usd_bevy_runtime_core::scene::LoadScene {
                                     path: lunco_assets_core::engine_asset_uri(&asset.asset_path),
                                     root_prim: String::new(),
                                 });
@@ -1612,8 +1612,8 @@ fn clean_scene_name(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        RuntimeUiDropdownState, runtime_ui_dimension, scenario_registry_diagnostic,
-        scenario_registry_status_message,
+        runtime_ui_dimension, scenario_registry_diagnostic, scenario_registry_status_message,
+        RuntimeUiDropdownState,
     };
     use lunco_core::exposure::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;

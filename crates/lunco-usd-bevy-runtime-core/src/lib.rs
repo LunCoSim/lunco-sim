@@ -14,6 +14,7 @@ use bevy::prelude::{App, IntoScheduleConfigs, Plugin};
 mod live_consume;
 mod program_runtime;
 mod runtime_persistence;
+pub mod scene;
 mod scene_runtime;
 mod twin_projection;
 
@@ -29,6 +30,12 @@ impl Plugin for UsdSceneRuntimePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
         app.init_resource::<lunco_usd_core::commands::EmptyViewportReason>();
+        scene::install_scene_lifecycle(app);
+        app.add_observer(scene::on_scene_transition_intent);
+        app.add_observer(scene::execute_admitted_restart_scene);
+        app.add_observer(scene::execute_admitted_clear_scene);
+        app.add_observer(scene::on_scene_transition_completed);
+        app.add_observer(scene::on_scene_transition_failed);
         app.add_observer(scene_runtime::clear_scene_on_twin_closed);
         app.add_systems(
             lunco_core::SceneTeardown,
@@ -90,6 +97,7 @@ impl Plugin for UsdSceneRuntimePlugin {
                     >,
                 ),
         );
+        scene::register_all_commands(app);
         scene_runtime::register_all_commands(app);
     }
 }

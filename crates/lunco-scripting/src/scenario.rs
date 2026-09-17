@@ -118,6 +118,38 @@ pub fn open_scenarios_when_scene_ready(
     info!("[scenario] scene participants ready — lifecycle execution enabled");
 }
 
+/// Stop and close scripts whose ownership was declared by the outgoing USD
+/// scene before its entities are reclaimed.
+///
+/// The generic scenario driver normally observes a detached entity on its next
+/// tick. A scene boundary cannot wait for that tick: an outgoing `on_stop` hook
+/// must run while its world still exists, and the script document must not
+/// survive into the replacement scene. Interactive/API documents are not
+/// marked `SceneOwnedScript` and remain open until their explicit close.
+#[cfg(feature = "rhai")]
+pub fn stop_scene_owned_scripts(world: &mut World) {
+    let targets: Vec<(Entity, Option<u64>)> = {
+        let mut query = world
+            .query_filtered::<(Entity, Option<&ScriptedModel>), With<crate::SceneOwnedScript>>();
+        query
+            .iter(world)
+            .map(|(entity, model)| (entity, model.and_then(|model| model.document_id)))
+            .collect()
+    };
+
+    for (entity, document_id) in targets {
+        ScenarioDriver::<crate::world_bridge::RhaiScenarioRuntime>::stop_entity(world, entity);
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.remove::<ScriptedModel>();
+        }
+        if let Some(document_id) = document_id {
+            if let Some(mut registry) = world.get_resource_mut::<crate::ScriptRegistry>() {
+                registry.documents.remove(&DocumentId::new(document_id));
+            }
+        }
+    }
+}
+
 /// Run condition for scenario lifecycle systems.
 pub fn scenario_execution_enabled(gate: Option<Res<ScenarioExecutionGate>>) -> bool {
     gate.is_some_and(|gate| gate.enabled)
