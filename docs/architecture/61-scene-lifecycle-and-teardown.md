@@ -71,7 +71,7 @@ then repopulates only its own findings, so a camera, environment, or physics
 error from the outgoing scene cannot be displayed as a fact about the replacement.
 
 Windowed presentation state follows the same ownership rule. A scene authors
-its initial camera selection through `CameraTrack` or a unique `LocalAvatar`;
+its initial camera selection through `CameraTrack` or a unique `LocalEmbodiment`;
 avatar or scene-root projection never creates an implicit view. A window host
 that wants convenience framing invokes the `camera.default_presentation`
 Rhai policy over derived USD/ECS facts. Rust validates and realizes its closed

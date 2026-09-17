@@ -39,7 +39,7 @@ pub fn celestial_declared(q: Query<(), With<CelestialBodyDecl>>) -> bool {
 pub struct LocalGravityField {
     /// The body gravitationally bound to the active avatar.
     pub body_entity: Option<Entity>,
-    /// Avatar position relative to the bound body's centre in body-fixed axes.
+    /// Embodiment position relative to the bound body's centre in body-fixed axes.
     pub body_relative_position: DVec3,
     /// Up direction in world space.
     pub up: DVec3,

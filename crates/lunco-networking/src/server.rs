@@ -437,7 +437,7 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     app.add_observer(on_twin_added_host);
     // NOTE: these MUST stay in `Update` (the lightyear message ferry). Moving them
     // to `FixedUpdate` silently breaks the RELIABLE `CmdChannel` (client→host
-    // PossessVessel/SpawnEntity never arrive) — lightyear's reliable flush is
+    // AcquireControl/SpawnEntity never arrive) — lightyear's reliable flush is
     // schedule-sensitive. The render-throttle-when-unfocused issue (this peer's
     // `Update` drops to ~5 Hz, so the ferry sends snapshots in bursts) is handled
     // WITHOUT touching the ferry: snapshot GENERATION (`gather_snapshot`) runs in

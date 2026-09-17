@@ -342,7 +342,7 @@ fn on_client_disconnected(
 ) {
     if let Some(holds) = holds {
         for entity in holds.held_entities() {
-            // The disconnected client cannot issue its normal ReleaseVessel path.
+            // The disconnected client cannot issue its normal ReleaseControlSource path.
             // Clear predicted/local intents now so reconnecting or re-possession
             // cannot inherit an abandoned command surface.
             commands.trigger(lunco_cosim_core::commands::ReleaseControl { target: entity });

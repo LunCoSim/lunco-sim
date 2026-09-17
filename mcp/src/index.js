@@ -309,15 +309,16 @@ const STATIC_TOOLS = [
   },
   // ── Avatar camera control ────────────────────────────────────────────
   {
-    name: 'possess_vessel',
-    description: 'Take direct control of a vessel (rover, spacecraft). Inserts the generic `ControlLink` so keyboard input drives the target plus a `SpringArmCamera` chase view. Idempotent: re-issuing for the same target is a no-op. Pass entity IDs from `list_entities`.',
+    name: 'acquire_control',
+    description: 'Acquire a target control surface for a producer. Omit `source` to use the local embodiment and set `bind_camera` when the local presentation rig should follow the target. Pass entity IDs from `list_entities`.',
     inputSchema: {
       type: 'object',
       properties: {
-        avatar: { type: 'string', description: 'Avatar entity api_id.' },
-        target: { type: 'string', description: 'Vessel entity api_id.' },
+        source: { type: 'string', description: 'Control producer entity api_id. Omit for the local embodiment.' },
+        target: { type: 'string', description: 'Entity exposing the writable control surface.' },
+        bind_camera: { type: 'boolean', description: 'Whether the local presentation rig follows the target.', default: true },
       },
-      required: ['avatar', 'target'],
+      required: ['target'],
     },
   },
   {
@@ -326,10 +327,10 @@ const STATIC_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        avatar: { type: 'string', description: 'Avatar entity api_id.' },
+        camera: { type: 'string', description: 'Camera rig entity api_id. Omit for the local presentation rig.' },
         target: { type: 'string', description: 'Target entity api_id (any `SelectableRoot`).' },
       },
-      required: ['avatar', 'target'],
+      required: ['target'],
     },
   },
   {
@@ -338,10 +339,10 @@ const STATIC_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        avatar: { type: 'string', description: 'Avatar entity api_id.' },
+        camera: { type: 'string', description: 'Camera rig entity api_id. Omit for the local presentation rig.' },
         target: { type: 'string', description: 'Body entity api_id.' },
       },
-      required: ['avatar', 'target'],
+      required: ['target'],
     },
   },
   // ── Scripting ────────────────────────────────────────────────────────
@@ -457,7 +458,7 @@ function buildDynamicTools(schema) {
   const EXCLUDED_COMMANDS = [
     'CaptureScreenshot',
     'LoadScene',
-    'PossessVessel',
+    'AcquireControl',
     'FollowTarget',
     'FocusTarget',
   ];
@@ -1094,18 +1095,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
-      case 'possess_vessel':
+      case 'acquire_control':
       case 'follow_target':
       case 'focus_target': {
-        const { avatar, target } = args ?? {};
-        if (!avatar || !target) {
-          return { content: [{ type: 'text', text: 'Error: `avatar` and `target` are both required' }], isError: true };
+        const { source, camera, target, bind_camera } = args ?? {};
+        if (!target) {
+          return { content: [{ type: 'text', text: 'Error: `target` is required' }], isError: true };
         }
         // Tool name → PascalCase command name.
         const commandName = name.split('_')
           .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
           .join('');
-        const result = await executeCommand(commandName, { avatar, target });
+        const params = { target };
+        if (commandName === 'AcquireControl') {
+          if (source !== undefined) params.source = source;
+          if (bind_camera !== undefined) params.bind_camera = bind_camera;
+        } else if (camera !== undefined) {
+          params.camera = camera;
+        }
+        const result = await executeCommand(commandName, params);
         if (result.error) {
           return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
         }

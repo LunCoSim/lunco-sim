@@ -6,20 +6,26 @@
 //! in-flight compiles and — when there is a human at a window — the
 //! dirty-document save prompt.
 //!
-//! Registered by `ModelicaCorePlugin`, so a headless host still gets the
-//! cancellation path; the prompt half is skipped for want of a window.
+//! Registered by `ModelicaCommandsPlugin` only for an interactive API-enabled
+//! host. Headless hosts use the generic API session exit owner.
 
 use bevy::prelude::*;
 use lunco_api::session::Exit;
 use lunco_core::{on_command, register_commands};
 
 #[on_command(Exit)]
-pub fn on_exit(trigger: On<Exit>, windows: Query<(), With<Window>>, mut commands: Commands) {
+pub fn on_exit(
+    trigger: On<Exit>,
+    windows: Query<(), With<Window>>,
+    mut commands: Commands,
+    mut exit: MessageWriter<bevy::app::AppExit>,
+) {
     // Signal in-flight runs before every non-interactive exit path.
     if trigger.event().force || windows.is_empty() {
         commands.queue(|world: &mut World| {
             crate::ui::commands::lifecycle::cancel_inflight_runs(world);
         });
+        exit.write(bevy::app::AppExit::Success);
         return;
     }
     // Interactive close: route through the dirty-document save-prompt flow, same

@@ -1,4 +1,4 @@
-//! Avatar-specific camera realization.
+//! Avatar-specific camera realization over generic embodiment roles.
 //!
 //! Generic camera contracts and camera-mode policy live in
 //! [`lunco_camera_core`] and [`lunco_camera_runtime`]. This package realizes
@@ -7,31 +7,34 @@
 //! Possession, focus, and follow authority remain in `lunco-avatar`; this
 //! package owns the BigSpace surface/orbit lifecycle and its camera-side
 //! transition commands. The generic celestial surface adapter remains in
-//! `lunco-camera-celestial`.
+//! `lunco-camera-celestial`. Application composition installs this package
+//! independently of `lunco-avatar`; the avatar authority package does not
+//! register or depend on this implementation.
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::{
-    CAMERA_ZOOM_SENSITIVITY, CurrentRegionArrival, OrbitUserInput, RadialArrival,
+    CAMERA_ZOOM_SENSITIVITY, CurrentRegionArrival, OrbitUserInput, OrbitViewReturn, RadialArrival,
     SURFACE_ORBIT_HANDOFF_ALTITUDE_M,
 };
-use lunco_avatar_core::commands::{FocusTarget, ReturnFromOrbit};
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_camera_core::{
     CameraDefaults, CameraPoseLock, CameraUpdateSet, CameraZoomInput, FreeFlightCamera,
-    OrbitCamera, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
+    OrbitCamera, PendingFocus, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
     math::{apply_scroll_zoom, camera_decay_alpha, surface_camera_angles, surface_camera_rotation},
 };
+use lunco_camera_core::{FocusTarget, ReturnFromOrbit};
 use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_celestial_spatial_core::{
     LocalGravityField, surface_axes_for_grid_position, surface_axes_in_grid,
 };
 use lunco_core::{CelestialBody, Spacecraft, on_command, register_commands};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::{GravityBody, GravityProvider};
-use lunco_spatial::attach::migrate_to_grid;
+use lunco_spatial::attach::{local_pose_to_grid_storage, migrate_to_grid_local_pose};
 
 mod collision;
+pub(crate) mod handoff;
 mod locomotion;
 mod scroll_transit;
 mod spring_arm;
@@ -76,8 +79,172 @@ impl Plugin for AvatarCelestialCameraPlugin {
                 reset_avatar_easing_before_spatial_rebase.before(lunco_time::InteractionRestoreSet),
             )
             .add_systems(Update, surface_mode_transition_system);
+        app.add_systems(First, apply_pending_focus);
+        handoff::register(app);
         register_all_commands(app);
     }
+}
+
+/// Consume a scene focus request at the camera's frame boundary.
+///
+/// Scene-facing commands only resolve stable identities and queue this generic
+/// request. This adapter owns the avatar camera's source-specific choice:
+/// celestial targets enter the inertial orbit mode, while local targets are
+/// framed in the active BigSpace grid. No scene-camera or authority package
+/// needs to know these spatial details.
+fn apply_pending_focus(
+    pending: Option<Res<PendingFocus>>,
+    mut q_avatar: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut big_space::prelude::CellCoord,
+            &ChildOf,
+            Option<&mut FreeFlightCamera>,
+            Has<OrbitViewReturn>,
+        ),
+        (With<Embodiment>, With<LocalEmbodiment>),
+    >,
+    q_grids: Query<&Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform), Without<Embodiment>>,
+    q_celestial: Query<(), With<CelestialBody>>,
+    q_celestial_decl: Query<(), With<lunco_celestial_spatial_core::CelestialBodyDecl>>,
+    q_children: Query<&Children>,
+    mut commands: Commands,
+    mut orbital_pin: Option<ResMut<lunco_celestial_spatial_core::OrbitalViewPin>>,
+    local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    let Some(pending) = pending else { return };
+    let (target, distance) = (pending.target, pending.distance);
+    // Celestial bodies are ORBIT-scale targets: route them through the same
+    // typed camera command used by interactive focus. Local framing remains
+    // for metre-scale subjects such as wheels, rovers, and props.
+    let mut is_celestial = q_celestial.get(target).is_ok() || q_celestial_decl.get(target).is_ok();
+    let mut pending = vec![target];
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        for parent in pending.drain(..) {
+            if let Ok(children) = q_children.get(parent) {
+                for child in children.iter() {
+                    if q_celestial.get(child).is_ok() || q_celestial_decl.get(child).is_ok() {
+                        is_celestial = true;
+                    }
+                    next.push(child);
+                }
+            }
+        }
+        if is_celestial || next.is_empty() {
+            break;
+        }
+        pending = next;
+    }
+    if is_celestial {
+        commands.remove_resource::<PendingFocus>();
+        commands.trigger(FocusTarget {
+            camera: None,
+            target,
+        });
+        info!("FOCUS_ENTITY: celestial target {target:?} → orbit focus");
+        return;
+    }
+    // A local target is authored in the pre-orbit scene frame. Restore the
+    // exact camera transaction first, then retry this retained focus next
+    // frame. Leaving a presentation mode never changes domain control.
+    if let Some(avatar) = local_avatar.as_deref().and_then(|slot| slot.0) {
+        if q_avatar
+            .get(avatar)
+            .is_ok_and(|(_, _, _, _, _, orbit_return)| orbit_return)
+        {
+            commands.trigger(ReturnFromOrbit { camera: avatar });
+            info!("FOCUS_ENTITY: restored pre-orbit frame; local focus retries next frame");
+            return;
+        }
+    }
+    if let Some(pin) = orbital_pin.as_mut() {
+        pin.active = false;
+    }
+    commands.remove_resource::<PendingFocus>();
+    let Some(avatar_ent) = local_avatar.as_deref().and_then(|slot| slot.0) else {
+        let message = "no authoritative LocalEmbodiment is available for local focus".to_string();
+        warn!("FOCUS_ENTITY: {message}");
+        lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+        return;
+    };
+    let Ok((avatar_ent, mut tf, mut cell, child_of, ff_opt, _)) = q_avatar.get_mut(avatar_ent)
+    else {
+        let message =
+            format!("authoritative LocalEmbodiment {avatar_ent:?} has no complete focus state");
+        warn!("FOCUS_ENTITY: {message}");
+        lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+        return;
+    };
+    lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, None);
+    let Ok(grid) = q_grids.get(child_of.parent()) else {
+        let message = format!(
+            "authoritative LocalEmbodiment {avatar_ent:?} is not parented directly under a BigSpace Grid"
+        );
+        warn!("FOCUS_ENTITY: {message}");
+        lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+        return;
+    };
+    let avatar_pos = grid.grid_position_double(&cell, &tf);
+    let target_pos = if target == avatar_ent {
+        avatar_pos
+    } else {
+        let Some((target_pos, _)) = lunco_spatial::coords::pose_in_grid(
+            target,
+            child_of.parent(),
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            let message = format!(
+                "target {target:?} has no complete pose in the embodiment's BigSpace frame"
+            );
+            warn!("FOCUS_ENTITY: {message}");
+            lunco_camera_core::replace_focus_diagnostic(&mut diagnostics, Some(message));
+            return;
+        };
+        target_pos
+    };
+    let dist = if distance > 0.1 { distance } else { 6.0 };
+    // Keep the established side-on framing as a camera presentation default;
+    // authored camera policies can still issue a different typed command.
+    let dir = Vec3::new(1.0, 0.4, 0.25).normalize();
+    let offset = dir * dist;
+    let (new_cell, new_translation) = grid.translation_to_grid(target_pos + offset.as_dvec3());
+    cell.set_if_neq(new_cell);
+    if tf.translation != new_translation {
+        tf.translation = new_translation;
+    }
+    let d = (-offset).normalize();
+    let (yaw, pitch) = ((-d.x).atan2(-d.z), d.y.clamp(-1.0, 1.0).asin());
+    match ff_opt {
+        Some(mut ff) => {
+            ff.yaw = yaw;
+            ff.pitch = pitch;
+        }
+        None => {
+            tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+            commands
+                .entity(avatar_ent)
+                .remove::<OrbitCamera>()
+                .remove::<SpringArmCamera>()
+                .remove::<SurfaceCamera>()
+                .remove::<SurfaceRelativeMode>()
+                .try_insert(FreeFlightCamera {
+                    yaw,
+                    pitch,
+                    damping: None,
+                });
+        }
+    }
+    info!(
+        "FOCUS_ENTITY: framed target={target:?} at {:.1} m (embodiment={avatar_ent:?})",
+        dist
+    );
 }
 
 // Camera-side lifecycle commands are registered with the same reflection and
@@ -118,8 +285,8 @@ fn reset_avatar_easing_before_spatial_rebase(
     mut q: Query<
         &mut lunco_time::InteractionEased,
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<CameraPoseLock>,
             Or<(Changed<CellCoord>, Changed<ChildOf>)>,
         ),
@@ -151,7 +318,7 @@ fn on_surface_teleport_command(
             &ChildOf,
             Has<lunco_camera_core::CameraPoseLock>,
         ),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -272,8 +439,6 @@ fn on_surface_teleport_command(
             return;
         };
 
-        let (new_cell, new_tf_translation) = target_grid_ref.translation_to_grid(surface_local_pos);
-
         // Surface gravity from body's GravityProvider
         let surface_g = if let Ok(gp) = q_gravity_providers.get(body_entity) {
             let accel = gp.model.acceleration(surface_body_pos);
@@ -288,8 +453,14 @@ fn on_surface_teleport_command(
 
         // Parent the camera to the same surface Grid as terrain and rover
         // content. The persistent OriginAnchor tracks the selected camera.
-        let local_tf = Transform::from_translation(new_tf_translation).with_rotation(surface_rot);
-        migrate_to_grid(&mut commands, avatar_ent, target_grid, new_cell, local_tf);
+        migrate_to_grid_local_pose(
+            &mut commands,
+            avatar_ent,
+            target_grid,
+            target_grid_ref,
+            surface_local_pos,
+            surface_rot.as_dquat(),
+        );
 
         commands
             .entity(avatar_ent)
@@ -340,7 +511,7 @@ fn on_leave_surface_command(
             Option<&GravityBody>,
             Has<lunco_camera_core::CameraPoseLock>,
         ),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
     mut field: ResMut<LocalGravityField>,
 ) {
@@ -364,7 +535,7 @@ fn on_leave_surface_command(
     }
 
     commands.trigger(FocusTarget {
-        avatar: Some(avatar_ent),
+        camera: Some(avatar_ent),
         target: body_entity,
     });
 
@@ -401,8 +572,8 @@ fn surface_mode_transition_system(
             Option<&SpringArmCamera>,
         ),
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<OrbitCamera>,
             Without<lunco_camera_core::CameraPoseLock>,
         ),
@@ -410,7 +581,7 @@ fn surface_mode_transition_system(
     q_bodies: Query<&CelestialBody>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     thresholds: Res<SurfaceModeThreshold>,
     field: Res<LocalGravityField>,
     q_site: Query<(), With<lunco_celestial::SiteAnchor>>,
@@ -532,8 +703,8 @@ fn orbit_system(
             Has<RadialArrival>,
         ),
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<SpringArmCamera>,
             Without<FreeFlightCamera>,
             Without<SurfaceCamera>,
@@ -545,7 +716,7 @@ fn orbit_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<(Entity, &CelestialBody)>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     q_sc: Query<&Spacecraft>,
     q_dragging: Query<(), With<lunco_interaction_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
@@ -675,7 +846,7 @@ fn orbit_system(
         if surface_exit {
             let transition_direction = zoom.delta;
             zoom.begin_mode_transition(Some(transition_direction));
-            commands.trigger(ReturnFromOrbit { target: avatar_ent });
+            commands.trigger(ReturnFromOrbit { camera: avatar_ent });
             info!("ORBITAL SCROLL-THROUGH: exiting to surface at current pose");
             continue;
         }
@@ -728,8 +899,8 @@ fn orbit_system(
             }
         };
         let next_orbit = target_orbit + direction_orbit * final_len;
-        let (new_cell, new_translation) = orbit_grid_ref.translation_to_grid(next_orbit);
-        let next_transform = Transform::from_translation(new_translation).with_rotation(rotation);
+        let (new_cell, next_transform) =
+            local_pose_to_grid_storage(orbit_grid_ref, next_orbit, rotation.as_dquat());
         if child_of.parent() != orbit_grid {
             lunco_spatial::attach::migrate_to_grid(
                 &mut commands,
@@ -740,8 +911,8 @@ fn orbit_system(
             );
         } else {
             cell.set_if_neq(new_cell);
-            if tf.translation != new_translation {
-                tf.translation = new_translation;
+            if tf.translation != next_transform.translation {
+                tf.translation = next_transform.translation;
             }
             if tf.rotation != rotation {
                 tf.rotation = rotation;
@@ -771,6 +942,72 @@ fn orbit_system(
 mod tests {
     use super::*;
     use lunco_camera_core::FollowAttitude;
+
+    #[test]
+    fn focus_uses_authoritative_grid_pose_not_render_global_transform() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let grid = app
+            .world_mut()
+            .spawn((
+                Grid::new(1_000.0, 0.0),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let target = app
+            .world_mut()
+            .spawn((
+                CellCoord::new(2, 0, -1),
+                Transform::from_xyz(25.0, 3.0, -10.0),
+                // This deliberately stale render pose must not affect focus.
+                GlobalTransform::from(Transform::from_xyz(-1.0e11, 2.0e11, 3.0e11)),
+                ChildOf(grid),
+            ))
+            .id();
+        let avatar = app
+            .world_mut()
+            .spawn((
+                Embodiment,
+                LocalEmbodiment,
+                CellCoord::new(1, 0, 0),
+                Transform::from_xyz(4.0, 6.0, 8.0),
+                GlobalTransform::from(Transform::from_xyz(7.0e10, -8.0e10, 9.0e10)),
+                ChildOf(grid),
+                FreeFlightCamera {
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                },
+            ))
+            .id();
+
+        app.insert_resource(PendingFocus {
+            target,
+            distance: 6.0,
+        });
+        app.insert_resource(lunco_embodiment_core::roles::TheLocalEmbodiment(Some(
+            avatar,
+        )));
+        app.add_systems(First, apply_pending_focus);
+        app.update();
+
+        let grid = app.world().get::<Grid>(grid).unwrap();
+        let target_pos = bevy::math::DVec3::new(2_025.0, 3.0, -1_010.0);
+        let offset = Vec3::new(1.0, 0.4, 0.25).normalize() * 6.0;
+        let actual = {
+            let cell = app.world().get::<CellCoord>(avatar).unwrap();
+            let transform = app.world().get::<Transform>(avatar).unwrap();
+            grid.grid_position_double(cell, transform)
+        };
+        assert!((actual - (target_pos + offset.as_dvec3())).length() < 1.0e-3);
+
+        let freeflight = app.world().get::<FreeFlightCamera>(avatar).unwrap();
+        let direction = (-offset).normalize();
+        assert!((freeflight.yaw - (-direction.x).atan2(-direction.z)).abs() < 1.0e-6);
+        assert!((freeflight.pitch - direction.y.asin()).abs() < 1.0e-6);
+    }
 
     #[test]
     fn orbit_angles_round_trip_the_body_to_camera_arm() {
@@ -876,8 +1113,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                Avatar,
-                LocalAvatar,
+                Embodiment,
+                LocalEmbodiment,
                 CellCoord::ZERO,
                 Transform::from_xyz(10.0, 20.0, 30.0),
                 ChildOf(host_grid),
@@ -895,37 +1132,31 @@ mod tests {
 
         app.update();
 
-        let world = app.world();
-        assert_eq!(
-            world.get::<ChildOf>(avatar).unwrap().parent(),
-            orbit_grid,
-            "a celestial orbit camera must be a direct child of the target's explicit inertial frame"
-        );
-        let inertial = world.get::<Grid>(orbit_grid).unwrap();
-        let actual_in_inertial = inertial.grid_position_double(
-            world.get::<CellCoord>(avatar).unwrap(),
-            world.get::<Transform>(avatar).unwrap(),
-        );
-        let root = world.get::<Grid>(root_grid).unwrap();
-        let host_position = root.grid_position_double(
-            world.get::<CellCoord>(host_grid).unwrap(),
-            world.get::<Transform>(host_grid).unwrap(),
-        );
-        let host = world.get::<Grid>(host_grid).unwrap();
-        let body_local = host.grid_position_double(
-            world.get::<CellCoord>(body).unwrap(),
-            world.get::<Transform>(body).unwrap(),
-        );
-        let body_root = host_position + host_rotation.as_dquat() * body_local;
+        let (actual_in_inertial, target_in_inertial) = {
+            let world = app.world_mut();
+            let mut state: bevy::ecs::system::SystemState<(
+                Query<&ChildOf>,
+                Query<&Grid>,
+                Query<(Option<&CellCoord>, &Transform)>,
+            )> = bevy::ecs::system::SystemState::new(world);
+            let (q_parents, q_grids, q_spatial) = state.get(world).unwrap();
+            let actual = lunco_spatial::coords::grid_relative_pose(
+                avatar, orbit_grid, &q_parents, &q_grids, &q_spatial,
+            )
+            .expect("orbit avatar must resolve in its destination Grid")
+            .0;
+            let target = lunco_spatial::coords::pose_in_grid(
+                body, orbit_grid, &q_parents, &q_grids, &q_spatial,
+            )
+            .expect("orbit target must resolve in its destination Grid")
+            .0;
+            (actual, target)
+        };
         let arm = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0)
             .mul_vec3(Vec3::Z)
             .as_dvec3()
             * distance;
-        let orbit_origin = root.grid_position_double(
-            world.get::<CellCoord>(orbit_grid).unwrap(),
-            world.get::<Transform>(orbit_grid).unwrap(),
-        );
-        let expected_in_inertial = body_root + arm - orbit_origin;
+        let expected_in_inertial = target_in_inertial + arm;
         assert!(
             actual_in_inertial.abs_diff_eq(expected_in_inertial, 1e-3),
             "inertial-grid orbit pose differs: expected {expected_in_inertial:?}, got {actual_in_inertial:?}"
@@ -965,8 +1196,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                Avatar,
-                LocalAvatar,
+                Embodiment,
+                LocalEmbodiment,
                 Transform::default(),
                 CellCoord::ZERO,
                 ChildOf(grid),

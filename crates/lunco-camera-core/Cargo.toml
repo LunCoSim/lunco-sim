@@ -7,6 +7,7 @@ description = "Backend-neutral camera rig contracts for LunCoSim"
 
 [dependencies]
 lunco-hooks = { path = "../lunco-hooks" }
+lunco-core = { path = "../lunco-core" }
 bevy = { workspace = true }
 
 [lints]

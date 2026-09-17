@@ -718,7 +718,7 @@ pub fn setup_big_space_hierarchy(
             cam_cell,
             Transform::from_translation(cam_translation).looking_to(cam_direction, Vec3::Y),
             GlobalTransform::default(),
-            lunco_avatar_core::roles::Avatar,
+            lunco_embodiment_core::roles::Embodiment,
             lunco_control_core::IntentState::default(),
             input_map,
             lunco_control_core::IntentAnalogState::default(),

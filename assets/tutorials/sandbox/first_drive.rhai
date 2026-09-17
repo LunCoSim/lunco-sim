@@ -87,7 +87,7 @@ fn aim_short_of(rover, flag, standoff) {
 
 fn first_drive_autopilot_possess(me) {
     let rover = find("/FirstDrive/Rover");
-    cmd("PossessVessel", #{ target: rover });
+    cmd("AcquireControl", #{ target: rover });
     notify_kind("[debug] autopilot engaged", "info");
 }
 

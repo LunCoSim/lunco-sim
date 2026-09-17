@@ -48,7 +48,7 @@ fn b3_reached_top(me) {
 }
 
 fn b3_autopilot_possess(me) {
-    cmd("PossessVessel", #{ target: find("/SlopeTest/Rover") });
+    cmd("AcquireControl", #{ target: find("/SlopeTest/Rover") });
     notify_kind(`[debug] tilt at start: ${tilt_deg(find("/SlopeTest/Rover"))}°`, "info");
 }
 

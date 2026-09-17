@@ -23,7 +23,7 @@
 //! when every objective is done (→ chain end).
 //!
 //! ## Why `takeover` is a state read, not an event latch
-//! `requires_event: "cmd:PossessVessel"` would complete on ANY possession — the
+//! `requires_event: "cmd:AcquireControl"` would complete on ANY control claim — the
 //! student clicking the LANDER mid-descent to fly it by hand would tick off "take
 //! control of the rover". So `takeover` asks the question it actually means: is a
 //! human driving THE ROVER right now? `controller(id)` answers it directly
@@ -66,7 +66,7 @@ fn lander_course_finished(me) {
 }
 
 fn lander_autopilot_takeover(me) {
-    cmd("PossessVessel", #{ target: find("/LanderTest/SkidRover") });
+    cmd("AcquireControl", #{ target: find("/LanderTest/SkidRover") });
     notify_kind("[debug] auto-takeover — driving the course", "info");
 }
 

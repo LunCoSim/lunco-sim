@@ -96,7 +96,7 @@ and CSS can bind the same authored size properties for the trigger while Rhai
 controls the popup dimensions.
 
 The `celestial-view` surface also owns the authored lunar map. Rust resolves the
-local avatar's driven target through `TheLocalAvatar` and `ControlLink`,
+local avatar's driven target through `TheLocalEmbodiment` and `ControlLink`,
 projects that vessel's canonical `SurfacePose.geodetic` into the map's
 equirectangular marker coordinates, and publishes only typed status and marker
 properties. The HUI/Flair template owns the map, grid, marker, and no-fix

@@ -11,7 +11,7 @@
 //
 // What it does on the CLIENT:
 //   1. ListEntities → find the rover chassis (/SandboxScene/<drive>_<kind>_N).
-//   2. PossessVessel(avatar=rover, target=rover) — ownership claim keys off
+//   2. AcquireControl(target=rover) — ownership claim keys off
 //      `target`, so the client's copy becomes OwnedLocally → Dynamic → predicted.
 //   3. Drive it forward at ~20 Hz with an incrementing `seq` so the
 //      reconcile/ack path engages.
@@ -50,7 +50,10 @@ const name = rovers.find((r) => String(r.api_id) === String(gid))?.name ?? '(ove
 console.log(`possessing + driving ${name} gid=${gid} on client ${CLIENT} for ${SECONDS}s`);
 console.log('available rovers:', rovers.map((r) => `${r.name}=${r.api_id}`).join(', '));
 
-await post(CLIENT, { command: 'PossessVessel', params: { avatar: gid, target: gid } });
+await post(CLIENT, {
+  command: 'AcquireControl',
+  params: { target: gid, bind_camera: true },
+});
 await sleep(300);
 
 let seq = 1, ok = 0, fail = 0;

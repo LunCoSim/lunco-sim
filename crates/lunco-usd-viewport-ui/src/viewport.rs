@@ -989,7 +989,7 @@ fn create_preview_session(
             Name::new(format!("UsdPreviewRoot-{}", id.0)),
             // Preview-only: usd-sim/usd-avian walk ChildOf up from each
             // candidate prim and bail when they reach this marker, so
-            // the preview stage never spawns an Avatar Camera3d into
+            // the preview stage never spawns an Embodiment Camera3d into
             // the workbench window (which would cause camera-order
             // ambiguity + gizmo warnings every frame) or activate
             // wheel physics / FSW.

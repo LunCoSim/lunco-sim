@@ -21,7 +21,7 @@
 /// One objective. `spec` keys (all optional but usually `done` or
 /// `requires_event`): `text` (human label for the HUD, defaults to `id`), `done`
 /// (|m| bool completion), `requires_event` (event NAME whose arrival completes
-/// the objective — e.g. `"cmd:PossessVessel"` to advance when the user possesses
+/// the objective — e.g. `"cmd:AcquireControl"` to advance when the user acquires
 /// a vessel; latched, so it may combine with `done`), `requires_event_source`
 /// (optional entity path that must emit the event), `dwell` (secs the condition
 /// must hold), `fail` (|m| bool failure), `requires` (array of objective ids that
@@ -196,7 +196,7 @@ fn __init_mission(me, ctx) {
 // inferred combination of optional fields:
 //   #{ move_to: [x,y,z], speed: 1.0, radius: 2.0 }  drive until arrived (speed/radius optional)
 //   #{ move_to_entity: "/path", speed, radius }   drive to another entity, tracked live
-//   #{ possess: "/path" }                         take control of a vessel (PossessVessel)
+//   #{ possess: "/path" }                         take control of a vessel (AcquireControl)
 //   #{ brake: true, secs: 1.0 }                   hold the brake for N seconds
 //   #{ cmd: "Name", params: #{...} }              fire any command once, then advance
 //   #{ emit: "NAME", value: v }                   emit a telemetry marker once
@@ -267,7 +267,7 @@ fn timeline_step(s) {
     }
     if s.possess != () {
         let tgt = s.possess;
-        return once(|m| cmd("PossessVessel", #{ target: find(tgt) }));
+        return once(|m| cmd("AcquireControl", #{ target: find(tgt) }));
     }
     if s.brake != () {
         let secs = if s.secs != () { s.secs } else { 1.0 };

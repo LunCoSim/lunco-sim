@@ -392,7 +392,7 @@ parsing; a successful acknowledgement proves validation and dispatch, not that
 the simulation has finished its work. A live API check must also wait for `/api/ready` to report `ready:true`,
 `world_hold:false`, and `pending_count:0`.
 
-Autopilot checks should observe the same `PossessVessel` and port-write events
+Autopilot checks should observe the same `AcquireControl` and port-write events
 as a human control sequence, plus a real movement/port predicate and the final
 goal. Keep declared cosim topology separate from current samples: a connection
 may resolve before the first sample, but an absent value is not a valid zero.

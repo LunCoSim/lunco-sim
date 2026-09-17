@@ -40,7 +40,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-controller`](#lunco-controller) (4 commands)
 
-**Avatar & possession**
+**Embodiment & possession**
 
 - [`lunco-avatar`](#lunco-avatar) (1 command)
 
@@ -84,7 +84,9 @@ actually call, with the fields the deserializer actually accepts. See the
 **Other (source location unknown)**
 
 - [`lunco-assets-datasets`](#lunco-assets-datasets) (2 commands)
-- [`lunco-avatar-core`](#lunco-avatar-core) (7 commands)
+- [`lunco-camera-core`](#lunco-camera-core) (5 commands)
+- [`lunco-control-core`](#lunco-control-core) (2 commands)
+- [`lunco-notifications-core`](#lunco-notifications-core) (1 command)
 - [`lunco-capture`](#lunco-capture) (4 commands)
 - [`lunco-celestial-spatial`](#lunco-celestial-spatial) (3 commands)
 - [`lunco-core-session`](#lunco-core-session) (3 commands)
@@ -95,7 +97,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-modelica-api`](#lunco-modelica-api) (7 commands)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
-- [`lunco-scene-camera`](#lunco-scene-camera) (3 commands)
+- [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
 - [`lunco-scene-catalog`](#lunco-scene-catalog) (2 commands)
 - [`lunco-scene-validation`](#lunco-scene-validation) (1 command)
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
@@ -986,7 +988,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `intent` | `String` |  Intent name (`action`, `release`, `forward`, …). |
 | `edge` | `String` |  `pressed`, `released`, or `pulse`. |
 
-## Avatar & possession
+## Embodiment & possession
 
 ### `lunco-avatar` <a id="lunco-avatar"></a>
 
@@ -1853,67 +1855,45 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `id` | `String` |  Globally unique dataset id. |
 
-### `lunco-avatar-core` <a id="lunco-avatar-core"></a>
+### `lunco-camera-core` <a id="lunco-camera-core"></a>
 
 #### `FocusTarget`
 
  Focus on a target without taking control.
 
-- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
+- *defined in:* `crates/lunco-camera-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `avatar` | `Option < Entity >` |  The avatar entity that is focusing, when a local camera exists. |
+| `camera` | `Option < Entity >` |  The camera rig. Omit to use the local presentation rig. |
 | `target` | `Entity` |  The entity to focus on. |
 
 #### `FollowTarget`
 
  Follow a target with the chase camera without taking control.
 
-- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
+- *defined in:* `crates/lunco-camera-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `avatar` | `Option < Entity >` |  The avatar entity that will follow, when a local camera exists. |
+| `camera` | `Option < Entity >` |  The camera rig. Omit to use the local presentation rig. |
 | `target` | `Entity` |  The entity to follow. |
-
-#### `PossessVessel`
-
- Possess a vessel, taking direct control of it.
-
-- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `avatar` | `Option < Entity >` |  The avatar entity taking possession, when a camera should be bound. |
-| `target` | `Entity` |  The entity exposing the writable `InputPorts` surface to possess. |
-| `bind_camera` | `bool` |  Whether possession also binds the avatar's camera to the vessel. |
-
-#### `ReleaseVessel`
-
- Release possession of the currently controlled vessel.
-
-- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `target` | `Entity` |  The avatar entity releasing possession. |
 
 #### `ReturnFromOrbit`
 
- Return the local camera from celestial orbit to its saved camera state.
+ Return a camera rig from celestial orbit to its saved camera state.
 
-- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
+- *defined in:* `crates/lunco-camera-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Entity` |  The local avatar camera returning from orbit view. |
+| `camera` | `Entity` |  The camera rig returning from orbit view. |
 
 #### `SetCameraInput`
 
  Tune pointer-to-camera response while the application is running.
 
-- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
+- *defined in:* `crates/lunco-camera-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1921,16 +1901,56 @@ actually call, with the fields the deserializer actually accepts. See the
 | `orbit_surface_min_scale` | `Option < f64 >` |  Lower bound for orbital rotation at the body's surface, in `[0, 1]`. |
 | `orbit_distance_curve_exponent` | `Option < f64 >` |  Positive exponent shaping the apparent-horizon distance response. |
 
+#### `SetCameraLookAt`
+
+ Aim a camera from `eye` at `target` in the active presentation frame. The
+ addressed camera adapter validates pose ownership and realizes the pose in
+ its owning spatial frame.
+
+- *defined in:* `crates/lunco-camera-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `camera` | `Entity` |  Camera entity to pose. |
+| `eye` | `Vec3` |  Camera position in the active physics frame, metres. |
+| `target` | `Vec3` |  Camera look-at point in the active physics frame, metres. |
+
+### `lunco-control-core` <a id="lunco-control-core"></a>
+
+#### `AcquireControl`
+
+ Acquire an authored control endpoint for a control producer.
+
+- *defined in:* `crates/lunco-control-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `Option < Entity >` |  The producer receiving the control relationship; omitted selects the local embodiment. |
+| `target` | `Entity` |  The entity exposing the writable control surface. |
+| `bind_camera` | `bool` |  Whether the local presentation rig follows the acquired target. |
+
+#### `ReleaseControlSource`
+
+ Release the control relationship held by a producer.
+
+- *defined in:* `crates/lunco-control-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `Entity` |  The producer releasing its control relationship. |
+
+### `lunco-notifications-core` <a id="lunco-notifications-core"></a>
+
 #### `ShowNotification`
 
  Show a transient on-screen notification (toast) to the player.
 
- The avatar runtime owns the command observer and headless queue lifecycle;
- the optional `lunco-avatar-ui` adapter renders active toasts. Fired from
+ The application runtime owns the command observer and headless queue lifecycle;
+ optional UI adapters render active toasts. Fired from
  rhai via `notify(msg)` / `notify_kind(msg, kind)` (see the prelude) so a
  scenario can announce each phase without touching Rust.
 
-- *defined in:* `crates/lunco-avatar-core/src/notifications.rs`
+- *defined in:* `crates/lunco-notifications-core/src/notifications.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2042,7 +2062,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Claim a stable control endpoint for the originating session.
 
- The command only changes session authority. Avatar camera binding and
+ The command only changes session authority. Embodiment camera binding and
  controller-specific composition remain with the higher-level command that
  needs them.
 
@@ -2502,30 +2522,6 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `path` | `String` |  Absolute composed USD prim path (for example `/World/Lander`). |
 
-#### `SetCameraLookAt`
-
- Aim a scene camera: place it at `eye` and look at `target` (both
- absolute world-space). The client computes the angle and distance, so the
- same command serves review, instrument, avatar, and cinematic cameras.
-
- `camera` is the resolved scene-camera entity. Rhai resolves a USD path with
- `find(...)`, while API callers can obtain the same stable entity from the
- scene query surface. `eye` and `target` speak the semantic
- [`lunco_spatial::ActivePhysicsFrame`]; the concrete grid is resolved from
- that resource so camera placement remains in the active physics frame.
-
- The command establishes explicit runtime pose ownership. Authored and
- interactive cameras can accept it; mounted and path-driven cameras retain
- their authored pose owner and report the conflict instead of acquiring a
- second writer.
-
-- *defined in:* `crates/lunco-scene-camera/src/lib.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `camera` | `Entity` |  Scene camera entity to pose. |
-| `eye` | `Vec3` |  Camera position in the active physics frame, metres. |
-| `target` | `Vec3` |  Camera look-at point in the active physics frame, metres. |
 
 ### `lunco-scene-catalog` <a id="lunco-scene-catalog"></a>
 

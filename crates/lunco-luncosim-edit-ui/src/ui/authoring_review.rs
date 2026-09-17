@@ -9,13 +9,13 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_avatar_core::roles::{Avatar, LocalAvatar, TheLocalAvatar};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_camera_core::{OrbitCamera, SpringArmCamera};
 use lunco_core::{
     entity_display_name, CatalogEntryId, GlobalEntityId, RuntimeDiagnostics, RuntimeFaults,
     SceneMountState,
 };
-use lunco_cosim_core::ControlLink;
+use lunco_control_core::ControlLink;
 use lunco_render::SceneCamera;
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -106,7 +106,7 @@ fn target_for_camera(
 
 #[derive(SystemParam)]
 pub(crate) struct AuthoringReviewQueries<'w, 's> {
-    avatar: Query<'w, 's, (), (With<Avatar>, With<LocalAvatar>)>,
+    avatar: Query<'w, 's, (), (With<Embodiment>, With<LocalEmbodiment>)>,
     links: Query<'w, 's, &'static ControlLink>,
     spring: Query<'w, 's, &'static SpringArmCamera>,
     orbit: Query<'w, 's, &'static OrbitCamera>,
@@ -133,7 +133,7 @@ pub(crate) struct AuthoringReviewQueries<'w, 's> {
 pub(crate) fn populate_authoring_review_view(
     mut view: ResMut<AuthoringReviewView>,
     selected: Res<SelectedEntities>,
-    local_avatar: Res<TheLocalAvatar>,
+    local_avatar: Res<TheLocalEmbodiment>,
     viewport: Option<Res<SceneViewport>>,
     diagnostics: Res<RuntimeDiagnostics>,
     faults: Res<RuntimeFaults>,

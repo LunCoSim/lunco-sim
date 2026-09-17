@@ -2424,7 +2424,7 @@ mod tests {
             .spawn((
                 UsdPrimPath {
                     stage_handle: stage.clone(),
-                    path: "/Traverse/Avatar".into(),
+                    path: "/Traverse/Embodiment".into(),
                 },
                 UsdSceneProjected,
             ))

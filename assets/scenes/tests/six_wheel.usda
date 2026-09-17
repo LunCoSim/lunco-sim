@@ -65,7 +65,7 @@ def Xform "SixWheelTest" (
 
     # The mounted rover camera is the sole presentation owner for this test.
     # Keep the generic avatar prim available as inert scene data so the track
-    # never races a LocalAvatar fallback during asynchronous projection.
+    # never races a local-embodiment fallback during asynchronous projection.
     over "Avatar"
     {
         bool active = false

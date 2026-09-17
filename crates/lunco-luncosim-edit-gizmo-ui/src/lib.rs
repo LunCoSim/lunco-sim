@@ -1246,7 +1246,7 @@ impl Plugin for SceneEditGizmoPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_cosim_core::ControlLink;
+    use lunco_control_core::ControlLink;
     use lunco_render::SceneCamera;
 
     #[test]

@@ -26,7 +26,6 @@ networking = [
     "dep:lunco-twin-journal",
     "dep:lunco-usd-compose",
     "dep:lunco-cosim-core",
-    "dep:lunco-avatar-core",
     "dep:lunco-doc-bevy",
     "dep:lunco-workspace",
     "dep:lunco-assets-core",
@@ -73,9 +72,6 @@ lunco-api-transport = { path = "../lunco-api-transport", default-features = fals
 # The generic vessel-control commands live in the backend-neutral package; the
 # wire declares channels for them without pulling the Avian orchestration.
 lunco-cosim-core = { path = "../lunco-cosim-core", optional = true }
-# Wire substrate needs only the backend-neutral avatar camera and possession
-# contracts; the avatar system implementation is not part of the network edge.
-lunco-avatar-core = { path = "../lunco-avatar-core", optional = true }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false, optional = true }
 lunco-workspace = { path = "../lunco-workspace", optional = true }
 # Promote a downloaded scenario → editable on-disk Twin (`PromoteScenario`):

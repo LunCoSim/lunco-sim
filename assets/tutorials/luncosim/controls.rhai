@@ -33,11 +33,11 @@ fn authority_is_released(me) {
 }
 
 fn authority_possess(me) {
-    cmd("PossessVessel", #{ target: find("/FirstDrive/Rover") })
+    cmd("AcquireControl", #{ target: find("/FirstDrive/Rover") })
 }
 
 fn authority_release(me) {
-    cmd("ReleaseVessel", #{ target: find("/FirstDrive/Avatar") })
+    cmd("ReleaseControlSource", #{ source: find("/FirstDrive/Avatar") })
 }
 
 fn on_start(me, ctx) {

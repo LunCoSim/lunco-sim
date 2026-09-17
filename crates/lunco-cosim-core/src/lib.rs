@@ -11,7 +11,6 @@ pub mod commands;
 pub mod component;
 pub mod connection;
 pub mod contract;
-pub mod control;
 pub mod diagnostics;
 
 pub use actuation::{ForceActuator, TorqueActuator};
@@ -21,7 +20,6 @@ pub use connection::{
     ControlWriteFence, PortHolds, RealtimeSafe, SimConnection, clear_control_write_fence,
 };
 pub use contract::*;
-pub use control::ControlLink;
 pub use diagnostics::{AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics};
 
 /// The fixed port name exposed by a generic scalar port endpoint.

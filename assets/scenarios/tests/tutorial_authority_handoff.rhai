@@ -20,9 +20,9 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    if evt.name == "cmd:PossessVessel" {
+    if evt.name == "cmd:AcquireControl" {
         this.possess_count += 1;
-    } else if evt.name == "cmd:ReleaseVessel" {
+    } else if evt.name == "cmd:ReleaseControlSource" {
         this.release_count += 1;
     } else if evt.name == "MISSION_FAILED" {
         if !this.done { this.done = true; verdict(false, "the built-in authority lesson failed"); }
@@ -31,8 +31,8 @@ fn on_event(me, evt, ctx) {
         let returned = false;
         if rover >= 0 { returned = !is_controlled(rover); }
         this.done = true;
-        if this.possess_count == 0 { verdict(false, "no PossessVessel command was issued"); return; }
-        if this.release_count == 0 { verdict(false, "no ReleaseVessel command was issued"); return; }
+        if this.possess_count == 0 { verdict(false, "no AcquireControl command was issued"); return; }
+        if this.release_count == 0 { verdict(false, "no ReleaseControlSource command was issued"); return; }
         if !returned { verdict(false, "rover remained under human authority"); return; }
         verdict(true, "");
     }

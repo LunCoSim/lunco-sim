@@ -2,7 +2,7 @@
 //!
 //! This package owns camera-mode exclusivity and the pure pose writers that do
 //! not need to know whether a rig is an avatar, inspection camera, or another
-//! authored operator. Avatar input, possession, vessel collision, and
+//! authored operator. Embodiment input, possession, vessel collision, and
 //! source-specific surface-frame production remain outside this package. It
 //! also owns the generic rule that direct-pose modes cannot retain interaction
 //! easing, so every camera realization has one transform writer.
@@ -11,12 +11,12 @@ use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use lunco_avatar_core::commands::SetCameraInput;
 use lunco_camera_core::{
     CameraDefaults, CameraFollow, CameraPoseLock, CameraPoseMode, CameraRig, CameraUpdateSet,
     FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera, SpringArmCamera,
     SurfaceCamera, SurfaceCameraFrame, math::surface_camera_rotation,
 };
+use lunco_camera_core::SetCameraInput;
 use lunco_core::{on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 

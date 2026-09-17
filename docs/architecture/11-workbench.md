@@ -846,7 +846,7 @@ surfaces, and user-global preferences remain in `settings.json`.
 
 - Theming via egui's visuals system. Built-in themes: Dark, Light, High
   Contrast. Per-user customization is a typed section in `settings.json`.
-- Avatar and vessel input bindings are owned by `lunco-input-core` as the typed
+- Embodiment and vessel input bindings are owned by `lunco-input-core` as the typed
   `InputBindingsSettings` section in `<OS config dir>/lunco/settings.json`. The bundled
   defaults are the data in `assets/config/keybindings.json`; the same resolved
   resource feeds the live input map, help surfaces, input injection, and Rhai

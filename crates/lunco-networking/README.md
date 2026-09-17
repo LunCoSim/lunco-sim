@@ -68,7 +68,7 @@ removable without affecting simulation correctness:
 ```
 Layer 4: UIPlugins            — lunco-workbench, lunco-ui, domain ui/panels
 Layer 3: SimulationPlugins    — Rendering, Cameras, Lighting, 3D viewport, Gizmos
-Layer 2: DomainPlugins        — Celestial, Avatar, Mobility, Robotics, OBC, FSW
+Layer 2: DomainPlugins        — Celestial, Embodiment, Mobility, Robotics, OBC, FSW
 Layer 2b: NetworkingPlugin    — lunco-networking (transport, auth, bridges)
              Sync runtime     — lunco-networking-sync (replication, journals, scenarios)
 Layer 1: SimCore              — MinimalPlugins, ScheduleRunner, big_space, Avian3D
@@ -199,8 +199,8 @@ broader command/op vs state-replication split is in
 Control authority runs through the server so the host can arbitrate one active
 session per endpoint. `SessionRegistry` stores the stable global-id ownership
 table. A generic `ClaimControl` or `ReleaseControlClaim` command crosses the
-same reflected command path as `PossessVessel`; the host applies the session
-transition and broadcasts the resulting ownership snapshot. `PossessVessel`
+same reflected command path as `AcquireControl`; the host applies the session
+transition and broadcasts the resulting ownership snapshot. `AcquireControl`
 adds avatar `ControlLink` and camera composition on top of that generic
 transition.
 

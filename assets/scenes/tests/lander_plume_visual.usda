@@ -42,7 +42,7 @@ def Xform "LanderPlumeVisual" (
         prepend references = @lunco://components/cameras/visual_review_camera.usda@</VisualReviewCamera>
     )
     {
-        # The offscreen recorder promotes the authored LocalAvatar camera to
+        # The offscreen recorder promotes the authored local-embodiment camera to
         # its image target. Possession then uses the same camera/authority
         # contract as the interactive lander controls.
         def "Controls" (

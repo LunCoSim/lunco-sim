@@ -902,8 +902,8 @@ def Xform "World" (
             Some("/Apollo".into())
         );
         assert_eq!(
-            lunco_usd_bevy_core::resolve_stage_prim_path(&view, "/Apollo/Avatar"),
-            Some("/Apollo/Avatar".into())
+            lunco_usd_bevy_core::resolve_stage_prim_path(&view, "/Apollo/Embodiment"),
+            Some("/Apollo/Embodiment".into())
         );
     }
 }

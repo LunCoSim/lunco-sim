@@ -1,0 +1,12 @@
+[package]
+name = "lunco-embodiment-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Backend-neutral local and replicated embodiment contracts for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+
+[lints]
+workspace = true

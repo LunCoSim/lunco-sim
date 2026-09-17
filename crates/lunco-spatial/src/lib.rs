@@ -9,6 +9,7 @@ pub mod attach;
 pub mod coords;
 pub mod invariants;
 pub mod navigation;
+pub mod scene_handoff;
 pub mod world;
 
 /// Maximum number of hierarchy levels traversed by generic spatial lookups.
@@ -57,6 +58,7 @@ pub fn find_descendant_or_self<T: Component>(
 
 pub use invariants::BigSpaceInvariantsPlugin;
 pub use navigation::{approach_factor, nav_setpoint, steering_command, NavigationCommand};
+pub use scene_handoff::SceneSpatialHandoffSet;
 pub use world::{
     ensure_world_root, ActivePhysicsFrame, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot,
     WorldShellPlugin, WorldShellSet,

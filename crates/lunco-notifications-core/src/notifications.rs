@@ -5,8 +5,8 @@ use lunco_core::Command;
 
 /// Show a transient on-screen notification (toast) to the player.
 ///
-/// The avatar runtime owns the command observer and headless queue lifecycle;
-/// the optional `lunco-avatar-ui` adapter renders active toasts. Fired from
+/// The application runtime owns the command observer and headless queue lifecycle;
+/// optional UI adapters render active toasts. Fired from
 /// rhai via `notify(msg)` / `notify_kind(msg, kind)` (see the prelude) so a
 /// scenario can announce each phase without touching Rust.
 #[Command(default)]

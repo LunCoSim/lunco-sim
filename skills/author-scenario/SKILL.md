@@ -240,7 +240,7 @@ tick one instead of ticking silently to the limit.
 For a tutorial, this scenario is an **observer**, not a second lesson. Attach it
 to the same production scene fixture as the tutorial and observe its public
 `cmd:*` events, mission verdict, and live state. Count the mechanism that
-matters (`cmd:PossessVessel` plus a real port write, for example), then verify
+matters (`cmd:AcquireControl` plus a real port write, for example), then verify
 the resulting movement or value. Never make the observer send the same control
 commands as the lesson, and never accept `MISSION_COMPLETE` by itself.
 

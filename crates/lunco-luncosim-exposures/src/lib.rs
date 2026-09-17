@@ -14,22 +14,22 @@ use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Ro
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_avatar_core::roles::{Avatar, LocalAvatar, TheLocalAvatar};
 use lunco_celestial_spatial::link::LinkState;
 use lunco_celestial_spatial_core::OrbitalViewPin;
+use lunco_control_core::ControlLink;
 use lunco_core::exposure::{
-    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
+    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
 };
 use lunco_core::{CelestialBody, GlobalEntityId, SceneMountState};
-use lunco_cosim_core::ControlLink;
 use lunco_cosim_core::{SimComponent, SimStatus};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
 use lunco_port_core::InputPorts;
 use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_core::read::UsdReadObject;
-use lunco_usd_bevy_core::{UsdStageAsset, canonical::CanonicalStages};
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -46,8 +46,8 @@ pub struct RuntimeExposuresPlugin;
 
 impl Plugin for RuntimeExposuresPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
-            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
+            app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
         app.add_systems(Startup, publish_initial_camera_exposure)
             .add_observer(on_camera_selection_status_changed)
@@ -902,8 +902,8 @@ fn resolve_authored_telemetry(
 
 /// Resolve the vessel the local avatar is driving, or `None` in free flight.
 fn resolve_driven(
-    local_avatar: &TheLocalAvatar,
-    q_avatar: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
+    local_avatar: &TheLocalEmbodiment,
+    q_avatar: &Query<&ControlLink, (With<Embodiment>, With<LocalEmbodiment>)>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
@@ -1309,8 +1309,12 @@ pub(crate) fn mark_exposure_dirty(
     q_avatar: Query<
         (),
         (
-            With<LocalAvatar>,
-            Or<(Changed<ControlLink>, Changed<Avatar>, Changed<LocalAvatar>)>,
+            With<LocalEmbodiment>,
+            Or<(
+                Changed<ControlLink>,
+                Changed<Embodiment>,
+                Changed<LocalEmbodiment>,
+            )>,
         ),
     >,
     q_velocity: Query<(), Changed<LinearVelocity>>,
@@ -1450,7 +1454,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     signals: Res<'w, SignalRegistry>,
     selected: Res<'w, SelectedEntities>,
     scene_mount: Res<'w, SceneMountState>,
-    local_avatar: Res<'w, TheLocalAvatar>,
+    local_avatar: Res<'w, TheLocalEmbodiment>,
     sessions: Res<'w, lunco_core_session::SessionRegistry>,
     local_session: Res<'w, lunco_core_session::LocalSession>,
     bodies: Query<'w, 's, &'static CelestialBody>,
@@ -1469,7 +1473,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
 /// function when seminar tracing adds another input.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ExposureQueries<'w, 's> {
-    avatar: Query<'w, 's, &'static ControlLink, (With<Avatar>, With<LocalAvatar>)>,
+    avatar: Query<'w, 's, &'static ControlLink, (With<Embodiment>, With<LocalEmbodiment>)>,
     name: Query<'w, 's, &'static Name>,
     callsign: Query<'w, 's, &'static lunco_core::markers::Callsign>,
     catalog_id: Query<'w, 's, &'static lunco_core::CatalogEntryId>,
@@ -1768,8 +1772,8 @@ fn publish_celestial_capability(
     exposures: &mut EngineExposures,
     bodies: &Query<&CelestialBody>,
     orbital_pin: Option<&OrbitalViewPin>,
-    local_avatar: &TheLocalAvatar,
-    avatars: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
+    local_avatar: &TheLocalEmbodiment,
+    avatars: &Query<&ControlLink, (With<Embodiment>, With<LocalEmbodiment>)>,
     surface_pose: &lunco_celestial_spatial_core::SurfacePoseQuery,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) {

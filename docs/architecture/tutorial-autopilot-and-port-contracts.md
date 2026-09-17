@@ -13,7 +13,7 @@ An authored task program is a different **policy**, not a second actuation
 mechanism. Human and unattended paths use the same control sequence:
 
 ```text
-PossessVessel
+AcquireControl
     -> ControlBinding / intent mapping
     -> SetPorts (or the same live ControlStream surface)
     -> PortRegistry
@@ -35,7 +35,7 @@ possession and authored programs cannot create competing actuation paths.
 For a tutorial acceptance test, observe both command events and the resulting
 state:
 
-- `cmd:PossessVessel` proves that the controller acquired authority through the
+- `cmd:AcquireControl` proves that the controller acquired authority through the
   normal session path.
 - `cmd:SetPorts` proves that it used the same actuation surface as a human.
 - A live position/port predicate proves that the command had an effect.

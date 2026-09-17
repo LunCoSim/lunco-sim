@@ -5,20 +5,54 @@
 //! runtimes such as `lunco-avatar` translate interaction and source-specific
 //! frames into these contracts. Authored scene policy remains in USD/Rhai.
 
+pub mod commands;
 pub mod math;
+
+pub use commands::{FocusTarget, FollowTarget, ReturnFromOrbit, SetCameraInput, SetCameraLookAt};
 
 /// Ordering anchor for generic interactive camera pose writers.
 ///
-/// Avatar-specific preparation may run before this set and movement or other
+/// Embodiment-specific preparation may run before this set and movement or other
 /// pose consumers may run after it. The set belongs to the camera contract so
 /// a host can compose camera realization without importing the avatar runtime.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct CameraUpdateSet;
 
-/// Presentation intent emitted by an avatar workflow that explicitly returns
-/// the operator to the local avatar view.
+/// Presentation intent emitted by an embodiment workflow that explicitly
+/// returns the operator to the local presentation view.
 #[derive(Event, Clone, Copy, Debug, Default)]
-pub struct RequestLocalAvatarView;
+pub struct RequestLocalEmbodimentView;
+
+/// A focus request retained until the owning camera adapter can apply it at a
+/// frame boundary. The request carries only generic entity identity and a
+/// presentation distance; spatial interpretation belongs to the active camera
+/// realization.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct PendingFocus {
+    /// Entity to present.
+    pub target: Entity,
+    /// Requested camera distance in metres.
+    pub distance: f32,
+}
+
+/// Replace the diagnostic for the shared scene-focus transaction.
+pub fn replace_focus_diagnostic(
+    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    message: Option<String>,
+) {
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        diagnostics.replace_producer(
+            "scene-focus",
+            message.map(|message| lunco_core::RuntimeDiagnostic {
+                code: "scene-focus".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "scene-focus".to_string(),
+                subject: "PendingFocus".to_string(),
+                message,
+            }),
+        );
+    }
+}
 
 /// Hook seam for an application's initial presentation decision.
 ///
@@ -159,7 +193,7 @@ pub enum CameraPoseMode {
     Explicit,
 }
 
-/// Per-avatar mouse-wheel input accumulated between camera systems.
+/// Per-camera mouse-wheel input accumulated between camera systems.
 #[derive(Component, Default)]
 pub struct CameraZoomInput {
     /// Accumulated scroll delta since the last camera system consumed it.

@@ -1,6 +1,6 @@
 //! Regression harness for the built-in Lander & Rover Mission lesson.
 //! The lesson observes the scene's descent/deployment events, then drives the
-//! rover with the same PossessVessel + SetPorts path as the human controls.
+//! rover with the same AcquireControl + SetPorts path as the human controls.
 
 fn verdict(pass, reason) {
     if pass {
@@ -31,7 +31,7 @@ fn on_event(me, evt, ctx) {
         this.touchdown = true;
     } else if evt.name == "rover_deployed" {
         this.deployed = true;
-    } else if evt.name == "cmd:PossessVessel" && this.deployed {
+    } else if evt.name == "cmd:AcquireControl" && this.deployed {
         this.possess_count += 1;
     } else if evt.name == "cmd:SetPorts" && this.deployed && this.possess_count > 0 {
         this.port_writes += 1;

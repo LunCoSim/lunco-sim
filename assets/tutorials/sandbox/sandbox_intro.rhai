@@ -18,9 +18,9 @@ fn steps() {
         // 4
         #{ anchor: "panel.spawn_palette",   focus: "spawn_palette",   title: "Spawn an object",        body: "Open Spawn in the right dock. Click a rover, prop, or structure, then place it in the scene. Cancel with " + input_hint("cancel") + ".", require: "cmd:SpawnEntity" },
         // 5
-        #{ anchor: "panel.command_deck",    focus: "command_deck",    title: "Take control",           body: "Select the rover. Open Command Deck and click Possess to give it your driving inputs.", require: "cmd:PossessVessel" },
+        #{ anchor: "panel.command_deck",    focus: "command_deck",    title: "Take control",           body: "Select the rover. Open Command Deck and click Acquire Control to give it your driving inputs.", require: "cmd:AcquireControl" },
         // 6
-        #{ anchor: "panel.command_deck",    focus: "command_deck",    title: "Release control",        body: "Press " + input_hint("cancel") + " to release the rover and return to free flight.", require: "cmd:ReleaseVessel" },
+        #{ anchor: "panel.command_deck",    focus: "command_deck",    title: "Release control",        body: "Press " + input_hint("cancel") + " to release the rover and return to free flight.", require: "cmd:ReleaseControlSource" },
         // 7
         #{ anchor: "",                      focus: (),             title: "Find command help",       body: "Open Help to find command and automation guidance. Rhai, the HTTP API, MCP clients, and the UI use the same typed commands.", require: "cmd:GuidedNext" },
         // 8

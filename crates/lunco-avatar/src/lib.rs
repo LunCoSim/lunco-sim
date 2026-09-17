@@ -1,7 +1,8 @@
 //! Implementation of the local presentation embodiment and interaction surface.
 //!
-//! This crate defines the [Avatar] entity, which handles focus transitions,
-//! vessel possession, and avatar-side camera transactions. Semantic input is
+//! This crate defines the high-level avatar behavior around an [Embodiment]
+//! entity, which handles focus transitions, vessel possession, and avatar-side
+//! camera transactions. Semantic input is
 //! projected by `lunco-avatar-input`. The camera architecture uses
 //! composable behavior components (`SpringArmCamera`, `OrbitCamera`, `FreeFlightCamera`) rather
 //! than a monolithic state machine, enabling modular frame-aware operation
@@ -30,29 +31,27 @@ use lunco_avatar_camera_core::{
     CurrentRegionArrival, OrbitPose, OrbitReturnBehavior, OrbitUserInput, OrbitViewHistory,
     OrbitViewReturn, RadialArrival,
 };
-use lunco_avatar_core::commands::{
-    FocusTarget, FollowTarget, PossessVessel, ReleaseVessel, ReturnFromOrbit,
-};
-use lunco_avatar_core::lifecycle::AvatarSceneHandoffSet;
-use lunco_avatar_core::notifications::{ScreenNotifications, ShowNotification, Toast};
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_camera_core::{
+    math::{surface_camera_angles, surface_camera_rotation},
     AdaptiveNearPlane, CameraUpdateSet, CameraZoomInput, FollowAttitude, FreeFlightCamera,
     OrbitCamera, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
-    math::{surface_camera_angles, surface_camera_rotation},
 };
-use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
-use lunco_core::{CelestialBody, Spacecraft, on_command, register_commands};
+use lunco_camera_core::{FocusTarget, FollowTarget, ReturnFromOrbit};
+use lunco_control_core::{
+    AcquireControl, ControlLink, IntentAnalogState, IntentState, ReleaseControlSource, UserIntent,
+};
+use lunco_core::{on_command, register_commands, CelestialBody, Spacecraft};
 use lunco_core_session::commands::UpdateProfile;
 use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
-use lunco_cosim_core::ControlLink;
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_input_core::InputBindingsSettings;
+use lunco_notifications_core::{ScreenNotifications, ShowNotification, Toast};
 /// Capability test for "**accepts commands**": carries an authored intent→port
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
 /// backend (`SimComponent`).
 ///
 /// This is not the possession predicate. Possession validates a writable
-/// [`lunco_port_core::InputPorts`] endpoint that is not an [`Avatar`], then the
+/// [`lunco_port_core::InputPorts`] endpoint that is not an [`Embodiment`], then the
 /// authority layer (`SessionRegistry::may_possess` / `PossessionPolicy`) decides
 /// who may hold it. This alias answers only whether a target accepts commands,
 /// and is used for one presentation decision: whether a heading-follow camera
@@ -63,12 +62,12 @@ type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_cosim_core::SimComponent>,
 )>;
 use lunco_celestial_spatial_core::{
-    LocalGravityField, surface_axes_for_grid_position, surface_axes_in_grid,
+    surface_axes_for_grid_position, surface_axes_in_grid, LocalGravityField,
 };
 use lunco_environment::GravityBody;
 use lunco_settings::{AppSettingsExt, ProfileSettings};
 use lunco_spatial::attach::migrate_to_grid;
-use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, is_preview_only, is_preview_only_entity};
+use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
 
 // Render-bound screenshots and deterministic offline recording are owned by
 // `lunco-capture`; this crate remains responsible for camera intent,
@@ -136,7 +135,7 @@ fn register_orbit_history_hook(app: &mut App) {
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
-/// Plugin for managing local embodiment logic, input processing, and possession.
+/// Plugin for managing local avatar logic, input processing, and possession.
 pub struct LunCoAvatarPlugin;
 
 fn trigger_vessel_hard_stop(commands: &mut Commands, vessel_entity: Entity) {
@@ -227,7 +226,7 @@ fn enforce_ownership(
     role: Res<lunco_core_session::NetworkRole>,
     registry: Res<lunco_core_session::SessionRegistry>,
     session: Res<lunco_core_session::LocalSession>,
-    q_avatar: Query<(Entity, &ControlLink), (With<Avatar>, With<LocalAvatar>)>,
+    q_avatar: Query<(Entity, &ControlLink), (With<Embodiment>, With<LocalEmbodiment>)>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     mut commands: Commands,
 ) {
@@ -236,19 +235,19 @@ fn enforce_ownership(
     }
     for (avatar, link) in q_avatar.iter() {
         let Ok(gid) = q_gid.get(link.target) else {
-            commands.trigger(ReleaseVessel { target: avatar });
+            commands.trigger(ReleaseControlSource { source: avatar });
             continue;
         };
         if registry.owner_of(gid.get()) != Some(session.0) {
-            commands.trigger(ReleaseVessel { target: avatar });
+            commands.trigger(ReleaseControlSource { source: avatar });
         }
     }
 }
 
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
-            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
+            app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
         if !app.is_plugin_added::<lunco_avatar_input::AvatarInputPlugin>() {
             app.add_plugins(lunco_avatar_input::AvatarInputPlugin);
@@ -257,7 +256,6 @@ impl Plugin for LunCoAvatarPlugin {
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }
-        app.configure_sets(Update, AvatarSceneHandoffSet);
         // Stepped camera writers use `lunco_time::InteractionSchedule`, while the
         // spring arm follows the final rendered body pose in `PostUpdate` below. The
         // time spine is a hard dependency for both paths; guarantee it rather than
@@ -301,7 +299,7 @@ impl Plugin for LunCoAvatarPlugin {
         // looks them up by reflected short type-path — so the type MUST be in the
         // registry. They used to be wired observer-by-hand + type-by-hand, and when
         // the second half was forgotten the host logged "unknown command type
-        // 'PossessVessel'", never recorded the client's ownership, and rejected
+        // 'AcquireControl'", never recorded the client's ownership, and rejected
         // every subsequent SetPorts as unauthorized (the "client rover won't move"
         // bug). `register_commands!` now does both halves in one step, so the two
         // can't drift apart again.
@@ -345,18 +343,6 @@ impl Plugin for LunCoAvatarPlugin {
                 tick_notifications,
             ),
         );
-        // USD projection and celestial projection publish scene entities in
-        // Update. The camera subsystem owns the complete handoff after those
-        // publishers have committed their deferred components.
-        app.add_systems(
-            Update,
-            (
-                capture_site_camera_pose.run_if(site_camera_capture_changed),
-                bind_local_avatar_to_site_grid.run_if(avatar_site_handoff_changed),
-            )
-                .chain()
-                .in_set(AvatarSceneHandoffSet),
-        );
         app.configure_sets(
             lunco_time::InteractionSchedule,
             // Between restore and record: start from the authoritative stepped pose
@@ -365,7 +351,7 @@ impl Plugin for LunCoAvatarPlugin {
             // step's final pose be snapshotted for the render-rate ease.
             CameraUpdateSet
                 .after(lunco_time::InteractionRestoreSet)
-                .after(lunco_controller::InteractionControlSet)
+                .after(lunco_control_core::InteractionControlSet)
                 .before(lunco_time::InteractionRecordSet),
         );
         // Camera drag and avatar camera-mode transitions remain here. Focused
@@ -374,218 +360,16 @@ impl Plugin for LunCoAvatarPlugin {
     }
 }
 
-/// Pose captured while a local avatar is still attached to the loader's world
-/// Grid. The value is local to the authored site frame, so it remains valid
-/// when the site root becomes or is already a BigSpace Grid.
-#[derive(Component, Clone, Copy, Debug)]
-struct PendingSiteCameraPose {
-    site_root: Entity,
-    position: DVec3,
-    rotation: DQuat,
-}
-
-fn site_camera_capture_changed(
-    q_site: Query<(), With<lunco_celestial::SiteAnchor>>,
-    q_avatar: Query<
-        (),
-        (
-            With<Avatar>,
-            With<LocalAvatar>,
-            Without<PendingSiteCameraPose>,
-            Or<(
-                Changed<Avatar>,
-                Changed<LocalAvatar>,
-                Changed<ChildOf>,
-                Changed<Transform>,
-            )>,
-        ),
-    >,
-) -> bool {
-    !q_site.is_empty() && !q_avatar.is_empty()
-}
-
-/// Capture an authored local-camera pose before the binder migrates the avatar
-/// into the site frame. The shared common-grid conversion also handles a USD
-/// avatar projected after the site root has already moved beneath a celestial
-/// surface Grid.
-fn capture_site_camera_pose(
-    q_site: Query<Entity, With<lunco_celestial::SiteAnchor>>,
-    q_avatar: Query<
-        (Entity, &ChildOf, Option<&PendingSiteCameraPose>),
-        (With<Avatar>, With<LocalAvatar>),
-    >,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    q_world_grid: Query<(), With<lunco_spatial::WorldGrid>>,
-    mut commands: Commands,
-) {
-    let Ok(site_root) = q_site.single() else {
-        return;
-    };
-
-    for (avatar, child_of, pending) in &q_avatar {
-        if pending.is_some() {
-            continue;
-        }
-        let current_parent = child_of.parent();
-        if q_grids.get(current_parent).is_ok() && q_world_grid.get(current_parent).is_err() {
-            continue;
-        }
-        let pose = lunco_spatial::coords::common_grid_poses(
-            avatar, site_root, &q_parents, &q_grids, &q_spatial,
-        )
-        .map(
-            |(_, avatar_position, avatar_rotation, site_position, site_rotation)| {
-                let inverse_site_rotation = site_rotation.inverse();
-                (
-                    inverse_site_rotation * (avatar_position - site_position),
-                    (inverse_site_rotation * avatar_rotation).normalize(),
-                )
-            },
-        );
-        let Some((avatar_position, avatar_rotation)) = pose else {
-            warn!(
-                ?avatar,
-                ?site_root,
-                "local avatar cannot be composed with the authored site root"
-            );
-            continue;
-        };
-        commands.entity(avatar).try_insert(PendingSiteCameraPose {
-            site_root,
-            position: avatar_position,
-            rotation: avatar_rotation.normalize(),
-        });
-        info!(
-            ?avatar,
-            ?site_root,
-            "captured local avatar pose for site camera handoff"
-        );
-    }
-}
-
-/// Run the startup camera handoff when either side of the scene/camera
-/// boundary changes. This keeps the steady-state path out of the frame loop;
-/// scene replacement and a newly projected local avatar are the only events
-/// that can require this binding.
-fn avatar_site_handoff_changed(
-    q_site: Query<(), (With<lunco_celestial::SiteAnchor>, Changed<Grid>)>,
-    q_avatar: Query<
-        (),
-        (
-            With<Avatar>,
-            With<LocalAvatar>,
-            Or<(
-                Added<LocalAvatar>,
-                Changed<ChildOf>,
-                Added<PendingSiteCameraPose>,
-            )>,
-        ),
-    >,
-) -> bool {
-    !q_site.is_empty() || !q_avatar.is_empty()
-}
-
-/// Mount a loader-created local avatar into the authored site's Grid.
-///
-/// USD projection initially has no celestial knowledge and therefore places
-/// the avatar under the persistent world shell. Once celestial placement has
-/// made the authored site root a Grid, the camera subsystem converts the
-/// avatar pose through the shared BigSpace coordinate helpers and atomically
-/// re-parents it. A camera already mounted in another valid Grid is left to
-/// its owning camera mode (for example, orbital view).
-fn bind_local_avatar_to_site_grid(
-    q_site: Query<(Entity, &lunco_celestial::GeodeticAnchor), With<lunco_celestial::SiteAnchor>>,
-    q_bodies: Query<(Entity, &CelestialBody)>,
-    q_avatar: Query<(Entity, &ChildOf, Option<&GravityBody>), (With<Avatar>, With<LocalAvatar>)>,
-    q_pending: Query<&PendingSiteCameraPose>,
-    q_grids: Query<&Grid>,
-    q_world_grid: Query<(), With<lunco_spatial::WorldGrid>>,
-    mut commands: Commands,
-) {
-    let Ok((site_root, anchor)) = q_site.single() else {
-        return;
-    };
-    let Some((body_entity, _)) = q_bodies
-        .iter()
-        .find(|(_, body)| body.ephemeris_id == anchor.body)
-    else {
-        return;
-    };
-    let Ok(site_grid) = q_grids.get(site_root) else {
-        return;
-    };
-
-    for (avatar, child_of, gravity_body) in &q_avatar {
-        let current_parent = child_of.parent();
-        if current_parent == site_root {
-            if gravity_body.is_none_or(|binding| binding.body_entity != body_entity) {
-                commands
-                    .entity(avatar)
-                    .try_insert(GravityBody { body_entity });
-            }
-            commands
-                .entity(avatar)
-                .try_remove::<PendingSiteCameraPose>();
-            continue;
-        }
-
-        // A valid non-world Grid is already owned by an explicit camera mode.
-        // The startup binder must not reclaim orbital or target-relative views.
-        if q_grids.get(current_parent).is_ok() && q_world_grid.get(current_parent).is_err() {
-            continue;
-        }
-
-        let Ok(pending) = q_pending.get(avatar) else {
-            warn!(
-                ?avatar,
-                ?site_root,
-                "local avatar has no pre-mount pose for the authored site Grid"
-            );
-            continue;
-        };
-        if pending.site_root != site_root {
-            warn!(
-                ?avatar,
-                ?site_root,
-                pending_site = ?pending.site_root,
-                "local avatar site-camera handoff targets a different scene"
-            );
-            continue;
-        }
-        let site_position = pending.position;
-        let site_rotation = pending.rotation;
-        let (cell, translation) = site_grid.translation_to_grid(site_position);
-        migrate_to_grid(
-            &mut commands,
-            avatar,
-            site_root,
-            cell,
-            Transform::from_translation(translation).with_rotation(site_rotation.as_quat()),
-        );
-        commands
-            .entity(avatar)
-            .try_insert(GravityBody { body_entity })
-            .try_remove::<PendingSiteCameraPose>();
-        info!(
-            ?avatar,
-            ?site_root,
-            "local avatar camera mounted in the authored site Grid"
-        );
-    }
-}
-
 /// Local avatars are command endpoints with an authored-equivalent
 /// `ControlBinding` and `InputPorts` surface. The shared controller translates
 /// intents into ports, and the flight realization consumes only those ports.
-fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands) {
+fn demote_former_avatar(trigger: On<Remove, LocalEmbodiment>, mut commands: Commands) {
     let entity = trigger.entity;
     // Retirement is a presentation contract consumed by the one viewport
     // reconciler. Do not write Camera::is_active here: avatar role lifecycle
     // and viewport activation are separate ownership boundaries.
     commands.entity(entity).try_remove::<(
-        Avatar,
+        Embodiment,
         FreeFlightCamera,
         OrbitCamera,
         SpringArmCamera,
@@ -650,7 +434,7 @@ fn surface_target_frame(
     body_entity: Entity,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
 ) -> Option<(Vec3, Vec3, Vec3, f32)> {
     let (east, north, up) = surface_axes_for_grid_position(
         target_grid,
@@ -677,8 +461,8 @@ fn surface_target_frame(
 ///
 /// No-op when `target_grid` is `None`/placeholder or not a live Grid.
 ///
-/// Consolidates the CQ-113 duplicate migration block shared by
-/// `on_possess_command`, `on_follow_command`, and `on_focus_command`.
+/// Consolidates the duplicate migration block shared by
+/// `on_possess_command` and `on_follow_command`.
 fn migrate_avatar_to_target_grid(
     commands: &mut Commands,
     avatar_ent: Entity,
@@ -689,19 +473,28 @@ fn migrate_avatar_to_target_grid(
 ) {
     if let Some(tg) = target_grid {
         if tg != Entity::PLACEHOLDER {
-            if let Ok(target_grid_ref) = q_grids.get(tg) {
-                let (new_cell, translation) = target_grid_ref.translation_to_grid(final_local_pos);
-                let local_tf = Transform::from_translation(translation).with_rotation(final_rot);
-                info!(
+            let Ok(target_grid_ref) = q_grids.get(tg) else {
+                warn!(
                     avatar = ?avatar_ent,
                     target_grid = ?tg,
-                    final_local = ?final_local_pos,
-                    cell = ?new_cell,
-                    local = ?local_tf.translation,
-                    "[possess] migrated avatar into target grid"
+                    "[camera] refused avatar migration: target grid pose is unavailable"
                 );
-                migrate_to_grid(commands, avatar_ent, tg, new_cell, local_tf);
-            }
+                return;
+            };
+            lunco_spatial::attach::migrate_to_grid_local_pose(
+                commands,
+                avatar_ent,
+                tg,
+                target_grid_ref,
+                final_local_pos,
+                final_rot.as_dquat(),
+            );
+            info!(
+                avatar = ?avatar_ent,
+                target_grid = ?tg,
+                final_local = ?final_local_pos,
+                "[possess] migrated avatar into target grid"
+            );
         }
     }
 }
@@ -715,13 +508,13 @@ fn migrate_avatar_to_target_grid(
 /// its nonempty vocabulary is the input surface a session may own. A
 /// [`lunco_control_core::ControlBinding`] or [`lunco_core::MobilityRoot`] identifies the
 /// authored vehicle boundary, which takes precedence over nested component
-/// endpoints. An [`Avatar`] endpoint is excluded even when it carries its own
+/// endpoints. An [`Embodiment`] endpoint is excluded even when it carries its own
 /// movement ports; walking past one to this owner makes a click on a vehicle
 /// part possess the vehicle rather than the avatar.
 fn find_control_owner_from_hit(
     mut entity: Entity,
     q_parents: &Query<&ChildOf>,
-    q_input_ports: &Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+    q_input_ports: &Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
     q_vehicle_roots: &Query<
         (),
         Or<(
@@ -766,7 +559,7 @@ fn find_control_owner_from_hit(
 /// never become the vessel selected by a click or a direct possession command.
 fn is_vessel_control_endpoint(
     entity: Entity,
-    q_input_ports: &Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+    q_input_ports: &Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
     q_child_of: &Query<&ChildOf>,
     q_preview_only: &Query<(), With<UsdPreviewOnly>>,
 ) -> bool {
@@ -793,7 +586,7 @@ fn is_vessel_control_endpoint(
 ///
 /// | Hit                         | Command          |
 /// |-----------------------------|------------------|
-/// | opened input-port surface   | `PossessVessel`  |
+/// | opened input-port surface   | `AcquireControl`  |
 /// | `CelestialBody`             | `FocusTarget`    |
 /// | everything else             | no action        |
 ///
@@ -856,7 +649,7 @@ pub fn avatar_raycast_possession(
     keys: Res<ButtonInput<KeyCode>>,
     camera_q: Query<
         (&Camera, &GlobalTransform, Entity, &IntentState),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
     scene_interaction: SceneInteractionGate,
     drag_mode_active: Res<lunco_interaction_core::DragModeActive>,
@@ -866,7 +659,7 @@ pub fn avatar_raycast_possession(
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
-    q_input_ports: Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+    q_input_ports: Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
     q_parents: Query<&ChildOf>,
     q_vehicle_roots: Query<
         (),
@@ -920,7 +713,7 @@ pub fn avatar_raycast_possession(
     // stop the auto-propagation to ancestor entities — otherwise a global
     // observer re-fires once per ancestor. The analytic spacecraft/celestial
     // sphere tests below depend on the ray, not on `click.entity`, so they'd
-    // re-trigger `PossessVessel`/`FocusTarget` for every ancestor in the chain
+    // re-trigger `AcquireControl`/`FocusTarget` for every ancestor in the chain
     // (we must not gate this on a *mesh* hit being found, the earlier bug).
     click.propagate(false);
 
@@ -1001,18 +794,18 @@ pub fn avatar_raycast_possession(
 
     if let Some(target) = body_hit {
         commands.trigger(FocusTarget {
-            avatar: Some(avatar_entity),
+            camera: Some(avatar_entity),
             target,
         });
     } else if let Some(target) = spacecraft_hit {
-        commands.trigger(PossessVessel {
-            avatar: Some(avatar_entity),
+        commands.trigger(AcquireControl {
+            source: Some(avatar_entity),
             target,
             bind_camera: true,
         });
     } else if let Some(target) = control_target {
-        commands.trigger(PossessVessel {
-            avatar: Some(avatar_entity),
+        commands.trigger(AcquireControl {
+            source: Some(avatar_entity),
             target,
             bind_camera: true,
         });
@@ -1081,12 +874,12 @@ fn on_return_from_orbit(
             Has<OrbitUserInput>,
             Has<lunco_camera_core::CameraPoseLock>,
         ),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
     q_bodies: Query<&CelestialBody>,
     mut orbital_pin: Option<ResMut<lunco_celestial_spatial_core::OrbitalViewPin>>,
 ) {
-    let avatar = trigger.event().target;
+    let camera = trigger.event().camera;
     let Ok((
         mut transform,
         mut cell,
@@ -1097,7 +890,7 @@ fn on_return_from_orbit(
         mut orbit_history,
         orbit_user_input,
         cinematic_lock,
-    )) = q_avatar.get_mut(avatar)
+    )) = q_avatar.get_mut(camera)
     else {
         return;
     };
@@ -1121,18 +914,18 @@ fn on_return_from_orbit(
     } else {
         migrate_to_grid(
             &mut commands,
-            avatar,
+            camera,
             return_state.parent_grid(),
             return_state.cell(),
             return_state.transform(),
         );
     }
-    apply_orbit_return(&mut commands, avatar, &return_state);
+    apply_orbit_return(&mut commands, camera, &return_state);
 
     if let Some(pin) = orbital_pin.as_mut() {
         pin.active = false;
     }
-    commands.trigger(lunco_camera_core::RequestLocalAvatarView);
+    commands.trigger(lunco_camera_core::RequestLocalEmbodimentView);
     info!("ORBITAL EXIT: restored exact pre-orbit camera transaction");
 }
 
@@ -1140,9 +933,9 @@ fn on_return_from_orbit(
 ///
 /// Keeps the camera at its current position — no jarring teleport.
 /// Switches to `FreeFlightCamera` mode with the current orientation preserved.
-#[on_command(ReleaseVessel)]
+#[on_command(ReleaseControlSource)]
 fn on_release_command(
-    trigger: On<ReleaseVessel>,
+    trigger: On<ReleaseControlSource>,
     mut commands: Commands,
     mut q_avatar: Query<
         (
@@ -1157,13 +950,13 @@ fn on_release_command(
             Has<OrbitUserInput>,
             Has<lunco_camera_core::CameraPoseLock>,
         ),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
     guard: Res<lunco_core_session::SyncApplyGuard>,
     mut orbital_pin: Option<ResMut<lunco_celestial_spatial_core::OrbitalViewPin>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     q_owned: Query<&lunco_core::GlobalEntityId>,
     q_bodies: Query<&CelestialBody>,
     gravity: Res<LocalGravityField>,
@@ -1194,8 +987,8 @@ fn on_release_command(
     // A local release is meaningful only for the authoritative local avatar.
     // Validate this before freeing the session table so a stale entity cannot
     // release an otherwise valid possession.
-    if q_avatar.get(cmd.target).is_err() {
-        warn!(target = ?cmd.target, "[release] refused: target is not the local avatar");
+    if q_avatar.get(cmd.source).is_err() {
+        warn!(target = ?cmd.source, "[release] refused: source is not the local embodiment");
         return;
     }
     let released = if matches!(*role, lunco_core_session::NetworkRole::Client) {
@@ -1225,7 +1018,7 @@ fn on_release_command(
             pin.active = false;
         }
     }
-    let avatar_ent = cmd.target;
+    let avatar_ent = cmd.source;
     let (yaw, pitch, opt_vessel, is_surface, local_translation, return_state) = if let Ok((
         mut tf,
         mut cell,
@@ -1373,9 +1166,9 @@ fn on_release_command(
         });
     }
     // Give the viewport back to the player's own eye through the shared camera
-    // intent. The camera subsystem resolves the LocalAvatar and records this as
+    // intent. The camera subsystem resolves the LocalEmbodiment and records this as
     // an explicit user selection; it never falls through to another camera.
-    commands.trigger(lunco_camera_core::RequestLocalAvatarView);
+    commands.trigger(lunco_camera_core::RequestLocalEmbodimentView);
     info!(
         "Released possession → camera at local {:?} (surface={})",
         local_translation, is_surface
@@ -1403,13 +1196,13 @@ fn get_grid_for_entity(
 
 fn resolve_requested_or_local_avatar(
     requested: Option<Entity>,
-    local_avatar: Option<&lunco_avatar_core::roles::TheLocalAvatar>,
+    local_avatar: Option<&lunco_embodiment_core::roles::TheLocalEmbodiment>,
 ) -> Result<Entity, String> {
     match requested {
         Some(entity) => Ok(entity),
         None => local_avatar
             .and_then(|slot| slot.0)
-            .ok_or_else(|| "no authoritative LocalAvatar is available".to_string()),
+            .ok_or_else(|| "no authoritative LocalEmbodiment is available".to_string()),
     }
 }
 
@@ -1418,7 +1211,7 @@ fn local_avatar_state_error(requested: Option<Entity>) -> String {
         Some(entity) => {
             format!("requested avatar {entity:?} is not a complete local avatar")
         }
-        None => "the authoritative LocalAvatar has no complete camera state".to_string(),
+        None => "the authoritative LocalEmbodiment has no complete camera state".to_string(),
     }
 }
 
@@ -1427,7 +1220,7 @@ fn controller_avatar_state_error(requested: Option<Entity>) -> String {
         Some(entity) => {
             format!("requested avatar {entity:?} has no local controller input state")
         }
-        None => "the authoritative LocalAvatar has no local controller input state".to_string(),
+        None => "the authoritative LocalEmbodiment has no local controller input state".to_string(),
     }
 }
 
@@ -1442,7 +1235,7 @@ fn replace_avatar_diagnostic(
                 code: "avatar-camera".to_string(),
                 severity: lunco_core::DiagnosticSeverity::Error,
                 producer: "avatar-camera".to_string(),
-                subject: "LocalAvatar".to_string(),
+                subject: "LocalEmbodiment".to_string(),
                 message,
             }),
         );
@@ -1462,10 +1255,14 @@ struct PossessAvatarQueries<'w, 's> {
             Option<&'static ControlLink>,
             Has<lunco_camera_core::CameraPoseLock>,
         ),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
-    controller:
-        Query<'w, 's, Option<&'static ControlLink>, (With<Avatar>, With<ActionState<UserIntent>>)>,
+    controller: Query<
+        'w,
+        's,
+        Option<&'static ControlLink>,
+        (With<Embodiment>, With<ActionState<UserIntent>>),
+    >,
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -1478,18 +1275,18 @@ struct PossessionAuthority<'w, 's> {
     q_owned: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
 }
 
-#[on_command(PossessVessel)]
+#[on_command(AcquireControl)]
 fn on_possess_command(
-    trigger: On<PossessVessel>,
+    trigger: On<AcquireControl>,
     mut commands: Commands,
     possession_avatars: PossessAvatarQueries,
     // Camera readiness and control readiness are separate lifecycle facts. A
-    // scene/perspective handoff can temporarily remove `LocalAvatar` (and its
+    // scene/perspective handoff can temporarily remove `LocalEmbodiment` (and its
     // camera components) while the avatar still owns its ActionState. The
     // controller link must be able to survive that handoff; otherwise a
     // possession command is accepted and authority is published, but semantic
     // intents have no consumer.
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     // Used ONLY for the heading-follow camera decision below. Possession is
@@ -1501,11 +1298,11 @@ fn on_possess_command(
         ),
         Controllable,
     >,
-    q_input_ports: Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+    q_input_ports: Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     mut possession_authority: PossessionAuthority,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
-    local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
+    local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
@@ -1529,7 +1326,7 @@ fn on_possess_command(
     // Return before avatar resolution so `bind_camera = false` never performs
     // an implicit lookup.
     if !cmd.bind_camera {
-        if let Some(requested) = cmd.avatar {
+        if let Some(requested) = cmd.source {
             let Some(previous) = possession_avatars.controller.get(requested).ok() else {
                 replace_avatar_diagnostic(
                     &mut diagnostics,
@@ -1564,7 +1361,7 @@ fn on_possess_command(
         return;
     }
 
-    let avatar_ent = match resolve_requested_or_local_avatar(cmd.avatar, local_avatar.as_deref()) {
+    let avatar_ent = match resolve_requested_or_local_avatar(cmd.source, local_avatar.as_deref()) {
         Ok(entity) => entity,
         Err(message) => {
             warn!(target = ?cmd.target, "[possess] refused: {message}");
@@ -1573,7 +1370,7 @@ fn on_possess_command(
         }
     };
     if !possession_avatars.controller.contains(avatar_ent) {
-        let message = controller_avatar_state_error(cmd.avatar);
+        let message = controller_avatar_state_error(cmd.source);
         warn!(target = ?cmd.target, "[possess] refused: {message}");
         replace_avatar_diagnostic(&mut diagnostics, Some(message));
         return;
@@ -1588,7 +1385,7 @@ fn on_possess_command(
     let Ok((avatar_ent, cam_tf, _child_of, existing_link, cinematic_lock)) =
         possession_avatars.camera.get(avatar_ent)
     else {
-        let message = local_avatar_state_error(cmd.avatar);
+        let message = local_avatar_state_error(cmd.source);
         warn!(target = ?cmd.target, "[possess] camera bind deferred: {message}");
         let Some(released) =
             commit_possession_authority(&mut commands, &mut possession_authority, cmd.target)
@@ -1834,7 +1631,7 @@ fn on_possess_command(
 
 /// Follows a target with the chase camera but without taking control.
 ///
-/// Conceptually `PossessVessel` minus the controller binding: the avatar
+/// Conceptually `AcquireControl` minus the controller binding: the avatar
 /// rides along behind the target, but keyboard input no longer drives any
 /// vessel. Used for non-`Vessel` objects (balloons, props, observation
 /// targets). Idempotent — clicking the same already-followed target is a
@@ -1850,18 +1647,18 @@ fn on_follow_command(
             Option<&SpringArmCamera>,
             Has<lunco_camera_core::CameraPoseLock>,
         ),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     q_vessel: Query<Entity, Controllable>,
     q_vessel_gravity: Query<&GravityBody>,
-    local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
+    local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
-    let avatar_ent = match resolve_requested_or_local_avatar(cmd.avatar, local_avatar.as_deref()) {
+    let avatar_ent = match resolve_requested_or_local_avatar(cmd.camera, local_avatar.as_deref()) {
         Ok(entity) => entity,
         Err(message) => {
             warn!(target = ?cmd.target, "[follow] refused: {message}");
@@ -1871,7 +1668,7 @@ fn on_follow_command(
     };
     let Ok((avatar_ent, _child_of, existing_spring, cinematic_lock)) = q_avatar.get(avatar_ent)
     else {
-        let message = local_avatar_state_error(cmd.avatar);
+        let message = local_avatar_state_error(cmd.camera);
         warn!(target = ?cmd.target, "[follow] refused: {message}");
         replace_avatar_diagnostic(&mut diagnostics, Some(message));
         return;
@@ -2008,19 +1805,19 @@ fn on_focus_command(
             Has<SurfaceRelativeMode>,
             Has<lunco_camera_core::CameraPoseLock>,
         ),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
-    mut q_zoom: Query<&mut CameraZoomInput, (With<Avatar>, With<LocalAvatar>)>,
+    mut q_zoom: Query<&mut CameraZoomInput, (With<Embodiment>, With<LocalEmbodiment>)>,
     q_bodies: Query<&CelestialBody>,
     q_body_decls: Query<&lunco_celestial_spatial_core::CelestialBodyDecl>,
     q_body_entities: Query<(Entity, &CelestialBody)>,
     q_sc: Query<&Spacecraft>,
     q_children: Query<&Children>,
-    local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
+    local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
-    let avatar_ent = match resolve_requested_or_local_avatar(cmd.avatar, local_avatar.as_deref()) {
+    let avatar_ent = match resolve_requested_or_local_avatar(cmd.camera, local_avatar.as_deref()) {
         Ok(entity) => entity,
         Err(message) => {
             warn!(target = ?cmd.target, "[focus] refused: {message}");
@@ -2046,7 +1843,7 @@ fn on_focus_command(
         cinematic_lock,
     )) = q_avatar.get(avatar_ent)
     else {
-        let message = local_avatar_state_error(cmd.avatar);
+        let message = local_avatar_state_error(cmd.camera);
         warn!(target = ?cmd.target, "[focus] refused: {message}");
         replace_avatar_diagnostic(&mut diagnostics, Some(message));
         return;
@@ -2201,8 +1998,8 @@ fn avatar_init_system(
             Option<&ActionState<UserIntent>>,
         ),
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             With<Projection>,
             With<lunco_render::SceneCamera>,
             Without<SpringArmCamera>,
@@ -2218,8 +2015,8 @@ fn avatar_init_system(
     q_proj: Query<
         Entity,
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<AdaptiveNearPlane>,
             With<Projection>,
             With<lunco_render::SceneCamera>,
@@ -2347,7 +2144,7 @@ fn sync_profile(
     mut last_name: Local<Option<String>>,
     mut commands: Commands,
 ) {
-    let session = local.0.0;
+    let session = local.0 .0;
     if *role == NetworkRole::Client && session == 0 {
         *last_sent = None;
         return;
@@ -2409,11 +2206,11 @@ mod tests {
         app.init_resource::<lunco_core::RuntimeDiagnostics>()
             .add_observer(on_focus_command);
 
-        let requested_avatar = app.world_mut().spawn(Avatar).id();
+        let requested_avatar = app.world_mut().spawn(Embodiment).id();
         let target = app.world_mut().spawn_empty().id();
 
         app.world_mut().trigger(FocusTarget {
-            avatar: Some(requested_avatar),
+            camera: Some(requested_avatar),
             target,
         });
         app.world_mut().flush();
@@ -2435,7 +2232,7 @@ mod tests {
             .init_resource::<lunco_core_session::LocalSession>()
             .add_observer(on_possess_command);
 
-        // During a scene/perspective handoff the camera-owned `LocalAvatar`
+        // During a scene/perspective handoff the camera-owned `LocalEmbodiment`
         // marker, Transform, and parent can be absent for one lifecycle tick.
         // The semantic controller source is still alive and must be enough for
         // an interactive possession to install its shared link before the
@@ -2443,7 +2240,7 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                Avatar,
+                Embodiment,
                 ActionState::<lunco_control_core::UserIntent>::default(),
             ))
             .id();
@@ -2452,8 +2249,8 @@ mod tests {
             .spawn(lunco_port_core::InputPorts::new(&["throttle"]))
             .id();
 
-        app.world_mut().trigger(PossessVessel {
-            avatar: Some(avatar),
+        app.world_mut().trigger(AcquireControl {
+            source: Some(avatar),
             target: rover,
             bind_camera: true,
         });
@@ -2485,8 +2282,8 @@ mod tests {
 
         // No local avatar exists. The endpoint is valid, but the camera-binding
         // request must fail before it can publish a registry claim.
-        app.world_mut().trigger(PossessVessel {
-            avatar: None,
+        app.world_mut().trigger(AcquireControl {
+            source: None,
             target,
             bind_camera: true,
         });
@@ -2526,8 +2323,8 @@ mod tests {
             .id();
 
         for target in [first, second] {
-            app.world_mut().trigger(PossessVessel {
-                avatar: None,
+            app.world_mut().trigger(AcquireControl {
+                source: None,
                 target,
                 bind_camera: false,
             });
@@ -2565,7 +2362,7 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
             Query<
                 (),
                 Or<(
@@ -2608,7 +2405,7 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
             Query<
                 (),
                 Or<(
@@ -2649,7 +2446,7 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
             Query<
                 (),
                 Or<(
@@ -2690,7 +2487,7 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
             Query<
                 (),
                 Or<(
@@ -2728,7 +2525,7 @@ mod tests {
             .id();
         let avatar = world
             .spawn((
-                Avatar,
+                Embodiment,
                 lunco_port_core::InputPorts::new(&["forward"]),
                 ChildOf(rover),
             ))
@@ -2736,7 +2533,7 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
             Query<
                 (),
                 Or<(
@@ -2767,12 +2564,12 @@ mod tests {
     fn top_level_avatar_endpoint_is_not_a_possession_target() {
         let mut world = World::new();
         let avatar = world
-            .spawn((Avatar, lunco_port_core::InputPorts::new(&["forward"])))
+            .spawn((Embodiment, lunco_port_core::InputPorts::new(&["forward"])))
             .id();
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
             Query<
                 (),
                 Or<(
@@ -2809,7 +2606,7 @@ mod tests {
 
         let mut state: SystemState<(
             Query<&ChildOf>,
-            Query<&lunco_port_core::InputPorts, Without<Avatar>>,
+            Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
             Query<
                 (),
                 Or<(
@@ -2881,8 +2678,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                Avatar,
-                LocalAvatar,
+                Embodiment,
+                LocalEmbodiment,
                 CellCoord::new(-80_000, 30_000, 20_000),
                 Transform::from_xyz(700.0, -600.0, 500.0),
                 ChildOf(root_grid),
@@ -2905,23 +2702,20 @@ mod tests {
             ))
             .id();
 
-        app.world_mut().trigger(ReleaseVessel { target: avatar });
+        app.world_mut()
+            .trigger(ReleaseControlSource { source: avatar });
         app.world_mut().flush();
 
         let world = app.world();
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), return_cell);
         let restored = world.get::<Transform>(avatar).unwrap();
-        assert!(
-            restored
-                .translation
-                .abs_diff_eq(return_transform.translation, 1e-6)
-        );
-        assert!(
-            restored
-                .rotation
-                .abs_diff_eq(return_transform.rotation, 1e-6)
-        );
+        assert!(restored
+            .translation
+            .abs_diff_eq(return_transform.translation, 1e-6));
+        assert!(restored
+            .rotation
+            .abs_diff_eq(return_transform.rotation, 1e-6));
         assert!(
             !world
                 .resource::<lunco_celestial_spatial_core::OrbitalViewPin>()
@@ -2980,8 +2774,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                Avatar,
-                LocalAvatar,
+                Embodiment,
+                LocalEmbodiment,
                 Camera {
                     is_active: true,
                     ..default()
@@ -2996,7 +2790,7 @@ mod tests {
             .id();
 
         app.world_mut().trigger(FocusTarget {
-            avatar: Some(avatar),
+            camera: Some(avatar),
             target: moon,
         });
         app.world_mut().flush();
@@ -3013,19 +2807,17 @@ mod tests {
         );
 
         app.world_mut().trigger(FocusTarget {
-            avatar: Some(avatar),
+            camera: Some(avatar),
             target: earth,
         });
         app.world_mut().flush();
         let second_snapshot = app.world().get::<OrbitViewReturn>(avatar).unwrap();
         assert_eq!(second_snapshot.parent_grid(), first_snapshot.parent_grid());
         assert_eq!(second_snapshot.cell(), first_snapshot.cell());
-        assert!(
-            second_snapshot
-                .transform()
-                .translation
-                .abs_diff_eq(first_snapshot.transform().translation, 1e-6)
-        );
+        assert!(second_snapshot
+            .transform()
+            .translation
+            .abs_diff_eq(first_snapshot.transform().translation, 1e-6));
         assert_eq!(
             app.world().get::<OrbitCamera>(avatar).unwrap().target,
             earth
@@ -3035,22 +2827,18 @@ mod tests {
             "a body without saved user pose must resolve from the current region"
         );
 
-        app.world_mut().trigger(ReturnFromOrbit { target: avatar });
+        app.world_mut().trigger(ReturnFromOrbit { camera: avatar });
         app.world_mut().flush();
         let world = app.world();
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), original_cell);
         let restored = world.get::<Transform>(avatar).unwrap();
-        assert!(
-            restored
-                .translation
-                .abs_diff_eq(original_transform.translation, 1e-6)
-        );
-        assert!(
-            restored
-                .rotation
-                .abs_diff_eq(original_transform.rotation, 1e-6)
-        );
+        assert!(restored
+            .translation
+            .abs_diff_eq(original_transform.translation, 1e-6));
+        assert!(restored
+            .rotation
+            .abs_diff_eq(original_transform.rotation, 1e-6));
         assert_eq!(
             world.get::<SurfaceCamera>(avatar).unwrap().heading,
             original_surface.heading
@@ -3091,8 +2879,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                Avatar,
-                LocalAvatar,
+                Embodiment,
+                LocalEmbodiment,
                 CellCoord::ZERO,
                 Transform::from_xyz(0.0, 0.0, 100.0),
                 ChildOf(grid),
@@ -3110,7 +2898,7 @@ mod tests {
             .id();
 
         app.world_mut().trigger(FocusTarget {
-            avatar: Some(avatar),
+            camera: Some(avatar),
             target: earth,
         });
         app.world_mut().flush();
@@ -3141,7 +2929,7 @@ mod tests {
         );
 
         app.world_mut().trigger(FocusTarget {
-            avatar: Some(avatar),
+            camera: Some(avatar),
             target: moon,
         });
         app.world_mut().flush();
@@ -3174,8 +2962,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                Avatar,
-                LocalAvatar,
+                Embodiment,
+                LocalEmbodiment,
                 OrbitCamera {
                     target: body,
                     distance: 12_000.0,
@@ -3216,7 +3004,7 @@ mod tests {
         app.add_observer(clear_orbit_view_history_on_twin_closed);
         let avatar = app
             .world_mut()
-            .spawn((Avatar, LocalAvatar, OrbitViewHistory::default()))
+            .spawn((Embodiment, LocalEmbodiment, OrbitViewHistory::default()))
             .id();
 
         app.world_mut().trigger(lunco_workspace::TwinClosed {
@@ -3284,8 +3072,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                Avatar,
-                LocalAvatar,
+                Embodiment,
+                LocalEmbodiment,
                 Camera {
                     is_active: true,
                     ..default()
@@ -3301,7 +3089,7 @@ mod tests {
             .id();
 
         app.world_mut().trigger(FocusTarget {
-            avatar: Some(avatar),
+            camera: Some(avatar),
             target: moon,
         });
         app.world_mut().flush();
@@ -3323,23 +3111,19 @@ mod tests {
             CellCoord::new(-50_000, 20_000, 9_000),
             Transform::from_xyz(700.0, -600.0, 500.0),
         ));
-        app.world_mut().trigger(ReturnFromOrbit { target: avatar });
+        app.world_mut().trigger(ReturnFromOrbit { camera: avatar });
         app.world_mut().flush();
 
         let world = app.world();
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), original_cell);
         let restored_transform = world.get::<Transform>(avatar).unwrap();
-        assert!(
-            restored_transform
-                .translation
-                .abs_diff_eq(original_transform.translation, 1e-6)
-        );
-        assert!(
-            restored_transform
-                .rotation
-                .abs_diff_eq(original_transform.rotation, 1e-6)
-        );
+        assert!(restored_transform
+            .translation
+            .abs_diff_eq(original_transform.translation, 1e-6));
+        assert!(restored_transform
+            .rotation
+            .abs_diff_eq(original_transform.rotation, 1e-6));
         let restored_spring = world.get::<SpringArmCamera>(avatar).unwrap();
         assert_eq!(restored_spring.target, original_spring.target);
         assert_eq!(restored_spring.distance, original_spring.distance);
@@ -3360,260 +3144,6 @@ mod tests {
     }
 
     #[test]
-    fn local_avatar_mounts_into_ready_site_grid() {
-        let mut app = App::new();
-        app.insert_resource(lunco_spatial::WorldGridConfig::default());
-
-        let world_grid = app
-            .world_mut()
-            .spawn((
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::ZERO,
-                Transform::default(),
-                lunco_spatial::WorldGrid,
-            ))
-            .id();
-        let site = app
-            .world_mut()
-            .spawn((
-                lunco_celestial::SiteAnchor,
-                lunco_celestial::GeodeticAnchor {
-                    body: lunco_celestial::ephemeris_id::MOON,
-                    geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
-                },
-                CellCoord::ZERO,
-                Transform::from_xyz(100.0, 2.0, -50.0),
-                ChildOf(world_grid),
-            ))
-            .id();
-        let body = app
-            .world_mut()
-            .spawn(lunco_celestial::CelestialBody {
-                name: "Moon".into(),
-                ephemeris_id: lunco_celestial::ephemeris_id::MOON,
-                radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
-            })
-            .id();
-        let avatar = app
-            .world_mut()
-            .spawn((
-                Avatar,
-                LocalAvatar,
-                CellCoord::ZERO,
-                Transform::from_xyz(110.0, 4.0, -40.0),
-                ChildOf(world_grid),
-            ))
-            .id();
-
-        app.add_systems(PreUpdate, capture_site_camera_pose);
-        app.add_systems(Update, bind_local_avatar_to_site_grid);
-        app.update();
-
-        assert!(app.world().get::<PendingSiteCameraPose>(avatar).is_some());
-        app.world_mut()
-            .entity_mut(site)
-            .insert(lunco_spatial::WorldGridConfig::default().grid());
-        app.update();
-
-        assert_eq!(app.world().get::<ChildOf>(avatar).unwrap().parent(), site);
-        assert_eq!(
-            app.world().get::<GravityBody>(avatar).unwrap().body_entity,
-            body
-        );
-        let avatar_transform = app.world().get::<Transform>(avatar).unwrap();
-        assert!(
-            avatar_transform
-                .translation
-                .abs_diff_eq(Vec3::new(10.0, 2.0, 10.0), 1e-5)
-        );
-    }
-
-    #[test]
-    fn late_avatar_projection_is_captured_after_site_grid_creation() {
-        let mut app = App::new();
-        let world_grid = app
-            .world_mut()
-            .spawn((
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::ZERO,
-                Transform::default(),
-                lunco_spatial::WorldGrid,
-            ))
-            .id();
-        let site = app
-            .world_mut()
-            .spawn((
-                lunco_celestial::SiteAnchor,
-                lunco_celestial::GeodeticAnchor {
-                    body: lunco_celestial::ephemeris_id::MOON,
-                    geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
-                },
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::ZERO,
-                Transform::default(),
-                ChildOf(world_grid),
-            ))
-            .id();
-        let avatar = app
-            .world_mut()
-            .spawn((
-                Avatar,
-                LocalAvatar,
-                CellCoord::ZERO,
-                Transform::from_xyz(45.0, 22.0, 28.0),
-                ChildOf(world_grid),
-            ))
-            .id();
-
-        // The scene frame is already live, but USD projection has only just
-        // produced the avatar. Its loader-grid pose is still the authored
-        // site-local pose and must be captured before the binder reparents it.
-        app.configure_sets(Update, AvatarSceneHandoffSet);
-        app.add_systems(
-            Update,
-            capture_site_camera_pose
-                .run_if(site_camera_capture_changed)
-                .in_set(AvatarSceneHandoffSet),
-        );
-        app.update();
-
-        let pending = app
-            .world()
-            .get::<PendingSiteCameraPose>(avatar)
-            .expect("late local avatar must retain its loader-relative pose");
-        assert_eq!(pending.site_root, site);
-        assert_eq!(pending.position, DVec3::new(45.0, 22.0, 28.0));
-        assert_eq!(pending.rotation, DQuat::IDENTITY);
-    }
-
-    #[test]
-    fn late_avatar_projection_uses_the_mounted_site_frame() {
-        let mut app = App::new();
-        let world_grid = app
-            .world_mut()
-            .spawn((
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::ZERO,
-                Transform::default(),
-                lunco_spatial::WorldGrid,
-            ))
-            .id();
-        let surface_grid = app
-            .world_mut()
-            .spawn((
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::ZERO,
-                Transform::default(),
-                ChildOf(world_grid),
-            ))
-            .id();
-        let site = app
-            .world_mut()
-            .spawn((
-                lunco_celestial::SiteAnchor,
-                lunco_celestial::GeodeticAnchor {
-                    body: lunco_celestial::ephemeris_id::MOON,
-                    geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
-                },
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::ZERO,
-                Transform::from_xyz(100.0, 0.0, 0.0),
-                ChildOf(surface_grid),
-            ))
-            .id();
-        let avatar = app
-            .world_mut()
-            .spawn((
-                Avatar,
-                LocalAvatar,
-                CellCoord::ZERO,
-                Transform::from_xyz(110.0, 0.0, 0.0),
-                ChildOf(world_grid),
-            ))
-            .id();
-
-        app.configure_sets(Update, AvatarSceneHandoffSet);
-        app.add_systems(
-            Update,
-            capture_site_camera_pose
-                .run_if(site_camera_capture_changed)
-                .in_set(AvatarSceneHandoffSet),
-        );
-        app.update();
-
-        let pending = app
-            .world()
-            .get::<PendingSiteCameraPose>(avatar)
-            .expect("late local avatar must be projected in site coordinates");
-        assert_eq!(pending.site_root, site);
-        assert_eq!(pending.position, DVec3::new(10.0, 0.0, 0.0));
-        assert_eq!(pending.rotation, DQuat::IDENTITY);
-    }
-
-    #[test]
-    fn deferred_avatar_projection_is_captured_at_the_handoff_boundary() {
-        fn project_avatar_once(
-            mut commands: Commands,
-            q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
-            mut projected: Local<bool>,
-        ) {
-            if *projected {
-                return;
-            }
-            *projected = true;
-            let world_grid = q_world_grid.single().unwrap();
-            commands.spawn((
-                Avatar,
-                LocalAvatar,
-                CellCoord::ZERO,
-                Transform::from_xyz(45.0, 22.0, 28.0),
-                ChildOf(world_grid),
-            ));
-        }
-
-        let mut app = App::new();
-        app.configure_sets(Update, AvatarSceneHandoffSet);
-        let world_grid = app
-            .world_mut()
-            .spawn((
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::ZERO,
-                Transform::default(),
-                lunco_spatial::WorldGrid,
-            ))
-            .id();
-        app.world_mut().spawn((
-            lunco_celestial::SiteAnchor,
-            lunco_celestial::GeodeticAnchor {
-                body: lunco_celestial::ephemeris_id::MOON,
-                geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
-            },
-            lunco_spatial::WorldGridConfig::default().grid(),
-            CellCoord::ZERO,
-            Transform::default(),
-            ChildOf(world_grid),
-        ));
-        app.add_systems(
-            Update,
-            (
-                project_avatar_once,
-                capture_site_camera_pose.run_if(site_camera_capture_changed),
-            )
-                .chain()
-                .in_set(AvatarSceneHandoffSet),
-        );
-
-        app.update();
-
-        let position = {
-            let world = app.world_mut();
-            let mut query = world.query::<&PendingSiteCameraPose>();
-            query.single(world).unwrap().position
-        };
-        assert_eq!(position, DVec3::new(45.0, 22.0, 28.0));
-    }
-
-    #[test]
     fn avatar_init_does_not_reinsert_freeflight_over_surface_camera() {
         let mut app = App::new();
         app.init_resource::<InputBindingsSettings>();
@@ -3622,8 +3152,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                Avatar,
-                LocalAvatar,
+                Embodiment,
+                LocalEmbodiment,
                 Transform::default(),
                 Projection::Perspective(PerspectiveProjection::default()),
                 SurfaceCamera {
@@ -3636,8 +3166,8 @@ mod tests {
         let camera_less_avatar = app
             .world_mut()
             .spawn((
-                Avatar,
-                LocalAvatar,
+                Embodiment,
+                LocalEmbodiment,
                 Transform::default(),
                 Projection::Perspective(PerspectiveProjection::default()),
             ))
@@ -3673,7 +3203,7 @@ mod tests {
     /// **A retired avatar camera must leave the viewport candidate pool.**
     ///
     /// A host-created camera can outlive a scene load because it is not owned by a
-    /// USD prim. When an incoming scene claims `LocalAvatar`, this observer adds
+    /// USD prim. When an incoming scene claims `LocalEmbodiment`, this observer adds
     /// the render-owned retirement marker to the former camera and removes its
     /// `SceneCamera` intent marker. The marker hook makes it inactive
     /// synchronously, while camera selection excludes it before the replacement's
@@ -3684,7 +3214,7 @@ mod tests {
     #[test]
     fn demoted_avatar_camera_stops_being_a_viewport_candidate() {
         let mut app = App::new();
-        app.init_resource::<lunco_avatar_core::roles::TheLocalAvatar>();
+        app.init_resource::<lunco_embodiment_core::roles::TheLocalEmbodiment>();
         app.add_observer(demote_former_avatar);
 
         let old = app
@@ -3695,8 +3225,8 @@ mod tests {
                     None,
                     lunco_render::RenderingQuality::Balanced.profile(),
                 ),
-                lunco_avatar_core::roles::Avatar,
-                LocalAvatar,
+                lunco_embodiment_core::roles::Embodiment,
+                LocalEmbodiment,
             ))
             .id();
         assert!(
@@ -3718,15 +3248,15 @@ mod tests {
                     None,
                     lunco_render::RenderingQuality::Balanced.profile(),
                 ),
-                lunco_avatar_core::roles::Avatar,
-                LocalAvatar,
+                lunco_embodiment_core::roles::Embodiment,
+                LocalEmbodiment,
             ))
             .id();
         app.update();
 
         assert_eq!(
             app.world()
-                .resource::<lunco_avatar_core::roles::TheLocalAvatar>()
+                .resource::<lunco_embodiment_core::roles::TheLocalEmbodiment>()
                 .0,
             Some(new),
             "the incoming camera holds the avatar role"

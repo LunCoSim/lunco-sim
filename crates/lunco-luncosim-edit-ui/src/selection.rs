@@ -13,9 +13,9 @@ use bevy::camera::primitives::Aabb;
 use bevy::math::primitives::Cuboid;
 use bevy::math::Isometry3d;
 
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_core::{on_command, register_commands, Command};
-use lunco_cosim_core::ControlLink;
+use lunco_control_core::ControlLink;
 use lunco_luncosim_edit_core::SpawnState;
 use lunco_luncosim_edit_gizmo_ui::GizmoSelected;
 use lunco_scene_selection::{
@@ -360,7 +360,7 @@ pub(crate) fn clear_selection(
 /// Releasing control leaves the last vessel focused, just as it leaves the
 /// camera at its current view.
 pub fn select_possessed_vessel(
-    q_avatar: Query<Ref<ControlLink>, (With<Avatar>, With<LocalAvatar>)>,
+    q_avatar: Query<Ref<ControlLink>, (With<Embodiment>, With<LocalEmbodiment>)>,
     q_old: Query<Entity, With<Selected>>,
     mut selected: ResMut<SelectedEntities>,
     mut inspector_target: ResMut<SelectionTarget>,
@@ -1206,7 +1206,7 @@ mod tests {
             .push(previously_selected);
         let vessel = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .spawn((Avatar, LocalAvatar, ControlLink { target: vessel }));
+            .spawn((Embodiment, LocalEmbodiment, ControlLink { target: vessel }));
 
         app.update();
 

@@ -6,7 +6,7 @@
 **Input**: 5-Layer Action-to-Actuator Technical Architecture (Avian & Leafwing).
 
 ## Problem Statement
-To serve as a high-fidelity digital twin, LunCoSim treats all simulated entities as **Physical Plants** strictly decoupled from their controlling logic. The human operator interacts with this world through an **Avatar** that possesses an entity-specific **Controller**, bridging the gap between human intent and robotic flight software.
+To serve as a high-fidelity digital twin, LunCoSim treats all simulated entities as **Physical Plants** strictly decoupled from their controlling logic. The human operator interacts with this world through an **Embodiment** that possesses an entity-specific **Controller**, bridging the gap between human intent and robotic flight software.
 
 ### Core Principles
 - **Plugin First**: Every feature (OBC, FSW, Propagator) MUST be implemented as a modular Bevy Plugin.
@@ -95,8 +95,8 @@ As a developer, I want to validate the 5-layer architecture with a concrete "Sta
     - **2x Steering Motors**: Independent steering on the 2 front wheels.
 
 **Interaction Logic:**
-- **Initial State**: Avatar starts unpossessed (Free-cam).
-- **Possession Handover**: Avatar can "Enter" the rover to enable control.
+- **Initial State**: Embodiment starts unpossessed (Free-cam).
+- **Possession Handover**: Embodiment can "Enter" the rover to enable control.
 - **Controls**:
     - **W/S**: Drive (Forward/Backward torque).
     - **A/D**: Steer (Left/Right front wheel rotation).
@@ -179,16 +179,16 @@ Bevy defaults to **Y-Up**. External aerospace software (Fprime, ROS) defaults to
 
 ## User Scenarios
 
-### User Story 1 - Avatar Possession & Orbit Interaction (Priority: P1)
-As a user, I want my **Avatar** to be the primary interactive element in the world:
-- By default, the Avatar operates as a free-camera, moving freely through the 3D space using the `WASDQE` keys.
-- By holding the **Right Mouse Button**, I can drag to rotate the Avatar's view direction.
-- **Possession & Orbit**: When I **Click on the rover**, the Avatar "possesses" the vessel. The camera switches to **Orbit Mode**, centering the rover.
+### User Story 1 - Embodiment Possession & Orbit Interaction (Priority: P1)
+As a user, I want my **Embodiment** to be the primary interactive element in the world:
+- By default, the Embodiment operates as a free-camera, moving freely through the 3D space using the `WASDQE` keys.
+- By holding the **Right Mouse Button**, I can drag to rotate the Embodiment's view direction.
+- **Possession & Orbit**: When I **Click on the rover**, the Embodiment "possesses" the vessel. The camera switches to **Orbit Mode**, centering the rover.
 - **Controllers**: While possessed, `WASD` commands move the rover; **Right Click + Drag** orbits the camera around the vessel.
-- **Release**: By pressing **Backspace**, the Avatar terminates possession, releasing the rover and returning to free-camera mode.
+- **Release**: By pressing **Backspace**, the Embodiment terminates possession, releasing the rover and returning to free-camera mode.
 
 ### User Story 2 - CLI Command Overhaul (Priority: P1)
-As a mission operator, I want to bypass the Avatar and Controller by sending a raw `CMD_REBOOT` directly to the FSW via the command-line interface (CLI).
+As a mission operator, I want to bypass the Embodiment and Controller by sending a raw `CMD_REBOOT` directly to the FSW via the command-line interface (CLI).
 
 ### User Story 3 - Automated Success Verifiers (Priority: P1)
 As a QA lead, I want to run 1,000 headless simulations of a rover landing to gather statistical success data without GPU overhead or windowing requirements.
@@ -201,7 +201,7 @@ As a mission operator, I want to view and modify dynamic component configuration
 ## Requirements
 
 ### Functional Requirements
-- **FR-001**: **Unified Action Bus**: Every Avatar executes an Action Bus (using `leafwing-input-manager` style mapping).
+- **FR-001**: **Unified Action Bus**: Every Embodiment executes an Action Bus (using `leafwing-input-manager` style mapping).
 - **FR-002**: **Command Handover**: The Flight Software MUST expose a unified interface for receiving **Commands** from the Controller, CLI, or internal autonomous sequences.
 - **FR-003**: **OBC Hardware Emulation**: The OBC MUST maintain a persistent state of its I/O registers, allowing telemetry probes to read real-time "Port Levels".
 - **FR-005**: **f64 Physical Fidelity**: All physics calculations MUST be performed in **f64 (double precision)** using Avian3D.
@@ -212,4 +212,4 @@ As a mission operator, I want to view and modify dynamic component configuration
 - **FR-010**: **Testability Mandate**: Every Level 2, 3, and 4 component MUST be implementable in a mockable way, allowing for isolated unit testing of logic without the full physics engine.
 
 ### Key Entities & Terminology
-For a complete definition of all entities (Avatar, Space System, Controller, OBC, etc.) and architectural terminology, refer to the authoritative **[Engineering Ontology](../../docs/architecture/01-ontology.md)**.
+For a complete definition of all entities (Embodiment, Space System, Controller, OBC, etc.) and architectural terminology, refer to the authoritative **[Engineering Ontology](../../docs/architecture/01-ontology.md)**.

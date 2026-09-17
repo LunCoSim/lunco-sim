@@ -116,12 +116,12 @@ As a mission observer, I want to view the Earth, Moon, and Sun system from a det
 
 ### User Story 2 - Exponential Multi-Scale Camera with Ground View (Priority: P1)
 
-As a user, I want to seamlessly zoom from a view of the entire Earth-Moon system down to the lunar surface, and transition into a "Ground View" (Rover/Avatar) mode where the UI and character movement remain responsive regardless of simulation speed.
+As a user, I want to seamlessly zoom from a view of the entire Earth-Moon system down to the lunar surface, and transition into a "Ground View" (Rover/Embodiment) mode where the UI and character movement remain responsive regardless of simulation speed.
 
 **Acceptance Scenarios**:
 
 1.  **Given** the camera is zooming, **When** the distance to the target changes by orders of magnitude, **Then** `big_space` nestable grids manage coordinate precision — the camera operates within the target body's local grid.
-2.  **Given** the camera is within 1km of the surface, **When** the user selects "Ground View", **Then** the ObserverCamera is deactivated and the AvatarCamera is activated. The Avatar's movement and the UI animations use **Application Clock (independent of Celestial Clock speed)**.
+2.  **Given** the camera is within 1km of the surface, **When** the user selects "Ground View", **Then** the ObserverCamera is deactivated and the AvatarCamera is activated. The Embodiment's movement and the UI animations use **Application Clock (independent of Celestial Clock speed)**.
 3.  **Given** the camera transitions from Earth-focused to Moon-focused, **Then** the `big_space` floating origin smoothly re-parents into the Moon's nested grid without visual discontinuity.
 
 ### User Story 3 - Detailed Mission Trajectory & Customizable Overlays (Priority: P2)
@@ -193,7 +193,7 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
 -   **FR-009**: **Mouse Interaction**: Select focus targets via raycasting on celestial bodies.
 -   **FR-010**: **Basic Clock Architecture**: Two clocks owned by this spec:
     -   **Celestial Clock**: Julian Date TDB internally, UTC for display. Scrubbable (X1 to X1M). Drives ephemeris queries and body positions.
-    -   **Application Clock**: Standard Bevy `Time` (always 1.0×). Drives UI, Camera, and Avatar movement.
+    -   **Application Clock**: Standard Bevy `Time` (always 1.0×). Drives UI, Camera, and Embodiment movement.
     -   *(The Robotics Clock and advanced PhysicsMode transitions are deferred — advanced time/PhysicsMode, not yet specced.)*
 -   **FR-011**: **Pluggable Gravity Model Architecture**: A `trait GravityModel` interface that allows different gravity implementations per body and per scale. This spec implements **point-mass gravity** as the default. The global avian `Gravity` resource is set by the celestial plugin based on the nearest body (AD-2).
     -   **Surface gravity**: Constant downward vector derived from body's GM and radius.

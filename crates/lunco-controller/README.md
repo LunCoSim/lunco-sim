@@ -20,10 +20,14 @@ The controller acts as the **Human-Machine Interface (HMI)** layer, decoupling r
 
 ```
 lunco-controller/
-  ├── UserIntent            — shared abstract action vocabulary
-  ├── ControlLink       — Component from lunco-cosim-core linking a producer to a target
+  ├── UserIntent            — shared abstract action vocabulary (from lunco-control-core)
+  ├── ControlLink       — Component from lunco-control-core linking a producer to a target
   └── lib.rs             — translation, authority, and input injection
 ```
+
+The generic `InteractionControlSet` schedule boundary is owned by
+`lunco-control-core`; this adapter only installs producers and consumers into
+that boundary.
 
 ## Usage
 

@@ -30,7 +30,7 @@
 use bevy::camera::{primitives::Aabb, RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_avatar_core::roles::{LocalAvatar, TheLocalAvatar};
+use lunco_embodiment_core::roles::{LocalEmbodiment, TheLocalEmbodiment};
 use lunco_camera_core::DEFAULT_PRESENTATION_HOOK;
 use lunco_core::{on_command, Command};
 use lunco_hooks::HookValue;
@@ -136,7 +136,7 @@ pub struct StandalonePresentationLight;
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct StandalonePresentationState {
     /// Whether the current host requests a generated presentation when an
-    /// authored camera-track/LocalAvatar presentation is absent.
+    /// authored camera-track/LocalEmbodiment presentation is absent.
     pub enabled: bool,
     /// Active scene root that owns the generated presentation, if any.
     pub root: Option<Entity>,
@@ -233,7 +233,7 @@ impl StandalonePresentationSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DefaultPresentationAction {
     None,
-    Avatar,
+    Embodiment,
     Generated,
 }
 
@@ -275,7 +275,7 @@ fn default_presentation_action(
     })?;
     match value.as_str() {
         Some("none") => Ok(DefaultPresentationAction::None),
-        Some("avatar") => Ok(DefaultPresentationAction::Avatar),
+        Some("avatar") => Ok(DefaultPresentationAction::Embodiment),
         Some("generated") => Ok(DefaultPresentationAction::Generated),
         Some(other) => Err(format!(
             "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' returned unsupported action '{other}'"
@@ -289,7 +289,7 @@ fn default_presentation_action(
 /// Mandatory presentation contract for a windowed scene.
 ///
 /// The render host opts into `required`. The USD projection owns the verdict:
-/// an authored camera track/LocalAvatar or an explicit standalone presentation
+/// an authored camera track/LocalEmbodiment or an explicit standalone presentation
 /// must resolve to a window camera. A missing or invalid contract is not
 /// repaired by choosing an authored camera; the scene admission owner can
 /// reject it and the UI can highlight the finding.
@@ -658,15 +658,15 @@ pub fn on_set_user_camera(
 
 #[on_command(ObserveAvatar)]
 pub fn on_observe_avatar(_trigger: On<ObserveAvatar>, mut commands: Commands) {
-    commands.trigger(lunco_camera_core::RequestLocalAvatarView);
+    commands.trigger(lunco_camera_core::RequestLocalEmbodimentView);
 }
 
-/// Resolve the shared avatar-return intent. Avatar mechanics and the UI use
+/// Resolve the shared avatar-return intent. Embodiment mechanics and the UI use
 /// this same path, so neither can clear the viewport and accidentally leave a
 /// director camera selected behind the scenes.
 pub fn on_request_local_avatar_view(
-    _trigger: On<lunco_camera_core::RequestLocalAvatarView>,
-    local_avatar: Res<TheLocalAvatar>,
+    _trigger: On<lunco_camera_core::RequestLocalEmbodimentView>,
+    local_avatar: Res<TheLocalEmbodiment>,
     q_cameras: Query<(), With<SceneCamera>>,
     mut status: ResMut<CameraSelectionStatus>,
     mut commands: Commands,
@@ -1044,7 +1044,7 @@ pub fn update_camera_origin(
 pub fn update_camera_selection_status(
     selection: Res<ViewportCameraSelection>,
     vp: Res<SceneViewport>,
-    q_cams: Query<(Entity, &Name, &RenderTarget, Has<LocalAvatar>), With<SceneCamera>>,
+    q_cams: Query<(Entity, &Name, &RenderTarget, Has<LocalEmbodiment>), With<SceneCamera>>,
     q_tracks: Query<(), With<crate::camera_track::CameraTrackPlan>>,
     mut status: ResMut<CameraSelectionStatus>,
     mut commands: Commands,
@@ -1093,7 +1093,7 @@ pub fn camera_selection_status_changed(
                 Added<SceneCamera>,
                 Changed<Name>,
                 Changed<RenderTarget>,
-                Changed<LocalAvatar>,
+                Changed<LocalEmbodiment>,
             )>,
         ),
     >,
@@ -1110,7 +1110,7 @@ pub fn camera_selection_status_changed(
 }
 
 /// Keep a windowed standalone USD assembly presentable when it has no authored
-/// camera track or LocalAvatar camera. This is an explicit host policy, not a
+/// camera track or LocalEmbodiment camera. This is an explicit host policy, not a
 /// fallback in the camera reconciler: the generated camera and light are
 /// parented below the active USD scene root and are removed at the scene
 /// boundary or as soon as an authored presentation takes ownership.
@@ -1139,7 +1139,7 @@ pub(crate) struct StandalonePresentationQueries<'w, 's> {
         Entity,
         (
             With<SceneCamera>,
-            With<LocalAvatar>,
+            With<LocalEmbodiment>,
             Without<StandalonePresentationCamera>,
         ),
     >,
@@ -1396,7 +1396,7 @@ pub(crate) fn ensure_standalone_presentation(
         publish_standalone_presentation_diagnostic(&mut diagnostics, None);
         return;
     }
-    if action == DefaultPresentationAction::Avatar {
+    if action == DefaultPresentationAction::Embodiment {
         despawn_generated_presentation(
             &generated_entities,
             &mut selection,
@@ -1404,7 +1404,7 @@ pub(crate) fn ensure_standalone_presentation(
             &mut commands,
         );
         let message =
-            "[camera-policy] policy selected avatar presentation, but no valid LocalAvatar camera is available"
+            "[camera-policy] policy selected avatar presentation, but no valid LocalEmbodiment camera is available"
                 .to_string();
         let enabled = presentation.enabled;
         presentation.set_if_neq(StandalonePresentationState {
@@ -1737,7 +1737,7 @@ pub(crate) struct CameraContractInputQueries<'w, 's> {
                 Added<SceneCamera>,
                 Changed<Name>,
                 Changed<UsdPrimPath>,
-                Changed<LocalAvatar>,
+                Changed<LocalEmbodiment>,
             )>,
         ),
     >,
@@ -1837,7 +1837,7 @@ pub(crate) fn camera_contract_inputs_changed(
 /// names, and multiple mounted stages are errors owned by the camera domain.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AuthoredAvatarSelection<'w, 's> {
-    local_avatar: Res<'w, TheLocalAvatar>,
+    local_avatar: Res<'w, TheLocalEmbodiment>,
     retiring: Query<'w, 's, (), With<lunco_render::CameraRetiring>>,
 }
 
@@ -1867,7 +1867,7 @@ pub(crate) fn validate_authored_camera_contract(
         (&UsdPrimPath, Option<&crate::camera_track::CameraTrackPlan>),
         With<crate::camera_track::CameraTrack>,
     >,
-    cameras: Query<(Entity, &Name, &UsdPrimPath, Has<LocalAvatar>), With<SceneCamera>>,
+    cameras: Query<(Entity, &Name, &UsdPrimPath, Has<LocalEmbodiment>), With<SceneCamera>>,
     presentation_queries: AuthoredPresentationQueries,
     selection: Res<ViewportCameraSelection>,
     avatar_selection: AuthoredAvatarSelection,
@@ -2042,23 +2042,23 @@ pub(crate) fn validate_authored_camera_contract(
                 &avatar_selection.retiring,
                 &mut commands,
             ) {
-                Ok(DefaultPresentationAction::Avatar) => {}
+                Ok(DefaultPresentationAction::Embodiment) => {}
                 Ok(DefaultPresentationAction::None) => errors.push(
                     "[camera-contract] the default presentation policy selected no initial camera"
                         .to_string(),
                 ),
                 Ok(DefaultPresentationAction::Generated) => errors.push(
-                    "[camera-policy] the default presentation policy selected generated framing while a LocalAvatar camera is authored"
+                    "[camera-policy] the default presentation policy selected generated framing while a LocalEmbodiment camera is authored"
                         .to_string(),
                 ),
                 Err(error) => errors.push(format!("[camera-policy] {error}")),
             },
             [] => errors.push(
-                "[camera-contract] scene has no authored CameraTrack or LocalAvatar initial presentation"
+                "[camera-contract] scene has no authored CameraTrack or LocalEmbodiment initial presentation"
                     .to_string(),
             ),
             names => errors.push(format!(
-                "[camera-contract] scene has multiple LocalAvatar initial presentations: {}",
+                "[camera-contract] scene has multiple LocalEmbodiment initial presentations: {}",
                 names.join(", ")
             )),
         }
@@ -2112,18 +2112,18 @@ pub(crate) fn validate_authored_camera_contract(
     }
 }
 
-/// Ask the application policy whether a valid authored LocalAvatar camera should
+/// Ask the application policy whether a valid authored LocalEmbodiment camera should
 /// become the initial presentation. The role slot, not ECS iteration order,
 /// supplies the candidate identity. A `none` decision is returned to the
 /// contract validator; it is not converted into another camera.
 fn request_authored_local_avatar_view(
-    cameras: &Query<(Entity, &Name, &UsdPrimPath, Has<LocalAvatar>), With<SceneCamera>>,
+    cameras: &Query<(Entity, &Name, &UsdPrimPath, Has<LocalEmbodiment>), With<SceneCamera>>,
     tracks: &Query<
         (&UsdPrimPath, Option<&crate::camera_track::CameraTrackPlan>),
         With<crate::camera_track::CameraTrack>,
     >,
     selection: &Res<ViewportCameraSelection>,
-    local_avatar: &TheLocalAvatar,
+    local_avatar: &TheLocalEmbodiment,
     retiring: &Query<(), With<lunco_render::CameraRetiring>>,
     commands: &mut Commands,
 ) -> Result<DefaultPresentationAction, String> {
@@ -2131,7 +2131,7 @@ fn request_authored_local_avatar_view(
         return Ok(DefaultPresentationAction::None);
     }
     let target = local_avatar.0.ok_or_else(|| {
-        "the LocalAvatar camera is present but the authoritative role slot is empty".to_string()
+        "the LocalEmbodiment camera is present but the authoritative role slot is empty".to_string()
     })?;
     if retiring.get(target).is_ok()
         || !cameras
@@ -2139,12 +2139,12 @@ fn request_authored_local_avatar_view(
             .any(|(entity, _, _, local)| entity == target && local)
     {
         return Err(
-            "the LocalAvatar role slot does not identify a live SceneCamera candidate".to_string(),
+            "the LocalEmbodiment role slot does not identify a live SceneCamera candidate".to_string(),
         );
     }
     let action =
         default_presentation_action(false, cameras.iter().count(), tracks.iter().count(), 1)?;
-    if action == DefaultPresentationAction::Avatar {
+    if action == DefaultPresentationAction::Embodiment {
         commands.trigger(ActivateCamera::policy(target));
     }
     Ok(action)
@@ -2276,7 +2276,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<SceneViewport>()
-            .init_resource::<TheLocalAvatar>()
+            .init_resource::<TheLocalEmbodiment>()
             .init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraSelectionStatus>()
             .init_resource::<StandalonePresentationState>()
@@ -2565,7 +2565,7 @@ mod tests {
             .init_resource::<StandalonePresentationState>()
             .init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraSelectionStatus>()
-            .init_resource::<TheLocalAvatar>()
+            .init_resource::<TheLocalEmbodiment>()
             .add_systems(Update, validate_authored_camera_contract);
 
         let root = app
@@ -2942,13 +2942,13 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<SceneViewport>()
-            .init_resource::<TheLocalAvatar>()
+            .init_resource::<TheLocalEmbodiment>()
             .init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraSelectionStatus>()
             .add_systems(Update, reconcile_scene_viewport);
 
         app.world_mut()
-            .spawn((window_cam(false, "Avatar"), LocalAvatar));
+            .spawn((window_cam(false, "Embodiment"), LocalEmbodiment));
         app.update();
 
         assert_eq!(
@@ -2964,7 +2964,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<SceneViewport>()
-            .init_resource::<TheLocalAvatar>()
+            .init_resource::<TheLocalEmbodiment>()
             .init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraSelectionStatus>()
             .add_observer(on_activate_camera)
@@ -2972,19 +2972,19 @@ mod tests {
 
         let old = app
             .world_mut()
-            .spawn((SceneCamera::default(), LocalAvatar))
+            .spawn((SceneCamera::default(), LocalEmbodiment))
             .id();
         let new = app
             .world_mut()
-            .spawn((SceneCamera::default(), LocalAvatar))
+            .spawn((SceneCamera::default(), LocalEmbodiment))
             .id();
 
         // The old role removal is deferred by the component hook, but the
         // authoritative slot already names the newest claimant.
-        assert_eq!(app.world().resource::<TheLocalAvatar>().0, Some(new));
+        assert_eq!(app.world().resource::<TheLocalEmbodiment>().0, Some(new));
         assert!(app.world().get::<SceneCamera>(old).is_some());
         app.world_mut()
-            .trigger(lunco_camera_core::RequestLocalAvatarView);
+            .trigger(lunco_camera_core::RequestLocalEmbodimentView);
         app.world_mut().flush();
 
         assert_eq!(
@@ -3003,7 +3003,7 @@ mod tests {
             .init_resource::<StandalonePresentationState>()
             .init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraSelectionStatus>()
-            .init_resource::<TheLocalAvatar>()
+            .init_resource::<TheLocalEmbodiment>()
             .add_observer(on_activate_camera)
             .add_systems(Update, validate_authored_camera_contract);
         app.world_mut()
@@ -3030,7 +3030,7 @@ mod tests {
                     stage_handle: Handle::default(),
                     path: "/Scene/Old".into(),
                 },
-                LocalAvatar,
+                LocalEmbodiment,
             ))
             .id();
         let new = app
@@ -3042,12 +3042,12 @@ mod tests {
                     stage_handle: Handle::default(),
                     path: "/Scene/New".into(),
                 },
-                LocalAvatar,
+                LocalEmbodiment,
             ))
             .id();
 
         assert_eq!(
-            app.world().resource::<TheLocalAvatar>().0,
+            app.world().resource::<TheLocalEmbodiment>().0,
             Some(new),
             "the role hook has already published the newest claimant"
         );

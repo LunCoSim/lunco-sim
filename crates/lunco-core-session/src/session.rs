@@ -1262,7 +1262,7 @@ pub fn authorize_policy(
 /// halves are the rule; either alone is not.
 ///
 /// The generic claim transition asks this predicate before claiming an endpoint. A
-/// higher-level command such as `PossessVessel` composes that transition with its
+/// higher-level command such as `AcquireControl` composes that transition with its
 /// local `ControlLink` and camera transaction, so a policy-approved takeover cannot
 /// leave those state changes in disagreement.
 ///
@@ -1481,7 +1481,7 @@ mod tests {
         let drive_down = authorize(&reg, &rbac, &pol, &down, A, "SetPorts", Some(R1));
         // …but only DRIVING is refused — a blackout must not lock a student out of
         // possessing, looking around, or the tutorial's own commands.
-        let possess_down = authorize(&reg, &rbac, &pol, &down, A, "PossessVessel", Some(R1));
+        let possess_down = authorize(&reg, &rbac, &pol, &down, A, "AcquireControl", Some(R1));
         // And a DIFFERENT vessel is unaffected: the fact is per-target.
         let other_down = authorize(&reg, &rbac, &pol, &down, A, "SetPorts", Some(R2));
 
@@ -1939,7 +1939,7 @@ mod tests {
         assert!(authorize(&reg, &rbac, &pol, &paths, A, "SetPorts", None).is_err());
         // Possession + structural commands are always allowed (arbitration is in
         // `claim`, not the authority gate).
-        assert!(authorize(&reg, &rbac, &pol, &paths, B, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, &paths, B, "AcquireControl", Some(R1)).is_ok());
         assert!(authorize(&reg, &rbac, &pol, &paths, B, "SpawnEntity", None).is_ok());
 
         // An authenticated Observer that *owns* the rover may still drive it:
@@ -1966,7 +1966,7 @@ mod tests {
             &pol,
             &paths,
             A,
-            "PossessVessel",
+            "AcquireControl",
             Some(R1)
         )
         .is_ok());
@@ -2010,7 +2010,7 @@ mod tests {
             &pol,
             &paths,
             A,
-            "PossessVessel",
+            "AcquireControl",
             Some(R1)
         )
         .is_err());
@@ -2080,8 +2080,8 @@ mod tests {
 
         // Observer is rejected for the tightened command…
         assert!(authorize(&reg, &rbac, &pol, &paths, A, "SpawnEntity", None).is_err());
-        // …a still-open command (PossessVessel) is unaffected…
-        assert!(authorize(&reg, &rbac, &pol, &paths, A, "PossessVessel", None).is_ok());
+        // …a still-open command (AcquireControl) is unaffected…
+        assert!(authorize(&reg, &rbac, &pol, &paths, A, "AcquireControl", None).is_ok());
         // …and an Operator passes the tightened command.
         assert!(authorize(&reg, &rbac, &pol, &paths, B, "SpawnEntity", None).is_ok());
 

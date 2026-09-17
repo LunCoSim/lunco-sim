@@ -19,7 +19,7 @@ pub(crate) struct SnapChannel;
 /// (and, Phase 3, the asset chunk stream). Separate from [`CmdChannel`] so a
 /// large manifest / a multi-MB asset transfer can't head-of-line-block the
 /// join-critical, latency-sensitive traffic on `CmdChannel` (Handshake,
-/// Ownership, Profiles, PossessVessel, spawn). Both are `OrderedReliable`;
+/// Ownership, Profiles, AcquireControl, spawn). Both are `OrderedReliable`;
 /// they're independent lightyear channels, so backpressure on one doesn't
 /// stall the other.
 pub(crate) struct BulkChannel;

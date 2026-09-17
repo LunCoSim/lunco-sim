@@ -7,7 +7,7 @@
 use avian3d::schedule::PhysicsTime;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_cosim_core::{
     BindingEpochDirty, BoundConnection, ConnectionBinding, SimComponent, SimConnection, SimStatus,
     UsdSourcedCosim,
@@ -27,8 +27,8 @@ pub struct UsdSimCosimApiPlugin;
 
 impl Plugin for UsdSimCosimApiPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
-            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
+            app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
         app.add_systems(
             Startup,
@@ -1008,8 +1008,8 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
                 Option<&bevy::camera::RenderTarget>,
                 Has<SceneCamera>,
                 Has<MountedCamera>,
-                Has<Avatar>,
-                Has<LocalAvatar>,
+                Has<Embodiment>,
+                Has<LocalEmbodiment>,
             ),
             With<SceneCamera>,
         >::try_new(world) else {

@@ -6,7 +6,6 @@ use lunco_avatar_camera_core::{
     CAMERA_ZOOM_SENSITIVITY, OrbitReturnBehavior, OrbitViewHistory, OrbitViewReturn, RadialArrival,
     SURFACE_ORBIT_HANDOFF_ALTITUDE_M,
 };
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_avatar_policy::{
     AvatarCollisionSettings, AvatarSoilCollisionPolicy, avatar_soil_collision_policy,
 };
@@ -16,9 +15,11 @@ use lunco_camera_core::{
 };
 use lunco_celestial::{GeodeticAnchor, SiteAnchor};
 use lunco_core::CelestialBody;
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::GravityBody;
 use lunco_interaction_core::DragModeActive;
 use lunco_spatial::ActivePhysicsFrame;
+use lunco_spatial::coords::grid_absolute_seeded;
 use lunco_workspace::WorkspaceResource;
 
 use crate::locomotion::{
@@ -89,8 +90,8 @@ pub(crate) fn freeflight_scroll_transit_system(
             Has<CameraPoseLock>,
         ),
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Or<(With<FreeFlightCamera>, With<SurfaceCamera>)>,
             Without<OrbitCamera>,
             Without<SpringArmCamera>,
@@ -98,7 +99,7 @@ pub(crate) fn freeflight_scroll_transit_system(
     >,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     drag_mode: Option<Res<DragModeActive>>,
@@ -147,7 +148,7 @@ pub(crate) fn freeflight_scroll_transit_system(
             continue;
         }
         // Only the active render camera transits (scenes carry inactive
-        // Avatar-tagged spawn cameras — same guard as `on_focus_command`).
+        // Embodiment-tagged spawn cameras — same guard as `on_focus_command`).
         if !cam.is_some_and(|c| c.is_active) {
             zoom.delta = 0.0;
             continue;
@@ -166,7 +167,12 @@ pub(crate) fn freeflight_scroll_transit_system(
             zoom.delta = 0.0;
             continue;
         };
-        let pos = grid.grid_position_double(&cell, &tf);
+        let Some(pos) = grid_absolute_seeded(avatar_ent, Some(&cell), &tf, &q_parents, &q_grids)
+            .map(|position| position.0)
+        else {
+            zoom.delta = 0.0;
+            continue;
+        };
         let alt = (pos - center).length() - radius_m;
         let factor = zoom_factor(zoom.delta, CAMERA_ZOOM_SENSITIVITY);
         let transition_direction = zoom.delta;

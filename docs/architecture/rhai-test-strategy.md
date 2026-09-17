@@ -430,9 +430,12 @@ exist:
 - `lunco-cosim` and `lunco-modelica-core` tests that construct participants directly;
   these protect generic coupling, parser and solver mechanisms, not authored
   mission policy;
-- avatar teleport/grid tests, render-to-physics writeback tests, and USD
-  projection tests whose public surfaces do not expose the exact frame or
-  lifecycle fact they assert;
+- render-to-physics writeback tests and USD projection tests whose public
+  surfaces do not expose the exact frame or lifecycle fact they assert. The
+  retired avatar rotation/grid, surface-math, and teleport targets were
+  duplicate hand-built workflows; authoritative surface math remains in
+  `lunco-camera-core`, and runtime camera behavior belongs in authored scene
+  tests;
 - orphan or externally-targeted scenario assets, such as
   `assets/scenarios/tests/wheel_sinking_parity.rhai`, until a matching authored
   scene exists. They are not silently counted as production gates.

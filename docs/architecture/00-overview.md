@@ -121,7 +121,7 @@ Arrows point at dependencies, and two edges deserve calling out explicitly:
   `lunco-workbench-widgets`
   and reaches into domain crates for mission-control views, while
   `lunco-avatar-ui` owns Avatar-specific egui presentation over
-  `lunco-avatar-core` and `lunco-avatar-policy`; it does not depend on the
+  `lunco-embodiment-core` and `lunco-avatar-policy`; it does not depend on the
   headless-safe `lunco-avatar` implementation. UI and domain state meet below
   Apps only through these explicit adapters.
 

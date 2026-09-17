@@ -80,7 +80,7 @@ fn on_start(me, ctx) {
                        "LANDER CONTROLS", "LANDER_CONTROLS");
         return;
     }
-    let possessed = cmd("PossessVessel", #{ target: this.lander });
+    let possessed = cmd("AcquireControl", #{ target: this.lander });
     if !possessed.ok {
         this.done = true;
         report_verdict(["production lander could not be possessed: " + possessed.error],

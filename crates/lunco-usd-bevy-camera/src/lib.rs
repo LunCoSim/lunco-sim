@@ -29,8 +29,8 @@ pub struct UsdCameraPlugin;
 
 impl Plugin for UsdCameraPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
-            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
+            app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);

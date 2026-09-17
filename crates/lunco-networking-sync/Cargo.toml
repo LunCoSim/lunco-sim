@@ -19,7 +19,7 @@ leafwing-input-manager = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-transport = { path = "../lunco-assets-transport" }
-lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }

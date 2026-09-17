@@ -12,7 +12,6 @@ use avian3d::prelude::{
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_avatar_policy::{
     AvatarCollisionSettings, AvatarSoilCollisionPolicy, avatar_soil_collision_policy,
 };
@@ -22,9 +21,12 @@ use lunco_camera_core::{
 };
 use lunco_celestial_spatial_core::{LocalGravityField, gravity_up_in_grid};
 use lunco_core::NON_PHYSICAL_QUERY_LAYERS;
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_interaction_core::DragModeActive;
 use lunco_port_core::InputPorts;
 use lunco_spatial::ActivePhysicsFrame;
+use lunco_spatial::attach::local_pose_to_grid_storage;
+use lunco_spatial::coords::grid_absolute_seeded;
 use lunco_workspace::WorkspaceResource;
 
 pub(crate) fn report_avatar_policy_error(error: &str, last_error: &mut Option<String>) {
@@ -54,7 +56,7 @@ pub(crate) fn move_avatar_with_collision(
     collision_settings: &AvatarCollisionSettings,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
 ) -> Option<DVec3> {
     let move_and_slide = move_and_slide?;
     let active_frame = active_frame?;
@@ -70,8 +72,8 @@ pub(crate) fn move_avatar_with_collision(
         return None;
     }
 
-    let source_grid_ref = q_grids.get(source_grid).ok()?;
-    let source_position = source_grid_ref.grid_position_double(cell, transform);
+    let source_position =
+        grid_absolute_seeded(avatar, Some(cell), transform, q_parents, q_grids)?.0;
     if !source_position.is_finite() || !desired_delta.is_finite() || !up_direction.is_finite() {
         return None;
     }
@@ -138,12 +140,13 @@ pub(crate) fn write_avatar_grid_position(
     transform: &mut Transform,
     position: DVec3,
 ) {
-    let (new_cell, new_transform) = grid.translation_to_grid(position);
+    let (new_cell, new_transform) =
+        local_pose_to_grid_storage(grid, position, transform.rotation.as_dquat());
     if *cell != new_cell {
         *cell = new_cell;
     }
-    if transform.translation != new_transform {
-        transform.translation = new_transform;
+    if transform.translation != new_transform.translation {
+        transform.translation = new_transform.translation;
     }
 }
 
@@ -166,14 +169,14 @@ pub(crate) fn apply_fly(
             Option<&SurfaceRelativeMode>,
         ),
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<lunco_camera_core::CameraPoseLock>,
         ),
     >,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     gravity: Res<LocalGravityField>,
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -210,7 +213,12 @@ pub(crate) fn apply_fly(
         let Ok(grid) = q_grids.get(child_of.0) else {
             continue;
         };
-        let current_pos = grid.grid_position_double(&cell, &tf);
+        let Some(current_pos) =
+            grid_absolute_seeded(entity, Some(&cell), &tf, &q_parents, &q_grids)
+                .map(|position| position.0)
+        else {
+            continue;
+        };
         if !has_freeflight && !has_surface_camera && !ctrl_pressed {
             continue;
         }

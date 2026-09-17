@@ -35,7 +35,6 @@ required-features = ["ui"]
 bevy = { workspace = true, optional = true }
 lunco-api = { path = "../lunco-api", optional = true }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
-lunco-avatar-core = { path = "../lunco-avatar-core", optional = true }
 lunco-core = { path = "../lunco-core", optional = true }
 lunco-core-session = { path = "../lunco-core-session", optional = true }
 lunco-cosim-core = { path = "../lunco-cosim-core", optional = true }
@@ -111,7 +110,6 @@ networking = [
     "dep:bevy",
     "dep:lunco-api",
     "dep:lunco-api-transport",
-    "dep:lunco-avatar-core",
     "dep:lunco-core",
     "dep:lunco-core-session",
     "dep:lunco-cosim-core",

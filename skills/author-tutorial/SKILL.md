@@ -67,7 +67,7 @@ fn mission(me, ctx) {
     [
         objective("possess", #{
             text: "Select the rover to take control",
-            requires_event: "cmd:PossessVessel",
+            requires_event: "cmd:AcquireControl",
         }),
         objective("reach_flag", #{
             text: "Drive to the glowing flag",

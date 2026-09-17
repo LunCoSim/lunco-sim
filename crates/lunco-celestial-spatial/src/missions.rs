@@ -99,7 +99,7 @@ pub struct SpacecraftBillboard;
 
 pub fn spacecraft_billboard_system(
     mut q_billboards: Query<(&mut Transform, &ChildOf), With<SpacecraftBillboard>>,
-    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_avatar_core::roles::LocalAvatar>)>,
+    q_camera: Query<&GlobalTransform, (With<Camera>, With<lunco_embodiment_core::roles::LocalEmbodiment>)>,
     q_global: Query<&GlobalTransform>,
 ) {
     let Some(cam_gtf) = q_camera.single().ok() else {

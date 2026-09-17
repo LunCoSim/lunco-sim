@@ -260,9 +260,9 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | **Control** | `SetPorts` | Write a vessel's named input ports (`throttle`/`steer`/`brake` for a rover; any FSW/Modelica/hardware port for other vessels) — the one generic control command. |
 | **Control** | `ClaimControl` / `ReleaseControlClaim` | Claim or release a stable endpoint for the originating session without binding an avatar camera. |
 | **Control** | `SimulateIntentEdge` | Emit one target-scoped semantic `pressed`, `released`, or `pulse` edge for a shared intent; the consuming Rhai/Modelica policy decides its meaning. |
-| **Avatar** | `PossessVessel` | Attach camera and control to a vessel. |
-| | `FollowTarget` | Chase-camera a target. |
-| | `FocusTarget` | Orbit-camera a target. |
+| **Control** | `AcquireControl` | Acquire a target control surface, optionally binding the local presentation rig. |
+| **Camera** | `FollowTarget` | Chase-camera a target through a selected or local camera rig. |
+| | `FocusTarget` | Orbit-camera a target through a selected or local camera rig. |
 | | `CaptureScreenshot` | Trigger an in-sim screenshot. |
 | **USD** | `LoadScene` | Mount or reload a USD stage from a root-qualified `lunco://` or `twin://` address. |
 | | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
@@ -411,26 +411,28 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 The same controls are in the Inspector's **Animation** section. See
 [`19-unified-time-and-clock.md`](19-unified-time-and-clock.md) for the clock model.
 
-### Example: Possess / Follow / Focus
+### Example: Acquire control / Follow / Focus
 
-Three avatar-camera commands, all share `{avatar, target}`:
+The commands use generic producer, camera-rig, and target roles. Omitting
+`source` or `camera` selects the local presentation role where the command
+supports it:
 
 ```bash
 # Take direct control (rover, spacecraft)
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"type":"ExecuteCommand","command":"PossessVessel","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
+  -d '{"type":"ExecuteCommand","command":"AcquireControl","params":{"target":"01ARZ...","bind_camera":true}}'
 
 # Chase camera only — any SelectableRoot (balloons, props)
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"type":"ExecuteCommand","command":"FollowTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
+  -d '{"type":"ExecuteCommand","command":"FollowTarget","params":{"target":"01ARZ..."}}'
 
 # Orbit a celestial body
 curl -X POST http://127.0.0.1:4101/api/commands \
-  -d '{"type":"ExecuteCommand","command":"FocusTarget","params":{"avatar":"01ARZ...","target":"01ARZ..."}}'
+  -d '{"type":"ExecuteCommand","command":"FocusTarget","params":{"target":"01ARZ..."}}'
 ```
 
 Headless controllers can use `ClaimControl` before writing ports and
-`ReleaseControlClaim` when the session relinquishes the endpoint. `PossessVessel`
+`ReleaseControlClaim` when the session relinquishes the endpoint. `AcquireControl`
 combines the same authority transition with the local avatar's `ControlLink`
 and camera binding.
 

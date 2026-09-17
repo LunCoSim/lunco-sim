@@ -16,7 +16,7 @@ fn on_start(me, ctx) {
     this.momentum_flux = 0.0;
     this.exit_dynamic_pressure = 0.0;
     if this.lander >= 0 {
-        let possession = cmd("PossessVessel", #{
+        let possession = cmd("AcquireControl", #{
             target: this.lander,
             bind_camera: false,
         });

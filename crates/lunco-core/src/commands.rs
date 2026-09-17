@@ -141,7 +141,7 @@ pub enum SyncChannel {
     /// **Command Bus** — reliable, ordered, ack'd (XTCE Telecommand /
     /// ROS Service / F′ Command). Client applies optimistically, server
     /// reconciles + acks; stale `parent_gen` is rejected. Examples:
-    /// `PossessVessel`, `AddComponent`, `SetPlacement`, USD prim edits,
+    /// `AcquireControl`, `AddComponent`, `SetPlacement`, USD prim edits,
     /// spawn. Possession/authority arbitration rides here (the ontology's
     /// `AcquireStream` pattern).
     CommandBus,

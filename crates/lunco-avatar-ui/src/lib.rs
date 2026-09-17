@@ -1,24 +1,24 @@
 //! Avatar UI panels — camera mode display and surface coordinates.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt};
 
-use lunco_avatar_core::notifications::ScreenNotifications;
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_avatar_policy::{
-    AVATAR_ALLOW_THROUGH_SOIL_SETTING, AvatarSoilCollisionPolicy, avatar_soil_collision_policy,
+    avatar_soil_collision_policy, AvatarSoilCollisionPolicy, AVATAR_ALLOW_THROUGH_SOIL_SETTING,
 };
 use lunco_camera_core::CameraFollow;
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::LeaveSurface;
 use lunco_celestial_spatial_core::{LocalGravityField, SurfacePoseQuery};
+use lunco_control_core::ControlLink;
 use lunco_control_core::{ControlBinding, UserIntent};
 use lunco_core::GlobalEntityId;
 use lunco_core_session::{SessionProfiles, SessionRegistry};
-use lunco_cosim_core::ControlLink;
-use lunco_input_core::{InputBindingsSettings, resolved_input_label};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
+use lunco_input_core::{resolved_input_label, InputBindingsSettings};
+use lunco_notifications_core::ScreenNotifications;
 
 use lunco_camera_core::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 
@@ -379,7 +379,7 @@ pub fn populate_avatar_status_view(
     mut view: ResMut<AvatarStatusView>,
     palette: Option<Res<lunco_theme::Theme>>,
     gravity: Option<Res<LocalGravityField>>,
-    avatars: Query<Entity, (With<Avatar>, With<LocalAvatar>)>,
+    avatars: Query<Entity, (With<Embodiment>, With<LocalEmbodiment>)>,
     surface_pose: SurfacePoseQuery,
     bodies: Query<&CelestialBody>,
     spring: Query<&SpringArmCamera>,
@@ -463,8 +463,8 @@ pub struct AvatarUiPlugin;
 
 impl Plugin for AvatarUiPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
-            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
+            app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
         app.init_resource::<AvatarStatusView>()
             .init_resource::<RoverNameTagSettings>()
@@ -498,7 +498,7 @@ pub fn draw_rover_name_tags(
     scene_viewport: Option<Res<lunco_viewport_core::SceneViewport>>,
     panel_rects: Option<Res<PanelRects>>,
     net_role: Option<Res<lunco_core_session::NetworkRole>>,
-    q_camera: Query<(&Camera, &GlobalTransform), (With<Avatar>, With<LocalAvatar>)>,
+    q_camera: Query<(&Camera, &GlobalTransform), (With<Embodiment>, With<LocalEmbodiment>)>,
     q_rovers: Query<(&GlobalEntityId, &GlobalTransform)>,
 ) {
     // Solo suppression: name tags label OTHER players, who only exist on a wire.

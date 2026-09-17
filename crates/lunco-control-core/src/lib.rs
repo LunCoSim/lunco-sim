@@ -1,17 +1,33 @@
-//! Generic semantic-control contracts shared by input producers, authored control
+//! Generic control contracts shared by input producers, authored control
 //! bindings, and engine consumers.
 //!
 //! This package owns the semantic input boundary that used to be mixed into
 //! `lunco-core`: the leafwing action vocabulary, authored intent-to-port
-//! bindings, egui input gate, and bounded semantic-edge trace. The generic
-//! engine/port substrate remains in `lunco-core`, so changes to control policy
-//! do not rebuild that high-fanout crate.
+//! bindings, the typed producer/target relationship commands, egui input gate,
+//! and bounded semantic-edge trace. The generic engine/port substrate remains
+//! in `lunco-core`, so changes to control policy do not rebuild that high-fanout
+//! crate.
 
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_core::GlobalEntityId;
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use std::collections::VecDeque;
+
+/// Schedule boundary for semantic control producers and their consumers.
+///
+/// The interaction schedule is the unpaused cadence used by client-local
+/// control producers. Keeping its named boundary in this generic contract
+/// package lets any producer or consumer order itself without depending on a
+/// particular controller implementation.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct InteractionControlSet;
+
+pub mod commands;
+mod control_link;
+
+pub use commands::{AcquireControl, ReleaseControlSource};
+pub use control_link::ControlLink;
 
 // ── User Intent (Input Abstraction) ───────────────────────────────────────────
 
@@ -70,8 +86,8 @@ pub enum UserIntent {
     SwitchMode,
     /// Pauses or unpauses the simulation state.
     Pause,
-    /// Cancel / back out: release possession or plain follow, back to free flight.
-    /// A discrete key intent (default `Backspace`) — see `avatar_escape_possession`.
+    /// Cancel / back out: release an active control relationship or plain follow.
+    /// A discrete key intent (default `Backspace`) — see the consuming runtime.
     /// While an egui field is focused egui consumes the key, so the guard suppresses
     /// this intent that frame and it acts only once the field is defocused.
     Cancel,
@@ -290,14 +306,11 @@ pub struct IntentAnalogState {
     ///
     /// `+x` is pointer-right, `+y` is pointer-down (the raw device convention),
     /// in device units scaled by the capture gain: the producer
-    /// (`lunco_avatar::capture_avatar_intent`) writes
-    /// `ActionState::axis_pair(Look) * 10.0`, i.e. mouse motion, not an angle.
+    /// (`lunco_avatar_input` or another input adapter) writes
+    /// `ActionState::axis_pair(Look) * 10.0`, i.e. pointer motion, not an angle.
     ///
-    /// Consumers turn it into an angle themselves — the only one today is
-    /// `lunco_avatar::avatar_behavior_input_system`, which applies
-    /// `-look_delta * sensitivity * 0.01` to get yaw/pitch radians (note the sign
-    /// flip: screen-down must become pitch-up). Steering does **not** read this
-    /// field; vessel control flows through the port path
+    /// A camera adapter turns it into an angle. Steering does **not** read this
+    /// field; domain control flows through the port path
     /// (`ControlBinding` → `SetPorts`), so there is exactly one interpretation.
     ///
     /// Anything new that consumes it owns the same screen-space → radians
@@ -496,13 +509,13 @@ pub struct LocalIntentSurface;
 ///
 /// Read this instead of sniffing `KeyCode::Escape`/`Backspace`: the bindings are DATA
 /// (`assets/config/keybindings.json`), so a rebind works everywhere at once and every
-/// mode agrees on what cancelling means. It reads both the local avatar and the
+/// mode agrees on what cancelling means. It reads both the local embodiment and the
 /// workbench's app-level intent surface, so editor-only previews do not require an
-/// avatar. Suppressed while an egui field has keyboard focus, so Backspace typed into
+/// embodiment. Suppressed while an egui field has keyboard focus, so Backspace typed into
 /// a text box edits text rather than backing out.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct CancelIntent<'w, 's> {
-    avatars: Query<'w, 's, &'static IntentState, (With<Avatar>, With<LocalAvatar>)>,
+    embodiments: Query<'w, 's, &'static IntentState, (With<Embodiment>, With<LocalEmbodiment>)>,
     global_surface: Query<'w, 's, &'static IntentState, With<LocalIntentSurface>>,
     egui_focus: Res<'w, EguiFocus>,
 }
@@ -513,7 +526,7 @@ impl CancelIntent<'_, '_> {
         if self.egui_focus.wants_keyboard {
             return false;
         }
-        self.avatars
+        self.embodiments
             .iter()
             .any(|i| i.just_pressed(&UserIntent::Cancel))
             || self
@@ -529,7 +542,7 @@ pub struct LunCoControlPlugin;
 /// Install the semantic-control substrate exactly once at an application
 /// composition boundary.
 ///
-/// Avatar, controller, and workbench plugins can be composed independently in
+/// Embodiment, controller, and workbench plugins can be composed independently in
 /// headless, Editor, or GUI hosts. They all depend on the same substrate, so
 /// making each caller hand-roll an `add_plugins` call turns normal composition
 /// into a startup panic. This helper is an idempotent ownership check, not a

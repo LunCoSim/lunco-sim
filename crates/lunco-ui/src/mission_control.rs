@@ -5,8 +5,9 @@ use bevy_egui::egui;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workbench_widgets::{UiIcon, icon_text_button};
 
-use lunco_avatar_core::commands::{FocusTarget, PossessVessel, ReleaseVessel};
-use lunco_avatar_core::roles::Avatar;
+use lunco_camera_core::FocusTarget;
+use lunco_control_core::{AcquireControl, ReleaseControlSource};
+use lunco_embodiment_core::roles::Embodiment;
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_control_core::{ControlBinding, UserIntent};
@@ -356,7 +357,7 @@ impl Panel for MissionControl {
         if let Some(av) = avatar_ent {
             if let Some(target) = focus {
                 ctx.trigger(FocusTarget {
-                    avatar: Some(av),
+                    camera: Some(av),
                     target,
                 });
             }
@@ -367,14 +368,14 @@ impl Panel for MissionControl {
                 });
             }
             if let Some(target) = possess {
-                ctx.trigger(PossessVessel {
-                    avatar: Some(av),
+                ctx.trigger(AcquireControl {
+                    source: Some(av),
                     target,
                     bind_camera: true,
                 });
             }
             if release {
-                ctx.trigger(ReleaseVessel { target: av });
+                ctx.trigger(ReleaseControlSource { source: av });
             }
             if leave_surface && gravity_body.is_some() {
                 ctx.trigger(LeaveSurface { target: av });
@@ -442,7 +443,7 @@ struct RoverRow {
 /// `is_empty`/scalar checks; the scans only run on a relevant change.
 pub fn populate_mission_control_view(
     mut view: ResMut<MissionControlView>,
-    local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
+    local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
     bodies: Query<(Entity, &Name, &CelestialBody)>,
     spacecraft: Query<(Entity, &Name), With<Spacecraft>>,
     // The local avatar carries a `ControlBinding` too (it's a controllable), so
@@ -454,7 +455,7 @@ pub fn populate_mission_control_view(
     // Per-tick input values live on `InputPorts`, which are written every tick.
     rovers: Query<
         (Entity, &Name, Option<&lunco_core::GlobalEntityId>),
-        (With<ControlBinding>, Without<Avatar>),
+        (With<ControlBinding>, Without<Embodiment>),
     >,
     surface: Query<(), With<lunco_camera_core::SurfaceCamera>>,
     gravity: Option<Res<lunco_celestial_spatial_core::LocalGravityField>>,

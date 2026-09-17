@@ -182,7 +182,7 @@ Scene replacement clears possession claims for outgoing USD prims at the shared
 replacement projection may reuse an id without inheriting the previous scene's
 driver; persistent non-scene ids are not cleared by that sweep.
 
-`PossessVessel` and `ReleaseVessel` are the single owner of the possession transaction:
+`AcquireControl` and `ReleaseControlSource` are the single owner of the possession transaction:
 they validate the endpoint and local binding before changing `SessionRegistry` or
 `ControlLink`. A handoff releases prior claims for that session (except the selected
 target) and hard-stops each released vessel; release hard-stops the current vessel before
@@ -192,7 +192,7 @@ remote session to the local camera.
 ### Autopilots must drive like humans
 
 An autopilot is only a different policy. It must acquire authority with
-`PossessVessel`, then use the vessel's `ControlBinding`/intent surface and the
+`AcquireControl`, then use the vessel's `ControlBinding`/intent surface and the
 same live port writes as a human. Do not set `Position`, `LinearVelocity`,
 `ModelicaModel.inputs`, or a private actuator component to make a scenario move;
 those bypass possession, arbitration, and the authored input contract.
@@ -219,10 +219,10 @@ continue to capture keyboard input until that explicit scene press. The
 controller must consume this published focus state; it must not read raw keys
 again, clear focus itself, or add a vehicle-specific input path.
 
-The local `Avatar` is a separate domain role. It also has an `InputPorts` surface and
+The local `Embodiment` is a separate domain role. It also has an `InputPorts` surface and
 binding, but those ports are its free-flight embodiment and are not a vessel
-possession target. Click resolution and `PossessVessel` enforce this boundary by
-accepting a non-`Avatar` input surface; `SceneCamera` is presentation metadata and
+possession target. Click resolution and `AcquireControl` enforce this boundary by
+accepting a non-`Embodiment` input surface; `SceneCamera` is presentation metadata and
 does not participate in possession.
 
 Author the scope as a **child `references` arc** to the shared profile — the SAME arc

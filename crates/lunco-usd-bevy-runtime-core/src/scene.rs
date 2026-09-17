@@ -342,7 +342,7 @@ pub(crate) fn execute_admitted_restart_scene(
     let stage_id = handle.id();
 
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).
-    // Every scene-authored entity (incl. the Avatar camera) carries `UsdPrimPath`,
+    // Every scene-authored entity (incl. the Embodiment camera) carries `UsdPrimPath`,
     // so `try_despawn` (hierarchy-recursive) tears the old camera down here — no
     // stale window camera survives into the fresh scene.
     clear_scene_entities(&mut commands, &scene);

@@ -1,7 +1,7 @@
 # LunCoSim Avatar Camera System
 
 Avatar owns possession, focus, and follow authority plus avatar-side camera
-transactions. Semantic pointer and keyboard projection is supplied by
+transactions over the generic embodiment roles. Semantic pointer and keyboard projection is supplied by
 `lunco-avatar-input`.
 The reusable camera contracts and generic free-flight/surface pose writers are
 in `lunco-camera-core` and `lunco-camera-runtime`; celestial ENU frame
@@ -66,8 +66,8 @@ Camera systems run in `PostUpdate`, **after** `PhysicsSystems::Writeback` and **
 When focusing a target on a different grid (e.g., Earth → Moon):
 1. The orbit command resolves the target pose through the shared
    `lunco_spatial::coords::grid_relative_pose` frame path.
-2. The destination inertial Grid performs the existing f64-to-cell/local split
-   through `Grid::translation_to_grid()`.
+2. The shared `lunco-spatial` attachment boundary performs the f64-to-cell/local
+   split for the destination Grid.
 3. If the camera changes Grid, `migrate_to_grid()` commits the parent,
    `CellCoord`, and local `Transform` atomically; same-Grid updates use
    value-gated writes.

@@ -24,7 +24,7 @@ fn verdict(pass, reason) {
 }
 
 fn on_event(me, evt, ctx) {
-    if evt.name == "cmd:PossessVessel" {
+    if evt.name == "cmd:AcquireControl" {
         this.possess_count += 1;
     } else if evt.name == "cmd:SetPorts" && this.possess_count > 0 {
         this.port_writes += 1;
@@ -48,7 +48,7 @@ fn on_event(me, evt, ctx) {
             verdict(false, "the authored scene sun is not emitting down onto the surface");
         } else if !controls_used {
             this.verdict_done = true;
-            verdict(false, "autopilot did not use PossessVessel followed by SetPorts");
+            verdict(false, "autopilot did not use AcquireControl followed by SetPorts");
         } else if !at_flag {
             this.verdict_done = true;
             verdict(false, "mission completed without the rover reaching the flag");

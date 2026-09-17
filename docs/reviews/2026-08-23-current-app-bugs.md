@@ -321,7 +321,7 @@ errors.
 The Summer Space School presentation path is production-verified. A fresh
 windowed `target/debug/luncosim` run reached `/api/ready` with
 `pending_count: 0`; `SceneCameraAudit` found the unique authored
-`/Traverse/Avatar` `LocalAvatar` camera; and `CaptureScreenshot` produced a
+`/Traverse/Embodiment` `LocalEmbodiment` camera; and `CaptureScreenshot` produced a
 2561x1553 PNG with non-clear pixels (`min=0`, `max=62708`). The startup UI no
 longer opens the heavy rover-build/Modelica presentation by default.
 

@@ -2,7 +2,6 @@ use bevy::math::{DVec3, StableInterpolate};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::CAMERA_ZOOM_SENSITIVITY;
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_camera_core::{
     CameraDefaults, CameraZoomInput, FollowAttitude, FreeFlightCamera, OrbitCamera,
     SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
@@ -14,8 +13,10 @@ use lunco_camera_core::{
 use lunco_celestial_spatial_core::{
     LocalGravityField, gravity_up_in_grid, surface_axes_for_grid_position,
 };
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_physics::GridSpatialQuery;
-use lunco_spatial::coords::GridPos;
+use lunco_spatial::attach::local_pose_to_grid_storage;
+use lunco_spatial::coords::{GridPos, grid_absolute_seeded};
 
 use crate::collision::{VesselCollisionFilterCache, VesselCollisionTopology, VesselJoints};
 
@@ -32,8 +33,8 @@ pub(crate) fn spring_arm_system(
             &mut CameraZoomInput,
         ),
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<Grid>,
             Without<OrbitCamera>,
             Without<FreeFlightCamera>,
@@ -41,7 +42,7 @@ pub(crate) fn spring_arm_system(
             Without<lunco_camera_core::CameraPoseLock>,
         ),
     >,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     gravity: Res<LocalGravityField>,
@@ -60,7 +61,7 @@ pub(crate) fn spring_arm_system(
     let dt = time.delta_secs();
     collision_filters.refresh(&joints, &mut topology);
 
-    for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode, mut zoom) in
+    for (avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode, mut zoom) in
         q_avatar.iter_mut()
     {
         if q_dragging.get(arm.target).is_ok() {
@@ -172,7 +173,12 @@ pub(crate) fn spring_arm_system(
             Some(hit_data) => ((hit_data.distance - 0.5).min(desired_len)).max(0.0),
             None => desired_len,
         };
-        let current_pos = grid.grid_position_double(&cell, &tf);
+        let Some(current_pos) =
+            grid_absolute_seeded(avatar_ent, Some(&cell), &tf, &q_parents, &q_grids)
+                .map(|position| position.0)
+        else {
+            continue;
+        };
         let current_len = current_pos.distance(target_pos);
         let final_len = resolve_camera_arm_length(
             current_len,
@@ -184,10 +190,11 @@ pub(crate) fn spring_arm_system(
         );
         let final_pos = target_pos + ray_dir * final_len;
 
-        let (new_cell, new_tf) = grid.translation_to_grid(final_pos);
+        let (new_cell, new_tf) =
+            local_pose_to_grid_storage(grid, final_pos, tf.rotation.as_dquat());
         cell.set_if_neq(new_cell);
-        if tf.translation != new_tf {
-            tf.translation = new_tf;
+        if tf.translation != new_tf.translation {
+            tf.translation = new_tf.translation;
         }
     }
 }

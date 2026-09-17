@@ -12,12 +12,12 @@ components. The reusable implementation is split across focused owners:
 `lunco-usd-bevy-camera` decodes standard USD cameras and camera roles,
 `lunco-camera-core` carries reusable render-free rig contracts,
 `lunco-camera-runtime` realizes generic interactive camera modes,
-`lunco-avatar-core` carries avatar lifecycle/command contracts, `lunco-scene-camera`
+`lunco-embodiment-core` carries embodiment role contracts, `lunco-scene-camera`
 exposes script/API camera transactions, `lunco-avatar-input` is the specialized
 owner of raw input translation, `lunco-avatar` owns possession, focus, and
 follow authority, and `lunco-avatar-camera` owns celestial BigSpace orbital
 placement, surface/orbit lifecycle commands, vessel spring-arm realization,
-and collision-aware local locomotion. Avatar transition state is in
+and collision-aware local locomotion. Embodiment transition state is in
 `lunco-avatar-camera-core`.
 Generic input response, the one-writer interaction-easing rule, and clip
 precision policy live in `lunco-camera-runtime`/`lunco-camera-core`; Rhai
@@ -76,7 +76,7 @@ The rendering bridge.
   (`LunCoAvatarPlugin`, possession and transition logic),
   `lunco-avatar-camera` (celestial/vessel placement and local locomotion), the optional
   `lunco-avatar-ui` egui adapter, and the focused
-  `lunco-avatar-core`/`lunco-avatar-policy` contracts. Sun/shadow in
+  `lunco-embodiment-core`/`lunco-avatar-policy` contracts. Sun/shadow in
   `lunco-render`.
 - **Purpose**: Drives a Bevy `Camera3d`; the persistent `OriginAnchor` tracks
   the selected camera's f64 cell while camera rigs (spring-arm, orbit,
@@ -92,13 +92,17 @@ A discrete instruction event.
 - **Self-Describing**: Commands are typed structs (derived with `#[Command]`) and carry their own parameters and documentation, discovered via reflection.
 - **Feedback**: Every command execution triggers an acknowledgment result (`Result<Ack, String>`) for verification.
 
-Avatar camera commands change one exclusive behavior component on the local
-avatar. Generic authored-camera selection and camera-path commands do not need
-an avatar and are handled by `lunco-usd-bevy-camera`.
-`FocusTarget`, `PossessVessel`, `FollowTarget`, `TeleportToSurface`, and
-`ReturnFromOrbit` are explicit mode transactions; possession/focus/follow are
-handled by `lunco-avatar`, while surface/orbit lifecycle commands are handled
-by `lunco-avatar-camera`. The active behavior owns the complete BigSpace
+Typed camera commands in `lunco-camera-core` express generic rig operations;
+typed control commands in `lunco-control-core` express producer/target
+relationships. Generic authored-camera selection and camera-path commands do
+not need an embodiment and are handled by `lunco-usd-bevy-camera`.
+`FocusTarget`, `FollowTarget`, `ReturnFromOrbit`, `SetCameraInput`, and
+`SetCameraLookAt` are generic camera contracts; `AcquireControl` is the
+high-level embodiment composition of the generic control relationship.
+`lunco-scene-camera` resolves scene/API targets and queues `PendingFocus`, while
+`lunco-avatar-camera` consumes that request when its specialized camera
+authority is present. Surface/orbit
+lifecycle commands remain in `lunco-avatar-camera`. The active behavior owns the complete BigSpace
 `(CellCoord, Transform)` pose. The task-tree runtime owns
 long-running authored missions separately and does not use a camera-specific
 progress component.
@@ -214,7 +218,7 @@ The viewport has explicit presentation ownership:
 
 Names match a full USD prim path or its leaf. A windowed scene normally authors
 its initial presentation through `CameraTrack` (including a single key for a
-static initial view) or exactly one `LocalAvatar` camera. When a window host
+static initial view) or exactly one `LocalEmbodiment` camera. When a window host
 opts into standalone presentation, the camera adapter passes authored
 USD/ECS counts to the `camera.default_presentation` policy. The shipped Rhai
 policy chooses `avatar`, `generated`, or `none`; Rust validates and realizes
@@ -248,9 +252,10 @@ surface-frame pose writing, validated input response, and clip precision live in
 in `lunco-avatar`, while celestial BigSpace orbital placement, surface/orbit
 lifecycle, vessel spring-arm realization, and collision-aware local locomotion
 are in `lunco-avatar-camera`; avatar-only orbit return
-state is in `lunco-avatar-camera-core`. Avatar lifecycle and
-possession commands remain in
-`lunco-avatar-core`. The viewport reconciler decides *which* camera is shown; a rig
+state is in `lunco-avatar-camera-core`. Embodiment lifecycle remains in
+`lunco-embodiment-core`; generic control relationship commands are in
+`lunco-control-core`, and generic camera commands are in `lunco-camera-core`. The
+viewport reconciler decides *which* camera is shown; a rig
 decides *how* its pose is solved. They compose: possession changes the avatar
 camera's rig without changing which camera the viewport shows.
 
@@ -302,32 +307,32 @@ owner, so a Rhai-authored rig can target any eligible scene camera. Mounted and
 path-driven cameras retain their authored pose owners; a direct command reports
 that ownership conflict instead of creating a second writer.
 
-### 6.7 Avatar identity and ownership
+### 6.7 Embodiment identity and ownership
 
-`lunco-avatar-core::roles` owns the avatar embodiment markers and derived local
-lookup. `Avatar` is an embodiment component, not a user, session, or control authority.
+`lunco-embodiment-core::roles` owns the avatar embodiment markers and derived local
+lookup. `Embodiment` is an embodiment component, not a user, session, or control authority.
 It identifies an entity that can carry a presentation rig and a controller link.
 The local/remote distinction is an ownership qualifier on that same embodiment:
 
-- `LocalAvatar` is the authoritative marker for the one embodiment that may
+- `LocalEmbodiment` is the authoritative marker for the one embodiment that may
   consume this process's input and drive its local interactive camera.
-- `RemoteAvatar` identifies another session's replicated embodiment. It may be
+- `RemoteEmbodiment` identifies another session's replicated embodiment. It may be
   rendered, but it is not eligible for local input or camera commands.
-- `TheLocalAvatar` is a derived entity index maintained by the `LocalAvatar`
+- `TheLocalEmbodiment` is a derived entity index maintained by the `LocalEmbodiment`
   lifecycle hooks. It is a read-only lookup cache, not a second ownership
   contract and not a user object; callers never write it.
 
 Session/control authority is separate from presentation. A headless API,
 autopilot, or mission script can control a vessel without creating an avatar.
-Commands that need a local camera accept an explicit complete `LocalAvatar`, or
-the derived `TheLocalAvatar` selection when the avatar is omitted. An invalid
+Commands that need a local camera accept an explicit complete `LocalEmbodiment`, or
+the derived `TheLocalEmbodiment` selection when the avatar is omitted. An invalid
 explicit entity or a missing local camera is rejected at the avatar-camera
 boundary and remains visible through runtime diagnostics; no entity-order
 selection is permitted.
 
 The local avatar also carries an `InputPorts` surface for free-flight movement
 (`forward`/`side`/`up`) and its normalized `speed_boost` modifier,
-but the `Avatar` domain marker makes that endpoint ineligible for vessel
+but the `Embodiment` domain marker makes that endpoint ineligible for vessel
 possession. Plain-click resolution continues past an avatar endpoint and gives
 an enclosing authored control root (`ControlBinding` or `MobilityRoot`)
 priority over nested component input surfaces, so clicking any part of a vehicle
@@ -345,7 +350,7 @@ control or telemetry path.
 
 Control authority has two independent layers. The generic session layer's
 `SessionRegistry` answers *which session controls which stable target id*; the
-backend-neutral `lunco_cosim_core::ControlLink` answers *which local producer
+backend-neutral `lunco_control_core::ControlLink` answers *which local producer
 projects semantic input onto which entity*. Neither layer knows what a vessel,
 avatar, or camera is. A producer can therefore be an avatar, an autopilot, a
 remote-control adapter, or another specialized controller. `ClaimControl` and
@@ -354,7 +359,7 @@ headless/authored producers; each accepted transition emits
 `ControlAuthorityChanged`, and the co-simulation backend applies safe-stop
 handling to every released endpoint.
 
-`PossessVessel` is the avatar-level composition of those primitives: its command
+`AcquireControl` is the avatar-level composition of those primitives: its command
 validates the target's writable input surface, asks the session authority to
 commit the claim, installs the local `ControlLink`, and optionally performs the
 camera transaction. `FocusTarget` and `FollowTarget` are likewise reachable
@@ -363,7 +368,7 @@ while Rust enforces the local-avatar boundary and the BigSpace-safe pose update.
 Rhai can also call `set_camera_input(...)` to tune the generic camera response
 without a Rust rebuild; Rust retains only the validated hot-path mechanism.
 The generic command/value surface remains `SetPorts` for a controller that does
-not need an avatar camera. `PossessVessel` uses the same `SessionRegistry`
+not need an avatar camera. `AcquireControl` uses the same `SessionRegistry`
 transaction rather than maintaining a parallel ownership path.
 
 A possession handoff releases all prior claims for the session except the selected

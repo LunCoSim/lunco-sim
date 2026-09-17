@@ -216,7 +216,7 @@ This is also the most likely explanation for a class of "cannot reproduce" betwe
 The first three are the interesting ones. Entity `1277v0` is identified 0.86 s earlier:
 
 ```
-08:36:36.352  INFO  [usd-bevy] /SandboxScene/Avatar Camera → inactive SceneCamera (perspective)
+08:36:36.352  INFO  [usd-bevy] /SandboxScene/Embodiment Camera → inactive SceneCamera (perspective)
 ```
 
 `forward` / `side` / `up` are the avatar's movement intents — `crates/lunco-avatar/src/lib.rs:993` binds `MoveForward → "forward"`. They are being written to the avatar's **camera**, not to the avatar body. Whatever resolves the avatar's control target is picking the camera child instead of the rigid body. The values are dropped, so the symptom the tester sees is "WASD does nothing", with a warning that reads like a scene-authoring problem.
@@ -225,8 +225,8 @@ The first three are the interesting ones. Entity `1277v0` is identified 0.86 s e
 
 **Fix:**
 
-- **Resolve control targets to the owning domain endpoint, not a presentation entity.** The avatar possession resolver must accept only a non-`Avatar` writable `InputPorts` endpoint and walk past an avatar endpoint to its owning vessel. Add a test that an avatar endpoint nested under a vessel resolves to the vessel; `SceneCamera` must not participate in this control decision.
-- **Name the prim in the warning, not the entity id.** `1277v0` is unactionable in a tester's log; `/SandboxScene/Avatar Camera` is a bug report. `crates/lunco-cosim/src/lib.rs:350` already fetches `GlobalEntityId` — resolve and print the SDF path too.
+- **Resolve control targets to the owning domain endpoint, not a presentation entity.** The avatar possession resolver must accept only a non-`Embodiment` writable `InputPorts` endpoint and walk past an avatar endpoint to its owning vessel. Add a test that an avatar endpoint nested under a vessel resolves to the vessel; `SceneCamera` must not participate in this control decision.
+- **Name the prim in the warning, not the entity id.** `1277v0` is unactionable in a tester's log; `/SandboxScene/Embodiment Camera` is a bug report. `crates/lunco-cosim/src/lib.rs:350` already fetches `GlobalEntityId` — resolve and print the SDF path too.
 - **Promote to ERROR when the target has *no* input ports at all.** A typo'd port on a real endpoint is a warning; a wire into an entity that declares nothing is a wiring bug and should be loud.
 
 ---
@@ -362,7 +362,7 @@ render evidence.
 | 2 | **Fixed in source.** The explicit `shadow_budget_bytes` setting remains the sole pre-extraction resource ceiling; no adapter-class cap or automatic lower preset rewrites the requested map sizes/cascade count. The workbench now publishes live shadow-resource facts and preserves every authored shadow-map flag; the authored Rhai policy reports unmet class or byte limits without omitting maps or changing quality. Actual AMD/Vulkan Windows evidence is still unverified locally. |
 | 3 | **Fixed in source.** Python programs check the authoritative interpreter status before binding, publish their declared interface as a terminal error, and emit one scene-level aggregate diagnostic. Terminal participants now retire their derived edges at the binding boundary, so unavailable Python cannot create secondary missing-port or algebraic-loop faults. The interactive sandbox intentionally has no verdict channel; `assets/scenes/tests/sandbox_smoke.usda` is the explicit composed smoke contract and the production thermal scene remains a separate gate. |
 | 4 | **Closed.** Runtime overlays and history are ignored by source control and excluded by the native packaging copier; no sandbox `.lunco` files are tracked. |
-| 5 | **Fixed in source.** The avatar domain owns the possession boundary: click and direct-command resolution accept only a non-`Avatar` writable `InputPorts` endpoint, so the avatar's free-flight surface cannot become the rover target. Resolution walks to the owning endpoint; warnings include the authored identity rather than only an entity id. |
+| 5 | **Fixed in source.** The avatar domain owns the possession boundary: click and direct-command resolution accept only a non-`Embodiment` writable `InputPorts` endpoint, so the avatar's free-flight surface cannot become the rover target. Resolution walks to the owning endpoint; warnings include the authored identity rather than only an entity id. |
 | 6 | **Fixed in source.** Earth and solar-frame diagnostics use startup settle windows and explicitly report recovery; transient entity-construction order is not treated as a permanent scene fault. Earth-direction demand is also projected only from composed Earth-vector wires, so ordinary environment probes cannot trigger the Earth-tracking warning. |
 | 7 | **Fixed in source.** Deliberate every-frame view models use an explicit registration path outside gate-effectiveness tracking, and deterministic celestial cadence declares its always-open policy to the gate monitor; accidental continuously-true gates retain actionable diagnostics. |
 | 8 | **Fixed in source.** USD camera authoring carries render-free intent only; the render binder adds the complete camera/render graph atomically. |

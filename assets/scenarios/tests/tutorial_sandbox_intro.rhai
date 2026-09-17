@@ -51,8 +51,8 @@ fn on_tick(me, ctx) {
     else if this.step == 2 { emit("cmd:GuidedNext", 0); }
     else if this.step == 3 { emit("cmd:SelectEntity", 0); }
     else if this.step == 4 { emit("cmd:SpawnEntity", 0); }
-    else if this.step == 5 { emit("cmd:PossessVessel", 0); }
-    else if this.step == 6 { emit("cmd:ReleaseVessel", 0); }
+    else if this.step == 5 { emit("cmd:AcquireControl", 0); }
+    else if this.step == 6 { emit("cmd:ReleaseControlSource", 0); }
     else if this.step == 7 { emit("cmd:GuidedNext", 0); }
     else if this.step == 8 { emit("cmd:GuidedNext", 0); }
     else if this.step > 9 && this.elapsed > 5.0 {

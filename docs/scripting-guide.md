@@ -1186,7 +1186,7 @@ camera along without taking control via `follow(entity)`.
 >
 > Claim it before commanding it:
 > ```rhai
-> fn on_start(me, ctx) { cmd("PossessVessel", #{ target: me }); }
+> fn on_start(me, ctx) { cmd("AcquireControl", #{ target: me }); }
 > ```
 > The claim keys on `target`, **not on an avatar**, so this works headless — an unattended
 > or server-side run needs no avatar to hold authority.
@@ -1201,7 +1201,7 @@ release_control_claim(me);
 ```
 
 `ClaimControl` and `ReleaseControlClaim` update the session authority table;
-`PossessVessel` composes the same transition with an avatar `ControlLink` and
+`AcquireControl` composes the same transition with an avatar `ControlLink` and
 optional camera binding.
 
 ## H. Task programs and the reusable kernel

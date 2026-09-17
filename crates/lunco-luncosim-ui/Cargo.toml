@@ -16,7 +16,7 @@ api-transport = ["dep:lunco-api-transport", "lunco-modelica-ui/api"]
 transport-http = ["api-transport", "lunco-api-transport/transport-http"]
 # Source-palette presentation for Python-backed programs.
 python = []
-# Avatar's egui presentation belongs to the application UI shell rather than
+# Embodiment's egui presentation belongs to the application UI shell rather than
 # the headless-safe simulation runtime.
 avatar-ui = ["dep:lunco-avatar-ui"]
 # Downloaded Twin presentation in the Scenarios menu.
@@ -61,13 +61,14 @@ lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets = { path = "../lunco-assets" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-capture = { path = "../lunco-capture", features = ["api"] }
-lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-avatar-ui = { path = "../lunco-avatar-ui", optional = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-control-core = { path = "../lunco-control-core" }
+lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-input-ui = { path = "../lunco-input-ui" }
 lunco-doc = { path = "../lunco-doc" }

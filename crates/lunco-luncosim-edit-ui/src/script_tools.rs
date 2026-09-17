@@ -27,9 +27,9 @@
 
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
-use lunco_avatar_core::roles::TheLocalAvatar;
+use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_core::{TelemetryEvent, TelemetryValue};
-use lunco_cosim_core::ControlLink;
+use lunco_control_core::ControlLink;
 use lunco_input_core::InputBindingsSettings;
 use lunco_scene_selection::SelectedEntities;
 use lunco_spatial::coords::{
@@ -78,7 +78,7 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     >,
     q_parents: Query<'w, 's, &'static ChildOf>,
     selected: Res<'w, SelectedEntities>,
-    local_avatar: Res<'w, TheLocalAvatar>,
+    local_avatar: Res<'w, TheLocalEmbodiment>,
     q_links: Query<'w, 's, &'static ControlLink>,
     q_scene_cameras: Query<
         'w,
@@ -189,7 +189,7 @@ fn scene_tool_context(
     >,
     q_parents: &Query<&ChildOf>,
     selected: &SelectedEntities,
-    local_avatar: &TheLocalAvatar,
+    local_avatar: &TheLocalEmbodiment,
     q_links: &Query<&ControlLink>,
     backed: &lunco_usd_bevy_twin::DocBackedTwinScenes,
     asset_server: &AssetServer,

@@ -587,7 +587,7 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
   the persistent `OriginAnchor` tracks the selected camera. A nested prim alone
   never changes pose authority. Aim either camera with `lunco:cameraLookAt`.
 
-- **Avatar behavior:** `LunCoAvatarAPI` only marks the local avatar role. The
+- **Embodiment behavior:** `LunCoAvatarAPI` only marks the local avatar role. The
   initial interactive rig is generic Rust substrate; the avatar-specific
   `lunco-avatar-input` adapter projects shared semantic intents into camera
   behavior; Rhai selects free-flight,
@@ -603,7 +603,7 @@ complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17
   unauthored USD schema attributes use their standard defaults.
 - **Standalone presentation:** an interactive window host may ask the
   `camera.default_presentation` Rhai policy to choose `avatar`, `generated`,
-  or `none` when no `CameraTrack` or unique `LocalAvatar` initial presentation
+  or `none` when no `CameraTrack` or unique `LocalEmbodiment` initial presentation
   is authored. Rust passes only derived USD/ECS counts, validates the closed
   result, and realizes `generated` as one render-free `SceneCamera` plus one
   unscoped directional light under the active `UsdSceneRoot` when projected

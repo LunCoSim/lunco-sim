@@ -1032,7 +1032,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
 
         // There is deliberately NO "possessable" tag read here. The generic command
         // surface is authored by `Controls` and projected as `InputPorts`; the avatar
-        // domain owns the semantic vessel boundary and rejects its own `Avatar`
+        // domain owns the semantic vessel boundary and rejects its own `Embodiment`
         // endpoint before authority arbitration. What a non-avatar endpoint can do is
         // still decided by its authored capability — no vehicle-class branch belongs
         // in this translator.

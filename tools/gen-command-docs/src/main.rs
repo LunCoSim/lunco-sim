@@ -270,7 +270,7 @@ fn domain_title(crate_name: &str) -> (&'static str, u32) {
         "lunco-mobility" | "lunco-hardware" | "lunco-controller" => {
             ("Vessels, mobility & control", 30)
         }
-        "lunco-avatar" => ("Avatar & possession", 31),
+        "lunco-avatar" => ("Embodiment & possession", 31),
         "lunco-workbench" | "lunco-ui" => ("Workbench UI & panels", 40),
         "lunco-scripting" | "lunco-tools-rhai" => ("Scripting & scenarios", 50),
         "lunco-doc-bevy" | "lunco-doc" | "lunco-twin" | "lunco-twin-journal" => {

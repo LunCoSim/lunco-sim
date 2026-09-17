@@ -98,7 +98,7 @@ These tools are always available:
 | `find_model` | Fuzzy search across bundled / Twin / source libraries / open docs. Returns ranked URIs with relevance scores |
 | `cosim_status` | Snapshot every USD-driven cosim entity (`UsdSourcedCosim`): position, velocity, Modelica state, propagated `force_y`. Probe-the-running-sim alternative to log polling |
 | `load_scene` | Reload (or replace) the active USD scene at runtime. Despawns existing USD prims + cosim wires, force-reads the file from disk, spawns a fresh root. Use after editing a `.usda` to pick up changes without restarting |
-| `possess_vessel` | Take direct control of a vessel — chase camera + keyboard input bound to the target |
+| `acquire_control` | Acquire a target control surface, optionally binding the local presentation rig |
 | `follow_target` | Chase camera onto any `SelectableRoot` (balloon, prop) without binding controls |
 | `focus_target` | Orbit camera at an appropriate distance (celestial bodies, large objects) |
 | `run_scenario` | Attach a persistent **rhai** scenario to an entity (`target`, `source`). Registers a `ScriptDocument` + `ScriptedModel{Rhai}` so the per-entity runtime builds a native `task(me)` tree, evaluates optional `mission(me)` objectives, and runs lifecycle/event hooks. Scripts read world state (`world_pos`/`world_forward`/`get`), drive the sim (`cmd(...)` + prelude `nav_to`/`drive`), and `emit`/receive `TelemetryEvent`s. Idempotent + hot-reload (re-run recompiles in place). Returns `{document_id, generation}` |
@@ -179,9 +179,8 @@ Commands discovered from the simulation's schema are exposed as typed tools:
 
 - `drive_rover` - Drive a rover (target, forward, steer)
 - `brake_rover` - Apply brakes (target, intensity)
-- `possess_vessel` - Possess a vessel (avatar, target)
-- `release_vessel` - Release vessel (target)
-- `focus_target` - Focus camera on target (avatar, target)
+- `acquire_control` - Acquire a control surface (target, optional source and camera binding)
+- `focus_target` - Focus camera on target (target, optional camera)
 - `teleport_to_surface` - Teleport to surface (target, body_entity)
 - `leave_surface` - Return to orbit (target)
 - `spawn_entity` - Spawn from catalog (target, entry_id, position)

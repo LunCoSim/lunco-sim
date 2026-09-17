@@ -19,7 +19,7 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    if evt.name == "cmd:PossessVessel" {
+    if evt.name == "cmd:AcquireControl" {
         this.possess_count += 1;
     } else if evt.name == "cmd:SetPorts" && this.possess_count > 0 {
         this.port_writes += 1;
@@ -34,7 +34,7 @@ fn on_event(me, evt, ctx) {
         }
         let used_controls = this.possess_count > 0 && this.port_writes > 0;
         this.done = true;
-        if !used_controls { verdict(false, "autopilot did not use PossessVessel and SetPorts"); }
+        if !used_controls { verdict(false, "autopilot did not use AcquireControl and SetPorts"); }
         else if !reached_flag { verdict(false, "mission completed away from the finish flag"); }
         else { verdict(true, ""); }
     }

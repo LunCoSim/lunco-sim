@@ -8,7 +8,6 @@ description = "Generic camera pose realization for interactive camera rigs"
 [dependencies]
 bevy = { workspace = true }
 serde = { workspace = true }
-lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-interaction-core = { path = "../lunco-interaction-core" }

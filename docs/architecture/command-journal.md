@@ -6,7 +6,7 @@
 > document journal is defined in [`18-unified-journal-and-history.md`](18-unified-journal-and-history.md).
 
 `#[Command]` execution is not currently journaled. Runtime actions such as
-`SpawnEntity`, `PossessVessel`, `SetPorts`, terrain spawning, and time control
+`SpawnEntity`, `AcquireControl`, `SetPorts`, terrain spawning, and time control
 remain transient; deterministic session replay is therefore not built.
 
 The command journal must remain separate from high-rate controls and telemetry:
@@ -88,7 +88,7 @@ and imperative, or journaled and projected — never both), so this is increment
 big-bang, and never dual-writes.
 
 - **Op vocabulary = the commands.** `BrushTerrain`, `FlattenTerrain`, `SpawnEntity`,
-  `PossessVessel`, a USD prim edit — each a typed op. No separate op language.
+  `AcquireControl`, a USD prim edit — each a typed op. No separate op language.
 - **Identity = `EntryId`.** A terrain layer's `LayerId` *is* the `EntryId` of the edit
   that created it; a spawned entity traces to its spawn op; etc. One id space.
 - **Undo = the inverse.** Each mutating command declares its inverse — often another
@@ -240,7 +240,7 @@ commands run, mutate ECS directly, and leave no journal entry.
 | Dig / raise | `BrushTerrain` | `RemoveTerrainLayer{EntryId}` | `for_tool("terrain")` / user |
 | Flatten pad | `FlattenTerrain` | `RemoveTerrainLayer{EntryId}` (or heights snapshot) | as above |
 | Spawn a rover | `SpawnEntity` | `Despawn{EntryId}` | user / script |
-| Possess | `PossessVessel` | `ReleaseVessel` / prior possession | user |
+| Possess | `AcquireControl` | `ReleaseControlSource` / prior possession | user |
 | USD prim edit | doc op | doc inverse op | user / peer |
 
 Every row is the same shape. That is the point: **the tools, the edits, the identity,

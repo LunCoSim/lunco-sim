@@ -702,7 +702,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 90 {
         if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
-        let possession = cmd("PossessVessel", #{
+        let possession = cmd("AcquireControl", #{
             target: this.subject,
             bind_camera: false,
         });

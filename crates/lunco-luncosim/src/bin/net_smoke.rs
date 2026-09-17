@@ -188,7 +188,7 @@ fn main() {
     // Register the command types so the wire reflect (de)serialize + trigger
     // path works (the domain plugins normally do this; the harness skips them).
     app.register_type::<lunco_cosim_core::commands::SetPorts>();
-    app.register_type::<lunco_avatar_core::commands::PossessVessel>();
+    app.register_type::<lunco_control_core::commands::AcquireControl>();
 
     // Both peers activate the SAME scripted (rhai) convergent merge policy before
     // any edits are authored — exercising conflict resolution over the real wire.
@@ -266,8 +266,8 @@ fn host_spawn_rovers(mut commands: Commands) {
     // The host claims its own rover (G1) through the real possession observer.
     // `guard` is None here → the claim is attributed to the host's `LocalSession`
     // (`SessionId::LOCAL`). The client must NOT be able to take it.
-    commands.trigger(lunco_avatar_core::commands::PossessVessel {
-        avatar: Some(g1),
+    commands.trigger(lunco_control_core::commands::AcquireControl {
+            source: Some(g1),
         target: g1,
         bind_camera: true,
     });
@@ -278,7 +278,7 @@ fn host_spawn_rovers(mut commands: Commands) {
 /// session (origin from the wire-apply guard, else the local host session) so
 /// its drives are authorized (G4). Exclusivity is enforced by `claim`.
 fn host_on_possess(
-    trigger: On<lunco_avatar_core::commands::PossessVessel>,
+    trigger: On<lunco_control_core::commands::AcquireControl>,
     guard: Res<lunco_core_session::SyncApplyGuard>,
     local: Res<lunco_core_session::LocalSession>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
@@ -421,14 +421,14 @@ fn client_act(
     };
     if !*acted {
         // Claim the free rover…
-        commands.trigger(lunco_avatar_core::commands::PossessVessel {
-            avatar: Some(rovers.g2),
+        commands.trigger(lunco_control_core::commands::AcquireControl {
+            source: Some(rovers.g2),
             target: rovers.g2,
             bind_camera: true,
         });
         // …and attempt to steal the host's rover (must be refused).
-        commands.trigger(lunco_avatar_core::commands::PossessVessel {
-            avatar: Some(rovers.g1),
+        commands.trigger(lunco_control_core::commands::AcquireControl {
+            source: Some(rovers.g1),
             target: rovers.g1,
             bind_camera: true,
         });

@@ -8,7 +8,7 @@ use crate::{LocalSession, NetworkRole, SessionRbac, SessionRegistry, SyncApplyGu
 
 /// Claim a stable control endpoint for the originating session.
 ///
-/// The command only changes session authority. Avatar camera binding and
+/// The command only changes session authority. Embodiment camera binding and
 /// controller-specific composition remain with the higher-level command that
 /// needs them.
 #[Command]

@@ -652,7 +652,7 @@ fn activate_offscreen_camera(
             bevy::ecs::query::Has<lunco_render::SceneCamera>,
             Option<&lunco_usd_bevy_scene::UsdPrimPath>,
             bevy::ecs::query::Has<lunco_usd_bevy_camera::camera_path::CameraPathDriven>,
-            bevy::ecs::query::Has<lunco_avatar_core::roles::LocalAvatar>,
+            bevy::ecs::query::Has<lunco_embodiment_core::roles::LocalEmbodiment>,
             bevy::ecs::query::Has<bevy::camera::ShadowLodOrigin>,
         ),
         Without<OffscreenRenderCamera>,
@@ -751,7 +751,7 @@ fn activate_offscreen_camera(
         &mut warned,
         &mut ambiguous,
     );
-    // A scene without a cinematic track can still author one LocalAvatar camera
+    // A scene without a cinematic track can still author one LocalEmbodiment camera
     // as its initial presentation. It is an explicit identity marker, not an
     // entity-order fallback, and is shared with the windowed camera contract.
     let local_avatar = unique_offscreen_camera(
@@ -768,7 +768,7 @@ fn activate_offscreen_camera(
             )
             .map(|(entity, ..)| entity)
             .collect(),
-        "authored LocalAvatar camera",
+        "authored LocalEmbodiment camera",
         &mut warned,
         &mut ambiguous,
     );

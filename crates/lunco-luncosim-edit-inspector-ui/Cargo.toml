@@ -21,7 +21,7 @@ avian3d = { workspace = true }
 big_space.workspace = true
 
 lunco-api = { path = "../lunco-api" }
-lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-cosim = { path = "../lunco-cosim" }

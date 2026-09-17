@@ -247,8 +247,8 @@ fn add_protocol(app: &mut App) {
     app.declare_channel::<lunco_core_session::commands::ReleaseControlClaim>(
         SyncChannel::CommandBus,
     );
-    app.declare_channel::<lunco_avatar_core::commands::PossessVessel>(SyncChannel::CommandBus);
-    app.declare_channel::<lunco_avatar_core::commands::ReleaseVessel>(SyncChannel::CommandBus);
+    app.declare_channel::<lunco_control_core::commands::AcquireControl>(SyncChannel::CommandBus);
+    app.declare_channel::<lunco_control_core::commands::ReleaseControlSource>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_core_session::commands::UpdateProfile>(SyncChannel::CommandBus);
     // `SpawnEntity`'s TYPE lives in lunco-core (review A6) — declaring its channel
     // needs the type, not the editor that handles it. This crate has no dependency

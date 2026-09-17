@@ -6,9 +6,9 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_avatar_core::roles::TheLocalAvatar;
+use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_core::GlobalEntityId;
-use lunco_cosim_core::ControlLink;
+use lunco_control_core::ControlLink;
 use lunco_scene_selection::SelectedEntities;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -22,7 +22,7 @@ pub struct CommandDeckView {
 pub fn populate_command_deck_view(
     mut view: ResMut<CommandDeckView>,
     selected: Res<SelectedEntities>,
-    local_avatar: Res<TheLocalAvatar>,
+    local_avatar: Res<TheLocalEmbodiment>,
     q_link: Query<&ControlLink>,
     q_name: Query<&Name>,
     q_callsign: Query<&lunco_core::markers::Callsign>,
@@ -104,13 +104,13 @@ impl Panel for CommandDeck {
         ui.separator();
         if view.driving {
             if ui.button("Release control").clicked() {
-                if let Some(avatar) = ctx.resource::<TheLocalAvatar>().and_then(|value| value.0) {
-                    ctx.trigger(lunco_avatar_core::commands::ReleaseVessel { target: avatar });
+                if let Some(avatar) = ctx.resource::<TheLocalEmbodiment>().and_then(|value| value.0) {
+                    ctx.trigger(lunco_control_core::ReleaseControlSource { source: avatar });
                 }
             }
         } else if ui.button("Take control").clicked() {
-            ctx.trigger(lunco_avatar_core::commands::PossessVessel {
-                avatar: None,
+            ctx.trigger(lunco_control_core::commands::AcquireControl {
+                source: None,
                 target,
                 bind_camera: true,
             });

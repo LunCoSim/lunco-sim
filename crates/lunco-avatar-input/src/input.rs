@@ -2,8 +2,6 @@ use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::OrbitUserInput;
-use lunco_avatar_core::commands::ReleaseVessel;
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
 use lunco_camera_core::{
     CameraZoomInput, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
     SurfaceRelativeMode,
@@ -11,7 +9,9 @@ use lunco_camera_core::{
 use lunco_camera_runtime::{CameraInputSettings, body_orbit_look_scale};
 use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial_core::{LocalGravityField, surface_axes_in_grid};
+use lunco_control_core::commands::ReleaseControlSource;
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 
 // ─── Intent & Input ──────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 pub(crate) fn capture_avatar_intent(
     mut q_avatar: Query<
         (Entity, &IntentState, &mut IntentAnalogState),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
     world: Option<Res<WorldTime>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
@@ -80,7 +80,7 @@ pub(crate) fn collect_camera_zoom(
     egui_focus: Res<lunco_control_core::EguiFocus>,
     drag_mode: Option<Res<lunco_interaction_core::DragModeActive>>,
     scroll: Res<AccumulatedMouseScroll>,
-    mut q_avatar: Query<&mut CameraZoomInput, (With<Avatar>, With<LocalAvatar>)>,
+    mut q_avatar: Query<&mut CameraZoomInput, (With<Embodiment>, With<LocalEmbodiment>)>,
 ) {
     let d = normalized_scroll_delta(&scroll);
     let accepted = !egui_focus.wants_pointer && !drag_mode.is_some_and(|drag| drag.active);
@@ -104,51 +104,51 @@ pub(crate) fn collect_camera_zoom(
 pub(crate) fn avatar_behavior_input_system(
     q_avatar: Query<
         (&IntentAnalogState, Option<&SurfaceRelativeMode>),
-        (With<Avatar>, With<LocalAvatar>),
+        (With<Embodiment>, With<LocalEmbodiment>),
     >,
     mut q_spring: Query<
         &mut SpringArmCamera,
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<lunco_camera_core::CameraPoseLock>,
         ),
     >,
     mut q_orbit: Query<
         (Entity, &mut OrbitCamera),
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<lunco_camera_core::CameraPoseLock>,
         ),
     >,
     mut q_freeflight: Query<
         &mut FreeFlightCamera,
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<lunco_camera_core::CameraPoseLock>,
         ),
     >,
     mut q_surface: Query<
         &mut SurfaceCamera,
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<lunco_camera_core::CameraPoseLock>,
         ),
     >,
     mut q_tf: Query<
         (&mut Transform, &CellCoord, &ChildOf),
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Without<lunco_camera_core::CameraPoseLock>,
         ),
     >,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     settings: Res<CameraInputSettings>,
     keys: Res<ButtonInput<KeyCode>>,
     gravity: Res<LocalGravityField>,
@@ -245,7 +245,7 @@ pub(crate) fn look_angles(
 }
 
 pub(crate) fn avatar_global_hotkeys(
-    q_avatar: Query<&IntentState, (With<Avatar>, With<LocalAvatar>)>,
+    q_avatar: Query<&IntentState, (With<Embodiment>, With<LocalEmbodiment>)>,
     transport: Option<Res<TimeTransport>>,
     mut commands: Commands,
 ) {
@@ -266,10 +266,10 @@ pub(crate) fn avatar_escape_possession(
     q_avatar: Query<
         (Entity, &IntentState),
         (
-            With<Avatar>,
-            With<LocalAvatar>,
+            With<Embodiment>,
+            With<LocalEmbodiment>,
             Or<(
-                With<lunco_cosim_core::ControlLink>,
+                With<lunco_control_core::ControlLink>,
                 With<SpringArmCamera>,
                 With<OrbitCamera>,
             )>,
@@ -283,7 +283,7 @@ pub(crate) fn avatar_escape_possession(
     }
     for (entity, intent) in q_avatar.iter() {
         if intent.just_pressed(&UserIntent::Cancel) {
-            commands.trigger(ReleaseVessel { target: entity });
+            commands.trigger(ReleaseControlSource { source: entity });
         }
     }
 }

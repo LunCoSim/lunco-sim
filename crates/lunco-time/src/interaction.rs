@@ -53,7 +53,7 @@ use bevy::prelude::*;
 #[derive(Debug, Clone, Copy, Default, Reflect)]
 pub struct Interaction;
 
-/// The constant-rate, never-paused step. Avatar movement and every camera run here.
+/// The constant-rate, never-paused step. Embodiment movement and every camera run here.
 #[derive(ScheduleLabel, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InteractionSchedule;
 

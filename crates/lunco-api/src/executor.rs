@@ -468,10 +468,8 @@ pub fn api_command_dispatcher(
 
 // ── Entity-id conversion (schema-driven) ──────────────────────────────────
 //
-// Replaces an older heuristic that rewrote fields by NAME
-// (`target`/`entity`/`body`/`parent`/`avatar`). We now walk the command's
-// reflect `TypeInfo` alongside its JSON and convert every leaf whose declared
-// type is `Entity` — name-independent, so renamed/new entity fields,
+// Walk the command's reflect `TypeInfo` alongside its JSON and convert every
+// leaf whose declared type is `Entity` — name-independent, so renamed/new entity fields,
 // `Vec<Entity>`, `Option<Entity>`, and nested structs/enums all convert, while
 // a same-named non-entity field (`parent: String`, `target: f64`) is left
 // alone. See `crates/lunco-networking/PH2_ID_CODEC.md`.
@@ -490,8 +488,8 @@ pub fn resolve_command_ids(
 
 /// Outgoing/capture: local `Entity::to_bits()` → wire `GlobalEntityId` u64. A
 /// field tagged `#[sync_local]` (the `SyncLocal` reflect attribute) is replaced
-/// with `Entity::PLACEHOLDER` instead, so a peer's local-only references (camera
-/// avatar) never leak onto the wire.
+/// with `Entity::PLACEHOLDER` instead, so a peer's local-only references never
+/// leak onto the wire.
 pub fn globalize_command_ids(
     value: &mut serde_json::Value,
     type_id: std::any::TypeId,
@@ -649,7 +647,7 @@ fn convert_node(
                     if let Some(f) = tv.field_at(0) {
                         // Propagate `sync_local` into the single-field payload so
                         // an `Option<Entity>` (the `Some` variant) tagged
-                        // `#[sync_local]` — e.g. `PossessVessel::avatar` — still
+                        // `#[sync_local]` — e.g. `AcquireControl::source` — still
                         // nulls its inner local bits on the wire.
                         convert_node(payload, f.type_id(), reg, dir, entities, sync_local);
                     }
@@ -692,7 +690,8 @@ fn convert_leaf(
             }
         }
         IdDir::Globalize => {
-            // Local-only field (e.g. avatar): never put local bits on the wire.
+            // Local-only field (for example a local control producer): never put
+            // local bits on the wire.
             if sync_local {
                 *value = serde_json::json!(Entity::PLACEHOLDER.to_bits());
                 return;
@@ -991,6 +990,7 @@ impl Plugin for ApiExecutorPlugin {
         // Session commands (`Ping`) — registered with the command CORE, so any
         // host that can receive a command can answer a readiness probe.
         crate::session::register_all_commands(app);
+        app.init_resource::<crate::session::InteractiveExitHandler>();
         app.init_resource::<ApiIdCounter>()
             // Command-result store + active-id scope. Also init'd by
             // lunco-core; idempotent, kept here so the API plugin is
@@ -1273,13 +1273,12 @@ mod id_codec_tests {
     }
     #[derive(Reflect)]
     struct TVessel {
-        // Name is OFF the old `[target,entity,body,parent,avatar]` allowlist —
-        // the heuristic would have silently missed it.
+        // A differently named entity field is converted from its declared type.
         vessel: Entity,
     }
     #[derive(Reflect)]
     struct TNonEntity {
-        // Heuristic field NAMES, but not entity TYPES — must be left alone.
+        // Entity-shaped names with non-entity types must remain untouched.
         parent: String,
         target: f64,
     }
@@ -1294,16 +1293,16 @@ mod id_codec_tests {
         inner: TInner,
     }
     #[derive(Reflect)]
-    struct TPossess {
+    struct TControl {
         #[reflect(@lunco_core::SyncLocal)]
-        avatar: Entity,
+        source: Entity,
         #[reflect(@lunco_core::AuthzTarget)]
         target: Entity,
     }
     #[derive(Reflect)]
-    struct TPossessOpt {
+    struct TControlOpt {
         #[reflect(@lunco_core::SyncLocal)]
-        avatar: Option<Entity>,
+        source: Option<Entity>,
         #[reflect(@lunco_core::AuthzTarget)]
         target: Entity,
     }
@@ -1322,8 +1321,8 @@ mod id_codec_tests {
         reg.register::<TNonEntity>();
         reg.register::<TColl>();
         reg.register::<TInner>();
-        reg.register::<TPossess>();
-        reg.register::<TPossessOpt>();
+        reg.register::<TControl>();
+        reg.register::<TControlOpt>();
         reg.register::<Entity>();
         reg.register::<Vec<Entity>>();
         reg.register::<Option<Entity>>();
@@ -1381,24 +1380,24 @@ mod id_codec_tests {
     #[test]
     fn globalize_inverts_resolve_and_strips_wire_local() {
         let (reg, ent, e, gid) = setup();
-        let mut v = json!({ "avatar": e.to_bits(), "target": e.to_bits() });
-        globalize_command_ids(&mut v, TypeId::of::<TPossess>(), &reg, &ent);
+        let mut v = json!({ "source": e.to_bits(), "target": e.to_bits() });
+        globalize_command_ids(&mut v, TypeId::of::<TControl>(), &reg, &ent);
         assert_eq!(v["target"], json!(gid.get())); // local bits → gid
                                                    // sync_local field never carries real local bits onto the wire.
-        assert_eq!(v["avatar"], json!(Entity::PLACEHOLDER.to_bits()));
+        assert_eq!(v["source"], json!(Entity::PLACEHOLDER.to_bits()));
     }
 
     #[test]
     fn globalize_strips_wire_local_inside_option() {
-        // `PossessVessel::avatar` is `Option<Entity>` + `#[sync_local]`. The
+        // `AcquireControl::source` is `Option<Entity>` + `#[sync_local]`. The
         // strip must reach the inner `Entity` of the `Some` payload, not just a
         // bare-`Entity` field — otherwise a possessing client leaks its local
         // camera bits onto the wire.
         let (reg, ent, e, _gid) = setup();
-        let mut v = json!({ "avatar": { "Some": e.to_bits() }, "target": e.to_bits() });
-        globalize_command_ids(&mut v, TypeId::of::<TPossessOpt>(), &reg, &ent);
+        let mut v = json!({ "source": { "Some": e.to_bits() }, "target": e.to_bits() });
+        globalize_command_ids(&mut v, TypeId::of::<TControlOpt>(), &reg, &ent);
         assert_eq!(
-            v["avatar"],
+            v["source"],
             json!({ "Some": Entity::PLACEHOLDER.to_bits() })
         );
     }
@@ -1407,9 +1406,9 @@ mod id_codec_tests {
     fn authz_target_reads_tagged_field_by_type() {
         let (reg, _ent, _e, gid) = setup();
         // Raw wire params carry the GLOBAL gid in the #[authz_target] field.
-        let tagged = json!({ "avatar": 5, "target": gid.get() });
+        let tagged = json!({ "source": 5, "target": gid.get() });
         assert_eq!(
-            authz_target_gid(&tagged, TypeId::of::<TPossess>(), &reg),
+            authz_target_gid(&tagged, TypeId::of::<TControl>(), &reg),
             Some(gid.get())
         );
         // A command with no #[authz_target] field → None (target-less).

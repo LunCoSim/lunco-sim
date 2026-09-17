@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use leafwing_input_manager::prelude::ActionState;
-use lunco_avatar_core::roles::{AvatarCorePlugin, LocalAvatar};
+use lunco_embodiment_core::roles::{EmbodimentCorePlugin, LocalEmbodiment};
 use lunco_core::{GlobalEntityId, Mutation, OpId, SessionId, SimTick, SyncChannel};
 use lunco_core_session::{
     AppliedInputSeq, LocalSession, NetReplicate, NetSpawn, NetworkRole, PendingReplicatedSpawns,
@@ -324,7 +324,7 @@ pub struct ProfilesMsg {
     pub entries: Vec<(u64, String, [u8; 3])>,
 }
 
-/// Avatar pose in an explicit semantic reference frame.
+/// Embodiment pose in an explicit semantic reference frame.
 ///
 /// The wire never exposes BigSpace's private `(CellCoord, f32 remainder)`
 /// representation. That split depends on the sender's concrete grid nesting
@@ -370,7 +370,7 @@ pub fn profile_wire_entries(profiles: &SessionProfiles) -> Vec<(u64, String, [u8
 /// A peer that POSSESSES a vehicle has a host-derivable center (the vehicle's
 /// authoritative position), so this report is only load-bearing for a FREE
 /// observer flying the scene with no possession — the host has no other way to
-/// know where it is looking. The client emits it from its `LocalAvatar` position
+/// know where it is looking. The client emits it from its `LocalEmbodiment` position
 /// at `interest_hz` on the lossy `ControlStream` (a dropped report just reuses the
 /// last center for one recompute; AOI hysteresis tolerates the staleness).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -787,7 +787,7 @@ pub struct SyncCommandEvent {
 
 /// Declare which [`SyncChannel`] a command type rides, and (unless `Local`)
 /// register its capture observer. Called by `lunco-networking` for each
-/// networked command (e.g. `SetPorts` → `ControlStream`, `PossessVessel` →
+/// networked command (e.g. `SetPorts` → `ControlStream`, `AcquireControl` →
 /// `CommandBus`). No-op-on-the-wire commands need not be declared.
 pub trait DeclareChannelExt {
     fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: SyncChannel)
@@ -2305,7 +2305,7 @@ pub fn send_local_cursor_updates(
 }
 
 /// Client → host: report this peer's world-space view center for AOI culling (B4
-/// Phase 1). Emitted from the `LocalAvatar` position at `interest_hz` on the lossy
+/// Phase 1). Emitted from the `LocalEmbodiment` position at `interest_hz` on the lossy
 /// `ControlStream`. Only a remote client reports — the host computes its own interest
 /// directly (and skips itself as `SessionId::LOCAL`). A possessing peer's center is
 /// host-derivable from the vehicle, but reporting unconditionally is cheap (~12 B at
@@ -2474,7 +2474,7 @@ pub fn send_student_status_updates(
 /// conventions themselves.
 #[derive(SystemParam)]
 pub struct AvatarPoseContext<'w, 's> {
-    local_avatar: Res<'w, lunco_avatar_core::roles::TheLocalAvatar>,
+    local_avatar: Res<'w, lunco_embodiment_core::roles::TheLocalEmbodiment>,
     frames: Query<'w, 's, &'static ReferenceFrame>,
     parents: Query<'w, 's, &'static ChildOf>,
     grids: Query<'w, 's, &'static Grid>,
@@ -2524,7 +2524,7 @@ impl AvatarPoseContext<'_, '_> {
     }
 }
 
-/// Snap every `LocalAvatar` to a target pose, migrating to the grid that owns
+/// Snap every `LocalEmbodiment` to a target pose, migrating to the grid that owns
 /// `reference_frame` when it differs
 /// from the avatar's current parent. Shared by all three mirroring paths
 /// (follow, observe, one-shot look-at) so the snap logic lives in one place.
@@ -2538,13 +2538,13 @@ fn snap_avatars_to(
             &ChildOf,
             Option<&mut lunco_camera_core::FreeFlightCamera>,
         ),
-        With<LocalAvatar>,
+        With<LocalEmbodiment>,
     >,
     frame_index: &lunco_celestial_spatial_core::ReferenceFrameIndex,
     q_frames: &Query<&ReferenceFrame>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
-    q_grid_spatial: &Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalAvatar>)>,
+    q_grid_spatial: &Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalEmbodiment>)>,
     pose: FramedAvatarPose,
 ) {
     let Some(canonical_grid) = frame_index.resolve(pose.frame) else {
@@ -2656,12 +2656,12 @@ mod framed_avatar_pose_tests {
                 &ChildOf,
                 Option<&mut lunco_camera_core::FreeFlightCamera>,
             ),
-            With<LocalAvatar>,
+            With<LocalEmbodiment>,
         >,
         frames: Query<&ReferenceFrame>,
         parents: Query<&ChildOf>,
         grids: Query<&Grid>,
-        grid_spatial: Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalAvatar>)>,
+        grid_spatial: Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalEmbodiment>)>,
     ) {
         snap_avatars_to(
             &mut commands,
@@ -2705,7 +2705,7 @@ mod framed_avatar_pose_tests {
     fn capture_exports_f64_pose_in_inherited_semantic_frame() {
         let mut app = App::new();
         app.init_resource::<lunco_celestial_spatial_core::ReferenceFrameIndex>()
-            .init_resource::<lunco_avatar_core::roles::TheLocalAvatar>()
+            .init_resource::<lunco_embodiment_core::roles::TheLocalEmbodiment>()
             .init_resource::<Captured>()
             .add_systems(
                 First,
@@ -2716,14 +2716,14 @@ mod framed_avatar_pose_tests {
         let avatar = app
             .world_mut()
             .spawn((
-                LocalAvatar,
+                LocalEmbodiment,
                 CellCoord::ZERO,
                 Transform::from_xyz(0.25, 3.0, -7.0),
                 ChildOf(surface),
             ))
             .id();
         app.world_mut()
-            .resource_mut::<lunco_avatar_core::roles::TheLocalAvatar>()
+            .resource_mut::<lunco_embodiment_core::roles::TheLocalEmbodiment>()
             .0 = Some(avatar);
 
         app.update();
@@ -2762,7 +2762,7 @@ mod framed_avatar_pose_tests {
         let avatar = app
             .world_mut()
             .spawn((
-                LocalAvatar,
+                LocalEmbodiment,
                 CellCoord::ZERO,
                 Transform::IDENTITY,
                 ChildOf(surface),
@@ -2835,13 +2835,13 @@ pub fn apply_tutorial_mirroring(
             &ChildOf,
             Option<&mut lunco_camera_core::FreeFlightCamera>,
         ),
-        With<LocalAvatar>,
+        With<LocalEmbodiment>,
     >,
     frame_index: Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
     q_frames: Query<&ReferenceFrame>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
-    q_grid_spatial: Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalAvatar>)>,
+    q_grid_spatial: Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalEmbodiment>)>,
     #[cfg(feature = "layout-sync")] layout: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
 ) {
     // Case 1: Student is in follow mode, mirroring tutor status
@@ -3287,8 +3287,8 @@ lunco_core::register_commands!(
 
 impl Plugin for SyncPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<AvatarCorePlugin>() {
-            app.add_plugins(AvatarCorePlugin);
+        if !app.is_plugin_added::<EmbodimentCorePlugin>() {
+            app.add_plugins(EmbodimentCorePlugin);
         }
         lunco_settings::ensure_download_settings(app);
         // CONVENTION: SyncPlugin initializes ONLY wire-only state (envelope

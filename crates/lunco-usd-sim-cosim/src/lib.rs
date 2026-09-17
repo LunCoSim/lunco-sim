@@ -1206,7 +1206,7 @@ fn process_usd_cosim_prim_read(
     // comes from its `Controls` scope → `ControlBinding` + `InputPorts`, stamped in
     // the general USD translator (`lunco-usd-bevy`), which runs for every prim — not
     // here, which only sees model-bound cosim prims. The avatar domain owns the
-    // semantic possession boundary and excludes the `Avatar` endpoint; authority
+    // semantic possession boundary and excludes the `Embodiment` endpoint; authority
     // arbitration remains independent. A lander's actuation backend is its
     // `SimComponent` manual-override ports (written by `SetPorts`).
 

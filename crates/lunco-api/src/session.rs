@@ -10,6 +10,15 @@
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
 
+/// Records that an application-level interactive close-flow adapter owns the
+/// non-forced exit path. The adapter sets this when it registers its observer;
+/// the API session handler otherwise remains the headless exit owner.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct InteractiveExitHandler {
+    /// Whether a UI/application adapter will consume non-forced exits.
+    pub installed: bool,
+}
+
 /// Shut down the application.
 ///
 /// `force = true`: exit immediately. The reliable path for automation.
@@ -33,17 +42,18 @@ pub struct Exit {
 #[on_command(Exit)]
 pub fn on_exit(
     trigger: On<Exit>,
-    windows: Query<(), With<Window>>,
+    handler: Option<Res<InteractiveExitHandler>>,
     mut exit: MessageWriter<bevy::app::AppExit>,
 ) {
     if trigger.event().force {
         info!("[Exit] force — exiting immediately (no save prompt)");
-    } else if windows.is_empty() {
-        info!("[Exit] no window — nobody to answer a save prompt, exiting");
-    } else {
-        // A windowed host owns this path: it prompts, then exits itself.
+    } else if handler.is_some_and(|handler| handler.installed) {
+        // An application adapter owns the interactive close flow and will
+        // either prompt or emit AppExit after its policy settles.
         info!("[Exit] requested — routing through the app-close flow");
         return;
+    } else {
+        info!("[Exit] no interactive close handler — exiting");
     }
     exit.write(bevy::app::AppExit::Success);
 }

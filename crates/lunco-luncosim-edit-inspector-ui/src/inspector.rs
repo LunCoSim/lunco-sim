@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_avatar_core::roles::{Avatar, LocalAvatar};
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_control_core::{EguiFocus, IntentState, UserIntent};
 use lunco_core::OpId;
 use lunco_cosim::{JOINT_ANGLE_PORT, joint_angle_holder};
@@ -1269,7 +1269,7 @@ pub fn delete_selected_on_intent(
 /// package owns the role markers used to find the local input source.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct DeleteSelectionIntent<'w, 's> {
-    avatars: Query<'w, 's, &'static IntentState, (With<Avatar>, With<LocalAvatar>)>,
+    avatars: Query<'w, 's, &'static IntentState, (With<Embodiment>, With<LocalEmbodiment>)>,
     egui_focus: Res<'w, EguiFocus>,
 }
 

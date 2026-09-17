@@ -88,7 +88,7 @@ invoke an offscreen run when the acceptance criterion includes shadows, sky, or
 lunar-surface appearance.
 
 Offscreen has no workbench, so no viewport camera exists: the scene must provide an
-explicit active presentation camera, an authored `LocalAvatar` presentation camera,
+explicit active presentation camera, an authored `LocalEmbodiment` presentation camera,
 or an authored camera track with a valid camera binding. The recorder consumes that
 authored presentation contract and renders it through a target-born offscreen camera.
 That camera mirrors the source camera's transform, projection, exposure, tonemapping,

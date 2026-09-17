@@ -101,8 +101,8 @@ pub fn update_local_gravity_field(
             Option<&GravityBody>,
         ),
         (
-            With<lunco_avatar_core::roles::Avatar>,
-            With<lunco_avatar_core::roles::LocalAvatar>,
+            With<lunco_embodiment_core::roles::Embodiment>,
+            With<lunco_embodiment_core::roles::LocalEmbodiment>,
         ),
     >,
     q_parents: Query<&ChildOf>,
@@ -283,8 +283,8 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                lunco_avatar_core::roles::Avatar,
-                lunco_avatar_core::roles::LocalAvatar,
+                lunco_embodiment_core::roles::Embodiment,
+                lunco_embodiment_core::roles::LocalEmbodiment,
                 CellCoord::default(),
                 Transform::from_xyz(10.0, 0.0, 0.0),
                 GlobalTransform::default(),

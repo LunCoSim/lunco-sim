@@ -7,10 +7,10 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_avatar_core::roles::{Avatar, TheLocalAvatar};
+use lunco_embodiment_core::roles::{Embodiment, TheLocalEmbodiment};
 use lunco_control_core::ControlBinding;
 use lunco_core::SceneMountState;
-use lunco_cosim_core::ControlLink;
+use lunco_control_core::ControlLink;
 use lunco_luncosim_edit_gizmo_ui as edit_gizmo;
 use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
 use lunco_port_core::InputPorts;
@@ -272,8 +272,8 @@ fn sync_editor_session_selection(
 /// reads the public input-port surface and never changes control state.
 fn refresh_view_help_controls(
     bindings: Res<lunco_input_core::InputBindingsSettings>,
-    local_avatar: Res<TheLocalAvatar>,
-    q_avatar: Query<&ControlLink, (With<Avatar>, With<lunco_avatar_core::roles::LocalAvatar>)>,
+    local_avatar: Res<TheLocalEmbodiment>,
+    q_avatar: Query<&ControlLink, (With<Embodiment>, With<lunco_embodiment_core::roles::LocalEmbodiment>)>,
     q_names: Query<Ref<Name>>,
     q_callsigns: Query<&lunco_core::markers::Callsign>,
     q_catalog_ids: Query<&lunco_core::CatalogEntryId>,
@@ -379,8 +379,8 @@ pub struct SceneEditUiPlugin;
 
 impl Plugin for SceneEditUiPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
-            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
+            app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
         // The transform-gizmo transaction adapter is composed as a focused
         // sibling package. The remaining panel and scene interaction adapters

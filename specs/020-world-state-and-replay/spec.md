@@ -10,7 +10,7 @@
 - **NOT built — US3 (Deterministic Replay):** there is **no Input Log**. `#[Command]`s are not
   journaled: `api_command_dispatcher` (`lunco-api::executor`, the single funnel for every HTTP / MCP /
   rhai / UI command) performs zero journal interaction, and there is no `DomainKind::Command`. So
-  `SpawnEntity`, `PossessVessel`, `DriveRover`, `SetPorts`, terrain spawn/overlay and all time control
+  `SpawnEntity`, `AcquireControl`, `DriveRover`, `SetPorts`, terrain spawn/overlay and all time control
   are neither recorded nor replayable, and entries carry no sim-tick/seed. **Replaying a session is
   impossible today**; reopening a twin restores *document* state only. See
   [`docs/architecture/command-journal.md`](../../docs/architecture/command-journal.md) for the design

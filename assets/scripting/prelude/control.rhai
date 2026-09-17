@@ -113,7 +113,7 @@ fn detach_joint(joint)         { cmd("DetachJoint", #{ target: joint }) }
 fn claim_control(endpoint)     { cmd("ClaimControl", #{ target: endpoint }) }
 /// Release one endpoint's session authority without changing its producer.
 fn release_control_claim(endpoint) { cmd("ReleaseControlClaim", #{ target: endpoint }) }
-fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }
+fn possess(vessel)             { cmd("AcquireControl", #{ target: vessel }) }
 
 // ── Cinematic camera helpers (all generic cmd() under the hood) ──
 // A cutscene is just a `seq([...])` task that cuts the active viewport between

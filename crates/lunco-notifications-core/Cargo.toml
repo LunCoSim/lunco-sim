@@ -1,9 +1,9 @@
 [package]
-name = "lunco-avatar-core"
+name = "lunco-notifications-core"
 version = "0.1.0-dev"
-edition = "2021"
+edition = "2024"
 license.workspace = true
-description = "Backend-neutral avatar command and lifecycle contracts for LunCoSim"
+description = "Backend-neutral transient notification contracts for LunCoSim"
 
 [dependencies]
 bevy = { workspace = true }

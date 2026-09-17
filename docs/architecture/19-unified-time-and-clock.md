@@ -115,7 +115,7 @@ contact islands and one solver step require a coherent physics cadence.
 ### 5.3 Cadence is not clock
 
 The schedule answers how often a system runs; the domain answers which time it
-reads. Causal simulation runs on the fixed schedule. Avatar, camera, and UI
+reads. Causal simulation runs on the fixed schedule. Embodiment, camera, and UI
 presentation use `InteractionSchedule` and `InteractionEased`, so their stable
 presentation cadence does not become a second simulation clock.
 

@@ -6,7 +6,7 @@
 //! compile this crate.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{egui, EguiContexts};
 use lunco_workbench_runtime_ui as runtime_ui;
 
 use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
@@ -142,8 +142,8 @@ fn sync_runtime_ui_capture_state(
 
 impl Plugin for LunCoSimUiPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
-            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
+            app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
         app.insert_resource(lunco_workbench::BuildIdentity::new(
             self.config.product_version,
@@ -191,7 +191,7 @@ impl Plugin for LunCoSimUiPlugin {
         scenario_fixture::install(app);
         crate::register_save_scenario_command(app);
         // A windowed host requires a presentation contract. Authored tracks and
-        // LocalAvatar cameras remain authoritative; the USD projection may add
+        // LocalEmbodiment cameras remain authoritative; the USD projection may add
         // one Twin-scoped presentation camera/light for a standalone assembly
         // that has neither authored initial presentation.
         app.world_mut()
@@ -443,8 +443,8 @@ fn on_runtime_ui_action(
     q_avatar: Query<
         Entity,
         (
-            With<lunco_avatar_core::roles::Avatar>,
-            With<lunco_avatar_core::roles::LocalAvatar>,
+            With<lunco_embodiment_core::roles::Embodiment>,
+            With<lunco_embodiment_core::roles::LocalEmbodiment>,
         ),
     >,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
@@ -460,7 +460,7 @@ fn on_runtime_ui_action(
                 return;
             }
             if let Ok(target) = q_avatar.single() {
-                commands.trigger(lunco_avatar_core::commands::ReturnFromOrbit { target });
+                commands.trigger(lunco_camera_core::ReturnFromOrbit { camera: target });
             }
         }
         "view.body.moon" => {
@@ -522,8 +522,8 @@ fn runtime_focus_body(
         .iter()
         .find(|(_, body)| body.ephemeris_id == ephemeris_id)
     {
-        commands.trigger(lunco_avatar_core::commands::FocusTarget {
-            avatar: None,
+        commands.trigger(lunco_camera_core::FocusTarget {
+            camera: None,
             target,
         });
         true
@@ -1612,8 +1612,8 @@ fn clean_scene_name(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        RuntimeUiDropdownState, runtime_ui_dimension, scenario_registry_diagnostic,
-        scenario_registry_status_message,
+        runtime_ui_dimension, scenario_registry_diagnostic, scenario_registry_status_message,
+        RuntimeUiDropdownState,
     };
     use lunco_core::exposure::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;

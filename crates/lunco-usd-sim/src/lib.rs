@@ -357,8 +357,8 @@ impl Plugin for UsdSimPlugin {
                 invalidate_usd_sim_projection,
                 wheel_runtime::resync_wheels_for_stage,
             ));
-        if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
-            app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
+        if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
+            app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
         app.init_resource::<lunco_core::RuntimeFaults>();
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
@@ -367,7 +367,7 @@ impl Plugin for UsdSimPlugin {
         app.configure_sets(
             Update,
             (
-                UsdSimSet::Projection.before(lunco_avatar_core::lifecycle::AvatarSceneHandoffSet),
+                UsdSimSet::Projection.before(lunco_spatial::SceneSpatialHandoffSet),
                 UsdSimSet::ActivateDynamicBodies,
                 lunco_usd_sim_celestial::CelestialProjectionSet::Projection
                     .before(UsdSimSet::Projection),
@@ -565,7 +565,7 @@ fn process_usd_sim_prims(
 
         // Bail when this prim lives under a `UsdPreviewOnly` scene
         // root. Preview viewports render geometry only — they must
-        // not spawn Avatar Camera3d, actuator ports, or wheel raycasts
+        // not spawn Embodiment Camera3d, actuator ports, or wheel raycasts
         // into the main world. Walking up the `ChildOf` chain catches
         // every prim because `sync_usd_visuals` parents each spawned
         // prim entity to its USD-parent entity, which itself chains
@@ -1198,16 +1198,16 @@ fn process_usd_sim_prim_read(
     // `lunco-usd-sim-celestial` plugin, not here. Bundling it in this system
     // made a cosim prim, which skips this system, lose its LinkNode.
 
-    // Avatar camera behavior is a presentation concern. USD simulation only
+    // Embodiment camera behavior is a presentation concern. USD simulation only
     // projects the avatar role and spatial identity; `lunco-avatar` realizes
     // the generic movement substrate and Rhai selects camera behavior.
     if is_avatar {
         info!(
-            "Detected Avatar prim at {}, publishing avatar role and spatial identity",
+            "Detected Embodiment prim at {}, publishing avatar role and spatial identity",
             prim_path.path
         );
 
-        // Avatar position from the live composed scene hierarchy. The USD
+        // Embodiment position from the live composed scene hierarchy. The USD
         // transform is local to its authored parent, so resolve the nearest
         // actual Grid in that parent chain and commit the complete spatial
         // handoff through the shared migration boundary.
@@ -1255,8 +1255,8 @@ fn process_usd_sim_prim_read(
             .with_scale(existing_tf.scale);
 
         commands.entity(entity).try_insert((
-            lunco_avatar_core::roles::Avatar,
-            lunco_avatar_core::roles::LocalAvatar,
+            lunco_embodiment_core::roles::Embodiment,
+            lunco_embodiment_core::roles::LocalEmbodiment,
         ));
         lunco_spatial::attach::migrate_to_grid(
             commands,

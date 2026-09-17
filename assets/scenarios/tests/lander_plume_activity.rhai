@@ -47,8 +47,8 @@ fn on_start(me, ctx) {
     this.zero_length = 1.0;
     if this.lander >= 0 {
         // This is a headless authored stimulus. Establish control ownership
-        // without asking the presentation layer to resolve a LocalAvatar.
-        let possession = cmd("PossessVessel", #{
+        // without asking the presentation layer to resolve a local embodiment.
+        let possession = cmd("AcquireControl", #{
             target: this.lander,
             bind_camera: false,
         });

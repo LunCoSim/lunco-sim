@@ -16,7 +16,7 @@ pub struct NoSelectionBounds;
 ///
 /// The same fact the vessel's `piloted` port carries, hoisted to a resource so
 /// UI can read it without depending on the possession crate. Written by
-/// `PossessVessel`/`ReleaseVessel`; read by the input overlay's AUTO/MANUAL
+/// `AcquireControl`/`ReleaseControlSource`; read by the input overlay's AUTO/MANUAL
 /// badge, which is what makes a handback legible on camera — the keys go dark
 /// and the badge flips in the same frame.
 #[derive(Resource, Debug, Default, Clone, Copy, Reflect)]

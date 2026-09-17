@@ -197,7 +197,7 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
     // projection is a downstream client concern.
     let mut cam_q = app
         .world_mut()
-        .query_filtered::<(&ChildOf, &Name), With<lunco_avatar_core::roles::Avatar>>();
+        .query_filtered::<(&ChildOf, &Name), With<lunco_embodiment_core::roles::Embodiment>>();
     let parent = cam_q
         .iter(app.world())
         .find(|(_, name)| name.as_str() == "Observer Camera")

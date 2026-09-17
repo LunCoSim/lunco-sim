@@ -19,7 +19,7 @@ pub mod status;
 // that selects `ui` WITHOUT `lunco-api` (e.g. `cargo test -p lunco-luncosim-edit-ui`,
 // which reaches this crate through the dependency graph) failed to compile on an
 // unresolved `lunco_api` import.
-#[cfg(feature = "api")]
+#[cfg(all(feature = "api", feature = "ui"))]
 pub mod util;
 
 // Re-export Command structs for easy access
@@ -75,6 +75,15 @@ impl Plugin for ModelicaCommandsPlugin {
                 lifecycle::render_close_dialogs
                     .in_set(lunco_workbench_core::ApplicationOverlayRenderSet),
             );
+
+        #[cfg(all(feature = "api", feature = "ui"))]
+        {
+            app.init_resource::<lunco_api::session::InteractiveExitHandler>();
+            app.world_mut()
+                .resource_mut::<lunco_api::session::InteractiveExitHandler>()
+                .installed = true;
+            util::register_all_commands(app);
+        }
 
         // All typed commands, collected by the `register_commands!`
         // invocation below (path form supports the split submodules).

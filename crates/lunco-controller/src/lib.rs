@@ -43,9 +43,11 @@ use bevy::input::{
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
 use leafwing_input_manager::prelude::ActionState;
-use lunco_control_core::{ensure_control_plugin, ControlBinding, UserIntent};
+use lunco_control_core::{
+    ensure_control_plugin, ControlBinding, InteractionControlSet, UserIntent,
+};
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
-use lunco_cosim_core::ControlLink;
+use lunco_control_core::ControlLink;
 use lunco_input_core::InputBindingsSettings;
 use serde::{Deserialize, Serialize};
 
@@ -706,14 +708,6 @@ impl Plugin for LunCoControllerPlugin {
 /// binding implementation live in `lunco-control-core`; this crate only provides
 /// the SYSTEM that consumes it
 /// ([`drive_from_bindings`]).
-/// Interaction-schedule boundary for the avatar's command producer.
-///
-/// The free avatar consumes its command ports in `lunco-avatar` on the same
-/// unpausable cadence. Keeping the producer in a named set lets that consumer
-/// establish a real dependency, which also gives Bevy an `ApplyDeferred` sync
-/// point for the `SetPorts` observer before movement reads the ports.
-#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
-pub struct InteractionControlSet;
 
 /// Cap on the unacked input ring (~2 s at 60 Hz). The reconcile normally drains
 /// it to the acked `seq` each snapshot; this only bounds a stalled/disconnected

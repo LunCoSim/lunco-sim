@@ -8,11 +8,12 @@ use bevy::prelude::*;
 use lunco_api::{
     add_plugin_once,
     discovery::ApiDiscoveryPlugin,
-    ensure_command_core, executor,
+    ensure_command_core,
     queries::{self, ApiQueryRegistryPlugin, ApiVisibilityPlugin},
-    schema,
     subscription::ApiTelemetryPlugin,
 };
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+use lunco_api::{executor, schema};
 pub mod transports;
 
 /// Configuration for the API plugin.
