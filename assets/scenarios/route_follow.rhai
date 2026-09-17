@@ -779,11 +779,15 @@ fn on_start(me, ctx) {
 fn on_event(me, evt, ctx) {
     if evt.name == "usd.document.projected" && evt.value != ()
         && evt.value["doc_id"] == this.route_document {
-        // The document generation can be committed before the live ECS
-        // structural sink has spawned every child. The next typed route read
-        // validates the identity/placement key; disposable view changes keep
-        // the key stable and therefore cannot trigger a redraw loop.
-        this.route_revision = ();
+        // A view edit publishes the same generic projection event as a durable
+        // route edit. The revision captured after a successful view update is
+        // already current, so do not force an expensive composed route scan on
+        // every disposable marker/ribbon projection. A different generation
+        // is the structural invalidation boundary and must refresh the key.
+        let generation = evt.value["generation"];
+        if generation == () || this.route_revision != generation {
+            this.route_revision = ();
+        }
         return;
     }
     if evt.name == "program.selected" {
@@ -911,18 +915,25 @@ fn route_task_tick(m) {
     // control authority. Keep it synchronized for every live program so
     // selecting a different program cannot make the previous view stale.
     // Only navigation below is gated by the active-program selection.
-    let refreshed = refresh_route_view(m, this);
-    this = refreshed.state;
-    let view = refreshed.result;
-    if view.ok != true {
-        if view.retryable == true { return false; }
-        if this.route_error != view.error {
-            emit("route_presentation_unavailable", view.error);
+    // Route topology and the disposable view are revision-driven. Re-reading
+    // every composed child and the full ribbon payload on every control tick
+    // makes a long route look like a simulation stall and can starve input.
+    // `usd.document.projected` clears this fence only for a new generation;
+    // successful presentation writes retain the captured post-edit revision.
+    if this.route_revision == () || this.marker_sync_pending {
+        let refreshed = refresh_route_view(m, this);
+        this = refreshed.state;
+        let view = refreshed.result;
+        if view.ok != true {
+            if view.retryable == true { return false; }
+            if this.route_error != view.error {
+                emit("route_presentation_unavailable", view.error);
+            }
+            return false;
         }
-        return false;
+        this.route_revision = view.revision;
+        this.route_view_key = view.view_key;
     }
-    this.route_revision = view.revision;
-    this.route_view_key = view.view_key;
     // Selection state is a transient USD projection and may appear one
     // frame after a program hot-reload. Reconcile it at the same cadence
     // as the route view before driving; no route-specific Rust state is

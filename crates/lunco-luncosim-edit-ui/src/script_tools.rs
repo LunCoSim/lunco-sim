@@ -27,9 +27,9 @@
 
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
-use lunco_embodiment_core::roles::TheLocalEmbodiment;
-use lunco_core::{TelemetryEvent, TelemetryValue};
 use lunco_control_core::ControlLink;
+use lunco_core::{TelemetryEvent, TelemetryValue};
+use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_input_core::InputBindingsSettings;
 use lunco_scene_selection::SelectedEntities;
 use lunco_spatial::coords::{
@@ -367,9 +367,15 @@ fn scene_tool_context(
             ));
         }
     }
-    if let Some(surface_position) =
-        pointer_surface_render_position(click, q_scene_cameras, viewport, surface)
-    {
+    if let Some(surface_position) = pointer_surface_render_position(
+        click,
+        q_prim,
+        q_parents,
+        q_lod_tiles,
+        q_scene_cameras,
+        viewport,
+        surface,
+    ) {
         let surface_position = RenderPos(surface_position);
         context.push((
             "surface_render_position".to_string(),
@@ -388,6 +394,7 @@ fn scene_tool_context(
     }
     if let Some(position) = canonical_pointer_render_position(
         click,
+        q_prim,
         q_parents,
         q_lod_tiles,
         q_scene_cameras,
@@ -419,11 +426,13 @@ fn scene_tool_context(
 /// The mesh picker reports positions in the picked entity's local frame. That
 /// is valid for an ordinary prop, but a streamed terrain tile is nested under
 /// BigSpace and its local hit can be near zero even when the terrain is ~2 km
-/// below the body datum. The analytic surface query already owns the canonical
-/// screen-ray → active-grid conversion, so use it whenever its surface is the
-/// nearest hit. Props and vehicles keep the mesh pick unchanged.
+/// below the body datum. The analytic surface query owns the canonical
+/// screen-ray → active-grid conversion, so use it only when the visible pick
+/// belongs to that terrain. Props, vehicles, and the sky keep their mesh hit
+/// or no-hit result; hidden analytic terrain is never an interaction target.
 fn canonical_pointer_render_position(
     click: &Pointer<Click>,
+    q_prim: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_parents: &Query<&ChildOf>,
     q_lod_tiles: &Query<&lunco_terrain_surface::stream_viz::LodTileOf>,
     q_scene_cameras: &Query<
@@ -434,48 +443,22 @@ fn canonical_pointer_render_position(
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> Option<bevy::math::DVec3> {
     let mesh_position = click.hit.position?.as_dvec3();
-    let Some(camera_entity) = viewport.active_camera else {
-        return Some(mesh_position);
-    };
-    let Ok((camera, camera_transform)) = q_scene_cameras.get(camera_entity) else {
-        return Some(mesh_position);
-    };
-    let Some(surface_position) =
-        pointer_surface_render_position(click, q_scene_cameras, viewport, surface)
-    else {
-        return Some(mesh_position);
-    };
-    let Some(ray) = lunco_viewport_core::scene_click_ray(
-        false,
-        camera,
-        camera_transform,
-        click.pointer_location.position,
+    let Some(surface_position) = pointer_surface_render_position(
+        click,
+        q_prim,
+        q_parents,
+        q_lod_tiles,
+        q_scene_cameras,
+        viewport,
+        surface,
     ) else {
         return Some(mesh_position);
     };
-    let Some(terrain_hit) = surface.raycast_render(
-        RenderPos(ray.origin.as_dvec3()),
-        ray.direction,
-        f64::INFINITY,
-    ) else {
-        return Some(mesh_position);
-    };
-
-    let hit_is_terrain = std::iter::successors(Some(click.entity), |entity| {
-        q_parents.get(*entity).ok().map(|parent| parent.0)
-    })
-    .any(|entity| {
-        entity == terrain_hit.terrain
-            || q_lod_tiles
-                .get(entity)
-                .is_ok_and(|tile| tile.0 == terrain_hit.terrain)
-    });
-    let mesh_depth = f64::from(click.hit.depth);
-    let terrain_is_nearest = terrain_hit.distance <= mesh_depth + 0.5;
-    if hit_is_terrain || terrain_is_nearest {
-        return Some(surface_position);
-    }
-    Some(mesh_position)
+    // The surface helper already established that the picked entity belongs to
+    // the visible terrain. Returning this analytic point fixes the tile-local
+    // picker coordinate while keeping ordinary prop and sky clicks on their
+    // original mesh/no-hit path.
+    Some(surface_position)
 }
 
 /// Resolve the analytic terrain point below a scene pointer in the renderer's
@@ -484,6 +467,9 @@ fn canonical_pointer_render_position(
 /// suitable for terrain-aware authored tools.
 fn pointer_surface_render_position(
     click: &Pointer<Click>,
+    q_prim: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    q_parents: &Query<&ChildOf>,
+    q_lod_tiles: &Query<&lunco_terrain_surface::stream_viz::LodTileOf>,
     q_scene_cameras: &Query<
         (&Camera, &GlobalTransform),
         (With<Camera3d>, With<lunco_render::SceneCamera>),
@@ -491,6 +477,9 @@ fn pointer_surface_render_position(
     viewport: &lunco_viewport_core::SceneViewport,
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> Option<bevy::math::DVec3> {
+    if let Some(terrain_hit) = click.hit.extra_as::<lunco_terrain_surface::SurfaceHit>() {
+        return surface.to_render(terrain_hit.point).map(|point| point.0);
+    }
     let camera_entity = viewport.active_camera?;
     let (camera, camera_transform) = q_scene_cameras.get(camera_entity).ok()?;
     let ray = lunco_viewport_core::scene_click_ray(
@@ -504,6 +493,28 @@ fn pointer_surface_render_position(
         ray.direction,
         f64::INFINITY,
     )?;
+    let hit_is_terrain = std::iter::successors(Some(click.entity), |entity| {
+        q_parents.get(*entity).ok().map(|parent| parent.0)
+    })
+    .any(|entity| {
+        entity == terrain_hit.terrain
+            || q_lod_tiles
+                .get(entity)
+                .is_ok_and(|tile| tile.0 == terrain_hit.terrain)
+    });
+    let hit_has_authored_prim = std::iter::successors(Some(click.entity), |entity| {
+        q_parents.get(*entity).ok().map(|parent| parent.0)
+    })
+    .any(|entity| q_prim.get(entity).is_ok());
+    if !hit_is_terrain && hit_has_authored_prim {
+        return None;
+    }
+    // Streamed DEM tiles are render-only entities: they intentionally have no
+    // USD prim identity, while the analytic surface query is the authoritative
+    // terrain owner. If the winning render hit has no authored prim, the ray
+    // intersection above is sufficient to classify it as terrain. An authored
+    // prop/vehicle/ribbon remains a hard boundary, so a terrain point behind it
+    // is never silently substituted for the clicked object.
     surface.to_render(terrain_hit.point).map(|point| point.0)
 }
 

@@ -289,7 +289,14 @@ struct PendingUsdMesh {
     task: Task<Option<Mesh>>,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     path: SdfPath,
-    stage_generation: u64,
+    /// Ordinary scene geometry is read from the canonical stage and must be
+    /// discarded if that stage changes before the worker result lands.
+    /// Referenced runtime instances are different: their geometry comes from
+    /// the immutable instance projection plan, while the containing scene's
+    /// canonical generation advances for the instance's runtime placement and
+    /// view edits. Such a task is fenced by the instance plan, not by the
+    /// containing scene generation.
+    canonical_generation: Option<u64>,
     profile: lunco_render::RenderQualityProfile,
 }
 
@@ -894,7 +901,9 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                             task,
                             stage_id: prim_path.stage_handle.id(),
                             path: sdf_path.clone(),
-                            stage_generation,
+                            canonical_generation: instance_projection
+                                .is_none()
+                                .then_some(stage_generation),
                             profile: quality,
                         },
                         UsdSceneGeometryPending,
@@ -941,7 +950,9 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                             task,
                             stage_id: prim_path.stage_handle.id(),
                             path: sdf_path.clone(),
-                            stage_generation,
+                            canonical_generation: instance_projection
+                                .is_none()
+                                .then_some(stage_generation),
                             profile: quality,
                         },
                         UsdSceneGeometryPending,
@@ -1989,10 +2000,12 @@ fn process_queued_usd_visuals(
 /// Commit completed CPU-generated USD meshes without reading USD again.
 ///
 /// The extraction side owns the live-stage read and publishes the editable
-/// definition. This side only validates the stage generation and quality
-/// snapshot, inserts the worker-produced Bevy mesh, and binds the already
-/// authored appearance intent. A live edit, quality change, or scene replacement
-/// cancels the result and returns the entity to the canonical projection queue.
+/// definition. This side only validates the stage identity, the applicable
+/// geometry-generation fence, and the quality snapshot, then inserts the
+/// worker-produced Bevy mesh and binds the already authored appearance intent.
+/// A live edit or scene replacement cancels ordinary canonical-stage work;
+/// immutable referenced-instance work is fenced by its source projection plan
+/// and is unaffected by runtime edits in the containing scene.
 fn poll_pending_usd_meshes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -2023,7 +2036,9 @@ fn poll_pending_usd_meshes(
         let stale = !visual_synced
             || prim_path.stage_handle.id() != pending.stage_id
             || SdfPath::new(&prim_path.path).ok().as_ref() != Some(&pending.path)
-            || stage_generation != pending.stage_generation
+            || pending
+                .canonical_generation
+                .is_some_and(|generation| stage_generation != generation)
             || current_profile != pending.profile;
         if stale {
             commands

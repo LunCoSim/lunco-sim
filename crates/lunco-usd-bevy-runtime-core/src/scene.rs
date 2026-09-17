@@ -8,9 +8,9 @@ use bevy::asset::{AssetEvent, AssetLoadFailedEvent, AssetServer, Handle};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{
-    on_command, register_commands, Command, SceneTransition, SceneTransitionAdmission,
-    SceneTransitionAdmitted, SceneTransitionCompleted, SceneTransitionCoordinator,
-    SceneTransitionFailed, SceneTransitionIntent, SceneTransitionRequest,
+    Command, SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted,
+    SceneTransitionCompleted, SceneTransitionCoordinator, SceneTransitionFailed,
+    SceneTransitionIntent, SceneTransitionRequest, on_command, register_commands,
 };
 use lunco_cosim_core::SimConnection;
 use lunco_spatial::{OriginAnchor, WorldGrid};
@@ -670,9 +670,18 @@ pub fn spawn_usd_child_under_parent(
         InheritedVisibility::VISIBLE,
         ViewVisibility::default(),
     );
-    // A top-level child of the nested scene Grid carries its own CellCoord.
-    // Deeper USD descendants remain plain children of their authored parent.
+    // Match the initial USD projection's BigSpace contract. A child directly
+    // below a Grid stores its authored position as `(CellCoord, Transform)`;
+    // a child below a grid-direct USD prim is a low-precision render root and
+    // must carry `LowPrecisionRoot` so BigSpace propagates the parent's
+    // high-precision transform into its visual subtree. Runtime additions use
+    // this same boundary as initial scene materialisation.
     let parent_is_grid = world.get::<Grid>(parent_entity).is_some();
+    let parent_is_high_precision = parent_is_grid
+        || world
+            .get::<big_space::prelude::CellCoord>(parent_entity)
+            .is_some();
+    let child_is_low_precision_root = parent_is_high_precision && !parent_is_grid;
     let entity = match member {
         Some(m) if parent_is_grid => world
             .spawn((base, ChildOf(parent_entity), m, CellCoord::default()))
@@ -683,6 +692,11 @@ pub fn spawn_usd_child_under_parent(
             .id(),
         None => world.spawn((base, ChildOf(parent_entity))).id(),
     };
+    if child_is_low_precision_root {
+        world
+            .entity_mut(entity)
+            .insert(big_space::grid::propagation::LowPrecisionRoot);
+    }
     if let Some(projection) = parent_projection {
         world.entity_mut(entity).insert(projection);
     }
@@ -933,11 +947,12 @@ mod tests {
             app.world().resource::<CompletedTransitions>().0,
             vec![transition]
         );
-        assert!(app
-            .world()
-            .resource::<SceneTransitionCoordinator>()
-            .active()
-            .is_none());
+        assert!(
+            app.world()
+                .resource::<SceneTransitionCoordinator>()
+                .active()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1125,5 +1140,47 @@ mod tests {
         assert_eq!(validate_scene_address("lunco://"), None);
         assert_eq!(validate_scene_address("lunco://../scene.usda"), None);
         assert_eq!(validate_scene_address("twin:///scene.usda"), None);
+    }
+
+    #[test]
+    fn incremental_child_below_grid_direct_prim_gets_low_precision_root() {
+        let mut world = World::new();
+        let grid = world
+            .spawn((
+                Grid::new(2_000.0, 0.0),
+                CellCoord::ZERO,
+                Transform::default(),
+            ))
+            .id();
+        let route = world
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: Handle::default(),
+                    path: "/World/Route".to_string(),
+                },
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(grid),
+            ))
+            .id();
+
+        let point = spawn_usd_child_under_parent(
+            &mut world,
+            route,
+            "/World/Route/W0",
+            Transform::from_translation(Vec3::new(12.0, 3.0, -8.0)),
+        )
+        .expect("runtime child is spawned under its live USD parent");
+
+        assert!(
+            world
+                .get::<big_space::grid::propagation::LowPrecisionRoot>(point)
+                .is_some(),
+            "runtime children must enter the same low-precision render path as initial USD children"
+        );
+        assert!(
+            world.get::<CellCoord>(point).is_none(),
+            "a child below a grid-direct USD prim must not carry CellCoord without a Grid parent"
+        );
     }
 }

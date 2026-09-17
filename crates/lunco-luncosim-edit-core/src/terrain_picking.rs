@@ -63,7 +63,13 @@ pub fn emit_terrain_hits(
             ray_id.pointer,
             vec![(
                 hit.terrain,
-                HitData::new(ray_id.camera, depth, Some(render_point.0.as_vec3()), None),
+                HitData::new_with_extra(
+                    ray_id.camera,
+                    depth,
+                    Some(render_point.0.as_vec3()),
+                    None,
+                    hit,
+                ),
             )],
             camera.order as f32,
         ));

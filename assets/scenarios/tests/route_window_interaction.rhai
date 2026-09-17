@@ -6,7 +6,10 @@
 
 const ROUTE = "/Traverse/Route";
 const SUBJECT = "/Traverse/Rover";
-const ROVER_TARGET = "/Traverse/Rover/Chassis";
+// The chassis is coincident with W0's transparent annotation in this Twin.
+// Use a visible rover panel as the native possession target so the gesture
+// tests the same unambiguous hit a human gets when clicking the rover.
+const ROVER_TARGET = "/Traverse/Rover/SolarPanel/PanelSurface";
 const ADD_X = 1000.0;
 const ADD_Y = 700.0;
 
@@ -59,7 +62,12 @@ fn on_start(me, ctx) {
     this.before = ();
     this.after_add = ();
     this.added = ();
+    this.after_second_add = ();
+    this.added_second = ();
     this.marker = -1;
+    this.second_marker = -1;
+    this.before_add_pose = ();
+    this.before_second_add_pose = ();
     this.selection_ok = false;
     this.route_was_active = false;
     this.started = false;
@@ -74,6 +82,8 @@ fn on_start(me, ctx) {
     this.stable_rover_samples = 0;
     this.add_x = ADD_X;
     this.add_y = ADD_Y;
+    this.second_add_x = 0.0;
+    this.second_add_y = 0.0;
     this.sky_x = ADD_X;
     this.sky_y = 80.0;
     this.point_x = 0.0;
@@ -221,6 +231,26 @@ fn on_tick(me, ctx) {
 
     if this.phase == 8 {
         if port_active(this.subject) { return; }
+        // Possession changes the camera binding. Re-project the target after
+        // that handoff and wait for the follow camera to settle; reusing the
+        // pre-possession screen coordinate would click a different surface.
+        let rover_screen = viewport_position(find_path(ROVER_TARGET));
+        if rover_screen == () || rover_screen.len() != 2 { return; }
+        if this.last_rover_x != 0.0 {
+            let dx = rover_screen[0] - this.last_rover_x;
+            let dy = rover_screen[1] - this.last_rover_y;
+            if (dx * dx + dy * dy).sqrt() <= 2.0 {
+                this.stable_rover_samples += 1;
+            } else {
+                this.stable_rover_samples = 0;
+            }
+        }
+        this.last_rover_x = rover_screen[0];
+        this.last_rover_y = rover_screen[1];
+        if this.stable_rover_samples < 3 { return; }
+        this.rover_x = rover_screen[0];
+        this.rover_y = rover_screen[1];
+        this.before_add_pose = world_pos(this.subject);
         input_key_press("AltLeft");
         this.phase = 9;
         return;
@@ -255,8 +285,10 @@ fn on_tick(me, ctx) {
             "native Alt-click on the sky does not append a route point"));
         // Keep the valid terrain gesture close to the controlled rover so the
         // newly composed marker is observable in the same camera view.
-        this.add_x = this.rover_x + 120.0;
-        this.add_y = this.rover_y;
+        // The panel is the rover's visible hit target. Move well clear of it,
+        // but remain below the horizon so the ray must land on terrain.
+        this.add_x = this.rover_x + 240.0;
+        this.add_y = this.rover_y - 120.0;
         input_pointer_move(this.add_x, this.add_y);
         this.phase = 13;
         return;
@@ -294,6 +326,132 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(true, "native Alt-click appends one authored route point"));
         this.marker = find_path(this.added + "/Dome");
         if this.marker < 0 { return; }
+        let marker_screen = viewport_position(this.marker);
+        if marker_screen == () || marker_screen.len() != 2 { return; }
+        this.checks.push(t_true(true,
+            "the newly authored waypoint has a live viewport projection"));
+        let marker_root_screen = viewport_position(find_path(this.added));
+        if marker_root_screen == () || marker_root_screen.len() != 2 { return; }
+        let marker_dx = marker_root_screen[0] - this.add_x;
+        let marker_dy = marker_root_screen[1] - this.add_y;
+        this.checks.push(t_true((marker_dx * marker_dx + marker_dy * marker_dy).sqrt() < 64.0,
+            "the waypoint stays anchored at the terrain click"));
+        let marker_look = get(this.marker, "PbrLook");
+        this.checks.push(t_true(marker_look != ()
+            && marker_look.unlit == true
+            && marker_look.no_shadow_cast == true
+            && marker_look.alpha == "Blend",
+            "the waypoint uses the authored translucent, unlit, shadowless render intent"));
+        if this.before_add_pose != () {
+            let after_add_pose = world_pos(this.subject);
+            if after_add_pose == () || after_add_pose.len() != 3 { return; }
+            let dx = after_add_pose[0] - this.before_add_pose[0];
+            let dy = after_add_pose[1] - this.before_add_pose[1];
+            let dz = after_add_pose[2] - this.before_add_pose[2];
+            this.checks.push(t_true((dx * dx + dy * dy + dz * dz).sqrt() < 5.0,
+                "adding a waypoint does not teleport the rover"));
+        }
+        let ribbon = query("QueryUsdPrim", #{
+            path: ROUTE + "/RouteRibbon/Geometry",
+            attrs: ["wrap", "curveVertexCounts", "points"],
+        });
+        this.checks.push(t_true(ribbon != () && ribbon.ok != false
+            && ribbon.attrs != ()
+            && ribbon.attrs["wrap"] == "nonperiodic"
+            && ribbon.attrs["curveVertexCounts"] != ()
+            && ribbon.attrs["curveVertexCounts"].len() == 1
+            && ribbon.attrs["curveVertexCounts"][0] == ribbon.attrs["points"].len(),
+            "the route ribbon remains an open polyline with no closing leg"));
+        // Exercise the consecutive-add case as well. The second marker must
+        // be projected independently; a ribbon update is not evidence that
+        // its referenced sphere reached the live renderer.
+        this.second_add_x = this.add_x - 160.0;
+        this.second_add_y = this.add_y;
+        this.before_second_add_pose = world_pos(this.subject);
+        input_key_press("AltLeft");
+        this.phase = 26;
+        return;
+    }
+
+    if this.phase == 26 {
+        input_pointer_move(this.second_add_x, this.second_add_y);
+        this.phase = 27;
+        return;
+    }
+
+    if this.phase == 27 {
+        input_pointer_press("primary", this.second_add_x, this.second_add_y);
+        this.phase = 28;
+        return;
+    }
+
+    if this.phase == 28 {
+        input_pointer_release("primary", this.second_add_x, this.second_add_y);
+        this.phase = 29;
+        return;
+    }
+
+    if this.phase == 29 {
+        input_key_release("AltLeft");
+        this.phase = 30;
+        return;
+    }
+
+    if this.phase == 30 {
+        this.after_second_add = route_points();
+        if this.after_second_add == ()
+            || this.after_second_add.len() != this.before.len() + 2 {
+            return;
+        }
+        for path in this.after_second_add {
+            if !this.after_add.contains(path) { this.added_second = path; break; }
+        }
+        if this.added_second == () {
+            this.done = true;
+            fail("the second native Alt-click did not produce a distinct route point");
+            return;
+        }
+        this.checks.push(t_true(true,
+            "a second native Alt-click appends another authored route point"));
+        this.second_marker = find_path(this.added_second + "/Dome");
+        if this.second_marker < 0 { return; }
+        let second_marker_screen = viewport_position(this.second_marker);
+        if second_marker_screen == () || second_marker_screen.len() != 2 { return; }
+        this.checks.push(t_true(true,
+            "the second waypoint has an independent live viewport projection"));
+        let second_root_screen = viewport_position(find_path(this.added_second));
+        if second_root_screen == () || second_root_screen.len() != 2 { return; }
+        let second_dx = second_root_screen[0] - this.second_add_x;
+        let second_dy = second_root_screen[1] - this.second_add_y;
+        this.checks.push(t_true((second_dx * second_dx + second_dy * second_dy).sqrt() < 64.0,
+            "the second waypoint stays anchored at its terrain click"));
+        let second_marker_look = get(this.second_marker, "PbrLook");
+        this.checks.push(t_true(second_marker_look != ()
+            && second_marker_look.unlit == true
+            && second_marker_look.no_shadow_cast == true
+            && second_marker_look.alpha == "Blend",
+            "the second waypoint uses the authored translucent render intent"));
+        if this.before_second_add_pose != () {
+            let after_second_add_pose = world_pos(this.subject);
+            if after_second_add_pose == () || after_second_add_pose.len() != 3 { return; }
+            let dx = after_second_add_pose[0] - this.before_second_add_pose[0];
+            let dy = after_second_add_pose[1] - this.before_second_add_pose[1];
+            let dz = after_second_add_pose[2] - this.before_second_add_pose[2];
+            this.checks.push(t_true((dx * dx + dy * dy + dz * dz).sqrt() < 5.0,
+                "adding a second waypoint does not teleport the rover"));
+        }
+        let second_ribbon = query("QueryUsdPrim", #{
+            path: ROUTE + "/RouteRibbon/Geometry",
+            attrs: ["wrap", "curveVertexCounts", "points"],
+        });
+        this.checks.push(t_true(second_ribbon != () && second_ribbon.ok != false
+            && second_ribbon.attrs != ()
+            && second_ribbon.attrs["wrap"] == "nonperiodic"
+            && second_ribbon.attrs["curveVertexCounts"] != ()
+            && second_ribbon.attrs["curveVertexCounts"].len() == 1
+            && second_ribbon.attrs["curveVertexCounts"][0]
+                == second_ribbon.attrs["points"].len(),
+            "the second route update remains an open polyline"));
         // Repeat the release after the projected point is observable. This
         // gives the native input fan-out its own frame before the secondary
         // click, so a modifier cannot accidentally suppress route.context.
@@ -371,7 +529,10 @@ fn on_tick(me, ctx) {
 
     if this.phase == 23 {
         let after_delete = route_points();
-        if after_delete == () || after_delete.len() != this.before.len()
+        // The second point is intentionally retained: this acceptance path
+        // deletes the first newly-added point while proving that a consecutive
+        // point remains authored and visible.
+        if after_delete == () || after_delete.len() != this.before.len() + 1
             || after_delete.contains(this.added) {
             return;
         }
