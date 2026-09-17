@@ -34,6 +34,7 @@ lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-execution = { path = "../lunco-modelica-execution" }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }

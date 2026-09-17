@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use lunco_modelica_index::package_tree::types::{ModelSource, PackageNode};
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
 /// Canonical tree-node id for a source-library / third-party class, keyed by its dotted

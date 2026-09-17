@@ -1,5 +1,7 @@
 //! Source-scanning guards for the rumoca workaround chokepoints
-//! (`docs/architecture/29-rumoca-workarounds.md`).
+//! (`docs/architecture/29-rumoca-workarounds.md`). The guards scan both the
+//! compiler package and this execution package so moving a runtime seam cannot
+//! accidentally leave the compiler-side invariants untested.
 //!
 //! A workaround only works if EVERY path goes through it. These bugs are all
 //! silent — a bypassed path doesn't crash, it just quietly returns wrong numbers
@@ -107,16 +109,19 @@ fn sim_options_are_built_only_by_the_canonical_builders() {
 /// emitter again. See docs/architecture/29-rumoca-workarounds.md §5.
 #[test]
 fn source_is_never_regenerated_through_the_rumoca_emitter() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source_roots = [root.join("src"), root.join("../lunco-modelica-core/src")];
 
     let mut offenders = Vec::new();
-    for file in rust_files(&src) {
-        let Ok(text) = lunco_storage::read_text_file_sync(&file) else {
-            continue;
-        };
-        for (i, line) in code_only(&text).lines().enumerate() {
-            if line.contains(".to_modelica(") {
-                offenders.push(format!("{}:{}: {}", file.display(), i + 1, line.trim()));
+    for source_root in source_roots {
+        for file in rust_files(&source_root) {
+            let Ok(text) = lunco_storage::read_text_file_sync(&file) else {
+                continue;
+            };
+            for (i, line) in code_only(&text).lines().enumerate() {
+                if line.contains(".to_modelica(") {
+                    offenders.push(format!("{}:{}: {}", file.display(), i + 1, line.trim()));
+                }
             }
         }
     }
@@ -145,7 +150,7 @@ fn source_is_never_regenerated_through_the_rumoca_emitter() {
 /// session that never produces a DAE, so they are exempt.)
 #[test]
 fn user_source_is_seated_only_through_the_strip_chokepoint() {
-    let lib_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+    let lib_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lunco-modelica-core/src/lib.rs");
     let text = lunco_storage::read_text_file_sync(&lib_rs).expect("lib.rs readable");
 
     let seats: Vec<String> = code_only(&text)
@@ -154,20 +159,17 @@ fn user_source_is_seated_only_through_the_strip_chokepoint() {
         .filter(|(_, l)| {
             l.contains("session.update_document(") || l.contains("session.add_document(")
         })
-        .map(|(i, l)| format!("lib.rs:{}: {}", i + 1, l.trim()))
+        .map(|(i, l)| format!("{}:{}: {}", lib_rs.display(), i + 1, l.trim()))
         .collect();
 
-    // Exactly two are expected, and BOTH strip first:
-    //   * `seat_user_source` — the chokepoint for a user model document
-    //   * `load_source_root_in_memory` — library roots, reached only through
-    //     `seat_library_files`, which strips every member. Library members used
-    //     to arrive via rumoca's own source-root loader instead, unstripped —
-    //     that is the bug `library_member_bound_input_survives_as_runtime_slot`
-    //     pins. (Still untracked in `seated_user_uris`, so it can't be evicted:
-    //     §3 of the workarounds doc.)
+    // Exactly one compile-session write is expected: `seat_user_source`, the
+    // chokepoint for a user model document. Library roots are parsed and
+    // installed through `replace_parsed_source_set` in
+    // `load_source_root_in_memory`, so they do not add a second
+    // `update_document`/`add_document` site.
     assert_eq!(
         seats.len(),
-        2,
+        1,
         "a new site seats documents into the COMPILE session. User model source must go \
          through `seat_user_source` (which applies strip_input_defaults) — otherwise bound \
          inputs are silently demoted. See docs/architecture/29-rumoca-workarounds.md §2.\n\

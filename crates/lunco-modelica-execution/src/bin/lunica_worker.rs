@@ -56,7 +56,7 @@ mod wasm {
     use std::cell::RefCell;
 
     use js_sys::Uint8Array;
-    use lunco_modelica_core::worker_transport::{WireMessage, WireResult};
+    use lunco_modelica_execution::worker_transport::{WireMessage, WireResult};
     use lunco_modelica_runtime::{ModelicaCommand, ModelicaResult};
 
     fn command_label(cmd: &ModelicaCommand) -> String {
@@ -76,13 +76,13 @@ mod wasm {
         }
     }
 
+    use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
-    use wasm_bindgen::JsCast;
     use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-    use lunco_modelica_core::worker::{
-        panic_result_for_command, process_worker_command, ModelicaWorkerState,
+    use lunco_modelica_execution::worker::{
+        ModelicaWorkerState, panic_result_for_command, process_worker_command,
     };
 
     thread_local! {
@@ -233,7 +233,7 @@ mod wasm {
         >,
         bounds: &lunco_experiments::RunBounds,
     ) {
-        use lunco_modelica_core::experiments_runner::apply_value_bindings_to_dae;
+        use lunco_modelica_execution::experiments_runner::apply_value_bindings_to_dae;
         let started = web_time::Instant::now();
         post_log(
             scope,
@@ -332,7 +332,9 @@ mod wasm {
         // closes that divergence and also brings the worker the batch
         // output-decimation.
         let mut sink = WorkerSink { scope, run_id };
-        lunco_modelica_core::experiments_runner::drive_run(&run_dae, bounds, started, &mut sink);
+        lunco_modelica_execution::experiments_runner::drive_run(
+            &run_dae, bounds, started, &mut sink,
+        );
         post_log(
             scope,
             format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
@@ -352,7 +354,7 @@ mod wasm {
         }
     }
 
-    /// Worker-side [`RunSink`](lunco_modelica_core::experiments_runner::RunSink):
+    /// Worker-side [`RunSink`](lunco_modelica_execution::experiments_runner::RunSink):
     /// streams run updates over `postMessage` and reads the worker's cancel
     /// registry. The ONLY platform-specific half of the run loop — the loop
     /// itself is shared with the native runner.
@@ -361,7 +363,7 @@ mod wasm {
         run_id: lunco_experiments::ExperimentId,
     }
 
-    impl lunco_modelica_core::experiments_runner::RunSink for WorkerSink<'_> {
+    impl lunco_modelica_execution::experiments_runner::RunSink for WorkerSink<'_> {
         fn is_cancelled(&mut self) -> bool {
             if is_cancelled(self.run_id) {
                 clear_cancel();
@@ -400,7 +402,7 @@ mod wasm {
     }
 
     #[wasm_bindgen(start)]
-    pub fn run() -> Result<(), JsValue> {
+    pub(crate) fn run() -> Result<(), JsValue> {
         console_error_panic_hook::set_once();
         web_sys::console::log_1(&"[lunica_worker] starting".into());
 
@@ -414,8 +416,8 @@ mod wasm {
         // victim of the layout drift it detects.
         let _ = scope.post_message(&JsValue::from_str(&format!(
             "{}{}",
-            lunco_modelica_core::worker_transport::WIRE_HANDSHAKE_PREFIX,
-            lunco_modelica_core::worker_transport::WIRE_BUILD_ID,
+            lunco_modelica_execution::worker_transport::WIRE_HANDSHAKE_PREFIX,
+            lunco_modelica_execution::worker_transport::WIRE_BUILD_ID,
         )));
 
         let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
@@ -651,7 +653,7 @@ mod wasm {
                 }
                 WireMessage::ParseDocument {
                     doc_id,
-                    gen,
+                    generation,
                     uri,
                     source,
                 } => {
@@ -691,7 +693,7 @@ mod wasm {
                                 &scope_for_cb,
                                 &WireResult::ParseDocumentFailed {
                                     doc_id,
-                                    gen,
+                                    generation,
                                     error: format!("Modelica parser panicked: {msg}"),
                                 },
                             );
@@ -703,7 +705,7 @@ mod wasm {
                     post_log(
                         &scope_for_cb,
                         format!(
-                            "parsed doc={doc_id:?} gen={gen} src={}B in {ms:.0}ms (errors={})",
+                            "parsed doc={doc_id:?} generation={generation} src={}B in {ms:.0}ms (errors={})",
                             source.len(),
                             errors.len(),
                         ),
@@ -712,7 +714,7 @@ mod wasm {
                         &scope_for_cb,
                         &WireResult::ParseDocumentDone {
                             doc_id,
-                            gen,
+                            generation,
                             ast,
                             errors,
                         },

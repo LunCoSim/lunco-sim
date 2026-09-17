@@ -8,7 +8,7 @@ How the browser build keeps the UI responsive while rumoca compiles a model.
 
 `wasm32-unknown-unknown` has no native thread API available to the runtime.
 The Modelica worker therefore runs in a dedicated Web Worker. Native already
-has the same ownership boundary — `worker::modelica_worker` on a
+has the same ownership boundary — `lunco_modelica_execution::worker::modelica_worker` on a
 `std::thread` exchanging crossbeam messages — and the web transport mirrors
 that boundary without nightly Rust, atomics, or `SharedArrayBuffer`.
 
@@ -39,18 +39,19 @@ a transport layer that bridges the channels to the worker over
 ```
 
 1. **Page boot.** Main wasm runs `lunica`'s `wasm_bindgen(start) run()`.
-   The Modelica UI facade adds the core plugin, which creates two crossbeam channels (cmd, res), stores
+   The Modelica UI facade adds the compiler core and execution plugins. The
+   execution plugin creates two crossbeam channels (cmd, res), stores
    them on `ModelicaChannels`, and registers the `tx_res` / `tx_cmd` handles
-   with `worker_transport::register_result_sender` /
+   with `lunco_modelica_execution::worker_transport::register_result_sender` /
    `register_command_sender` so JS-side bridges can reach them.
 2. **Worker spawn.** The first Modelica compile, document parse, or fast run
-   calls `worker_transport::ensure_pool_spawned`, which constructs a
+   calls `lunco_modelica_execution::worker_transport::ensure_pool_spawned`, which constructs a
    `web_sys::Worker` of `type=module`, attaches an
    `onmessage` closure that decodes `WireResult` and pushes `Result` into
    `tx_res` and `Log` lines into `bevy::log::info!("[worker] …")`, and
    stashes the worker pool in the transport owner. The worker JS
    bundle is loaded via the **bootstrap adapter** (see "Bootstrap" below).
-3. **Worker init.** Inside the Worker, `bin/lunica_worker.rs::run()` runs
+3. **Worker init.** Inside the Worker, `lunco-modelica-execution/src/bin/lunica_worker.rs::run()` runs
    under `wasm_bindgen(start)`. It installs `self.onmessage`, posts back
    `WireResult::Log("ready")`, and parks.
 4. **Source-library handoff.** The main page's source-library fetcher keeps the downloaded
@@ -64,13 +65,13 @@ a transport layer that bridges the channels to the worker over
    as a runtime substitute.
 5. **Compile / Step / etc.** Bevy systems send `ModelicaCommand` via
    `channels.tx` exactly as on native. Each `Update` tick,
-   `worker_transport::pump_commands_to_worker` drains `channels.rx_cmd`,
+   `lunco_modelica_execution::worker_transport::pump_commands_to_worker` drains `channels.rx_cmd`,
    wraps each command in `WireMessage::Command(...)`, bincode-encodes,
    `worker.post_message(...)`. If the worker is unavailable, each command
    receives an explicit lifecycle failure; simulation is never run on the page
    thread and commands never remain queued indefinitely.
 6. **Worker dispatch.** Worker `onmessage` decodes the envelope:
-   - `Command(cmd)` → `worker::process_worker_command(state, cmd, |r| post_result(r))`.
+   - `Command(cmd)` → `lunco_modelica_execution::worker::process_worker_command(state, cmd, |r| post_result(r))`.
      This is the single wasm command-dispatch path.
      `catch_unwind` wraps the call so a panic surfaces as
      `WireResult::Log("PANIC during {label}: {msg}")` instead of silent death.
@@ -121,10 +122,13 @@ shared-snapshot fast-path.
 ## Cross-platform footprint
 
 Native unchanged. The serde derives are no-ops at runtime.
-`worker_transport.rs` and `bin/lunica_worker.rs` are
+`lunco-modelica-execution/src/worker_transport.rs` and
+`lunco-modelica-execution/src/bin/lunica_worker.rs` are
 `#![cfg(target_arch = "wasm32")]` end-to-end. The wasm worker owns the
-`ModelicaWorkerState` and dispatches through `worker::process_worker_command`;
-there is no main-thread Modelica fallback. The native `worker::modelica_worker` loop
+`ModelicaWorkerState` and dispatches through
+`lunco_modelica_execution::worker::process_worker_command`;
+there is no main-thread Modelica fallback. The native
+`lunco_modelica_execution::worker::modelica_worker` loop
 keeps its native dispatch and ownership of `SimulationSession` values.
 
 ## Build (`scripts/build_web.sh build lunica`)
@@ -169,7 +173,7 @@ import init from './lunica_worker.js';
 await init();
 ```
 
-`worker_transport::install_worker` points at `worker_bootstrap.js`, not
+`lunco_modelica_execution::worker_transport::install_worker` points at `worker_bootstrap.js`, not
 `lunica_worker.js`. This is the single most important file in the whole
 pipeline; without it nothing else works.
 
@@ -250,9 +254,10 @@ step runs on the page thread.
   `SharedWorker` but YAGNI.
 - **Cancel mid-compile.** No way to interrupt a compile in flight. Same
   as native today.
-- **Worker bundle size.** The worker is built from `lunco-modelica-core`, so
-  it does not link the workbench UI graph. Further size work should target the
-  core's actual Rumoca/source closure rather than recreating a worker-only crate.
+- **Worker bundle size.** The worker is built from `lunco-modelica-execution`,
+  which composes the compiler core without linking the workbench UI graph.
+  Further size work should target the execution package's actual
+  Rumoca/source closure.
 
 ## Prerequisites
 

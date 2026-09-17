@@ -11,20 +11,21 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::ModelicaCompiler;
 use lunco_experiments::solver;
-use lunco_modelica_ast::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
+use lunco_modelica_ast::ast_extract::{InputDefaultIssue, strip_input_defaults_with_report};
+use lunco_modelica_core::ModelicaCompiler;
+use lunco_modelica_runtime::{
+    CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, MAX_MACRO_STEP_DT,
+    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaResult, NoticeLevel,
+    SimSampleBatch, SimSampleStream,
+};
 #[cfg(test)]
 use lunco_modelica_runtime::{
-    resolve_communication_period_secs, validate_communication_period_secs,
-    DEFAULT_COMMUNICATION_PERIOD_SECS,
-};
-use lunco_modelica_runtime::{
-    CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, ModelicaChannels,
-    ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaResult, NoticeLevel, SimSampleBatch,
-    SimSampleStream, MAX_MACRO_STEP_DT,
+    DEFAULT_COMMUNICATION_PERIOD_SECS, resolve_communication_period_secs,
+    validate_communication_period_secs,
 };
 use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
@@ -45,6 +46,25 @@ use scheduling::{
     enqueue_command, pending_preparation_entities, promote_unblocked_steps,
     take_runnable_compile_command, take_runnable_steps,
 };
+
+fn diagnostics_from_sim_error(
+    err: &rumoca_sim::SimulationDiagnosticError,
+    source: &str,
+) -> Vec<lunco_doc::Diagnostic> {
+    use lunco_doc::Diagnostic;
+
+    let message = format!("[{}] {err}", err.diagnostic_code());
+    match err.source_span() {
+        Some(span) if span.start.0 <= source.len() => {
+            let (line, column) = lunco_modelica_document::document::core::byte_offset_to_line_col(
+                source,
+                span.start.0,
+            );
+            vec![Diagnostic::error(message, Some(line), Some(column))]
+        }
+        _ => vec![Diagnostic::message_only(message)],
+    }
+}
 
 /// Solver options for the **LIVE** (co-simulated) path.
 ///
@@ -380,7 +400,7 @@ fn send_compile_stepper_error(
 ) {
     let mut result = result_ok(entity, session_id);
     result.error = Some(format!("Stepper Error: {error}"));
-    result.compile_diagnostics = crate::diagnostics_from_sim_error(error, source);
+    result.compile_diagnostics = diagnostics_from_sim_error(error, source);
     result.is_new_model = true;
     let _ = tx.send(result);
 }
@@ -777,6 +797,7 @@ struct CacheRebuild {
     /// recompiled); `Err` = rumoca's formatted compile summary.
     outcome: Result<Box<rumoca_compile::compile::DaeCompilationResult>, String>,
     /// True when the cached artifact was reused as-is (no compiler touched).
+    #[cfg(not(target_arch = "wasm32"))]
     reused: bool,
 }
 
@@ -832,6 +853,7 @@ fn rebuild_from_cache(
             unit_key,
             unit,
             outcome: Ok(compiled),
+            #[cfg(not(target_arch = "wasm32"))]
             reused: true,
         });
     }
@@ -860,6 +882,7 @@ fn rebuild_from_cache(
         unit_key,
         unit,
         outcome,
+        #[cfg(not(target_arch = "wasm32"))]
         reused: false,
     })
 }
@@ -1793,10 +1816,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                             // diagnostics (click-to-source for solver
                                             // lowering failures).
                                             r.compile_diagnostics =
-                                                crate::diagnostics_from_sim_error(
-                                                    &e,
-                                                    &rb.unit.source,
-                                                );
+                                                diagnostics_from_sim_error(&e, &rb.unit.source);
                                             r.is_reset = true;
                                             let _ = tx_inner.send(r);
                                         }
@@ -1919,7 +1939,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     let mut r = result_ok(entity, session_id);
                                     r.error = Some(format!("Stepper Init Error: {e}"));
                                     r.compile_diagnostics =
-                                        crate::diagnostics_from_sim_error(&e, &unit.source);
+                                        diagnostics_from_sim_error(&e, &unit.source);
                                     r.is_parameter_update = true;
                                     let _ = tx_inner.send(r);
                                 }
@@ -2189,10 +2209,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                                      cached model of `{model_name}`: {e}"
                                                 ));
                                                 r.compile_diagnostics =
-                                                    crate::diagnostics_from_sim_error(
-                                                        &e,
-                                                        &rb.unit.source,
-                                                    );
+                                                    diagnostics_from_sim_error(&e, &rb.unit.source);
                                                 let _ = tx_inner.send(r);
                                                 return;
                                             }
@@ -2397,6 +2414,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 /// One-line identifier for a `ModelicaCommand`, used in worker
 /// instrumentation logs. Includes the model name where available so
 /// a stall can be pinned to a specific source.
+#[cfg(not(target_arch = "wasm32"))]
 fn command_label(cmd: &ModelicaCommand) -> String {
     match cmd {
         ModelicaCommand::Step {
@@ -2420,6 +2438,7 @@ fn command_label(cmd: &ModelicaCommand) -> String {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn cmd_entity(cmd: &ModelicaCommand) -> Entity {
     match cmd {
         ModelicaCommand::Step { entity, .. } => *entity,
@@ -2436,6 +2455,7 @@ fn cmd_entity(cmd: &ModelicaCommand) -> Entity {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn cmd_session(cmd: &ModelicaCommand) -> u64 {
     match cmd {
         ModelicaCommand::Step { session_id, .. } => *session_id,
@@ -2463,6 +2483,7 @@ fn cmd_session(cmd: &ModelicaCommand) -> u64 {
 ///
 /// If back-pressure on `Step` is ever genuinely needed, coalesce by **summing
 /// the `dt`s** — never by dropping one.
+#[cfg(not(target_arch = "wasm32"))]
 fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
     match (last, next) {
         (
@@ -2798,10 +2819,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 is_parameter_update: false,
                                 is_reset: false,
                                 detected_input_names: Vec::new(),
-                                compile_diagnostics: crate::diagnostics_from_sim_error(
-                                    &e,
-                                    &unit.source,
-                                ),
+                                compile_diagnostics: diagnostics_from_sim_error(&e, &unit.source),
                                 ..Default::default()
                             });
                         }
@@ -3015,10 +3033,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 is_parameter_update: true,
                                 is_reset: false,
                                 detected_input_names: Vec::new(),
-                                compile_diagnostics: crate::diagnostics_from_sim_error(
-                                    &e,
-                                    &unit.source,
-                                ),
+                                compile_diagnostics: diagnostics_from_sim_error(&e, &unit.source),
                                 ..Default::default()
                             });
                         }

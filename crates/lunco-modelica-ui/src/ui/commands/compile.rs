@@ -23,6 +23,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
+use lunco_modelica_execution::resolve_setup_bounds;
 use lunco_modelica_runtime::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, DEFAULT_COMMUNICATION_PERIOD_SECS,
 };
@@ -1539,7 +1540,7 @@ fn parse_solver_arg(s: Option<&str>) -> Result<Option<lunco_experiments::SolverI
     if t.is_empty() || t.eq_ignore_ascii_case("auto") {
         return Ok(None);
     }
-    lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
+    lunco_modelica_execution::ensure_builtin_solvers();
     let id = lunco_experiments::SolverId::from(t);
     if lunco_experiments::solver::get(&id).is_some() {
         return Ok(Some(id));
@@ -1830,7 +1831,7 @@ fn dispatch_experiment(
         // no per-surface divergence. The annotation cache seeding above is
         // what makes the cache layer here resolve without a prior
         // interactive compile.
-        let mut bounds = crate::model_commands::resolve_setup_bounds(world, doc, &model_ref);
+        let mut bounds = resolve_setup_bounds(world, doc, &model_ref);
 
         // Parameter overrides / inputs from the draft, with command-supplied
         // values winning. Empty maps (the FastRunActiveModel path) = no-op.

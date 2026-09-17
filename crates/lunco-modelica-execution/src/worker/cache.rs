@@ -1,12 +1,13 @@
 //! In-memory and persistent prepared-solve cache for the Modelica worker.
 
-use super::solver;
 #[cfg(not(target_arch = "wasm32"))]
 use super::PREPARED_SOLVE_CACHE_VERSION;
+use super::solver;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_core::modelica_dir;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_storage::{read_file_sync, write_file_sync};
+#[cfg(not(target_arch = "wasm32"))]
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

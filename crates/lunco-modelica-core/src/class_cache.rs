@@ -134,6 +134,7 @@ impl ClassLookupMode {
 /// process-wide [`lunco_assets_core::library::LibraryAssetSource`]. Returns
 /// `None` if the source hasn't been installed yet (web boot before
 /// fetch completes) or the path isn't present.
+#[cfg(not(target_arch = "wasm32"))]
 fn read_source_bytes(path: &std::path::Path) -> Option<String> {
     let bytes = lunco_assets_core::library::library_read(path)?;
     String::from_utf8(bytes).ok()
@@ -217,50 +218,50 @@ pub fn peek_or_load_class_blocking(
         return engine.class_def(qualified).map(Arc::new);
     }
 
-    let parsed_ast: Option<rumoca_compile::parsing::ast::StoredDefinition> = {
-        #[cfg(target_arch = "wasm32")]
-        {
-            bevy::log::warn!(
-                "[class_cache] source library cache miss for {qualified} (uri={uri}); \
-                     wasm refuses sync parse — class remains unresolved until worker fills"
-            );
-            return None;
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let source = read_source_bytes(&path)?;
-            // Parse standalone without holding the engine lock.
-            // `add_document` would do this internally but inside
-            // the lock; the standalone `parse_to_ast` lets us
-            // pay the parse cost off-lock and install via
-            // `add_parsed_batch` (cheap) afterwards.
-            match lunco_modelica_ast::parse_to_ast(&source, &uri) {
-                Ok(ast) => Some(ast),
-                Err(e) => {
-                    bevy::log::warn!(
-                        "[class_cache] rumoca parse failed for {qualified} (uri={uri}): {e:?}"
-                    );
-                    return None;
-                }
+    #[cfg(target_arch = "wasm32")]
+    {
+        bevy::log::warn!(
+            "[class_cache] source library cache miss for {qualified} (uri={uri}); \
+                 wasm refuses sync parse — class remains unresolved until worker fills"
+        );
+        return None;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let parsed_ast: rumoca_compile::parsing::ast::StoredDefinition = {
+        let source = read_source_bytes(&path)?;
+        // Parse standalone without holding the engine lock.
+        // `add_document` would do this internally but inside
+        // the lock; the standalone `parse_to_ast` lets us
+        // pay the parse cost off-lock and install via
+        // `add_parsed_batch` (cheap) afterwards.
+        match lunco_modelica_ast::parse_to_ast(&source, &uri) {
+            Ok(ast) => ast,
+            Err(e) => {
+                bevy::log::warn!(
+                    "[class_cache] rumoca parse failed for {qualified} (uri={uri}): {e:?}"
+                );
+                return None;
             }
         }
     };
 
-    let parsed_ast = parsed_ast?;
-
-    // Phase 3: re-acquire the lock briefly to install. Another
-    // task may have raced ahead and installed the same class
-    // while we were parsing — `add_parsed_batch` is idempotent
-    // for matching content, and `class_def` returns whatever is
-    // current. The wasted parse is acceptable; the alternative
-    // (per-class loading mutex) is more state for negligible win.
-    let mut engine = handle.lock();
-    if !engine.has_class(qualified) {
-        engine
-            .session_mut()
-            .add_parsed_batch(vec![(uri, parsed_ast)]);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Phase 3: re-acquire the lock briefly to install. Another
+        // task may have raced ahead and installed the same class
+        // while we were parsing — `add_parsed_batch` is idempotent
+        // for matching content, and `class_def` returns whatever is
+        // current. The wasted parse is acceptable; the alternative
+        // (per-class loading mutex) is more state for negligible win.
+        let mut engine = handle.lock();
+        if !engine.has_class(qualified) {
+            engine
+                .session_mut()
+                .add_parsed_batch(vec![(uri, parsed_ast)]);
+        }
+        engine.class_def(qualified).map(Arc::new)
     }
-    engine.class_def(qualified).map(Arc::new)
 }
 
 /// Non-blocking variant of [`peek_or_load_class_blocking`] — returns the

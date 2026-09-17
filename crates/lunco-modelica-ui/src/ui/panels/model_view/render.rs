@@ -16,6 +16,7 @@ use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
 use crate::ui::MODEL_VIEW_KIND;
 use lunco_doc::CompileState;
 use lunco_doc_bevy::DocumentDiagnostics;
+use lunco_modelica_execution::resolve_setup_bounds;
 
 pub struct ModelViewPanel {
     code: CodeEditorPanel,
@@ -55,7 +56,7 @@ pub(crate) fn on_fast_run_setup_requested(
         let model_ref = crate::sim_default::default_simulation_class(world, doc)
             .map(lunco_experiments::ModelRef);
         if let Some(model_ref) = model_ref {
-            let bounds = crate::model_commands::resolve_setup_bounds(world, doc, &model_ref);
+            let bounds = resolve_setup_bounds(world, doc, &model_ref);
             let overrides_count = world
                 .get_resource::<crate::experiments_runner::ExperimentDrafts>()
                 .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))
@@ -735,7 +736,7 @@ fn render_unified_toolbar(
                 // Same resolver the Experiments-tab Setup uses, so the two
                 // surfaces always agree (draft → runner cache → AST
                 // annotation → fallback).
-                let bounds = crate::model_commands::resolve_setup_bounds(world, doc, &model_ref);
+                let bounds = resolve_setup_bounds(world, doc, &model_ref);
                 let overrides_count = world
                     .get_resource::<crate::experiments_runner::ExperimentDrafts>()
                     .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))

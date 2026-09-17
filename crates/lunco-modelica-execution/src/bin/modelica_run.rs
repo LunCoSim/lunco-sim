@@ -211,7 +211,11 @@ mod native {
         // versa. Honors an explicit `RUMOCA_CACHE_DIR` if the user set one.
         if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
             let target = lunco_assets_core::cache_dir().join("rumoca");
-            std::env::set_var("RUMOCA_CACHE_DIR", &target);
+            // This happens before the compiler or any worker is created, so
+            // the process-wide cache setting has a single initialization
+            // owner. Rust 2024 requires the environment mutation to be
+            // explicit because concurrent environment access is unsound.
+            unsafe { std::env::set_var("RUMOCA_CACHE_DIR", &target) };
             eprintln!("[modelica_run] using rumoca cache at {}", target.display());
         }
 
@@ -265,7 +269,8 @@ mod native {
             ..Default::default()
         };
         let stepper_opts =
-            match lunco_modelica_core::experiments_runner::stepper_options_from_bounds(&bounds) {
+            match lunco_modelica_execution::experiments_runner::stepper_options_from_bounds(&bounds)
+            {
                 Ok(o) => o,
                 Err(e) => die(&format!("solver selection failed: {e}")),
             };
@@ -289,9 +294,11 @@ mod native {
         for (name, val) in &opts.inputs {
             if !stepper.input_names().iter().any(|n| n == name) {
                 eprintln!(
-                "[modelica_run] WARN --input `{}` is not a known input of {} (known: {:?}); applying anyway",
-                name, opts.class, stepper.input_names(),
-            );
+                    "[modelica_run] WARN --input `{}` is not a known input of {} (known: {:?}); applying anyway",
+                    name,
+                    opts.class,
+                    stepper.input_names(),
+                );
             }
             let _ = stepper.set_input(name, *val);
             applied_inputs.insert(name.clone(), *val);
@@ -437,14 +444,14 @@ mod native {
                 let steps_per_sec = (steps_done - last_progress_step) as f64
                     / last_progress.elapsed().as_secs_f64();
                 eprintln!(
-                "[modelica_run] sim t={:.3}/{:.3}s ({:.0}%), {:.0} steps/s, RTF {:.2}x, ETA {:.1}s",
-                sim_elapsed,
-                opts.duration,
-                100.0 * sim_elapsed / opts.duration,
-                steps_per_sec,
-                rtf,
-                eta_secs,
-            );
+                    "[modelica_run] sim t={:.3}/{:.3}s ({:.0}%), {:.0} steps/s, RTF {:.2}x, ETA {:.1}s",
+                    sim_elapsed,
+                    opts.duration,
+                    100.0 * sim_elapsed / opts.duration,
+                    steps_per_sec,
+                    rtf,
+                    eta_secs,
+                );
                 last_progress = Instant::now();
                 last_progress_step = steps_done;
             }

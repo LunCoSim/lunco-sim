@@ -30,7 +30,7 @@
 
 use bevy::prelude::*;
 // The egui workbench shell — UI only. A headless `--no-ui` (or `--no-default-
-// features`) lunica adds `ModelicaCorePlugin` (compile core) instead.
+// features`) lunica adds the Modelica compiler and execution plugins instead.
 #[cfg(feature = "ui")]
 use lunco_modelica_ui::ModelicaWorkbenchPlugin;
 
@@ -169,7 +169,8 @@ fn main() {
     // `default_plugins`; then we layer the egui workbench OR the headless
     // compile core on top — lunica's "UI plugin" is the modelica crate's
     // `ModelicaWorkbenchPlugin`, its "core plugin" the crate's
-    // `ModelicaCorePlugin`. Mirrors `lunco_luncosim`'s Core/Ui/Headless split.
+    // `ModelicaCorePlugin` plus `ModelicaExecutionPlugin`. Mirrors
+    // `lunco_luncosim`'s Core/Ui/Headless split.
     app.add_plugins(default_plugins(headless));
 
     // GUI (native windowed, or wasm — always windowed). The whole workbench:
@@ -203,6 +204,7 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     if headless {
         app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
+        app.add_plugins(lunco_modelica_execution::ModelicaExecutionPlugin);
         #[cfg(feature = "api")]
         {
             app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);

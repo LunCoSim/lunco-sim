@@ -8,7 +8,7 @@
 
 **Implemented.** `lunco-experiments` shipped — `Experiment`, `RunResult`,
 `RunStatus`, `ExperimentRegistry`, `ExperimentRunner` (trait), `ExperimentsPlugin`,
-with `lunco-modelica-core` providing the `ModelicaRunner` backend.
+with `lunco-modelica-execution` providing the `ModelicaRunner` backend.
 Owner: lunica/modelica.
 Related: `13-twin-and-workflow.md`, `14-simulation-layers.md`, `22-domain-cosim.md`, `30-wasm-web-worker.md`.
 
@@ -51,13 +51,18 @@ lunco-experiments-ui/     (backend-agnostic view state)
   ExperimentsViewModel and change-gated trajectory cache
 
 lunco-modelica-core/
+  ModelicaCompiler and compiler/document lifecycle
+
+lunco-modelica-execution/
   ModelicaRunner: ExperimentRunner
     cfg(target_arch="wasm32") -> WebWorkerTransport
     cfg(not(...))             -> ThreadTransport
   source-string override injector
+
+lunco-modelica-ui/
   Run buttons + experiment table + bounds inline UI
 
-lunco-modelica-core/src/bin/lunica_worker.rs
+lunco-modelica-execution/src/bin/lunica_worker.rs
   + ModelicaCommand::RunFast / CancelRun
   + ModelicaResult::RunProgress / RunCompleted / RunFailed
   MSL/compile readiness gate extended
@@ -69,7 +74,9 @@ lunco-viz/                            Shared multi-series trajectory renderer
 lunco-viz-core/                       Render-free visualization identifiers
 ```
 
-`lunco-modelica-core` depends on `lunco-experiments`. `lunco-experiments` does not depend on `lunco-modelica-core` or `rumoca-*`.
+`lunco-modelica-execution` depends on `lunco-experiments` and the compiler
+core. `lunco-experiments` does not depend on either Modelica package or
+`rumoca-*`.
 
 ### Why a new crate (vs. inside lunco-twin)
 `lunco-twin` today is folder + manifest + file classification. It has no simulation deps. Pulling rumoca-sim deps in to host experiments would expand its scope significantly. A sibling crate keeps lunco-twin lean and lets future twin work (possession, scenarios) compose with experiments rather than nesting under them.

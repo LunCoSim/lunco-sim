@@ -91,7 +91,8 @@ mod native {
             ..Default::default()
         };
         let mut opts =
-            match lunco_modelica_core::experiments_runner::stepper_options_from_bounds(&bounds) {
+            match lunco_modelica_execution::experiments_runner::stepper_options_from_bounds(&bounds)
+            {
                 Ok(o) => o,
                 Err(e) => anyhow::bail!("solver selection failed: {e}"),
             };

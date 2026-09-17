@@ -45,11 +45,11 @@ use bevy::prelude::*;
 use crossbeam_channel::Sender;
 use js_sys::Uint8Array;
 use lunco_worker_transport::{Callbacks, WorkerPool as WorkerTransport};
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
 use crate::lock_ext::LockExt;
-use crate::worker::ModelicaWorkerState;
+use lunco_modelica_core::worker_bridge::{WorkerParseDone, WorkerParseFailed};
 use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 
 /// Wire-format envelope for the postMessage transport.
@@ -108,7 +108,7 @@ pub enum WireMessage {
     /// Eliminates the ~5 s rumoca freeze on AnnotatedRocketStage.
     ParseDocument {
         doc_id: lunco_doc::DocumentId,
-        gen: u64,
+        generation: u64,
         uri: String,
         source: String,
     },
@@ -176,7 +176,7 @@ pub enum WireResult {
     /// `ast` is the lenient parser's best-effort result (always
     /// produced, even on broken sources). `errors` is the diagnostic
     /// list emitted by rumoca's recovery — empty when the source is
-    /// well-formed. `gen` is the doc's generation at parse-spawn time
+    /// well-formed. `generation` is the doc's generation at parse-spawn time
     /// so main can drop stale results.
     ///
     /// Both fields together replace the previous strict-style
@@ -185,7 +185,7 @@ pub enum WireResult {
     /// in one shot.
     ParseDocumentDone {
         doc_id: lunco_doc::DocumentId,
-        gen: u64,
+        generation: u64,
         ast: rumoca_compile::parsing::StoredDefinition,
         errors: Vec<lunco_doc::Diagnostic>,
     },
@@ -194,7 +194,7 @@ pub enum WireResult {
     /// an AST or retry a failed worker dispatch indefinitely.
     ParseDocumentFailed {
         doc_id: lunco_doc::DocumentId,
-        gen: u64,
+        generation: u64,
         error: String,
     },
     /// Lifecycle update for a Fast Run started via
@@ -402,17 +402,8 @@ static COMMAND_TX: OnceLock<crossbeam_channel::Sender<ModelicaCommand>> = OnceLo
 ///
 /// Crossbeam unbounded — parse-completion rate is well below tab-open
 /// rate so it never grows.
-pub struct ParseDoneEnvelope {
-    pub doc_id: lunco_doc::DocumentId,
-    pub gen: u64,
-    pub ast: rumoca_compile::parsing::StoredDefinition,
-    pub errors: Vec<lunco_doc::Diagnostic>,
-}
-pub struct ParseFailedEnvelope {
-    pub doc_id: lunco_doc::DocumentId,
-    pub gen: u64,
-    pub error: String,
-}
+pub type ParseDoneEnvelope = WorkerParseDone;
+pub type ParseFailedEnvelope = WorkerParseFailed;
 static PARSE_DONE_TX: OnceLock<crossbeam_channel::Sender<ParseDoneEnvelope>> = OnceLock::new();
 static PARSE_DONE_RX: OnceLock<crossbeam_channel::Receiver<ParseDoneEnvelope>> = OnceLock::new();
 static PARSE_FAILED_TX: OnceLock<crossbeam_channel::Sender<ParseFailedEnvelope>> = OnceLock::new();
@@ -506,7 +497,7 @@ fn ensure_parse_done_channel() -> &'static crossbeam_channel::Sender<ParseDoneEn
 /// Drain a single completed parse result, if any. Bevy system on the
 /// main thread polls this each tick; returns `None` when the queue
 /// is empty.
-pub fn try_recv_parse_done() -> Option<ParseDoneEnvelope> {
+pub fn try_recv_parse_done() -> Option<WorkerParseDone> {
     let _ = ensure_parse_done_channel();
     PARSE_DONE_RX.get()?.try_recv().ok()
 }
@@ -519,15 +510,15 @@ fn ensure_parse_failed_channel() -> &'static crossbeam_channel::Sender<ParseFail
     })
 }
 
-pub fn try_recv_parse_failed() -> Option<ParseFailedEnvelope> {
+pub fn try_recv_parse_failed() -> Option<WorkerParseFailed> {
     let _ = ensure_parse_failed_channel();
     PARSE_FAILED_RX.get()?.try_recv().ok()
 }
 
-fn queue_parse_failure(doc_id: lunco_doc::DocumentId, gen: u64, error: impl Into<String>) {
+fn queue_parse_failure(doc_id: lunco_doc::DocumentId, generation: u64, error: impl Into<String>) {
     let _ = ensure_parse_failed_channel().send(ParseFailedEnvelope {
         doc_id,
-        gen,
+        generation,
         error: error.into(),
     });
 }
@@ -641,7 +632,7 @@ fn route_wire_result(idx: usize, data: JsValue) {
     if data.is_instance_of::<js_sys::ArrayBuffer>() {
         let buf: js_sys::ArrayBuffer = data.unchecked_into();
         let decoded = Uint8Array::new(&buf).to_vec();
-        crate::library_remote::ingest_worker_decoded_library(decoded);
+        lunco_modelica_core::library_remote::ingest_worker_decoded_library(decoded);
         return;
     }
     let bytes: Vec<u8> = match Uint8Array::new(&data).to_vec() {
@@ -676,31 +667,37 @@ fn route_wire_result(idx: usize, data: JsValue) {
             bundled,
             done,
         }) => {
-            crate::library_remote::ingest_worker_library_index_chunk(components, bundled, done);
+            lunco_modelica_core::library_remote::ingest_worker_library_index_chunk(
+                components, bundled, done,
+            );
         }
         Ok(WireResult::LibraryIndexFailed { error }) => {
-            crate::library_remote::fail_worker_library_index(error);
+            lunco_modelica_core::library_remote::fail_worker_library_index(error);
         }
         Ok(WireResult::LibraryFailed { error }) => {
             fail_worker_pipeline(error.clone());
-            crate::library_remote::fail_worker_library(error);
+            lunco_modelica_core::library_remote::fail_worker_library(error);
         }
         Ok(WireResult::ParseDocumentDone {
             doc_id,
-            gen,
+            generation,
             ast,
             errors,
         }) => {
             let tx = ensure_parse_done_channel();
             let _ = tx.send(ParseDoneEnvelope {
                 doc_id,
-                gen,
+                generation,
                 ast,
                 errors,
             });
         }
-        Ok(WireResult::ParseDocumentFailed { doc_id, gen, error }) => {
-            queue_parse_failure(doc_id, gen, error);
+        Ok(WireResult::ParseDocumentFailed {
+            doc_id,
+            generation,
+            error,
+        }) => {
+            queue_parse_failure(doc_id, generation, error);
         }
         Ok(WireResult::RunUpdate { run_id, update }) => {
             forward_run_update(run_id, update);
@@ -818,7 +815,7 @@ pub fn prewarm_pool_on_source_bundle_ready() {
 ///   2. Respawn a fresh worker in that slot and re-seed it with source library, so pool
 ///      capacity self-heals (critical for the wasm default single-worker pool).
 fn handle_worker_error(idx: usize) {
-    if let Some(handle) = crate::engine_resource::global_engine_handle() {
+    if let Some(handle) = lunco_modelica_core::engine_resource::global_engine_handle() {
         handle.clear_all_pending();
     }
     let crashed_run = {
@@ -1312,22 +1309,16 @@ thread_local! {
 
 pub fn dispatch_parse_to_worker(
     doc_id: lunco_doc::DocumentId,
-    gen: u64,
+    generation: u64,
     uri: String,
     source: String,
-) {
+) -> Result<(), String> {
     if let Some(error) = pipeline_failure() {
-        queue_parse_failure(doc_id, gen, format!("Modelica worker unavailable: {error}"));
-        return;
+        return Err(format!("Modelica worker unavailable: {error}"));
     }
     ensure_pool_spawned();
     if !is_worker_active() {
-        queue_parse_failure(
-            doc_id,
-            gen,
-            "Modelica Web Worker is unavailable; rebuild the browser worker bundle",
-        );
-        return;
+        return Err("Modelica Web Worker is unavailable; rebuild the browser worker bundle".into());
     }
     // Parsing is independent of the source library session, so it may be queued behind
     // worker startup or a compile. Posting to the worker preserves ordering
@@ -1336,12 +1327,7 @@ pub fn dispatch_parse_to_worker(
         let p = pool().lock_or_recover();
         let n = p.worker_count();
         if n == 0 {
-            queue_parse_failure(
-                doc_id,
-                gen,
-                "Modelica Web Worker pool has no active workers",
-            );
-            return;
+            return Err("Modelica Web Worker pool has no active workers".into());
         }
         let start = NEXT_PARSE_WORKER.with(|c| {
             let s = c.get();
@@ -1355,17 +1341,12 @@ pub fn dispatch_parse_to_worker(
     };
     let message = WireMessage::ParseDocument {
         doc_id,
-        gen,
+        generation,
         uri,
         source,
     };
-    if let Err(error) = post_msg_to(idx, &message, "parse") {
-        queue_parse_failure(
-            doc_id,
-            gen,
-            format!("failed to dispatch Modelica parse: {error}"),
-        );
-    }
+    post_msg_to(idx, &message, "parse")
+        .map_err(|error| format!("failed to dispatch Modelica parse: {error}"))
 }
 
 /// JS-callable bridge that synthesizes a `ModelicaCommand::Compile` and

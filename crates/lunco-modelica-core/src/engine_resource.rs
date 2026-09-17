@@ -46,6 +46,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::engine::ModelicaEngine;
+use crate::worker_bridge::ModelicaWorkerBridge;
 use lunco_doc::{Document, DocumentId};
 
 /// Process-wide accessor for the workbench's engine handle. Set
@@ -216,7 +217,7 @@ impl ModelicaEngineHandle {
     /// No-op if a parse for `doc_id` is already in flight (dedupe).
     /// Mark a doc as pending-parse and return its URI without spawning
     /// any parser. Used by the wasm path that ships parsing to the
-    /// Web Worker — see `worker_transport::dispatch_parse_to_worker`
+    /// Web Worker — dispatched through [`ModelicaWorkerBridge`]
     /// and `drain_worker_parse_results` (engine_resource).
     ///
     /// Returns `None` when another parse is already in flight for the
@@ -447,6 +448,7 @@ pub fn drive_engine_sync(
     >,
     mut cursor: ResMut<EngineSyncCursor>,
     pacing: Res<ParsePacing>,
+    #[cfg(target_arch = "wasm32")] worker_bridge: Res<ModelicaWorkerBridge>,
 ) {
     let completed_roots = {
         let Some(mut engine) = handle.try_lock() else {
@@ -821,12 +823,18 @@ pub fn drive_engine_sync(
                     );
                     continue;
                 }
-                crate::worker_transport::dispatch_parse_to_worker(
-                    doc_id,
-                    gen,
-                    uri,
-                    source.to_string(),
-                );
+                if let Err(error) =
+                    worker_bridge.dispatch_parse(doc_id, gen, uri, source.to_string())
+                {
+                    handle.finish_worker_parse_failed(doc_id, gen, error.clone());
+                    bevy::log::error!(
+                        "[EngineSync] Modelica worker parse dispatch failed doc={} gen={}: {}",
+                        doc_id.raw(),
+                        gen,
+                        error,
+                    );
+                    continue;
+                }
                 true
             }
             None => {
@@ -881,7 +889,7 @@ pub fn drive_engine_sync(
 /// install each AST into the engine session.
 ///
 /// Wasm-only system. The worker emits one
-/// [`crate::worker_transport`] per
+/// [`ModelicaWorkerBridge`] per
 /// finished parse; the transport layer pushes each into a crossbeam
 /// channel; this system pulls them off the channel and routes each
 /// through [`ModelicaEngineHandle::install_worker_parsed_ast`] (success)
@@ -890,32 +898,33 @@ pub fn drive_engine_sync(
 #[cfg(target_arch = "wasm32")]
 pub fn drain_worker_parse_results(
     handle: Res<ModelicaEngineHandle>,
+    worker_bridge: Res<ModelicaWorkerBridge>,
     mut registry: ResMut<
         lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
     >,
 ) {
     use lunco_modelica_document::SyntaxCache;
     use std::sync::Arc;
-    while let Some(env) = crate::worker_transport::try_recv_parse_failed() {
-        handle.finish_worker_parse_failed(env.doc_id, env.gen, env.error.clone());
+    while let Some(env) = worker_bridge.try_recv_parse_failed() {
+        handle.finish_worker_parse_failed(env.doc_id, env.generation, env.error.clone());
         bevy::log::error!(
             "[EngineSync] worker parse failed doc={} gen={}: {}",
             env.doc_id.raw(),
-            env.gen,
+            env.generation,
             env.error,
         );
     }
-    while let Some(env) = crate::worker_transport::try_recv_parse_done() {
+    while let Some(env) = worker_bridge.try_recv_parse_done() {
         // Lenient parser always returns an AST. `errors` carries
         // any recovery diagnostics; `is_empty()` means source was
         // well-formed. Both fields land in the doc's single
         // `SyntaxCache` and the engine session adopts the AST as
         // its canonical view.
         let ast_arc = Arc::new(env.ast);
-        handle.install_worker_parsed_ast(env.doc_id, env.gen, (*ast_arc).clone());
+        handle.install_worker_parsed_ast(env.doc_id, env.generation, (*ast_arc).clone());
         if let Some(host) = registry.host_mut(env.doc_id) {
             let syntax = SyntaxCache {
-                generation: env.gen,
+                generation: env.generation,
                 ast: ast_arc,
                 errors: env.errors.clone(),
             };
@@ -928,13 +937,13 @@ pub fn drain_worker_parse_results(
             bevy::log::info!(
                 "[EngineSync] worker-parsed install doc={} gen={}",
                 env.doc_id.raw(),
-                env.gen,
+                env.generation,
             );
         } else {
             bevy::log::warn!(
                 "[EngineSync] worker-parsed install doc={} gen={} with {} parse error(s)",
                 env.doc_id.raw(),
-                env.gen,
+                env.generation,
                 env.errors.len(),
             );
         }
@@ -955,6 +964,7 @@ impl Plugin for ModelicaEnginePlugin {
         let handle = ModelicaEngineHandle::default();
         let _ = GLOBAL_ENGINE.set(handle.clone());
         app.insert_resource(handle)
+            .init_resource::<ModelicaWorkerBridge>()
             .init_resource::<EngineSyncCursor>()
             .init_resource::<ParsePacing>()
             .init_resource::<SourceBundleBootstrapState>()
@@ -1110,6 +1120,7 @@ fn drive_source_bundle_bootstrap(
     mut bootstrap: ResMut<SourceBundleBootstrapState>,
     mut task: ResMut<SourceBundleBootstrapTask>,
     mut commands: Commands,
+    #[cfg(target_arch = "wasm32")] worker_bridge: Res<ModelicaWorkerBridge>,
 ) {
     if matches!(*bootstrap, SourceBundleBootstrapState::Done) {
         return;
@@ -1129,7 +1140,7 @@ fn drive_source_bundle_bootstrap(
         bevy::log::info!("[EngineBootstrap] source bundle already installed by class lookup");
         commands.trigger(SourceBundleBecameReady);
         #[cfg(target_arch = "wasm32")]
-        crate::worker_transport::prewarm_pool_on_source_bundle_ready();
+        worker_bridge.prewarm();
         return;
     }
 
@@ -1148,7 +1159,7 @@ fn drive_source_bundle_bootstrap(
             );
             commands.trigger(SourceBundleBecameReady);
             #[cfg(target_arch = "wasm32")]
-            crate::worker_transport::prewarm_pool_on_source_bundle_ready();
+            worker_bridge.prewarm();
         }
         return;
     }

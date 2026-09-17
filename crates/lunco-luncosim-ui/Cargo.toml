@@ -75,6 +75,7 @@ lunco-luncosim-edit-inspector-ui = { path = "../lunco-luncosim-edit-inspector-ui
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
 lunco-usd-prim-tree-ui = { path = "../lunco-usd-prim-tree-ui" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-execution = { path = "../lunco-modelica-execution" }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }

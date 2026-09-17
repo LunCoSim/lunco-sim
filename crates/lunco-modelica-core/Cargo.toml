@@ -3,7 +3,7 @@ name = "lunco-modelica-core"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "Headless Modelica compiler, worker, and simulation runtime for LunCoSim"
+description = "Headless Modelica compiler and document runtime for LunCoSim"
 
 [features]
 # The compiler core is transport-free by default. API command completion is an
@@ -26,15 +26,13 @@ tracy = ["bevy/trace_tracy"]
 
 [dependencies]
 bevy.workspace = true
-# The whole egui IDE stack is UI-only. Optional behind `ui` so the Modelica
-# COMPILE CORE (ModelicaCorePlugin: channels + worker + .mo loader + dispatch)
-# builds headless (`default-features = false`) for a server running cosim — no
-# egui→winit. The GUI/lunica build keeps `default = [..., "ui"]`.
+# The solver worker and Fast Run stack live in `lunco-modelica-execution`.
+# This package keeps only the compiler/document runtime and its generic bridge,
+# so compiler-only consumers do not inherit the solver dependency closure.
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-core-session = { path = "../lunco-core-session" }
-lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
 # Core document-lifecycle events; its egui systems come back via `ui` below.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
@@ -63,18 +61,6 @@ ruzstd = "0.7"
 # Raster decoders used by egui_extras' `all_loaders`. Only the formats
 # actually present in source-library Resources/Images are enabled to keep the
 # compile surface small.
-# LunCoSim/rumoca, `main` (see the workspace Cargo.toml for the pin). It
-# carries the wasm32 `Instant` fix (std::time::Instant panics on
-# wasm32-unknown-unknown), reconstruction of algebraic/output variables via the
-# retained `EliminationResult` (so `state()`/`get()` return every variable, not
-# just solver-vector entries), and `Session::load_source_root_in_memory(...)`,
-# which lets the wasm runtime hand pre-fetched source bytes to the compile session
-# with no filesystem.
-# The interactive stepper is `SimulationSession` (rumoca ≥0.9.20; it replaced
-# `SimStepper`). NOTE: it clamps every advance at `SimOptions::t_end`, so build
-# it through `experiments_runner::stepper_options_from_bounds`, never from
-# `SimOptions::default()` — see the docs there.
-rumoca-sim = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
 # FACTS for the `modelica` lint domain (`../lunco-modelica-ast/src/lint_facts.rs`) are `HookValue`, the same
 # typed shape every other domain hands its authored rules.
@@ -82,22 +68,9 @@ lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
-lunco-modelica-solver = { path = "../lunco-modelica-solver" }
 rumoca-compile = { workspace = true }
-rumoca-ir-solve = { workspace = true }
-# Modelica formatter — surfaced as a "Format" toolbar button +
-# Ctrl+Shift+F binding. Rewrites the active editor buffer with
-# the canonical layout rumoca-tool-fmt produces.
-# Modelica linter — surfaced into the Diagnostics panel alongside
-# parse errors. Wraps `rumoca_tool_lint::lint(source, name, opts)`
-# which returns a `Vec<LintMessage>` we map to `LogEntry`s.
-anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# rumoca's AST uses `indexmap::IndexMap` for class collections; we
-# reference the type directly in `ast_extract` helpers so our
-# hot-path extractors can walk the cached AST without any clone.
-crossbeam-channel = { workspace = true }
 lunco-api = { path = "../lunco-api", optional = true }
 # PERF-CRITICAL: compile-time static max level for the `log` facade.
 #
@@ -133,15 +106,6 @@ log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"
 # needs a C++ compile that breaks on wasm32 and on Windows MSVC 2019
 # (missing `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs).
 # Enable with `cargo run --features tracy --bin lunica` when profiling.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# The worker still uses rayon for native solve preparation.
-rayon = { workspace = true }
-# The persistent prepared-solve cache is native-only and routes file I/O
-# through the storage boundary.
-lunco-storage = { path = "../lunco-storage" }
-# Persistent prepared-solve cache compression used by the native worker.
-zstd = { workspace = true }
-
 # OS clipboard for the code editor's menu / toolbar / right-click Paste
 # buttons on native. Ctrl/Cmd+V already works through bevy_egui's own
 # arboard plumbing, but the buttons go through
@@ -153,15 +117,11 @@ zstd = { workspace = true }
 # Web-specific: wasm32-unknown-unknown needs JS interop for console output,
 # panic hooks, and RNG (std::time is unavailable).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# The generic Web Worker pool (spawn / boot handshake / byte + Transferable post
-# / crash respawn), shared with the DEM bake worker. `worker_transport` composes
-# it and keeps the Modelica-specific source-library/run state on top.
-lunco-worker-transport = { path = "../lunco-worker-transport" }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 # bevy_math → rand pulls getrandom 0.3, which on wasm needs an explicit backend.
-# The lunica_worker bundle builds out of this crate, so the browser-crypto
-# (`wasm_js`) feature must be enabled here too; build_web.sh sets the matching
+# The compiler/document runtime still links Bevy on wasm, so the browser-crypto
+# (`wasm_js`) feature must be enabled here; build_web.sh sets the matching
 # `--cfg getrandom_backend="wasm_js"` (cfg + feature are both required).
 getrandom = { version = "0.3", features = ["wasm_js"] }
 # `Response`, `Request`, `RequestInit`, `Headers` for the source fetcher
@@ -189,17 +149,6 @@ web-sys = { workspace = true, features = [
     # `?example=…` URL parameter parsing in lunica.rs.
     "Location",
     "UrlSearchParams",
-    # Web Worker bindings — used by `worker_transport` to offload the
-    # blocking compile/step pipeline off the main thread.
-    "Worker",
-    "WorkerType",
-    "WorkerOptions",
-    "DedicatedWorkerGlobalScope",
-    "MessageEvent",
-    # `ErrorEvent` for the worker `onerror` crash handler — lets a worker
-    # OOM/panic surface as a graceful run failure + respawn instead of
-    # hanging the main thread (see `worker_transport::handle_worker_error`).
-    "ErrorEvent",
     # Clipboard wiring for the wasm code editor.
     # `Navigator` + `Clipboard` for the menu's async paste fallback;
     # `ClipboardEvent` + `DataTransfer` for the synchronous paste-event
@@ -224,4 +173,5 @@ ignored = ["getrandom"]
 workspace = true
 
 [dev-dependencies]
+lunco-storage = { path = "../lunco-storage" }
 tempfile = { workspace = true }

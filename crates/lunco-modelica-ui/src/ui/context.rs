@@ -11,6 +11,7 @@ use lunco_modelica_core::{
     class_metadata::{self, ClassMetadata},
     sim_default::{self, ResourceRead},
 };
+use lunco_modelica_execution::resolve_setup_bounds_in;
 use lunco_workbench_core::PanelCtx;
 
 struct PanelResources<'a, 'ctx>(&'a PanelCtx<'ctx>);
@@ -45,7 +46,7 @@ pub fn resolve_setup_bounds(
     model_ref: &lunco_experiments::ModelRef,
 ) -> lunco_experiments::RunBounds {
     let resources = PanelResources(ctx);
-    lunco_modelica_core::model_commands::resolve_setup_bounds_in(&resources, doc, model_ref)
+    resolve_setup_bounds_in(&resources, doc, model_ref)
 }
 
 pub fn detected_name_for(ctx: &PanelCtx, doc: DocumentId) -> Option<String> {

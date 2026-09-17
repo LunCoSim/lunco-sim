@@ -193,7 +193,7 @@ algebraic cycle from depending on Bevy system insertion order. Modelica input
 sampling and script input sampling therefore occur at named schedule edges,
 not as unsynchronised per-frame callbacks.
 
-Because the wait is real, it is **surfaced**: `lunco_modelica_core::worker::CosimLag`
+Because the wait is real, it is **surfaced**: `lunco_modelica_execution::worker::CosimLag`
 records the communication gap for every live participant every fixed tick, and
 `warn!`s (rate-limited) past 0.25 s. An off-thread worker is not a second
 simulation clock. An independent model still uses the same authoritative world

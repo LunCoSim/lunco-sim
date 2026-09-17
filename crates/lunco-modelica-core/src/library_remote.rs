@@ -31,6 +31,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use bevy::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
+use crate::worker_bridge::ModelicaWorkerBridge;
+#[cfg(target_arch = "wasm32")]
 use lunco_assets_core::library::InMemoryLibrary as LibraryInMemory;
 #[cfg(target_arch = "wasm32")]
 use lunco_assets_core::library::LibraryLoadPhase;
@@ -501,6 +503,7 @@ fn kick_web_library_fetcher(
     mut request: ResMut<WebLibraryInstallRequest>,
     mut state: ResMut<LibraryLoadState>,
     settings: Res<lunco_settings::DownloadSettings>,
+    worker_bridge: Res<ModelicaWorkerBridge>,
 ) {
     if !request.0 {
         return;
@@ -511,7 +514,11 @@ fn kick_web_library_fetcher(
         bytes_done: 0,
         bytes_total: 0,
     };
-    wasm_bindgen_futures::spawn_local(web::run_fetcher(slot.0.clone(), settings.clone()));
+    wasm_bindgen_futures::spawn_local(web::run_fetcher(
+        slot.0.clone(),
+        settings.clone(),
+        worker_bridge.clone(),
+    ));
 }
 
 /// Plugin that owns source library asset loading. Add once during app build.
@@ -529,6 +536,18 @@ pub enum LibraryInstallAction {
 #[cfg(target_arch = "wasm32")]
 #[derive(Resource, Default)]
 struct WebLibraryInstallRequest(bool);
+
+#[cfg(target_arch = "wasm32")]
+fn on_library_install_action(
+    trigger: On<LibraryInstallAction>,
+    mut request: ResMut<WebLibraryInstallRequest>,
+    worker_bridge: Res<ModelicaWorkerBridge>,
+) {
+    if matches!(trigger.event(), LibraryInstallAction::Reinstall) {
+        worker_bridge.reset_pipeline();
+    }
+    request.0 = true;
+}
 
 impl Plugin for LibraryRemotePlugin {
     fn build(&self, app: &mut App) {
@@ -649,7 +668,11 @@ struct SlotInner {
 struct LibraryLoadSlot(SharedSlot);
 
 #[cfg(target_arch = "wasm32")]
-fn drain_library_load_slot(slot: Res<LibraryLoadSlot>, mut state: ResMut<LibraryLoadState>) {
+fn drain_library_load_slot(
+    slot: Res<LibraryLoadSlot>,
+    mut state: ResMut<LibraryLoadState>,
+    worker_bridge: Res<ModelicaWorkerBridge>,
+) {
     let mut inner = match slot.0.lock() {
         Ok(g) => g,
         Err(_) => return,
@@ -677,17 +700,17 @@ fn drain_library_load_slot(slot: Res<LibraryLoadSlot>, mut state: ResMut<Library
         // decoded bincode bytes back so the main thread skips the ruzstd
         // decompress and only deserializes into its own heap (resolution /
         // autocomplete) — see `ingest_worker_decoded_library`.
-        let shipped = crate::worker_transport::install_library_compressed_in_worker(&pbytes);
+        let shipped = worker_bridge.install_library_compressed(&pbytes);
         if shipped == 0 {
             let error =
                 "Modelica Web Worker is unavailable; rebuild the browser worker bundle".to_string();
-            crate::worker_transport::fail_worker_pipeline(error.clone());
+            worker_bridge.fail_pipeline(error.clone());
             inner.pending_state = Some(LibraryLoadState::Failed(error));
             inner.pending_source_compressed = None;
             return;
         }
         if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
-            crate::worker_transport::load_library_index_in_worker(&sbytes);
+            worker_bridge.load_library_index(&sbytes);
             stash_compressed_source(sbytes, smeta);
         }
         return;
@@ -746,11 +769,15 @@ mod web {
     use lunco_assets_core::web_fetch;
     use wasm_bindgen::prelude::*;
 
-    pub(super) async fn run_fetcher(slot: SharedSlot, settings: lunco_settings::DownloadSettings) {
+    pub(super) async fn run_fetcher(
+        slot: SharedSlot,
+        settings: lunco_settings::DownloadSettings,
+        worker_bridge: ModelicaWorkerBridge,
+    ) {
         match try_fetch(&slot, &settings).await {
             Ok(()) => {}
             Err(e) => {
-                crate::worker_transport::fail_worker_pipeline(e.clone());
+                worker_bridge.fail_pipeline(e.clone());
                 if let Ok(mut s) = slot.lock() {
                     s.pending_state = Some(LibraryLoadState::Failed(e));
                 }

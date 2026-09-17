@@ -43,11 +43,11 @@ expressible rather than spelled `t_end = u32::MAX`.
 - live co-sim → `worker::live_stepper_options()` (sets `t_end = u32::MAX` as an
   explicit "no ceiling" sentinel) via `worker::build_stepper()`
 
-**Enforced by** `tests/rumoca_chokepoints.rs::sim_options_are_built_only_by_the_canonical_builders`
+**Enforced by** `crates/lunco-modelica-execution/tests/rumoca_chokepoints.rs::sim_options_are_built_only_by_the_canonical_builders`
 — scans `src/` (bins included) and fails on any `SimOptions::default()` /
 `SimOptions { … }` outside those two builders.
 
-**Probe / regression guard.** `tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end`
+**Probe / regression guard.** `crates/lunco-modelica-execution/tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end`
 — it *asserts the clamp exists*. When rumoca removes the clamp this test FAILS,
 which is the signal to revisit the `u32::MAX` sentinel.
 
@@ -98,9 +98,9 @@ through `seat_library_files`, which strips each one. The shipped package path
 is exercised by authored scenes such as `lander_plume_activity`, `lander_rcs`,
 and `sun_tracker`; Rust tests do not read the assets tree.
 
-**Enforced by** `tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
+**Enforced by** `crates/lunco-modelica-execution/tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
 (fails if a new site seats documents into the compile session directly),
-`tests/rumoca_api_coverage.rs::compile_str_keeps_bound_input_as_runtime_slot`
+`crates/lunco-modelica-execution/tests/rumoca_api_coverage.rs::compile_str_keeps_bound_input_as_runtime_slot`
 (feeds `compile_str` RAW source and asserts `g` survives as a runtime slot).
 
 **Diagnosed by** `worker::apply_input_defaults_validated`: a model whose source
@@ -136,7 +136,7 @@ evicts all other user docs from the shared session first
 **Ideal upstream fix.** Compare class definitions structurally (ignoring spans /
 source ids), and accept an identical redefinition instead of erroring.
 
-**Enforced by** `tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
+**Enforced by** `crates/lunco-modelica-execution/tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
 — it pins the number of sites that seat documents into the compile session, so a
 new un-evicted seat can't be added silently.
 
@@ -203,7 +203,7 @@ strings and comments.
 > Comments were dropped too. Silent corruption of the user's model from a mouse
 > drag — that is what the splice engine exists to prevent.
 
-**Enforcement.** `tests/rumoca_chokepoints.rs::source_is_never_regenerated_through_the_rumoca_emitter`
+**Enforcement.** `crates/lunco-modelica-execution/tests/rumoca_chokepoints.rs::source_is_never_regenerated_through_the_rumoca_emitter`
 fails on any `.to_modelica(` in `src/`.
 `tests/ast_mut_preserves_untouched_source.rs` asserts, per op, that every line the
 op did not target is byte-identical afterwards.

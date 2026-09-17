@@ -2140,13 +2140,12 @@ impl Plugin for LunCoSimHeadlessPlugin {
             "ClearTour",
         ]));
 
-        // Modelica COMPILE CORE only (channels + worker thread + `.mo` asset
-        // loader + compile-dispatch systems) — NO egui/viz/workbench. Windowed
-        // builds get this transitively via `ModelicaWorkbenchPlugin`; headless
-        // must add it directly or the cosim `on_load_scene` observer panics on a
-        // missing `Res<ModelicaChannels>`. The server runs Modelica cosim models
-        // authoritatively, so it needs the real compile path, not a stub.
+        // Modelica compiler/document core plus the separate execution plugin —
+        // NO egui/viz/workbench. The split keeps compiler-only consumers free
+        // of solver workers while this runtime still installs the authoritative
+        // Modelica compile and execution path used by cosim scenes.
         app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
+        app.add_plugins(lunco_modelica_execution::ModelicaExecutionPlugin);
 
         // Spawn-command CORE (runtime spawn/move/property commands + the
         // `apply_net_replication` system that tags dynamic scene bodies with

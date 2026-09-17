@@ -29,12 +29,13 @@
 
 use crate::lock_ext::LockExt;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+#[cfg(not(target_arch = "wasm32"))]
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::{Sender, unbounded};
 use lunco_experiments::{
     Experiment, ExperimentId, ExperimentRegistry, ExperimentRunner, ModelRef, ParamPath,
     ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta, RunProgress,
@@ -197,7 +198,7 @@ struct RunnerState {
     /// compiles on the worker, so the runner never constructs one. See
     /// [`run_inner`].
     #[cfg(not(target_arch = "wasm32"))]
-    compiler: Arc<Mutex<crate::ModelicaCompiler>>,
+    compiler: Arc<Mutex<lunco_modelica_core::ModelicaCompiler>>,
 }
 
 /// `(model_name, filename)` identity used to scope DAE-cache invalidation
@@ -216,7 +217,7 @@ impl Default for RunnerState {
             // Cheap: `new()` builds an empty session and installs no source library
             // (Layer A). source library lands on the first run that actually needs it.
             #[cfg(not(target_arch = "wasm32"))]
-            compiler: Arc::new(Mutex::new(crate::ModelicaCompiler::new())),
+            compiler: Arc::new(Mutex::new(lunco_modelica_core::ModelicaCompiler::new())),
         }
     }
 }
@@ -379,10 +380,10 @@ impl ExperimentRunner for ModelicaRunner {
             t_end,
             // `Interval=0` sentinel handling shared with every other
             // annotation→bounds path (preserves this struct's own `solver`).
-            dt: crate::sim_target::interval_to_dt(d.interval),
-            n_intervals: crate::sim_target::number_of_intervals_to_n(
+            dt: lunco_modelica_core::sim_target::interval_to_dt(d.interval),
+            n_intervals: lunco_modelica_core::sim_target::number_of_intervals_to_n(
                 d.number_of_intervals,
-                crate::sim_target::interval_to_dt(d.interval),
+                lunco_modelica_core::sim_target::interval_to_dt(d.interval),
             ),
             tolerance: d.tolerance,
             solver: d.solver.clone(),
@@ -878,7 +879,7 @@ pub fn drive_run(
             // it (and `run_batch_sim` decimates the event-flooded result back
             // to that grid).
             let mut batch_opts = stepper_opts;
-            let output_dt = crate::sim_target::resolve_step_dt(
+            let output_dt = lunco_modelica_core::sim_target::resolve_step_dt(
                 bounds.t_start,
                 bounds.t_end,
                 bounds.dt,
@@ -1250,7 +1251,7 @@ fn emit_partial_failure(
 
 /// Drive a built [`SimulationSession`](rumoca_sim::SimulationSession) to `bounds.t_end`,
 /// accumulating output samples at the spacing
-/// [`sim_target::resolve_step_dt`](crate::sim_target::resolve_step_dt)
+/// [`lunco_modelica_core::sim_target::resolve_step_dt`]
 /// derives, streaming throttled `Progress` deltas, and emitting the terminal
 /// `Completed` / `Failed` / `Cancelled` through `sink`.
 ///
@@ -1264,8 +1265,12 @@ pub fn run_stepping_loop(
     sink: &mut impl RunSink,
 ) {
     let t_end = bounds.t_end;
-    let step_dt =
-        crate::sim_target::resolve_step_dt(bounds.t_start, t_end, bounds.dt, bounds.n_intervals);
+    let step_dt = lunco_modelica_core::sim_target::resolve_step_dt(
+        bounds.t_start,
+        t_end,
+        bounds.dt,
+        bounds.n_intervals,
+    );
 
     bevy::log::info!(
         "[sim] simulate begin: t={}..{} step_dt={}",
@@ -1314,7 +1319,7 @@ pub fn run_stepping_loop(
         let span = (t_end - bounds.t_start).max(0.0);
         output_dt
             .min(25.0)
-            .max(span / crate::sim_target::SAMPLE_CAP)
+            .max(span / lunco_modelica_core::sim_target::SAMPLE_CAP)
     };
     #[cfg(not(target_arch = "wasm32"))]
     let internal_dt = output_dt;

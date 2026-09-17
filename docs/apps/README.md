@@ -53,13 +53,13 @@ Modelica application, use the `lunica` target in the table below.
 
 | Binary | Crate | Launch | What it is |
 |---|---|---|---|
-| `modelica_run` | `lunco-modelica-core` | `cargo run -p lunco-modelica-core --bin modelica_run` | Headless Modelica CLI — compile a model, step it for a fixed duration, optionally dump per-step variables to CSV. |
+| `modelica_run` | `lunco-modelica-execution` | `cargo run -p lunco-modelica-execution --bin modelica_run` | Headless Modelica CLI — compile a model, step it for a fixed duration, optionally dump per-step variables to CSV. |
 | `modelica_library_indexer` | `lunco-modelica-assets` | `cargo run -p lunco-modelica-assets --bin modelica_library_indexer` | Builds the Modelica-library search index. Same entry the workbench drives in-process. Re-run after a source-library rebuild. |
-| `lunica_worker` | `lunco-modelica-core` | (wasm only) | Off-thread rumoca compile worker for the web build. Not run directly — bundled by `scripts/build_web.sh`. |
+| `lunica_worker` | `lunco-modelica-execution` | (wasm only) | Off-thread rumoca compile worker for the web build. Not run directly — bundled by `scripts/build_web.sh`. |
 | `build_modelica_library_assets` | `lunco-modelica-assets` | `cargo run -p lunco-modelica-assets --bin build_modelica_library_assets` | Bundles Modelica-library artifacts into shippable assets. |
 | `net_smoke` | `lunco-networking` | `scripts/net_smoke.sh` | Networking transport smoke test. |
 
-`lunco-modelica-core` also carries the headless tester. The native source
+`lunco-modelica-execution` also carries the headless tester. The native source
 library indexer and parse benchmark live in `lunco-modelica-assets` so they do
 not enlarge headless compiler builds.
 
