@@ -229,6 +229,93 @@ pub fn evaluate_initialization_policy(
 #[reflect(Component)]
 pub struct PhysicsSupportFootprint(pub Vec<PhysicsSupportContact>);
 
+/// Runtime result of evaluating a published support footprint.
+///
+/// [`PhysicsSupportFootprint`] describes where a model may contact the
+/// environment. This component is the per-tick observation of that geometry;
+/// it is kept separate so a query cannot mistake an authored probe count for a
+/// live contact count. Producers update it after their native contact/raycast
+/// solve, and consumers treat an absent component as unavailable evidence.
+#[derive(Component, Debug, Clone, Copy, Reflect, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct PhysicsSupportState {
+    /// Number of footprint probes with a valid contact this sample.
+    pub active_contact_count: u32,
+    /// Fixed-step sample at which the contact count was evaluated.
+    pub sample_tick: u64,
+}
+
+/// Native contact evidence published by a raycast-wheel realization.
+///
+/// The producer (currently `lunco-mobility`) owns the raycast and suspension
+/// semantics; consumers only see the resulting sample. Keeping this contract
+/// in the physics substrate lets scene queries expose effective contacts
+/// without depending on the mobility crate or guessing from authored support
+/// footprints. `hit_entity` is the actual Avian collider selected by the
+/// wheel's ray, not an inferred terrain/body name.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct PhysicsWheelContact {
+    /// Rigid body that receives this wheel's suspension and tire forces.
+    pub owner: Entity,
+    /// Whether the selected hit has a finite, non-degenerate normal and lies
+    /// within the authored suspension travel.
+    pub contact_valid: bool,
+    /// Actual collider selected by the native raycast, when one exists.
+    pub hit_entity: Option<Entity>,
+    /// Native ray distance to the selected hit, if any.
+    pub distance_m: Option<f64>,
+    /// Native contact normal in world physics coordinates; zero means no hit.
+    pub normal: DVec3,
+    /// Normal spring/damper force actually published by suspension.
+    pub normal_force_n: f64,
+    /// Authored suspension rest length used for the contact decision.
+    pub suspension_rest_length_m: f64,
+    /// Effective spring compression for this sample.
+    pub suspension_compression_m: f64,
+    /// Resultant tire force applied to the owner in this sample.
+    pub tire_force: DVec3,
+    /// Number of raw Avian ray hits returned before validity filtering.
+    pub ray_hit_count: u32,
+    /// Number of raw hits with a finite, non-degenerate normal.
+    pub valid_ray_hit_count: u32,
+    /// Number of collider entities currently excluded by the wheel raycast
+    /// filter (assembly ownership diagnostics).
+    pub raycast_filter_excluded_entity_count: u32,
+    /// Effective ray origin in world physics coordinates.
+    pub ray_origin: DVec3,
+    /// Effective ray direction in world physics coordinates.
+    pub ray_direction: DVec3,
+    /// Effective native ray length for this sample.
+    pub ray_max_distance_m: f64,
+    /// Fixed-step sample at which this snapshot was published.
+    pub sample_tick: u64,
+}
+
+/// The effective collider exclusion set used by one raycast wheel.
+///
+/// This is a topology diagnostic, not an authored vehicle property. It is
+/// refreshed by the mobility producer only when the connected-body graph or
+/// wheel caster changes, so exposing exact members does not allocate in the
+/// fixed-step contact publication path. Consumers can resolve the entities to
+/// API IDs and USD paths without knowing how the wheel was realized.
+#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PhysicsWheelRaycastFilter {
+    /// Bodies and colliders excluded from this wheel's native raycast.
+    pub excluded_entities: Vec<Entity>,
+    /// Deterministic signature of the current exclusion set. The producer
+    /// compares this without allocating in its fixed-step publication path.
+    pub signature: u64,
+}
+
+impl Default for PhysicsSupportState {
+    fn default() -> Self {
+        Self {
+            active_contact_count: 0,
+            sample_tick: 0,
+        }
+    }
+}
+
 /// One support contact in a body's local physics frame.
 ///
 /// The probe description is part of the contract because initial-state validation

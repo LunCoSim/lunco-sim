@@ -32,6 +32,7 @@ use lunco_core::MobilityRoot;
 use lunco_port_core::Port;
 use lunco_port_core::{InputPorts, OutputPorts};
 use lunco_spatial::coords::{GridPos, GridRot};
+use std::borrow::Borrow;
 use std::collections::HashSet;
 
 mod jointed_tire;
@@ -116,13 +117,20 @@ impl Plugin for LunCoMobilityPlugin {
                 publish_raycast_support_footprints
                     .in_set(lunco_physics::PhysicsSupportSet::Publish),
             )
+            .add_systems(
+                Update,
+                initialize_raycast_wheel_contact_diagnostics
+                    .after(publish_raycast_support_footprints),
+            )
             // Raycast ownership is topology-driven. Refresh each caster's
             // exclusion set when its caster is admitted or Avian's joint graph
             // changes, so articulated suspensions ignore every collider in
             // their connected assembly rather than only the immediate parent.
             .add_systems(
                 Update,
-                sync_raycast_assembly_filters.after(publish_raycast_support_footprints),
+                sync_raycast_assembly_filters
+                    .after(publish_raycast_support_footprints)
+                    .after(initialize_raycast_wheel_contact_diagnostics),
             )
             // G5 rocker-bogie differential — separate set: it doesn't read the
             // control ports, only couples two rocker hinges. Idle unless a
@@ -145,6 +153,7 @@ impl Plugin for LunCoMobilityPlugin {
                 FixedUpdate,
                 (
                     apply_wheel_suspension,
+                    update_raycast_support_state,
                     update_suspension_visuals,
                     // HEADING, then SOLVE THE TIRE, then APPLY IT. Heading first so the
                     // contact basis is this tick's heading; the spin solve produces the
@@ -155,6 +164,7 @@ impl Plugin for LunCoMobilityPlugin {
                     apply_wheel_heading,
                     update_wheel_spin,
                     apply_wheel_drive,
+                    publish_raycast_wheel_contact_diagnostics,
                     apply_jointed_tire_forces,
                 )
                     .chain()
@@ -224,6 +234,7 @@ impl Plugin for LunCoMobilityPlugin {
             lunco_core::RollbackReplay,
             (
                 apply_wheel_suspension,
+                update_raycast_support_state,
                 update_suspension_visuals,
                 // HEADING, then SOLVE THE TIRE, then APPLY IT. Heading first so the
                 // contact basis is this tick's heading; the spin solve produces the
@@ -251,12 +262,27 @@ impl Plugin for LunCoMobilityPlugin {
 /// path, name, or drivetrain variant participates in the result.
 fn sync_raycast_assembly_filters(
     joints: Option<Res<avian3d::dynamics::solver::joint_graph::JointGraph>>,
-    mut raycasters: Query<(&WheelBodyMount, &mut RayCaster), With<WheelRaycast>>,
+    mut raycasters: Query<(
+        &WheelBodyMount,
+        &mut RayCaster,
+        Option<&mut lunco_physics::PhysicsWheelRaycastFilter>,
+    ), With<WheelRaycast>>,
     colliders: Query<(Entity, Option<&ColliderOf>), With<Collider>>,
+    changed_colliders: Query<Entity, Or<(Added<Collider>, Changed<ColliderOf>)>>,
+    removed_colliders: RemovedComponents<Collider>,
 ) {
     let graph_changed = joints.as_ref().is_some_and(Res::is_changed);
-    for (mount, mut raycaster) in &mut raycasters {
-        if !graph_changed && !raycaster.is_added() {
+    let collider_topology_changed =
+        !changed_colliders.is_empty() || !removed_colliders.is_empty();
+    for (mount, mut raycaster, mut filter_snapshot) in &mut raycasters {
+        let filter_added = filter_snapshot
+            .as_ref()
+            .is_some_and(|filter| filter.is_added());
+        if !graph_changed
+            && !collider_topology_changed
+            && !raycaster.is_added()
+            && !filter_added
+        {
             continue;
         }
 
@@ -284,7 +310,42 @@ fn sync_raycast_assembly_filters(
                 raycaster.query_filter.excluded_entities.insert(collider);
             }
         }
+
+        // Keep this allocation outside FixedUpdate. The contact publisher
+        // only reads the snapshot while producing its in-place sample.
+        if let Some(mut filter_snapshot) = filter_snapshot.take() {
+            let mut excluded_entities = raycaster
+                .query_filter
+                .excluded_entities
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            excluded_entities.sort_by_key(|entity| entity.to_bits());
+            filter_snapshot.excluded_entities = excluded_entities;
+            filter_snapshot.signature = raycast_filter_signature(
+                &raycaster.query_filter.excluded_entities,
+            );
+        }
     }
+}
+
+/// Hash the small native exclusion set without allocating. The signature is
+/// order-independent because the source is a `HashSet`; the exact sorted
+/// members are copied only when this value changes.
+fn raycast_filter_signature<I>(excluded_entities: I) -> u64
+where
+    I: IntoIterator,
+    I::Item: Borrow<Entity>,
+{
+    excluded_entities.into_iter().fold(
+        0u64,
+        |signature, entity| {
+            let entity = entity.borrow();
+            let bits = entity.to_bits();
+            let mixed = bits ^ bits.rotate_left(29) ^ 0x9e37_79b9_7f4a_7c15;
+            signature.wrapping_add(mixed.rotate_left((bits & 63) as u32))
+        },
+    )
 }
 
 /// Marks a rigid-body carrier whose raycast-wheel mass has already been folded
@@ -399,10 +460,173 @@ fn publish_raycast_support_footprints(
             })
             .collect::<Vec<_>>();
         if !contacts.is_empty() {
-            commands
-                .entity(root)
-                .try_insert(lunco_physics::PhysicsSupportFootprint(contacts));
+            commands.entity(root).try_insert((
+                lunco_physics::PhysicsSupportFootprint(contacts),
+                lunco_physics::PhysicsSupportState::default(),
+            ));
         }
+    }
+}
+
+/// Publish the live contact result for the raycast support footprint.
+///
+/// The footprint itself is authored geometry and is intentionally stable after
+/// publication. Contact is a fixed-step observation of the current ray hits,
+/// so it is updated separately after suspension has consumed the same hits.
+/// Keeping the two values separate prevents a consumer from treating a wheel
+/// probe as grounded merely because the probe exists.
+fn update_raycast_support_state(
+    wheels: Query<(&WheelRaycast, &Suspension, &RayHits, &WheelBodyMount)>,
+    mut roots: Query<&mut lunco_physics::PhysicsSupportState, With<MobilityRoot>>,
+    tick: Res<lunco_core::SimTick>,
+) {
+    for mut state in &mut roots {
+        state.active_contact_count = 0;
+        state.sample_tick = tick.0;
+    }
+
+    for (_wheel, suspension, hits, mount) in &wheels {
+        let grounded = hits.iter_sorted().any(|hit| {
+            hit.distance.is_finite()
+                && hit.distance >= 0.0
+                && hit.normal.is_finite()
+                && hit.normal.length_squared() > 1.0e-12
+                && hit.distance < suspension.rest_length
+        });
+        if grounded {
+            if let Ok(mut state) = roots.get_mut(mount.body) {
+                state.active_contact_count = state.active_contact_count.saturating_add(1);
+            }
+        }
+    }
+}
+
+/// Allocate the per-wheel diagnostic component once after USD projection.
+/// Fixed-step publication then mutates it in place, avoiding a deferred ECS
+/// command and an archetype lookup for every wheel on every sample.
+fn initialize_raycast_wheel_contact_diagnostics(
+    mut commands: Commands,
+    wheels: Query<(Entity, &WheelBodyMount), Without<lunco_physics::PhysicsWheelContact>>,
+) {
+    for (wheel_entity, mount) in &wheels {
+        commands.entity(wheel_entity).insert(lunco_physics::PhysicsWheelContact {
+            owner: mount.body,
+            contact_valid: false,
+            hit_entity: None,
+            distance_m: None,
+            normal: DVec3::ZERO,
+            normal_force_n: 0.0,
+            suspension_rest_length_m: 0.0,
+            suspension_compression_m: 0.0,
+            tire_force: DVec3::ZERO,
+            ray_hit_count: 0,
+            valid_ray_hit_count: 0,
+            raycast_filter_excluded_entity_count: 0,
+            ray_origin: DVec3::ZERO,
+            ray_direction: DVec3::ZERO,
+            ray_max_distance_m: 0.0,
+            sample_tick: 0,
+        });
+        commands
+            .entity(wheel_entity)
+            .insert(lunco_physics::PhysicsWheelRaycastFilter::default());
+    }
+}
+
+/// Publish the effective native raycast result after suspension and tire force
+/// application. This is deliberately a snapshot component in `lunco-physics`:
+/// scene queries can expose it without coupling to this mobility realization,
+/// and a future wheel implementation can publish the same evidence contract.
+fn publish_raycast_wheel_contact_diagnostics(
+    mut wheels: Query<(
+        &WheelRaycast,
+        &Suspension,
+        &RayHits,
+        &WheelBodyMount,
+        Option<&RayCaster>,
+        Option<&mut lunco_physics::PhysicsWheelRaycastFilter>,
+        &mut lunco_physics::PhysicsWheelContact,
+    )>,
+    tick: Res<lunco_core::SimTick>,
+) {
+    for (wheel, suspension, hits, mount, raycaster, mut filter_snapshot, mut snapshot) in
+        &mut wheels
+    {
+        if let (Some(raycaster), Some(mut filter_snapshot)) = (raycaster, filter_snapshot.take()) {
+            let signature = raycast_filter_signature(&raycaster.query_filter.excluded_entities);
+            if signature != filter_snapshot.signature
+                || filter_snapshot.excluded_entities.len()
+                    != raycaster.query_filter.excluded_entities.len()
+            {
+                let mut excluded_entities = raycaster
+                    .query_filter
+                    .excluded_entities
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>();
+                excluded_entities.sort_by_key(|entity| entity.to_bits());
+                filter_snapshot.excluded_entities = excluded_entities;
+                filter_snapshot.signature = signature;
+            }
+        }
+        let selected = hits.0.iter().filter(|hit| {
+            hit.distance.is_finite()
+                && hit.distance >= 0.0
+                && hit.normal.is_finite()
+                && hit.normal.length_squared() > 1.0e-12
+        });
+        let hit = selected.min_by(|left, right| {
+            left.distance
+                .partial_cmp(&right.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let (hit_entity, distance_m, normal, contact_valid) = match hit {
+            Some(hit) => (
+                Some(hit.entity),
+                Some(hit.distance),
+                hit.normal,
+                hit.distance < suspension.rest_length,
+            ),
+            None => (None, None, DVec3::ZERO, false),
+        };
+        let compression = distance_m
+            .filter(|distance| *distance < suspension.rest_length)
+            .map(|distance| (suspension.rest_length - distance).max(0.0))
+            .unwrap_or(0.0);
+        let valid_ray_hit_count = hits
+            .0
+            .iter()
+            .filter(|hit| {
+                hit.distance.is_finite()
+                    && hit.distance >= 0.0
+                    && hit.normal.is_finite()
+                    && hit.normal.length_squared() > 1.0e-12
+            })
+            .count() as u32;
+        snapshot.owner = mount.body;
+        snapshot.contact_valid = contact_valid;
+        snapshot.hit_entity = hit_entity;
+        snapshot.distance_m = distance_m;
+        snapshot.normal = normal;
+        snapshot.normal_force_n = wheel.last_normal_force;
+        snapshot.suspension_rest_length_m = suspension.rest_length;
+        snapshot.suspension_compression_m = compression;
+        snapshot.tire_force = wheel.tire_force;
+        snapshot.ray_hit_count = hits.0.len() as u32;
+        snapshot.valid_ray_hit_count = valid_ray_hit_count;
+        snapshot.raycast_filter_excluded_entity_count = raycaster
+            .map(|raycaster| raycaster.query_filter.excluded_entities.len() as u32)
+            .unwrap_or(0);
+        snapshot.ray_origin = raycaster
+            .map(|raycaster| raycaster.global_origin())
+            .unwrap_or(DVec3::ZERO);
+        snapshot.ray_direction = raycaster
+            .map(|raycaster| raycaster.global_direction().as_dvec3())
+            .unwrap_or(DVec3::ZERO);
+        snapshot.ray_max_distance_m = raycaster
+            .map(|raycaster| raycaster.max_distance)
+            .unwrap_or(0.0);
+        snapshot.sample_tick = tick.0;
     }
 }
 
@@ -1285,9 +1509,12 @@ fn apply_wheel_suspension(
     }
 }
 
-/// Keep each raycast wheel's avian `Position`/`Rotation` in the grid-ABSOLUTE
-/// physics frame so its suspension `RayCaster` originates at the true hub — not
-/// at the wheel's big_space RENDER-frame `GlobalTransform`.
+/// Keep each raycast wheel's avian `Position` in the grid-ABSOLUTE physics frame
+/// so its suspension `RayCaster` originates at the true chassis-up strut top —
+/// not at the wheel's big_space RENDER-frame `GlobalTransform`. The caster's
+/// `Rotation` is deliberately held at identity because its `NEG_Y` direction is
+/// a world-down support probe; the changing local origin supplies the authored
+/// strut-top offset.
 ///
 /// avian's `update_ray_caster_positions` derives the ray origin from an entity's
 /// own `Position`/`Rotation` when present, falling back to its `GlobalTransform`
@@ -1305,15 +1532,18 @@ fn apply_wheel_suspension(
 /// We compose the chassis' solved grid-absolute pose with the wheel's local
 /// transform via `wheel_hub_pose` — exactly how the suspension/drive force point
 /// is built — running AFTER the physics step (fresh chassis pose) and BEFORE the
-/// spatial query (which reads `Position`), so the cast sees this tick's pose.
+/// spatial query, so the cast sees this tick's pose.
 fn sync_raycast_wheel_physics_pose(
     mut q_wheels: Query<
         (
             Entity,
+            &WheelRaycast,
             &mut Position,
             &mut Rotation,
+            &mut RayCaster,
             &Transform,
             &WheelBodyMount,
+            &Suspension,
         ),
         With<WheelRaycast>,
     >,
@@ -1321,7 +1551,9 @@ fn sync_raycast_wheel_physics_pose(
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
-    for (wheel, mut wpos, mut wrot, wtf, mount) in q_wheels.iter_mut() {
+    for (wheel_entity, wheel, mut wpos, mut wrot, mut raycaster, wtf, mount, suspension) in
+        q_wheels.iter_mut()
+    {
         if let Ok((cpos, crot)) = q_chassis.get(mount.body) {
             let (hub_pos, hub_rot) = wheel_hub_pose(
                 GridPos(cpos.0),
@@ -1329,45 +1561,56 @@ fn sync_raycast_wheel_physics_pose(
                 mount.local.translation.as_dvec3(),
                 (mount.local.rotation * wtf.rotation).as_dquat(),
             );
-            // The wheel's `Position`/`Rotation` IS avian's ray-origin frame: the
-            // caster's local origin is `DVec3::ZERO`, so the global origin is
-            // `Position + Rotation * ZERO` — and a NaN rotation poisons even that.
+            // The raycaster's local origin is the authored strut-top offset and
+            // Avian computes `Position + Rotation * origin`. Keep that offset in
+            // the chassis-up direction, but keep the caster rotation identity:
+            // `Dir3::NEG_Y` is the generic world-down support probe. Rotating the
+            // caster by wheel heading/vehicle attitude turns a ground probe
+            // sideways on a ramp and is especially wrong when the rover rolls.
+            let ray_origin = hub_rot.0 * DVec3::Y * strut_offset(
+                suspension.rest_length,
+                wheel.wheel_radius,
+            );
+            // A NaN rotation or origin poisons the cast and avian asserts on it.
             // avian's `raycast` asserts `origin.is_finite()` and takes the whole
             // app down with it. Do not leave the wheel on an old pose and let the
             // next system interpret that pose as current physics. Record the
             // invalid source as a terminal scene fault; the fault gate pauses
             // force production and the scene lifecycle owns the explicit reset.
-            if !hub_pos.0.is_finite() || !hub_rot.0.is_finite() {
+            if !hub_pos.0.is_finite() || !hub_rot.0.is_finite() || !ray_origin.is_finite() {
                 if let Some(holds) = holds.as_deref_mut() {
                     holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
                 }
                 if let Some(faults) = faults.as_deref_mut() {
                     if faults.raise(
                         "mobility-nonfinite-wheel-pose",
-                        Some(wheel),
+                        Some(wheel_entity),
                         "raycast wheel",
                         format!(
-                            "hub_position={:?}, hub_rotation={:?}, chassis={:?}",
-                            hub_pos.0, hub_rot.0, mount.body,
+                            "hub_position={:?}, hub_rotation={:?}, ray_origin={:?}, chassis={:?}",
+                            hub_pos.0, hub_rot.0, ray_origin, mount.body,
                         ),
                     ) {
                         error!(
-                            "[mobility] terminal runtime failure: non-finite raycast wheel pose on {wheel:?}"
+                            "[mobility] terminal runtime failure: non-finite raycast wheel pose on {wheel_entity:?}"
                         );
                     }
                 }
                 continue;
             }
-            // Compare-gate like the bridge's writeback: the hub pose is a
-            // deterministic function of the chassis pose and the wheel's local
-            // transform, so an idle chassis recomputes bit-identical values —
-            // exact compare, no epsilon. Writing unconditionally dirtied every
-            // wheel's `Position`/`Rotation` change ticks per tick even parked.
+            // Compare-gate like the bridge's writeback: the hub pose and local
+            // origin are deterministic functions of the chassis pose and the
+            // wheel's local transform, so an idle chassis recomputes bit-identical
+            // values — exact compare, no epsilon. Writing unconditionally dirtied
+            // every wheel's physics state on every parked tick.
             if wpos.0 != hub_pos.0 {
                 wpos.0 = hub_pos.0;
             }
-            if wrot.0 != hub_rot.0 {
-                wrot.0 = hub_rot.0;
+            if raycaster.origin != ray_origin {
+                raycaster.origin = ray_origin;
+            }
+            if wrot.0 != DQuat::IDENTITY {
+                wrot.0 = DQuat::IDENTITY;
             }
         }
     }

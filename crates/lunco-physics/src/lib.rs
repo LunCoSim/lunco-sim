@@ -70,7 +70,9 @@ pub use support::{
     PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
     PhysicsInitializationSubject, PhysicsJointDetachRequested, PhysicsJointDetachSet,
     PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact, PhysicsSupportFootprint,
-    PhysicsSupportSet, PHYSICS_INITIALIZATION_HOOK_PREFIX, STRICT_AUTHORED_INITIALIZATION_POLICY,
+    PhysicsSupportSet, PhysicsSupportState, PhysicsWheelContact, PhysicsWheelRaycastFilter,
+    PHYSICS_INITIALIZATION_HOOK_PREFIX,
+    STRICT_AUTHORED_INITIALIZATION_POLICY,
 };
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.
@@ -1288,6 +1290,7 @@ impl Plugin for PhysicsGatePlugin {
             .register_type::<PhysicsInitializationSubject>()
             .register_type::<PhysicsSupportFootprint>()
             .register_type::<PhysicsSupportContact>()
+            .register_type::<PhysicsSupportState>()
             .configure_sets(
                 Update,
                 (
