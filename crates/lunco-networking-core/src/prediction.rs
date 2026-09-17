@@ -374,7 +374,7 @@ pub fn ingest_snapshots(
 
 /// L1: free a despawned proxy's interpolation buffer. `ingest_snapshots` inserts a
 /// `VecDeque` per gid on first sight (`entry(gid).or_default()`), but the client
-/// Despawn arm (`lunco_networking::sync`) only despawns the entity + cleans the
+/// Despawn arm (`lunco_networking_sync::sync`) only despawns the entity + cleans the
 /// `ApiEntityRegistry` — it never touches `InterpBuffers`, which lives in this
 /// crate. Without this the map leaks one ring per ever-seen gid; worse, once
 /// interest-management churns proxies in/out, a gid that leaves then re-enters

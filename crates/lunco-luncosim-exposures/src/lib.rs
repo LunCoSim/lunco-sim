@@ -15,10 +15,10 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_core::roles::{Avatar, LocalAvatar, TheLocalAvatar};
-use lunco_celestial_spatial::link::LinkState;
 use lunco_celestial_spatial::OrbitalViewPin;
+use lunco_celestial_spatial::link::LinkState;
 use lunco_core::exposure::{
-    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
+    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
 };
 use lunco_core::{CelestialBody, GlobalEntityId, SceneMountState};
 use lunco_cosim_core::ControlLink;
@@ -29,7 +29,7 @@ use lunco_port_core::InputPorts;
 use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_core::read::UsdReadObject;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -522,7 +522,7 @@ pub(crate) struct RuntimeOverlayInputs<'w> {
     terrain: Option<Res<'w, lunco_terrain_surface::TerrainGenStatus>>,
     overlay: Option<Res<'w, lunco_terrain_surface::overlay::TerrainOverlayParams>>,
     #[cfg(feature = "networking")]
-    scenario: Option<Res<'w, lunco_networking::scenario_sync::ScenarioDownloadStatus>>,
+    scenario: Option<Res<'w, lunco_networking_sync::scenario_sync::ScenarioDownloadStatus>>,
 }
 
 /// The small amount of edge state needed for seminar-grade runtime evidence.

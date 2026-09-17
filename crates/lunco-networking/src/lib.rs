@@ -3,15 +3,15 @@
 //! Identity primitives (`Provenance`, `GlobalEntityId`, `SimTick`, and
 //! `Mutation`) live in `lunco-core`; session/authority primitives (`NetworkRole`
 //! — whose `is_authoritative()` is the sole authority flag — plus status,
-//! possession, and prediction markers) live in `lunco-core-session`. The networking **wire** (codec, command capture/apply, snapshot
-//! state — see [`wire`]) lives in *this* crate behind the `networking` feature,
-//! so single-player builds that omit `lunco-networking` carry no networking code
-//! at all. On top of the wire, this crate's job is to:
+//! possession, and prediction markers) live in `lunco-core-session`. The
+//! transport-neutral synchronization runtime lives in
+//! `lunco-networking-sync`, while this crate's job is to:
 //! - configure the lightyear WebTransport transport (native + wasm) and run it
 //!   as host or client;
 //! - allocate sessions on connect and send the handshake;
-//! - ferry pre-serialized [`sync::SyncEnvelope`]s between
-//!   [`sync::SyncOutbox`]/[`sync::SyncInbox`] and two lightyear
+//! - ferry pre-serialized [`lunco_networking_sync::sync::SyncEnvelope`]s between
+//!   [`lunco_networking_sync::sync::SyncOutbox`] /
+//!   [`lunco_networking_sync::sync::SyncInbox`] and two lightyear
 //!   messages (reliable `CmdChannel` + best-effort `SnapChannel`).
 //!
 //! With the feature off the plugin is a no-op and single-player is unaffected.
@@ -27,40 +27,6 @@ pub(crate) mod connection_state;
 /// feature.
 pub mod connect_link;
 
-/// The **bytes plane**: fetch a scenario's CID-addressed assets over HTTP rather
-/// than streaming them through the reliable QUIC channel (which queues without
-/// bound and stalls on multi-MB twins). Used whenever the host advertises an
-/// `asset_base_url`; `scenario_sync`'s chunk path is the fallback.
-#[cfg(feature = "networking")]
-pub mod http_fetch;
-/// The journal replication plane: authored Twin-journal entries host→client,
-/// merged via `append_remote`. Separated from the command/state/content planes
-/// (see module docs); the transport ferry only routes to it.
-#[cfg(feature = "networking")]
-pub mod journal_plane;
-#[cfg(feature = "networking")]
-mod protocol;
-/// Scenario distribution: the server publishes its scenario manifest (CID-
-/// addressed assets + a Merkle revision), clients fetch the assets they're
-/// missing over the same WebTransport. IPFS-CID interop. Phase 1 ships the
-/// manifest; asset chunk transfer is Phase 3.
-#[cfg(feature = "networking")]
-pub mod scenario;
-/// Scenario asset transfer (Phase 3): one-way host→client byte streaming of the
-/// CID-addressed assets a manifest advertises, into `<cache_dir>/scenarios/<id>/`.
-#[cfg(feature = "networking")]
-pub mod scenario_sync;
-#[cfg(all(feature = "networking", not(target_family = "wasm")))]
-mod server;
-#[cfg(feature = "networking")]
-mod shared;
-/// Transport-agnostic networking wire: codec, command capture/apply, and state
-/// snapshots (no lightyear dep). Driven by this crate's lightyear adapter.
-#[cfg(feature = "networking")]
-pub mod sync;
-// The scenario manifest uses `lunco-assets` for native closure traversal and
-// `lunco-usd-compose` for USD dependency interpretation. This crate neither
-// reads USD files itself nor carries a second closure walker.
 #[cfg(feature = "networking")]
 mod client;
 /// Client-prediction diagnostics (render-jitter / velocity / correction census).
@@ -69,6 +35,12 @@ mod client;
 /// `diagnostics.rs`.
 #[cfg(feature = "net-diag")]
 mod diagnostics;
+#[cfg(feature = "networking")]
+mod protocol;
+#[cfg(all(feature = "networking", not(target_family = "wasm")))]
+mod server;
+#[cfg(feature = "networking")]
+mod shared;
 /// Native single-instance deep-link forwarding: route a clicked `luncosim://`
 /// link into the already-running app over a local socket (else become primary).
 /// (OS *scheme registration* is a desktop-integration concern and lives in the
@@ -220,17 +192,6 @@ pub(crate) fn normalize_addr(raw: &str) -> String {
 /// host assigns a server-side `SessionId` at connect; see
 /// `server::AssignedSessions`). Drawn from fresh entropy so two clients can't
 /// collide, fixing the old `std::process::id()` reuse across machines (review H5).
-/// Run condition: is the wire live at all? `Standalone` (single-player — the
-/// overwhelmingly common case) skips the networked schedule instead of paying a
-/// full pass of no-op ferry/RBAC/tutor systems every frame (C12). Re-evaluated
-/// each frame, so `JoinServer`/`LeaveServer` flipping [`NetworkRole`] at runtime
-/// enables/disables the set on the spot. `Option` so a bare test app without
-/// the role resource reads as "no wire" instead of panicking.
-#[cfg(feature = "networking")]
-pub(crate) fn wire_is_live(role: Option<Res<lunco_core_session::NetworkRole>>) -> bool {
-    role.is_some_and(|r| r.is_networked())
-}
-
 pub(crate) fn next_client_id() -> u64 {
     #[cfg(target_family = "wasm")]
     {

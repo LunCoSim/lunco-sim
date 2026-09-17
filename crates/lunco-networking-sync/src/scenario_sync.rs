@@ -33,7 +33,7 @@
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -43,7 +43,7 @@ use lunco_core_session::NetworkRole;
 use lunco_storage::StorageHandle;
 
 use crate::scenario::{
-    cid_from_bytes, AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest, ScenarioManifestMsg,
+    AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest, ScenarioManifestMsg, cid_from_bytes,
 };
 use crate::sync::{SyncEnvelope, SyncOutbox};
 
@@ -415,16 +415,12 @@ pub fn scenario_cache_root(scenario_id: &[u8; 16]) -> PathBuf {
 /// **rejecting traversal** (empty / `.` / `..` / backslash segments) — the path
 /// comes from a remote host and must never escape a target root. `None` if unsafe
 /// or empty.
-pub(crate) fn safe_rel_path(rel: &str) -> Option<PathBuf> {
-    let mut p = PathBuf::new();
-    for seg in rel.split('/') {
-        if seg.is_empty() || seg == "." || seg == ".." || seg.contains('\\') {
-            warn!("[net] rejecting unsafe scenario asset path: {rel:?}");
-            return None;
-        }
-        p.push(seg);
+pub fn safe_rel_path(rel: &str) -> Option<PathBuf> {
+    if !lunco_assets_core::asset_path::is_safe_relative_path(rel) {
+        warn!("[net] rejecting unsafe scenario asset path: {rel:?}");
+        return None;
     }
-    (!p.as_os_str().is_empty()).then_some(p)
+    lunco_assets_core::asset_path::relative_path(rel)
 }
 
 /// Resolve a manifest asset's relative path to its on-disk cache location under

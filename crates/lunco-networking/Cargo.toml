@@ -5,11 +5,6 @@ edition = "2021"
 license.workspace = true
 description = "LunCoSim replication and lightyear WebTransport adapter"
 
-[[bin]]
-name = "net_smoke"
-path = "src/bin/net_smoke.rs"
-required-features = ["networking"]
-
 [features]
 # Default = headless-clean: no egui, no workbench, no networking wire. The
 # GUI-free `lunco-luncosim-server` depends on this crate (transitively) WITHOUT
@@ -18,42 +13,25 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a configuration/deep-link surface into the real
 # lightyear WebTransport adapter. Transport-independent prediction lives in
-# `lunco-networking-core` and is enabled alongside this feature.
+# `lunco-networking-core` and `lunco-networking-sync` are enabled alongside
+# this feature.
 networking = [
     "dep:lunco-networking-core",
+    "dep:lunco-networking-sync",
     "dep:lunco-api-transport",
     "dep:lightyear",
     "dep:serde",
-    "dep:serde_json",
-    "dep:bincode",
     "dep:interprocess",
-    "dep:uuid",
-    "dep:sha2",
-    "dep:lunco-hash",
-    "dep:crossbeam-channel",
     "dep:lunco-twin",
     "dep:lunco-twin-journal",
-    "dep:lunco-scripting",
-    "lunco-scripting/rhai",
     "dep:lunco-usd-compose",
-    "dep:lunco-control-core",
-    "dep:lunco-spatial",
-    "dep:lunco-api",
     "dep:lunco-cosim-core",
     "dep:lunco-avatar-core",
-    "dep:lunco-camera-core",
-    "dep:lunco-celestial",
-    "dep:lunco-celestial-spatial",
     "dep:lunco-doc-bevy",
-    "dep:lunco-doc",
-    "dep:lunco-settings",
     "dep:lunco-workspace",
-    "dep:lunco-assets-transport",
     "dep:lunco-assets-core",
     "dep:lunco-storage",
-    "dep:leafwing-input-manager",
     "dep:avian3d",
-    "dep:big_space",
     "dep:aeronet_webtransport",
     "dep:lightyear_aeronet",
     "dep:wtransport",
@@ -73,7 +51,7 @@ ui = ["networking", "dep:bevy_egui", "layout-sync"]
 # Perspective/layout sync against the renderer-independent workbench contract
 # (`sync.rs` ActivatePerspective + WorkbenchSnapshot reads). This does not pull
 # the concrete egui docking shell.
-layout-sync = ["dep:lunco-workbench-core"]
+layout-sync = ["dep:lunco-workbench-core", "lunco-networking-sync/layout-sync"]
 # Host-side HTTP **bytes plane**: serve scenario assets by CID over HTTP instead of
 # streaming them through the reliable QUIC channel (which queues without bound and
 # stalls on multi-MB twins). Native-only in effect — the `lunco-api` asset server is
@@ -86,13 +64,11 @@ bevy = { workspace = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-core = { path = "../lunco-core" }
 lunco-networking-core = { path = "../lunco-networking-core", optional = true }
-lunco-control-core = { path = "../lunco-control-core", optional = true }
-lunco-spatial = { path = "../lunco-spatial", optional = true }
+lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
 lunco-core-session = { path = "../lunco-core-session" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
 # Native builds still get transport-http via lunco-luncosim's own default features.
-lunco-api = { path = "../lunco-api", optional = true }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 # The generic vessel-control commands live in the backend-neutral package; the
 # wire declares channels for them without pulling the Avian orchestration.
@@ -100,26 +76,7 @@ lunco-cosim-core = { path = "../lunco-cosim-core", optional = true }
 # Wire substrate needs only the backend-neutral avatar camera and possession
 # contracts; the avatar system implementation is not part of the network edge.
 lunco-avatar-core = { path = "../lunco-avatar-core", optional = true }
-lunco-camera-core = { path = "../lunco-camera-core", optional = true }
-# `default-features = false`: we read only `ReferenceFrame` (the
-# always-compiled registry component) for snapshot grid parenting — never
-# celestial's egui inspector (`ui` feature). Keeps the headless server egui-free.
-lunco-celestial = { path = "../lunco-celestial", default-features = false, optional = true }
-lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false, optional = true }
-# NO editor-package EDGE. The wire needs exactly two symbols the editor used to
-# own — `SpawnEntity` (channel declaration) from `lunco-core` and
-# `PendingCorrection` (prediction diagnostics) from `lunco-networking-core`.
-# That edge used to drag the whole editor closure
-# (→ modelica → workspace → doc-bevy) into every networking build. Do not re-add it:
-# if the wire needs a type the editor defines, the type belongs in core.
-#
-# `default-features = false`: we use only the egui-free `Presence`/`UserId`/
-# `PresenceInfo` document-lifecycle types, never doc-bevy's `ui` editor-intent
-# systems. Default features here would turn on `lunco-doc-bevy/ui` (→ bevy_egui)
-# for the WHOLE build via feature unification — the real CQ-601 headless leak.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false, optional = true }
-lunco-doc = { path = "../lunco-doc", optional = true }
-lunco-settings = { path = "../lunco-settings", optional = true }
 lunco-workspace = { path = "../lunco-workspace", optional = true }
 # Promote a downloaded scenario → editable on-disk Twin (`PromoteScenario`):
 # `TwinMode::open` + `Twin::promote_to_twin` (writes `twin.toml`). Native-only in
@@ -128,12 +85,8 @@ lunco-twin = { path = "../lunco-twin", optional = true }
 # Journal-on-wire (scenario-plane sync): ship `JournalEntry`s host→client, applied
 # via `Journal::append_remote` (which merges). Optional — networking build only.
 lunco-twin-journal = { path = "../lunco-twin-journal", optional = true, features = ["hooks"] }
-# Shared policy activation: standalone and networked apps must project the same
-# policy definitions through one scripting-owned hook registry.
-lunco-scripting = { path = "../lunco-scripting", optional = true, default-features = false }
 # Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
 # `scenarios/<id>/` download target. Native + wasm-safe path helper.
-lunco-assets-transport = { path = "../lunco-assets-transport", optional = true }
 lunco-assets-core = { path = "../lunco-assets-core", optional = true }
 # Host-side scenario closure: `lunco-assets-core` owns canonical asset
 # traversal; this
@@ -148,34 +101,8 @@ lunco-storage = { path = "../lunco-storage", optional = true }
 # Optional: only the Layer-4 `mod ui` (egui overlays) uses it, behind the `ui`
 # feature. Headless servers never link egui.
 bevy_egui = { workspace = true, optional = true }
-leafwing-input-manager = { workspace = true, optional = true }
-# Read by the wire's `gather_snapshot`: Avian f64 pose/velocity for prediction;
-# BigSpace is used only to convert between local precision grids and the named
-# semantic frame carried by the protocol.
 avian3d = { workspace = true, optional = true }
-big_space = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
-# Binary wire codec for the snapshot/envelope hot path (replaces serde_json there —
-# ~2x smaller, no field names). serde_json stays for the Reflect command payload.
-bincode = { workspace = true, optional = true }
-# Stable scenario identity (twin.toml uuid) carried on the
-# ScenarioManifest envelope; works on native + wasm (the workspace uuid
-# features pull a wasm-capable getrandom backend).
-uuid = { workspace = true, optional = true }
-# SHA-256 for the scenario manifest revision digest + per-asset content
-# addressing. Pure Rust → compiles on wasm32-unknown-unknown so the web
-# client verifies asset hashes identically to the native client.
-sha2 = { workspace = true, optional = true }
-# Cross-platform completion channel for async asset persist (native task pool +
-# wasm spawn_local both push outcomes here). Gated with the networking feature.
-crossbeam-channel = { workspace = true, optional = true }
-# IPLD content-addressing (IPFS interop): asset ids are real CIDv1
-# (raw codec + sha2-256 multihash), resolvable by `ipfs get`/`ipfs pin`.
-# Minted through the shared hashing substrate's CID tier (one canonical impl,
-# shared with the precompute disk cache) — it re-exports the `Cid` type so this
-# crate no longer depends on `cid`/`multihash-codetable` directly.
-lunco-hash = { path = "../lunco-hash", features = ["cid"], optional = true }
 # URL-dialing WebTransport client IO (`wt_client`): lets the browser/native connect by
 # HOSTNAME (`https://sandbox.lunco.space:5888`) so a real CA cert validates with no
 # digest — lightyear's built-in IO only dials `https://{ip}`.

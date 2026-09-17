@@ -16,9 +16,9 @@ use big_space::prelude::*;
 
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
+use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
-use lunco_cosim::CoSimPlugin;
 use lunco_environment::EnvironmentPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
 use lunco_mobility::LunCoMobilityPlugin;
@@ -28,11 +28,11 @@ use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
 use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
 use lunco_usd_avian_filters::filtered_pairs::UsdCollisionFilter;
+use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_core::program::{
     ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
 };
 use lunco_usd_bevy_core::read::UsdReadObject;
-use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime::UsdPlugins;
 use lunco_usd_bevy_scene::UsdPrimPath;
 #[cfg(feature = "networking")]
@@ -136,14 +136,16 @@ mod headless_composition_tests {
 
         assert!(app.is_plugin_added::<AssetPlugin>());
         assert!(app.world().get_resource::<AssetServer>().is_some());
-        assert!(app
-            .world()
-            .get_resource::<Assets<bevy::shader::Shader>>()
-            .is_some());
-        assert!(app
-            .world()
-            .get_resource::<Assets<bevy::image::Image>>()
-            .is_some());
+        assert!(
+            app.world()
+                .get_resource::<Assets<bevy::shader::Shader>>()
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get_resource::<Assets<bevy::image::Image>>()
+                .is_some()
+        );
     }
 }
 
@@ -298,7 +300,9 @@ pub fn run_headless() -> AppExit {
     };
     log_build_identity(mode);
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("luncosim-server — headless LunCoSim runtime\n\nUsage: luncosim-server [--api PORT] [--scene PATH] [--headless-max-speed]");
+        println!(
+            "luncosim-server — headless LunCoSim runtime\n\nUsage: luncosim-server [--api PORT] [--scene PATH] [--headless-max-speed]"
+        );
         return AppExit::Success;
     }
     let execution_mode = if args.iter().any(|arg| arg == "--headless-max-speed") {
@@ -334,8 +338,8 @@ pub fn run_headless() -> AppExit {
 #[cfg(feature = "networking")]
 fn load_ready_scenario(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
-    downloads: Res<lunco_networking::scenario_sync::AssetDownloads>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    downloads: Res<lunco_networking_sync::scenario_sync::AssetDownloads>,
     // Twin roots: a downloaded scenario is mounted here as a root over its cache
     // dir, so it loads under the SAME `twin://<name>/<rel>` the host uses.
     twins: Res<lunco_assets_core::twin_source::TwinRoots>,
@@ -372,7 +376,7 @@ fn load_ready_scenario(
     // it exercises URI agreement but never the cache-root mount. It fails
     // silently: a wrong root gives that peer its own `GlobalEntityId`s, so
     // possession and client prediction never bind while the scene still renders.
-    let uri = match lunco_networking::scenario_sync::mount_scenario_twin(
+    let uri = match lunco_networking_sync::scenario_sync::mount_scenario_twin(
         &twins,
         &m.scenario_id,
         &m.name,
@@ -438,9 +442,9 @@ fn load_ready_scenario(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
-    local_scenario: Option<Res<lunco_networking::scenario::ScenarioManifestResource>>,
+    local_scenario: Option<Res<lunco_networking_sync::scenario::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     mut registry: ResMut<
         lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
@@ -480,7 +484,8 @@ fn replay_scenario_journal(
     };
     let doc = *doc;
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::scene_ops_after(&journal, base, &me, &applied);
+    let pending =
+        lunco_networking_sync::journal_plane::scene_ops_after(&journal, base, &me, &applied);
     for (id, op) in pending {
         registry.replay_op(doc, &op);
         applied.insert(id);
@@ -491,7 +496,7 @@ fn replay_scenario_journal(
 /// [`replay_scenario_journal`] for the model domain. The journal plane, its merge,
 /// and the strategy-honoring op selector are all domain-generic; only this consume
 /// leg is per-domain. Selects the merged, not-yet-applied `Modelica` op entries via
-/// [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
+/// [`domain_ops_after`](lunco_networking_sync::journal_plane::domain_ops_after)
 /// (`DomainKind::Modelica`) — so a scripted merge policy reorders Modelica replay
 /// identically to USD — and applies each through the generic Modelica document
 /// registry's `replay_op`
@@ -505,7 +510,7 @@ fn replay_scenario_journal(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_modelica(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
@@ -532,7 +537,7 @@ fn replay_scenario_journal_modelica(
     };
     let doc = *doc;
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -547,7 +552,7 @@ fn replay_scenario_journal_modelica(
 
 /// Per-domain journal consume leg for `DomainKind::Script` — the script twin of
 /// [`replay_scenario_journal_modelica`]. Selects the merged, not-yet-applied
-/// `Script` op entries via [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
+/// `Script` op entries via [`domain_ops_after`](lunco_networking_sync::journal_plane::domain_ops_after)
 /// (so a scripted merge policy reorders script replay identically to USD/Modelica)
 /// and applies each through `ScriptRegistry::replay_op` (no re-recording), so a
 /// live rover-behaviour edit (`ScriptOp::SetSource`) recorded on one peer projects
@@ -561,7 +566,7 @@ fn replay_scenario_journal_modelica(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_script(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scripting::ScriptRegistry>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -584,7 +589,7 @@ fn replay_scenario_journal_script(
     };
     let doc = *doc;
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -607,7 +612,7 @@ fn replay_scenario_journal_script(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_experiment(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -624,7 +629,7 @@ fn replay_scenario_journal_experiment(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -647,7 +652,7 @@ fn replay_scenario_journal_experiment(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_shader(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scene_authoring::shader_doc::ShaderRegistry>>,
     asset_server: Option<Res<AssetServer>>,
@@ -668,7 +673,7 @@ fn replay_scenario_journal_shader(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -706,7 +711,7 @@ fn replay_scenario_journal_shader(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_obstacle(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     spec: Option<ResMut<lunco_obstacle_field::ObstacleFieldSpec>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -723,7 +728,7 @@ fn replay_scenario_journal_obstacle(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -754,7 +759,7 @@ fn replay_scenario_journal_obstacle(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_tools(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     scoped: Option<ResMut<lunco_scripting::tool_libs::TwinToolLibraries>>,
@@ -782,7 +787,7 @@ fn replay_scenario_journal_tools(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -808,7 +813,7 @@ fn replay_scenario_journal_tools(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_timeline(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     store: Option<ResMut<lunco_scripting::timelines::TimelineStore>>,
@@ -833,7 +838,7 @@ fn replay_scenario_journal_timeline(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -967,7 +972,7 @@ fn load_run_result_artifacts(
 fn request_rebuild_after_result(
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
     role: Option<Res<lunco_core_session::NetworkRole>>,
-    mut rebuild: ResMut<lunco_networking::sync::RequestManifestRebuild>,
+    mut rebuild: ResMut<lunco_networking_sync::sync::RequestManifestRebuild>,
 ) {
     if !matches!(role.as_deref(), Some(lunco_core_session::NetworkRole::Host)) {
         return;
@@ -986,7 +991,7 @@ fn request_rebuild_after_result(
 #[cfg(feature = "networking")]
 fn broadcast_run_status(
     role: Option<Res<lunco_core_session::NetworkRole>>,
-    mut outbox: ResMut<lunco_networking::sync::SyncOutbox>,
+    mut outbox: ResMut<lunco_networking_sync::sync::SyncOutbox>,
     mut progress: MessageReader<lunco_experiments::RunProgress>,
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
     mut failed: MessageReader<lunco_experiments::RunFailed>,
@@ -997,7 +1002,7 @@ fn broadcast_run_status(
         return;
     }
     use lunco_core::SyncChannel;
-    use lunco_networking::sync::{RunStatusMsg, SyncEnvelope};
+    use lunco_networking_sync::sync::{RunStatusMsg, SyncEnvelope};
     let msg = |id: lunco_experiments::ExperimentId,
                phase: u8,
                t_current: f64,
@@ -1048,7 +1053,7 @@ fn broadcast_run_status(
 /// carries the trajectory; a late progress packet must not downgrade it).
 #[cfg(feature = "networking")]
 fn apply_run_status(
-    mut pending: ResMut<lunco_networking::sync::PendingRunStatus>,
+    mut pending: ResMut<lunco_networking_sync::sync::PendingRunStatus>,
     mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
 ) {
     if pending.0.is_empty() {
@@ -1948,8 +1953,8 @@ impl Plugin for LunCoSimCorePlugin {
             // Presence/rebuild resources are consumed by the systems below for any
             // role; init here (idempotent with the host-side init) so a standalone
             // or client app never hits a missing resource.
-            app.init_resource::<lunco_networking::sync::PendingRunStatus>();
-            app.init_resource::<lunco_networking::sync::RequestManifestRebuild>();
+            app.init_resource::<lunco_networking_sync::sync::PendingRunStatus>();
+            app.init_resource::<lunco_networking_sync::sync::RequestManifestRebuild>();
             // Result artifacts themselves are written/loaded by the CORE persistence
             // systems (registered unconditionally below — storage-backed, all
             // platforms). Networking only adds the *distribution* trigger: when a

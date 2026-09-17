@@ -1,5 +1,9 @@
 # Sync architecture — how *everything* stays in sync, by design
 
+The transport-neutral implementation described here lives in
+`lunco-networking-sync`. `lunco-networking` only supplies the lightyear transport
+adapter and connection lifecycle around it.
+
 The capstone. The other docs cover pieces (identity, transport, gaps). This one
 answers the whole question: **across all possible cases, how is state kept
 consistent — derivably, not feature-by-feature?**

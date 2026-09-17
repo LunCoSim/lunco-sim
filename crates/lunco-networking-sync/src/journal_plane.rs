@@ -24,6 +24,7 @@ use std::collections::HashSet;
 
 use lunco_core_session::NetworkRole;
 use lunco_doc_bevy::JournalResource;
+use lunco_storage::{FileStorage, Storage, StorageHandle};
 use lunco_twin_journal::{AuthorId, DomainKind, EntryId, EntryKind, JournalEntry};
 
 use crate::sync::{SyncEnvelope, SyncOutbox};
@@ -55,13 +56,16 @@ pub struct JournalEntryMsg {
 /// 3. A fresh random id if the config dir can't be read/written (never collides
 ///    within a run; just not durable — logged).
 pub fn local_author_id() -> AuthorId {
-    if let Ok(id) = std::env::var("LUNCO_PEER_ID") {
-        let id = id.trim();
-        if !id.is_empty() {
-            return AuthorId::new(id);
-        }
+    let override_id = std::env::var("LUNCO_PEER_ID").ok();
+    if let Some(author) = author_from_override(override_id.as_deref()) {
+        return author;
     }
     AuthorId::new(persisted_install_id())
+}
+
+fn author_from_override(value: Option<&str>) -> Option<AuthorId> {
+    let value = value?.trim();
+    (!value.is_empty()).then(|| AuthorId::new(value))
 }
 
 /// Canonical journal author for a live network connection. The server chooses
@@ -72,25 +76,45 @@ pub fn author_for_session(session: lunco_core::SessionId) -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn persisted_install_id() -> String {
-    let path = lunco_settings::user_config_subdir("identity").join("peer_id");
-    if let Ok(existing) = std::fs::read_to_string(&path) {
+    let path = lunco_settings::user_config_dir()
+        .join("identity")
+        .join("peer_id");
+    let storage = FileStorage::new();
+    let handle = StorageHandle::File(path.clone());
+    if let Ok(existing) = storage.read_sync(&handle) {
+        let Ok(existing) = String::from_utf8(existing) else {
+            return fresh_install_id(&storage, &path, &handle);
+        };
         let id = existing.trim();
         if !id.is_empty() {
             return id.to_string();
         }
     }
+    fresh_install_id(&storage, &path, &handle)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fresh_install_id(
+    storage: &FileStorage,
+    path: &std::path::Path,
+    handle: &StorageHandle,
+) -> String {
     let fresh = format!("peer-{:016x}", lunco_core::ids::random_u64());
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let parent_handle = StorageHandle::File(parent.to_path_buf());
+        if let Err(error) = storage.ensure_directory_sync(&parent_handle) {
+            warn!(
+                "[journal-plane] could not prepare install-id directory {}: {error}",
+                parent.display()
+            );
+        }
     }
     // The identity file is a small local bootstrap record. It is not a network
     // credential: live network journal entries are rebound to the server-issued
-    // connection author in `apply_inbound_entry`. A future storage migration can
-    // make this bootstrap write atomic without changing the network authority
-    // boundary.
-    if let Err(e) = std::fs::write(&path, &fresh) {
+    // connection author in `apply_inbound_entry`.
+    if let Err(error) = storage.write_sync(handle, fresh.as_bytes()) {
         warn!(
-            "[journal-plane] could not persist install id to {}: {e}",
+            "[journal-plane] could not persist install id to {}: {error}",
             path.display()
         );
     } else {
@@ -308,10 +332,13 @@ mod tests {
     #[test]
     fn local_author_id_respects_env_override() {
         // The env override is how multiple instances on one machine (tests,
-        // net_smoke) get distinct stable authors. Single test touching this var.
-        std::env::set_var("LUNCO_PEER_ID", "peer-override-xyz");
-        assert_eq!(local_author_id(), AuthorId::new("peer-override-xyz"));
-        std::env::remove_var("LUNCO_PEER_ID");
+        // net_smoke) get distinct stable authors. The pure parser keeps the
+        // test independent of process-global environment mutation.
+        assert_eq!(
+            author_from_override(Some(" peer-override-xyz ")),
+            Some(AuthorId::new("peer-override-xyz"))
+        );
+        assert_eq!(author_from_override(Some("  ")), None);
     }
 
     #[test]

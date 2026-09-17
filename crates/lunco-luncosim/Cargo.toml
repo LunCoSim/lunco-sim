@@ -21,16 +21,35 @@ path = "src/bin/luncosim.rs"
 # `run()` (via this bin) for `wasm32` — `#[cfg(target_arch = "wasm32")]` blocks
 # in the lib handle platform differences. Served at `dist/luncosim/`.
 
+[[bin]]
+name = "net_smoke"
+path = "src/bin/net_smoke.rs"
+required-features = ["networking"]
+
 [[example]]
 name = "usd_rover_visual"
 path = "examples/usd_rover_visual.rs"
 required-features = ["ui"]
 
 [dependencies]
+bevy = { workspace = true, optional = true }
+lunco-api = { path = "../lunco-api", optional = true }
+lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
+lunco-avatar-core = { path = "../lunco-avatar-core", optional = true }
+lunco-core = { path = "../lunco-core", optional = true }
+lunco-core-session = { path = "../lunco-core-session", optional = true }
+lunco-cosim-core = { path = "../lunco-cosim-core", optional = true }
+lunco-doc = { path = "../lunco-doc", optional = true }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false, optional = true }
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
+lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
+lunco-networking-core = { path = "../lunco-networking-core", optional = true }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
+lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
+lunco-workspace = { path = "../lunco-workspace", optional = true }
+serde_json = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lunco-rhai-repl = { path = "../lunco-rhai-repl" }
@@ -89,9 +108,23 @@ transport-http = [
 # Multiplayer over WebTransport (lightyear). Pulls in the real networking
 # adapter; the wire substrate (lunco-api) is required.
 networking = [
+    "dep:bevy",
+    "dep:lunco-api",
+    "dep:lunco-api-transport",
+    "dep:lunco-avatar-core",
+    "dep:lunco-core",
+    "dep:lunco-core-session",
+    "dep:lunco-cosim-core",
+    "dep:lunco-doc",
+    "dep:lunco-doc-bevy",
     "lunco-luncosim-core/networking",
     "lunco-luncosim-ui?/networking",
+    "dep:lunco-networking",
+    "dep:lunco-networking-core",
     "api-transport",
+    "dep:lunco-twin-journal",
+    "dep:lunco-workspace",
+    "dep:serde_json",
 ]
 # Netcode jitter diagnostics — off by default (not in normal builds). Build with
 # `--features networking,net-diag` when debugging; see lunco-networking/diagnostics.rs.
@@ -119,9 +152,7 @@ tracy = ["lunco-luncosim-ui?/tracy"]
 workspace = true
 
 [dev-dependencies]
-bevy = { workspace = true }
 avian3d = { workspace = true }
-lunco-api-transport = { path = "../lunco-api-transport", default-features = false }
 lunco-core = { path = "../lunco-core" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }

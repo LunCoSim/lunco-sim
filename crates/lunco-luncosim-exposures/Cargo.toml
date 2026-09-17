@@ -20,7 +20,7 @@ lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-port-core = { path = "../lunco-port-core" }
-lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
+lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
@@ -32,7 +32,7 @@ lunco-workspace = { path = "../lunco-workspace" }
 
 [features]
 default = []
-networking = ["dep:lunco-networking"]
+networking = ["dep:lunco-networking-sync"]
 
 [lints]
 workspace = true

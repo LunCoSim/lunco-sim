@@ -144,7 +144,8 @@ External communication, ECS replication, telemetry extraction, and distributed a
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-networking-core`** | Transport-independent client netcode: snapshot interpolation, ownership prediction, rollback/reconciliation, correction smoothing, and their session state. It has no WebTransport/lightyear dependency. |
-| **`lunco-networking`** | Multiplayer replication and lightyear WebTransport adapter. Host-authoritative planes broadcast on connect + change: the **journal plane** (convergent op-log merge), the **scenario plane** (CID asset manifest + scenario sync), the **scripted-policy plane** (rhai merge/authorize/drive-kernel hooks distributed so every peer runs the identical one), and per-peer AOI snapshot routing. |
+| **`lunco-networking-sync`** | Transport-neutral Bevy synchronization runtime: replicated state, journal convergence, scenario manifest/asset distribution, typed bounded envelopes, and sync policy execution. It has no WebTransport/lightyear dependency; adapters provide the wire channels. |
+| **`lunco-networking`** | Multiplayer replication and lightyear WebTransport adapter. It owns transport setup, peer/session handshakes, channel ferrying, and network-only adapters while consuming the transport-neutral `lunco-networking-sync` runtime. |
 | **`lunco-api-contracts`** | Pure API wire envelopes and shared API endpoint constants. It has no ECS or language-runtime dependency, so native clients and transport adapters compile against the same contract without linking the runtime. |
 | **`lunco-api-client`** | Generic native command-API client. It owns endpoint configuration and HTTP request/response handling; it knows no Rhai command or simulator implementation. |
 | **`lunco-api`** | ECS API runtime: typed command/query execution, reflection-based discovery, entity identity, and response/telemetry infrastructure. Its internal requests are converted to/from `lunco-api-contracts` only at transport edges. |
@@ -245,7 +246,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-modelica-assets`** | `build_modelica_library_assets`, `modelica_library_indexer`, `modelica_library_parse_bench` | Native Modelica source-library packaging and indexing tools. The indexer is shared by the CLI and the Modelica UI's background lifecycle adapter; the package remains independent of Bevy. |
 | **`lunco-modelica-api`** | — | Transport-free Modelica API capability: query providers plus document edit commands, installed by API-enabled Modelica and LunCoSim hosts. |
 
-> Other binaries: `build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
+> Other binaries: `build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-luncosim`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
 
 ---
 

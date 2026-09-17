@@ -6,7 +6,7 @@
 //! compile this crate.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use lunco_workbench_runtime_ui as runtime_ui;
 
 use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
@@ -1329,7 +1329,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // `<cache>/scenarios/index.json` at boot and updates as downloads finish.
         #[cfg(feature = "networking")]
         {
-            use lunco_networking::scenario_sync::CachedTwinsRegistry;
+            use lunco_networking_sync::scenario_sync::CachedTwinsRegistry;
             let entries = ctx
                 .resource::<CachedTwinsRegistry>()
                 .map(|r| r.entries.clone())
@@ -1371,7 +1371,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                     else {
                                         continue;
                                     };
-                                    let path = match lunco_networking::scenario_sync::mount_scenario_twin(
+                                    let path = match lunco_networking_sync::scenario_sync::mount_scenario_twin(
                                         &twins,
                                         &entry.scenario_id,
                                         &entry.name,
@@ -1612,8 +1612,8 @@ fn clean_scene_name(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        runtime_ui_dimension, scenario_registry_diagnostic, scenario_registry_status_message,
-        RuntimeUiDropdownState,
+        RuntimeUiDropdownState, runtime_ui_dimension, scenario_registry_diagnostic,
+        scenario_registry_status_message,
     };
     use lunco_core::exposure::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;

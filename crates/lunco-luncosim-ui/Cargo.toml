@@ -20,7 +20,11 @@ python = []
 # the headless-safe simulation runtime.
 avatar-ui = ["dep:lunco-avatar-ui"]
 # Downloaded Twin presentation in the Scenarios menu.
-networking = ["dep:lunco-networking", "lunco-networking/networking"]
+networking = [
+    "dep:lunco-networking",
+    "dep:lunco-networking-sync",
+    "lunco-networking/networking",
+]
 # Opt-in profiling for the complete GPU-backed application composition.
 tracy = ["bevy/trace_tracy"]
 
@@ -81,6 +85,7 @@ lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }
 lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
 lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
+lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
 lunco-render = { path = "../lunco-render" }
 lunco-render-bevy = { path = "../lunco-render-bevy" }
 lunco-render-recovery = { path = "../lunco-render-recovery" }

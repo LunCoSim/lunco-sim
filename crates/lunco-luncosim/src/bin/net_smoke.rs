@@ -413,7 +413,7 @@ fn client_act(
     mut commands: Commands,
     mut acted: Local<bool>,
 ) {
-    if local.0 .0 == 0 {
+    if local.0.0 == 0 {
         return; // handshake not yet received
     }
     let Some(rovers) = rovers else {
@@ -460,7 +460,7 @@ fn client_drive_cadence(
     mut ideal: ResMut<ClientIdealX>,
     mut commands: Commands,
 ) {
-    if local.0 .0 == 0 {
+    if local.0.0 == 0 {
         return; // handshake not yet received
     }
     let Some(rovers) = rovers else {
@@ -634,7 +634,7 @@ fn client_author_journal_entry(
     journal: Option<Res<JournalResource>>,
     mut done: Local<bool>,
 ) {
-    if *done || local.0 .0 == 0 || time.elapsed_secs() < CLIENT_JOURNAL_AT {
+    if *done || local.0.0 == 0 || time.elapsed_secs() < CLIENT_JOURNAL_AT {
         return;
     }
     if let Some(j) = journal {
@@ -651,7 +651,7 @@ fn report_session(
     mut mine: ResMut<MySession>,
     mut last: Local<u64>,
 ) {
-    let cur = local.0 .0;
+    let cur = local.0.0;
     if cur != 0 {
         mine.0 = cur; // latch the assigned id; never overwrite with a disconnect's 0
     }
@@ -684,7 +684,7 @@ fn exit_after_timeout(
         let g1_still = m.g1 < 0.1; // unauthorized drive rejected → no motion
         let g2_mine = g2_owner == Some(me); // ownership broadcast adopted
         let g1_host = g1_owner == Some(SessionId::LOCAL); // host kept its rover
-                                                          // B5: the host despawned G3 mid-run; its proxy must be gone on the client.
+        // B5: the host despawned G3 mid-run; its proxy must be gone on the client.
         let g3_despawned = !q_proxies.iter().any(|g| g.0 == G3_GID);
 
         // Journal plane: the host's authored edit (marker `H1`) must have
@@ -748,7 +748,9 @@ fn exit_after_timeout(
             && journal_from_host
             && policy_active
         {
-            info!("[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync + despawn-repl + journal-sync (scripted merge policy) all hold");
+            info!(
+                "[test] RESULT: PASS — exclusive possession + ownership-gated drive + sync + despawn-repl + journal-sync (scripted merge policy) all hold"
+            );
         } else {
             warn!("[test] RESULT: FAIL — see checks above");
         }

@@ -2,25 +2,25 @@
 //! outbox→clients / clients→inbox ferry. Native only.
 
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lightyear::netcode::server_plugin::NetcodeConfig;
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use lightyear::netcode::NetcodeServer;
+use lightyear::netcode::server_plugin::NetcodeConfig;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
-use crate::scenario::{
-    cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg,
-    ScenarioManifestResource,
-};
-use crate::sync::{
-    HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg, ReplicationState,
-    SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
-};
 use lunco_core::{SessionId, SimTick, SyncChannel};
 use lunco_core_session::{NetStatus, SessionProfiles, SessionRegistry};
 use lunco_doc_bevy::JournalResource;
+use lunco_networking_sync::scenario::{
+    ScenarioAsset, ScenarioManifestMsg, ScenarioManifestResource, cid_for_content,
+    scenario_revision,
+};
+use lunco_networking_sync::sync::{
+    HandshakeMsg, MAX_SNAPSHOT_ENTRIES, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg,
+    ReplicationState, SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters,
+};
 use lunco_workspace::{Twin, TwinAdded, WorkspaceResource};
 
 /// Host-authoritative map: live connection (deterministic netcode peer key) →
@@ -63,9 +63,8 @@ impl AssignedSessions {
 }
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
-use crate::shared::{
-    deserialize_env, is_dev_netcode_key, netcode_key, peer_to_session, serialize_env, PROTOCOL_ID,
-};
+use crate::shared::{PROTOCOL_ID, is_dev_netcode_key, netcode_key, peer_to_session};
+use lunco_networking_sync::codec::{deserialize_env, serialize_env};
 
 use lunco_storage::{FileStorage, Storage, StorageHandle};
 use std::path::{Path, PathBuf};
@@ -285,7 +284,7 @@ impl AssetHttpServer {
         for (cid, path) in cid_paths {
             // Key on the canonical base32 string — exactly what a client puts in
             // the URL — so the handler never parses or trusts caller-shaped input.
-            if let Some(cid) = crate::scenario::cid_from_bytes(cid) {
+            if let Some(cid) = lunco_networking_sync::scenario::cid_from_bytes(cid) {
                 map.insert(cid.to_string(), path.clone());
             }
         }
@@ -405,8 +404,8 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     // `drive_scenario_manifest`) + in-flight off-thread read jobs. These back the
     // in-session (QUIC) chunk path, which remains as the fallback when no HTTP
     // asset endpoint is advertised.
-    app.init_resource::<crate::scenario_sync::HostAssetPaths>();
-    app.init_resource::<crate::scenario_sync::AssetServeTasks>();
+    app.init_resource::<lunco_networking_sync::scenario_sync::HostAssetPaths>();
+    app.init_resource::<lunco_networking_sync::scenario_sync::AssetServeTasks>();
     // The HTTP bytes plane. Opt out with `LUNCO_ASSET_PORT=0` (clients then fall
     // back to in-session streaming, viable only for small scenarios).
     #[cfg(feature = "transport-http")]
@@ -422,12 +421,12 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
         }
     }
     // Bidirectional ingest: queue of client-offered imported assets.
-    app.init_resource::<crate::scenario_sync::PendingAssetOffers>();
+    app.init_resource::<lunco_networking_sync::scenario_sync::PendingAssetOffers>();
     // Presence: client-side queue of host-sent experiment run-status updates
     // (required by `InboundClientCtx`, so init'd for both roles here).
-    app.init_resource::<crate::sync::PendingRunStatus>();
+    app.init_resource::<lunco_networking_sync::sync::PendingRunStatus>();
     // Public rebuild seam (mid-session content → manifest rebuild).
-    app.init_resource::<crate::sync::RequestManifestRebuild>();
+    app.init_resource::<lunco_networking_sync::sync::RequestManifestRebuild>();
     // Connect-time journal replay queue (review N5) — metered by
     // `replay_journal_chunks` instead of blasted from the connect observer.
     app.init_resource::<PendingJournalReplay>();
@@ -444,7 +443,7 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     // WITHOUT touching the ferry: snapshot GENERATION (`gather_snapshot`) runs in
     // `FixedUpdate` at a steady 20 Hz and tick-stamps each batch, and the client
     // interpolates in tick-space (`interpolate_proxies`), so bursty sends still
-    // render smoothly. See `crate::sync::SyncPlugin`.
+    // render smoothly. See `lunco_networking_sync::sync::SyncPlugin`.
     app.add_systems(
         Update,
         (
@@ -454,15 +453,16 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
             // ~200 ms later when the host's `Update` is render-throttled while
             // unfocused). Intra-`Update` ordering only — the systems stay in
             // `Update` as the reliable-flush note above requires.
-            host_recv_inbox.before(crate::sync::drain_sync_inbox),
+            host_recv_inbox.before(lunco_networking_sync::sync::drain_sync_inbox),
             update_host_netstatus,
             // Phase-3: turn queued client asset requests into off-thread read
             // jobs. Doesn't touch the lightyear sender, so it runs parallel; must
             // follow the drain that fills `PendingAssetRequests`.
-            crate::scenario_sync::serve_asset_requests.after(crate::sync::drain_sync_inbox),
+            lunco_networking_sync::scenario_sync::serve_asset_requests
+                .after(lunco_networking_sync::sync::drain_sync_inbox),
             // Bidirectional ingest: write client-offered imported assets into the
             // twin + rebuild the manifest. Follows the drain that fills the queue.
-            ingest_asset_offers.after(crate::sync::drain_sync_inbox),
+            ingest_asset_offers.after(lunco_networking_sync::sync::drain_sync_inbox),
             // Public rebuild seam: any subsystem that wrote new twin content (e.g.
             // a finished experiment result) sets `RequestManifestRebuild`; this
             // services it so already-connected peers pull the bytes now. Ordered
@@ -493,7 +493,7 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
                 drain_and_send_asset_chunks,
             )
                 .chain()
-                .after(crate::sync::drain_sync_inbox),
+                .after(lunco_networking_sync::sync::drain_sync_inbox),
         ),
     );
 }
@@ -522,7 +522,7 @@ fn broadcast_profiles(profiles: Res<SessionProfiles>, mut outbox: ResMut<SyncOut
     outbox.0.push((
         SyncChannel::CommandBus,
         SyncEnvelope::Profiles(ProfilesMsg {
-            entries: crate::sync::profile_wire_entries(&profiles),
+            entries: lunco_networking_sync::sync::profile_wire_entries(&profiles),
         }),
     ));
 }
@@ -656,10 +656,10 @@ fn on_server_connected(
         &SyncEnvelope::Handshake(HandshakeMsg {
             session: session.0,
             tick: tick.0,
-            journal_author: crate::journal_plane::author_for_session(session),
+            journal_author: lunco_networking_sync::journal_plane::author_for_session(session),
             // Review N4: the client refuses the session on a mismatch rather than
             // mis-decoding every later message (bincode is positional).
-            wire_version: crate::sync::WIRE_VERSION,
+            wire_version: lunco_networking_sync::sync::WIRE_VERSION,
         }),
     );
     // Current ownership table, so the joiner immediately knows who owns what
@@ -679,7 +679,7 @@ fn on_server_connected(
         &target,
         SyncChannel::CommandBus,
         &SyncEnvelope::Profiles(ProfilesMsg {
-            entries: crate::sync::profile_wire_entries(&profiles),
+            entries: lunco_networking_sync::sync::profile_wire_entries(&profiles),
         }),
     );
     // Scenario manifest: tell the joiner which scenario the server is running
@@ -713,7 +713,7 @@ fn on_server_connected(
     // handed to `replay_journal_chunks`, which ships them in batches under a
     // per-frame budget, behind the session-context frames above.
     if let Some(journal) = &journal {
-        let entries = crate::journal_plane::full_journal_msgs(journal);
+        let entries = lunco_networking_sync::journal_plane::full_journal_msgs(journal);
         if !entries.is_empty() {
             info!(
                 "[net] queueing {} journal entries for replay to session {} \
@@ -751,7 +751,7 @@ const JOURNAL_REPLAY_BUDGET: usize = 256;
 /// One connected peer's outstanding journal replay.
 struct PeerJournalReplay {
     peer: PeerId,
-    remaining: std::collections::VecDeque<crate::journal_plane::JournalEntryMsg>,
+    remaining: std::collections::VecDeque<lunco_networking_sync::journal_plane::JournalEntryMsg>,
 }
 
 /// Host: journal replays still owed to freshly-connected peers.
@@ -795,10 +795,12 @@ fn replay_journal_chunks(
 /// entries off the front, in chunks of `chunk`. Pure, so the budget/chunk behaviour
 /// is testable without a lightyear sender.
 fn take_replay_chunks(
-    remaining: &mut std::collections::VecDeque<crate::journal_plane::JournalEntryMsg>,
+    remaining: &mut std::collections::VecDeque<
+        lunco_networking_sync::journal_plane::JournalEntryMsg,
+    >,
     budget: usize,
     chunk: usize,
-) -> Vec<Vec<crate::journal_plane::JournalEntryMsg>> {
+) -> Vec<Vec<lunco_networking_sync::journal_plane::JournalEntryMsg>> {
     let mut out = Vec::new();
     let mut sent = 0usize;
     while sent < budget && !remaining.is_empty() {
@@ -812,7 +814,7 @@ fn take_replay_chunks(
 #[cfg(test)]
 mod journal_replay_tests {
     use super::*;
-    use crate::journal_plane::JournalEntryMsg;
+    use lunco_networking_sync::journal_plane::JournalEntryMsg;
 
     fn journal(n: usize) -> std::collections::VecDeque<JournalEntryMsg> {
         (0..n)
@@ -883,13 +885,13 @@ fn on_server_disconnected(
     mut registry: ResMut<SessionRegistry>,
     mut profiles: ResMut<SessionProfiles>,
     mut rbac: ResMut<lunco_core_session::SessionRbac>,
-    mut dedup: ResMut<crate::sync::SyncDedup>,
+    mut dedup: ResMut<lunco_networking_sync::sync::SyncDedup>,
     mut assigned: ResMut<AssignedSessions>,
     mut view_centers: ResMut<ViewCenters>,
     mut interest: ResMut<PeerInterest>,
-    mut pending_offers: ResMut<crate::scenario_sync::PendingAssetOffers>,
-    mut pending_requests: ResMut<crate::scenario_sync::PendingAssetRequests>,
-    mut serve_tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
+    mut pending_offers: ResMut<lunco_networking_sync::scenario_sync::PendingAssetOffers>,
+    mut pending_requests: ResMut<lunco_networking_sync::scenario_sync::PendingAssetRequests>,
+    mut serve_tasks: ResMut<lunco_networking_sync::scenario_sync::AssetServeTasks>,
     mut replay: ResMut<PendingJournalReplay>,
     mut commands: Commands,
 ) {
@@ -994,14 +996,14 @@ fn assemble_and_send_snapshots(
     server: Single<&Server>,
     mut sender: ServerMultiMessageSender,
     mut last_gen: Local<u64>,
-    // Per-session digest of the last pose ([`crate::sync::PoseDigest`] —
+    // Per-session digest of the last pose ([`lunco_networking_sync::sync::PoseDigest`] —
     // `(position_bits, rot_packed, last_input_seq)`) SENT to that peer per gid.
     // Diffed each assemble to decide what to send; out-of-interest gids are
     // evicted so a re-entry re-baselines.
     mut sent_last: Local<
         std::collections::HashMap<
             SessionId,
-            std::collections::HashMap<u64, crate::sync::PoseDigest>,
+            std::collections::HashMap<u64, lunco_networking_sync::sync::PoseDigest>,
         >,
     >,
     // Per-session set of gids the peer has been sent a `Spawn` for (scoped-spawn,
@@ -1057,7 +1059,7 @@ fn assemble_and_send_snapshots(
         known.retain(|gid| repl.entries.contains_key(gid));
 
         let digest = sent_last.entry(session).or_default();
-        let batch = crate::sync::diff_peer_batch(set, &repl.entries, digest);
+        let batch = lunco_networking_sync::sync::diff_peer_batch(set, &repl.entries, digest);
 
         if batch.is_empty() {
             continue;
@@ -1127,7 +1129,7 @@ struct ScenarioBuildInput {
     default_scene: Option<String>,
     /// Entry scene relative to the Twin root (pre-re-rooting), for a client that
     /// has the Twin locally to load `twin://` host-identically. See
-    /// [`ScenarioManifestMsg::twin_scene`](crate::scenario::ScenarioManifestMsg::twin_scene).
+    /// [`ScenarioManifestMsg::twin_scene`](lunco_networking_sync::scenario::ScenarioManifestMsg::twin_scene).
     twin_scene: Option<String>,
     descriptors: Vec<AssetDescriptor>,
     /// The host's journal head at build time — the base the asset snapshot
@@ -1311,7 +1313,7 @@ fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
 /// leaving that asset permanently absent on every peer (review: silently dropped
 /// unreadable files corrupt the asset list and revision together).
 /// Off-thread build result: the wire manifest plus the host-local CID → absolute
-/// path map [`serve_asset_requests`](crate::scenario_sync::serve_asset_requests)
+/// path map [`serve_asset_requests`](lunco_networking_sync::scenario_sync::serve_asset_requests)
 /// reads bytes through (Phase 3). Kept out of the wire type — the client only
 /// ever sees relative paths; abs paths are the host's private serving index.
 type ScenarioBuildOutput = (ScenarioManifestMsg, Vec<(Vec<u8>, PathBuf)>);
@@ -1440,7 +1442,7 @@ fn spawn_initial_scenario_manifest(
 fn drive_scenario_manifest(
     mut pending: ResMut<PendingScenarioManifest>,
     mut scenario: ResMut<ScenarioManifestResource>,
-    mut asset_paths: ResMut<crate::scenario_sync::HostAssetPaths>,
+    mut asset_paths: ResMut<lunco_networking_sync::scenario_sync::HostAssetPaths>,
     #[cfg(feature = "transport-http")] http_assets: Option<Res<AssetHttpServer>>,
 ) {
     let Some(task) = pending.task.as_mut() else {
@@ -1505,7 +1507,7 @@ fn on_twin_added_host(
 /// rebuild only fires on `TwinAdded`, startup, or (now) a client offer.
 fn ingest_asset_offers(
     role: Res<lunco_core_session::NetworkRole>,
-    mut offers: ResMut<crate::scenario_sync::PendingAssetOffers>,
+    mut offers: ResMut<lunco_networking_sync::scenario_sync::PendingAssetOffers>,
     workspace: Option<Res<WorkspaceResource>>,
     journal: Option<Res<JournalResource>>,
     mut pending: ResMut<PendingScenarioManifest>,
@@ -1524,24 +1526,24 @@ fn ingest_asset_offers(
     for (session, offer) in batch {
         // Defense in depth: the inbox drain already caps offer size, but this is
         // the last gate before bytes hit the shared twin's disk.
-        if offer.data.len() > crate::scenario_sync::MAX_ASSET_OFFER_BYTES {
+        if offer.data.len() > lunco_networking_sync::scenario_sync::MAX_ASSET_OFFER_BYTES {
             warn!(
                 "[net] rejected oversized asset offer from {session}: {} bytes (cap {})",
                 offer.data.len(),
-                crate::scenario_sync::MAX_ASSET_OFFER_BYTES
+                lunco_networking_sync::scenario_sync::MAX_ASSET_OFFER_BYTES
             );
             continue;
         }
         // Fail-closed: the bytes must hash to the advertised CID (never trust a
         // wire-supplied path/bytes pairing).
-        if crate::scenario::cid_for_content(&offer.data).to_bytes() != offer.cid {
+        if lunco_networking_sync::scenario::cid_for_content(&offer.data).to_bytes() != offer.cid {
             warn!(
                 "[net] rejected asset offer: bytes don't match CID ({})",
                 offer.path
             );
             continue;
         }
-        let Some(rel) = crate::scenario_sync::safe_rel_path(&offer.path) else {
+        let Some(rel) = lunco_networking_sync::scenario_sync::safe_rel_path(&offer.path) else {
             continue; // traversal-guarded; safe_rel_path logs the rejection
         };
         let dest = twin.root.join(rel);
@@ -1565,14 +1567,14 @@ fn ingest_asset_offers(
     }
 }
 
-/// Service the public [`RequestManifestRebuild`](crate::sync::RequestManifestRebuild)
+/// Service the public [`RequestManifestRebuild`](lunco_networking_sync::sync::RequestManifestRebuild)
 /// seam: when a subsystem wrote new twin content mid-session (e.g. the assembly
 /// crate's finished-experiment-result writer) and flipped the flag, kick off an
 /// off-thread manifest rebuild so already-connected peers pull the new bytes now.
 /// One-shot (resets the flag). Host-only; no-op when idle.
 fn service_manifest_rebuild_request(
     role: Res<lunco_core_session::NetworkRole>,
-    mut req: ResMut<crate::sync::RequestManifestRebuild>,
+    mut req: ResMut<lunco_networking_sync::sync::RequestManifestRebuild>,
     workspace: Option<Res<WorkspaceResource>>,
     journal: Option<Res<JournalResource>>,
     mut pending: ResMut<PendingScenarioManifest>,
@@ -1592,12 +1594,12 @@ fn service_manifest_rebuild_request(
 
 /// Host (Phase 3): poll finished off-thread read jobs and stream their chunks to
 /// the requesting peer over the reliable `BulkChannel`, capped at
-/// [`MAX_CHUNKS_PER_FRAME`](crate::scenario_sync::MAX_CHUNKS_PER_FRAME) per frame
+/// [`MAX_CHUNKS_PER_FRAME`](lunco_networking_sync::scenario_sync::MAX_CHUNKS_PER_FRAME) per frame
 /// so a large multi-asset transfer can't flood lightyear's send buffer in one
 /// `Update`. Leftover chunks (and chunks whose task is still running) persist to
 /// the next frame; chunks for a peer that disconnected mid-transfer are dropped.
 fn drain_and_send_asset_chunks(
-    mut tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
+    mut tasks: ResMut<lunco_networking_sync::scenario_sync::AssetServeTasks>,
     assigned: Res<AssignedSessions>,
     q_client: Query<&RemoteId, With<ClientOf>>,
     server: Single<&Server>,
@@ -1605,17 +1607,18 @@ fn drain_and_send_asset_chunks(
     time: Res<Time>,
     // Carries chunks not yet flushed (per-frame cap / still-arriving tasks) across
     // frames. A `Local` (not a resource) — this is the only reader/writer.
-    mut ready: Local<Vec<(SessionId, crate::scenario::AssetChunkMsg)>>,
+    mut ready: Local<Vec<(SessionId, lunco_networking_sync::scenario::AssetChunkMsg)>>,
     // Per-peer estimate of chunks lightyear still holds unacked (sends minus the
     // assumed drain) — the sender-side high-water mark. See
-    // [`MAX_UNACKED_CHUNK_ESTIMATE`](crate::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE).
+    // [`MAX_UNACKED_CHUNK_ESTIMATE`](lunco_networking_sync::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE).
     mut unacked_estimate: Local<std::collections::HashMap<SessionId, f32>>,
 ) {
     // Decay the unacked estimate: assume each peer drained at the conservative
     // rate since last frame. Runs before the empty-check so the budget refills
     // even on frames with nothing to flush.
     if !unacked_estimate.is_empty() {
-        let drained = crate::scenario_sync::ASSUMED_DRAIN_CHUNKS_PER_SEC * time.delta_secs();
+        let drained =
+            lunco_networking_sync::scenario_sync::ASSUMED_DRAIN_CHUNKS_PER_SEC * time.delta_secs();
         unacked_estimate.retain(|_, est| {
             *est -= drained;
             *est > 0.0
@@ -1653,13 +1656,13 @@ fn drain_and_send_asset_chunks(
     let mut sent = 0usize;
     let mut requeue = Vec::new();
     for (session, chunk) in std::mem::take(&mut *ready) {
-        if sent >= crate::scenario_sync::MAX_CHUNKS_PER_FRAME {
+        if sent >= lunco_networking_sync::scenario_sync::MAX_CHUNKS_PER_FRAME {
             requeue.push((session, chunk));
             continue;
         }
         if let Some(&peer) = peer_of.get(&session) {
             let est = unacked_estimate.entry(session).or_insert(0.0);
-            if *est >= crate::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE {
+            if *est >= lunco_networking_sync::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE {
                 // Over budget for this peer — hold the chunk until the
                 // estimate drains. FIFO order is preserved by the requeue.
                 requeue.push((session, chunk));

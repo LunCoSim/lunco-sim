@@ -85,8 +85,8 @@ export LUNICA_BIN="${LUNICA_BIN:-lunica}"
 **Utility / dev bins**: `modelica_run` (`lunco-modelica-core`, headless Modelica CLI → CSV),
 `modelica_library_indexer` (`lunco-modelica-assets`, rebuild the Modelica-library search index — re-run
 after a source-library change), `lunica_worker` (`lunco-modelica-core`, wasm compile worker, bundled not run),
-`build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`, transport smoke
-test). Authored luncosim behavior tests run through `luncosim test` plus their Rhai scenarios.
+`build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-luncosim`, production
+transport smoke test). Authored luncosim behavior tests run through `luncosim test` plus their Rhai scenarios.
 Details:
 [`docs/apps/README.md`](../../docs/apps/README.md).
 
@@ -125,7 +125,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 | **Simulation engine** | celestial, environment, terrain, experiments, cosim | `lunco-celestial`, `lunco-cosim`, `lunco-experiments`, `lunco-terrain-*` |
 | **Vessel control & hardware** | semantic input, mobility, robotics, avatar, FSW/OBC/hardware, controller | `lunco-input-core`, `lunco-mobility`, `lunco-controller`, `lunco-cosim` |
 | **USD integration** | OpenUSD↔Bevy: authored document, operation core, geometry, visuals, physics, joint admission, sim schemas, actuation, materials | `lunco-usd-document`, `lunco-usd-core`, `lunco-usd-geometry`, `lunco-usd-commands`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-usd-avian-joints`, `lunco-usd-actuation`, `lunco-materials` |
-| **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
+| **Networking & API** | transport, transport-neutral replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-networking-sync`, `lunco-api`, `lunco-telemetry` |
 | **Workbench & UI** | IDE shell, shell-independent widgets, optional guided presentation, runtime-authored HUI/Flair surfaces, reusable Twin/Files browser, viz, 2D canvas, edit tools, focused transform gizmo, render intent/recovery, web boot | `lunco-workbench`, `lunco-workbench-core`, `lunco-workbench-widgets`, `lunco-workbench-guided-ui`, `lunco-workbench-runtime-ui`, `lunco-workbench-browser`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit-core`, `lunco-luncosim-edit-gizmo-ui`, `lunco-luncosim-edit-ui`, `lunco-render-recovery` |
 | **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, authored lessons | `lunco-modelica-core`, `lunco-modelica-ui-core`, `lunco-modelica-ui`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-luncosim` |
 | **Applications** | the entry-point binaries above | `luncosim`, `luncosim-server`, `lunica` |

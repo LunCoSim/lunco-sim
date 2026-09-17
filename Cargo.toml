@@ -117,6 +117,7 @@ members = [
     "crates/lunco-materials",
     "crates/lunco-networking",
     "crates/lunco-networking-core",
+    "crates/lunco-networking-sync",
     "crates/lunco-usd-bevy-runtime-core",
     "crates/lunco-command-macro",
     "crates/lunco-terrain-globe",
@@ -477,15 +478,15 @@ rayon = "1"
 base64 = "0.22"
 # Pure-Rust SHA-256 — works on native AND wasm32-unknown-unknown (no
 # getrandom / no C). Used by lunco-assets (asset verify) and
-# lunco-networking (scenario manifest revision digest + asset content
-# addressing on both server and web client).
+# lunco-networking-sync (scenario manifest revision digest; asset content
+# addressing itself is shared through lunco-hash on both server and web client).
 sha2 = "0.11"
 # IPLD content-addressing (IPFS interop). `cid` builds/renders CIDs;
 # `multihash-codetable` provides `Code::Sha2_256.digest(bytes)`. Both
 # pure-Rust and wasm32-safe — the web client verifies asset hashes
 # identically to native and the CIDs it pins are resolvable by `ipfs
 # get`/`ipfs pin`. Wire form is canonical CID bytes (see
-# lunco-networking/src/scenario.rs).
+# lunco-networking-sync/src/scenario.rs).
 cid = { version = "0.11", default-features = false, features = ["alloc", "serde"] }
 multihash-codetable = { version = "0.2", default-features = false, features = ["sha2"] }
 

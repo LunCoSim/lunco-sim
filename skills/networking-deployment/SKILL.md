@@ -7,8 +7,9 @@ description: Configure, smoke-test, or deploy LunCoSim networking, the headless 
 
 Read [`crates/lunco-networking/DEPLOY.md`](../../crates/lunco-networking/DEPLOY.md),
 the networking [`README.md`](../../crates/lunco-networking/README.md), and the
-relevant synchronization contract before editing. The networking crate owns
-transport/session behavior; the deployment guide owns service and TLS facts.
+relevant synchronization contract before editing. `lunco-networking` owns
+transport/session behavior and `lunco-networking-sync` owns the transport-neutral
+replication runtime; the deployment guide owns service and TLS facts.
 
 ## Local validation
 

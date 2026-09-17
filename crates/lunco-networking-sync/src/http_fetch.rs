@@ -26,12 +26,12 @@
 //! back to the in-session chunk path.
 
 use bevy::prelude::*;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, bounded};
 
 use lunco_core_session::NetworkRole;
 
-use crate::scenario::{cid_for_content, RemoteScenarioManifest};
-use crate::scenario_sync::{asset_storage_handle, AssetDownloads, AssetPersist};
+use crate::scenario::{RemoteScenarioManifest, cid_for_content};
+use crate::scenario_sync::{AssetDownloads, AssetPersist, asset_storage_handle};
 
 /// Max asset fetches in flight at once. Bounded so a many-file scenario doesn't open
 /// dozens of sockets (and, on wasm, doesn't queue dozens of `fetch()` promises); the

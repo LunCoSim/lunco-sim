@@ -15,7 +15,7 @@ replay is a separate design in [`command-journal.md`](command-journal.md).
 | ECS access and automatic recording | `lunco-doc-bevy` | `JournalResource` wraps the active journal; `JournalOpRecorder` records successful document apply, undo, and redo operations |
 | Document undo/redo | `lunco-doc::DocumentHost` | Each domain owns typed inverse history groups; the recorder mirrors each member edit into the Twin journal |
 | Twin selection and persistence policy | `lunco-twin` + `lunco-workspace` | `[journal] persist = true` opts a Twin into `history/journal.json`; session-only is the default |
-| Network distribution | `lunco-networking` | The journal replication plane sends entries and merges them by `EntryId` |
+| Network distribution | `lunco-networking-sync` | The journal replication plane sends entries and merges them by `EntryId`; `lunco-networking` supplies the transport adapter |
 
 The document remains the authoritative authored state. The journal records the
 operation and inverse that produced it; it does not replace the document or
