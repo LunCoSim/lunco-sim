@@ -57,7 +57,7 @@ mod native {
     use std::path::PathBuf;
     use std::time::Instant;
 
-    use lunco_modelica_core::ModelicaCompiler;
+    use lunco_modelica_compiler::ModelicaCompiler;
 
     /// CLI options. Hand-parsed (no `clap`) so the binary stays cheap to
     /// build and link — same rationale as `modelica_library_indexer`.

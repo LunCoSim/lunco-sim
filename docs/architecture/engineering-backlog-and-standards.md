@@ -189,7 +189,8 @@ refactor, and should be taken explicitly rather than arrived at.
 ### Modelica compile-core split — completed
 
 `lunco-modelica-document` now owns the headless Modelica document and source
-editing seams. `lunco-modelica-core` owns the compiler/document boundary, while
+editing seams. `lunco-modelica-compiler` owns the headless compiler boundary,
+`lunco-modelica-core` owns document/runtime synchronization, while
 `lunco-modelica-worker` owns stateful workers and simulation; `lunco-modelica-execution`
 owns platform host and transport assembly
 seams. `lunco-modelica-index` owns the reusable AST projection,

@@ -11,4 +11,5 @@ pub mod class_lookup;
 pub mod doc_extract;
 pub mod index;
 pub mod package_tree;
+pub mod source_deps;
 pub mod visual_diagram;

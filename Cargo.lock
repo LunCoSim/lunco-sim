@@ -8170,6 +8170,7 @@ dependencies = [
  "log",
  "lunco-assets-core",
  "lunco-modelica-ast",
+ "lunco-modelica-compiler",
  "lunco-modelica-core",
  "lunco-modelica-index",
  "lunco-modelica-library",
@@ -8198,6 +8199,21 @@ dependencies = [
  "rumoca-phase-parse",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-modelica-compiler"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "lunco-assets-core",
+ "lunco-doc",
+ "lunco-modelica-ast",
+ "lunco-modelica-document",
+ "lunco-modelica-index",
+ "lunco-modelica-library",
+ "rumoca-compile",
+ "web-time",
 ]
 
 [[package]]
@@ -8274,6 +8290,7 @@ dependencies = [
  "lunco-doc",
  "lunco-experiments",
  "lunco-modelica-ast",
+ "lunco-modelica-compiler",
  "lunco-modelica-core",
  "lunco-modelica-index",
  "lunco-modelica-library",
@@ -8356,6 +8373,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-experiments",
  "lunco-modelica-ast",
+ "lunco-modelica-compiler",
  "lunco-modelica-core",
  "lunco-modelica-document",
  "lunco-modelica-solver",
@@ -8506,6 +8524,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-experiments",
  "lunco-modelica-ast",
+ "lunco-modelica-compiler",
  "lunco-modelica-core",
  "lunco-modelica-document",
  "lunco-modelica-runner",

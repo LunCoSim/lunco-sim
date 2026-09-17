@@ -69,7 +69,7 @@ returns the defaults separately, to be re-seeded via `set_input`.
 binding as its default value (MLS §4.4.1 reading), or expose a parameter/input
 override API on the compiled DAE so no source rewriting is needed.
 
-**Chokepoint.** `ModelicaCompiler::seat_user_source` (`lunco-modelica-core/src/lib.rs`)
+**Chokepoint.** `ModelicaCompiler::seat_user_source` (`lunco-modelica-compiler/src/lib.rs`)
 — the single place user model text enters the compile session. Both
 `compile_str` and `compile_str_multi` go through it, so **the strip happens
 inside the compiler and no caller can forget it**.
@@ -132,7 +132,7 @@ shared copy, would break every compile.
 
 **Workaround.** Every compile is made hermetic: `ModelicaCompiler::compile_str`
 evicts all other user docs from the shared session first
-(`evict_user_docs_except` + `seated_user_uris`, `lunco-modelica-core/src/lib.rs`).
+(`evict_user_docs_except` + `seated_user_uris`, `lunco-modelica-compiler/src/lib.rs`).
 
 **Ideal upstream fix.** Compare class definitions structurally (ignoring spans /
 source ids), and accept an identical redefinition instead of erroring.
@@ -142,7 +142,7 @@ source ids), and accept an identical redefinition instead of erroring.
 new un-evicted seat can't be added silently.
 
 > **Local ownership guard:** `ModelicaCompiler::load_source_root_in_memory`
-> (`lib.rs`, called from the `LoadSourceRoot` command on both worker twins)
+> (`lunco-modelica-compiler/src/lib.rs`, called from the `LoadSourceRoot` command on both worker twins)
 > intentionally keeps durable source-root documents outside
 > `seated_user_uris`. It now records the authored top-level namespaces from
 > every successfully parsed document in `installed_roots`, independent of the

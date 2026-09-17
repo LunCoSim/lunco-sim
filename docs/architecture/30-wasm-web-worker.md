@@ -39,7 +39,8 @@ a transport layer that bridges the channels to the worker over
 ```
 
 1. **Page boot.** Main wasm runs `lunica`'s `wasm_bindgen(start) run()`.
-   The Modelica UI facade adds the compiler core and execution plugins. The
+   The Modelica UI facade adds the Modelica document/runtime core and execution
+   plugins. The compiler host is shared by the worker package. The
    execution plugin creates two crossbeam channels (cmd, res), stores
    them on `ModelicaChannels`, and registers the `tx_res` / `tx_cmd` handles
    with `lunco_modelica_execution::worker_transport::register_result_sender` /
@@ -257,7 +258,8 @@ step runs on the page thread.
 - **Cancel mid-compile.** No way to interrupt a compile in flight. Same
   as native today.
 - **Worker bundle size.** The worker is built from `lunco-modelica-execution`,
-  which composes the compiler core without linking the workbench UI graph.
+  which composes the headless compiler and worker without linking the workbench
+  UI graph.
   Further size work should target the worker package's actual Rumoca/source
   closure and keep the execution host limited to transport adapters.
 
@@ -389,7 +391,7 @@ bottom egui bar).
 The fork lives at `LunCoSim/rumoca`; the web build pulls branch
 `wasm-asset-loader` (adds `Session::load_source_root_in_memory` on top of
 `main`). Local dev typically uses a sibling worktree at `../rumoca/` with
-`path = …` deps in `lunco-modelica-core/Cargo.toml` and the explicit asset
+`path = …` deps in `lunco-modelica-compiler/Cargo.toml` and the explicit asset
 provisioning packages (`lunco-assets-download` / `lunco-assets-processing`).
 To update:
 

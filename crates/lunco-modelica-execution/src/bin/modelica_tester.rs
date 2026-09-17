@@ -7,7 +7,7 @@
 // `main` at the bottom.
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use lunco_modelica_core::ModelicaCompiler;
+    use lunco_modelica_compiler::ModelicaCompiler;
     use std::path::PathBuf;
 
     pub(crate) fn main() -> anyhow::Result<()> {

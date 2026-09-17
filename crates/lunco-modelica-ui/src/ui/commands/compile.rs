@@ -1186,7 +1186,7 @@ pub fn on_compile_model(
         if let Some(ast) = registry.host(doc).and_then(|h| h.document().strict_ast()) {
             if let Some(roots) = world_source_roots.as_deref_mut() {
                 crate::source_roots::log_compile_deps(roots, &model_name, &ast);
-                let deps = crate::source_roots::scan_source_root_deps(&ast);
+                let deps = lunco_modelica_index::source_deps::scan_source_root_deps(&ast);
                 for root in &deps {
                     crate::source_roots::ensure_loaded(roots, root, &channels);
                 }

@@ -159,8 +159,9 @@ fn source_is_never_regenerated_through_the_rumoca_emitter() {
 /// session that never produces a DAE, so they are exempt.)
 #[test]
 fn user_source_is_seated_only_through_the_strip_chokepoint() {
-    let lib_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lunco-modelica-core/src/lib.rs");
-    let text = lunco_storage::read_text_file_sync(&lib_rs).expect("lib.rs readable");
+    let compiler_lib =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../lunco-modelica-compiler/src/lib.rs");
+    let text = lunco_storage::read_text_file_sync(&compiler_lib).expect("compiler lib.rs readable");
 
     let seats: Vec<String> = code_only(&text)
         .lines()
@@ -168,7 +169,7 @@ fn user_source_is_seated_only_through_the_strip_chokepoint() {
         .filter(|(_, l)| {
             l.contains("session.update_document(") || l.contains("session.add_document(")
         })
-        .map(|(i, l)| format!("{}:{}: {}", lib_rs.display(), i + 1, l.trim()))
+        .map(|(i, l)| format!("{}:{}: {}", compiler_lib.display(), i + 1, l.trim()))
         .collect();
 
     // Exactly one compile-session write is expected: `seat_user_source`, the

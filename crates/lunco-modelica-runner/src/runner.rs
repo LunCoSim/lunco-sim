@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
-use crossbeam_channel::{Sender, unbounded};
+use crossbeam_channel::{unbounded, Sender};
 use lunco_experiments::{
     Experiment, ExperimentId, ExperimentRegistry, ExperimentRunner, ModelRef, ParamPath,
     ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta, RunProgress,
@@ -196,7 +196,7 @@ struct RunnerState {
     /// compiles on the worker, so the runner never constructs one. See
     /// [`run_inner`].
     #[cfg(not(target_arch = "wasm32"))]
-    compiler: Arc<Mutex<lunco_modelica_core::ModelicaCompiler>>,
+    compiler: Arc<Mutex<lunco_modelica_compiler::ModelicaCompiler>>,
 }
 
 /// `(model_name, filename)` identity used to scope DAE-cache invalidation
@@ -215,7 +215,7 @@ impl Default for RunnerState {
             // Cheap: `new()` builds an empty session and installs no source library
             // (Layer A). source library lands on the first run that actually needs it.
             #[cfg(not(target_arch = "wasm32"))]
-            compiler: Arc::new(Mutex::new(lunco_modelica_core::ModelicaCompiler::new())),
+            compiler: Arc::new(Mutex::new(lunco_modelica_compiler::ModelicaCompiler::new())),
         }
     }
 }

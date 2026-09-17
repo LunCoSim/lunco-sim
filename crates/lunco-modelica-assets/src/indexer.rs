@@ -86,7 +86,9 @@ impl Options {
 }
 
 fn print_help() {
-    println!("modelica_library_indexer — index Modelica library components and optionally warm rumoca caches");
+    println!(
+        "modelica_library_indexer — index Modelica library components and optionally warm rumoca caches"
+    );
     println!();
     println!("USAGE:");
     println!("  modelica_library_indexer [OPTIONS]");
@@ -1327,14 +1329,14 @@ fn bundled_class_node(
 ///      qualified path.
 ///   3. If neither (1) nor (2) yielded anything, no warm work is performed.
 ///
-/// Each compile is gated by [`lunco_modelica_core::ModelicaCompiler::compile_loaded`]'s
+/// Each compile is gated by the compiler host's strict reachable-DAE path;
 /// existing 5-second heartbeat (see lib.rs), so even a multi-minute
 /// source library-heavy compile prints proof-of-life every 5s.
 fn warm_compile_pass(opts: &Options) {
     println!("[warm] starting compile pass — populating rumoca semantic-summary cache");
     let t_total = Instant::now();
 
-    let mut compiler = lunco_modelica_core::ModelicaCompiler::new();
+    let mut compiler = lunco_modelica_compiler::ModelicaCompiler::new();
     // The warm pass compiles source library classes by name, so it needs the full
     // library resident up front. `new()` no longer preloads source library (Layer A:
     // source compilation admits roots from source text), so install it
@@ -1529,7 +1531,7 @@ mod parsed_bundle_tests {
 
     /// The generated parsed-source artifact is a zstd-compressed bincode
     /// stream. Keep this codec contract next to its sole producer without
-    /// pulling the asset writer into the compiler-core test target.
+    /// pulling the asset writer into the compiler-host test target.
     #[test]
     fn parsed_bundle_roundtrips_in_memory() {
         let source = "model M Real x; equation der(x) = -x; end M;";

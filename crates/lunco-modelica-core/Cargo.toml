@@ -3,10 +3,10 @@ name = "lunco-modelica-core"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "Headless Modelica compiler and document runtime for LunCoSim"
+description = "Headless Modelica document and runtime integration for LunCoSim"
 
 [features]
-# The compiler core is transport-free by default. API command completion is an
+# The document/runtime core is transport-free by default. API command completion is an
 # explicit host capability; Modelica query providers live in the separate
 # `lunco-modelica-api` package.
 default = []

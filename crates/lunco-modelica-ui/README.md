@@ -159,7 +159,7 @@ Users can drag, split, tab, and float panels freely. Layout persists via `lunco-
 |--------|--------|-------------|
 | `lunica` | Desktop | Full Modelica workbench with all panels |
 | `lunica` | wasm32 | Web version (Modelica work in a dedicated Web Worker) |
-The headless Modelica tools are split between the compiler core and the native
+The headless Modelica tools are split between the compiler host and the native
 asset/tool package:
 
 | Binary | Target | Description |

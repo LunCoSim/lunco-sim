@@ -55,8 +55,11 @@ lunco-experiments-ui/     (backend-agnostic view state)
   ExperimentVisibility, PlotPanelStates, ActivePlot
   ExperimentsViewModel and change-gated trajectory cache
 
+lunco-modelica-compiler/
+  ModelicaCompiler and source-root admission
+
 lunco-modelica-core/
-  ModelicaCompiler and compiler/document lifecycle
+  document and compiler-engine lifecycle synchronization
 
 lunco-modelica-runner/
   ModelicaRunner: ExperimentRunner
@@ -86,7 +89,8 @@ lunco-viz/                            Shared multi-series trajectory renderer
 lunco-viz-core/                       Render-free visualization identifiers
 ```
 
-`lunco-modelica-runner` depends on `lunco-experiments` and the compiler core;
+`lunco-modelica-runner` depends on `lunco-experiments` and
+`lunco-modelica-compiler`;
 `lunco-modelica-execution` composes the runner and worker engine with platform
 transport. The generic
 `lunco-experiments` package does not depend on either Modelica package or

@@ -214,7 +214,7 @@ session:
 - `CompiledSourceRoot::from_parsed_batch_tolerant` indexes a parsed batch once
   and defers strict target compilation;
 - `lunco-modelica-ast` wraps those APIs and exposes only pure parsing/fact
-  extraction, while `lunco-modelica-core` owns Bevy/compiler integration and
+extraction, while `lunco-modelica-core` owns Bevy/document integration and
   `lunco-modelica-worker` owns worker execution and simulation, while
   `lunco-modelica-execution` owns host transport and generation/document
   integration.
@@ -249,7 +249,7 @@ typed inverse—never splice text by an unqualified name.
 ### DRY rule
 
 Keep Modelica-specific normalization, AST extraction, and AST mutation in
-`lunco-modelica-ast`/`lunco-modelica-core`. Share only domain-neutral pieces:
+`lunco-modelica-ast`/`lunco-modelica-compiler`. Share only domain-neutral pieces:
 
 1. `lunco-doc` for document identity, undo/redo, generation, diagnostics,
    file-backed reload, and cross-document references;

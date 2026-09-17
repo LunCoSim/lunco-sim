@@ -1,8 +1,9 @@
 //! Modelica workbench UI and application facade.
 //!
-//! The compiler/document runtime lives in `lunco_modelica_core`; solver
-//! workers and run orchestration live in `lunco_modelica_execution`. This
-//! package owns only the egui/workbench integration and application facade.
+//! The document/runtime integration lives in `lunco_modelica_core`; the
+//! headless compiler is `lunco_modelica_compiler`, and stateful solver workers
+//! live in `lunco_modelica_worker`. This package owns only the egui/workbench
+//! integration and application facade.
 
 pub use lunco_modelica_core::*;
 

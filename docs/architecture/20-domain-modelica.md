@@ -7,6 +7,7 @@
 > a background worker thread.
 >
 > Engineering docs live in
+> [`../../crates/lunco-modelica-compiler/`](../../crates/lunco-modelica-compiler/),
 > [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/),
 > [`../../crates/lunco-modelica-index/`](../../crates/lunco-modelica-index/), and
 > [`../../crates/lunco-modelica-ui/`](../../crates/lunco-modelica-ui/) and
@@ -45,8 +46,10 @@ The reusable parse boundary is [`lunco-modelica-ast`](../../crates/lunco-modelic
 It owns BOM-preserving normalization, strict/recovering Rumoca parse wrappers,
 AST interface projections, and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-document` owns the headless
-document and source-editing seams; `lunco-modelica-core` owns the compiler,
-worker, and simulation seams; `lunco-modelica-ui` owns workbench
+ document and source-editing seams; `lunco-modelica-compiler` owns the
+ headless Rumoca session and source admission; `lunco-modelica-core` owns
+ document/runtime synchronization; `lunco-modelica-worker` owns worker and
+ simulation seams; `lunco-modelica-ui` owns workbench
  presentation and the `lunica` application facade. The reusable egui graphics
 renderer is isolated in [`lunco-modelica-icon-ui`](../../crates/lunco-modelica-icon-ui/);
 the diagram canvas and model preview consume that package directly.
@@ -96,7 +99,9 @@ rather than authored editing.
 ```
 
 Consumers that need only source facts use `lunco-modelica-ast`; consumers that
-compile or simulate use `lunco-modelica-core`; only workbench hosts use
+compile use `lunco-modelica-compiler`, consumers that host Modelica documents
+and runtime synchronization use `lunco-modelica-core`, and consumers that
+simulate use `lunco-modelica-worker`/`lunco-modelica-execution`; only workbench hosts use
 `lunco-modelica-ui`. Cross-package UI requests use the render-independent
 `lunco-modelica-ui-core` contracts, so an editor can target a Modelica document,
 request a parameter update, or reserve its plot identity without importing the
@@ -1270,7 +1275,8 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 
 ### Source
 
-- [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — compiler/document crate root
+- [`../../crates/lunco-modelica-compiler/`](../../crates/lunco-modelica-compiler/) — headless Rumoca session and source-admission host
+- [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — document/runtime crate root
 - [`../../crates/lunco-modelica-worker/`](../../crates/lunco-modelica-worker/) — stateful worker, live solver, and co-simulation bridge
 - [`../../crates/lunco-modelica-execution/`](../../crates/lunco-modelica-execution/) — host plugin, transport, and execution adapters
 - [`../../crates/lunco-modelica-document/`](../../crates/lunco-modelica-document/) — `ModelicaDocument`, op set, apply pipeline, and source-editing seams

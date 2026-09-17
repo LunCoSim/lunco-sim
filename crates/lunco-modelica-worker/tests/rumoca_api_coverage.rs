@@ -18,7 +18,7 @@
 #[test]
 fn compile_str_keeps_bound_input_as_runtime_slot() {
     let src = "model M\n  input Real g = 9.81;\n  Real x;\nequation\n  der(x) = g;\nend M;\n";
-    let mut compiler = lunco_modelica_core::ModelicaCompiler::new();
+    let mut compiler = lunco_modelica_compiler::ModelicaCompiler::new();
     let dae = compiler.compile_str("M", src, "m.mo").expect("M compiles");
 
     let opts = rumoca_sim::SimOptions {
@@ -53,7 +53,7 @@ fn compile_str_keeps_bound_input_as_runtime_slot() {
 fn simulation_session_clamps_advance_at_t_end() {
     let source = "model HorizonFixture\n  Real x(start = 0, fixed = true);\nequation\n  der(x) = 1;\nend HorizonFixture;\n";
     let (stripped, _) = lunco_modelica_ast::ast_extract::strip_input_defaults(source);
-    let mut compiler = lunco_modelica_core::ModelicaCompiler::new();
+    let mut compiler = lunco_modelica_compiler::ModelicaCompiler::new();
     let dae = compiler
         .compile_str("HorizonFixture", &stripped, "horizon_fixture.mo")
         .expect("HorizonFixture compiles");

@@ -15,12 +15,12 @@ use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 
 use lunco_experiments::solver;
-use lunco_modelica_ast::ast_extract::{InputDefaultIssue, strip_input_defaults_with_report};
-use lunco_modelica_core::ModelicaCompiler;
+use lunco_modelica_ast::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
+use lunco_modelica_compiler::ModelicaCompiler;
 use lunco_modelica_runtime::{
-    CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, MAX_MACRO_STEP_DT,
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaResult, NoticeLevel,
-    SimSampleBatch, SimSampleStream,
+    CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, ModelicaChannels,
+    ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaResult, NoticeLevel, SimSampleBatch,
+    SimSampleStream, MAX_MACRO_STEP_DT,
 };
 use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
@@ -3333,29 +3333,23 @@ mod macro_step_tests {
 
     #[test]
     fn communication_schedule_must_be_representable_and_bounded() {
-        assert!(
-            lunco_modelica_runtime::validate_communication_period_secs(
-                lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
-            )
-            .is_ok()
-        );
-        assert!(
-            lunco_modelica_runtime::validate_communication_period_secs(lunco_core::SECS_PER_TICK)
-                .is_ok()
-        );
-        assert!(
-            lunco_modelica_runtime::validate_communication_period_secs(
-                3.0 * lunco_core::SECS_PER_TICK
-            )
-            .is_ok()
-        );
+        assert!(lunco_modelica_runtime::validate_communication_period_secs(
+            lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
+        )
+        .is_ok());
+        assert!(lunco_modelica_runtime::validate_communication_period_secs(
+            lunco_core::SECS_PER_TICK
+        )
+        .is_ok());
+        assert!(lunco_modelica_runtime::validate_communication_period_secs(
+            3.0 * lunco_core::SECS_PER_TICK
+        )
+        .is_ok());
         assert!(lunco_modelica_runtime::validate_communication_period_secs(0.13).is_err());
-        assert!(
-            lunco_modelica_runtime::validate_communication_period_secs(
-                MAX_MACRO_STEP_DT + LIVE_MICRO_DT
-            )
-            .is_err()
-        );
+        assert!(lunco_modelica_runtime::validate_communication_period_secs(
+            MAX_MACRO_STEP_DT + LIVE_MICRO_DT
+        )
+        .is_err());
     }
 
     #[test]

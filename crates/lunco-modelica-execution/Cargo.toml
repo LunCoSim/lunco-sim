@@ -27,6 +27,7 @@ lunco-experiments = { path = "../lunco-experiments" }
 lunco-modelica-library = { path = "../lunco-modelica-library" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-compiler = { path = "../lunco-modelica-compiler" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-runner = { path = "../lunco-modelica-runner" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
