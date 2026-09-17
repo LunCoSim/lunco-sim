@@ -79,6 +79,7 @@ over "OBC"
         # Waypoint guidance is still a command-surface input. The active
         # Modelica drive law consumes these mission values together with its
         # live pose; an ordinary direct controller leaves them disabled.
+        float inputs:program_active = 0.0
         float inputs:autopilot_enable = 0.0
         float inputs:autopilot_target_x = 0.0
         float inputs:autopilot_target_z = 0.0

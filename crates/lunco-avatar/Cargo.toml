@@ -20,6 +20,7 @@ lunco-render = { path = "../lunco-render" }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
+serde = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
 lunco-input-core = { path = "../lunco-input-core" }
 lunco-interaction-core = { path = "../lunco-interaction-core" }

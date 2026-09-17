@@ -89,3 +89,23 @@ fn pointer_point(context) {
     }
     #{ ok: true, point: point }
 }
+
+/// Resolve the canonical analytic terrain point under a scene pointer.
+///
+/// Streamed terrain tiles keep their mesh transform local to their BigSpace
+/// cell, so `world_position` can be a mesh-local hit even though the terrain
+/// oracle has a valid point. Terrain-aware tools should use this helper; it
+/// uses the explicit `surface_world_position` field and never interprets a
+/// render-space value as active-physics data. In a scene without analytic
+/// terrain, the ordinary typed mesh point remains the intentional target.
+fn pointer_surface_point(context) {
+    if context == () { return #{ ok: false, error: "pointer context is unavailable" }; }
+    let point = context.surface_world_position;
+    if point == () {
+        return pointer_point(context);
+    }
+    if !point_valid(point) || point_frame(point) != "active_physics" {
+        return #{ ok: false, error: "terrain surface point is not in the active physics frame" };
+    }
+    #{ ok: true, point: point }
+}

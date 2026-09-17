@@ -7244,6 +7244,7 @@ dependencies = [
  "lunco-time",
  "lunco-usd-bevy-scene",
  "lunco-workspace",
+ "serde",
 ]
 
 [[package]]
@@ -7919,6 +7920,7 @@ dependencies = [
  "lunco-hooks",
  "lunco-mobility",
  "lunco-networking",
+ "lunco-port-core",
  "lunco-scene-selection",
  "lunco-signal",
  "lunco-spatial",
@@ -8774,6 +8776,7 @@ dependencies = [
  "lunco-core",
  "lunco-physics",
  "lunco-port-core",
+ "lunco-render",
  "lunco-scripting-bridge-core",
  "lunco-spatial",
 ]

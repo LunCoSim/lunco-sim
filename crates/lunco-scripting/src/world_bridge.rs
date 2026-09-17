@@ -91,14 +91,6 @@ impl ValueBuilder for RhaiBuilder {
     fn int(&self, i: i64) -> Dynamic {
         Dynamic::from_int(i)
     }
-    fn uint(&self, u: u64) -> Dynamic {
-        // Rhai's native integer is signed. Keep the fast native path for the
-        // representable range and make the wider case explicit and lossless;
-        // never route an unsigned identity through f64 or a wrapping cast.
-        i64::try_from(u)
-            .map(Dynamic::from_int)
-            .unwrap_or_else(|_| Dynamic::from(u.to_string()))
-    }
     fn bool(&self, b: bool) -> Dynamic {
         Dynamic::from_bool(b)
     }
@@ -1149,6 +1141,22 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     engine.register_fn("world_rotation_quat", |id: i64| -> Dynamic {
         spatial_bridge::world_rotation_quat(id as u64)
             .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT)
+    });
+
+    // viewport_position(id) -> [x, y] in the active render viewport, or () on
+    // a projection miss. This is the generic presentation counterpart to
+    // world_pos: authored tools can address a rendered target with the same
+    // coordinates accepted by the typed pointer-event bridge without knowing
+    // about cameras, floating-origin grids, or Bevy internals.
+    engine.register_fn("viewport_position", |id: i64| -> Dynamic {
+        spatial_bridge::viewport_position(id as u64)
+            .map(|position| {
+                RhaiBuilder.array(vec![
+                    Dynamic::from_float(position.x as f64),
+                    Dynamic::from_float(position.y as f64),
+                ])
+            })
             .unwrap_or(Dynamic::UNIT)
     });
 

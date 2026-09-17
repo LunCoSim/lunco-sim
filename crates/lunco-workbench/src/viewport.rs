@@ -652,7 +652,9 @@ fn apply_viewport_panel_measurement(
 
 impl Plugin for WorkbenchViewportPlugin {
     fn build(&self, app: &mut App) {
-        lunco_control_core::ensure_control_plugin(app);
+        if !app.is_plugin_added::<lunco_control_core::LunCoControlPlugin>() {
+            app.add_plugins(lunco_control_core::LunCoControlPlugin);
+        }
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }

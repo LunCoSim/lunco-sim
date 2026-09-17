@@ -59,6 +59,7 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.init_resource::<live_consume::LiveTransformEditHints>();
         app.init_resource::<twin_projection::PendingRefSpawns>();
         app.init_resource::<twin_projection::PendingInstanceProjections>();
+        app.init_resource::<live_consume::PendingStageProjections>();
         app.add_systems(
             bevy::prelude::PreUpdate,
             (

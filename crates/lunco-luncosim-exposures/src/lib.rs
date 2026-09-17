@@ -25,6 +25,7 @@ use lunco_cosim_core::ControlLink;
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
+use lunco_port_core::InputPorts;
 use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_core::read::UsdReadObject;
@@ -68,7 +69,7 @@ const RUNTIME_UI_PROPERTIES_HOOK: &str = "runtime.ui.properties";
 lunco_hooks::declare_hook! {
     id: RUNTIME_UI_VISIBILITY_HOOK,
     owner: "lunco-luncosim-exposures",
-    description: "Choose whether an authored runtime UI surface is visible.",
+    description: "Choose visibility for a generic authored runtime UI surface.",
     signature: [facts: Map],
     output: Map,
     deterministic: false,
@@ -79,7 +80,7 @@ lunco_hooks::declare_hook! {
 lunco_hooks::declare_hook! {
     id: RUNTIME_UI_PROPERTIES_HOOK,
     owner: "lunco-luncosim-exposures",
-    description: "Build the typed property map presented by an authored runtime UI surface.",
+    description: "Provide typed presentation properties for a generic authored runtime UI surface.",
     signature: [facts: Map],
     output: Map,
     deterministic: false,
@@ -227,6 +228,7 @@ fn runtime_ui_facts(
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_gid: &Query<&GlobalEntityId>,
     q_sim: &Query<(Entity, &SimComponent)>,
+    q_inputs: &Query<&InputPorts>,
     q_parents: &Query<&ChildOf>,
     q_vel: &Query<&LinearVelocity>,
     q_angvel: &Query<&AngularVelocity>,
@@ -253,6 +255,10 @@ fn runtime_ui_facts(
         .and_then(|root| q_paths.get(root).ok())
         .map(|(_, path)| path.path.clone());
     let programs = authored_program_facts(root_path.as_deref(), q_sim, q_paths, stages, canonical);
+    let inputs = root
+        .and_then(|entity| q_inputs.get(entity).ok())
+        .map(|ports| scalar_hook_map(&ports.values))
+        .unwrap_or_else(|| HookValue::Map(Vec::new()));
 
     let status = root
         .and_then(|root| q_sim.get(root).ok())
@@ -401,6 +407,7 @@ fn runtime_ui_facts(
             HookValue::Array(participants.into_iter().map(|(_, facts)| facts).collect()),
         ),
         ("programs", HookValue::Array(programs)),
+        ("inputs", inputs),
     ])
 }
 
@@ -1310,6 +1317,7 @@ pub(crate) fn mark_exposure_dirty(
     q_wheels: Query<(), Or<(Changed<WheelRaycast>, Changed<Transform>)>>,
     q_com: Query<(), Changed<ComputedCenterOfMass>>,
     q_sim: Query<(), Changed<SimComponent>>,
+    q_inputs: Query<(), Changed<InputPorts>>,
     q_bodies: Query<(), Or<(Added<CelestialBody>, Changed<CelestialBody>)>>,
     selected: Res<SelectedEntities>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
@@ -1325,7 +1333,8 @@ pub(crate) fn mark_exposure_dirty(
         || !q_links.is_empty()
         || !q_wheels.is_empty()
         || !q_com.is_empty()
-        || !q_sim.is_empty();
+        || !q_sim.is_empty()
+        || !q_inputs.is_empty();
 
     let schema_changed = selected.is_changed();
     let celestial_changed = !q_bodies.is_empty()
@@ -1441,6 +1450,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     scene_mount: Res<'w, SceneMountState>,
     local_avatar: Res<'w, TheLocalAvatar>,
     sessions: Res<'w, lunco_core_session::SessionRegistry>,
+    local_session: Res<'w, lunco_core_session::LocalSession>,
     bodies: Query<'w, 's, &'static CelestialBody>,
     angular_velocity: Query<'w, 's, &'static AngularVelocity>,
     rotation: Query<'w, 's, &'static Rotation>,
@@ -1471,6 +1481,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
     wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
     com: Query<'w, 's, &'static ComputedCenterOfMass>,
     sim: Query<'w, 's, (Entity, &'static SimComponent)>,
+    inputs: Query<'w, 's, &'static InputPorts>,
     channels: Query<
         'w,
         's,
@@ -1567,9 +1578,9 @@ pub(crate) fn publish_exposure(
             &runtime.canonical,
             &runtime_surface_roots.roots,
             &runtime_surface_roots.retired_surface_ids,
-            &runtime.local_avatar,
             &runtime.sessions,
-            &queries.avatar,
+            runtime.local_session.0,
+            &queries.inputs,
         );
         runtime_surface_roots.retired_surface_ids.clear();
     }
@@ -1666,14 +1677,18 @@ pub(crate) fn publish_exposure(
                 let mut ui = runtime.exposures.writer(&surface.surface_id);
                 let subject = queries.gid.get(vessel.entity).ok().copied();
                 ui.subject(subject);
-                let control_owner =
-                    if locally_possesses(&runtime.local_avatar, &queries.avatar, vessel.entity) {
-                        "local"
-                    } else {
-                        "none"
-                    };
                 let control_claimed =
                     subject.is_some_and(|gid| runtime.sessions.owner_of(gid.get()).is_some());
+                let control_owner = subject
+                    .and_then(|gid| runtime.sessions.owner_of(gid.get()))
+                    .map(|owner| {
+                        if owner == runtime.local_session.0 {
+                            "local"
+                        } else {
+                            "remote"
+                        }
+                    })
+                    .unwrap_or("none");
                 let facts = runtime_ui_facts(
                     &surface.surface_id,
                     Some(vessel.entity),
@@ -1686,6 +1701,7 @@ pub(crate) fn publish_exposure(
                     &queries.catalog_id,
                     &queries.gid,
                     &queries.sim,
+                    &queries.inputs,
                     &queries.parents,
                     &queries.velocity,
                     &runtime.angular_velocity,
@@ -2141,9 +2157,9 @@ fn publish_runtime_surface_exposures(
     canonical: &CanonicalStages,
     roots: &[AuthoredRuntimeSurface],
     retired_surface_ids: &[String],
-    local_avatar: &TheLocalAvatar,
     sessions: &lunco_core_session::SessionRegistry,
-    q_avatar: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
+    local_session: lunco_core::SessionId,
+    q_inputs: &Query<&InputPorts>,
 ) {
     for surface_id in retired_surface_ids {
         let mut ui = exposures.writer(surface_id);
@@ -2154,12 +2170,17 @@ fn publish_runtime_surface_exposures(
 
     for root in roots {
         let subject = q_gid.get(root.entity).ok().copied();
-        let control_owner = if locally_possesses(local_avatar, q_avatar, root.entity) {
-            "local"
-        } else {
-            "none"
-        };
         let control_claimed = subject.is_some_and(|gid| sessions.owner_of(gid.get()).is_some());
+        let control_owner = subject
+            .and_then(|gid| sessions.owner_of(gid.get()))
+            .map(|owner| {
+                if owner == local_session {
+                    "local"
+                } else {
+                    "remote"
+                }
+            })
+            .unwrap_or("none");
         let telemetry = resolve_authored_telemetry(root.entity, signals, q_parents, q_channels);
         publish_selected_control_exposure(
             exposures,
@@ -2175,6 +2196,7 @@ fn publish_runtime_surface_exposures(
             q_catalog_id,
             q_gid,
             q_sim,
+            q_inputs,
             q_parents,
             q_grids,
             q_vel,
@@ -2202,6 +2224,7 @@ fn publish_selected_control_exposure(
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_gid: &Query<&GlobalEntityId>,
     q_sim: &Query<(Entity, &SimComponent)>,
+    q_inputs: &Query<&InputPorts>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_vel: &Query<&LinearVelocity>,
@@ -2224,6 +2247,7 @@ fn publish_selected_control_exposure(
         q_catalog_id,
         q_gid,
         q_sim,
+        q_inputs,
         q_parents,
         q_vel,
         q_angvel,
@@ -2244,17 +2268,6 @@ fn publish_selected_control_exposure(
     for (name, value) in properties {
         ui.property(name, value);
     }
-}
-
-fn locally_possesses(
-    local_avatar: &TheLocalAvatar,
-    q_avatar: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
-    subject: Entity,
-) -> bool {
-    local_avatar
-        .0
-        .and_then(|avatar| q_avatar.get(avatar).ok())
-        .is_some_and(|controller| controller.target == subject)
 }
 
 /// Discover roots that explicitly opt into a runtime surface.

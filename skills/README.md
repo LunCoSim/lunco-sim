@@ -68,8 +68,6 @@ parse check into runtime evidence.
 | [**capability-discovery**](capability-discovery/SKILL.md) | Find an existing capability and its owner before calling a feature missing or adding a duplicate mechanism |
 | [**use-asset-library**](use-asset-library/SKILL.md) | Add a component, shader, Modelica model, or event-driven Rhai policy to `assets/` and have the engine find it |
 | [**luncosim-architecture**](luncosim-architecture/SKILL.md) | Design or review a reusable feature across USD, Modelica, Avian, Rust, and Rhai; adopt standard USD schemas and remove legacy paths |
-| [**rust-rhai-modelica-boundary**](rust-rhai-modelica-boundary/SKILL.md) | Decide the owner of a feature across USD, Modelica, Rhai, and Rust; reuse existing capabilities and policy hooks |
-| [**author-hook-policy**](author-hook-policy/SKILL.md) | Declare and author a typed function-shaped Rhai hook policy, bind it from an application/Twin manifest, and test its diagnostics |
 | [**coordinate-frames**](coordinate-frames/SKILL.md) | Diagnose or implement BigSpace, reference-frame, camera, terrain, trajectory, or physics pose changes without raw-f32 or repair logic |
 | [**sysml-requirements**](sysml-requirements/SKILL.md) | Author, validate, and run Twin-owned SysML v2 requirements and verification cases; understand the supported subset and Rhai bridge |
 
@@ -100,7 +98,7 @@ parse check into runtime evidence.
 | [**inspect-simulation**](inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
 | [**record-video**](record-video/SKILL.md) | Record deterministic video/PNG takes — windowed or windowless (`--offscreen`), CLI or rhai-sequenced |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
-| [**author-rhai-tests**](author-rhai-tests/SKILL.md) | Author asset-backed and behavioral tests in Twin Rhai with real verdict evidence |
+| [**debug-ui-interactions**](debug-ui-interactions/SKILL.md) | Reproduce and verify headful UI workflows with typed native key and pointer events |
 | [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.sysml`/`.kerml`/`.wgsl`/`.rhai` or an entire Twin namespace — does it parse, resolve, and lint correctly? — in seconds; plus `ValidateSysml`/`RunLint` for Twin and loaded-scene checks |
 | [**performance-profiling**](performance-profiling/SKILL.md) | Diagnose FPS, physics timing, periodic stalls, Builder/View differences, and Tracy evidence without reducing quality or changing BigSpace/substeps |
 

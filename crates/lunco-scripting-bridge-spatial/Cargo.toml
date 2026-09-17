@@ -15,6 +15,7 @@ lunco-control-core = { path = "../lunco-control-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-physics = { path = "../lunco-physics" }
+lunco-render = { path = "../lunco-render" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 

@@ -179,6 +179,16 @@ struct RefSpawn {
     /// loading. They are replayed after the reference and its composed
     /// subtree exist, preserving the original ordered document intent.
     deferred_ops: Vec<UsdOp>,
+    /// Current root activation state while the live reference transaction is
+    /// pending. A root that is inactive before its asset arrives is not
+    /// materialized into the live stage; a later reactivation keeps the same
+    /// transaction valid without authoring an inactive intermediate prim.
+    active: bool,
+    /// The document removed this pending root before its reference became
+    /// live. Keep the transaction until the asset event is consumed so later
+    /// descendant edits cannot leak onto the live stage; a new AddPrim at the
+    /// same path replaces this tombstone.
+    removed: bool,
 }
 
 /// Referenced spawns waiting on their asset closure to finish loading.
@@ -232,6 +242,26 @@ impl PendingRefSpawns {
             self.ready.insert(item.ref_handle.id());
         }
         self.items.push(item);
+    }
+
+    fn replace_path(&mut self, scene_id: AssetId<UsdStageAsset>, prim_path: &str) {
+        self.items
+            .retain(|item| !(item.scene_id == scene_id && item.prim_path == prim_path));
+    }
+
+    fn index_for_path(&self, scene_id: AssetId<UsdStageAsset>, path: &str) -> Option<usize> {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.scene_id == scene_id
+                    && (path == item.prim_path
+                        || path
+                            .strip_prefix(&item.prim_path)
+                            .is_some_and(|suffix| suffix.starts_with('/')))
+            })
+            .max_by_key(|(_, item)| item.prim_path.len())
+            .map(|(index, _)| index)
     }
 
     fn mark_ready(&mut self, id: AssetId<UsdStageAsset>) {
@@ -760,6 +790,8 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             world
                 .resource_mut::<DocBackedTwinScenes>()
                 .mark_stage_projected(scene_id);
+        } else {
+            crate::live_consume::queue_stage_projection(world, doc, scene_id, cur_gen);
         }
         let composed_source = world
             .resource::<DocumentRegistry<UsdDocument>>()
@@ -1066,46 +1098,66 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
     // relationship or metadata op would be accepted by the document and then
     // silently disappear from the live stage. SetTranslate is the one existing
     // fast path that has a dedicated field because it is applied at materialize.
-    if !matches!(op, UsdOp::AddPrim { .. }) {
-        let owned_path = match op {
-            UsdOp::RemovePrim { path, .. }
-            | UsdOp::SetTranslate { path, .. }
-            | UsdOp::RemoveXformOp { path, .. }
-            | UsdOp::RestoreXformOp { path, .. }
-            | UsdOp::SetRotate { path, .. }
-            | UsdOp::SetScale { path, .. }
-            | UsdOp::SetAttribute { path, .. }
-            | UsdOp::SetRelationship { path, .. }
-            | UsdOp::SetConnection { path, .. }
-            | UsdOp::SetApiSchemas { path, .. }
-            | UsdOp::SetPrimKind { path, .. }
-            | UsdOp::SetActive { path, .. }
-            | UsdOp::ClearActive { path, .. } => Some(path.as_str()),
-            _ => None,
-        };
-        if let Some(owned_path) = owned_path {
-            let pending_index =
-                world
-                    .resource::<PendingRefSpawns>()
-                    .items
-                    .iter()
-                    .position(|pending| {
-                        pending.scene_id == scene_id
-                            && (owned_path == pending.prim_path
-                                || owned_path
-                                    .strip_prefix(&pending.prim_path)
-                                    .is_some_and(|suffix| suffix.starts_with('/')))
-                    });
-            if let Some(index) = pending_index {
-                if matches!(op, UsdOp::RemovePrim { .. }) {
-                    world.resource_mut::<PendingRefSpawns>().items.remove(index);
+    // Root activation/removal is transaction state rather than a deferred
+    // operation: a transient delete must not be replayed against a later
+    // AddPrim that reuses the same path.
+    let owned_path = match op {
+        UsdOp::AddPrim {
+            parent_path, name, ..
+        } => Some(if parent_path == "/" || parent_path.is_empty() {
+            format!("/{name}")
+        } else {
+            format!("/{}/{}", parent_path.trim_matches('/'), name)
+        }),
+        UsdOp::RemovePrim { path, .. }
+        | UsdOp::SetTranslate { path, .. }
+        | UsdOp::RemoveXformOp { path, .. }
+        | UsdOp::RestoreXformOp { path, .. }
+        | UsdOp::SetRotate { path, .. }
+        | UsdOp::SetScale { path, .. }
+        | UsdOp::SetAttribute { path, .. }
+        | UsdOp::SetRelationship { path, .. }
+        | UsdOp::SetConnection { path, .. }
+        | UsdOp::SetApiSchemas { path, .. }
+        | UsdOp::SetPrimKind { path, .. }
+        | UsdOp::SetActive { path, .. }
+        | UsdOp::ClearActive { path, .. } => Some(path.clone()),
+        _ => None,
+    };
+    if let Some(owned_path) = owned_path {
+        let pending_index = world
+            .resource::<PendingRefSpawns>()
+            .index_for_path(scene_id, &owned_path);
+        if let Some(index) = pending_index {
+            let exact_root =
+                world.resource::<PendingRefSpawns>().items[index].prim_path == owned_path;
+            if matches!(op, UsdOp::AddPrim { .. }) && exact_root {
+                // A new authored root is a new transaction. Drop the old
+                // transaction, including any stale activation state, and let
+                // the normal AddPrim path queue/materialize this one.
+                world.resource_mut::<PendingRefSpawns>().items.remove(index);
+            } else {
+                let pending = &mut world.resource_mut::<PendingRefSpawns>().items[index];
+                if pending.removed {
                     return;
                 }
-                let pending = &mut world.resource_mut::<PendingRefSpawns>().items[index];
-                if let UsdOp::SetTranslate { value, .. } = op {
-                    pending.translate = Some(*value);
-                } else {
-                    pending.deferred_ops.push(op.clone());
+                match op {
+                    UsdOp::RemovePrim { .. } if exact_root => {
+                        pending.removed = true;
+                        pending.active = false;
+                        pending.translate = None;
+                        pending.deferred_ops.clear();
+                    }
+                    UsdOp::SetActive { active, .. } if exact_root => {
+                        pending.active = *active;
+                    }
+                    UsdOp::ClearActive { .. } if exact_root => {
+                        pending.active = true;
+                    }
+                    UsdOp::SetTranslate { value, .. } if exact_root => {
+                        pending.translate = Some(*value);
+                    }
+                    _ => pending.deferred_ops.push(op.clone()),
                 }
                 return;
             }
@@ -1591,6 +1643,13 @@ fn spawn_prim_op(
         return;
     };
 
+    // A root AddPrim starts a new live projection transaction. If an earlier
+    // transaction for the same path was canceled while its asset was loading,
+    // it must not retain deferred operations for this new authored root.
+    world
+        .resource_mut::<PendingRefSpawns>()
+        .replace_path(scene_id, prim_path);
+
     let Some(asset_path) = reference else {
         // Plain prim — author now.
         if let Some(cs) = world
@@ -1690,6 +1749,8 @@ fn spawn_prim_op(
                     ref_handle,
                     translate: None,
                     deferred_ops: Vec::new(),
+                    active: true,
+                    removed: false,
                 },
                 ready,
             );
@@ -1974,6 +2035,12 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<PendingRefSpawns>().items);
     let mut still = Vec::new();
     for mut item in pending {
+        if item.removed || !item.active {
+            // The authored document canceled or deactivated this root while
+            // its reference closure was in flight. Do not materialize a
+            // transient live instance for a state that is no longer active.
+            continue;
+        }
         if let Some(error) = failed.get(&item.ref_handle.id()) {
             error!(
                 "[twin] referenced spawn {} failed to load `{}`: {error}",

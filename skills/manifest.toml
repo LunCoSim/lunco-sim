@@ -42,20 +42,6 @@ defer_to = ["capability-discovery", "usd-projection"]
 evidence = "docs/architecture/"
 
 [[skills]]
-name = "rust-rhai-modelica-boundary"
-category = "architecture"
-primary_for = ["choose Rust or Rhai", "choose Modelica or Rust", "policy hook", "lean Rust core"]
-defer_to = ["capability-discovery", "luncosim-architecture", "author-rhai-tool", "use-asset-library"]
-evidence = "docs/architecture/00-overview.md"
-
-[[skills]]
-name = "author-hook-policy"
-category = "authoring"
-primary_for = ["declare hook", "author hook policy", "bind Rhai policy", "hook reflection"]
-defer_to = ["rust-rhai-modelica-boundary", "validate-assets", "capability-discovery"]
-evidence = "docs/architecture/hook-policies.md"
-
-[[skills]]
 name = "coordinate-frames"
 category = "architecture"
 primary_for = ["BigSpace", "reference frames", "pose precision"]
@@ -189,11 +175,11 @@ defer_to = ["validate-assets", "inspect-simulation"]
 evidence = "skills/test-via-api/SKILL.md"
 
 [[skills]]
-name = "author-rhai-tests"
+name = "debug-ui-interactions"
 category = "verify"
-primary_for = ["authored behavioral tests", "asset-backed tests", "Rhai verification"]
-defer_to = ["test-via-api", "sysml-requirements", "validate-assets"]
-evidence = "skills/author-rhai-tests/SKILL.md"
+primary_for = ["headful UI workflow", "native input interaction", "click and key debugging"]
+defer_to = ["test-via-api", "coordinate-frames", "runtime-ui"]
+evidence = "skills/debug-ui-interactions/SKILL.md"
 
 [[skills]]
 name = "validate-assets"
