@@ -63,10 +63,9 @@ type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_cosim_core::SimComponent>,
 )>;
 use lunco_celestial_spatial::{
-    surface_axes_for_grid_position, surface_axes_in_grid, LeaveSurface, LocalGravityField,
-    TeleportToSurface,
+    surface_axes_for_grid_position, surface_axes_in_grid, LocalGravityField,
 };
-use lunco_environment::{GravityBody, GravityProvider};
+use lunco_environment::GravityBody;
 use lunco_settings::{AppSettingsExt, ProfileSettings};
 use lunco_spatial::attach::migrate_to_grid;
 use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
@@ -133,29 +132,6 @@ fn register_orbit_history_hook(app: &mut App) {
     app.world_mut()
         .register_component_hooks::<OrbitCamera>()
         .on_remove(remember_orbit_camera_on_remove);
-}
-
-/// Tunable thresholds for entering/exiting surface-relative camera mode.
-///
-/// Hysteresis prevents rapid toggling at boundary altitude:
-/// - `engage_altitude` — below this, enter surface mode
-/// - `disengage_altitude` — above this, exit surface mode
-#[derive(Resource, Reflect, Clone, Debug)]
-#[reflect(Resource)]
-pub struct SurfaceModeThreshold {
-    /// Altitude (m) below which surface mode engages. Default: 50_000.
-    pub engage_altitude: f64,
-    /// Altitude (m) above which surface mode disengages. Default: 100_000.
-    pub disengage_altitude: f64,
-}
-
-impl Default for SurfaceModeThreshold {
-    fn default() -> Self {
-        Self {
-            engage_altitude: 50_000.0,
-            disengage_altitude: 100_000.0,
-        }
-    }
 }
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
@@ -281,7 +257,6 @@ impl Plugin for LunCoAvatarPlugin {
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }
-        app.init_resource::<SurfaceModeThreshold>();
         app.configure_sets(Update, AvatarSceneHandoffSet);
         // Stepped camera writers use `lunco_time::InteractionSchedule`, while the
         // spring arm follows the final rendered body pose in `PostUpdate` below. The
@@ -331,8 +306,7 @@ impl Plugin for LunCoAvatarPlugin {
         // bug). `register_commands!` now does both halves in one step, so the two
         // can't drift apart again.
         app.register_type::<AdaptiveNearPlane>()
-            .register_type::<SurfaceRelativeMode>()
-            .register_type::<SurfaceModeThreshold>();
+            .register_type::<SurfaceRelativeMode>();
 
         app.register_settings_section::<ProfileSettings>();
         // On-screen notifications (rhai `notify(...)` → `ShowNotification`). The
@@ -366,7 +340,6 @@ impl Plugin for LunCoAvatarPlugin {
             Update,
             (
                 avatar_init_system,
-                surface_mode_transition_system,
                 enforce_ownership,
                 sync_profile,
                 tick_notifications,
@@ -384,14 +357,6 @@ impl Plugin for LunCoAvatarPlugin {
                 .chain()
                 .in_set(AvatarSceneHandoffSet),
         );
-        // This must run before lunco_time restores the previous eased pose.
-        // The camera's Transform is cell-local; after a Grid/CellCoord handoff
-        // the old interpolation history is a pose in a different frame.
-        app.add_systems(
-            lunco_time::InteractionSchedule,
-            reset_easing_before_spatial_rebase.before(lunco_time::InteractionRestoreSet),
-        );
-
         app.configure_sets(
             lunco_time::InteractionSchedule,
             // Between restore and record: start from the authoritative stepped pose
@@ -403,15 +368,6 @@ impl Plugin for LunCoAvatarPlugin {
                 .after(lunco_controller::InteractionControlSet)
                 .before(lunco_time::InteractionRecordSet),
         );
-        // Source-specific camera realizations are installed by their focused
-        // camera packages. This crate retains the transition and input edges;
-        // the application composition root installs their writers explicitly.
-        // Every avatar gets easing only for incremental stepped camera modes.
-        // Surface mode derives a complete local pose from gravity and spring-arm
-        // mode follows the final rendered body pose; neither may have a second
-        // Transform writer.
-        app.add_systems(Update, sync_avatar_easing);
-
         // Camera drag and avatar camera-mode transitions remain here. Focused
         // camera packages realize source-specific spatial placement after the
         // avatar has selected a mode and target.
@@ -617,85 +573,6 @@ fn bind_local_avatar_to_site_grid(
             ?site_root,
             "local avatar camera mounted in the authored site Grid"
         );
-    }
-}
-
-/// Own the camera interpolation mode from the authoritative camera component.
-///
-/// Incremental stepped free-flight cameras use [`lunco_time::InteractionEased`].
-/// Spring-arm and orbit cameras derive their complete pose directly at render
-/// cadence, while the surface camera derives its complete gravity-relative pose;
-/// retaining local-Transform easing for any of them would leave a second writer.
-/// For orbit it would also be mathematically invalid whenever [`CellCoord`]
-/// changes, because local coordinates from two different cells cannot be lerped.
-fn sync_avatar_easing(
-    mut commands: Commands,
-    q: Query<
-        (
-            Entity,
-            Has<SpringArmCamera>,
-            Has<OrbitCamera>,
-            Has<SurfaceCamera>,
-            Has<lunco_time::InteractionEased>,
-            Has<lunco_camera_core::CameraPoseLock>,
-        ),
-        (With<Avatar>, With<LocalAvatar>),
-    >,
-) {
-    for (entity, spring_arm, orbit, surface_camera, eased, cinematic_lock) in q.iter() {
-        // A cinematic driver owns the complete camera pose. It must never
-        // acquire render-rate interaction easing: that component is itself a
-        // Transform writer and its initial spawn-pose history can overwrite a
-        // path sample in the same PostUpdate. Remove a marker that was added
-        // before the lock arrived, then leave the path camera alone.
-        if cinematic_lock {
-            if eased {
-                commands
-                    .entity(entity)
-                    .remove::<lunco_time::InteractionEased>();
-            }
-            continue;
-        }
-        if spring_arm || orbit || surface_camera {
-            if eased {
-                commands
-                    .entity(entity)
-                    .remove::<lunco_time::InteractionEased>();
-            }
-        } else if !eased {
-            commands
-                .entity(entity)
-                .try_insert(lunco_time::InteractionEased::default());
-        }
-    }
-}
-
-/// Drop easing history before the interaction schedule restores its previous
-/// pose when the avatar changes BigSpace frame.
-///
-/// `InteractionEased` interpolates two `Transform`s, which are cell-LOCAL: across a
-/// rebase the previous pose is expressed in a different cell, so lerping it toward
-/// the new one would slide the camera across a whole cell edge for a frame. Clearing
-/// the history makes the ease skip until two poses in the SAME cell exist — one
-/// unsmoothed frame at the rebase instead of a visible sweep. (Same class of problem
-/// as the body-side rebase jitter `lunco_physics` probes; the fix is to not
-/// interpolate across the discontinuity at all.)
-///
-/// Runs before [`lunco_time::InteractionRestoreSet`], so no old-frame pose can
-/// be restored after the handoff.
-fn reset_easing_before_spatial_rebase(
-    mut q: Query<
-        &mut lunco_time::InteractionEased,
-        (
-            With<Avatar>,
-            With<LocalAvatar>,
-            Without<lunco_camera_core::CameraPoseLock>,
-            Or<(Changed<CellCoord>, Changed<ChildOf>)>,
-        ),
-    >,
-) {
-    for mut eased in &mut q {
-        eased.reset();
     }
 }
 
@@ -2397,386 +2274,6 @@ fn avatar_init_system(
     }
 }
 
-// ─── Surface Teleport Commands ───────────────────────────────────────────────
-
-/// Teleports the avatar to a body's surface.
-///
-/// The camera is parented to the body's surface Grid, not to the Body entity.
-/// That keeps the camera in the same body-fixed BigSpace branch as streamed
-/// terrain while `SurfaceCamera` derives its orientation from the canonical
-/// body-fixed ENU frame. BigSpace origin ownership remains with the persistent
-/// OriginAnchor while this camera is migrated into the body-fixed Grid.
-#[on_command(TeleportToSurface)]
-fn on_surface_teleport_command(
-    trigger: On<TeleportToSurface>,
-    mut commands: Commands,
-    q_avatar: Query<
-        (
-            Entity,
-            &Transform,
-            &CellCoord,
-            &ChildOf,
-            Has<lunco_camera_core::CameraPoseLock>,
-        ),
-        (With<Avatar>, With<LocalAvatar>),
-    >,
-    q_grids: Query<&Grid>,
-    q_parents: Query<&ChildOf>,
-    q_spatial_abs: Query<(Option<&CellCoord>, &Transform)>,
-    q_bodies: Query<(Entity, &CelestialBody)>,
-    q_globe_lods: Query<&lunco_celestial_spatial::GlobeLod>,
-    q_gravity_providers: Query<&GravityProvider>,
-    mut field: ResMut<LocalGravityField>,
-) {
-    let cmd = trigger.event();
-    let avatar_ent = cmd.target;
-
-    let body_entity = cmd.body_entity;
-
-    let (body_entity, body_radius) = if let Ok((e, b)) = q_bodies.get(body_entity) {
-        debug!("TELEPORT: found body {:?} radius={:.0}m", e, b.radius_m);
-        (e, b.radius_m)
-    } else {
-        warn!(
-            "TELEPORT: body entity {:?} not found in q_bodies",
-            body_entity
-        );
-        return;
-    };
-
-    if body_entity == Entity::PLACEHOLDER {
-        warn!("TELEPORT: no body found");
-        return;
-    }
-
-    debug!("TELEPORT: triggered for avatar {:?}", avatar_ent);
-
-    // Get camera cell for position lookup
-    let Ok((_, _cam_tf, _cam_cell, _cam_child_of, cinematic_lock)) = q_avatar.get(avatar_ent)
-    else {
-        return;
-    };
-    if cinematic_lock {
-        return;
-    }
-
-    // GlobeLod is the authoritative owner of a body's surface Grid. This is
-    // deliberately data-driven: adding another celestial body does not add a
-    // second Rust-side list of surface-grid marker types.
-    let Ok(globe_lod) = q_globe_lods.get(body_entity) else {
-        warn!("TELEPORT: body {:?} has no surface LOD Grid", body_entity);
-        return;
-    };
-    let target_grid = globe_lod.surface_grid;
-    let Ok(target_grid_ref) = q_grids.get(target_grid) else {
-        warn!(
-            "TELEPORT: target surface Grid {:?} is not live",
-            target_grid
-        );
-        return;
-    };
-    debug!(
-        "TELEPORT: parenting camera to surface grid {:?}",
-        target_grid
-    );
-
-    {
-        // Resolve the camera pose and its look direction in the same shared
-        // BigSpace branch as the body. The old code read `Transform::forward`
-        // directly, which is only correct while the avatar and body happen to
-        // share one parent frame; it becomes a sideways teleport after an
-        // orbital/body-grid handoff.
-        let Some((_common_grid, avatar_position, avatar_rotation, body_position, body_rotation)) =
-            lunco_spatial::coords::common_grid_poses(
-                avatar_ent,
-                body_entity,
-                &q_parents,
-                &q_grids,
-                &q_spatial_abs,
-            )
-        else {
-            warn!("TELEPORT: avatar and body have no shared BigSpace Grid");
-            return;
-        };
-        let Some((_, grid_position, grid_to_common, _, body_to_common)) =
-            lunco_spatial::coords::common_grid_poses(
-                target_grid,
-                body_entity,
-                &q_parents,
-                &q_grids,
-                &q_spatial_abs,
-            )
-        else {
-            warn!("TELEPORT: target Grid cannot be composed with the body");
-            return;
-        };
-        let body_to_grid = grid_to_common.inverse() * body_to_common;
-        let origin_body = body_rotation.inverse() * (avatar_position - body_position);
-        let direction_body = body_rotation.inverse() * (avatar_rotation * Vec3::NEG_Z.as_dvec3());
-        let b = origin_body.dot(direction_body);
-        let c = origin_body.length_squared() - body_radius * body_radius;
-        let discriminant = b * b - c;
-        if discriminant < 0.0 {
-            warn!("TELEPORT: avatar view does not intersect the body's surface");
-            return;
-        }
-        let root = discriminant.sqrt();
-        let Some(t) = [-b - root, -b + root].into_iter().find(|t| *t > 0.0) else {
-            warn!("TELEPORT: camera ray does not intersect the body's forward surface");
-            return;
-        };
-        let surface_body_pos = origin_body + direction_body * t;
-        let surface_normal = surface_body_pos.normalize_or(DVec3::Y);
-        let body_center_in_grid = grid_to_common.inverse() * (body_position - grid_position);
-        let surface_local_pos = body_center_in_grid + body_to_grid * surface_body_pos;
-        let Some((east, north, up)) = surface_axes_for_grid_position(
-            target_grid,
-            surface_local_pos,
-            body_entity,
-            &q_parents,
-            &q_grids,
-            &q_spatial_abs,
-        ) else {
-            warn!("TELEPORT: body-fixed tangent frame is not reachable from the target Grid");
-            return;
-        };
-
-        let (new_cell, new_tf_translation) = target_grid_ref.translation_to_grid(surface_local_pos);
-
-        // Surface gravity from body's GravityProvider
-        let surface_g = if let Ok(gp) = q_gravity_providers.get(body_entity) {
-            let accel = gp.model.acceleration(surface_body_pos);
-            accel.length()
-        } else {
-            0.0
-        };
-
-        // Build the initial attitude from the same body-fixed ENU frame used
-        // by SurfaceCamera. No world-axis reference is valid here.
-        let surface_rot = surface_camera_rotation(east, north, up, 0.0, -0.2);
-
-        // Parent the camera to the same surface Grid as terrain and rover
-        // content. The persistent OriginAnchor tracks the selected camera.
-        let local_tf = Transform::from_translation(new_tf_translation).with_rotation(surface_rot);
-        migrate_to_grid(&mut commands, avatar_ent, target_grid, new_cell, local_tf);
-
-        commands
-            .entity(avatar_ent)
-            .try_insert(GravityBody { body_entity })
-            .try_insert(SurfaceRelativeMode)
-            .try_insert(SurfaceCamera {
-                heading: 0.0,
-                pitch: -0.2,
-            })
-            .remove::<FreeFlightCamera>()
-            .remove::<OrbitCamera>()
-            .remove::<SpringArmCamera>();
-
-        // Update LocalGravityField (world-space "up")
-        field.body_entity = Some(body_entity);
-        field.body_relative_position = surface_body_pos;
-        field.local_up = surface_normal;
-        field.surface_g = surface_g;
-        let Some((_, body_world_rotation)) =
-            lunco_spatial::coords::world_pose(body_entity, &q_parents, &q_grids, &q_spatial_abs)
-                .ok()
-        else {
-            warn!("TELEPORT: body has no complete world BigSpace pose");
-            return;
-        };
-        field.up = body_world_rotation.0 * surface_normal;
-
-        debug!(
-            "TELEPORT: done — camera now on surface grid {:?} at alt ~50m",
-            target_grid
-        );
-    }
-}
-
-/// Leaves the surface and returns to orbit view.
-///
-/// Opens the same transactional orbit view as every other body-focus path.
-/// Spatial placement is owned exclusively by `AvatarCelestialCameraPlugin`, which migrates
-/// the avatar to the body's explicit star-fixed
-/// [`lunco_celestial::ReferenceFrame::EclipticJ2000`].
-#[on_command(LeaveSurface)]
-fn on_leave_surface_command(
-    trigger: On<LeaveSurface>,
-    mut commands: Commands,
-    q_avatar: Query<
-        (
-            Entity,
-            Option<&GravityBody>,
-            Has<lunco_camera_core::CameraPoseLock>,
-        ),
-        (With<Avatar>, With<LocalAvatar>),
-    >,
-    mut field: ResMut<LocalGravityField>,
-) {
-    let avatar_ent = trigger.event().target;
-    let Ok((_, gravity_body, cinematic_lock)) = q_avatar.get(avatar_ent) else {
-        warn!(?avatar_ent, "LEAVE SURFACE: target is not an avatar");
-        return;
-    };
-    if cinematic_lock {
-        return;
-    }
-
-    // Find the body we're leaving
-    let body_entity = gravity_body
-        .map(|gb| gb.body_entity)
-        .unwrap_or(Entity::PLACEHOLDER);
-
-    if body_entity == Entity::PLACEHOLDER {
-        warn!("LEAVE SURFACE: avatar has no gravity body");
-        return;
-    }
-
-    commands.trigger(FocusTarget {
-        avatar: Some(avatar_ent),
-        target: body_entity,
-    });
-
-    // Clear gravity field
-    field.body_entity = None;
-    field.body_relative_position = DVec3::ZERO;
-    field.local_up = DVec3::Y;
-    field.surface_g = 0.0;
-    field.up = DVec3::Y;
-
-    info!("Left surface, opened orbit view around {:?}", body_entity);
-}
-
-// ─── Surface Mode Transition ────────────────────────────────────────────────
-
-/// Auto-inserts/removes `SurfaceRelativeMode` based on avatar altitude.
-///
-/// Uses hysteresis to prevent rapid toggling at the boundary:
-/// - Below `engage_altitude` → insert `SurfaceRelativeMode`
-/// - Above `disengage_altitude` → remove `SurfaceRelativeMode`
-///
-/// Altitude is computed as `|body_local_position| - body_radius` from the
-/// avatar's `GravityBody` binding. Runs in `Update` so camera systems
-/// see the mode change immediately.
-fn surface_mode_transition_system(
-    q_avatar: Query<
-        (
-            Entity,
-            &Transform,
-            &ChildOf,
-            Option<&GravityBody>,
-            Option<&SurfaceRelativeMode>,
-            Option<&SurfaceCamera>,
-            Option<&SpringArmCamera>,
-        ),
-        (
-            With<Avatar>,
-            With<LocalAvatar>,
-            Without<OrbitCamera>,
-            Without<lunco_camera_core::CameraPoseLock>,
-        ),
-    >,
-    q_bodies: Query<&CelestialBody>,
-    q_grids: Query<&Grid>,
-    q_parents: Query<&ChildOf>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    thresholds: Res<SurfaceModeThreshold>,
-    field: Res<LocalGravityField>,
-    q_site: Query<(), With<lunco_celestial::SiteAnchor>>,
-    mut commands: Commands,
-) {
-    // `Without<OrbitCamera>`: focusing a celestial body activates the orbital
-    // world-pin, which slides the celestial tree so the focused body lands in
-    // front of the PARKED camera. The camera's GT-delta altitude above the site
-    // body then reads as enormous, so the disengage branch below fired, stripped
-    // surface mode and inserted a `FreeFlightCamera`. The generic free-flight
-    // runtime has no `Without<OrbitCamera>` filter, so it then fought the orbit writer for the
-    // Transform every frame — the camera drifted off the site and right-drag
-    // flew the view away ("right click moved somewhere else"), while the two
-    // writers alternating produced the residual per-frame wobble. An orbital
-    // view owns the camera; leave it alone.
-    let Some((avatar_ent, transform, child_of, maybe_gb, maybe_mode, maybe_sc, maybe_spring)) =
-        q_avatar.single().ok()
-    else {
-        return;
-    };
-
-    // Altitude comes from the same body-local position used by gravity and the
-    // surface camera.  Mixing a root-frame GlobalTransform delta here with a
-    // grid-relative camera writer is precisely what allowed the mode to flap
-    // when the celestial frame rotated at high time warp.
-    let engage_body = maybe_gb.map(|gb| gb.body_entity);
-    let disengage_body = engage_body.or(field.body_entity);
-    let altitude_to = |b: Entity| {
-        (field.body_entity == Some(b))
-            .then_some(field.body_relative_position.length())
-            .zip(q_bodies.get(b).ok())
-            .map(|(distance, body)| distance - body.radius_m)
-    };
-    let engage_altitude_m = engage_body.and_then(altitude_to).unwrap_or(f64::MAX);
-    let altitude = disengage_body.and_then(altitude_to).unwrap_or(f64::MAX);
-
-    // SurfaceRelativeMode is a coordinate-policy marker, not a camera mode.
-    // `SurfaceCamera` owns a free camera's complete surface-relative pose;
-    // `SpringArmCamera` owns a followed vessel pose and consumes the marker to
-    // choose body-fixed ENU instead of world-Y.  Treating SurfaceCamera as the
-    // only valid writer used to insert it over an active spring arm immediately
-    // after possession. The camera-mode hook then removed SpringArmCamera, so
-    // the rover drove away while the view remained at the possession pose.
-    let camera_is_surface = maybe_sc.is_some();
-    let spring_is_surface = maybe_spring.is_some();
-    let has_surface_relative_writer = camera_is_surface || spring_is_surface;
-    let marker_is_surface = maybe_mode.is_some();
-
-    // Site-anchored scenes NEVER altitude-disengage: the user's frame of
-    // reference is the anchor body at every height below the orbital handover
-    // ("the planetary body always at the bottom of the screen, following the
-    // direction of gravity"). Falling back to the world-euler FreeFlight
-    // camera up there levels the view to world +Y instead of the local up —
-    // the tilted-horizon / "moon in the corner" report. Beyond ~50 km the
-    // scroll transit hands the camera to the orbital mode anyway.
-    let site_anchored = !q_site.is_empty();
-
-    if has_surface_relative_writer && altitude > thresholds.disengage_altitude && !site_anchored {
-        // Too high → leave the surface coordinate policy. A free surface
-        // camera swaps back to free flight; a spring arm remains the same
-        // writer and simply resumes its non-surface heading basis.
-        commands.entity(avatar_ent).remove::<SurfaceRelativeMode>();
-        if let Some(sc) = maybe_sc {
-            // Note: heading→yaw is approximate (different reference frames)
-            // but provides a reasonable starting orientation.
-            commands
-                .entity(avatar_ent)
-                .remove::<SurfaceCamera>()
-                .try_insert(FreeFlightCamera {
-                    yaw: sc.heading,
-                    pitch: sc.pitch,
-                    damping: None,
-                });
-        }
-    } else if engage_altitude_m < thresholds.engage_altitude {
-        // Low enough and explicitly bound to a body → enter surface mode.
-        commands.entity(avatar_ent).try_insert(SurfaceRelativeMode);
-        // A free camera needs the dedicated surface writer. A spring arm
-        // already is the sole writer and derives its ENU orientation itself.
-        if !has_surface_relative_writer {
-            if let Some((east, north, up)) =
-                surface_axes_in_grid(child_of.0, &field, &q_parents, &q_grids, &q_spatial)
-            {
-                let (heading, pitch) = surface_camera_angles(east, north, up, transform.rotation);
-                commands
-                    .entity(avatar_ent)
-                    .remove::<FreeFlightCamera>()
-                    .try_insert(SurfaceCamera { heading, pitch });
-            }
-        }
-    } else if marker_is_surface && !has_surface_relative_writer {
-        // Repair a stale marker even when the body is no longer in the engage
-        // band.  Leaving it behind is not a valid intermediate state.
-        commands.entity(avatar_ent).remove::<SurfaceRelativeMode>();
-    }
-}
-
 fn resolve_declared_body(
     target: Entity,
     declarations: &Query<&lunco_celestial_spatial::CelestialBodyDecl>,
@@ -4157,211 +3654,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn surface_transition_preserves_possessed_spring_arm_writer() {
-        let mut app = App::new();
-        register_orbit_history_hook(&mut app);
-        app.init_resource::<SurfaceModeThreshold>()
-            .insert_resource(LocalGravityField {
-                body_entity: None,
-                body_relative_position: DVec3::ZERO,
-                up: DVec3::Y,
-                local_up: DVec3::Y,
-                surface_g: 1.0,
-            })
-            .add_systems(Update, surface_mode_transition_system);
-
-        let body = app
-            .world_mut()
-            .spawn(CelestialBody {
-                name: "test body".into(),
-                ephemeris_id: lunco_celestial::ephemeris_id::MOON,
-                radius_m: 100.0,
-            })
-            .id();
-        app.world_mut()
-            .resource_mut::<LocalGravityField>()
-            .body_entity = Some(body);
-        app.world_mut()
-            .resource_mut::<LocalGravityField>()
-            .body_relative_position = DVec3::Y * 101.0;
-
-        let grid = app.world_mut().spawn(Grid::new(2_000.0, 0.0)).id();
-        let target = app.world_mut().spawn_empty().id();
-        let avatar = app
-            .world_mut()
-            .spawn((
-                Avatar,
-                LocalAvatar,
-                Transform::default(),
-                CellCoord::ZERO,
-                ChildOf(grid),
-                GravityBody { body_entity: body },
-                SurfaceRelativeMode,
-                SpringArmCamera {
-                    target,
-                    distance: 15.0,
-                    yaw: 0.0,
-                    pitch: -0.25,
-                    damping: None,
-                    vertical_offset: 2.0,
-                    track_heading: true,
-                    attitude: FollowAttitude::Heading,
-                },
-            ))
-            .id();
-
-        app.update();
-
-        assert!(
-            app.world().get::<SpringArmCamera>(avatar).is_some(),
-            "surface policy must not replace the possessed spring-arm writer"
-        );
-        assert!(app.world().get::<SurfaceCamera>(avatar).is_none());
-        assert!(app.world().get::<SurfaceRelativeMode>(avatar).is_some());
-    }
-
-    #[test]
-    fn spring_arm_owns_render_pose_without_interaction_easing() {
-        let mut app = App::new();
-        app.add_systems(Update, sync_avatar_easing);
-
-        let avatar = app
-            .world_mut()
-            .spawn((
-                Avatar,
-                LocalAvatar,
-                SpringArmCamera {
-                    target: Entity::PLACEHOLDER,
-                    distance: 10.0,
-                    yaw: 0.0,
-                    pitch: 0.0,
-                    damping: None,
-                    vertical_offset: 2.0,
-                    track_heading: true,
-                    attitude: FollowAttitude::Heading,
-                },
-                lunco_time::InteractionEased::default(),
-            ))
-            .id();
-
-        app.update();
-        assert!(
-            app.world()
-                .get::<lunco_time::InteractionEased>(avatar)
-                .is_none(),
-            "spring-arm cameras must not have a second interpolation writer"
-        );
-
-        app.world_mut()
-            .entity_mut(avatar)
-            .remove::<SpringArmCamera>();
-        app.update();
-        assert!(
-            app.world()
-                .get::<lunco_time::InteractionEased>(avatar)
-                .is_some(),
-            "stepped camera modes must regain interaction-rate easing"
-        );
-    }
-
-    #[test]
-    fn orbit_camera_owns_complete_big_space_pose_without_local_easing() {
-        let mut app = App::new();
-        app.add_systems(Update, sync_avatar_easing);
-
-        let avatar = app
-            .world_mut()
-            .spawn((
-                Avatar,
-                LocalAvatar,
-                OrbitCamera {
-                    target: Entity::PLACEHOLDER,
-                    distance: 1_800_000.0,
-                    yaw: 0.0,
-                    pitch: 0.0,
-                    damping: None,
-                    vertical_offset: 0.0,
-                },
-                lunco_time::InteractionEased::default(),
-            ))
-            .id();
-
-        app.update();
-        assert!(
-            app.world()
-                .get::<lunco_time::InteractionEased>(avatar)
-                .is_none(),
-            "an orbit camera must never lerp cell-local transforms across cells"
-        );
-    }
-
-    #[test]
-    fn surface_camera_owns_local_pose_without_interaction_easing() {
-        let mut app = App::new();
-        app.add_systems(Update, sync_avatar_easing);
-
-        let avatar = app
-            .world_mut()
-            .spawn((
-                Avatar,
-                LocalAvatar,
-                SurfaceCamera {
-                    heading: 0.0,
-                    pitch: -0.2,
-                },
-                lunco_time::InteractionEased::default(),
-            ))
-            .id();
-
-        app.update();
-        assert!(
-            app.world()
-                .get::<lunco_time::InteractionEased>(avatar)
-                .is_none(),
-            "surface cameras must have one authoritative local-pose writer"
-        );
-
-        app.world_mut().entity_mut(avatar).remove::<SurfaceCamera>();
-        app.update();
-        assert!(
-            app.world()
-                .get::<lunco_time::InteractionEased>(avatar)
-                .is_some(),
-            "an avatar without a direct-pose camera mode must regain easing"
-        );
-    }
-
-    #[test]
-    fn cinematic_camera_owns_render_pose_without_interaction_easing() {
-        let mut app = App::new();
-        app.add_systems(Update, sync_avatar_easing);
-
-        let avatar = app
-            .world_mut()
-            .spawn((Avatar, LocalAvatar, lunco_camera_core::CameraPoseLock))
-            .id();
-
-        app.update();
-        assert!(
-            app.world()
-                .get::<lunco_time::InteractionEased>(avatar)
-                .is_none(),
-            "cinematic cameras must not acquire the avatar interpolation writer"
-        );
-
-        app.world_mut()
-            .entity_mut(avatar)
-            .insert(lunco_time::InteractionEased::default());
-        app.update();
-        assert!(
-            app.world()
-                .get::<lunco_time::InteractionEased>(avatar)
-                .is_none(),
-            "a pose lock must remove stale avatar interpolation history"
-        );
-    }
-
     /// **A retired avatar camera must leave the viewport candidate pool.**
     ///
     /// A host-created camera can outlive a scene load because it is not owned by a
@@ -4502,8 +3794,6 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
 // `lunco-capture` with the renderer that owns their implementation.
 register_commands!(
     on_show_notification,
-    on_surface_teleport_command,
-    on_leave_surface_command,
     on_possess_command,
     on_return_from_orbit,
     on_release_command,
