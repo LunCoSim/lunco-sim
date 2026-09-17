@@ -4,6 +4,7 @@ const TEST_KIND = "graphics";
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
+    set_camera("VisualCamera");
     this.paths = [
         "/PartsAttachedVisual/SkidRaycast",
         "/PartsAttachedVisual/SkidPhysical",

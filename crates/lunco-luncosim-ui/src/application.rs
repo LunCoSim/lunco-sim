@@ -106,6 +106,87 @@ fn parse_record_preset(
     Ok(preset)
 }
 
+fn parse_recording_args(
+    args: &[String],
+) -> Result<
+    (
+        Option<lunco_capture::screenshot::OfflineRecordingRequest>,
+        Option<lunco_capture::screenshot::OfflineRecordLimit>,
+    ),
+    String,
+> {
+    let mut output_dir = None;
+    let mut fps = None;
+    let mut frame_limit = None;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--record-offline" {
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or_else(|| "`--record-offline` needs a directory or video path".to_string())?;
+            if value.starts_with('-') {
+                return Err(
+                    "`--record-offline` needs a directory or video path, not another flag"
+                        .to_string(),
+                );
+            }
+            if output_dir.replace(value.into()).is_some() {
+                return Err("`--record-offline` may only be specified once".to_string());
+            }
+        } else if let Some(value) = args[index].strip_prefix("--record-offline=") {
+            if value.is_empty() {
+                return Err("`--record-offline` needs a directory or video path".to_string());
+            }
+            if output_dir.replace(value.into()).is_some() {
+                return Err("`--record-offline` may only be specified once".to_string());
+            }
+        } else if args[index] == "--record-fps" {
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or_else(|| "`--record-fps` needs a positive integer".to_string())?;
+            fps = Some(parse_positive_record_number("--record-fps", value)?);
+        } else if let Some(value) = args[index].strip_prefix("--record-fps=") {
+            fps = Some(parse_positive_record_number("--record-fps", value)?);
+        } else if args[index] == "--record-frames" {
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or_else(|| "`--record-frames` needs a positive integer".to_string())?;
+            frame_limit = Some(parse_positive_record_number("--record-frames", value)? as u64);
+        } else if let Some(value) = args[index].strip_prefix("--record-frames=") {
+            frame_limit = Some(parse_positive_record_number("--record-frames", value)? as u64);
+        }
+        index += 1;
+    }
+
+    if output_dir.is_none() && (fps.is_some() || frame_limit.is_some()) {
+        return Err("`--record-fps` and `--record-frames` require `--record-offline`".to_string());
+    }
+
+    let request = output_dir.map(
+        |output_dir| lunco_capture::screenshot::OfflineRecordingRequest {
+            output_dir,
+            fps: fps.unwrap_or(60),
+        },
+    );
+    Ok((
+        request,
+        frame_limit.map(lunco_capture::screenshot::OfflineRecordLimit),
+    ))
+}
+
+fn parse_positive_record_number(flag: &str, value: &str) -> Result<u32, String> {
+    let number = value
+        .parse::<u32>()
+        .map_err(|_| format!("`{flag}` needs a positive integer, got `{value}`"))?;
+    if number == 0 {
+        return Err(format!("`{flag}` needs a positive integer, got `0`"));
+    }
+    Ok(number)
+}
+
 #[cfg(test)]
 mod render_profile_tests {
     use super::*;
@@ -179,6 +260,39 @@ mod render_profile_tests {
                 .profile(),
             lunco_render::RenderingQuality::High.profile()
         );
+    }
+
+    #[test]
+    fn parses_offline_recording_request_and_frame_limit() {
+        let (request, limit) = parse_recording_args(&[
+            "luncosim".to_string(),
+            "--record-offline=/tmp/take".to_string(),
+            "--record-fps".to_string(),
+            "30".to_string(),
+            "--record-frames=3".to_string(),
+        ])
+        .unwrap();
+        let request = request.unwrap();
+        assert_eq!(request.output_dir, std::path::PathBuf::from("/tmp/take"));
+        assert_eq!(request.fps, 30);
+        assert_eq!(limit.unwrap().0, 3);
+    }
+
+    #[test]
+    fn recording_limits_require_an_output_and_positive_values() {
+        assert!(parse_recording_args(&[
+            "luncosim".to_string(),
+            "--record-frames".to_string(),
+            "1".to_string(),
+        ])
+        .is_err());
+        assert!(parse_recording_args(&[
+            "luncosim".to_string(),
+            "--record-offline".to_string(),
+            "take".to_string(),
+            "--record-fps=0".to_string(),
+        ])
+        .is_err());
     }
 }
 
@@ -337,6 +451,13 @@ pub fn run_gui() -> AppExit {
             return AppExit::error();
         }
     };
+    let (recording_request, record_limit) = match parse_recording_args(&args) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("luncosim: {error}");
+            return AppExit::error();
+        }
+    };
     lunco_luncosim_core::log_build_identity(if offscreen { "offscreen" } else { "windowed" });
     // Answer GUI `--help` without building an app (see
     // `print_help_if_requested`). The headless server owns its own no-build
@@ -388,6 +509,12 @@ pub fn run_gui() -> AppExit {
     app.insert_resource(lunco_capture::screenshot::OfflineVideoSettings {
         preset: record_preset,
     });
+    if let Some(request) = recording_request {
+        app.insert_resource(request);
+    }
+    if let Some(limit) = record_limit {
+        app.insert_resource(limit);
+    }
 
     #[cfg(all(feature = "networking", not(target_family = "wasm")))]
     if let Some(inbox) = deeplink_inbox {

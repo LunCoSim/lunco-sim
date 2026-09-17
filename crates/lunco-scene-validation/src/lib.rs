@@ -10,9 +10,9 @@
 //! the same validation plugin and CLI entry point.
 
 pub mod lint_command;
-/// Static discovery of authored scene tests and their headless/graphics kind.
+/// Static discovery of authored scene tests and their execution kind.
 /// The scene supplies the USD program binding; the Rhai test source supplies
-/// the execution domain.
+/// the execution domain and whether a GPU test consumes pixels or diagnostics.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test_discovery;
 pub mod twin_lint;

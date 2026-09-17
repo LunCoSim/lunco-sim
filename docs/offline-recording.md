@@ -59,20 +59,27 @@ luncosim --api 4101 --offscreen --render-quality high \
 
 After the authored camera contract and the complete USD visual projection are
 present, offscreen recording holds virtual time for a one-second cold-GPU render
-warm-up before numbering frame 0. Scene completion includes queued projections
-and asynchronously generated meshes, so the recorder cannot begin with a valid
-camera and an incomplete render participant set. This fence lets pipelines finish
-compiling without emitting a clear-color first frame.
+warm-up before numbering frame 0. A CLI request made at process startup keeps
+ordinary virtual time only until the authored scenario has selected its explicit
+presentation camera; otherwise the readiness gate would freeze the clock before
+that startup command could run. Once the camera is bound, scene completion includes
+queued projections and asynchronously generated meshes, so the recorder cannot
+begin with a valid camera and an incomplete render participant set. This fence lets
+pipelines finish compiling without emitting a clear-color first frame.
 
 Scene test observers use the same separation: a Rhai test under
 `assets/scenarios/tests/` is headless unless it declares
-`const TEST_KIND = "graphics";` or `const TEST_KIND = "editor";`. The
-composed USD scene only binds that observer through
-`LunCoProgramAPI`/`info:sourceAsset`; `luncosim test --list` uses the
-declaration to route headless tests to the deterministic CPU runner, graphics
-tests to the offscreen renderer, and editor tests to the production windowed
-host. Editor-domain tests are not valid offscreen captures because preview and
-selection ownership is UI-gated.
+`const TEST_KIND = "graphics";`, `const TEST_KIND = "render-contract";`, or
+`const TEST_KIND = "editor";`. The composed USD scene only binds that observer
+through `LunCoProgramAPI`/`info:sourceAsset`; `luncosim test --list` uses the
+declaration to route headless tests to the deterministic CPU runner, pixel
+graphics tests to the offscreen recorder, render-contract tests to the
+production offscreen host without a pixel readiness gate, and editor tests to
+the production windowed host. A render-contract test is appropriate for a
+negative shader/material diagnostic whose authored scene intentionally has no
+valid color-phase item; it must still publish a real Rhai verdict. Editor-domain
+tests are not valid offscreen captures because preview and selection ownership
+is UI-gated.
 
 The graphics runner selects `--render-quality high` by default. Set
 `RENDER_QUALITY=balanced` or `RENDER_QUALITY=low` for a deliberate comparison.

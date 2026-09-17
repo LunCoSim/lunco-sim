@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
 # run_scene_tests.sh — build the production luncosim runner ONCE, then run every
-# authored scene test: deterministic headless Rhai tests plus graphics tests
-# whose Rhai observer declares `const TEST_KIND = "graphics"` or `"editor"`.
+# authored scene test: deterministic headless Rhai tests, pixel graphics tests,
+# GPU render-contract tests, and editor tests, selected by the Rhai observer's
+# `TEST_KIND` declaration.
 #
 # Each headless scene is an authored USD file whose attached Rhai scenario ends
 # in `emit("<CHANNEL>", "PASS"|"FAIL")`. `luncosim test` runs it headless and
 # deterministically (manual clock, no window, no GPU, no realtime pacing) and
 # exits 0 = PASS, 1 = FAIL, 2 = no verdict. Render-only scenes run through
 # `scripts/run_render_scene_tests.sh` using the same production binary in
-# GPU-full offscreen mode.
+# GPU-full offscreen mode. Render-contract tests use the same production GPU
+# host but do not request a pixel take.
 #
 #   ./scripts/run_scene_tests.sh              # all scenes
 #   ./scripts/run_scene_tests.sh drivetrain   # only scenes matching a substring
@@ -206,19 +208,21 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 # Classify through the production binary's composed-USD + Rhai discovery. This
-# is the only source of truth for headless versus graphics execution.
+# is the only source of truth for scene-test execution domains.
 LIST_OUTPUT="$("$BIN" test --list)" || {
     echo "scene test discovery failed" >&2
     exit 2
 }
 SCENES=()
 GRAPHICS_SCENES=()
+RENDER_CONTRACT_SCENES=()
 EDITOR_SCENES=()
 while IFS=$'\t' read -r kind scene; do
     [[ -n "${scene:-}" ]] || continue
     case "$kind" in
         headless) SCENES+=("$scene") ;;
         graphics) GRAPHICS_SCENES+=("$scene") ;;
+        render-contract) RENDER_CONTRACT_SCENES+=("$scene") ;;
         editor) EDITOR_SCENES+=("$scene") ;;
         *) echo "unknown scene test kind '$kind' for '$scene'" >&2; exit 2 ;;
     esac
@@ -246,6 +250,16 @@ if [[ -n "$FILTER" ]]; then
     GRAPHICS_SCENES=("${filtered[@]}")
 
     filtered=()
+    for s in "${RENDER_CONTRACT_SCENES[@]}"; do
+        if ((EXACT)); then
+            [[ "$(basename "$s" .usda)" == "$FILTER" || "$s" == "$FILTER" ]] && filtered+=("$s")
+        else
+            [[ "$s" == *"$FILTER"* ]] && filtered+=("$s")
+        fi
+    done
+    RENDER_CONTRACT_SCENES=("${filtered[@]}")
+
+    filtered=()
     for s in "${EDITOR_SCENES[@]}"; do
         if ((EXACT)); then
             [[ "$(basename "$s" .usda)" == "$FILTER" || "$s" == "$FILTER" ]] && filtered+=("$s")
@@ -256,12 +270,15 @@ if [[ -n "$FILTER" ]]; then
     EDITOR_SCENES=("${filtered[@]}")
 fi
 
-if [[ ${#SCENES[@]} -eq 0 && ${#GRAPHICS_SCENES[@]} -eq 0 && ${#EDITOR_SCENES[@]} -eq 0 ]]; then
+if [[ ${#SCENES[@]} -eq 0 && ${#GRAPHICS_SCENES[@]} -eq 0 && ${#RENDER_CONTRACT_SCENES[@]} -eq 0 && ${#EDITOR_SCENES[@]} -eq 0 ]]; then
     echo "no scene matches filter '${FILTER:-all}'" >&2
     exit 2
 fi
 for s in "${GRAPHICS_SCENES[@]}"; do
     echo "==> QUEUE $(basename "$s" .usda) — graphics assertion"
+done
+for s in "${RENDER_CONTRACT_SCENES[@]}"; do
+    echo "==> QUEUE $(basename "$s" .usda) — render-contract assertion"
 done
 for s in "${EDITOR_SCENES[@]}"; do
     echo "==> QUEUE $(basename "$s" .usda) — editor assertion"
@@ -423,8 +440,8 @@ for status in "${statuses[@]}"; do
 done
 
 # ── GPU render pass ─────────────────────────────────────────────────────────
-# The two render-only scenes are a separate acceptance class because their
-# assertions are pixels and render diagnostics, not physics telemetry. The
+# Pixel render scenes are a separate acceptance class because their assertions
+# are pixels, not physics telemetry. The
 # helper still uses this already-built production binary and exits non-zero on
 # missing assets, wrong pixels, pipeline warnings, hangs, or incomplete frames.
 if [[ ${#GRAPHICS_SCENES[@]} -gt 0 ]]; then
@@ -436,6 +453,24 @@ if [[ ${#GRAPHICS_SCENES[@]} -gt 0 ]]; then
         render_args=("$FILTER")
     fi
     if ! LUNCOSIM_BIN="$BIN" "$REPO_ROOT/scripts/run_render_scene_tests.sh" "${render_args[@]}"; then
+        overall=1
+    fi
+fi
+
+# ── GPU render-contract pass ───────────────────────────────────────────────
+# These scenes exercise the production shader/material/render diagnostic
+# boundary but intentionally do not promise a color-phase item. Running them
+# through the pixel recorder would turn a correct negative shader diagnostic
+# into a readiness timeout, or force the recorder to accept an empty frame.
+if [[ ${#RENDER_CONTRACT_SCENES[@]} -gt 0 ]]; then
+    echo
+    echo "==> GPU render-contract pass (production offscreen renderer)"
+    if ((EXACT)); then
+        contract_args=(--exact "$FILTER")
+    else
+        contract_args=("$FILTER")
+    fi
+    if ! LUNCOSIM_BIN="$BIN" "$REPO_ROOT/scripts/run_render_contract_tests.sh" "${contract_args[@]}"; then
         overall=1
     fi
 fi
@@ -455,8 +490,12 @@ if [[ ${#EDITOR_SCENES[@]} -gt 0 ]]; then
 fi
 
 # ── Summary table ───────────────────────────────────────────────────────────
+total_scene_tests=$((
+    ${#SCENES[@]} + ${#GRAPHICS_SCENES[@]} +
+    ${#RENDER_CONTRACT_SCENES[@]} + ${#EDITOR_SCENES[@]}
+))
 echo
-echo "==================== scene test summary ===================="
+echo "================ headless scene test summary ================"
 printf '%-28s %-12s %s\n' "SCENE" "RESULT" "DETAIL"
 for i in "${!names[@]}"; do
     printf '%-28s %-12s %s\n' "${names[$i]}" "${statuses[$i]}" "${details[$i]}"
@@ -495,7 +534,7 @@ if [[ $STRESS -eq 1 ]]; then
 fi
 
 if [[ $overall -eq 0 ]]; then
-    echo "ALL ${#names[@]} SCENE TESTS PASSED (gate pass)"
+    echo "ALL $total_scene_tests SCENE TESTS PASSED (gate pass)"
 else
     echo "SOME SCENE TESTS FAILED (gate pass)"
 fi

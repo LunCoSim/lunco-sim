@@ -1101,9 +1101,11 @@ impl VideoSink {
 ///
 /// **The clock is deliberately left alone here.** `TimeUpdateStrategy` has exactly
 /// ONE writer — `drive_offline_clock` — and that is load-bearing (two writers once
-/// produced a 3380-frame runaway). Waiting therefore happens with the clock in its
-/// ordinary `Automatic` mode: the wait is real-time and consumes no recorded frames,
-/// so the deterministic capture still begins at step 0 with N frames == N steps.
+/// produced a 3380-frame runaway). The clock owner freezes an already-running
+/// offscreen shot immediately, while a CLI shot at startup remains automatic only
+/// until its authored scenario binds the presentation camera. Neither path consumes
+/// recorded frames, so deterministic capture still begins at step 0 with N frames == N
+/// steps.
 #[on_command(StartOfflineRecording)]
 fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: Commands) {
     let cmd = trigger.event();
@@ -1586,6 +1588,7 @@ fn drive_offline_clock(
     // `--offscreen` mode: capture the offscreen render target, not the
     // (nonexistent) primary window.
     capture_target: Option<Res<OfflineCaptureTarget>>,
+    cameras: Query<(&bevy::camera::Camera, &bevy::camera::RenderTarget)>,
     // A live Modelica worker is a fixed-step barrier. Keep the recording clock
     // frozen after a capture until the worker releases the next physics step;
     // otherwise a slow worker produces duplicate frames at the same simulation
@@ -1594,7 +1597,12 @@ fn drive_offline_clock(
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut commands: Commands,
 ) {
-    // PHASE 0 — armed, waiting for the scene. Freeze virtual time.
+    // PHASE 0 — armed, waiting for the scene. A CLI request can arrive before
+    // the startup scene and its Rhai scenario have had a frame to bind the
+    // authored presentation camera. Keep ordinary time in that one case so
+    // the startup lifecycle can select its camera; once an offscreen camera is
+    // active, freeze virtual time while the visual readiness gate waits for
+    // meshes, materials, and GPU pipelines.
     //
     // MEASURED: without this, two runs of episode_02 differed at EVERY frame of
     // EVERY shot starting at frame 0 (viewport-crop RMSE 0.019-0.030, well clear of
@@ -1609,15 +1617,27 @@ fn drive_offline_clock(
     // captured sequence starts from the state the scene was in when the shot was
     // asked for, no matter how long the assets took.
     //
-    // Safe against a simulation deadlock: the scenario script does not need to tick
-    // during this window (it has already issued `shot_begin` and is polling
-    // `shot_frame()`, which reports `-1` while armed). An incomplete scene stays
-    // visibly armed until the caller stops it or the outer production gate reports
-    // failure.
+    // An incomplete scene stays visibly armed until the caller stops it or the
+    // outer production gate reports failure. For an in-process/API shot, the
+    // existing simulation is already running and this branch freezes it. For a
+    // CLI shot at startup, the absence of an image camera is the one explicit
+    // signal that startup authorship still needs a frame, so Automatic time is
+    // retained until that camera is bound.
     if pending.is_some() && !state.active {
-        commands.insert_resource(TimeUpdateStrategy::ManualDuration(
-            std::time::Duration::ZERO,
-        ));
+        let startup_camera_bound = capture_target.is_none()
+            || cameras.iter().any(|(camera, target)| {
+                camera.is_active
+                    && matches!(
+                        camera.output_mode,
+                        bevy::camera::CameraOutputMode::Write { .. }
+                    )
+                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+            });
+        if startup_camera_bound {
+            commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::ZERO,
+            ));
+        }
         return;
     }
 
