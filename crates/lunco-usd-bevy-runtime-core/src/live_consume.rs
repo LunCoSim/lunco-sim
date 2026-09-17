@@ -333,9 +333,14 @@ pub(crate) fn reproject_physics_if_needed(
     // while the sim owner identifies a vehicle context by MobilityRoot.
     let physics_invalidated =
         has_rigid_body_api && lunco_usd_avian::invalidate_usd_physics_projection(world, entity);
+    let live_edit_owners = world
+        .get_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
+        .map(|registry| registry.snapshot())
+        .unwrap_or_default();
     let sim_invalidated = has_vehicle_context_api
-        && world.get::<lunco_core::MobilityRoot>(entity).is_none()
-        && lunco_usd_sim::invalidate_usd_sim_projection(world, entity);
+        && live_edit_owners
+            .iter()
+            .any(|owner| owner.invalidates_projection(world, entity));
     if !physics_invalidated && !sim_invalidated {
         return false;
     }
@@ -825,25 +830,30 @@ pub(crate) fn refresh_edited_prims_live(
         Entity,
         Option<lunco_usd_bevy_core::program::ResolvedProgram>,
     )> = Vec::new();
-    // Wheel/vehicle dynamics edits are claimed by the in-place resync (same
-    // shape as the mission `info:sourceCode` special-case below): excluded from the
-    // subtree refresh — which would corrupt a spawned wheel — and folded into
-    // ONE `resync_wheels_for_stage` call after the loop.
-    let mut wheels_dirty = false;
+    // Domain-owned in-place edits are excluded from the subtree refresh — which
+    // can corrupt a synthesized runtime entity — and folded into one refresh
+    // call per claiming owner after the loop.
+    let live_edit_owners = world
+        .get_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
+        .map(|registry| registry.snapshot())
+        .unwrap_or_default();
+    let mut claimed_live_edit_owners = HashSet::new();
     for p in info_only {
         let Some((prim, attr)) = p.split_once('.') else {
             continue;
         };
         {
-            let claimed = world
+            let claimed_owner = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(id))
                 .zip(SdfPath::new(prim).ok())
-                .is_some_and(|(cs, sp)| {
-                    lunco_usd_sim::wheel_runtime::claims_edit(&cs.view(), &sp, attr)
+                .and_then(|(cs, sp)| {
+                    live_edit_owners
+                        .iter()
+                        .position(|owner| owner.claims_edit(&cs.view(), &sp, attr))
                 });
-            if claimed {
-                wheels_dirty = true;
+            if let Some(owner) = claimed_owner {
+                claimed_live_edit_owners.insert(owner);
                 continue;
             }
         }
@@ -915,8 +925,8 @@ pub(crate) fn refresh_edited_prims_live(
         }
     }
 
-    if wheels_dirty {
-        lunco_usd_sim::wheel_runtime::resync_wheels_for_stage(world, id);
+    for owner in claimed_live_edit_owners {
+        live_edit_owners[owner].refresh_stage(world, id);
     }
 
     for (owner, resolved) in program_updates {

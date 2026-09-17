@@ -30,7 +30,8 @@ composes that runtime with the complete application plugin bundle;
 `lunco-usd-geometry`
 owns the reusable render-free BasisCurves evaluator, NURBS, trim, and
 curve-sweep substrate;
-`lunco-usd-bevy-core` owns prepared/composed stage data;
+`lunco-usd-bevy-core` owns prepared/composed stage data and the generic
+domain-owned live-edit registry;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
 projection ordering boundaries, visual-split markers, authored billboard
 contracts, shared geometry decoding, and composed collision/placement
@@ -41,7 +42,8 @@ owning a second curve implementation;
 `lunco-usd-bevy-twin` owns the render-free document-to-`twin://` identity map,
 workspace and preview leases, projection cursors, user-ownership events, and
 the event-driven wake signal and document-to-mounted-stage lookup;
-`lunco-usd-bevy-core` owns canonical-stage storage, while
+`lunco-usd-bevy-core` owns canonical-stage storage and the generic live-edit
+owner registry, while
 `lunco-usd-bevy-runtime-core` owns scene admission, stage loading, and the live
 ECS projection systems that consume that state; `lunco-usd-bevy-runtime` owns
 the complete application plugin composition;
@@ -72,7 +74,8 @@ contract observed by scene runners and editor systems;
 vehicle wheel attachments and gear drives, plus their authored lint facts;
 `lunco-usd-sim-domain` owns composed component-network and Modelica projection;
 `lunco-usd-sim-domain-api` owns optional generated-source API queries;
-`lunco-usd-sim` owns vehicle projection; `lunco-usd-sim-cosim` owns participant
+`lunco-usd-sim` owns vehicle projection and registers its in-place wheel edit
+owner with the generic USD runtime; `lunco-usd-sim-cosim` owns participant
 discovery, wiring, readiness, and scene lifecycle; and
 `lunco-usd-sim-cosim-api` owns optional API query serialization. The application
 bundle installs the implementation plugins explicitly, so vehicle changes do

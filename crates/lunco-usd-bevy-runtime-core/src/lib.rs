@@ -5,6 +5,9 @@
 //! It does not assemble the complete visual/physics/simulation plugin bundle;
 //! that application convenience composition remains in
 //! `lunco-usd-bevy-runtime`.
+//! Specialized domain plugins register their in-place edit owners through
+//! [`lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`], keeping this
+//! generic runtime independent of those domain implementations.
 
 use bevy::prelude::{App, IntoScheduleConfigs, Plugin};
 

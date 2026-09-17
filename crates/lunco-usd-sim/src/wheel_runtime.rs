@@ -41,7 +41,7 @@ pub(crate) fn attachment_tire_path(
 /// refresh path. Prim-scoped where a name is not wheel-specific:
 /// `physxVehicleWheel:mass` is claimed only on a wheel prim — on a chassis it must keep
 /// the normal refresh path (mass overrides are rebuilt by `lunco-usd-avian`).
-pub fn claims_edit(
+pub(crate) fn claims_edit(
     reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     prim: &SdfPath,
     attr: &str,
@@ -85,7 +85,7 @@ struct WheelUpdate {
 /// Re-derive every spawned wheel of `stage` from the live composed stage, in
 /// place. A failed authored read raises a terminal runtime fault and leaves
 /// physics held; stale wheel parameters are never retained.
-pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
+pub(crate) fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
     let mut rows: Vec<(Entity, String, bool)> = Vec::new();
     {
         let mut q = world.query::<(

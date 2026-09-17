@@ -9497,7 +9497,6 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-usd-document",
- "lunco-usd-sim",
  "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
  "lunco-usd-sim-shader",

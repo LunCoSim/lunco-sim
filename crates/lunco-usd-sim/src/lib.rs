@@ -54,6 +54,7 @@ use lunco_usd_avian_contracts::{
     ShouldBeDynamic,
 };
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
+use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
 use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
@@ -86,7 +87,7 @@ use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
 
-pub mod wheel_runtime;
+mod wheel_runtime;
 
 /// Plugin for mapping simulation-specific USD schemas (like NVIDIA PhysX Vehicles)
 /// to LunCo's optimized simulation models.
@@ -347,6 +348,15 @@ mod authored_sun_tests {
 
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<UsdLiveEditRegistry>();
+        app.world_mut()
+            .resource_mut::<UsdLiveEditRegistry>()
+            .register(UsdLiveEditOwner::new(
+                "usd-sim.wheels",
+                wheel_runtime::claims_edit,
+                invalidate_usd_sim_projection,
+                wheel_runtime::resync_wheels_for_stage,
+            ));
         if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
             app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
         }
@@ -2618,7 +2628,10 @@ fn animate_proxy_physical_wheels(
 /// that root processed, so a later schema resync must clear the marker before
 /// the normal projection pass can publish its authored control surface,
 /// wheel wiring, or other simulation components.
-pub fn invalidate_usd_sim_projection(world: &mut World, entity: Entity) -> bool {
+fn invalidate_usd_sim_projection(world: &mut World, entity: Entity) -> bool {
+    if world.get::<lunco_core::MobilityRoot>(entity).is_some() {
+        return false;
+    }
     if world.get::<UsdSimProcessed>(entity).is_none() {
         return false;
     }

@@ -1339,14 +1339,25 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // port and a dangling joint. Checked before the `string`
             // fast-path: authored scalar/string attributes still resync.
             if authored {
-                let claimed = world
+                let live_edit_owners = world
+                    .get_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
+                    .map(|registry| registry.snapshot())
+                    .unwrap_or_default();
+                let claimed_owner = world
                     .get_non_send::<CanonicalStages>()
                     .and_then(|s| s.get(scene_id))
-                    .is_some_and(|cs| {
-                        lunco_usd_sim::wheel_runtime::claims_edit(&cs.view(), &sp, name)
-                    });
-                if claimed {
-                    lunco_usd_sim::wheel_runtime::resync_wheels_for_stage(world, scene_id);
+                    .map(|cs| {
+                        live_edit_owners
+                            .iter()
+                            .filter(|owner| owner.claims_edit(&cs.view(), &sp, name))
+                            .copied()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if !claimed_owner.is_empty() {
+                    for owner in claimed_owner {
+                        owner.refresh_stage(world, scene_id);
+                    }
                     return;
                 }
             }

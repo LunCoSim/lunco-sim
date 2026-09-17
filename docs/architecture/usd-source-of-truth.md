@@ -231,8 +231,12 @@ Built-in projectors:
 | WheelRaycast | `lunco:wheel:<field>` (matches existing `lunco-usd-sim` convention) | float |
 | Transform | `xformOp:translate` / `:orient` / `:scale` (already via `apply_translates`) | — |
 
-Adding a new editable domain = register one entry; no edits to the projection system
-(mirrors `App::add_terrain_layer`).
+Adding a new specialized live-edit domain means registering one
+`UsdLiveEditOwner` in `lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`;
+the generic runtime then invokes the owner without importing that domain crate.
+The owner claims only its authored attributes and performs its validated
+in-place refresh. Ordinary transforms, lights, and structural changes remain
+on the generic projection path.
 
 ### Step 3: generic projection on change (the fast path)
 

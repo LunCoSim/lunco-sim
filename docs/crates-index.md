@@ -99,7 +99,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, runtime persistence, and live document-to-stage projection. |
 | **`lunco-usd-bevy-runtime`** | Application-level composition of the USD runtime, visual, diagnostics, physics, simulation, and document-command plugins. |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
-| **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
+| **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, domain-owned live-edit registration, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, visual-split markers, preview/ancestry ownership, authored billboard contracts, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, projection cursors, user-ownership events, and the live-projection wake signal. It owns no stage loading, composition, rendering, or UI. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection/look-at intent, camera roles/pose, mounted/cinematic camera pose, camera-track selection, the `camera.default_presentation` fact/decision boundary, and the single-authority viewport-camera reconciler. It contains no avatar behavior parser or raw input mapping and does not own geometry math or visual projection. |
@@ -116,8 +116,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-avian`** | USD physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to normalized Avian joint plans and body/collider components. Native joint lifecycle is owned by `lunco-usd-avian-joints`; its USD physics-material reader is isolated from the main projection module. It consumes the independent collision-filter package and `lunco-usd-avian-reader`; lint fact production is in `lunco-usd-avian-lint`. |
 | **`lunco-usd-actuation`** | Render-free composed USD force/torque actuator reader. It converts authored actuator geometry and limits into generic co-simulation components without depending on the Avian runtime projection. |
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
-| **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
-| **`lunco-usd-sim-authoring`** | Render-free composed readers for PhysX vehicle wheel-attachment and gear-drive authoring, shared by vehicle projection and scene validation; it also publishes the corresponding typed USD lint facts. |
+| **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It registers the vehicle wheel owner with `lunco-usd-bevy-core` for in-place live edits. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
+| **`lunco-usd-sim-authoring`** | Render-free composed readers for PhysX vehicle wheel-attachment and gear-drive authoring, shared by vehicle projection and scene validation; it also publishes the corresponding typed USD lint facts. Runtime ECS resynchronization remains in `lunco-usd-sim`, registered through the generic live-edit owner in `lunco-usd-bevy-core`. |
 | **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, pending differential contract, physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, and scene-runner packages. It contains no projection systems. |
 | **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, scene lifecycle, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`. |
 | **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
@@ -567,7 +567,8 @@ runtime code.
 Headless composed-USD substrate shared by visual, physics, and simulation
 projections. It owns the `UsdRead`/`StageView` contract, resolver-backed
 composition, `UsdStageAsset` loading, `CanonicalStage` live-stage ownership,
-authored-layer readers, instance identity markers, `UsdStageProjectionPlan`,
+authored-layer readers, instance identity markers, the domain-owned
+`live_edit::UsdLiveEditRegistry`, `UsdStageProjectionPlan`,
 program and variant resolution, standard material binding, canonical transform
 decoding, stage units, and shared composed-value readers (`read_vec3_f64`,
 strict primvar/boolean readers, and their time-sampled variants). Consumers
@@ -733,7 +734,8 @@ Specialized vehicle metadata bridge. Intercepts complex industry-standard vehicl
 Render-free composed readers for the standard PhysX vehicle wheel-attachment
 topology and gear-drive values. It is shared by `lunco-usd-sim` and
 `lunco-scene-validation`, and publishes the typed facts consumed by the USD
-Rhai lint policy. Runtime ECS resynchronization remains in `lunco-usd-sim`.
+Rhai lint policy. Runtime ECS resynchronization remains in `lunco-usd-sim`,
+registered through the generic live-edit owner in `lunco-usd-bevy-core`.
 
 **`lunco-usd-sim-core`**
 Small production contract package shared by the vehicle and USD cosim

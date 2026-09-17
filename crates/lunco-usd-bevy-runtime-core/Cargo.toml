@@ -27,7 +27,6 @@ lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
-lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
 lunco-workspace = { path = "../lunco-workspace" }

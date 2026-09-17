@@ -211,13 +211,12 @@ multi-select extend** and retains the existing selection; it does not drill.
 The drill also requires the rover to already be the primary selection.
 
 Edits go `ApplyUsdOp SetAttribute` → document → **in-place resync, never a
-respawn**: `wheel_params::claims_edit` recognises the attribute (any
-`lunco:wheel:` / `lunco:suspension:` / `lunco:tire:` / `physxVehicle*:` prefix,
-and authored Modelica `inputs:*` are re-read by the domain projection,
-authored Modelica `inputs:*`/`outputs:*` and wheel heading attributes)
-and `resync_wheels_for_stage` updates the live components — same entities, joints
-untouched. Never poke `WheelRaycast`/`RevoluteJoint` components directly; the
-next document change would overwrite you.
+respawn**. `UsdSimPlugin` registers the vehicle wheel owner with
+`lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`; that owner claims the
+wheel, suspension, tire, and authored vehicle-control attributes and refreshes
+the live components from the composed stage — same entities, joints untouched.
+Never poke `WheelRaycast`/`RevoluteJoint` components directly; the next
+document change would overwrite you.
 
 ## Delivery order
 
