@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
 use lunco_assets_core::library::{LibraryLoadPhase, LibraryLoadState, LibrarySource};
 use lunco_assets_datasets::{DatasetRegistry, DatasetState};
+use lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME;
 
 const NATIVE_LIBRARY_DATASET_ID: &str = "engine/modelica/library";
 
@@ -77,7 +78,7 @@ impl Plugin for NativeLibraryIndexerPlugin {
         };
 
         app.init_resource::<NativeLibraryIndexLoad>();
-        if !root.join("library_index.json").is_file() {
+        if !root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
             info!(
                 "[source library] source root is present but its generated editor index is missing; indexing in the background"
             );
@@ -124,12 +125,12 @@ fn spawn_native_index(
                 return;
             }
 
-            if !completed || !root.join("library_index.json").is_file() {
+            if !completed || !root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
                 set_install_state(
                     &slot,
                     LibraryLoadState::Failed(format!(
                         "source library editor index was not generated at {}",
-                        root.join("library_index.json").display()
+                        root.join(LIBRARY_INDEX_FILE_NAME).display()
                     )),
                 );
                 return;
@@ -259,7 +260,7 @@ fn drive_native_library_dataset(
         DatasetState::Cancelled => *state = LibraryLoadState::NotStarted,
         DatasetState::Failed(error) => *state = LibraryLoadState::Failed(error.clone()),
         DatasetState::Installed => {
-            let Some(root) = lunco_assets_core::source_library_root_path("library") else {
+            let Some(root) = lunco_modelica_library::source_library::source_library_root_path() else {
                 *state = LibraryLoadState::Failed(
                     "dataset is installed but no Modelica source tree exists in the cache".into(),
                 );
@@ -268,7 +269,7 @@ fn drive_native_library_dataset(
             lunco_assets_core::library::install_global_library_sources(vec![
                 LibrarySource::Filesystem(root.clone()),
             ]);
-            if root.join("library_index.json").is_file() {
+            if root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
                 *state = LibraryLoadState::Ready {
                     file_count: lunco_assets_core::library::filesystem_library_file_count(),
                     compressed_bytes: 0,

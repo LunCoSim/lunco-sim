@@ -975,8 +975,11 @@ pub fn shader_asset_path_for(
 ) -> Result<String, lunco_assets_core::TwinRootsError> {
     Ok(
         match twin_roots.map(|t| t.primary()).transpose()?.flatten() {
-            Some((name, _)) => lunco_assets_core::twin_uri(&name, format!("shaders/{stem}.wgsl")),
-            None => format!("shaders/{stem}.wgsl"),
+            Some((name, _)) => lunco_assets_core::twin_uri(
+                &name,
+                lunco_assets_core::engine_shader_asset_rel(stem),
+            ),
+            None => lunco_assets_core::engine_shader_asset_rel(stem),
         },
     )
 }
@@ -1049,14 +1052,15 @@ fn install_shader(
     };
     let (asset_path, disk_path): (String, std::path::PathBuf) = match primary {
         Some((name, root)) => (
-            lunco_assets_core::twin_uri(&name, format!("shaders/{stem}.wgsl")),
-            root.join("shaders").join(format!("{stem}.wgsl")),
+            lunco_assets_core::twin_uri(
+                &name,
+                lunco_assets_core::engine_shader_asset_rel(stem),
+            ),
+            root.join(lunco_assets_core::engine_shader_asset_rel(stem)),
         ),
         None => (
-            format!("shaders/{stem}.wgsl"),
-            lunco_assets_core::assets_dir_abs()
-                .join("shaders")
-                .join(format!("{stem}.wgsl")),
+            lunco_assets_core::engine_shader_asset_rel(stem),
+            lunco_assets_core::engine_shader_path(stem),
         ),
     };
 

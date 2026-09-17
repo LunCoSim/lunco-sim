@@ -67,11 +67,11 @@ pub enum SourceRootKind {
     /// model from the package browser, but driven by the compile
     /// gate instead of a UI gesture.
     Bundled {
-        /// `.mo` filename inside the embedded `models/` directory
+        /// `.mo` filename inside the runtime `models/` asset directory
         /// (e.g. `"AnnotatedRocketStage.mo"`).
         filename: String,
     },
-    /// Structured Modelica package embedded below `assets/models/<root>`.
+    /// Structured Modelica package below the runtime `assets/models/<root>`.
     /// The complete package tree is loaded from the asset owner, so package
     /// members resolve by their authored `within` names like any package on
     /// a normal Modelica search path.
@@ -86,7 +86,7 @@ pub enum SourceRootKind {
     /// Source already synchronized from an untitled editor document.
     ///
     /// This is deliberately distinct from [`SourceRootKind::Bundled`]: an
-    /// untitled document has no embedded filename and must never be sent
+    /// untitled document has no runtime asset filename and must never be sent
     /// through the bundled-model loader.
     SessionDocument { id: String },
 }
@@ -134,7 +134,14 @@ impl SourceRootRegistry {
         // every bundled `.mo` follows: `Foo.mo` contains `package Foo`
         // or `model Foo`). The dep-scanner extracts `Foo` from a
         // `Foo.X` reference and looks it up here.
-        for model in crate::models::bundled_models() {
+        let bundled_models = match crate::models::bundled_models() {
+            Ok(models) => models,
+            Err(error) => {
+                bevy::log::error!("[source-roots] Modelica example inventory failed: {error}");
+                Vec::new()
+            }
+        };
+        for model in bundled_models {
             let Some(id) = model.filename.strip_suffix(".mo") else {
                 continue;
             };
@@ -156,10 +163,17 @@ impl SourceRootRegistry {
 
         // Structured packages — keyed by their Modelica root segment. On
         // native, prefer the live package directory so editor changes are
-        // visible without rebuilding; on wasm, use the embedded package tree.
+        // visible without rebuilding; browser consumers use the Bevy asset path.
         // This is the standard root-segment search-path inventory, not a
         // library-specific registration.
-        for root_name in lunco_assets_core::models::package_roots_live() {
+        let package_roots = match lunco_assets_core::models::package_roots_live() {
+            Ok(roots) => roots,
+            Err(error) => {
+                bevy::log::error!("[source-roots] Modelica package inventory failed: {error}");
+                Vec::new()
+            }
+        };
+        for root_name in package_roots {
             if roots.contains_key(&root_name) {
                 continue;
             }
@@ -532,18 +546,19 @@ pub fn ensure_loaded(
             )
         }
         SourceRootKind::Bundled { filename } => {
-            let Some(source) = crate::models::get_model(filename) else {
-                bevy::log::warn!(
-                    "[source-roots] bundled dep `{}` (file {}): not found \
-                     in embedded models — leaving Failed",
-                    id,
-                    filename,
-                );
-                entry.state = LoadState::Failed(format!(
-                    "bundled file `{}` missing from embedded models",
-                    filename
-                ));
-                return false;
+            let source = match crate::models::get_model(filename) {
+                Ok(Some(source)) => source,
+                Ok(None) => {
+                    let error = format!("Modelica asset `{filename}` was not found");
+                    bevy::log::warn!("[source-roots] {error}");
+                    entry.state = LoadState::Failed(error);
+                    return false;
+                }
+                Err(error) => {
+                    bevy::log::warn!("[source-roots] cannot load `{filename}`: {error}");
+                    entry.state = LoadState::Failed(error);
+                    return false;
+                }
             };
             let summary = format!("bundled {}, {}B", filename, source.len());
             (
@@ -555,17 +570,20 @@ pub fn ensure_loaded(
             )
         }
         SourceRootKind::BundledPackage { root } => {
-            let files = lunco_assets_core::models::package_files_live(root);
-            if files.is_empty() {
-                bevy::log::warn!(
-                    "[source-roots] bundled package `{}`: no Modelica files found",
-                    root
-                );
-                entry.state = LoadState::Failed(format!(
-                    "bundled Modelica package `{root}` has no source files"
-                ));
-                return false;
-            }
+            let files = match lunco_assets_core::models::package_files_live(root) {
+                Ok(files) if !files.is_empty() => files,
+                Ok(_) => {
+                    let error = format!("Modelica package `{root}` has no source files");
+                    bevy::log::warn!("[source-roots] {error}");
+                    entry.state = LoadState::Failed(error);
+                    return false;
+                }
+                Err(error) => {
+                    bevy::log::warn!("[source-roots] cannot load package `{root}`: {error}");
+                    entry.state = LoadState::Failed(error);
+                    return false;
+                }
+            };
             let summary = format!("bundled package {root}, {} files", files.len());
             (
                 LoadSourceRootPayload::InMemory {

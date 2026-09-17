@@ -1074,13 +1074,14 @@ fn texture_for_bitmap(ctx: &egui::Context, filename: &str) -> Option<egui::Textu
 /// - Plain relative path → the same source library-root-relative path (best effort).
 fn load_bitmap_bytes(filename: &str) -> Option<Vec<u8>> {
     let rel = match filename.strip_prefix("modelica://") {
-        Some(tail) => tail.to_string(),
-        None => filename.to_string(),
+        Some(tail) => tail.strip_prefix('/').unwrap_or(tail),
+        None => filename,
     };
     // Read through the source library virtual source. This keeps bitmap resolution on the
     // same asset boundary as documentation images and works for both the native
     // filesystem source and the browser's in-memory bundle.
-    lunco_assets_core::library::library_read(std::path::Path::new(&rel))
+    let path = lunco_assets_core::asset_path::relative_path(rel)?;
+    lunco_assets_core::library::library_read(&path)
 }
 
 // ---------------------------------------------------------------------------

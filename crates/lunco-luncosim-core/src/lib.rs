@@ -38,6 +38,126 @@ use lunco_usd_bevy_runtime::UsdPlugins;
 use lunco_usd_bevy_runtime_core::scene::LoadScene;
 use lunco_usd_bevy_scene::UsdPrimPath;
 
+const INPUT_BINDINGS_KIND: &str = "lunco.input-bindings.v1";
+
+struct PendingInputBindingsAsset {
+    path: String,
+    handle: Handle<lunco_assets_core::TextAsset>,
+}
+
+/// Runtime state for the application-owned input defaults.
+///
+/// The input contract does not know where its defaults live. The application
+/// discovers the uniquely typed JSON document from the runtime asset manifest,
+/// then applies it to the persisted section through the generic input API.
+#[derive(Resource, Default)]
+struct InputBindingsDefaults {
+    candidates: Vec<PendingInputBindingsAsset>,
+    scan_started: bool,
+    completed: bool,
+}
+
+fn load_input_bindings_defaults(
+    mut state: ResMut<InputBindingsDefaults>,
+    catalog: Option<Res<lunco_assets_core::TextAssetCatalog>>,
+    asset_server: Option<Res<AssetServer>>,
+    assets: Option<Res<Assets<lunco_assets_core::TextAsset>>>,
+    mut settings: Option<ResMut<lunco_input_core::InputBindingsSettings>>,
+    mut commands: Commands,
+) {
+    if state.completed {
+        return;
+    }
+    let (Some(catalog), Some(asset_server), Some(assets), Some(settings)) =
+        (catalog, asset_server, assets, settings.as_mut())
+    else {
+        return;
+    };
+    if !catalog.ready() {
+        return;
+    }
+
+    if !state.scan_started {
+        state.candidates = catalog
+            .entries()
+            .iter()
+            .filter(|entry| entry.asset_path.ends_with(".json"))
+            .map(|entry| PendingInputBindingsAsset {
+                path: entry.asset_path.clone(),
+                handle: entry.handle.clone(),
+            })
+            .collect();
+        state.scan_started = true;
+    }
+
+    let candidates = std::mem::take(&mut state.candidates);
+    let mut pending = Vec::new();
+    let mut failed_paths = Vec::new();
+    let mut selected: Option<(String, String)> = None;
+
+    for candidate in candidates {
+        let Some(asset) = assets.get(&candidate.handle) else {
+            let load_failed = asset_server
+                .get_load_state(candidate.handle.id())
+                .is_some_and(|load_state| load_state.is_failed());
+            if !load_failed {
+                pending.push(candidate);
+            } else {
+                failed_paths.push(candidate.path);
+            }
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&asset.text) else {
+            continue;
+        };
+        if value.get("kind").and_then(serde_json::Value::as_str) != Some(INPUT_BINDINGS_KIND) {
+            continue;
+        }
+        if selected.is_some() {
+            state.completed = true;
+            lunco_core::trigger_error(
+                &mut commands,
+                "input-bindings-defaults-ambiguous",
+                format!(
+                    "runtime asset listing contains more than one asset marked {INPUT_BINDINGS_KIND}"
+                ),
+            );
+            return;
+        }
+        selected = Some((candidate.path, asset.text.clone()));
+    }
+
+    state.candidates = pending;
+    if !state.candidates.is_empty() {
+        return;
+    }
+
+    state.completed = true;
+    let Some((path, text)) = selected else {
+        lunco_core::trigger_error(
+            &mut commands,
+            "input-bindings-defaults-missing",
+            format!(
+                "runtime asset listing contains no asset marked {INPUT_BINDINGS_KIND}; discovered {} JSON asset(s), failed: {}",
+                catalog.entries().iter().filter(|entry| entry.asset_path.ends_with(".json")).count(),
+                if failed_paths.is_empty() {
+                    "none".to_string()
+                } else {
+                    failed_paths.join(", ")
+                }
+            ),
+        );
+        return;
+    };
+    if let Err(error) = settings.apply_defaults_json(&text) {
+        lunco_core::trigger_error(
+            &mut commands,
+            "input-bindings-defaults-invalid",
+            format!("{path}: invalid authored input bindings: {error}"),
+        );
+    }
+}
+
 /// Asset registration needed by USD authoring in a headless world. These are
 /// data stores only; no render plugin is installed here.
 struct HeadlessAssetTypePlugin;
@@ -254,6 +374,7 @@ pub fn build_headless_app_with_scene(
         },
     });
     app.add_plugins(plugins);
+    lunco_assets_core::register_lunco_asset_types(&mut app);
     app.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
         compute_threads,
     ));
@@ -895,9 +1016,7 @@ fn write_run_result_artifact(
         };
         // The storage layer creates parent dirs on write (FileStorage tmp+rename;
         // WebStorage is key-based), so no explicit mkdir — all I/O goes through it.
-        let dest = twin
-            .root
-            .join("results")
+        let dest = lunco_twin::results_dir(&twin.root)
             .join(format!("{}.json", id.as_artifact_stem()));
         match serde_json::to_vec_pretty(result) {
             Ok(bytes) => match lunco_storage::write_file_sync(&dest, &bytes) {
@@ -926,7 +1045,7 @@ fn load_run_result_artifacts(
     let Some(active) = workspace.active_twin else {
         return;
     };
-    let Some(root) = workspace.twin(active).map(|t| t.root.join("results")) else {
+    let Some(root) = workspace.twin(active).map(|t| lunco_twin::results_dir(&t.root)) else {
         return;
     };
     // Ids known but resultless — the only candidates worth a storage read.
@@ -1611,6 +1730,8 @@ impl Plugin for LunCoSimCorePlugin {
         // installing it only in the headless constructor leaves the windowed
         // production app with a missing-resource panic during its first update.
         app.add_plugins(lunco_assets_datasets::DatasetRegistryPlugin);
+        app.init_resource::<InputBindingsDefaults>()
+            .add_systems(Update, load_input_bindings_defaults);
 
         // Asset and loaded-stage validation is a shared headless/UI service;
         // install it once with the simulator core rather than coupling it to
@@ -2320,20 +2441,21 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
 /// if it does not exist.
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve_scene_cli_path(input: &str) -> std::path::PathBuf {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     let path = Path::new(input);
     if path.is_absolute() {
         return path.to_path_buf();
     }
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let cwd_relative = cwd.join(path);
-    if cwd_relative.exists() {
-        return cwd_relative;
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd_relative = cwd.join(path);
+        if cwd_relative.exists() {
+            return cwd_relative;
+        }
     }
 
-    if let Ok(without_assets) = path.strip_prefix("assets") {
+    if let Ok(without_assets) = path.strip_prefix(lunco_assets_core::ASSETS_DIR_NAME) {
         let asset_spelling = lunco_assets_core::assets_dir_abs().join(without_assets);
         if asset_spelling.exists() {
             return asset_spelling;

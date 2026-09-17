@@ -18,6 +18,9 @@ bevy_egui = { workspace = true }
 bevy_flair = { workspace = true }
 bevy_hui = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+# Use the shared runtime text-asset catalog; this crate does not own a second
+# JSON loader or a path-specific manifest convention.
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-render = { path = "../lunco-render" }
 lunco-status-core = { path = "../lunco-status-core" }

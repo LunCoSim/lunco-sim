@@ -335,15 +335,15 @@ impl Plugin for LunCoScriptingPlugin {
         // can't hold `&mut World`); the drain records real stdout afterwards.
         #[cfg(feature = "rhai")]
         {
-            // Seed built-in tool libraries (formation + the native mathx example)
-            // BEFORE the runtime engine is built, so build_world_engine's binding
-            // binds them immediately.
-            tool_libs::register_builtins();
+            // Register only the tiny native substrate here. Prelude and tool
+            // behavior is authored source loaded through the Bevy asset graph.
+            tool_libs::register_native_builtins();
             // Shared per-document diagnostics store (also init'd by Modelica;
             // init_resource is idempotent). Scenario compile/runtime errors land
             // here and surface via the ScriptStatus query.
             app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
             app.init_resource::<world_bridge::PendingWorldScripts>();
+            app.init_resource::<world_bridge::RhaiRuntimeStatus>();
             // Hook contracts are link-collected by `declare_hook!` in their
             // owner crates. The application startup policy installs the
             // application manifest, while each active Twin gets its own
@@ -407,6 +407,11 @@ impl Plugin for LunCoScriptingPlugin {
             // must remain responsive while the sky advances.
             app.add_systems(
                 Update,
+                world_bridge::prepare_builtin_rhai_assets
+                    .after(source_asset::RhaiSourceAssetSet),
+            );
+            app.add_systems(
+                Update,
                 world_bridge::drain_world_scripts.run_if(scripts_run_here),
             );
             // Scene projection materialises the prim markers in Update. Scenario
@@ -447,6 +452,7 @@ impl Plugin for LunCoScriptingPlugin {
                 world_bridge::tick_rhai_scenarios
                     .in_set(ScriptingSet)
                     .run_if(scenario::scenario_execution_enabled)
+                    .run_if(world_bridge::rhai_runtime_ready)
                     .run_if(scenario::simulation_is_running),
             );
             app.add_systems(
@@ -456,6 +462,7 @@ impl Plugin for LunCoScriptingPlugin {
                 // fixed-step behavior.
                 world_bridge::tick_rhai_scenarios_while_paused
                     .run_if(scenario::scenario_execution_enabled)
+                    .run_if(world_bridge::rhai_runtime_ready)
                     .run_if(scenario::simulation_is_paused),
             );
         }

@@ -5,6 +5,8 @@
 # valid unconfigured state; `required = true` is reserved for seams that cannot
 # operate safely without an implementation.
 
+kind = "lunco.policy.v1"
+
 [startup]
 source = "startup.rhai"
 entry = "install_policies"
@@ -54,6 +56,12 @@ entry = "default_presentation"
 hook = "twin.lifecycle"
 source = "twin_lifecycle.rhai"
 entry = "twin_lifecycle"
+
+[[policies]]
+hook = "scripting.source.classify"
+source = "source_classification.rhai"
+entry = "classify_source"
+required = true
 
 [[policies]]
 hook = "link.connected"

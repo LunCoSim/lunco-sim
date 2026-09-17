@@ -580,6 +580,7 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
     lunco_assets_core::register_lunco_asset_sources(&mut app);
     let plugins = default_plugins_with_profile(offscreen, render_profile);
     app.add_plugins(plugins);
+    lunco_assets_core::register_lunco_asset_types(&mut app);
     // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
     app.add_plugins(lunco_luncosim_core::log_dedup::LogDedupPlugin);
     {

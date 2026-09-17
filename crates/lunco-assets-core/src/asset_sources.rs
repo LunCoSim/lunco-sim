@@ -177,6 +177,12 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     twin_roots
 }
 
+/// Register the generic text asset type after Bevy's [`AssetPlugin`] has been
+/// installed by the composition root.
+pub fn register_lunco_asset_types(app: &mut App) {
+    app.add_plugins(crate::TextAssetPlugin);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

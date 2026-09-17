@@ -118,7 +118,7 @@ mod tests {
         let reg = SchemeRegistry::default();
         assert_eq!(
             reg.local_path("shaders/wheel.wgsl").unwrap(),
-            Some(crate::assets_dir_abs().join("shaders/wheel.wgsl"))
+            Some(crate::engine_shader_path("wheel"))
         );
     }
 

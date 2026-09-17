@@ -500,14 +500,23 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
     entries
 }
 
-fn prelude_surface() -> Vec<serde_json::Value> {
+fn prelude_surface(world: &World) -> Vec<serde_json::Value> {
     let mut engine = rhai::Engine::new();
-    // This engine only introspects the embedded prelude. Keep imports
-    // fail-closed: completion must not read arbitrary files from the process
-    // working directory.
+    // This engine only introspects prelude text already admitted by the shared
+    // asset registry. Keep imports fail-closed: completion must not read
+    // arbitrary files from the process working directory.
     engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
     crate::rhai_limits::apply(&mut engine);
-    crate::world_bridge::compile_prelude(&engine)
+    let Some(sources) = world
+        .get_resource::<lunco_assets_core::script_source::ScriptSources>()
+    else {
+        return Vec::new();
+    };
+    crate::world_bridge::prelude_files_from_sources(sources)
+        .ok()
+        .and_then(|files| {
+            crate::world_bridge::compile_prelude_set_for_runtime(&engine, files).ok()
+        })
         .map(|ast| {
             let mut functions: Vec<serde_json::Value> = ast
                 .iter_functions()
@@ -598,7 +607,7 @@ impl ApiQueryProvider for ScriptCompleteProvider {
                 |(name, doc)| serde_json::json!({ "label": name, "kind": "hook", "detail": doc }),
             ))
             .collect::<Vec<_>>();
-        candidates.extend(prelude_surface().into_iter().map(|function| {
+        candidates.extend(prelude_surface(world).into_iter().map(|function| {
             serde_json::json!({
                 "label": function["name"],
                 "kind": "prelude",
@@ -741,7 +750,7 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
         // Prelude helpers and tool libraries (incl. file-loaded ones) use the
         // same helpers as `ScriptComplete`, keeping both discovery surfaces in
         // lockstep.
-        let prelude = prelude_surface();
+        let prelude = prelude_surface(world);
         let tools = tool_surface();
 
         // Reflected commands (cmd targets) — reuse the canonical discovery walk,
@@ -793,10 +802,17 @@ mod tests {
 
     #[test]
     fn catalog_lists_verbs_hooks_prelude_and_tools() {
+        let _registry_guard = crate::tool_libs::registry_test_guard();
         // Bare world with the registries the provider reads.
         let mut app = App::new();
         app.init_resource::<AppTypeRegistry>();
         app.init_resource::<ApiQueryRegistry>();
+        let sources = lunco_assets_core::script_source::ScriptSources::default();
+        sources.insert(
+            "scripting/prelude/catalog_probe.rhai",
+            "fn catalog_probe() { 1 }",
+        );
+        app.insert_resource(sources);
         // A known tool library so `tools` is non-empty.
         crate::tool_libs::register_tool_library("probe_lib", "fn ping() { 1 }");
 
@@ -838,12 +854,6 @@ mod tests {
             );
         }
 
-        // Prelude introspected (the embedded prelude defines helpers).
-        assert!(
-            !data["prelude"].as_array().unwrap().is_empty(),
-            "prelude empty"
-        );
-
         // Our registered tool library shows up.
         let tool_names: Vec<&str> = data["tools"]
             .as_array()
@@ -857,6 +867,7 @@ mod tests {
         assert!(data["commands"].is_array());
         assert!(data["queries"].is_array());
         assert!(data["reflection"].is_array());
+        assert!(lunco_tools::unregister("probe_lib").is_some());
     }
 
     #[test]

@@ -84,14 +84,8 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 use lunco_environment::{Gravity, GravityProvider};
-use lunco_materials::{ParamValue, ShaderLook};
+use lunco_materials::ShaderLook;
 use lunco_render::PbrLook;
-
-/// Earth with no imagery: ocean blue. This is the DEFAULT appearance, not a
-/// degraded one — see the note where the globes are built.
-const EARTH_BODY_COLOR: [f32; 3] = [0.13, 0.32, 0.66];
-/// The Moon with no imagery: regolith grey.
-const MOON_BODY_COLOR: [f32; 3] = [0.5, 0.5, 0.5];
 
 /// Collision membership for celestial picking geometry.
 ///
@@ -135,39 +129,6 @@ pub fn adopt_authored_body_look(
             );
         }
     }
-}
-
-/// A celestial body's default tile look: its own colour under the lat/long
-/// graticule (`transition = 0`, the spherical mode of `blueprint.wgsl`), with NO
-/// imagery bound. The shader multiplies `surface_color` by the albedo sample and
-/// an unbound albedo slot reads Bevy's white fallback, so this renders as
-/// `surface_color` exactly — which is why a body with no texture is a blue Earth
-/// or a grey Moon rather than a white ball.
-///
-/// Imagery is not built here at all: a scene that has some binds a Material to
-/// the body prim and [`adopt_authored_body_look`] carries it over.
-///
-/// Appearance **intent** only — `lunco-render-bevy` turns it into the real
-/// `ShaderMaterial` (see `docs/architecture/render-decoupling.md`). Identical looks
-/// share one material, so a body's whole tile set is still ONE material and one bind
-/// group, exactly as the single hand-threaded handle used to guarantee.
-fn blueprint_tile_look_untextured(
-    surface: [f32; 3],
-    line: [f32; 3],
-    subdivisions: [f32; 2],
-    line_width: f32,
-    roughness: f32,
-) -> ShaderLook {
-    ShaderLook::new("shaders/blueprint.wgsl")
-        .with_vertex_shader("shaders/blueprint.wgsl")
-        .with("surface_color", ParamValue::Vec3(surface))
-        .with("roughness", ParamValue::F32(roughness))
-        .with("high_line_color", ParamValue::Vec3(line))
-        .with("low_line_color", ParamValue::Vec3(line))
-        .with("subdivisions", ParamValue::Vec2(subdivisions))
-        .with("fade_range", ParamValue::Vec2([0.2, 0.6]))
-        .with("line_width", ParamValue::F32(line_width))
-        .with("transition", ParamValue::F32(0.0))
 }
 
 /// **The celestial ownership marker.** Every celestial-owned root spawned by the
@@ -238,9 +199,39 @@ pub fn setup_big_space_hierarchy(
     // (No `AssetServer`: this hierarchy loads no textures — see the imagery note below.)
     // The single world-shell grid (WorldShellPlugin) to nest under.
     q_world_grid: Query<Entity, (With<lunco_spatial::WorldGrid>, With<Grid>)>,
+    body_looks: Query<(&crate::CelestialBodyDecl, &ShaderLook)>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
     bindings: Res<lunco_input_core::InputBindingsSettings>,
+    mut missing_look_reported: Local<bool>,
 ) {
+    let Some(earth_look) = body_looks
+        .iter()
+        .find(|(decl, _)| decl.naif == lunco_celestial::ephemeris_id::EARTH)
+        .map(|(_, look)| look.clone())
+    else {
+        if !*missing_look_reported {
+            error!(
+                "[celestial] Earth declaration has no authored visual look; refusing to build the celestial hierarchy"
+            );
+            *missing_look_reported = true;
+        }
+        return;
+    };
+    let Some(moon_look) = body_looks
+        .iter()
+        .find(|(decl, _)| decl.naif == lunco_celestial::ephemeris_id::MOON)
+        .map(|(_, look)| look.clone())
+    else {
+        if !*missing_look_reported {
+            error!(
+                "[celestial] Moon declaration has no authored visual look; refusing to build the celestial hierarchy"
+            );
+            *missing_look_reported = true;
+        }
+        return;
+    };
+    *missing_look_reported = false;
+
     let Ok(input_map) = bindings.input_map() else {
         error!("[celestial] refusing to create the observer from invalid input bindings");
         return;
@@ -297,10 +288,9 @@ pub fn setup_big_space_hierarchy(
     // does for terrain layer maps and for any prop — see
     // [`adopt_authored_body_look`].
 
-    // The blueprint grid shader is named by PATH in the `ShaderLook` (see
-    // `blueprint_tile_look`) and loaded by the binder, so it still hot-reloads on
-    // native and HTTP-fetches on web like every other shader — this crate just never
-    // holds a `Handle<Shader>` (that type is `bevy_shader`, which pulls naga).
+    // Body appearance is authored on the USD declarations and arrives as a
+    // `ShaderLook`. This crate only carries that intent to the generated globe;
+    // shader loading and binding stay at the render boundary.
 
     // `CelestialPlugin` installs `WorldShellPlugin` when the host has not
     // already done so. There is therefore exactly one storage hierarchy in
@@ -572,13 +562,11 @@ pub fn setup_big_space_hierarchy(
     // graticule. Imagery, if a scene has any, arrives the ordinary way — a
     // `UsdShade` Material bound to the body prim, adopted by
     // `adopt_authored_body_look`.
-    let earth_blueprint =
-        blueprint_tile_look_untextured(EARTH_BODY_COLOR, [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5);
     commands.entity(earth_body).try_insert((
         crate::globe_lod::GlobeLod {
             radius_m: earth.radius_m,
             surface_grid: earth_surface_grid,
-            look: earth_blueprint,
+            look: earth_look,
             res: 32,
             max_lod: 8,
             lod_distance_factor: 2.0,
@@ -665,13 +653,11 @@ pub fn setup_big_space_hierarchy(
         .id();
 
     // Moon terrain: camera-driven cube-sphere LOD (replaces the fixed 24-tile shell).
-    let moon_blueprint =
-        blueprint_tile_look_untextured(MOON_BODY_COLOR, [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9);
     commands.entity(moon_body).try_insert((
         crate::globe_lod::GlobeLod {
             radius_m: moon.radius_m,
             surface_grid: moon_surface_grid,
-            look: moon_blueprint,
+            look: moon_look,
             res: 32,
             max_lod: 8,
             lod_distance_factor: 2.0,

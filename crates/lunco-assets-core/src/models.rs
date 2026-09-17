@@ -1,171 +1,147 @@
-//! Embedded Modelica example models — every `*.mo` under `assets/models/`.
-//! The source module is intentionally touched when the shipped model contract
-//! changes so Cargo rebuilds the include_dir snapshot used by headless runs.
-//! The reusable PositionPID3D/PIDAxis/AccelerationLimiter signal boundaries are
-//! part of that contract; reusable signal blocks publish explicit output aliases
-//! and the guidance exposes the bounded vertical channel.
-//! FrameVectorTransform is the shared quaternion frame-conversion boundary used
-//! by sensors and guidance.
+//! External Modelica sources under the engine asset library.
 //!
-//! Why this lives HERE: `lunco-assets-core` owns shared asset interaction. The
-//! bundled models must be present at compile time on EVERY target — wasm has no
-//! filesystem — so they're baked in with `include_dir!` and handed to consumers
-//! as raw `(filename, source)` pairs. DROP A `.mo` in `assets/models/`, rebuild,
-//! and it's picked up automatically: no code edit here or in the consumer.
+//! Modelica source is authored content, not Rust data. The asset library owns
+//! its location and storage boundary; this module only provides the common
+//! recursive walk used by native compiler/catalogue consumers. Web consumers
+//! load the same files through Bevy's `ModelicaSource` asset loader because a
+//! browser has no synchronous directory listing.
 //!
-//! This module deliberately exposes ONLY raw file access. Domain interpretation
-//! — Modelica `// tagline:` header parsing, the `BundledModel` view — stays in
-//! `lunco-modelica-core`, the crate that understands `.mo`.
+//! There is intentionally no compiled-in snapshot and no disk-first or compiled
+//! fallback. A present but unreadable package is an error at this boundary so
+//! callers can report the unavailable source instead of compiling stale bytes.
 
-use include_dir::{include_dir, Dir};
-#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
-/// Bundled model tree. Baked at compile time — rebuild after editing files
-/// under `assets/models/`.
-static MODELS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/models");
-
-/// Every top-level `*.mo` model as `(filename, source)`, sorted by filename so
-/// iteration order is stable across desktop and wasm (filesystem order varies).
-/// Non-UTF8 files are skipped (nothing legitimately authored here is binary).
-pub fn model_files() -> Vec<(&'static str, &'static str)> {
-    let mut out: Vec<(&'static str, &'static str)> = MODELS_DIR
-        .files()
-        .filter(|f| {
-            f.path()
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("mo"))
-                .unwrap_or(false)
-        })
-        .filter_map(|f| Some((f.path().file_name()?.to_str()?, f.contents_utf8()?)))
-        .collect();
-    out.sort_by(|a, b| a.0.cmp(b.0));
-    out
+fn models_root() -> PathBuf {
+    crate::engine_models_root()
 }
 
-/// One bundled model's source by basename (case-sensitive), or `None`.
-pub fn model_source(filename: &str) -> Option<&'static str> {
-    MODELS_DIR
-        .files()
-        .find(|f| f.path().file_name().and_then(|n| n.to_str()) == Some(filename))
-        .and_then(|f| f.contents_utf8())
+fn source_error(path: &Path, error: impl std::fmt::Display) -> String {
+    format!("cannot read Modelica asset {}: {error}", path.display())
 }
 
-/// Every `.mo` under a package subdirectory of `assets/models/`, as
-/// `(path-relative-to-models, source)` — e.g. `("LunCo/Electrical/Battery.mo", …)`.
-///
-/// RECURSIVE, unlike [`model_files`]: a structured Modelica package is a directory
-/// tree (`package.mo` + subpackages + members), so a top-level-only scan misses
-/// everything below the root. Used to seat a shipped library into a compile session,
-/// which is why the paths are kept qualified — each is a stable, unique document URI.
-pub fn package_files(package: &str) -> Vec<(String, String)> {
-    fn walk(dir: &Dir, out: &mut Vec<(String, String)>) {
-        for f in dir.files() {
-            let is_mo = f
-                .path()
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("mo"))
-                .unwrap_or(false);
-            if is_mo {
-                if let Some(src) = f.contents_utf8() {
-                    out.push((f.path().to_string_lossy().into_owned(), src.to_string()));
-                }
-            }
-        }
-        for sub in dir.dirs() {
-            walk(sub, out);
-        }
-    }
-
-    let mut out = Vec::new();
-    if let Some(dir) = MODELS_DIR.get_dir(package) {
-        walk(dir, &mut out);
-    }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
+fn modelica_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
 }
 
-/// Top-level structured Modelica packages embedded under `assets/models/`.
-///
-/// A directory is a Modelica package root only when it contains `package.mo`.
-/// Keeping this inventory data-driven lets every consumer use normal
-/// root-segment lookup (`LunCo.Electrical.Pin` → `LunCo`) without naming a
-/// particular library in Rust.
-pub fn package_roots() -> Vec<String> {
-    let mut roots = MODELS_DIR
-        .dirs()
-        .filter(|dir| {
-            dir.files().any(|file| {
-                file.path()
-                    .file_name()
-                    .is_some_and(|name| name == "package.mo")
-            })
-        })
-        .filter_map(|dir| dir.path().file_name()?.to_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    roots.sort();
-    roots
+fn asset_relative_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .expect("walked Modelica path must be below its root")
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
-/// Top-level structured package roots from the live native asset tree, with
-/// the embedded tree as the portable fallback on wasm or when the package is
-/// not present on disk.
-pub fn package_roots_live() -> Vec<String> {
-    let mut roots = package_roots();
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let models_dir = crate::assets_dir_abs().join("models");
-        if let Ok(entries) = std::fs::read_dir(models_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() && path.join("package.mo").is_file() {
-                    if let Some(root) = path.file_name().and_then(|name| name.to_str()) {
-                        roots.push(root.to_string());
-                    }
-                }
-            }
-        }
-    }
-    roots.sort();
-    roots.dedup();
-    roots
+fn read_source(path: &Path) -> Result<String, String> {
+    lunco_storage::read_text_file_sync(path).map_err(|error| source_error(path, error))
 }
 
-/// Read one structured package from the live native asset tree, falling back
-/// to the embedded snapshot on wasm or when the native tree is unavailable.
-/// The asset crate owns this filesystem access; Modelica consumers receive
-/// only the source-root file list.
-pub fn package_files_live(package: &str) -> Vec<(String, String)> {
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(root) = crate::models_package_root_path(package) {
-        let mut files = Vec::new();
-        read_disk_package_files(&root, &mut files);
-        files.sort_by(|a, b| a.0.cmp(&b.0));
-        // Once the live tree declares a structured package, it is the
-        // authoritative editable source. Do not silently replace an empty or
-        // unreadable package with stale embedded bytes; the resolver must show
-        // the package as unavailable and surface the asset error.
-        return files;
-    }
-    package_files(package)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_disk_package_files(root: &Path, out: &mut Vec<(String, String)>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-    paths.sort();
-    for path in paths {
+fn walk_package(
+    root: &Path,
+    package_root: &Path,
+    out: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    let entries = lunco_storage::read_directory_sync(root)
+        .map_err(|error| source_error(root, error))?;
+    for path in entries {
         if path.is_dir() {
-            read_disk_package_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "mo") {
-            if let Ok(source) = std::fs::read_to_string(&path) {
-                out.push((path.display().to_string(), source));
-            }
+            walk_package(&path, package_root, out)?;
+        } else if modelica_file(&path) {
+            out.push((asset_relative_path(&path, package_root), read_source(&path)?));
         }
     }
+    Ok(())
+}
+
+/// Every top-level `*.mo` source, sorted by basename.
+pub fn model_files() -> Result<Vec<(String, String)>, String> {
+    let root = models_root();
+    let entries = lunco_storage::read_directory_sync(&root)
+        .map_err(|error| source_error(&root, error))?;
+    let mut files = entries
+        .into_iter()
+        .filter(|path| path.is_file() && modelica_file(path))
+        .map(|path| {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    format!(
+                        "Modelica asset filename is not valid UTF-8: {}",
+                        path.display()
+                    )
+                })?
+                .to_owned();
+            Ok((name, read_source(&path)?))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(files)
+}
+
+/// Read one top-level Modelica source by basename.
+pub fn model_source(filename: &str) -> Result<Option<String>, String> {
+    let Some((_, source)) = model_files()?
+        .into_iter()
+        .find(|(name, _)| name == filename)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(source))
+}
+
+/// Every `.mo` in a structured package under the engine Modelica library.
+pub fn package_files(package: &str) -> Result<Vec<(String, String)>, String> {
+    let package_root = models_root().join(package);
+    let kind = lunco_storage::entry_kind_file_sync(&package_root)
+        .map_err(|error| source_error(&package_root, error))?;
+    if kind != lunco_storage::StorageEntryKind::Directory {
+        return Err(format!(
+            "Modelica package path is not a directory: {}",
+            package_root.display()
+        ));
+    }
+    let mut files = Vec::new();
+    walk_package(&package_root, &package_root, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(files)
+}
+
+/// Top-level structured Modelica packages that contain `package.mo`.
+pub fn package_roots() -> Result<Vec<String>, String> {
+    let root = models_root();
+    let entries = lunco_storage::read_directory_sync(&root)
+        .map_err(|error| source_error(&root, error))?;
+    let mut roots = entries
+        .into_iter()
+        .filter(|path| path.is_dir() && path.join("package.mo").is_file())
+        .map(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    format!(
+                        "Modelica package name is not valid UTF-8: {}",
+                        path.display()
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    roots.sort();
+    Ok(roots)
+}
+
+/// External package roots. Kept as a named function because callers should
+/// use the package inventory rather than inventing another asset walk.
+pub fn package_roots_live() -> Result<Vec<String>, String> {
+    package_roots()
+}
+
+/// Read one external structured package through the same source path as the
+/// package inventory. No alternate embedded generation is consulted.
+pub fn package_files_live(package: &str) -> Result<Vec<(String, String)>, String> {
+    package_files(package)
 }

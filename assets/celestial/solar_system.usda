@@ -43,11 +43,12 @@ def Xform "SolarSystem" (
     }
 
     def Xform "Earth" (
-        prepend apiSchemas = ["LunCoCelestialBodyAPI"]
+        prepend apiSchemas = ["LunCoCelestialBodyAPI", "MaterialBindingAPI"]
         doc = "Earth. Also the route root for deep-space comms (DSN ground stations anchor to it)."
     )
     {
         uniform int lunco:body = 399
+        rel material:binding = </SolarSystem/Looks/Earth>
         # Earthshine: the light Earth throws back onto whatever is looking at it.
         # It hangs UNDER the body it comes from, so the namespace states the
         # relationship and no attribute has to. Declaring Earth therefore brings
@@ -81,11 +82,12 @@ def Xform "SolarSystem" (
     }
 
     def Xform "Moon" (
-        prepend apiSchemas = ["LunCoCelestialBodyAPI"]
+        prepend apiSchemas = ["LunCoCelestialBodyAPI", "MaterialBindingAPI"]
         doc = "The Moon. Surface scenes anchor their site frame here (`int lunco:anchor:body = 301`)."
     )
     {
         uniform int lunco:body = 301
+        rel material:binding = </SolarSystem/Looks/Moon>
 
         # These two orbit lines used to be spawned in RUST, unconditionally, for
         # any scene that declared a body. That made "this world has an Earth"
@@ -111,6 +113,53 @@ def Xform "SolarSystem" (
             double lunco:trajectory:samplingDays = 30.0
             double lunco:trajectory:samplingStep = 0.02
             token  lunco:trajectory:frame = "Inertial"
+        }
+    }
+
+    # Default globe looks are ordinary USD Shade content. Celestial Rust owns
+    # the generated high-precision body and LOD topology, then carries these
+    # authored looks onto the streamed tiles. A scene may override the binding
+    # or its shader inputs using normal USD composition.
+    def Scope "Looks"
+    {
+        def Material "Earth"
+        {
+            token outputs:surface.connect = </SolarSystem/Looks/Earth/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/blueprint.wgsl@
+                color3f inputs:surface_color = (0.13, 0.32, 0.66)
+                float inputs:roughness = 0.5
+                color3f inputs:high_line_color = (0.0, 0.5, 1.0)
+                color3f inputs:low_line_color = (0.0, 0.5, 1.0)
+                float2 inputs:subdivisions = (36.0, 18.0)
+                float2 inputs:fade_range = (0.2, 0.6)
+                float inputs:line_width = 1.0
+                float inputs:transition = 0.0
+                token outputs:surface
+            }
+        }
+
+        def Material "Moon"
+        {
+            token outputs:surface.connect = </SolarSystem/Looks/Moon/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/blueprint.wgsl@
+                color3f inputs:surface_color = (0.5, 0.5, 0.5)
+                float inputs:roughness = 0.9
+                color3f inputs:high_line_color = (0.6, 0.6, 0.6)
+                color3f inputs:low_line_color = (0.6, 0.6, 0.6)
+                float2 inputs:subdivisions = (24.0, 12.0)
+                float2 inputs:fade_range = (0.2, 0.6)
+                float inputs:line_width = 2.0
+                float inputs:transition = 0.0
+                token outputs:surface
+            }
         }
     }
 }

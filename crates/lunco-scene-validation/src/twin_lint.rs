@@ -135,32 +135,19 @@ pub fn inspect_twin(twin: &lunco_workspace::Twin) -> TwinNamespaceSnapshot {
         }
     }
 
-    // The source files are the durable Twin owner. The built-in names and the
-    // live registry are both included so a Twin tool that shadows an engine
-    // module is reported even though the process registry retains one winner.
+    // The source files are the durable Twin owner. The live registry is the
+    // authoritative view of application tools, so a Twin tool that shadows an
+    // engine module is reported even though the process registry retains one
+    // winner.
     let mut known_tools = HashSet::new();
-    match lunco_assets_core::scripting::active_tool_libraries() {
-        Ok(tools) => {
-            for (name, _) in tools {
-                known_tools.insert(name.clone());
-                entries.push(tool_entry(
-                    name.clone(),
-                    "engine tool library",
-                    format!("assets/scripting/tools/{}.rhai", name),
-                ));
-            }
-        }
-        Err(error) => read_errors.push(format!("assets/scripting/tools: {error}")),
-    }
-    known_tools.insert("mathx".to_string());
-    if lunco_tools::get("mathx").is_some() {
+    for tool in lunco_tools::index() {
+        known_tools.insert(tool.name.clone());
         entries.push(tool_entry(
-            "mathx".to_string(),
-            "engine native tool",
-            "runtime native registration".to_string(),
+            tool.name.clone(),
+            "engine tool library",
+            "engine scripting tool source".to_string(),
         ));
     }
-
     for file in twin.files() {
         let rel = &file.relative_path;
         if rel.parent() != Some(Path::new("tools")) || !has_extension(rel, "rhai") {

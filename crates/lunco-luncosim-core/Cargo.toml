@@ -24,6 +24,7 @@ lunco-hardware = { path = "../lunco-hardware" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-controller = { path = "../lunco-controller" }
+lunco-input-core = { path = "../lunco-input-core" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-avatar-camera = { path = "../lunco-avatar-camera" }
 lunco-camera-runtime = { path = "../lunco-camera-runtime" }
@@ -83,7 +84,6 @@ mimalloc = "0.1"
 [features]
 default = ["sysml"]
 server = ["api-transport", "transport-http", "networking"]
-celestial = ["lunco-celestial-spatial/embed-assets"]
 api-transport = [
     "dep:lunco-api-transport",
     "dep:lunco-modelica-api",

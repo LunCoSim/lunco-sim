@@ -66,8 +66,7 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
     };
     let root = qualified.split('.').next().unwrap_or(qualified);
     let is_bundled_root = lunco_assets_core::models::package_roots_live()
-        .iter()
-        .any(|candidate| candidate == root);
+        .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root));
     let (has_class, has_root, root_failed) = {
         let Some(mut engine) = handle.try_lock() else {
             // The query is made from the projection worker. Contention is a
@@ -169,8 +168,7 @@ pub fn peek_or_load_class_blocking(
     // cross-file `within` and `extends` resolution remains canonical.
     if let Some(root) = qualified.split('.').next() {
         if lunco_assets_core::models::package_roots_live()
-            .iter()
-            .any(|candidate| candidate == root)
+            .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root))
         {
             let mut engine = handle.lock();
             if engine.ensure_source_root(root) {

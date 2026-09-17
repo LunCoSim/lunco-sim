@@ -5,7 +5,6 @@
 //! snapshot and own the retained tree, layout, and styling. A template does not
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::picking::events::{Click, Drag, Pointer};
@@ -19,6 +18,7 @@ use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress, Tags,
     TemplateProperties, UiId,
 };
+use lunco_assets_core::{TextAsset, TextAssetCatalog};
 use lunco_core::exposure::EngineExposures;
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
@@ -29,7 +29,8 @@ use lunco_workbench_core::{PanelId, WorkbenchSnapshot};
 use lunco_workbench_state::{RuntimeSurfaceLayout, RuntimeSurfaceLayouts};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::io;
+
+const RUNTIME_UI_MANIFEST_KIND: &str = "lunco.runtime-ui-manifest.v1";
 
 lunco_hooks::declare_hook! {
     id: "runtime.ui.recording",
@@ -138,9 +139,11 @@ fn register_dynamic_action(functions: &mut HtmlFunctions) {
 }
 
 /// Authored registration for runtime UI surfaces.
-#[derive(Asset, Deserialize, TypePath, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeUiManifest {
+    #[serde(default, rename = "kind")]
+    _kind: String,
     pub surfaces: Vec<RuntimeUiSurfaceDefinition>,
 }
 
@@ -464,44 +467,14 @@ fn validate_placement(placement: &RuntimeUiPlacementDefinition) -> Result<(), St
     }
 }
 
-#[derive(Default, TypePath)]
-struct RuntimeUiManifestLoader;
-
-impl AssetLoader for RuntimeUiManifestLoader {
-    type Asset = RuntimeUiManifest;
-    type Settings = ();
-    type Error = serde_json::Error;
-
-    async fn load(
-        &self,
-        reader: &mut dyn Reader,
-        _settings: &Self::Settings,
-        _load_context: &mut LoadContext<'_>,
-    ) -> Result<Self::Asset, Self::Error> {
-        let mut bytes = Vec::new();
-        reader
-            .read_to_end(&mut bytes)
-            .await
-            .map_err(serde_json::Error::io)?;
-        let manifest: RuntimeUiManifest = serde_json::from_slice(&bytes)?;
-        manifest.validate().map_err(|error| {
-            serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, error))
-        })?;
-        Ok(manifest)
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["json"]
-    }
-}
-
 struct RuntimeUiManifestPlugin;
 
 impl Plugin for RuntimeUiManifestPlugin {
     fn build(&self, app: &mut App) {
-        app.init_asset::<RuntimeUiManifest>()
-            .init_asset_loader::<RuntimeUiManifestLoader>()
-            .add_message::<RuntimeUiSurfaceDragged>()
+        if !app.is_plugin_added::<lunco_assets_core::TextAssetPlugin>() {
+            app.add_plugins(lunco_assets_core::TextAssetPlugin);
+        }
+        app.add_message::<RuntimeUiSurfaceDragged>()
             .add_message::<RuntimeUiSurfaceReset>()
             .add_observer(emit_runtime_ui_surface_reset);
     }
@@ -527,7 +500,6 @@ impl Plugin for RuntimeUiPlugin {
         .init_resource::<RuntimeUiRecordingContract>()
         .init_resource::<RuntimeUiCaptureState>()
         .init_resource::<RuntimeUiGates>()
-        .add_systems(Startup, load_runtime_ui_manifest)
         .add_systems(
             Update,
             (
@@ -576,27 +548,25 @@ impl Plugin for RuntimeUiPlugin {
     }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct RuntimeUiManifestState {
-    handle: Handle<RuntimeUiManifest>,
-    applied: Option<AssetId<RuntimeUiManifest>>,
+    handle: Option<Handle<TextAsset>>,
+    source_path: Option<String>,
+    candidates: Vec<(String, Handle<TextAsset>)>,
+    scan_started: bool,
+    manifest: Option<RuntimeUiManifest>,
+    error: Option<String>,
+    applied: Option<AssetId<TextAsset>>,
     rebuild_pending: bool,
 }
 
 impl RuntimeUiManifestState {
-    pub fn manifest<'a>(
-        &self,
-        manifests: &'a Assets<RuntimeUiManifest>,
-    ) -> Option<&'a RuntimeUiManifest> {
-        manifests.get(&self.handle)
+    pub fn manifest(&self) -> Option<&RuntimeUiManifest> {
+        self.manifest.as_ref()
     }
 
-    pub fn dropdown_key_for_action(
-        &self,
-        manifests: &Assets<RuntimeUiManifest>,
-        action: &str,
-    ) -> Option<String> {
-        self.manifest(manifests)?.dropdown_key_for_action(action)
+    pub fn dropdown_key_for_action(&self, action: &str) -> Option<String> {
+        self.manifest()?.dropdown_key_for_action(action)
     }
 }
 
@@ -609,7 +579,7 @@ impl RuntimeUiManifestState {
 #[derive(Resource, Debug, Default)]
 struct RuntimeUiRecordingContract {
     required_namespaces: HashSet<String>,
-    manifest_id: Option<AssetId<RuntimeUiManifest>>,
+    manifest_id: Option<AssetId<TextAsset>>,
     exposure_revision: u64,
     hook_generation: u64,
     recording_active: bool,
@@ -853,7 +823,6 @@ struct RuntimeUiCollectionHost;
 /// stable authored ID.
 fn update_runtime_ui_recording_contract(
     exposures: Res<EngineExposures>,
-    manifests: Res<Assets<RuntimeUiManifest>>,
     manifest_state: Res<RuntimeUiManifestState>,
     recording: Option<Res<RuntimeUiCaptureState>>,
     mut contract: ResMut<RuntimeUiRecordingContract>,
@@ -879,7 +848,7 @@ fn update_runtime_ui_recording_contract(
         return;
     }
 
-    let Some(manifest) = manifests.get(&manifest_state.handle) else {
+    let Some(manifest) = manifest_state.manifest() else {
         return;
     };
     let all_surface_ids = manifest
@@ -1204,17 +1173,6 @@ fn install_runtime_ui_render_readiness(app: &mut App) {
     );
 }
 
-/// Load the authored surface manifest. The asset watcher can replace it while
-/// the application is running; `sync_runtime_ui_manifest` then rebuilds only
-/// the registered surface roots.
-fn load_runtime_ui_manifest(mut commands: Commands, server: Res<AssetServer>) {
-    commands.insert_resource(RuntimeUiManifestState {
-        handle: server.load("ui/runtime_surfaces.json"),
-        applied: None,
-        rebuild_pending: false,
-    });
-}
-
 fn spawn_runtime_ui_surface(
     commands: &mut Commands,
     definition: &RuntimeUiSurfaceDefinition,
@@ -1234,34 +1192,136 @@ fn spawn_runtime_ui_surface(
 
 fn sync_runtime_ui_manifest(
     mut commands: Commands,
-    manifests: Res<Assets<RuntimeUiManifest>>,
-    mut events: MessageReader<AssetEvent<RuntimeUiManifest>>,
+    catalog: Option<Res<TextAssetCatalog>>,
+    assets: Option<Res<Assets<TextAsset>>>,
+    mut events: MessageReader<AssetEvent<TextAsset>>,
     mut state: ResMut<RuntimeUiManifestState>,
     roots: Query<Entity, With<RuntimeUiSurface>>,
     server: Res<AssetServer>,
     mut functions: HtmlFunctions,
     mut surface_layouts: ResMut<RuntimeSurfaceLayouts>,
 ) {
-    let changed = state.applied.is_none()
-        || events.read().any(|event| {
-            matches!(
-                event,
-                AssetEvent::Added { id }
-                    | AssetEvent::Modified { id }
-                    | AssetEvent::LoadedWithDependencies { id }
-                    if *id == state.handle.id()
-            )
-        });
+    let (Some(catalog), Some(assets)) = (catalog, assets) else {
+        return;
+    };
+    if !catalog.ready() {
+        return;
+    }
+
+    let changed_assets = events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id }
+            | AssetEvent::Removed { id } => Some(*id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    if !state.scan_started {
+        state.candidates = catalog
+            .entries()
+            .iter()
+            .filter(|entry| entry.asset_path.ends_with(".json"))
+            .map(|entry| (entry.asset_path.clone(), entry.handle.clone()))
+            .collect();
+        state.scan_started = true;
+    }
+
+    if state.handle.is_none() {
+        if state.error.is_some() && !changed_assets.is_empty() {
+            state.error = None;
+            state.scan_started = false;
+            state.candidates.clear();
+            state.applied = None;
+            state.manifest = None;
+            return;
+        }
+        if state.error.is_some() {
+            return;
+        }
+
+        let mut pending = false;
+        let mut found = None;
+        let mut error = None;
+        for (path, handle) in &state.candidates {
+            let Some(asset) = assets.get(handle) else {
+                if !server
+                    .get_load_state(handle.id())
+                    .is_some_and(|load_state| load_state.is_failed())
+                {
+                    pending = true;
+                }
+                continue;
+            };
+            match parse_runtime_ui_manifest(path, &asset.text) {
+                Ok(Some(manifest)) if found.is_none() => {
+                    found = Some((path.clone(), handle.clone(), manifest));
+                }
+                Ok(Some(_)) => {
+                    error = Some(format!(
+                        "runtime asset listing contains more than one asset marked {RUNTIME_UI_MANIFEST_KIND}"
+                    ));
+                    break;
+                }
+                Ok(None) => {}
+                Err(error_message) => {
+                    error = Some(error_message);
+                    break;
+                }
+            }
+        }
+        if let Some(error) = error {
+            error!("runtime UI manifest rejected: {error}");
+            state.error = Some(error);
+            return;
+        }
+        if let Some((path, handle, manifest)) = found {
+            state.source_path = Some(path);
+            state.handle = Some(handle);
+            state.manifest = Some(manifest);
+        } else if pending {
+            return;
+        } else {
+            let error = format!(
+                "runtime asset listing contains no asset marked {RUNTIME_UI_MANIFEST_KIND}"
+            );
+            error!("runtime UI manifest unavailable: {error}");
+            state.error = Some(error);
+            return;
+        }
+    }
+
+    let Some(handle) = state.handle.clone() else {
+        return;
+    };
+    let changed = state.applied.is_none() || changed_assets.contains(&handle.id());
     if !changed {
         return;
     }
-    let Some(manifest) = manifests.get(&state.handle) else {
+    let Some(asset) = assets.get(&handle) else {
         return;
     };
-    if let Err(error) = manifest.validate() {
-        error!("runtime UI manifest rejected: {error}");
+    let Some(path) = state.source_path.as_deref() else {
         return;
-    }
+    };
+    let Some(manifest) = (match parse_runtime_ui_manifest(path, &asset.text) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            error!("runtime UI manifest rejected: {error}");
+            state.error = Some(error);
+            return;
+        }
+    }) else {
+        state.handle = None;
+        state.source_path = None;
+        state.manifest = None;
+        state.applied = None;
+        return;
+    };
+    state.manifest = Some(manifest.clone());
+    state.error = None;
 
     register_dynamic_action(&mut functions);
 
@@ -1288,8 +1348,25 @@ fn sync_runtime_ui_manifest(
     for definition in &manifest.surfaces {
         spawn_runtime_ui_surface(&mut commands, definition, &server);
     }
-    state.applied = Some(state.handle.id());
+    state.applied = Some(handle.id());
     state.rebuild_pending = true;
+}
+
+fn parse_runtime_ui_manifest(
+    path: &str,
+    source: &str,
+) -> Result<Option<RuntimeUiManifest>, String> {
+    let value = serde_json::from_str::<serde_json::Value>(source)
+        .map_err(|error| format!("{path}: invalid JSON: {error}"))?;
+    if value.get("kind").and_then(serde_json::Value::as_str)
+        != Some(RUNTIME_UI_MANIFEST_KIND)
+    {
+        return Ok(None);
+    }
+    let manifest = serde_json::from_value::<RuntimeUiManifest>(value)
+        .map_err(|error| format!("{path}: invalid runtime UI manifest: {error}"))?;
+    manifest.validate().map_err(|error| format!("{path}: {error}"))?;
+    Ok(Some(manifest))
 }
 
 /// Attach HUI/Flair only to surfaces that can currently be shown. Runtime
@@ -1302,7 +1379,6 @@ fn sync_runtime_ui_manifest(
 pub fn mount_runtime_ui_surfaces(
     mut commands: Commands,
     manifest_state: Res<RuntimeUiManifestState>,
-    manifests: Res<Assets<RuntimeUiManifest>>,
     server: Res<AssetServer>,
     exposures: Res<EngineExposures>,
     layout: Option<Res<WorkbenchSnapshot>>,
@@ -1321,7 +1397,7 @@ pub fn mount_runtime_ui_surfaces(
         return;
     }
 
-    let Some(manifest) = manifests.get(&manifest_state.handle) else {
+    let Some(manifest) = manifest_state.manifest() else {
         return;
     };
     let existing_namespaces: HashSet<String> = roots
@@ -2590,9 +2666,9 @@ mod tests {
         app.insert_resource(exposures)
             .init_resource::<RuntimeSurfaceLayouts>()
             .insert_resource(RuntimeUiManifestState {
-                handle: Handle::default(),
                 applied: Some(AssetId::default()),
                 rebuild_pending: false,
+                ..Default::default()
             });
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         let root = app
@@ -2701,9 +2777,9 @@ mod tests {
         app.insert_resource(exposures)
             .init_resource::<RuntimeSurfaceLayouts>()
             .insert_resource(RuntimeUiManifestState {
-                handle: Handle::default(),
                 applied: Some(AssetId::default()),
                 rebuild_pending: false,
+                ..Default::default()
             });
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         let root = app
@@ -2764,9 +2840,9 @@ mod tests {
         app.insert_resource(exposures)
             .init_resource::<RuntimeSurfaceLayouts>()
             .insert_resource(RuntimeUiManifestState {
-                handle: Handle::default(),
                 applied: Some(AssetId::default()),
                 rebuild_pending: false,
+                ..Default::default()
             });
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         let root = app

@@ -93,7 +93,7 @@ mod native {
                     .unwrap_or(8);
                 let mut paths: Vec<std::path::PathBuf> = Vec::new();
                 walk_mo(
-                    &lunco_assets_core::source_library_dir("library"),
+                    &lunco_modelica_library::source_library::source_library_cache_dir(),
                     &mut paths,
                 );
                 // Retain the full bundle (the real output) so peak RSS is
@@ -112,7 +112,7 @@ mod native {
                 );
             }
             "batch" => {
-                let root = lunco_assets_core::source_library_root_path("library")
+                let root = lunco_modelica_library::source_library::source_library_root_path()
                     .expect("no Modelica library root on disk");
                 let cache = rumoca_compile::source_roots::resolve_source_root_cache_dir();
                 let parsed = rumoca_compile::source_roots::parse_source_root_with_cache_in(

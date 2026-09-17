@@ -265,7 +265,7 @@ Use `inputs:*` only for what a colour cannot express — accents, panel scale, w
 | File | Role |
 |---|---|
 | `crates/lunco-usd-authoring/schema/schema.usda` | the authoritative source. **Not read at runtime.** |
-| `crates/lunco-usd-authoring/schema/generatedSchema.usda` | what is compiled in (`include_str!`) and ingested by `lunco_usd_authoring::schema` |
+| `assets/schemas/lunco/generatedSchema.usda` and `assets/schemas/core/*.usda` | runtime schema sources loaded through the ordinary USD asset pipeline and ingested by `lunco_usd_authoring::schema`; the crate schema files remain generation inputs, not compiled bytes |
 | `crates/lunco-usd-authoring/schema/plugInfo.json` | the `Types` map, so external USD runtimes register the class |
 
 Plus a reader to consume it, plus authoring on the asset.

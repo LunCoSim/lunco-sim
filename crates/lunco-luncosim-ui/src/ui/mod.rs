@@ -285,6 +285,11 @@ impl Plugin for LunCoSimUiPlugin {
                     models_palette::drain_program_catalog
                         .after(lunco_scene_catalog::catalog::drain_catalog_listing),
                 );
+                app.add_systems(
+                    Update,
+                    models_palette::sync_program_contracts
+                        .after(models_palette::drain_program_catalog),
+                );
                 app.add_observer(models_palette::clear_program_catalog_on_twin_closed);
                 // In-app rhai REPL — runs snippets against the live app through the
                 // API bridge, on web + native. Gated on bridge availability.
@@ -450,7 +455,6 @@ fn on_runtime_ui_action(
     >,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
     orbital_pin: Option<Res<lunco_celestial_spatial_core::OrbitalViewPin>>,
-    manifests: Res<Assets<runtime_ui::RuntimeUiManifest>>,
     manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
     mut commands: Commands,
@@ -494,7 +498,7 @@ fn on_runtime_ui_action(
                 return;
             }
             let action = action.to_owned();
-            if let Some(key) = manifest_state.dropdown_key_for_action(&manifests, &action) {
+            if let Some(key) = manifest_state.dropdown_key_for_action(&action) {
                 dropdowns.toggle(&key);
                 return;
             }
@@ -635,7 +639,6 @@ fn draw_runtime_ui_dropdowns(
     exposures: Res<lunco_core::exposure::EngineExposures>,
     roots: Query<(&runtime_ui::RuntimeUiSurface, &Visibility)>,
     manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
-    manifests: Res<Assets<runtime_ui::RuntimeUiManifest>>,
     layout: Option<Res<WorkbenchSnapshot>>,
     theme: Option<Res<lunco_theme::Theme>>,
     mut commands: Commands,
@@ -649,7 +652,7 @@ fn draw_runtime_ui_dropdowns(
     let Some(open_key) = dropdowns.open.clone() else {
         return;
     };
-    let Some(manifest) = manifest_state.manifest(&manifests) else {
+    let Some(manifest) = manifest_state.manifest() else {
         dropdowns.close();
         return;
     };
@@ -794,10 +797,7 @@ fn register_camera_menu(world: &mut World) {
             ui.separator();
             let dropdown = ctx
                 .resource::<runtime_ui::RuntimeUiManifestState>()
-                .and_then(|state| {
-                    ctx.resource::<Assets<runtime_ui::RuntimeUiManifest>>()
-                        .and_then(|manifests| state.manifest(manifests))
-                })
+                .and_then(|state| state.manifest())
                 .and_then(|manifest| {
                     manifest
                         .surfaces

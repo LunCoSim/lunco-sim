@@ -18,6 +18,7 @@ mod control_runtime;
 mod live_consume;
 mod program_runtime;
 mod runtime_persistence;
+mod schema_assets;
 pub mod scene;
 mod scene_ports;
 mod scene_runtime;
@@ -33,6 +34,14 @@ pub struct UsdSceneRuntimePlugin;
 
 impl Plugin for UsdSceneRuntimePlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(
+            bevy::prelude::Update,
+            (
+                schema_assets::request_schema_assets,
+                schema_assets::register_ready_schema_assets,
+            )
+                .chain(),
+        );
         app.add_plugins(scene_ports::ScenePortsPlugin)
             .register_type::<lunco_camera_core::CameraFollow>();
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();

@@ -57,7 +57,7 @@ impl RhaiHook {
         // Close the file-import hole BEFORE compiling anything. `Engine::new()`
         // installs rhai's `FileModuleResolver`, which reads arbitrary files
         // relative to the process CWD — so a hook source (a peer-supplied merge
-        // policy, an authored `assets/scripting/policy/*.rhai`) could
+        // policy, an authored runtime `.rhai` source) could
         // `import "../../../etc/passwd"`. Hook sources are self-contained
         // snippets: no shipped policy or lint script uses `import`, and this
         // crate has no asset layer to resolve one against, so an EMPTY static

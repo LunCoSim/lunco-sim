@@ -1,7 +1,8 @@
 # Authored lessons
 
 Lessons are ordinary file-backed Rhai scenarios with optional USD scene
-content. The application menu reads [`catalog.json`](catalog.json), then
+content. The application menu discovers the unique JSON asset marked
+`kind = "lunco.tutorial-catalog.v1"`, then
 launches the selected entry through the generic `RunScenarioAsset` command.
 There is no lesson registry, lifecycle crate, or tutorial-specific USD schema.
 
@@ -23,8 +24,8 @@ a lesson always gets a fresh scenario start after its requested scene is
 composed. Other applications can reuse the same generic command with their own
 catalog or no menu at all.
 
-An opened Twin may contribute the same catalog shape at
-`sim/tutorials/catalog.json`. Its entries use paths relative to that Twin;
+An opened Twin may contribute the same catalog shape in any JSON asset under
+its root, provided it carries `kind = "lunco.tutorial-catalog.v1"`. Its entries use paths relative to that Twin;
 the application resolves them to canonical `twin://<name>/…` addresses,
 loads the catalog off the UI thread, and groups those lessons with bundled
 tracks. A Twin lesson that needs a world must name its scene explicitly, so
@@ -36,10 +37,10 @@ lesson.
 1. Add a `.rhai` file under a track directory. Use the shared scripting prelude
    for `hint`, `spotlight`, `coach_step`, `mission`, and semantic command/event
    observation. A script does not open USD layers directly.
-2. Add one catalog entry in `catalog.json`. Use a standard authored scene under
+2. Add one catalog entry in the application catalog JSON. Use a standard authored scene under
    `assets/` when the lesson needs a world; omit `scene_asset` for a UI-only
    lesson. Twin-owned lessons use the same fields in
-   `<twin>/sim/tutorials/catalog.json`, with Twin-relative source and scene
+   a Twin-owned catalog JSON, with Twin-relative source and scene
    paths.
 
 Scene ownership remains with the USD scene command layer. `RunScenarioAsset`

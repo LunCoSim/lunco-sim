@@ -453,6 +453,13 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
     /// Per-run global maintenance (e.g. hot-reload of shared modules). Runs once
     /// at the start of each driver pass, inside the World scope. Default: no-op.
     fn maintain(&mut self) {}
+
+    /// Discard backend programs after a shared runtime contract changes.
+    ///
+    /// The neutral driver also drops its lifecycle bookkeeping. The next pass
+    /// recompiles the still-attached scene programs against the new contract.
+    /// Backends without compiled shared state can keep the default.
+    fn invalidate(&mut self) {}
 }
 
 /// Neutral per-entity lifecycle bookkeeping — the FSM the driver owns. Kept
@@ -502,6 +509,14 @@ impl<R: ScenarioRuntime + Default> Default for ScenarioDriver<R> {
 }
 
 impl<R: ScenarioRuntime> ScenarioDriver<R> {
+    /// Invalidate every attached program after a shared runtime contract, such
+    /// as the authored Rhai prelude, has changed. The scene entities remain
+    /// attached; their programs are rebuilt on the next enabled pass.
+    pub(crate) fn invalidate(&mut self) {
+        self.fsm.clear();
+        self.runtime.invalidate();
+    }
+
     /// Stop one scenario synchronously at an ownership boundary.
     ///
     /// The ordinary dead-entity path runs during the next driver tick. That is

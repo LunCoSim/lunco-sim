@@ -1,5 +1,5 @@
 // Application-wide lifecycle policy. A Twin can replace this hook from its
-// own policies/index.toml without changing the Rust runtime.
+// own policy manifest without changing the Rust runtime.
 fn twin_lifecycle(event, ctx) {
     #{
         event: event,

@@ -378,9 +378,7 @@ library-specific installer or root-name branch.
   just to poke the worker; the crate that *owns* the Modelica worker is the right owner of
   "load a Twin's Modelica," and it already sees the shared Twin asset authority.
 
-**Gotcha worth its own line:** `lunco_assets_core::models::model_files()` is top-level only
-(`MODELS_DIR.files()`), so a package under a subdirectory is embedded but invisible to it.
-Use `package_files_live(pkg)` in the native runtime, which prefers the editable
-filesystem tree and recurses; `package_files(pkg)` is the embedded/portable
-snapshot API. This is exactly the bug that made the runtime blind to
-`LunCo/Electrical/*.mo` even though `include_dir!` had baked them in.
+`lunco_assets_core::models::model_files()` and `package_files()` read the
+runtime asset tree recursively through the storage boundary, so a package under
+a subdirectory is visible on every supported platform. There is no embedded or
+portable snapshot API that can drift from the delivered assets.

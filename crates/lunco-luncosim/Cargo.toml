@@ -68,28 +68,24 @@ velopack = { version = "=1.2.110-ge826545", optional = true, features = ["public
 #   cargo build -p lunco-luncosim --bin luncosim --no-default-features --features server
 # which omits winit/wayland/x11/egui/picking/gizmos + the workbench/material/doc
 # UI crates entirely — the SAME `luncosim` bin, just a different feature set. Single-
-# player with no wire: `--no-default-features --features ui,celestial,lunco-api`.
+# player with no wire: `--no-default-features --features ui,lunco-api`.
 # The wasm build sets its own feature set (`--no-default-features`), so this
 # default does not affect it.
-default = ["ui", "celestial", "api-transport", "transport-http", "sysml"]
+default = ["ui", "api-transport", "transport-http", "sysml"]
 # Windowed GUI and its complete renderer/presentation closure. The application
 # shell only enables the existing UI package; that package owns the Bevy
 # render features, window configuration, capture, and presentation.
 ui = [
+    "dep:bevy",
     "dep:velopack",
     "dep:lunco-luncosim-ui",
     "lunco-scene-runner/ui",
     "lunco-luncosim-ui/avatar-ui",
 ]
 # Lean headless multiplayer server: API + networking host, NO `ui`. Build with
-# `--no-default-features --features server`. Skips `celestial` (bundled Earth
-# texture + ephemeris, ~10s of MB) — the server only needs `GravityPlugin`,
-# always compiled.
+# `--no-default-features --features server`. Celestial data remains external
+# through the runtime asset and dataset pipelines.
 server = ["api-transport", "transport-http", "networking"]
-# `celestial` pulls in lunco-celestial's bundled Earth texture + Artemis-II
-# ephemeris (10s of MB). Off for the wasm luncosim build — it only needs
-# `GravityPlugin`, which is always compiled.
-celestial = ["lunco-luncosim-core/celestial"]
 luncosim = []
 # Compile the API in. Transport is chosen automatically: the native HTTP
 # server comes from `lunco-api-transport/transport-http` (added to `default` above);
@@ -150,6 +146,7 @@ tracy = ["lunco-luncosim-ui?/tracy"]
 workspace = true
 
 [dev-dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
 avian3d = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-mobility = { path = "../lunco-mobility" }

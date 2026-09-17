@@ -20,7 +20,7 @@
 #   luncosim  - Simulation Sandbox (ground physics)
 #   luncosim - Full lunar-mission simulator (celestial + orbital). No Modelica
 #              worker / source-library bundle (not a Modelica IDE). Textures load over HTTP
-#              (built without `celestial` embed-assets).
+#              (built without a compiled-in celestial data bundle).
 # ============================================================================
 
 set -e
@@ -351,9 +351,9 @@ build_wasm() {
     # (`?connect=host#<digest>`), see `NetworkMode::from_url`.
     local wasm_features="lunco-api,ui"
     # LunCoSim has a `lunco-api` feature for native transport and a networking
-    # feature. The browser uses the JS bridge and deliberately skips `celestial`
-    # (embed-assets) on web — baking the Earth/Moon textures via `include_bytes!`
-    # bloats the wasm and needs the asset cache; the browser loads them over HTTP.
+    # feature. The browser uses the JS bridge. Celestial data is never compiled
+    # into the wasm; the browser loads scene assets and declared datasets through
+    # the runtime asset pipeline.
     if [ "$binary" = "luncosim" ]; then
         wasm_features="lunco-api,networking,ui"
         # Opt the client-prediction diagnostics into the browser build with
@@ -589,11 +589,10 @@ generate_bindings() {
         --cache "$web_cache" \
         --destination "$dist_dir"
 
-    # luncosim loads scene files via the bevy AssetServer over HTTP
-    # (`assets/scenes/luncosim/sandbox_scene.usda` and friends). Copy the
-    # workspace `assets/` tree next to the wasm so they're same-origin.
-    # lunica doesn't need this — its models live in the source-library bundle.
-    if [ "$binary" = "luncosim" ] && [ -d "$PROJECT_DIR/assets" ]; then
+    # Both applications load authored scenes, Modelica sources, and catalogs
+    # via the Bevy AssetServer over HTTP. Copy the workspace `assets/` tree
+    # next to the wasm so every runtime asset is same-origin.
+    if [ -d "$PROJECT_DIR/assets" ]; then
         info "Copying assets/ → $dist_dir/assets/"
         # `.lunco/` (runtime overlay) and `history/` (edit journal) are per-session
         # state that a dev run writes into `assets/`, which is itself an open twin.

@@ -11,6 +11,10 @@ use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_sim::UsdSimPlugin;
 
 fn main() {
+    let path = std::env::args().nth(1).unwrap_or_else(|| {
+        eprintln!("usage: usd_rover_inspection <usd-file-path>");
+        std::process::exit(2);
+    });
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(AssetPlugin::default());
@@ -29,9 +33,8 @@ fn main() {
     // Compose from disk (synchronous, no async AssetServer) so the referenced
     // wheel / panel attributes the physics mapping reads are resolved, then
     // publish the composed stage as the live canonical stage.
-    let path = "assets/vessels/rovers/rucheyok/rucheyok.usda";
-    let stage =
-        compose_file_to_stage(std::path::Path::new(path)).expect("Failed to compose rucheyok.usda");
+    let stage = compose_file_to_stage(std::path::Path::new(&path))
+        .unwrap_or_else(|error| panic!("Failed to compose {path}: {error}"));
     let stage_handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
         stages.add(UsdStageAsset::from_composed_stage(&stage).expect("prepare composed asset"))

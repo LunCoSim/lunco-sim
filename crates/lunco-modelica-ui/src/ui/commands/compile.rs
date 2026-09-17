@@ -1162,7 +1162,7 @@ pub fn on_compile_model(
         if let Some(pkg) = lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
             if !claimed.contains(&pkg) {
                 if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
-                    extra_sources.push((format!("{pkg}.mo"), bundled.to_string()));
+                    extra_sources.push((format!("{pkg}.mo"), bundled));
                 }
             }
         }
@@ -1757,7 +1757,7 @@ fn dispatch_experiment(
         let extras: Vec<(String, String)> =
             match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
                 Some(pkg) => crate::ui::class_source::bundled_source_for(&pkg)
-                    .map(|s| vec![(format!("{pkg}.mo"), s.to_string())])
+                    .map(|s| vec![(format!("{pkg}.mo"), s)])
                     .unwrap_or_default(),
                 None => Vec::new(),
             };

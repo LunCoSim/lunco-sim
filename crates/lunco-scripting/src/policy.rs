@@ -7,10 +7,10 @@
 //! this module owns activation for both standalone and networked applications.
 //!
 //! Distribution remains outside this module. The application policy bundle and
-//! its startup function are selected by `assets/scripting/policy/index.toml`;
-//! an active Twin may add a separate authored `<twin>/policies/index.toml`
-//! startup function and policy set. The registry below is only the derived
-//! active cache.
+//! its startup function are selected by the uniquely marked authored policy
+//! manifest in the runtime asset tree; an active Twin may add a separate
+//! authored Twin policy manifest and policy set. The registry below is only the
+//! derived active cache.
 
 use bevy::prelude::*;
 use lunco_doc_bevy::JournalResource;

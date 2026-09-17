@@ -416,6 +416,9 @@ impl VisualDiagram {
 
 use std::sync::OnceLock;
 
+/// Filename of the generated source-library editor index.
+pub const LIBRARY_INDEX_FILE_NAME: &str = "library_index.json";
+
 static SOURCE_LIBRARY_INDEX: OnceLock<LibraryIndex> = OnceLock::new();
 
 /// Notify the UI that the editor index has been decoded and is available.
@@ -438,7 +441,7 @@ pub fn install_library_index(index: LibraryIndex) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_library_index_from_assets() -> Result<LibraryIndex, String> {
     let bytes =
-        lunco_assets_core::library::library_read(std::path::Path::new("library_index.json"))
+        lunco_assets_core::library::library_read(std::path::Path::new(LIBRARY_INDEX_FILE_NAME))
             .ok_or_else(|| "source library editor index is not present".to_string())?;
     decode_library_index(&bytes)
 }

@@ -4,7 +4,7 @@
 //! `lunco-api` for the trait). Workspace queries remain owned by
 //! `lunco-workspace-api`.
 //!
-//! - **`ListBundled`** — embedded `assets/models/*.mo` examples and the complete
+//! - **`ListBundled`** — runtime `assets/models/*.mo` examples and the complete
 //!   source inventory used by authored validation. Modelica-specific; lives here
 //!   because that's where the data lives.
 
@@ -79,7 +79,10 @@ impl ApiQueryProvider for ListBundledProvider {
     }
 
     fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let models = bundled_models();
+        let models = match bundled_models() {
+            Ok(models) => models,
+            Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
+        };
         let items: Vec<serde_json::Value> = models
             .iter()
             .map(|m| {
@@ -88,7 +91,7 @@ impl ApiQueryProvider for ListBundledProvider {
                     "tagline": m.tagline,
                     // `bundled://Filename.mo` is the canonical id — never
                     // leak an absolute filesystem path here. On wasm32
-                    // builds there is no fs path at all; the embedded
+                    // builds there is no filesystem path at all; the runtime
                     // source is the only addressable form.
                     "uri": format!("bundled://{}", m.filename),
                 })
@@ -98,12 +101,16 @@ impl ApiQueryProvider for ListBundledProvider {
             .iter()
             .map(|model| model.filename.to_string())
             .collect::<Vec<_>>();
-        for package in lunco_assets_core::models::package_roots() {
-            source_paths.extend(
-                lunco_assets_core::models::package_files(&package)
-                    .into_iter()
-                    .map(|(path, _)| path),
-            );
+        let packages = match lunco_assets_core::models::package_roots() {
+            Ok(packages) => packages,
+            Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
+        };
+        for package in packages {
+            let files = match lunco_assets_core::models::package_files(&package) {
+                Ok(files) => files,
+                Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
+            };
+            source_paths.extend(files.into_iter().map(|(path, _)| path));
         }
         source_paths.sort();
         source_paths.dedup();
@@ -112,7 +119,7 @@ impl ApiQueryProvider for ListBundledProvider {
             .map(|path| {
                 serde_json::json!({
                     "path": path,
-                    "uri": format!("lunco://models/{path}"),
+                    "uri": lunco_assets_core::engine_model_asset_uri(&path),
                 })
             })
             .collect::<Vec<_>>();
@@ -1363,15 +1370,19 @@ impl ApiQueryProvider for FindModelProvider {
         let q = query.to_ascii_lowercase();
         let mut hits: Vec<FindHit> = Vec::new();
 
-        // ── Bundled embedded examples ────────────────────────────
-        for m in bundled_models() {
+        // ── External example assets ──────────────────────────────
+        let models = match bundled_models() {
+            Ok(models) => models,
+            Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
+        };
+        for m in models {
             let label = m.filename.trim_end_matches(".mo").to_string();
-            if let Some(score) = score(&q, &label, m.tagline) {
+            if let Some(score) = score(&q, &label, &m.tagline) {
                 hits.push(FindHit {
                     uri: format!("bundled://{}", m.filename),
                     label,
                     source: "bundled",
-                    description: m.tagline.to_string(),
+                    description: m.tagline,
                     score,
                 });
             }

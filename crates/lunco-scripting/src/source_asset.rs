@@ -11,6 +11,8 @@ use bevy::asset::AssetPath;
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 #[cfg(any(feature = "rhai", feature = "python"))]
 use bevy::prelude::*;
+#[cfg(feature = "rhai")]
+use std::collections::{BTreeMap, HashMap};
 
 /// Raw text of a `.py` file.
 ///
@@ -149,6 +151,54 @@ fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, an
         })
 }
 
+/// Handles for application-owned Rhai sources discovered from the runtime
+/// asset manifest. Keeping the handles alive makes the Bevy asset graph retain
+/// the sources and lets the scripting runtime install edits without a compiled
+/// snapshot. The manifest's extension is the only Rust-side selection rule;
+/// source roles are decided by authored policy.
+#[cfg(feature = "rhai")]
+#[derive(Resource, Default)]
+pub(crate) struct BuiltinRhaiAssets {
+    pub(crate) handles: BTreeMap<String, Handle<RhaiSource>>,
+    pub(crate) processed: HashMap<String, (String, u64)>,
+}
+
+/// Discover and request every authored Rhai source from the authoritative asset
+/// manifest. This also works when the manifest arrives asynchronously on wasm;
+/// no directory scan or compiled file list is required.
+#[cfg(feature = "rhai")]
+fn request_builtin_rhai_assets(
+    manifest: Option<Res<lunco_assets_core::discovery::AssetManifest>>,
+    asset_server: Option<Res<AssetServer>>,
+    mut builtins: ResMut<BuiltinRhaiAssets>,
+) {
+    let Some(manifest) = manifest else {
+        return;
+    };
+    if !manifest.ready() {
+        return;
+    }
+    let Some(asset_server) = asset_server else {
+        warn_once!("[rhai] built-in sources cannot load: AssetServer is not installed");
+        return;
+    };
+
+    for rel in manifest
+        .rels()
+        .iter()
+        .filter(|rel| rel.ends_with(".rhai"))
+    {
+        let rel = rel.clone();
+        if !rel.ends_with(".rhai") {
+            continue;
+        }
+        builtins
+            .handles
+            .entry(rel.clone())
+            .or_insert_with(|| asset_server.load::<RhaiSource>(rel.clone()));
+    }
+}
+
 /// Publish every loaded `.rhai` asset into the registry that backs `import`.
 ///
 /// **Event-driven, not per-tick**: this wakes only when an asset actually appears
@@ -276,6 +326,8 @@ impl Plugin for RhaiSourceAssetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<RhaiSource>()
             .init_asset_loader::<RhaiSourceLoader>()
+            .init_resource::<BuiltinRhaiAssets>()
+            .add_systems(Update, request_builtin_rhai_assets)
             .add_systems(
                 Update,
                 (publish_rhai_sources,)

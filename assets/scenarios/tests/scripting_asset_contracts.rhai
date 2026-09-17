@@ -11,6 +11,13 @@ fn contains_name(entries, name) {
     false
 }
 
+fn contains_hook(entries, name) {
+    for entry in entries {
+        if entry.id == name { return true; }
+    }
+    false
+}
+
 fn contains_function(entries, name) {
     for entry in entries {
         if entry.name == name { return true; }
@@ -73,6 +80,8 @@ fn on_tick(me, ctx) {
         }
 
         let tools = catalog.tools;
+        failures.push(t_true(contains_hook(catalog.policy_hooks, "scripting.source.classify"),
+            "source classification policy hook is not reflected"));
         for tool_name in [
             "assembly_audit", "assembly_builder", "assembly_edit", "assembly_ui",
             "authoring_inspection", "model_authoring", "program_editor"
@@ -85,6 +94,37 @@ fn on_tick(me, ctx) {
             "assembly_builder does not expose lunar_albedo_material_plan"));
         failures.push(t_true(tool_has_function(tools, "assembly_ui", "panel_templates"),
             "assembly_ui does not expose panel_templates"));
+
+        let clock = clock_snapshot();
+        failures.push(t_true(clock != () && clock.fixed_dt_s > 0.0 &&
+                clock.deterministic_master == "sim_tick",
+            "clock_snapshot did not expose the deterministic runtime spine"));
+
+        failures.push(t_true(input_binding("forward") != () &&
+                input_binding("look_button") != (),
+            "the application input defaults were not loaded through the runtime asset pipeline"));
+
+        let xs = [#{id: 1, v: 5}, #{id: 2, v: 2}, #{id: 3, v: 9}];
+        let lo = min_by(xs, |e| e.v);
+        let hi = max_by(xs, |e| e.v);
+        let selected = count_where(xs, |e| e.v > 3);
+        failures.push(t_true(lo.id == 2 && hi.id == 3 && selected == 2,
+            "selection helpers did not preserve their authored closure contract"));
+
+        let collision = #{name: "COLLISION_START", value: "10:20"};
+        failures.push(t_true(collision_other(collision, 10) == 20 &&
+                collision_other(collision, 20) == 10 && entered(collision, 10) &&
+                !exited(collision, 10) && collision_other(collision, 99) == (),
+            "collision helpers did not resolve the event participants"));
+
+        let zone = #{name: "enter:pad_2", value: 42};
+        failures.push(t_true(zone_of(zone) == "pad_2" && entered_zone(zone, "pad_2") &&
+                !entered_zone(zone, "bay") && exited_zone(#{name: "exit:bay"}, "bay"),
+            "zone helpers did not preserve event-name semantics"));
+
+        let entities = list_entities();
+        failures.push(t_true(entities != () && entities.len() > 0,
+            "list_entities did not expose the authored scene"));
 
         let timeline = compile_timeline([#{ wait: 1.0 }]);
         failures.push(t_true(timeline != () && timeline.len() == 1,
@@ -117,10 +157,17 @@ fn on_tick(me, ctx) {
         "lunco://scripting/policy/lint_modelica.rhai",
         "lunco://scripting/policy/lint_rhai.rhai",
         "lunco://scripting/policy/lint_twin.rhai",
-        "lunco://scripting/policy/lint_usd.rhai"
+        "lunco://scripting/policy/lint_usd.rhai",
+        "lunco://scripting/policy/source_classification.rhai"
     ] {
         validate_rhai(path, failures);
     }
+
+    let schema = query("ValidateAsset", #{
+        path: "lunco://schemas/lunco/generatedSchema.usda"
+    });
+    failures.push(t_true(schema != () && schema.kind == "usd" && schema.ok == true,
+        "generated USD schema was not available through the runtime asset pipeline"));
 
     this.done = true;
     report_verdict(failures, "SCRIPTING ASSET CONTRACTS", "SCRIPTING_ASSET_CONTRACTS");

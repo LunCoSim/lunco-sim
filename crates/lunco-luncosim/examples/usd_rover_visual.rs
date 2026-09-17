@@ -3,11 +3,25 @@ use bevy::prelude::*;
 use lunco_usd_bevy_runtime::UsdPlugins;
 use lunco_usd_bevy_scene::UsdPrimPath;
 
+#[derive(Resource)]
+struct RoverAsset(String);
+
 fn main() {
+    let rover_asset = std::env::args().nth(1).unwrap_or_else(|| {
+        eprintln!("usage: usd_rover_visual <asset-path-relative-to-assets>");
+        std::process::exit(2);
+    });
+    let rover_asset = lunco_assets_core::asset_path::relative_path(&rover_asset)
+        .map(|path| lunco_assets_core::engine_asset_uri(&path.to_string_lossy()))
+        .unwrap_or_else(|| {
+            eprintln!("error: rover asset must be a safe path relative to the asset library");
+            std::process::exit(2);
+        });
+    let assets_root = lunco_assets_core::assets_dir_abs();
     App::new()
         .add_plugins((
             DefaultPlugins.set(AssetPlugin {
-                file_path: "../../".to_string(), // Set root to workspace root
+                file_path: assets_root.to_string_lossy().into_owned(),
                 ..default()
             }),
             PhysicsPlugins::default(),
@@ -15,6 +29,7 @@ fn main() {
             lunco_mobility::LunCoMobilityPlugin,
             UsdPlugins,
         ))
+        .insert_resource(RoverAsset(rover_asset))
         .add_systems(Startup, (setup_scene, setup_rover))
         .add_systems(Update, (orbit_camera, debug_rover_presence))
         .run();
@@ -74,8 +89,12 @@ fn orbit_camera(time: Res<Time>, mut query: Query<&mut Transform, With<OrbitCame
     }
 }
 
-fn setup_rover(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let stage_handle = asset_server.load("assets/vessels/rovers/rucheyok/rucheyok.usda");
+fn setup_rover(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    rover_asset: Res<RoverAsset>,
+) {
+    let stage_handle = asset_server.load(rover_asset.0.clone());
 
     commands.spawn((
         Name::new("RucheyokRover"),

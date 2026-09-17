@@ -181,12 +181,11 @@ generation and makes the cache refresh deterministic.
 Everything else is **policy in rhai** — see the prelude
 `assets/scripting/prelude/` (one file per topic): vector math, `distance`/`arrived`,
 `steer_to`/`nav_to` (closed-loop steering), task-tree mission constructors,
-`drive`/`brake`/`load_scene` wrappers. The prelude is loaded
-FROM DISK at startup on native (edit → restart, no rebuild), with the
-`include_dir!`-embedded copy when no editable asset directory exists and the
-wasm source of truth (wasm-safe, no IO). Once a native disk source set is
-selected, a parse error is reported and startup does not silently switch to
-stale embedded policy.
+`drive`/`brake`/`load_scene` wrappers. The prelude is loaded through the normal
+authored asset pipeline (and the storage boundary for native synchronous
+helpers). Editing an asset changes the runtime source without a Rust rebuild; a
+missing or invalid source is reported and never replaced by stale compiled
+policy.
 NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
 
 The shared scene-selection package registers `InspectSelection` as a read-only

@@ -34,7 +34,7 @@ The trap the old code fell into: `compile()` *parsed and ran the top-level body*
 - **Eviction:** the memo is retained across entity despawns (for replay reuse), so it is **bounded, not GC'd** — a `COMPILED_CACHE_CAP` (512) triggers a full `clear()` when hit (a cold re-parse on the next compile; the distinct-source working set is far below the cap, so this is rare). A finer byte-budget/LRU is a deferral, same status as the precompute cache's eviction.
 
 ### Why no disk tier
-rhai's `AST` is **not `Serialize`**, so [`lunco-precompute`](efficiency-and-maintainability.md#substrate-b--lunco-precompute-the-content-addressed-cache-tier-3) (Substrate B, content-addressed *disk*) does **not** apply — you cannot `bake_or_load` an AST across process runs. The memo is RAM-only, tier-1. The *source* is already embedded/on-disk at the asset layer; only the parsed form lives in RAM. (Don't reach for the disk cache just because it exists — it's for byte-serializable structure like meshes and flattened stages.)
+rhai's `AST` is **not `Serialize`**, so [`lunco-precompute`](efficiency-and-maintainability.md#substrate-b--lunco-precompute-the-content-addressed-cache-tier-3) (Substrate B, content-addressed *disk*) does **not** apply — you cannot `bake_or_load` an AST across process runs. The memo is RAM-only, tier-1. The *source* is already available through the runtime asset layer; only the parsed form lives in RAM. (Don't reach for the disk cache just because it exists — it's for byte-serializable structure like meshes and flattened stages.)
 
 ## Event routing
 

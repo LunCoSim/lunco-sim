@@ -26,6 +26,7 @@
 //! Console panel — that's our "status somewhere" until a dedicated status
 //! bar lands.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use bevy::prelude::*;
@@ -37,6 +38,39 @@ use lunco_assets_core::library::InMemoryLibrary as LibraryInMemory;
 #[cfg(target_arch = "wasm32")]
 use lunco_assets_core::library::LibraryLoadPhase;
 use lunco_assets_core::library::{LibraryLoadState, LibrarySource as LibraryAssetSource};
+
+/// Asset-library prefix for the Modelica source-library bundle.
+pub const SOURCE_LIBRARY_ASSET_ROOT: &str = "library";
+/// Name of the mutable manifest fetched before the source-library bundles.
+pub const SOURCE_LIBRARY_MANIFEST_FILE_NAME: &str = "manifest.json";
+/// Filename of the generated native source-library parse bundle.
+pub const PARSED_LIBRARY_BUNDLE_FILE_NAME: &str = "parsed-library.bin";
+
+/// Return the cache directory owned by the Modelica source library.
+pub fn source_library_cache_dir() -> PathBuf {
+    lunco_assets_core::source_library_dir(SOURCE_LIBRARY_ASSET_ROOT)
+}
+
+/// Resolve the materialised Modelica source-library root, if it exists.
+pub fn source_library_root_path() -> Option<PathBuf> {
+    lunco_assets_core::source_library_root_path(SOURCE_LIBRARY_ASSET_ROOT)
+}
+
+/// Return the web-relative path of one source-library bundle artifact.
+///
+/// The manifest supplies only a filename. Rejecting separators, absolute paths,
+/// and parent traversal here keeps a malformed remote manifest from escaping
+/// the source-library URL namespace.
+pub fn source_library_asset_path(file_name: &str) -> Result<String, String> {
+    let relative = lunco_assets_core::asset_path::relative_path(file_name)
+        .ok_or_else(|| format!("invalid source-library artifact filename {file_name}"))?;
+    if relative.components().count() != 1 {
+        return Err(format!(
+            "source-library artifact must be a filename, got {file_name}"
+        ));
+    }
+    Ok(format!("{SOURCE_LIBRARY_ASSET_ROOT}/{file_name}"))
+}
 
 /// Process-wide pre-parsed source library documents. Populated on wasm by the
 /// chunked parse driver once the full bundle has been turned into
@@ -105,7 +139,7 @@ pub fn parsed_source_bundle()
         if let Some(bundle) = GLOBAL_PARSED_SOURCE_BUNDLE.get() {
             return Some(bundle);
         }
-        let bundle_rel = std::path::Path::new("parsed-library.bin");
+        let bundle_rel = std::path::Path::new(PARSED_LIBRARY_BUNDLE_FILE_NAME);
         // The bundle is zstd-compressed bincode (~10× smaller on disk than the
         // raw bincode it replaced). A stale/foreign bundle that fails to decode
         // returns `Err` below → the caller cold-parses and rewrites it. The
@@ -147,7 +181,9 @@ pub fn parsed_source_bundle()
 fn read_parsed_bundle_file()
 -> Result<Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>, String> {
     let Some((_, file)) =
-        lunco_assets_core::library::library_open(std::path::Path::new("parsed-library.bin"))
+        lunco_assets_core::library::library_open(std::path::Path::new(
+            PARSED_LIBRARY_BUNDLE_FILE_NAME,
+        ))
     else {
         return Ok(None);
     };
@@ -206,8 +242,15 @@ pub fn load_library_index_from_source_bundle(
 ) -> Result<lunco_modelica_index::visual_diagram::LibraryIndex, String> {
     let files = lunco_assets_core::web_fetch::unpack_tar_zst(compressed, 1)?;
     let bytes = files
-        .get(std::path::Path::new("library_index.json"))
-        .ok_or_else(|| "source bundle has no generated library_index.json".to_string())?;
+        .get(std::path::Path::new(
+            lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME,
+        ))
+        .ok_or_else(|| {
+            format!(
+                "source bundle has no generated {}",
+                lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME
+            )
+        })?;
     lunco_modelica_index::visual_diagram::decode_library_index(bytes)
 }
 
@@ -637,7 +680,7 @@ pub fn configured_native_library_root(
         }
     });
 
-    override_root.or_else(|| lunco_assets_core::source_library_root_path("library"))
+    override_root.or_else(source_library_root_path)
 }
 
 // ─── Shared slot the wasm fetcher writes into ───────────────────────
@@ -804,11 +847,11 @@ mod web {
             },
         );
 
+        let manifest_path = source_library_asset_path(SOURCE_LIBRARY_MANIFEST_FILE_NAME)?;
         let manifest_bytes =
-            web_fetch::fetch_bytes_revalidated(CACHE_NAME, "library/manifest.json", settings)
-                .await?;
+            web_fetch::fetch_bytes_revalidated(CACHE_NAME, &manifest_path, settings).await?;
         let manifest: LibraryManifest = serde_json::from_slice(&manifest_bytes)
-            .map_err(|e| format!("manifest.json parse: {e}"))?;
+            .map_err(|e| format!("{SOURCE_LIBRARY_MANIFEST_FILE_NAME} parse: {e}"))?;
         if manifest.schema_version != 1 {
             return Err(format!(
                 "unsupported manifest schema_version {}",
@@ -818,7 +861,7 @@ mod web {
 
         // ── Sources blob (small, always shipped). Used by the editor for
         // ── opening source library files after the runtime artifact is installed.
-        let bundle_path = format!("library/{}", manifest.sources.filename);
+        let bundle_path = source_library_asset_path(&manifest.sources.filename)?;
         let phase1 = bundle_fetch_phase(&bundle_path).await;
         // Per-blob progress: this download sweeps 0..its own size, so the bar
         // Each blob reports progress over its own byte range, so the bar
@@ -864,7 +907,7 @@ mod web {
             ));
         }
         let parsed_meta = &manifest.parsed;
-        let parsed_path = format!("library/{}", parsed_meta.filename);
+        let parsed_path = source_library_asset_path(&parsed_meta.filename)?;
         let phase2 = bundle_fetch_phase(&parsed_path).await;
         // Per-blob again: the (larger) parsed bundle sweeps 0..its own size.
         let parsed_total = parsed_meta.compressed_bytes;
@@ -904,7 +947,9 @@ mod web {
             // Filenames the current manifest references; everything else in the
             // source library bucket is a superseded release and gets evicted.
             let mut keep = HashSet::new();
-            keep.insert("manifest.json".to_string());
+            // The cache pruner compares final URL components, while fetch
+            // paths include the source-library prefix.
+            keep.insert(SOURCE_LIBRARY_MANIFEST_FILE_NAME.to_string());
             keep.insert(manifest.sources.filename.clone());
             keep.insert(manifest.parsed.filename.clone());
             web_fetch::prune_cache(CACHE_NAME, &keep).await;
@@ -941,5 +986,21 @@ mod web {
         } else {
             LibraryLoadPhase::FetchingBundle
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_library_artifact_paths_are_single_filenames() {
+        assert_eq!(
+            source_library_asset_path("sources-a.tar.zst").as_deref(),
+            Ok("library/sources-a.tar.zst")
+        );
+        assert!(source_library_asset_path("../outside.tar.zst").is_err());
+        assert!(source_library_asset_path("nested/bundle.tar.zst").is_err());
+        assert!(source_library_asset_path("C:\\bundle.tar.zst").is_err());
     }
 }

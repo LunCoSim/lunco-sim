@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Regenerate the registered schema artifacts from schema.usda.
 
-Two outputs, both derived — never hand-edited:
+Three outputs, all derived — never hand-edited:
   - `generatedSchema.usda` — the layer a USD runtime registers
   - the `Types` block of `plugInfo.json` — the registry entry that makes each
     class RESOLVABLE by an external runtime (usdview / Omniverse / Pixar USD)
+  - `assets/schemas/` — runtime asset copies consumed by LunCoSim
 
 A class declared in `schema.usda` but absent from the `Types` block is
 unresolvable by an external runtime — which would defeat the entire point of
@@ -42,6 +43,17 @@ SCHEMA_DIR = Path("crates/lunco-usd-authoring/schema")
 SRC = SCHEMA_DIR / "schema.usda"
 OUT = SCHEMA_DIR / "generatedSchema.usda"
 PLUGINFO = SCHEMA_DIR / "plugInfo.json"
+RUNTIME_SCHEMA_DIR = Path("assets/schemas")
+RUNTIME_LUNCO_DIR = RUNTIME_SCHEMA_DIR / "lunco"
+RUNTIME_CORE_DIR = RUNTIME_SCHEMA_DIR / "core"
+RUNTIME_FILES = {
+    RUNTIME_LUNCO_DIR / "generatedSchema.usda": OUT,
+    RUNTIME_LUNCO_DIR / "plugInfo.json": PLUGINFO,
+    **{
+        RUNTIME_CORE_DIR / path.name: path
+        for path in sorted((SCHEMA_DIR / "core").glob("*.usda"))
+    },
+}
 
 # `class [Alias] "Name" (` … up to the closing `)` of the prim metadata block.
 CLASS_RE = re.compile(
@@ -94,6 +106,33 @@ def write_pluginfo(types: "OrderedDict[str, dict]") -> None:
     """Write the derived `Types` block while preserving hand-authored fields."""
     PLUGINFO.write_text(pluginfo_text(types), encoding="utf-8")
     print(f"wrote {PLUGINFO} ({len(types)} schema classes registered)")
+
+
+def runtime_schema_staleness() -> list[Path]:
+    """Return runtime schema copies that differ from their crate sources."""
+    stale = []
+    for destination, source in RUNTIME_FILES.items():
+        expected = runtime_asset_text(source)
+        if not destination.exists() or destination.read_text(encoding="utf-8") != expected:
+            stale.append(destination)
+    return stale
+
+
+def runtime_asset_text(source: Path) -> str:
+    """Return a stable on-disk representation for copied runtime assets."""
+    text = source.read_text(encoding="utf-8")
+    if source.suffix == ".usda":
+        text = "\n".join(line.rstrip(" \t") for line in text.splitlines())
+        return text.rstrip("\n") + "\n"
+    return text
+
+
+def write_runtime_schema_assets() -> None:
+    """Copy generated and vendored schema sources into the runtime asset tree."""
+    for destination, source in RUNTIME_FILES.items():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(runtime_asset_text(source), encoding="utf-8")
+        print(f"wrote {destination} from {source}")
 
 GENERATED_HEADER = '''#usda 1.0
 (
@@ -150,6 +189,7 @@ def main() -> int:
             stale.append(str(OUT))
         if actual_pluginfo != expected_pluginfo:
             stale.append(str(PLUGINFO))
+        stale.extend(str(path) for path in runtime_schema_staleness())
         if stale:
             print("schema artifacts are stale:", file=sys.stderr)
             for path in stale:
@@ -162,6 +202,7 @@ def main() -> int:
     OUT.write_text(generated, encoding="utf-8")
     print(f"wrote {OUT} ({OUT.stat().st_size} bytes) from {SRC}")
     write_pluginfo(types)
+    write_runtime_schema_assets()
     return 0
 
 

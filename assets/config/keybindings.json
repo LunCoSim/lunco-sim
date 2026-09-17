@@ -1,4 +1,5 @@
 {
+  "kind": "lunco.input-bindings.v1",
   "look_button": "Right",
   "forward":    ["KeyW"],
   "backward":   ["KeyS"],

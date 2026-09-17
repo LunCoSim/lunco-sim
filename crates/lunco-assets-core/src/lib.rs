@@ -59,15 +59,13 @@ pub mod library;
 /// git-tracked content and externally-fetched binaries without any authored
 /// file naming the cache. See `docs/architecture/56-asset-resolution-and-cache.md`.
 pub mod lunco_source;
-pub mod missions;
-pub mod modelica;
 pub mod models;
 /// Scheme → local filesystem root, as an open registry — the read-side mirror of
 /// [`register_lunco_asset_sources`].
 pub mod scheme_registry;
 pub mod script_source;
 pub mod scripting;
-pub mod tutorials;
+pub mod text_asset;
 pub mod twin_source;
 /// Generic browser fetch + Cache-Storage + tar.zst-unpack primitives shared by
 /// every bundle distributor (source library, twin bundles). Web-only — native downloads go
@@ -75,7 +73,9 @@ pub mod twin_source;
 #[cfg(target_arch = "wasm32")]
 pub mod web_fetch;
 
-pub use asset_sources::{register_lunco_asset_sources, TwinAssetMounted, TwinRootsPlugin};
+pub use asset_sources::{
+    register_lunco_asset_sources, register_lunco_asset_types, TwinAssetMounted, TwinRootsPlugin,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use closure::{transitive_file_closure, transitive_file_closure_with};
 #[cfg(not(target_arch = "wasm32"))]
@@ -87,6 +87,9 @@ pub use lunco_source::{
     id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
 };
 pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
+pub use text_asset::{
+    TextAsset, TextAssetCatalog, TextAssetEntry, TextAssetLoader, TextAssetPlugin,
+};
 pub use twin_source::{
     parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TwinRootsError, TWIN_SCHEME,
 };
@@ -97,6 +100,28 @@ pub use twin_source::{
 /// when the executable's packaged `assets/` directory must not win discovery.
 /// The value is the directory containing the asset library, not its parent.
 pub const ASSET_ROOT_ENV: &str = "LUNCO_ASSET_ROOT";
+
+// These are engine-library layout primitives, not application paths. Keep the
+// spelling here so consumers never reconstruct the shipped library layout from
+// their own assumptions. Runtime asset discovery still decides which files are
+// actually present.
+const ENGINE_MODELS_DIR: &str = "models";
+const ENGINE_SCENES_DIR: &str = "scenes";
+const ENGINE_SCENE_TESTS_DIR: &str = "scenes/tests";
+const ENGINE_SHADERS_DIR: &str = "shaders";
+
+/// Filename of the runtime asset table of contents.
+pub const ASSET_MANIFEST_FILE_NAME: &str = "manifest.json";
+
+/// Return the runtime asset table-of-contents path below root.
+pub fn asset_manifest_path(root: impl AsRef<Path>) -> PathBuf {
+    root.as_ref().join(ASSET_MANIFEST_FILE_NAME)
+}
+
+/// Return the URL path of the engine asset table of contents.
+pub fn asset_manifest_url() -> String {
+    format!("{ASSETS_DIR_NAME}/{ASSET_MANIFEST_FILE_NAME}")
+}
 
 // ============================================================================
 // Cache Directory Resolution
@@ -412,6 +437,55 @@ pub fn assets_dir() -> PathBuf {
     PathBuf::from(lunco_source::ASSETS_DIR_NAME)
 }
 
+/// Absolute root of the engine's Modelica library.
+///
+/// Callers use this only for native operations that require a filesystem path;
+/// runtime asset loading uses the corresponding `lunco://` identity.
+pub fn engine_models_root() -> PathBuf {
+    assets_dir_abs().join(ENGINE_MODELS_DIR)
+}
+
+/// Logical path of one engine Modelica source below the asset library.
+pub fn engine_model_asset_rel(relative: &str) -> String {
+    format!("{ENGINE_MODELS_DIR}/{relative}")
+}
+
+/// Canonical asset URI of one engine Modelica source.
+pub fn engine_model_asset_uri(relative: &str) -> String {
+    engine_asset_uri(&engine_model_asset_rel(relative))
+}
+
+/// Absolute root of the engine's authored scene-test library.
+///
+/// The directory is owned by the engine asset library. Keeping this lookup in
+/// the asset owner prevents CLI and UI consumers from embedding a second copy
+/// of its on-disk layout.
+pub fn engine_scene_tests_root() -> PathBuf {
+    assets_dir_abs().join(ENGINE_SCENE_TESTS_DIR)
+}
+
+/// Whether an engine-library relative path belongs to its authored scene tree.
+pub fn is_engine_scene_asset(relative: &str) -> bool {
+    relative == ENGINE_SCENES_DIR
+        || relative
+            .strip_prefix(ENGINE_SCENES_DIR)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Logical path of an engine-library shader generated from a safe file stem.
+///
+/// The caller owns stem validation and this function owns the library's shader
+/// directory and extension. The result is suitable for `lunco://` conversion
+/// and `AssetServer::load`.
+pub fn engine_shader_asset_rel(stem: &str) -> String {
+    format!("{ENGINE_SHADERS_DIR}/{stem}.wgsl")
+}
+
+/// Absolute path of an engine-library shader generated from a safe file stem.
+pub fn engine_shader_path(stem: &str) -> PathBuf {
+    assets_dir_abs().join(engine_shader_asset_rel(stem))
+}
+
 /// Resolves the shipped-library root used by Bevy's `AssetPlugin`.
 ///
 /// Packaged native binaries carry `assets/` beside the executable. Development
@@ -419,6 +493,9 @@ pub fn assets_dir() -> PathBuf {
 /// ancestry, then the current-directory ancestry. This keeps direct launches
 /// and test runners on the same asset root without depending on the process
 /// working directory.
+///
+/// If no root can be discovered, this reports an installation/configuration
+/// error. It never returns a guessed path below the current directory.
 ///
 /// On native targets, [`ASSET_ROOT_ENV`] takes precedence. An explicit root is
 /// validated and canonicalized here; an invalid override is a startup error and
@@ -454,13 +531,21 @@ pub fn assets_dir_abs() -> PathBuf {
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        if let Some(root) = find_assets_dir(&cwd) {
-            return root;
-        }
-        return cwd.join(assets_dir());
+        return find_assets_dir(&cwd).unwrap_or_else(|| {
+            panic!(
+                "could not resolve the LunCoSim asset directory from executable `{}` or current directory `{}`; set {ASSET_ROOT_ENV} explicitly",
+                std::env::current_exe()
+                    .ok()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string()),
+                cwd.display()
+            )
+        });
     }
 
-    assets_dir()
+    panic!(
+        "could not determine the current directory for the LunCoSim asset library; set {ASSET_ROOT_ENV} explicitly"
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -484,7 +569,7 @@ fn find_assets_dir(base: &Path) -> Option<PathBuf> {
 /// serves, and that parity is the whole point. A `.mo` named by
 /// `info:sourceAsset` reaches the compiler through the AssetServer, so
 /// it is read live from disk; loading the library it belongs to out of the
-/// build-time `include_dir!` copy instead would compile an edited member as its
+/// second source copy instead would compile an edited member as its
 /// last-built self until someone ran `cargo build`. Same tree both ways, or the
 /// two disagree silently.
 ///
@@ -493,7 +578,7 @@ fn find_assets_dir(base: &Path) -> Option<PathBuf> {
 /// folder that happens to hold `.mo` files.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn models_package_root_path(package: &str) -> Option<PathBuf> {
-    let root = assets_dir_abs().join("models").join(package);
+    let root = engine_models_root().join(package);
     if !root.join("package.mo").is_file() {
         return None;
     }
@@ -504,8 +589,8 @@ pub fn models_package_root_path(package: &str) -> Option<PathBuf> {
     std::fs::canonicalize(&root).ok().or(Some(root))
 }
 
-/// wasm has no filesystem to put a library on, so there is no MODELICAPATH entry
-/// and callers fall back to the embedded copy from [`models::package_files`].
+/// wasm has no filesystem to put a library on, so there is no MODELICAPATH entry;
+/// browser consumers use the Bevy `ModelicaSource` asset loader.
 #[cfg(target_arch = "wasm32")]
 pub fn models_package_root_path(_package: &str) -> Option<PathBuf> {
     None
@@ -783,5 +868,24 @@ mod tests {
             engine_asset_uri(r"lunco://scenes\base\lunar_surface.usda"),
             "lunco://scenes/base/lunar_surface.usda"
         );
+    }
+
+    #[test]
+    fn engine_layout_helpers_keep_asset_identity_relative() {
+        assert_eq!(
+            engine_model_asset_rel("LunCo/Test/Sensor.mo"),
+            "models/LunCo/Test/Sensor.mo"
+        );
+        assert_eq!(
+            engine_model_asset_uri("LunCo/Test/Sensor.mo"),
+            "lunco://models/LunCo/Test/Sensor.mo"
+        );
+        assert!(is_engine_scene_asset("scenes/luncosim/main.usda"));
+        assert!(!is_engine_scene_asset("vessels/rover.usda"));
+        assert_eq!(
+            asset_manifest_path(Path::new("bundle")),
+            Path::new("bundle/manifest.json")
+        );
+        assert_eq!(asset_manifest_url(), "assets/manifest.json");
     }
 }
