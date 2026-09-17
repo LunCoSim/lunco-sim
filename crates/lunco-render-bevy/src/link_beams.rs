@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_celestial_spatial::link::LinkState;
+use lunco_celestial_spatial_core::{LinkNode, LinkState};
 use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
 use lunco_core::{GlobalEntityId, ScriptParams};
 use lunco_render::{CommunicationLineSettings, SceneCamera};
@@ -333,7 +333,7 @@ fn reconcile_link_beams(
         &ChildOf,
     )>,
     q_state: Query<&LinkState>,
-    q_nodes: Query<(&lunco_celestial_spatial::link::LinkNode, Option<&Name>)>,
+    q_nodes: Query<(&LinkNode, Option<&Name>)>,
     q_names: Query<&Name>,
     q_ids: Query<(Entity, &GlobalEntityId)>,
     q_beams: Query<(Entity, &ChildOf, &LinkBeamInstance)>,

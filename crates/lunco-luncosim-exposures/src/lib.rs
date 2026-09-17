@@ -14,7 +14,7 @@ use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Ro
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_celestial_spatial::link::LinkState;
+use lunco_celestial_spatial_core::LinkState;
 use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_control_core::ControlLink;
 use lunco_core::exposure::{

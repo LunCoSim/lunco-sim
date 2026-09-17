@@ -19,7 +19,6 @@ use big_space::prelude::{CellCoord, Grid};
 
 use lunco_time::WorldTime;
 
-use crate::link::LinkNode;
 use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
 use lunco_celestial::frames::{BodyInertial, Pos};
@@ -27,6 +26,7 @@ use lunco_celestial::geo::{solar_tangent_frame, GeodeticAnchor, SiteAnchor};
 use lunco_celestial::kepler::KeplerOrbit;
 use lunco_celestial::transform::{FrameTree, LibrationAnchor};
 use lunco_celestial::CelestialBodyRegistry;
+use lunco_celestial_spatial_core::LinkNode;
 
 /// Opt-in marker: track this entity's solar pose even though it has no anchor or
 /// orbit (a scene-local prim positioned through the site frame — e.g. an antenna

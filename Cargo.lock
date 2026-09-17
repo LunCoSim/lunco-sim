@@ -7984,7 +7984,6 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-celestial",
- "lunco-celestial-spatial",
  "lunco-celestial-spatial-core",
  "lunco-control-core",
  "lunco-core",
@@ -8617,7 +8616,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "big_space",
- "lunco-celestial-spatial",
+ "lunco-celestial-spatial-core",
  "lunco-core",
  "lunco-cosim",
  "lunco-environment",
@@ -9769,7 +9768,7 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
- "lunco-celestial-spatial",
+ "lunco-celestial-spatial-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",

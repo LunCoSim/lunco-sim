@@ -9,7 +9,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use crate::link::LinkGeometryState;
+use lunco_celestial_spatial_core::LinkGeometryState;
 
 /// A scene-authored rover radio endpoint.
 #[derive(Component, Debug, Clone, Reflect)]
@@ -97,7 +97,7 @@ pub fn update_wifi_links(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::link::{LinkGeometryPeer, LinkState};
+    use lunco_celestial_spatial_core::{LinkGeometryPeer, LinkState};
 
     #[test]
     fn rover_radio_can_connect_when_direct_link_state_is_absent() {
@@ -143,22 +143,20 @@ mod tests {
 
         assert!(app.world().get::<LinkState>(a).is_none());
         assert!(app.world().get::<LinkState>(b).is_none());
-        assert!(
-            app.world()
-                .get::<WifiState>(a)
-                .unwrap()
-                .peers
-                .iter()
-                .any(|peer| peer.peer == 2 && peer.connected)
-        );
-        assert!(
-            app.world()
-                .get::<WifiState>(b)
-                .unwrap()
-                .peers
-                .iter()
-                .any(|peer| peer.peer == 1 && peer.connected)
-        );
+        assert!(app
+            .world()
+            .get::<WifiState>(a)
+            .unwrap()
+            .peers
+            .iter()
+            .any(|peer| peer.peer == 2 && peer.connected));
+        assert!(app
+            .world()
+            .get::<WifiState>(b)
+            .unwrap()
+            .peers
+            .iter()
+            .any(|peer| peer.peer == 1 && peer.connected));
     }
 
     #[test]

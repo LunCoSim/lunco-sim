@@ -241,7 +241,9 @@ Depends on Phases 1–2 (ports/connections/identity) + optionally 5 (electrical 
 
 - **P6.1–P6.3 — DONE, but not as a comms feature.** There is no comms crate, no comms component and no
   comms vocabulary: connectivity landed as a **generic link kernel** in `lunco-celestial-spatial`
-  (`LinkNode`/`LinkState`, cadence-gated geometry: range + elevation + body occlusion + terrain LOS),
+  (the render-independent `LinkNode`/`LinkState` contracts live in
+  `lunco-celestial-spatial-core`; the runtime owns cadence-gated geometry: range + elevation + body
+  occlusion + terrain LOS),
   with the verdict behind the language-neutral `link.connected` hook and routing authored in rhai over
   the `query("Links")` snapshot. The USD vocabulary is `lunco:linkNode` / `lunco:link:*`. See
   `49-connectivity-link-kernel.md`. A comms *domain* (link budget, `CommsLink.mo`, margin validation) is

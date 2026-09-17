@@ -17,12 +17,13 @@ use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::GlobalEntityId;
 use lunco_time::WorldTime;
 
-use crate::link::{node_label, LinkNode, LinkState};
+use crate::link::node_label;
 use crate::wifi::{WifiNode, WifiState};
 use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
 use lunco_celestial::geo::segment_hits_sphere;
 use lunco_celestial::CelestialBodyRegistry;
+use lunco_celestial_spatial_core::{LinkNode, LinkState};
 
 /// Read a `[x,y,z]` array or `{x,y,z}` map into a solar-frame [`DVec3`].
 fn parse_point(v: Option<&serde_json::Value>) -> Option<DVec3> {
@@ -230,7 +231,7 @@ impl ApiQueryProvider for SolarPoseProvider {
 /// `groups["earth"]`, so "can this rover reach Earth?" is a question about the
 /// group, while "what is Madrid's range?" is a question about the node. Keying the
 /// graph on the shared class collapsed the three into one and made only the last
-/// one answerable. See [`LinkPeer::peer`](crate::link::LinkPeer::peer).
+/// one answerable. See [`LinkPeer::peer`](lunco_celestial_spatial_core::LinkPeer::peer).
 ///
 /// `owners` is the same idea for CONTAINMENT. A link node sits where the link
 /// geometry physically is — on the dish's feed phase centre, so the beam, the RF
