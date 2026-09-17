@@ -36,8 +36,6 @@ const PREPARED_SOLVE_CACHE_VERSION: u32 = 4;
 mod cache;
 use cache::{PreparedSolveCache, PreparedSolveKey};
 mod bridge;
-#[cfg(test)]
-pub(crate) use bridge::plan_macro_step;
 pub use bridge::{handle_modelica_responses, on_remove_modelica, spawn_modelica_requests};
 #[cfg(not(target_arch = "wasm32"))]
 mod scheduling;
@@ -3104,6 +3102,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
 
 #[cfg(test)]
 mod macro_step_tests {
+    use super::bridge::plan_macro_step;
     use super::*;
 
     /// Stand-in for the worker: integrate what the worker WOULD integrate for a

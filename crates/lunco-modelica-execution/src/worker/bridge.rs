@@ -351,7 +351,7 @@ pub fn handle_modelica_responses(
     // the reactive UI viz observer (`ui::core_observers::drain_sim_samples_to_viz`)
     // drains it into `lunco_viz`. Core no longer references any viz/plot types.
     mut sample_stream: ResMut<SimSampleStream>,
-    runner_res: Option<Res<crate::ModelicaRunnerResource>>,
+    runner_res: Option<Res<lunco_modelica_runner::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<lunco_modelica_core::source_roots::SourceRootRegistry>>,
     participants: Option<Res<lunco_core::SimulationBarrierParticipants>>,
     coupling: Option<ResMut<lunco_core::SimulationBarrier>>,
@@ -395,7 +395,7 @@ pub fn handle_modelica_responses(
             {
                 runner.0.set_model_defaults(
                     lunco_experiments::ModelRef(name.clone()),
-                    crate::experiments_runner::ModelDefaults {
+                    lunco_modelica_runner::ModelDefaults {
                         t_start: result.experiment_start_time,
                         t_end: result.experiment_stop_time,
                         tolerance: result.experiment_tolerance,

@@ -30,6 +30,7 @@ lunco-modelica-core = { path = "../lunco-modelica-core", default-features = fals
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-library = { path = "../lunco-modelica-library" }
+lunco-modelica-runner = { path = "../lunco-modelica-runner" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-telemetry = { path = "../lunco-modelica-telemetry" }
 lunco-modelica-solver = { path = "../lunco-modelica-solver" }

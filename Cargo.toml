@@ -49,6 +49,7 @@ members = [
     "crates/lunco-modelica-docs-ui",
     "crates/lunco-modelica-core",
     "crates/lunco-modelica-library",
+    "crates/lunco-modelica-runner",
     "crates/lunco-modelica-execution",
     "crates/lunco-modelica-document",
     "crates/lunco-modelica-solver",

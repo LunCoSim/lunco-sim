@@ -1,0 +1,28 @@
+[package]
+name = "lunco-modelica-runner"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Modelica experiment scheduling and shared run execution"
+
+[dependencies]
+bevy.workspace = true
+crossbeam-channel.workspace = true
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-experiments = { path = "../lunco-experiments" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-document = { path = "../lunco-modelica-document" }
+lunco-modelica-solver = { path = "../lunco-modelica-solver" }
+lunco-settings = { path = "../lunco-settings" }
+rumoca-compile.workspace = true
+rumoca-sim.workspace = true
+serde.workspace = true
+web-time.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

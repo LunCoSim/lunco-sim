@@ -8152,6 +8152,7 @@ dependencies = [
  "lunco-modelica-document",
  "lunco-modelica-execution",
  "lunco-modelica-index",
+ "lunco-modelica-runner",
  "lunco-modelica-runtime",
  "lunco-twin-journal",
  "lunco-workspace",
@@ -8279,6 +8280,7 @@ dependencies = [
  "lunco-modelica-document",
  "lunco-modelica-index",
  "lunco-modelica-library",
+ "lunco-modelica-runner",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
  "lunco-modelica-telemetry",
@@ -8349,6 +8351,27 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "lunco-modelica-runner"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "crossbeam-channel",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-experiments",
+ "lunco-modelica-ast",
+ "lunco-modelica-core",
+ "lunco-modelica-document",
+ "lunco-modelica-solver",
+ "lunco-settings",
+ "rumoca-compile",
+ "rumoca-sim",
+ "serde",
+ "tempfile",
+ "web-time",
 ]
 
 [[package]]
@@ -8428,6 +8451,7 @@ dependencies = [
  "lunco-modelica-icon-ui",
  "lunco-modelica-index",
  "lunco-modelica-library",
+ "lunco-modelica-runner",
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
  "lunco-scripting",

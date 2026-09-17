@@ -204,7 +204,8 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
 | **`lunco-modelica-library`** | Shared source-library capability: persisted library-root settings, parsed-source bundle admission, browser fetch/decode, lazy source unpacking, editor-index handoff, and the typed Modelica worker bridge. It is a production runtime package, not a test harness; compiler and execution hosts consume its contracts without owning its transport implementation. |
 | **`lunco-modelica-core`** | Headless Modelica compiler/document host: Rumoca compilation, source-root admission, consumption of the source-library capability, and UI-agnostic document/runtime contracts. It does not own source-library transport, solver workers, Fast Run execution, browser fetch, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
-| **`lunco-modelica-execution`** | Modelica execution package: native solver workers, Fast Run/experiment execution, prepared-solve caching, and the wasm worker transport. It consumes compiler and source-library contracts through typed interfaces and keeps numerical/runtime dependencies out of compiler-only consumers. |
+| **`lunco-modelica-runner`** | Modelica experiment backend: source snapshots, compile-once DAE caching, native scheduling, shared batch/interactive run paths, run-bound resolution, and experiment-side Bevy resources. It consumes compiler and solver contracts without owning worker transport. |
+| **`lunco-modelica-execution`** | Modelica worker host: native worker lifecycle, prepared-solve caching, and the wasm worker transport. It composes `lunco-modelica-runner` through typed callbacks and keeps worker dependencies out of compiler-only consumers. |
 | **`lunco-modelica-solver`** | Renderer-free Modelica solver capability: Rumoca backend registration, solver-option translation, adaptive live sessions, and the deterministic fixed-step session. The execution host supplies lowered solve models and owns worker lifecycle; this package owns numerical integration construction and solver-specific dependencies. |
 | **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, and run query providers plus document edit commands. It depends on the headless Modelica core but is not part of the compiler core's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui-core`** | Render-independent Modelica UI contracts: shared command/event payloads (`OpenClass`, `FocusDocumentByName`, `SetModelicaParameter`) and stable plot identities. It has no Modelica compiler, workbench shell, panel, or renderer dependency; observers remain in the owning UI package. |
@@ -249,7 +250,8 @@ Primary entry points and simulation assembly targets.
 | **`lunco-modelica-docs-ui`** | — | Reusable egui Modelica documentation renderer used by the model view. |
 | **`lunco-modelica-index`** | — | Reusable Modelica index, diagram metadata, package-browser values, and editor-index artifact contract. |
 | **`lunco-modelica-library`** | — | Source-library runtime admission, artifacts, browser handoff, and the shared Modelica worker bridge. |
-| **`lunco-modelica-execution`** | `lunica_worker`, `modelica_run`, `modelica_tester` | Headless Modelica execution runtime. It owns solver workers, Fast Run execution, native/wasm worker transport, and execution-side caches; the compiler/document host is `lunco-modelica-core`, and the shared command/result protocol remains in `lunco-modelica-runtime`. |
+| **`lunco-modelica-runner`** | — | Modelica experiment scheduling and shared batch/interactive run backend. |
+| **`lunco-modelica-execution`** | `lunica_worker`, `modelica_run`, `modelica_tester` | Headless Modelica worker runtime. It owns worker lifecycle, native/wasm worker transport, and execution-side caches; `lunco-modelica-runner` owns experiment scheduling and run orchestration, while the shared command/result protocol remains in `lunco-modelica-runtime`. |
 | **`lunco-modelica-assets`** | `build_modelica_library_assets`, `modelica_library_indexer`, `modelica_library_parse_bench` | Native Modelica source-library packaging and indexing tools. The indexer is shared by the CLI and the Modelica UI's background lifecycle adapter; the package remains independent of Bevy. |
 | **`lunco-modelica-api`** | — | Transport-free Modelica API capability: query providers plus document edit commands, installed by API-enabled Modelica and LunCoSim hosts. |
 
@@ -1047,13 +1049,18 @@ implementation.
 
 **`lunco-modelica-execution`**
 Modelica execution host. It owns solver construction, native worker scheduling,
-Fast Run execution, prepared solve-IR caching, and the wasm `lunica_worker`
-transport. The wasm adapter composes the generic
-`lunco-worker-transport::WorkerPool`; source-library readiness and per-run
-routing remain Modelica-specific here. The source-library fetch/decode and
-worker callback contracts are consumed from `lunco-modelica-library`. This
-package depends on the compiler core, while compiler-only consumers do not
-inherit its execution dependency closure.
+native worker lifecycle, and the wasm `lunica_worker` transport. It composes
+the generic `lunco-worker-transport::WorkerPool` and installs the worker
+callbacks consumed by `lunco-modelica-runner`; source-library readiness and
+per-run routing remain Modelica-specific here. Compiler-only consumers do not
+inherit this worker dependency closure.
+
+**`lunco-modelica-runner`**
+Modelica experiment backend. It owns `ModelicaRunner`, source snapshots,
+compile-once DAE caching, native scheduling, shared batch/interactive run
+paths, run-bound resolution, and experiment-side Bevy resources. The runner
+depends on compiler and solver contracts but not on the worker transport; the
+execution host installs the typed wasm dispatch callbacks during composition.
 
 **`lunco-modelica-telemetry`**
 Render-free execution-side telemetry projection. It retains the current

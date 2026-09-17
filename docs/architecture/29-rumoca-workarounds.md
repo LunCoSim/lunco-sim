@@ -39,7 +39,7 @@ advance is clamped, or make the horizon `Option<f64>` so "no ceiling" is
 expressible rather than spelled `t_end = u32::MAX`.
 
 **Chokepoints (never build `SimOptions` by hand):**
-- batch / offline / Fast-Run → `experiments_runner::stepper_options_from_bounds(&RunBounds)`
+- batch / offline / Fast-Run → `lunco_modelica_runner::stepper_options_from_bounds(&RunBounds)`
 - live co-sim → `worker::live_stepper_options()` (sets `t_end = u32::MAX` as an
   explicit "no ceiling" sentinel) via `worker::build_stepper()`
 
@@ -75,7 +75,7 @@ inside the compiler and no caller can forget it**.
 
 It did not always live there, and the cost of that was steep: an audit at the
 0.9.20 bump found the strip missing on the *entire* experiments/FastRun surface
-(native `experiments_runner.rs` **and** the wasm `lunica_worker.rs` twin), on the
+(native `lunco-modelica-runner` **and** the wasm `lunica_worker.rs` twin), on the
 worker's disk-backed compile, and in `modelica_tester` — i.e. the sweep feature
 whose whole purpose is overriding inputs was silently demoting every bound input
 it swept. Moving the strip into the chokepoint fixed all four at once. Don't move
@@ -227,7 +227,7 @@ records an extra sample at every root/event crossing. An event-heavy model
 returned ~5M samples for a requested 1.1k-point grid (~4 GB across 75 vars) and
 OOM-killed the wasm worker outright.
 
-**Workaround.** `experiments_runner::batch_keep_indices` decimates the returned
+**Workaround.** `lunco_modelica_runner::batch_keep_indices` decimates the returned
 samples back onto the requested grid.
 
 **Ideal upstream fix.** Keep event samples out of the returned series (or put them

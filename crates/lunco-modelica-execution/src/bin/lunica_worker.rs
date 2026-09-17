@@ -233,7 +233,7 @@ mod wasm {
         >,
         bounds: &lunco_experiments::RunBounds,
     ) {
-        use lunco_modelica_execution::experiments_runner::apply_value_bindings_to_dae;
+        use lunco_modelica_runner::apply_value_bindings_to_dae;
         let started = web_time::Instant::now();
         post_log(
             scope,
@@ -321,7 +321,7 @@ mod wasm {
         };
 
         // Drive the run through the SHARED `drive_run` — the EXACT same entry
-        // point native (`experiments_runner::run_inner`) uses. It honours
+        // point native (`lunco_modelica_runner`) uses. It honours
         // `bounds.runtime`: Batch → the dense-output `simulate_with_diagnostics`
         // solve (robust on stiff models), Interactive → the streamable
         // `run_stepping_loop`. `WorkerSink` is the only worker-specific part
@@ -332,9 +332,7 @@ mod wasm {
         // closes that divergence and also brings the worker the batch
         // output-decimation.
         let mut sink = WorkerSink { scope, run_id };
-        lunco_modelica_execution::experiments_runner::drive_run(
-            &run_dae, bounds, started, &mut sink,
-        );
+        lunco_modelica_runner::drive_run(&run_dae, bounds, started, &mut sink);
         post_log(
             scope,
             format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
@@ -354,7 +352,7 @@ mod wasm {
         }
     }
 
-    /// Worker-side [`RunSink`](lunco_modelica_execution::experiments_runner::RunSink):
+    /// Worker-side [`RunSink`](lunco_modelica_runner::RunSink):
     /// streams run updates over `postMessage` and reads the worker's cancel
     /// registry. The ONLY platform-specific half of the run loop — the loop
     /// itself is shared with the native runner.
@@ -363,7 +361,7 @@ mod wasm {
         run_id: lunco_experiments::ExperimentId,
     }
 
-    impl lunco_modelica_execution::experiments_runner::RunSink for WorkerSink<'_> {
+    impl lunco_modelica_runner::RunSink for WorkerSink<'_> {
         fn is_cancelled(&mut self) -> bool {
             if is_cancelled(self.run_id) {
                 clear_cancel();

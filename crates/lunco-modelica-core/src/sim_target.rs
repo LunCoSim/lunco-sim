@@ -49,7 +49,7 @@ pub const SAMPLE_CAP: f64 = 200_000.0;
 
 /// Resolve the output sample spacing (`step_dt`) a stepping loop advances by,
 /// from the resolved horizon and `Interval`. This is the SINGLE source of
-/// truth shared by every run loop — native (`experiments_runner`) and the
+/// truth shared by every run loop — native (`lunco_modelica_runner`) and the
 /// wasm worker (`lunica_worker`) — so the spec rule and the memory backstop
 /// can't drift between platforms. (They did: the worker kept a pathological
 /// `unwrap_or(0.01)` long after native was fixed, which emitted ~10M samples

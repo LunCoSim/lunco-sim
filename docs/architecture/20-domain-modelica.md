@@ -313,7 +313,7 @@ advancing. The default is `1.0`, so any caller that builds options from
 than an error. Two consequences, both deliberate:
 
 - The batch/offline path builds options **only** through
-  `experiments_runner::stepper_options_from_bounds`, which carries the run's
+  `lunco_modelica_runner::stepper_options_from_bounds`, which carries the run's
   real horizon through. Nothing else may hand-roll `SimOptions`.
 - The live path is driven by `step(dt)` forever and has no horizon, so
   `worker::live_stepper_options` sets `t_end = u32::MAX` as an explicit

@@ -115,7 +115,7 @@ pub enum WireMessage {
     },
     /// Fast Run request: compile (with overrides) + simulate end-to-end.
     /// Worker posts back a `WireResult::RunUpdate` stream tagged with
-    /// `run_id`. See `experiments_runner` and
+    /// `run_id`. See `lunco_modelica_runner` and
     /// `docs/architecture/25-experiments.md`.
     RunFast {
         run_id: lunco_experiments::ExperimentId,
@@ -562,7 +562,7 @@ pub fn is_worker_active() -> bool {
 /// starts it returns `Ok`; a later worker failing just shrinks the pool.
 pub fn install_worker(worker_url: &str) -> Result<(), JsValue> {
     let want =
-        lunco_settings::load_section_from_disk::<crate::experiments_runner::ExperimentSettings>()
+        lunco_settings::load_section_from_disk::<lunco_modelica_runner::ExperimentSettings>()
             .resolved_max_parallel()
             .clamp(1, MAX_WORKERS);
 

@@ -127,6 +127,8 @@ Native unchanged. The serde derives are no-ops at runtime.
 `#![cfg(target_arch = "wasm32")]` end-to-end. The wasm worker owns the
 `ModelicaWorkerState` and dispatches through
 `lunco_modelica_execution::worker::process_worker_command`;
+`lunco-modelica-runner` receives the worker's Fast Run callbacks through the
+typed transport registration installed by the execution host;
 there is no main-thread Modelica fallback. The native
 `lunco_modelica_execution::worker::modelica_worker` loop
 keeps its native dispatch and ownership of `SimulationSession` values.

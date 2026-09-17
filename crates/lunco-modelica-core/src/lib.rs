@@ -735,13 +735,6 @@ impl ModelicaCompiler {
         }
     }
 
-    /// Access the underlying `rumoca_compile::Session` — used by a
-    /// test helper that needs to inspect loaded source roots.
-    #[cfg(test)]
-    pub fn session(&mut self) -> &mut Session {
-        &mut self.session
-    }
-
     /// Merge a Modelica source root into the live session so
     /// subsequent compiles can resolve its types. Used by the
     /// `LoadSourceRoot` worker command (`source_roots` lazy-load
@@ -1269,8 +1262,13 @@ mod source_root_smoke {
         assert_eq!(report.parsed_file_count, 2);
         assert_eq!(report.inserted_file_count, 0);
         assert!(!report.diagnostics.is_empty());
+        let result = compiler.compile_str(
+            "Consumer",
+            "model Consumer\n  Demo.Healthy healthy;\nend Consumer;",
+            "Consumer.mo",
+        );
         assert!(
-            compiler.session().class_lookup_query("Healthy").is_none(),
+            result.is_err(),
             "a failed source-root admission must not expose only its parseable members"
         );
     }

@@ -23,7 +23,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_modelica_execution::resolve_setup_bounds;
+use lunco_modelica_runner::resolve_setup_bounds;
 use lunco_modelica_runtime::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, DEFAULT_COMMUNICATION_PERIOD_SECS,
 };
@@ -159,7 +159,7 @@ pub struct FastRunInput {
 pub(crate) fn render_fast_run_setup(
     mut egui_ctx: bevy_egui::EguiContexts,
     mut setup: ResMut<FastRunSetupState>,
-    mut drafts: ResMut<crate::experiments_runner::ExperimentDrafts>,
+    mut drafts: ResMut<lunco_modelica_runner::ExperimentDrafts>,
     mut run_targets: ResMut<crate::sim_default::RunTargetOverrides>,
     mut commands: Commands,
 ) {
@@ -337,11 +337,11 @@ pub(crate) fn render_fast_run_setup(
                     let mut tol_v = entry
                         .bounds
                         .tolerance
-                        .unwrap_or(crate::experiments_runner::DEFAULT_TOLERANCE);
+                        .unwrap_or(lunco_modelica_runner::DEFAULT_TOLERANCE);
                     ui.horizontal(|ui| {
                         if ui.checkbox(&mut tol_on, "set").changed() {
                             entry.bounds.tolerance = if tol_on {
-                                Some(crate::experiments_runner::DEFAULT_TOLERANCE)
+                                Some(lunco_modelica_runner::DEFAULT_TOLERANCE)
                             } else {
                                 None
                             };
@@ -1778,7 +1778,8 @@ fn dispatch_experiment(
 
         // Snapshot source into the runner so the worker thread / web
         // worker can compile without touching the live editor state.
-        let runner_res = match world.get_resource::<crate::ModelicaRunnerResource>() {
+        let runner_res = match world.get_resource::<lunco_modelica_runner::ModelicaRunnerResource>()
+        {
             Some(r) => r.clone(),
             None => {
                 bevy::log::error!("[dispatch_experiment] runner resource missing");
@@ -1787,7 +1788,7 @@ fn dispatch_experiment(
         };
         runner_res.0.set_model_source(
             model_ref.clone(),
-            crate::experiments_runner::ModelSource {
+            lunco_modelica_runner::ModelSource {
                 model_name: model_name.clone(),
                 source,
                 filename,
@@ -1812,7 +1813,7 @@ fn dispatch_experiment(
         if let Some(exp) = annotation {
             runner_res.0.set_model_defaults(
                 model_ref.clone(),
-                crate::experiments_runner::ModelDefaults {
+                lunco_modelica_runner::ModelDefaults {
                     t_start: exp.start_time,
                     t_end: exp.stop_time,
                     tolerance: exp.tolerance,
@@ -1836,7 +1837,7 @@ fn dispatch_experiment(
         // Parameter overrides / inputs from the draft, with command-supplied
         // values winning. Empty maps (the FastRunActiveModel path) = no-op.
         let (mut overrides, mut inputs) = {
-            let drafts = world.resource::<crate::experiments_runner::ExperimentDrafts>();
+            let drafts = world.resource::<lunco_modelica_runner::ExperimentDrafts>();
             match drafts.get(doc, &model_ref) {
                 Some(d) => (d.overrides.clone(), d.inputs.clone()),
                 None => (Default::default(), Default::default()),
@@ -1912,13 +1913,13 @@ fn dispatch_experiment(
         // Remember which document started this run so failures can be
         // routed back into the doc's CompileStates + Console.
         world
-            .resource_mut::<crate::experiments_runner::ExperimentSources>()
+            .resource_mut::<lunco_modelica_runner::ExperimentSources>()
             .0
             .insert(exp_id, doc);
         // Store the handle so a draining system can pump updates into
         // registry status.
         world
-            .resource_mut::<crate::experiments_runner::PendingHandles>()
+            .resource_mut::<lunco_modelica_runner::PendingHandles>()
             .0
             .push(handle);
         // Mark the run Queued. The scheduler may start it immediately (then
@@ -2175,7 +2176,7 @@ pub fn on_cancel_experiment(trigger: On<CancelExperiment>, mut commands: Command
     let target = trigger.event().experiment_id.clone();
     let all = trigger.event().all;
     commands.queue(move |world: &mut World| {
-        let handles = world.resource::<crate::experiments_runner::PendingHandles>();
+        let handles = world.resource::<lunco_modelica_runner::PendingHandles>();
         let mut n = 0u32;
         for h in handles.0.iter() {
             if all || target.as_deref() == Some(h.run_id.0.to_string().as_str()) {
@@ -2211,8 +2212,7 @@ pub(crate) fn purge_experiment_side_state(
     if removed.is_empty() {
         return;
     }
-    if let Some(mut sources) =
-        world.get_resource_mut::<crate::experiments_runner::ExperimentSources>()
+    if let Some(mut sources) = world.get_resource_mut::<lunco_modelica_runner::ExperimentSources>()
     {
         for id in removed {
             sources.0.remove(id);

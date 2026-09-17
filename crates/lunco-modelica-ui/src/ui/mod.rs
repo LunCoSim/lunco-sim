@@ -160,7 +160,7 @@ fn close_drilled_tabs_on_class_removed(
     mut tabs: ResMut<crate::model_tabs::ModelTabs>,
     mut watermark: ResMut<ClassRemovedWatermark>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
-    mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,
+    mut drafts: Option<ResMut<lunco_modelica_runner::ExperimentDrafts>>,
     mut steppers: Query<&mut ModelicaModel>,
 ) {
     use lunco_doc::Document as _;
@@ -1396,7 +1396,10 @@ mod tests {
         let entity = app.world_mut().spawn(ModelicaModel::default()).id();
         let doc = {
             let mut reg = app.world_mut().resource_mut::<ModelicaDocuments>();
-            let doc = reg.allocate("model M end M;".into());
+            let doc = reg.allocate(
+                "model M end M;".into(),
+                lunco_doc::PathlessOrigin::untitled("M.mo"),
+            );
             reg.link(entity, doc)
                 .expect("Modelica UI test document link");
             doc

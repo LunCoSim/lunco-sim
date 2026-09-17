@@ -71,7 +71,8 @@ with their `overrides` + `bounds` so a sweep's runs are self-describing.
 For parameter sweeps, prefer `RunExperiment` (explicit `overrides`) over
 mutating the source — each run becomes a proper `Experiment` with its
 override set recorded. A sweep's runs execute **in parallel** and the model
-is **compiled once** and shared across runs (see `experiments_runner.rs`).
+is **compiled once** and shared across runs (see
+`lunco-modelica-runner/src/runner.rs`).
 
 ## Architecture at a glance
 

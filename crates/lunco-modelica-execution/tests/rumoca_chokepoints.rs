@@ -58,7 +58,7 @@ fn code_only(source: &str) -> String {
 /// that builds one: it turns
 /// a resolved `SolverSpec` plus `SolverParams` into rumoca's options. The two
 /// policy entry points state parameters and delegate to it, never construct:
-/// * `experiments_runner::stepper_options_from_bounds` — batch / offline / FastRun
+/// * `lunco_modelica_runner::stepper_options_from_bounds` — batch / offline / FastRun
 /// * `worker::live_stepper_options` — live co-sim (`t_end = u32::MAX`, no ceiling)
 ///
 /// Everything else — including `src/bin/` — must take options from one of those.

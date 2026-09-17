@@ -19,7 +19,7 @@ use lunco_workspace::WorkspaceResource;
 
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 use lunco_modelica_core::models::bundled_models;
-use lunco_modelica_execution::experiments_runner::ExperimentSources;
+use lunco_modelica_runner::ExperimentSources;
 // `DrilledInClassNames` reads migrated to
 // `lunco_modelica_core::sim_default::drilled_class_for_doc`.
 use lunco_doc::CompileState;
@@ -387,7 +387,7 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
         }
 
         use lunco_experiments::{ExperimentRunner, ModelRef};
-        use lunco_modelica_execution::{bounds_from_annotation, resolve_setup_bounds};
+        use lunco_modelica_runner::{bounds_from_annotation, resolve_setup_bounds};
 
         let classes: Vec<serde_json::Value> = class_list
             .into_iter()
@@ -399,15 +399,14 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
                 // label beside the canonical resolver until the API can return
                 // its typed result directly.
                 let has_draft = world
-                    .get_resource::<lunco_modelica_execution::experiments_runner::ExperimentDrafts>(
-                    )
+                    .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
                     .and_then(|d| {
                         d.get(doc_id, &mref)
                             .and_then(|dr| dr.bounds_override.clone())
                     })
                     .is_some();
                 let has_runner_cache = world
-                    .get_resource::<lunco_modelica_execution::ModelicaRunnerResource>()
+                    .get_resource::<lunco_modelica_runner::ModelicaRunnerResource>()
                     .and_then(|r| r.0.default_bounds(&mref))
                     .is_some();
                 let source = if has_draft {

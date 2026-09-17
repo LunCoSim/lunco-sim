@@ -22,11 +22,7 @@ use lunco_modelica_core::ModelicaCorePlugin as CoreModelicaPlugin;
 use lunco_modelica_execution::ModelicaExecutionPlugin;
 
 #[cfg(feature = "ui")]
-pub(crate) use lunco_modelica_execution::experiments_runner;
-
 #[cfg(feature = "ui")]
-pub(crate) use lunco_modelica_execution::ModelicaRunnerResource;
-
 #[cfg(feature = "ui")]
 /// UI configuration for the Modelica workbench.
 #[derive(Resource, Clone, Debug)]
@@ -149,7 +145,7 @@ impl Plugin for ModelicaWorkbenchPlugin {
 #[cfg(feature = "ui")]
 fn sim_focus_pace(
     settings: Option<ResMut<bevy::winit::WinitSettings>>,
-    pending: Option<Res<experiments_runner::PendingHandles>>,
+    pending: Option<Res<lunco_modelica_runner::PendingHandles>>,
     models: Query<&lunco_modelica_runtime::ModelicaModel>,
     keep_awake: Option<Res<lunco_core::KeepAwake>>,
     mut idle: Local<Option<bevy::winit::UpdateMode>>,
