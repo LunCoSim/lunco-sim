@@ -1,0 +1,20 @@
+[package]
+name = "lunco-modelica-compiler"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Headless Modelica source admission and Rumoca compiler host"
+
+[dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-document = { path = "../lunco-modelica-document" }
+lunco-modelica-index = { path = "../lunco-modelica-index" }
+lunco-modelica-library = { path = "../lunco-modelica-library" }
+rumoca-compile = { workspace = true }
+web-time = { workspace = true }
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
+
+[lints]
+workspace = true

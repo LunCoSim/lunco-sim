@@ -57,7 +57,7 @@ mod native {
     use std::path::PathBuf;
     use std::time::Instant;
 
-    use lunco_modelica_core::ModelicaCompiler;
+    use lunco_modelica_compiler::ModelicaCompiler;
 
     /// CLI options. Hand-parsed (no `clap`) so the binary stays cheap to
     /// build and link — same rationale as `modelica_library_indexer`.
@@ -268,12 +268,10 @@ mod native {
             tolerance: Some(1e-1),
             ..Default::default()
         };
-        let stepper_opts =
-            match lunco_modelica_execution::experiments_runner::stepper_options_from_bounds(&bounds)
-            {
-                Ok(o) => o,
-                Err(e) => die(&format!("solver selection failed: {e}")),
-            };
+        let stepper_opts = match lunco_modelica_runner::stepper_options_from_bounds(&bounds) {
+            Ok(o) => o,
+            Err(e) => die(&format!("solver selection failed: {e}")),
+        };
 
         let mut stepper =
             match lunco_modelica_solver::simulation_session::cli(&comp_res.dae, stepper_opts) {

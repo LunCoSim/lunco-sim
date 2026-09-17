@@ -8152,6 +8152,7 @@ dependencies = [
  "lunco-modelica-document",
  "lunco-modelica-execution",
  "lunco-modelica-index",
+ "lunco-modelica-runner",
  "lunco-modelica-runtime",
  "lunco-twin-journal",
  "lunco-workspace",
@@ -8169,6 +8170,7 @@ dependencies = [
  "log",
  "lunco-assets-core",
  "lunco-modelica-ast",
+ "lunco-modelica-compiler",
  "lunco-modelica-core",
  "lunco-modelica-index",
  "lunco-modelica-library",
@@ -8197,6 +8199,21 @@ dependencies = [
  "rumoca-phase-parse",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-modelica-compiler"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "lunco-assets-core",
+ "lunco-doc",
+ "lunco-modelica-ast",
+ "lunco-modelica-document",
+ "lunco-modelica-index",
+ "lunco-modelica-library",
+ "rumoca-compile",
+ "web-time",
 ]
 
 [[package]]
@@ -8268,37 +8285,31 @@ dependencies = [
  "crossbeam-channel",
  "getrandom 0.3.4",
  "js-sys",
- "log",
  "lunco-assets-core",
  "lunco-core",
  "lunco-doc",
- "lunco-doc-bevy",
  "lunco-experiments",
  "lunco-modelica-ast",
+ "lunco-modelica-compiler",
  "lunco-modelica-core",
- "lunco-modelica-document",
  "lunco-modelica-index",
  "lunco-modelica-library",
+ "lunco-modelica-runner",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
  "lunco-modelica-telemetry",
+ "lunco-modelica-worker",
  "lunco-settings",
  "lunco-signal",
- "lunco-storage",
  "lunco-time",
  "lunco-worker-transport",
- "rayon",
  "rumoca-compile",
- "rumoca-ir-solve",
- "rumoca-sim",
  "serde",
  "serde_json",
- "tempfile",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
- "zstd",
 ]
 
 [[package]]
@@ -8349,6 +8360,30 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "lunco-modelica-runner"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "crossbeam-channel",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-experiments",
+ "lunco-modelica-ast",
+ "lunco-modelica-compiler",
+ "lunco-modelica-core",
+ "lunco-modelica-document",
+ "lunco-modelica-solver",
+ "lunco-settings",
+ "rumoca-compile",
+ "rumoca-sim",
+ "serde",
+ "tempfile",
+ "web-sys",
+ "web-time",
 ]
 
 [[package]]
@@ -8428,6 +8463,7 @@ dependencies = [
  "lunco-modelica-icon-ui",
  "lunco-modelica-index",
  "lunco-modelica-library",
+ "lunco-modelica-runner",
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
  "lunco-scripting",
@@ -8472,6 +8508,38 @@ dependencies = [
  "bevy",
  "lunco-core",
  "serde",
+]
+
+[[package]]
+name = "lunco-modelica-worker"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bincode 2.0.1",
+ "crossbeam-channel",
+ "log",
+ "lunco-assets-core",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-experiments",
+ "lunco-modelica-ast",
+ "lunco-modelica-compiler",
+ "lunco-modelica-core",
+ "lunco-modelica-document",
+ "lunco-modelica-runner",
+ "lunco-modelica-runtime",
+ "lunco-modelica-solver",
+ "lunco-signal",
+ "lunco-storage",
+ "lunco-time",
+ "rayon",
+ "rumoca-compile",
+ "rumoca-ir-solve",
+ "rumoca-sim",
+ "serde",
+ "web-time",
+ "zstd",
 ]
 
 [[package]]

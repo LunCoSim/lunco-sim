@@ -18,7 +18,7 @@
 #[test]
 fn compile_str_keeps_bound_input_as_runtime_slot() {
     let src = "model M\n  input Real g = 9.81;\n  Real x;\nequation\n  der(x) = g;\nend M;\n";
-    let mut compiler = lunco_modelica_core::ModelicaCompiler::new();
+    let mut compiler = lunco_modelica_compiler::ModelicaCompiler::new();
     let dae = compiler.compile_str("M", src, "m.mo").expect("M compiles");
 
     let opts = rumoca_sim::SimOptions {
@@ -41,18 +41,19 @@ fn compile_str_keeps_bound_input_as_runtime_slot() {
 /// `step`/`advance_to` refuse to advance the model past `SimOptions::t_end`, and
 /// they do it *silently* — the call returns `Ok`, the clock just stops. Every
 /// interactive caller therefore has to declare its real horizon up front
-/// (`experiments_runner::stepper_options_from_bounds` is the one place that
+/// (`lunco_modelica_runner::stepper_options_from_bounds` is the one place that
 /// does), because with the `SimOptions::default()` horizon of 1.0 a long run
 /// parks at t=1s and reports a frozen model rather than an error.
 ///
 /// If this test starts failing, the clamp is gone: the horizon plumbing in
 /// `stepper_options_from_bounds` can be revisited, and the live path's
-/// `t_end = u32::MAX` sentinel in `worker::live_stepper_options` with it.
+/// `t_end = u32::MAX` sentinel in
+/// `lunco_modelica_worker::worker::live_stepper_options` with it.
 #[test]
 fn simulation_session_clamps_advance_at_t_end() {
     let source = "model HorizonFixture\n  Real x(start = 0, fixed = true);\nequation\n  der(x) = 1;\nend HorizonFixture;\n";
     let (stripped, _) = lunco_modelica_ast::ast_extract::strip_input_defaults(source);
-    let mut compiler = lunco_modelica_core::ModelicaCompiler::new();
+    let mut compiler = lunco_modelica_compiler::ModelicaCompiler::new();
     let dae = compiler
         .compile_str("HorizonFixture", &stripped, "horizon_fixture.mo")
         .expect("HorizonFixture compiles");

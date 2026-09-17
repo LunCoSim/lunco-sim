@@ -1,0 +1,39 @@
+[package]
+name = "lunco-modelica-worker"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Modelica worker engine, live co-simulation bridge, and worker-local caches"
+
+[dependencies]
+bevy.workspace = true
+crossbeam-channel.workspace = true
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-experiments = { path = "../lunco-experiments" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-compiler = { path = "../lunco-modelica-compiler" }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-document = { path = "../lunco-modelica-document" }
+lunco-modelica-runner = { path = "../lunco-modelica-runner" }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-modelica-solver = { path = "../lunco-modelica-solver" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-time = { path = "../lunco-time" }
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
+rumoca-compile.workspace = true
+rumoca-ir-solve.workspace = true
+rumoca-sim.workspace = true
+serde.workspace = true
+web-time.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bincode.workspace = true
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-storage = { path = "../lunco-storage" }
+rayon.workspace = true
+zstd.workspace = true
+
+[lints]
+workspace = true

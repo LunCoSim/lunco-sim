@@ -16,7 +16,7 @@ use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
 use crate::ui::MODEL_VIEW_KIND;
 use lunco_doc::CompileState;
 use lunco_doc_bevy::DocumentDiagnostics;
-use lunco_modelica_execution::resolve_setup_bounds;
+use lunco_modelica_runner::resolve_setup_bounds;
 
 pub struct ModelViewPanel {
     code: CodeEditorPanel,
@@ -58,7 +58,7 @@ pub(crate) fn on_fast_run_setup_requested(
         if let Some(model_ref) = model_ref {
             let bounds = resolve_setup_bounds(world, doc, &model_ref);
             let overrides_count = world
-                .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
                 .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))
                 .unwrap_or(0);
             let detected = world
@@ -69,11 +69,11 @@ pub(crate) fn on_fast_run_setup_requested(
                         h.document().syntax().ast(),
                         lunco_modelica_ast::ast_extract::short_name(&model_ref.0),
                     )
-                    .map(crate::experiments_runner::detect_top_level_inputs)
+                    .map(lunco_modelica_runner::detect_top_level_inputs)
                 })
                 .unwrap_or_default();
             let prefilled = world
-                .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
                 .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
                 .unwrap_or_default();
             let inputs = detected
@@ -418,7 +418,7 @@ fn render_unified_toolbar(
     // not-busy, which is why the toolbar showed "Idle" mid-run. For the
     // status pill we want "is anything running or queued?".
     let (runner_running, runner_queued) = ctx
-        .resource::<crate::ModelicaRunnerResource>()
+        .resource::<lunco_modelica_runner::ModelicaRunnerResource>()
         .map(|r| (r.0.in_flight_count(), r.0.queued_count()))
         .unwrap_or((0, 0));
     let runner_busy = runner_running > 0 || runner_queued > 0;
@@ -432,7 +432,7 @@ fn render_unified_toolbar(
     // toolbar for both the live stepper and the experiment runner.
     let experiment_run_t: Option<f64> = {
         let reg = ctx.resource::<lunco_experiments::ExperimentRegistry>();
-        let src = ctx.resource::<crate::experiments_runner::ExperimentSources>();
+        let src = ctx.resource::<lunco_modelica_runner::ExperimentSources>();
         match (reg, src) {
             (Some(reg), Some(src)) => src
                 .0
@@ -738,7 +738,7 @@ fn render_unified_toolbar(
                 // annotation → fallback).
                 let bounds = resolve_setup_bounds(world, doc, &model_ref);
                 let overrides_count = world
-                    .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                    .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
                     .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.len()))
                     .unwrap_or(0);
                 // Inputs from the parsed AST of the resolved model class — no
@@ -751,11 +751,11 @@ fn render_unified_toolbar(
                             h.document().syntax().ast(),
                             lunco_modelica_ast::ast_extract::short_name(&model_ref.0),
                         )
-                        .map(crate::experiments_runner::detect_top_level_inputs)
+                    .map(lunco_modelica_runner::detect_top_level_inputs)
                     })
                     .unwrap_or_default();
                 let prefilled = world
-                    .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                    .get_resource::<lunco_modelica_runner::ExperimentDrafts>()
                     .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
                     .unwrap_or_default();
                 let inputs: Vec<crate::ui::commands::FastRunInput> = detected

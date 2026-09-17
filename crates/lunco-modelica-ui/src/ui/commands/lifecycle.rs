@@ -236,7 +236,7 @@ fn fire_app_exit(world: &mut World) {
 /// Workers stop at their next solver-step or compile boundary; the normal
 /// lifecycle remains responsible for reporting a worker that does not stop.
 pub(crate) fn cancel_inflight_runs(world: &World) {
-    if let Some(pending) = world.get_resource::<crate::experiments_runner::PendingHandles>() {
+    if let Some(pending) = world.get_resource::<lunco_modelica_runner::PendingHandles>() {
         if !pending.0.is_empty() {
             bevy::log::info!(
                 "[AppClose] cancelling {} in-flight run(s) before exit",
@@ -278,7 +278,7 @@ pub fn finalize_app_close(
     pending_save_close: Option<Res<PendingCloseAfterSave>>,
     pending_tab_closes: Option<Res<lunco_workbench_core::tabs::PendingTabCloses>>,
     registry: Option<Res<ModelicaDocuments>>,
-    pending_runs: Option<Res<crate::experiments_runner::PendingHandles>>,
+    pending_runs: Option<Res<lunco_modelica_runner::PendingHandles>>,
     mut exit_events: bevy::ecs::message::MessageWriter<bevy::app::AppExit>,
 ) {
     let Some(mut flow) = flow else { return };
@@ -1028,7 +1028,7 @@ pub fn on_document_closed_cleanup(
     mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut doc_pins: Option<ResMut<crate::ui::doc_pin::DocPinState>>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
-    mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,
+    mut drafts: Option<ResMut<lunco_modelica_runner::ExperimentDrafts>>,
     mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
     mut bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {

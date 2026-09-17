@@ -19,7 +19,7 @@ solver findings belong here; the related rumoca workarounds are indexed in
   thermal models, while the diffsol 0.13 SDIRK tableaus (TR-BDF2 / ESDIRK34)
   hit "nonlinear solver failures (50)" within the first lunar hour on the same
   models. SDIRK stays opt-in. (Source of truth:
-  `crates/lunco-modelica-execution/src/experiments_runner.rs` default-solver comment.)
+  `crates/lunco-modelica-runner/src/runner.rs` default-solver comment.)
 
 ### Known-failing models — don't waste time tuning solvers
 

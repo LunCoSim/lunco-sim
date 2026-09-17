@@ -8,7 +8,9 @@
 
 **Implemented.** `lunco-experiments` shipped — `Experiment`, `RunResult`,
 `RunStatus`, `ExperimentRegistry`, `ExperimentRunner` (trait), `ExperimentsPlugin`,
-with `lunco-modelica-execution` providing the `ModelicaRunner` backend.
+with `lunco-modelica-runner` providing the `ModelicaRunner` backend,
+`lunco-modelica-worker` providing the stateful worker engine, and
+`lunco-modelica-execution` providing host lifecycle and transport.
 Owner: lunica/modelica.
 Related: `13-twin-and-workflow.md`, `14-simulation-layers.md`, `22-domain-cosim.md`, `30-wasm-web-worker.md`.
 
@@ -31,8 +33,11 @@ Dymola and OMEdit treat results as `.mat` files keyed by model name; comparison 
 ### Why backend-agnostic
 Today the only execution backend is rumoca + diffsol. The crate boundary should not assume that. FMU import, codegen, hardware-in-the-loop, and remote workers are all plausible v2+ extensions. Putting `Experiment` and `RunResult` in a backend-agnostic crate keeps the door open without committing to any of those.
 
-### Why string-injection overrides
-String injection covers the parameter override surface (top-level literal `parameter` declarations) without requiring upstream modifications to rumoca. This is encapsulated behind the runner trait and can be updated as the API evolves.
+### Why DAE-level overrides
+The runner applies scalar parameter and input values to the compiled DAE after
+one clean compile. A sweep therefore reuses the same compiled artifact without
+mutating authored source or reflattening every point. Unsupported bindings are
+reported as run errors at the runner boundary.
 
 ### Why the Web Worker uses postMessage, not SAB
 The wasm host has no COOP/COEP headers and the worker is intentionally a separate wasm instance (see `30-wasm-web-worker.md`). Adding SAB requires header changes and nightly atomics. Cancellation latency of <100 ms via message polling is acceptable for human-driven Fast Runs.
@@ -50,14 +55,24 @@ lunco-experiments-ui/     (backend-agnostic view state)
   ExperimentVisibility, PlotPanelStates, ActivePlot
   ExperimentsViewModel and change-gated trajectory cache
 
+lunco-modelica-compiler/
+  ModelicaCompiler and source-root admission
+
 lunco-modelica-core/
-  ModelicaCompiler and compiler/document lifecycle
+  document and compiler-engine lifecycle synchronization
+
+lunco-modelica-runner/
+  ModelicaRunner: ExperimentRunner
+  compile-once DAE cache and source-string override injector
+  shared batch/interactive run paths and run-bound resolution
+
+lunco-modelica-worker/
+  stateful Modelica worker engine and live co-simulation bridge
+  native worker loop, command dispatch, and worker-local caches
 
 lunco-modelica-execution/
-  ModelicaRunner: ExperimentRunner
-    cfg(target_arch="wasm32") -> WebWorkerTransport
-    cfg(not(...))             -> ThreadTransport
-  source-string override injector
+  native worker launch and wasm WebWorkerTransport
+  typed callback installation for the runner's wasm dispatch seam
 
 lunco-modelica-ui/
   Run buttons + experiment table + bounds inline UI
@@ -74,8 +89,11 @@ lunco-viz/                            Shared multi-series trajectory renderer
 lunco-viz-core/                       Render-free visualization identifiers
 ```
 
-`lunco-modelica-execution` depends on `lunco-experiments` and the compiler
-core. `lunco-experiments` does not depend on either Modelica package or
+`lunco-modelica-runner` depends on `lunco-experiments` and
+`lunco-modelica-compiler`;
+`lunco-modelica-execution` composes the runner and worker engine with platform
+transport. The generic
+`lunco-experiments` package does not depend on either Modelica package or
 `rumoca-*`.
 
 ### Why a new crate (vs. inside lunco-twin)
@@ -195,7 +213,10 @@ Compiler and DAE state already live in this worker. A second worker would duplic
 [ Interactive ▶ ]   [ Fast ⏩  0 → 10s, dt=auto ⚙ ]
 ```
 
-Bounds beside the Fast button reflect annotation defaults from `CompilationResult.experiment_*` after the model's first compile, fallback `0..1, dt=auto` otherwise. Inline-editable. Gear opens override editor.
+Bounds beside the Fast button reflect annotation defaults from
+`CompilationResult.experiment_*` after the model's first compile; when no
+annotation provides a horizon, the documented run-bound defaults are used.
+Inline-editable. Gear opens override editor.
 
 ### Experiments panel (new dock)
 
@@ -248,9 +269,9 @@ resolution or Modelica setup. The host resolves its current document to a
 A sweep runs many points at once, bounded by one scheduler. Two things carry
 most of the win, and both already exist — do not rebuild them.
 
-**Compile once, sweep many.** `experiments_runner.rs` caches the compiled `Dae`
+**Compile once, sweep many.** `lunco-modelica-runner` caches the compiled `Dae`
 keyed by source hash (`dae_cache`, `dae_cache_key`) and applies parameter
-overrides at the DAE level (`apply_overrides_to_dae`) rather than reflattening
+overrides at the DAE level (`apply_value_bindings_to_dae`) rather than reflattening
 per run. A sweep that varies only top-level scalar parameters recompiles
 **zero** times after the first point.
 

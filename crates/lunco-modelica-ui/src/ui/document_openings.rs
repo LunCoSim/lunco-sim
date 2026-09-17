@@ -233,7 +233,7 @@ pub fn track_compile_busy(
 }
 
 /// `StatusBus` handle for an in-flight Fast Run.
-/// [`crate::experiments_runner::ModelicaRunner`] is a process-global
+/// [`lunco_modelica_runner::ModelicaRunner`] is a process-global
 /// singleton — only one run at a time — so a single `Option` is
 /// sufficient. Scope is `Global` because the runner doesn't track
 /// which document owns the active experiment.
@@ -243,10 +243,10 @@ pub struct SimulateBusyHandle {
 }
 
 /// Edge-triggered tracker for Fast Run lifecycle. Mints when
-/// [`crate::experiments_runner::ModelicaRunner::is_busy`] rises,
+/// [`lunco_modelica_runner::ModelicaRunner::is_busy`] rises,
 /// drops when it falls.
 pub fn track_simulate_busy(
-    runner: Option<Res<crate::ModelicaRunnerResource>>,
+    runner: Option<Res<lunco_modelica_runner::ModelicaRunnerResource>>,
     mut state: ResMut<SimulateBusyHandle>,
     mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
 ) {

@@ -1,6 +1,6 @@
 //! Native source-library provisioning and editor-index lifecycle.
 //!
-//! The compiler core installs an already materialised source root and exposes
+//! The compiler/runtime host installs an already materialised source root and exposes
 //! the generic load state. This application adapter composes dataset delivery
 //! with the Modelica asset indexer and keeps the blocking scan/decode off the
 //! render thread.

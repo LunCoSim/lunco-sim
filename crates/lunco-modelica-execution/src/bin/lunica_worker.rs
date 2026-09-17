@@ -2,7 +2,7 @@
 //!
 //! Runs inside a Web Worker with its own wasm linear memory. Listens for
 //! bincode-serialized `ModelicaCommand` messages from the main page, drives
-//! them through the same `worker::process_worker_command` dispatch the native
+//! them through the same `lunco_modelica_worker::worker::process_worker_command` dispatch the native
 //! worker uses, and `postMessage`s each `ModelicaResult` back.
 //!
 //! Why a separate bin
@@ -12,7 +12,7 @@
 //! which is a separate JS thread with a separate wasm instance — moves the
 //! blocking work off the page's main thread without needing nightly Rust
 //! atomics or `SharedArrayBuffer`. The native build is unchanged: it still
-//! uses `worker::modelica_worker` on a real `std::thread`.
+//! uses `lunco_modelica_worker::worker::modelica_worker` on a real `std::thread`.
 //!
 //! State
 //! -----
@@ -76,13 +76,13 @@ mod wasm {
         }
     }
 
+    use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::prelude::*;
-    use wasm_bindgen::JsCast;
     use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
-    use lunco_modelica_execution::worker::{
-        panic_result_for_command, process_worker_command, ModelicaWorkerState,
+    use lunco_modelica_worker::worker::{
+        ModelicaWorkerState, panic_result_for_command, process_worker_command,
     };
 
     thread_local! {
@@ -233,7 +233,7 @@ mod wasm {
         >,
         bounds: &lunco_experiments::RunBounds,
     ) {
-        use lunco_modelica_execution::experiments_runner::apply_value_bindings_to_dae;
+        use lunco_modelica_runner::apply_value_bindings_to_dae;
         let started = web_time::Instant::now();
         post_log(
             scope,
@@ -321,7 +321,7 @@ mod wasm {
         };
 
         // Drive the run through the SHARED `drive_run` — the EXACT same entry
-        // point native (`experiments_runner::run_inner`) uses. It honours
+        // point native (`lunco_modelica_runner`) uses. It honours
         // `bounds.runtime`: Batch → the dense-output `simulate_with_diagnostics`
         // solve (robust on stiff models), Interactive → the streamable
         // `run_stepping_loop`. `WorkerSink` is the only worker-specific part
@@ -332,9 +332,7 @@ mod wasm {
         // closes that divergence and also brings the worker the batch
         // output-decimation.
         let mut sink = WorkerSink { scope, run_id };
-        lunco_modelica_execution::experiments_runner::drive_run(
-            &run_dae, bounds, started, &mut sink,
-        );
+        lunco_modelica_runner::drive_run(&run_dae, bounds, started, &mut sink);
         post_log(
             scope,
             format!("run_fast: done in {:.2}s", started.elapsed().as_secs_f64()),
@@ -354,7 +352,7 @@ mod wasm {
         }
     }
 
-    /// Worker-side [`RunSink`](lunco_modelica_execution::experiments_runner::RunSink):
+    /// Worker-side [`RunSink`](lunco_modelica_runner::RunSink):
     /// streams run updates over `postMessage` and reads the worker's cancel
     /// registry. The ONLY platform-specific half of the run loop — the loop
     /// itself is shared with the native runner.
@@ -363,7 +361,7 @@ mod wasm {
         run_id: lunco_experiments::ExperimentId,
     }
 
-    impl lunco_modelica_execution::experiments_runner::RunSink for WorkerSink<'_> {
+    impl lunco_modelica_runner::RunSink for WorkerSink<'_> {
         fn is_cancelled(&mut self) -> bool {
             if is_cancelled(self.run_id) {
                 clear_cancel();

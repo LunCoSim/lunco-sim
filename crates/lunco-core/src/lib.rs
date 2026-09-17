@@ -38,6 +38,8 @@ pub mod reconcile;
 pub mod scene;
 /// Shared scene teardown schedule for all scene-owned subsystems.
 mod scene_lifecycle;
+/// Recoverable locking for shared process state.
+pub mod sync;
 pub mod subsystems;
 pub mod telemetry;
 
@@ -97,6 +99,7 @@ pub use scene::{
 };
 pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};
 pub use telemetry::Severity;
+pub use sync::LockExt;
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
 //

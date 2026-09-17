@@ -78,7 +78,7 @@ pub(crate) fn on_rerun_experiment_requested(
     commands.queue(move |world: &mut World| {
         load_run_into_draft(world, id);
         if let Some(doc) = world
-            .get_resource::<crate::experiments_runner::ExperimentSources>()
+            .get_resource::<lunco_modelica_runner::ExperimentSources>()
             .and_then(|sources| sources.0.get(&id).copied())
             .or_else(|| {
                 world
@@ -675,7 +675,7 @@ impl Panel for ExperimentsPanel {
             // Best-effort cancel via the runner's RunHandle. The
             // PendingHandles drain system will see the resulting
             // RunUpdate::Cancelled and update registry status.
-            ctx.resource_scope::<crate::experiments_runner::PendingHandles, _>(
+            ctx.resource_scope::<lunco_modelica_runner::PendingHandles, _>(
                 |_, handles| {
                     for h in &handles.0 {
                         if h.run_id == id {
@@ -765,14 +765,14 @@ impl ExperimentsPanel {
                     h.document().syntax().ast(),
                     lunco_modelica_ast::ast_extract::short_name(&model_name),
                 )
-                .map(crate::experiments_runner::detect_top_level_inputs)
+                .map(lunco_modelica_runner::detect_top_level_inputs)
             })
             .unwrap_or_default();
         let prefilled_inputs: BTreeMap<
             lunco_experiments::ParamPath,
             lunco_experiments::ParamValue,
         > = ctx
-            .resource::<crate::experiments_runner::ExperimentDrafts>()
+            .resource::<lunco_modelica_runner::ExperimentDrafts>()
             .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.inputs.clone()))
             .unwrap_or_default();
         // Maintain editable text per input row across frames via a
@@ -809,7 +809,7 @@ impl ExperimentsPanel {
         // queued" chip and means the Run button queues (rather than being
         // disabled) when the runner is saturated.
         let (running_now, queued_now, max_par) = ctx
-            .resource::<crate::ModelicaRunnerResource>()
+            .resource::<lunco_modelica_runner::ModelicaRunnerResource>()
             .map(|r| {
                 (
                     r.0.in_flight_count(),
@@ -844,7 +844,7 @@ impl ExperimentsPanel {
         // Annotation-default reference for "is this what the model
         // says?" tagging next to the bounds inputs.
         let annotation_defaults = ctx
-            .resource::<crate::ModelicaRunnerResource>()
+            .resource::<lunco_modelica_runner::ModelicaRunnerResource>()
             .and_then(|r| {
                 use lunco_experiments::ExperimentRunner;
                 r.0.default_bounds(&model_ref)
@@ -1180,7 +1180,7 @@ impl ExperimentsPanel {
         // Wire the inline ⊘ Cancel button to the runner.
         if cancel_active {
             // Latest in-flight handle.
-            ctx.resource_scope::<crate::experiments_runner::PendingHandles, _>(|_, handles| {
+            ctx.resource_scope::<lunco_modelica_runner::PendingHandles, _>(|_, handles| {
                 if let Some(h) = handles.0.last() {
                     h.cancel();
                 }
@@ -1190,7 +1190,7 @@ impl ExperimentsPanel {
         // Persist edits.
         if bounds_changed {
             let model_ref_b = model_ref.clone();
-            ctx.resource_scope::<crate::experiments_runner::ExperimentDrafts, _>(|_, drafts| {
+            ctx.resource_scope::<lunco_modelica_runner::ExperimentDrafts, _>(|_, drafts| {
                 drafts.entry(doc, model_ref_b).bounds_override = Some(bounds);
             });
         }
@@ -1226,7 +1226,7 @@ impl ExperimentsPanel {
                     map.insert(lunco_experiments::ParamPath(name.clone()), v);
                 }
             }
-            ctx.resource_scope::<crate::experiments_runner::ExperimentDrafts, _>(|_, drafts| {
+            ctx.resource_scope::<lunco_modelica_runner::ExperimentDrafts, _>(|_, drafts| {
                 drafts.entry(doc, model_ref).inputs = map;
             });
         }
@@ -1288,7 +1288,7 @@ impl ExperimentsPanel {
             document.syntax().ast(),
             lunco_modelica_ast::ast_extract::short_name(&model_name),
         )
-        .map(crate::experiments_runner::detect_top_level_literal_parameters)
+        .map(lunco_modelica_runner::detect_top_level_literal_parameters)
         .unwrap_or_default();
         if detected.is_empty() {
             return;
@@ -1305,7 +1305,7 @@ impl ExperimentsPanel {
 
             // Parameter overrides
             let current_overrides: BTreeMap<ParamPath, ParamValue> = ctx
-                .resource::<crate::experiments_runner::ExperimentDrafts>()
+                .resource::<lunco_modelica_runner::ExperimentDrafts>()
                 .and_then(|d| d.get(doc, &model_ref).map(|dr| dr.overrides.clone()))
                 .unwrap_or_default();
 
@@ -1465,21 +1465,19 @@ impl ExperimentsPanel {
                 });
 
             if !updates.is_empty() {
-                ctx.resource_scope::<crate::experiments_runner::ExperimentDrafts, _>(
-                    |_, drafts| {
-                        let entry = drafts.entry(doc, model_ref);
-                        for (path, v) in updates {
-                            match v {
-                                Some(value) => {
-                                    entry.overrides.insert(path, value);
-                                }
-                                None => {
-                                    entry.overrides.remove(&path);
-                                }
+                ctx.resource_scope::<lunco_modelica_runner::ExperimentDrafts, _>(|_, drafts| {
+                    let entry = drafts.entry(doc, model_ref);
+                    for (path, v) in updates {
+                        match v {
+                            Some(value) => {
+                                entry.overrides.insert(path, value);
+                            }
+                            None => {
+                                entry.overrides.remove(&path);
                             }
                         }
-                    },
-                );
+                    }
+                });
             }
         });
     }
@@ -2261,13 +2259,11 @@ fn load_run_into_draft(world: &mut World, id: ExperimentId) {
     // (tracked in `ExperimentSources`). Fall back to the currently
     // resolved experiments doc if the source mapping is missing.
     let doc = world
-        .get_resource::<crate::experiments_runner::ExperimentSources>()
+        .get_resource::<lunco_modelica_runner::ExperimentSources>()
         .and_then(|src| src.0.get(&id).copied())
         .or_else(|| crate::ui::doc_pin::resolved_experiments_doc(world));
     let Some(doc) = doc else { return };
-    if let Some(mut drafts) =
-        world.get_resource_mut::<crate::experiments_runner::ExperimentDrafts>()
-    {
+    if let Some(mut drafts) = world.get_resource_mut::<lunco_modelica_runner::ExperimentDrafts>() {
         let entry = drafts.entry(doc, model_ref);
         entry.bounds_override = Some(bounds);
         entry.inputs = inputs;

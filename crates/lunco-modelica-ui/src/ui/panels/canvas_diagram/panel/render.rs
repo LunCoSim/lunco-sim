@@ -238,7 +238,7 @@ pub(crate) fn render_diagram_canvas(
                 })
                 .unwrap_or(false);
             let run_pending = ctx
-                .resource::<crate::ModelicaRunnerResource>()
+                .resource::<lunco_modelica_runner::ModelicaRunnerResource>()
                 .map(|r| r.0.in_flight_count() > 0 || r.0.queued_count() > 0)
                 .unwrap_or(false);
             let tokens = &ctx.resource_expect::<lunco_theme::Theme>().tokens;

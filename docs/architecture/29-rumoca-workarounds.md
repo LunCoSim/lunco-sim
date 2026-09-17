@@ -39,15 +39,16 @@ advance is clamped, or make the horizon `Option<f64>` so "no ceiling" is
 expressible rather than spelled `t_end = u32::MAX`.
 
 **Chokepoints (never build `SimOptions` by hand):**
-- batch / offline / Fast-Run → `experiments_runner::stepper_options_from_bounds(&RunBounds)`
-- live co-sim → `worker::live_stepper_options()` (sets `t_end = u32::MAX` as an
-  explicit "no ceiling" sentinel) via `worker::build_stepper()`
+- batch / offline / Fast-Run → `lunco_modelica_runner::stepper_options_from_bounds(&RunBounds)`
+- live co-sim → `lunco_modelica_worker::worker::live_stepper_options()` (sets `t_end = u32::MAX` as an
+  explicit "no ceiling" sentinel) via `lunco_modelica_worker::worker::build_stepper()`
 
-**Enforced by** `crates/lunco-modelica-execution/tests/rumoca_chokepoints.rs::sim_options_are_built_only_by_the_canonical_builders`
-— scans `src/` (bins included) and fails on any `SimOptions::default()` /
-`SimOptions { … }` outside those two builders.
+**Enforced by** `crates/lunco-modelica-worker/tests/rumoca_chokepoints.rs::sim_options_are_built_only_by_the_canonical_builders`
+— scans the worker, execution, runner, and solver source roots (bins included)
+and fails on any `SimOptions::default()` / `SimOptions { … }` outside those two
+builders.
 
-**Probe / regression guard.** `crates/lunco-modelica-execution/tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end`
+**Probe / regression guard.** `crates/lunco-modelica-worker/tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end`
 — it *asserts the clamp exists*. When rumoca removes the clamp this test FAILS,
 which is the signal to revisit the `u32::MAX` sentinel.
 
@@ -68,14 +69,14 @@ returns the defaults separately, to be re-seeded via `set_input`.
 binding as its default value (MLS §4.4.1 reading), or expose a parameter/input
 override API on the compiled DAE so no source rewriting is needed.
 
-**Chokepoint.** `ModelicaCompiler::seat_user_source` (`lunco-modelica-core/src/lib.rs`)
+**Chokepoint.** `ModelicaCompiler::seat_user_source` (`lunco-modelica-compiler/src/lib.rs`)
 — the single place user model text enters the compile session. Both
 `compile_str` and `compile_str_multi` go through it, so **the strip happens
 inside the compiler and no caller can forget it**.
 
 It did not always live there, and the cost of that was steep: an audit at the
 0.9.20 bump found the strip missing on the *entire* experiments/FastRun surface
-(native `experiments_runner.rs` **and** the wasm `lunica_worker.rs` twin), on the
+(native `lunco-modelica-runner` **and** the wasm `lunica_worker.rs` twin), on the
 worker's disk-backed compile, and in `modelica_tester` — i.e. the sweep feature
 whose whole purpose is overriding inputs was silently demoting every bound input
 it swept. Moving the strip into the chokepoint fixed all four at once. Don't move
@@ -98,12 +99,12 @@ through `seat_library_files`, which strips each one. The shipped package path
 is exercised by authored scenes such as `lander_plume_activity`, `lander_rcs`,
 and `sun_tracker`; Rust tests do not read the assets tree.
 
-**Enforced by** `crates/lunco-modelica-execution/tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
+**Enforced by** `crates/lunco-modelica-worker/tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
 (fails if a new site seats documents into the compile session directly),
-`crates/lunco-modelica-execution/tests/rumoca_api_coverage.rs::compile_str_keeps_bound_input_as_runtime_slot`
+`crates/lunco-modelica-worker/tests/rumoca_api_coverage.rs::compile_str_keeps_bound_input_as_runtime_slot`
 (feeds `compile_str` RAW source and asserts `g` survives as a runtime slot).
 
-**Diagnosed by** `worker::apply_input_defaults_validated`: a model whose source
+**Diagnosed by** `lunco_modelica_worker::worker::apply_input_defaults_validated`: a model whose source
 declares inputs but whose stepper exposes **none** logs at ERROR, because that is
 the shape of a run that simulates nothing and looks fine.
 
@@ -131,17 +132,17 @@ shared copy, would break every compile.
 
 **Workaround.** Every compile is made hermetic: `ModelicaCompiler::compile_str`
 evicts all other user docs from the shared session first
-(`evict_user_docs_except` + `seated_user_uris`, `lunco-modelica-core/src/lib.rs`).
+(`evict_user_docs_except` + `seated_user_uris`, `lunco-modelica-compiler/src/lib.rs`).
 
 **Ideal upstream fix.** Compare class definitions structurally (ignoring spans /
 source ids), and accept an identical redefinition instead of erroring.
 
-**Enforced by** `crates/lunco-modelica-execution/tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
+**Enforced by** `crates/lunco-modelica-worker/tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
 — it pins the number of sites that seat documents into the compile session, so a
 new un-evicted seat can't be added silently.
 
 > **Local ownership guard:** `ModelicaCompiler::load_source_root_in_memory`
-> (`lib.rs`, called from the `LoadSourceRoot` command on both worker twins)
+> (`lunco-modelica-compiler/src/lib.rs`, called from the `LoadSourceRoot` command on both worker twins)
 > intentionally keeps durable source-root documents outside
 > `seated_user_uris`. It now records the authored top-level namespaces from
 > every successfully parsed document in `installed_roots`, independent of the
@@ -203,7 +204,7 @@ strings and comments.
 > Comments were dropped too. Silent corruption of the user's model from a mouse
 > drag — that is what the splice engine exists to prevent.
 
-**Enforcement.** `crates/lunco-modelica-execution/tests/rumoca_chokepoints.rs::source_is_never_regenerated_through_the_rumoca_emitter`
+**Enforcement.** `crates/lunco-modelica-worker/tests/rumoca_chokepoints.rs::source_is_never_regenerated_through_the_rumoca_emitter`
 fails on any `.to_modelica(` in `src/`.
 `tests/ast_mut_preserves_untouched_source.rs` asserts, per op, that every line the
 op did not target is byte-identical afterwards.
@@ -227,7 +228,7 @@ records an extra sample at every root/event crossing. An event-heavy model
 returned ~5M samples for a requested 1.1k-point grid (~4 GB across 75 vars) and
 OOM-killed the wasm worker outright.
 
-**Workaround.** `experiments_runner::batch_keep_indices` decimates the returned
+**Workaround.** `lunco_modelica_runner::batch_keep_indices` decimates the returned
 samples back onto the requested grid.
 
 **Ideal upstream fix.** Keep event samples out of the returned series (or put them

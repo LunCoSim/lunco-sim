@@ -44,7 +44,7 @@ File references in `crates/lunco-modelica-core`, `crates/lunco-modelica-api`, an
 ### 2.4 Types — `lunco-experiments/src/lib.rs`
 - `ModelRef(String)` (`lib.rs`) — opaque qualified class name; the crate does **not** depend on `lunco-modelica-core`.
 - `RunBounds { t_start, t_end, dt: Option, tolerance: Option, solver: Option<String>, h0: Option }` (`lib.rs`).
-- `ExperimentRunner { run_fast(&Experiment) -> RunHandle; default_bounds(&ModelRef) -> Option<RunBounds> }` (`lib.rs`) — already backend-agnostic; one impl (`ModelicaRunner`, `experiments_runner.rs`).
+- `ExperimentRunner { run_fast(&Experiment) -> RunHandle; default_bounds(&ModelRef) -> Option<RunBounds> }` (`lunco-experiments`) — already backend-agnostic; the Modelica implementation lives in `lunco-modelica-runner`.
 - `ExperimentRegistry` — keyed `(TwinId, ModelRef)`; Modelica-specific in usage.
 - `ExperimentDrafts` — `(DocumentId, ModelRef) → ExperimentDraft { bounds_override: Option<RunBounds>, .. }`.
 

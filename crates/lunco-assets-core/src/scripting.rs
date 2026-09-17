@@ -436,6 +436,7 @@ pub fn active_policy_set() -> Result<Vec<LoadedPolicy>, String> {
 
 /// Load the application startup function and its manifest-selected policies.
 pub fn active_policy_bundle() -> Result<LoadedPolicyBundle, String> {
+    #[cfg(not(target_arch = "wasm32"))]
     let manifest_path = crate::assets_dir_abs().join("scripting/policy/index.toml");
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(manifest) = manifest_from_file(&manifest_path)? {

@@ -83,7 +83,7 @@ What is actually in the code:
 ### Solver selection is resolved, not hardcoded (2026-07-27)
 
 The live path used to name its own solver family, and that was a second,
-independent selection site: `worker::live_stepper_options` hardcoded the explicit
+independent selection site: `lunco_modelica_worker::worker::live_stepper_options` hardcoded the explicit
 family for **every** live model while the batch path resolved one properly. The
 two silently disagreed.
 

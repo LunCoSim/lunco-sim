@@ -1,8 +1,9 @@
 //! Modelica execution and transport adapters.
 //!
 //! This package owns the expensive, change-prone part of Modelica integration:
-//! solver sessions, worker scheduling, Fast Runs, and the browser worker wire.
-//! [`lunco_modelica_core`] remains the reusable compiler/document package.
+//! solver host assembly and the browser worker wire.
+//! [`lunco_modelica_core`] remains the reusable compiler/document package;
+//! [`lunco_modelica_worker`] owns the stateful worker engine.
 //! The shared parser/source-library callback seam is owned by
 //! [`lunco_modelica_library`].
 
@@ -16,15 +17,8 @@ use lunco_modelica_runtime::{
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
-mod lock_ext;
-
-pub mod experiments_runner;
-pub mod worker;
 #[cfg(target_arch = "wasm32")]
 pub mod worker_transport;
-
-mod run_bounds;
-pub use run_bounds::{bounds_from_annotation, resolve_setup_bounds, resolve_setup_bounds_in};
 
 /// Make the built-in solver descriptors available to query and UI surfaces.
 ///
@@ -33,12 +27,6 @@ pub use run_bounds::{bounds_from_annotation, resolve_setup_bounds, resolve_setup
 pub fn ensure_builtin_solvers() {
     lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
 }
-
-/// Bevy resource wrapping the singleton [`experiments_runner::ModelicaRunner`].
-/// Stored as `Arc` so UI panels can clone the handle and request a run without
-/// holding a mutable world borrow.
-#[derive(Resource, Clone)]
-pub struct ModelicaRunnerResource(pub std::sync::Arc<experiments_runner::ModelicaRunner>);
 
 /// Plugin that installs the Modelica solver worker and Fast Run runtime.
 ///
@@ -53,7 +41,7 @@ impl Plugin for ModelicaExecutionPlugin {
         let (tx_res, rx_res) = unbounded();
 
         #[cfg(not(target_arch = "wasm32"))]
-        thread::spawn(move || worker::modelica_worker(rx_cmd, tx_res));
+        thread::spawn(move || lunco_modelica_worker::worker::modelica_worker(rx_cmd, tx_res));
 
         #[cfg(not(target_arch = "wasm32"))]
         app.insert_resource(ModelicaChannels {
@@ -63,6 +51,15 @@ impl Plugin for ModelicaExecutionPlugin {
 
         #[cfg(target_arch = "wasm32")]
         {
+            if let Err(error) = lunco_modelica_runner::install_worker_run_transport(
+                lunco_modelica_runner::WorkerRunTransport {
+                    register_run_sender: worker_transport::register_run_sender,
+                    dispatch_run_fast: worker_transport::dispatch_run_fast,
+                    dispatch_cancel_run: worker_transport::dispatch_cancel_run,
+                },
+            ) {
+                bevy::log::warn!("{error}");
+            }
             let _ = worker_transport::register_result_sender(tx_res.clone());
             let _ = worker_transport::register_command_sender(tx_cmd.clone());
             app.insert_resource(ModelicaChannels {
@@ -88,37 +85,22 @@ impl Plugin for ModelicaExecutionPlugin {
         app.add_message::<ModelicaNotice>();
         app.add_message::<CompileRequested>();
 
-        app.add_plugins(lunco_experiments::ExperimentsPlugin);
-        app.insert_resource(ModelicaRunnerResource(std::sync::Arc::new(
-            experiments_runner::ModelicaRunner::new(),
-        )));
-        app.init_resource::<experiments_runner::PendingHandles>();
-        app.init_resource::<experiments_runner::ExperimentDrafts>();
-        app.init_resource::<experiments_runner::ExperimentSources>();
-        app.init_resource::<experiments_runner::PlaybackEntities>();
-        use lunco_settings::AppSettingsExt;
-        app.register_settings_section::<experiments_runner::ExperimentSettings>();
-        app.add_systems(
-            Update,
-            (
-                experiments_runner::apply_experiment_settings,
-                experiments_runner::drain_pending_handles,
-            ),
-        );
+        app.add_plugins(lunco_modelica_runner::ModelicaRunnerPlugin);
 
         app.configure_sets(Update, ModelicaSet::HandleResponses);
         app.configure_sets(FixedUpdate, ModelicaSet::SpawnRequests);
         app.add_plugins(lunco_modelica_telemetry::ModelicaTelemetryPlugin);
-        app.init_resource::<worker::CosimLag>();
+        app.init_resource::<lunco_modelica_worker::worker::CosimLag>();
         app.register_type::<ModelicaModel>()
-            .add_observer(worker::on_remove_modelica)
+            .add_observer(lunco_modelica_worker::worker::on_remove_modelica)
             .add_systems(
                 Update,
-                worker::handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
+                lunco_modelica_worker::worker::handle_modelica_responses
+                    .in_set(ModelicaSet::HandleResponses),
             )
             .add_systems(
                 FixedUpdate,
-                worker::spawn_modelica_requests
+                lunco_modelica_worker::worker::spawn_modelica_requests
                     .in_set(ModelicaSet::SpawnRequests)
                     .run_if(lunco_time::simulation_is_running),
             );
@@ -130,7 +112,7 @@ impl Plugin for ModelicaExecutionPlugin {
                 worker_transport::pump_worker_respawns();
             });
             app.add_systems(Update, |_world: &mut World| {
-                experiments_runner::pump_wasm_forwarders();
+                lunco_modelica_runner::pump_wasm_forwarders();
             });
         }
     }
@@ -145,6 +127,9 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(ModelicaExecutionPlugin);
         assert!(app.world().contains_resource::<ModelicaChannels>());
-        assert!(app.world().contains_resource::<ModelicaRunnerResource>());
+        assert!(
+            app.world()
+                .contains_resource::<lunco_modelica_runner::ModelicaRunnerResource>()
+        );
     }
 }

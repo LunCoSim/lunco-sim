@@ -84,6 +84,7 @@ path = "src/bin/lunica.rs"
 bevy.workspace = true
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-execution = { path = "../lunco-modelica-execution" }
+lunco-modelica-runner = { path = "../lunco-modelica-runner" }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-library = { path = "../lunco-modelica-library", optional = true }
