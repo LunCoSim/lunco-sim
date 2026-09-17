@@ -513,7 +513,11 @@ impl ModelicaEngine {
                 .insert(set_id.to_string(), message.clone());
             return Err(message);
         }
-        Ok(self.load_parsed_library_files(parsed))
+        let count = self.load_parsed_library_files(parsed);
+        if count > 0 {
+            self.installed_source_sets.insert(set_id.to_string());
+        }
+        Ok(count)
     }
 
     /// Replace one complete parsed source set in the shared session.
@@ -548,7 +552,10 @@ impl ModelicaEngine {
     /// qualified root, so this mechanism is reusable for `LunCo` and future
     /// shipped libraries without a library-specific resolver branch.
     pub fn ensure_source_root(&mut self, root: &str) -> bool {
-        if self.has_class(root) || self.pending_source_roots.contains(root) {
+        if self.source_set_installed(root)
+            || self.has_class(root)
+            || self.pending_source_roots.contains(root)
+        {
             return true;
         }
         if self.failed_source_roots.contains_key(root) {
@@ -574,7 +581,8 @@ impl ModelicaEngine {
     /// performs the package read and parse off the update thread, then calls
     /// [`Self::finish_source_root_load`].
     pub fn begin_source_root_load(&mut self, root: &str) -> bool {
-        if self.has_class(root)
+        if self.source_set_installed(root)
+            || self.has_class(root)
             || self.pending_source_roots.contains(root)
             || self.failed_source_roots.contains_key(root)
         {
@@ -605,6 +613,7 @@ impl ModelicaEngine {
         }
         let count = self.load_parsed_library_files(files);
         if count > 0 {
+            self.installed_source_sets.insert(root.to_string());
             self.failed_source_roots.remove(root);
             self.completed_source_roots.push(root.to_string());
         } else {

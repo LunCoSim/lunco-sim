@@ -1,17 +1,15 @@
 //! Transport adapters.
 //!
-//! The bridge core (`HttpBridge`, `BridgeMessage`, the request/response
-//! envelopes) is transport-agnostic — pure Bevy + `tokio::sync` channels +
-//! serde — and is shared by the native HTTP server and the wasm JS bridge.
+//! The bridge core (`HttpBridge`, `BridgeMessage`) is shared by the native HTTP
+//! server and the wasm JS bridge. Their request/response wire contracts live in
+//! the pure `lunco-api-contracts` package.
 //! Only `spawn_server` (a real `TcpListener`) is native-only.
 
 // The bridge core compiles whenever a transport is present: the native HTTP
 // server (`transport-http`) or — automatically — the wasm JS bridge (any
 // wasm32 build, since that's the only transport a browser can use).
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
-mod envelope;
-#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
-pub use envelope::*;
+pub(crate) mod envelope;
 
 // The axum HTTP server is native-only: even when `transport-http` is enabled, it
 // must not compile on wasm (axum + tokio/net are absent there by construction —
@@ -186,7 +184,7 @@ mod tests {
 #[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
 #[allow(clippy::disallowed_methods)]
 pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) -> std::io::Result<()> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", config.port))?;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, config.port))?;
     listener.set_nonblocking(true)?;
     let runtime = tokio::runtime::Runtime::new()?;
     let listener = {
@@ -242,7 +240,8 @@ mod http_server_tests {
 
     #[test]
     fn refuses_an_api_port_that_is_already_bound() {
-        let occupied = TcpListener::bind(("127.0.0.1", 0)).expect("test listener must bind");
+        let occupied =
+            TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("test listener must bind");
         let port = occupied
             .local_addr()
             .expect("test listener has an address")

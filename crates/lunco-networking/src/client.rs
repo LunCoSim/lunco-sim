@@ -2,19 +2,20 @@
 //! ferry. Compiles for native and wasm.
 
 use bevy::prelude::*;
-use lightyear::netcode::client_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeClient;
+use lightyear::netcode::client_plugin::NetcodeConfig;
 // `Authentication` comes from `lightyear::prelude::*` (glob-imported below).
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use crate::sync::{SyncInbox, SyncOutbox};
 use lunco_core::{SessionId, SyncChannel};
-use lunco_core_session::{LocalSession, NetStatus, NetworkRole};
+use lunco_core_session::{LocalSession, NetDisconnectRequest, NetStatus, NetworkRole};
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
-use crate::shared::{deserialize_env, netcode_key, serialize_env, PROTOCOL_ID};
+use crate::shared::{PROTOCOL_ID, netcode_key};
+use lunco_networking_sync::codec::{deserialize_env, serialize_env};
+use lunco_networking_sync::sync::{SyncInbox, SyncOutbox};
 
 /// **Build-time**: register the client ferry systems, the disconnect observer,
 /// the `JoinServer`/`LeaveServer` command observers, and (wasm) the URL-dialing
@@ -38,8 +39,8 @@ pub(crate) fn register_client_systems(app: &mut App) {
             // inbound snapshot/handshake is processed and any command captured this
             // frame is sent the same frame. Intra-`Update` only (see the
             // reliable-flush note in server.rs).
-            client_recv_inbox.before(crate::sync::drain_sync_inbox),
-            client_send_outbox.after(crate::sync::drain_sync_inbox),
+            client_recv_inbox.before(lunco_networking_sync::sync::drain_sync_inbox),
+            client_send_outbox.after(lunco_networking_sync::sync::drain_sync_inbox),
             update_client_netstatus,
         )
             // Standalone pays nothing for the ferry it can't use (C12). Safe to
@@ -47,8 +48,9 @@ pub(crate) fn register_client_systems(app: &mut App) {
             // so no producer runs while this is off. An involuntary drop keeps
             // role == Client (see `on_client_disconnected`), so the outbox-
             // clearing arm of `client_send_outbox` still runs then.
-            .run_if(crate::wire_is_live),
+            .run_if(lunco_networking_sync::wire_is_live),
     );
+    app.add_observer(on_net_disconnect_request);
     register_all_commands(app);
 
     // Native deep-link plumbing. A clicked `luncosim://connect?…` link is always
@@ -78,13 +80,13 @@ pub(crate) fn register_client_systems(app: &mut App) {
 }
 
 /// Fallback (no IPC wired): scan argv once for a `luncosim:` deep link and stage
-/// it in [`PendingConnect`](crate::session::PendingConnect). Skipped when a
+/// it in [`PendingConnect`](crate::connection_state::PendingConnect). Skipped when a
 /// [`DeepLinkInbox`](crate::single_instance::DeepLinkInbox)
 /// exists — the IPC path already carries the launch arg, so this avoids a double
 /// prompt. The once-only latch and the inbox check are `run_if` conditions at
 /// the registration site — the system body runs at most once per process.
 #[cfg(not(target_family = "wasm"))]
-fn seed_pending_from_deep_link_arg(mut pending: ResMut<crate::session::PendingConnect>) {
+fn seed_pending_from_deep_link_arg(mut pending: ResMut<crate::connection_state::PendingConnect>) {
     let Some(link) = std::env::args()
         .find(|a| a.starts_with(&format!("{}:", crate::connect_link::SCHEME)))
         .and_then(|a| crate::connect_link::parse_native(&a))
@@ -95,7 +97,7 @@ fn seed_pending_from_deep_link_arg(mut pending: ResMut<crate::session::PendingCo
         "[net] deep link → pending connect to {} (awaiting confirm)",
         link.address
     );
-    pending.request = Some(crate::session::PendingConnectRequest {
+    pending.request = Some(crate::connection_state::PendingConnectRequest {
         address: link.address,
         digest: link.digest,
     });
@@ -248,7 +250,7 @@ fn on_join_server(
     // handshake supplies the connection-bound author. The handshake then
     // atomically rebinds those entries and their DAG references.
     if let Some(journal) = journal {
-        journal.set_local_author(crate::journal_plane::local_author_id());
+        journal.set_local_author(lunco_networking_sync::journal_plane::local_author_id());
     }
 }
 
@@ -274,13 +276,20 @@ fn on_leave_server(
     status.endpoint = String::new();
     local.0 = SessionId::LOCAL;
     if let Some(journal) = journal {
-        journal.set_local_author(crate::journal_plane::local_author_id());
+        journal.set_local_author(lunco_networking_sync::journal_plane::local_author_id());
     }
     let _ = cmd;
     info!("[net] left session — back to local");
 }
 
 lunco_core::register_commands!(on_join_server, on_leave_server);
+
+/// Translate the always-on application disconnect request into the adapter's
+/// typed command. The sync runtime uses the same request when a peer fails a
+/// mandatory handshake contract, keeping it transport-neutral.
+fn on_net_disconnect_request(_trigger: On<NetDisconnectRequest>, mut commands: Commands) {
+    commands.trigger(LeaveServer {});
+}
 
 /// Parse the port out of a `host:port` string for the wasm netcode placeholder
 /// address (default `5888`). The host half is irrelevant — the browser dials the
@@ -310,7 +319,7 @@ fn port_of(server: &str) -> u16 {
 /// Reflect the handshake (non-zero [`LocalSession`]) into [`NetStatus`] so the
 /// status bar flips from "connecting…" to "connected".
 fn update_client_netstatus(local: Res<LocalSession>, mut status: ResMut<NetStatus>) {
-    let connected = local.0 .0 != 0;
+    let connected = local.0.0 != 0;
     if status.connected != connected {
         status.connected = connected;
         status.peers = u32::from(connected);

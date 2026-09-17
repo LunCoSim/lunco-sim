@@ -20,12 +20,13 @@ ui = [
     # Workbench API queries are UI-only, and NOT on `lunco-api` (a server build enables that).
     "lunco-workbench/api",
     "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-state", "dep:lunco-workbench-window", "dep:lunco-workbench-browser", "dep:lunco-workbench-datasets-ui", "dep:lunco-workbench-core", "dep:lunco-workbench-guided-ui", "dep:lunco-workbench-file-dialog", "dep:lunco-workbench-file-ops", "dep:lunco-workbench-widgets", "dep:lunco-status-core", "dep:lunco-ui",
-    "dep:lunco-viz", "dep:lunco-canvas", "dep:lunco-modelica-solver",
+    "dep:lunco-viz", "dep:lunco-canvas",
     "lunco-doc-bevy/ui",
     "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:arboard",
     "dep:lunco-modelica-icon-ui",
     "dep:lunco-modelica-docs-ui",
     "dep:lunco-modelica-api",
+    "dep:lunco-experiments-ui",
     # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
     # needs the winit backend (no longer in the workspace bevy default).
     "bevy/bevy_winit", "bevy/bevy_window", "bevy/x11", "bevy/wayland",
@@ -81,23 +82,23 @@ path = "src/bin/lunica.rs"
 [dependencies]
 bevy.workspace = true
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-execution = { path = "../lunco-modelica-execution" }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-icon-ui = { path = "../lunco-modelica-icon-ui", optional = true }
 lunco-modelica-docs-ui = { path = "../lunco-modelica-docs-ui", optional = true }
 lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
-lunco-modelica-solver = { path = "../lunco-modelica-solver", optional = true }
 lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }
 lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
-# The whole egui IDE stack is UI-only. Optional behind `ui` so the Modelica
-# COMPILE CORE (ModelicaCorePlugin: channels + worker + .mo loader + dispatch)
-# builds headless (`default-features = false`) for a server running cosim — no
-# egui→winit. The GUI/lunica build keeps `default = [..., "ui"]`.
+# The whole egui IDE stack is UI-only. Optional behind `ui` so compiler-only
+# consumers do not inherit the workbench shell. The GUI/lunica build enables
+# the complete workbench surface.
 bevy_egui = { workspace = true, optional = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-api-contracts = { path = "../lunco-api-contracts" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-doc = { path = "../lunco-doc" }
 # Core document-lifecycle events; its egui systems come back via `ui` below.
@@ -130,6 +131,7 @@ lunco-storage = { path = "../lunco-storage" }
 # "time not implemented on this platform" on wasm32-unknown-unknown.
 web-time = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
+lunco-experiments-ui = { path = "../lunco-experiments-ui", optional = true }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rumoca-compile = { workspace = true }
 # Modelica formatter — surfaced as a "Format" toolbar button +
@@ -202,8 +204,8 @@ arboard = { version = "3", optional = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 # bevy_math → rand pulls getrandom 0.3, which on wasm needs an explicit backend.
-# The lunica_worker bundle builds out of this crate, so the browser-crypto
-# (`wasm_js`) feature must be enabled here too; build_web.sh sets the matching
+# This package links Bevy on wasm, so the browser-crypto (`wasm_js`) feature
+# must be enabled here; build_web.sh sets the matching
 # `--cfg getrandom_backend="wasm_js"` (cfg + feature are both required).
 getrandom = { version = "0.3", features = ["wasm_js"] }
 # `Response`, `Request`, `RequestInit`, `Headers` for the source-library fetcher
@@ -231,17 +233,6 @@ web-sys = { workspace = true, features = [
     # `?example=…` URL parameter parsing in lunica.rs.
     "Location",
     "UrlSearchParams",
-    # Web Worker bindings — used by `worker_transport` to offload the
-    # blocking compile/step pipeline off the main thread.
-    "Worker",
-    "WorkerType",
-    "WorkerOptions",
-    "DedicatedWorkerGlobalScope",
-    "MessageEvent",
-    # `ErrorEvent` for the worker `onerror` crash handler — lets a worker
-    # OOM/panic surface as a graceful run failure + respawn instead of
-    # hanging the main thread (see `worker_transport::handle_worker_error`).
-    "ErrorEvent",
     # Clipboard wiring for the wasm code editor.
     # `Navigator` + `Clipboard` for the menu's async paste fallback;
     # `ClipboardEvent` + `DataTransfer` for the synchronous paste-event

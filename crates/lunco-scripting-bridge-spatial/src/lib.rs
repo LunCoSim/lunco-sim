@@ -53,10 +53,10 @@ pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
             Query<(Option<&CellCoord>, &Transform)>,
             Query<(Entity, &lunco_celestial::GeodeticAnchor), With<lunco_celestial::SiteAnchor>>,
             Res<lunco_celestial::CelestialBodyRegistry>,
-            Res<lunco_celestial_spatial::ReferenceFrameIndex>,
+            Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
         )> = SystemState::new(world);
         let (q_parents, q_grids, q_spatial, q_site, bodies, frame_index) = state.get(world).ok()?;
-        lunco_celestial_spatial::resolve_surface_pose(
+        lunco_celestial_spatial_core::resolve_surface_pose(
             entity,
             &q_site,
             &bodies,
@@ -127,6 +127,36 @@ pub fn world_rotation_quat(gid: u64) -> Option<DQuat> {
         let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
         let q = state.get(world).ok()?.rotation(entity)?.0;
         (q.is_finite() && q.length_squared() >= 1.0e-24).then_some(q.normalize())
+    })
+    .flatten()
+}
+
+/// `viewport_position(id)` — project a live render entity into the active
+/// scene viewport's logical pixel coordinates, or `None` when the entity,
+/// viewport, camera, or projection is unavailable.
+///
+/// This is a presentation query, not a simulation-frame conversion. It uses
+/// the entity's propagated `GlobalTransform` and the explicitly active
+/// `SceneCamera`, so a script that drives typed pointer events can address the
+/// same visual object the operator sees after camera motion or floating-origin
+/// rebasing. The caller owns the interaction policy; this function only
+/// exposes Bevy's canonical world-to-viewport projection.
+pub fn viewport_position(gid: u64) -> Option<Vec2> {
+    with_world(|world| {
+        let entity = resolve_entity(world, gid)?;
+        let mut state: SystemState<(
+            Query<&GlobalTransform>,
+            Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<lunco_render::SceneCamera>)>,
+            Res<lunco_viewport_core::SceneViewport>,
+        )> = SystemState::new(world);
+        let (q_transforms, q_cameras, scene_viewport) = state.get(world).ok()?;
+        let camera_entity = scene_viewport.active_camera?;
+        let (camera, camera_transform) = q_cameras.get(camera_entity).ok()?;
+        if !camera.is_active {
+            return None;
+        }
+        let position = q_transforms.get(entity).ok()?.translation();
+        camera.world_to_viewport(camera_transform, position).ok()
     })
     .flatten()
 }

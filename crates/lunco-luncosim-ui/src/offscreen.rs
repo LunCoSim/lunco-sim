@@ -26,9 +26,11 @@ pub struct LunCoSimOffscreenPlugin;
 impl Plugin for LunCoSimOffscreenPlugin {
     fn build(&self, app: &mut App) {
         // Same non-UI cores the headless server needs (see the twin comments in
-        // `LunCoSimHeadlessPlugin`): the Modelica compile channels and the
-        // spawn-command registry both normally arrive via UI plugins.
+        // `LunCoSimHeadlessPlugin`): the Modelica compiler and execution
+        // plugins plus the spawn-command registry normally arrive via UI
+        // plugins.
         app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
+        app.add_plugins(lunco_modelica_execution::ModelicaExecutionPlugin);
         app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
         app.add_plugins(lunco_scene_camera::SceneCameraCommandPlugin);
         app.add_plugins(lunco_scene_selection::SceneSelectionPlugin);
@@ -66,6 +68,9 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // renders Bevy UI into the same image as the authored scene camera;
         // install the shared HUI/Flair exposure layer so film HUDs are
         // captured as pixels rather than remaining editor-only overlays.
+        // Offscreen has no WorkbenchPlugin to install the shared pointer gate,
+        // but the generic runtime-UI bridge still records authored hit regions.
+        app.init_resource::<lunco_workbench_core::scene_pick::ScenePickGate>();
         crate::add_runtime_ui_layer(app);
 
         // The offline recorder itself — normally added by `WorkbenchPlugin`,
@@ -308,12 +313,20 @@ fn retarget_cameras_to_offscreen(
     mut cameras: Query<(
         &mut bevy::camera::RenderTarget,
         Option<&mut bevy::camera::Projection>,
+        Option<&mut Camera>,
     )>,
 ) {
     let Some(target) = target else { return };
-    for (mut rt, projection) in &mut cameras {
+    for (mut rt, projection, mut camera) in &mut cameras {
         if matches!(*rt, bevy::camera::RenderTarget::Window(_)) {
             *rt = bevy::camera::RenderTarget::Image(target.0.clone().into());
+            if let Some(camera) = camera.as_deref_mut() {
+                // The source camera remains the pose owner while its image
+                // mirror is the only render writer. Mark that contract before
+                // any authored SetActiveCamera command can arrive.
+                camera.output_mode = bevy::camera::CameraOutputMode::Skip;
+                camera.order = -1;
+            }
             // BEVY QUIRK (0.19): `camera_system` recomputes a camera's target
             // info on window/image EVENTS, `is_added`, or PROJECTION changes —
             // NOT on `RenderTarget` component changes. A camera whose
@@ -420,9 +433,11 @@ fn sync_offscreen_environment(
 #[cfg(feature = "api-transport")]
 fn maintain_offscreen_render_camera(
     target: Option<Res<lunco_capture::screenshot::OfflineCaptureTarget>>,
-    sources: Query<
+    mut sources: Query<
         (
             Entity,
+            &mut Camera,
+            &bevy::camera::RenderTarget,
             &Transform,
             &Projection,
             &bevy::camera::Exposure,
@@ -433,14 +448,6 @@ fn maintain_offscreen_render_camera(
             Option<&bevy::light::Skybox>,
             Option<&bevy::light::GeneratedEnvironmentMapLight>,
         ),
-        (
-            With<lunco_render::SceneCamera>,
-            With<lunco_avatar_core::roles::LocalAvatar>,
-            Without<OffscreenRenderCamera>,
-        ),
-    >,
-    mut source_cameras: Query<
-        &mut Camera,
         (
             With<lunco_render::SceneCamera>,
             Without<OffscreenRenderCamera>,
@@ -463,9 +470,13 @@ fn maintain_offscreen_render_camera(
     mut commands: Commands,
 ) {
     let Some(target) = target else { return };
-    let mut source_iter = sources.iter();
+    let mut source_iter = sources.iter_mut().filter(|(_, camera, target, ..)| {
+        camera.is_active && matches!(target, bevy::camera::RenderTarget::Image(_))
+    });
     let Some((
         source,
+        mut source_camera,
+        _source_target,
         source_transform,
         projection,
         source_exposure,
@@ -480,25 +491,24 @@ fn maintain_offscreen_render_camera(
         return;
     };
     if source_iter.next().is_some() {
-        warn!("[offscreen] LocalAvatar camera is ambiguous; no image render camera was created");
+        warn!(
+            "[offscreen] selected authored SceneCamera is ambiguous; no image render camera was created"
+        );
         return;
     }
 
-    let source_camera_settings = source_cameras.get_mut(source).ok().map(|mut camera| {
-        let settings = (
-            camera.viewport.clone(),
-            camera.msaa_writeback,
-            camera.clear_color,
-            camera.invert_culling,
-            camera.sub_camera_view,
-        );
-        camera.output_mode = bevy::camera::CameraOutputMode::Skip;
-        // Keep the authored camera active for the scene's camera-driven LOD and
-        // pose systems, but give the non-writing source a distinct priority so
-        // Bevy does not report two active cameras for the image target.
-        camera.order = -1;
-        settings
-    });
+    let source_camera_settings = (
+        source_camera.viewport.clone(),
+        source_camera.msaa_writeback,
+        source_camera.clear_color,
+        source_camera.invert_culling,
+        source_camera.sub_camera_view,
+    );
+    source_camera.output_mode = bevy::camera::CameraOutputMode::Skip;
+    // Keep the authored camera active for the scene's camera-driven LOD and
+    // pose systems, but give the non-writing source a distinct priority so
+    // Bevy does not report two active cameras for the image target.
+    source_camera.order = -1;
 
     let mut found = false;
     for (
@@ -523,15 +533,13 @@ fn maintain_offscreen_render_camera(
         found = true;
         *mirror_transform = *source_transform;
         *mirror_projection = projection.clone();
-        if let Some((viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view)) =
-            &source_camera_settings
-        {
-            camera.viewport = viewport.clone();
-            camera.msaa_writeback = *msaa_writeback;
-            camera.clear_color = *clear_color;
-            camera.invert_culling = *invert_culling;
-            camera.sub_camera_view = *sub_camera_view;
-        }
+        let (viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view) =
+            &source_camera_settings;
+        camera.viewport = viewport.clone();
+        camera.msaa_writeback = *msaa_writeback;
+        camera.clear_color = *clear_color;
+        camera.invert_culling = *invert_culling;
+        camera.sub_camera_view = *sub_camera_view;
         if let Some(mut exposure) = mirror_exposure {
             *exposure = *source_exposure;
         } else {
@@ -580,25 +588,23 @@ fn maintain_offscreen_render_camera(
         if let Some(source_environment) = source_environment {
             entity.try_insert(source_environment.clone());
         }
-        if let Some((viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view)) =
-            &source_camera_settings
-        {
-            entity.try_insert(Camera {
-                viewport: viewport.clone(),
-                msaa_writeback: *msaa_writeback,
-                clear_color: *clear_color,
-                invert_culling: *invert_culling,
-                sub_camera_view: *sub_camera_view,
-                ..default()
-            });
-        }
+        let (viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view) =
+            &source_camera_settings;
+        entity.try_insert(Camera {
+            viewport: viewport.clone(),
+            msaa_writeback: *msaa_writeback,
+            clear_color: *clear_color,
+            invert_culling: *invert_culling,
+            sub_camera_view: *sub_camera_view,
+            ..default()
+        });
         if let Some(parent) = parent {
             entity.try_insert(parent.clone());
         }
         if let Some(cell) = cell {
             entity.try_insert(*cell);
         }
-        info!("[offscreen] created image render camera from authored LocalAvatar {source}");
+        info!("[offscreen] created image render camera from selected authored camera {source}");
     }
 }
 

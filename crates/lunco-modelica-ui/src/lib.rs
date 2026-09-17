@@ -1,8 +1,8 @@
 //! Modelica workbench UI and application facade.
 //!
-//! The compiler, document runtime, worker, and simulation session live in
-//! lunco_modelica_core. This package owns only the egui/workbench
-//! integration and the lunica application-facing bundle.
+//! The compiler/document runtime lives in `lunco_modelica_core`; solver
+//! workers and run orchestration live in `lunco_modelica_execution`. This
+//! package owns only the egui/workbench integration and application facade.
 
 pub use lunco_modelica_core::*;
 
@@ -18,6 +18,14 @@ use bevy::prelude::*;
 use lunco_modelica_ast::pretty;
 #[cfg(feature = "ui")]
 use lunco_modelica_core::ModelicaCorePlugin as CoreModelicaPlugin;
+#[cfg(feature = "ui")]
+use lunco_modelica_execution::ModelicaExecutionPlugin;
+
+#[cfg(feature = "ui")]
+pub(crate) use lunco_modelica_execution::experiments_runner;
+
+#[cfg(feature = "ui")]
+pub(crate) use lunco_modelica_execution::ModelicaRunnerResource;
 
 #[cfg(feature = "ui")]
 /// UI configuration for the Modelica workbench.
@@ -47,6 +55,9 @@ impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<CoreModelicaPlugin>() {
             app.add_plugins(CoreModelicaPlugin);
+        }
+        if !app.is_plugin_added::<ModelicaExecutionPlugin>() {
+            app.add_plugins(ModelicaExecutionPlugin);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if !app.is_plugin_added::<native_library::NativeLibraryIndexerPlugin>() {
@@ -129,7 +140,9 @@ impl Plugin for ModelicaWorkbenchPlugin {
         app.add_plugins(ui::model_share::ModelSharePlugin);
 
         #[cfg(target_arch = "wasm32")]
-        lunco_modelica_core::worker_transport::register_worker_url("./worker/worker_bootstrap.js");
+        lunco_modelica_execution::worker_transport::register_worker_url(
+            "./worker/worker_bootstrap.js",
+        );
     }
 }
 

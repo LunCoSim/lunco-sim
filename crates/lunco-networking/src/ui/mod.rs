@@ -8,22 +8,22 @@
 //! - **seeds** [`NetStatus::connect_hint`] with [`crate::default_connect_host`]
 //!   (page origin on wasm, localhost on native) so the menu's address field has
 //!   a sensible default;
-//! - **observes** the menu's [`NetConnectRequest`] / [`NetDisconnectRequest`]
-//!   bridge events and re-dispatches the typed
-//!   [`JoinServer`](crate::client::JoinServer) /
-//!   [`LeaveServer`](crate::client::LeaveServer) commands — the **same** commands
-//!   the HTTP API, MCP, and CLI dispatch.
+//! - **observes** the menu's [`NetConnectRequest`] bridge event and re-dispatches
+//!   the typed [`JoinServer`](crate::client::JoinServer) command — the same
+//!   command the HTTP API, MCP, and CLI dispatch. The adapter owns the
+//!   always-on disconnect event so transport-neutral sync code can request a
+//!   clean session exit without depending on this UI module.
 //!
 //! Layer 4: optional. Headless builds simply never add this plugin; the menu's
 //! bridge events then go unobserved (no-op) and the sim runs single-player.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
-use lunco_core_session::{LocalSession, NetConnectRequest, NetDisconnectRequest, NetStatus};
+use bevy_egui::{EguiContexts, egui};
+use lunco_core_session::{LocalSession, NetConnectRequest, NetStatus};
 use lunco_doc_bevy::Presence;
 use lunco_workbench_core::WorkbenchMenuRegistry;
 
-use crate::client::{JoinServer, LeaveServer};
+use crate::client::JoinServer;
 
 /// Wires the Network-menu bridge: seeds the connect hint and forwards the menu's
 /// connect/disconnect requests to the typed networking commands.
@@ -33,7 +33,6 @@ impl Plugin for LunCoNetworkingUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, seed_connect_hint)
             .add_observer(on_net_connect_request)
-            .add_observer(on_net_disconnect_request)
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (draw_collaborator_cursors, draw_pending_connect_prompt)
@@ -64,19 +63,14 @@ fn on_net_connect_request(trigger: On<NetConnectRequest>, mut commands: Commands
     });
 }
 
-/// Menu *Disconnect* → dispatch the typed [`LeaveServer`] command.
-fn on_net_disconnect_request(_trigger: On<NetDisconnectRequest>, mut commands: Commands) {
-    commands.trigger(LeaveServer {});
-}
-
-/// While a deep link is awaiting confirmation ([`crate::session::PendingConnect`]), draw a modal
+/// While a deep link is awaiting confirmation ([`crate::connection_state::PendingConnect`]), draw a modal
 /// "Connect to X? [Join] [Cancel]". *Join* dispatches [`JoinServer`] with the
 /// link's address + digest; either choice clears the pending request. Gating an
 /// unsolicited link behind an explicit click stops a planted `luncosim://` /
 /// `?connect=` link from silently redirecting the session.
 fn draw_pending_connect_prompt(
     mut contexts: EguiContexts,
-    mut pending: ResMut<crate::session::PendingConnect>,
+    mut pending: ResMut<crate::connection_state::PendingConnect>,
     mut commands: Commands,
 ) {
     let Some(req) = pending.request.clone() else {
@@ -132,19 +126,19 @@ fn register_settings_submenu(world: &mut World) {
     menus.register_settings_submenu("Collaboration", |ui, ctx| {
         // Read/clone all needed resources up front to avoid borrow conflicts and keep
         // menu rendering from owning the domain world.
-        let Some(mut settings) = ctx.resource::<crate::sync::CursorSettings>().cloned() else {
+        let Some(mut settings) = ctx.resource::<lunco_networking_sync::sync::CursorSettings>().cloned() else {
             return;
         };
         let Some(presence_users) = ctx
-            .resource::<crate::sync::Presence>()
+            .resource::<lunco_networking_sync::sync::Presence>()
             .map(|p| p.users.clone())
         else {
             return;
         };
-        let Some(tut_settings) = ctx.resource::<crate::sync::TutorialSettings>().cloned() else {
+        let Some(tut_settings) = ctx.resource::<lunco_networking_sync::sync::TutorialSettings>().cloned() else {
             return;
         };
-        let Some(tutor_status) = ctx.resource::<crate::sync::TutorStatusResource>().cloned()
+        let Some(tutor_status) = ctx.resource::<lunco_networking_sync::sync::TutorStatusResource>().cloned()
         else {
             return;
         };
@@ -181,7 +175,7 @@ fn register_settings_submenu(world: &mut World) {
             .on_hover_text("Take control of the system and stream your window and avatar status to followers.")
             .changed()
         {
-            ctx.trigger(crate::sync::SetTeachMode { enabled: teach_mode });
+            ctx.trigger(lunco_networking_sync::sync::SetTeachMode { enabled: teach_mode });
         }
 
         if teach_mode {
@@ -190,7 +184,7 @@ fn register_settings_submenu(world: &mut World) {
                 let mut selected_target = current_target;
 
                 let combo_label = selected_target
-                    .and_then(|id| presence_users.get(&crate::sync::UserId(id)))
+                    .and_then(|id| presence_users.get(&lunco_networking_sync::sync::UserId(id)))
                     .map(|u| u.display_name.as_str())
                     .unwrap_or("Everyone");
 
@@ -209,7 +203,7 @@ fn register_settings_submenu(world: &mut World) {
                     });
 
                 if changed {
-                    ctx.trigger(crate::sync::SetTargetClient { target: selected_target });
+                    ctx.trigger(lunco_networking_sync::sync::SetTargetClient { target: selected_target });
                 }
 
                 let mut allow_free = tut_settings.allow_free_movement;
@@ -217,11 +211,11 @@ fn register_settings_submenu(world: &mut World) {
                     .on_hover_text("If checked, followers can move as they want. Otherwise, they are locked to your perspective.")
                     .changed()
                 {
-                    ctx.trigger(crate::sync::SetAllowFreeMovement { enabled: allow_free });
+                    ctx.trigger(lunco_networking_sync::sync::SetAllowFreeMovement { enabled: allow_free });
                 }
 
                 let target_name = selected_target
-                    .and_then(|id| presence_users.get(&crate::sync::UserId(id)))
+                    .and_then(|id| presence_users.get(&lunco_networking_sync::sync::UserId(id)))
                     .map(|u| u.display_name.as_str())
                     .unwrap_or("Everyone");
 
@@ -229,7 +223,7 @@ fn register_settings_submenu(world: &mut World) {
                     .on_hover_text("Force followers to snap to your current active document and avatar perspective once.")
                     .clicked()
                 {
-                    ctx.trigger(crate::sync::SharePerspective {});
+                    ctx.trigger(lunco_networking_sync::sync::SharePerspective {});
                 }
 
                 if selected_target.is_some() {
@@ -238,7 +232,7 @@ fn register_settings_submenu(world: &mut World) {
                         .on_hover_text("Observe the target student's screen and position instead of streaming yours.")
                         .changed()
                     {
-                        ctx.trigger(crate::sync::SetObserveMode { enabled: observe_mode });
+                        ctx.trigger(lunco_networking_sync::sync::SetObserveMode { enabled: observe_mode });
                     }
                 }
             });
@@ -254,7 +248,7 @@ fn register_settings_submenu(world: &mut World) {
             )
             .changed()
         {
-            ctx.trigger(crate::sync::SetFollowOptIn { enabled: follow_opt_in });
+            ctx.trigger(lunco_networking_sync::sync::SetFollowOptIn { enabled: follow_opt_in });
         }
 
         // The tutor lock applies to me only if I'm explicitly targeted, or it's a
@@ -277,7 +271,7 @@ fn register_settings_submenu(world: &mut World) {
                 .on_hover_text("Block local inputs and mirror the tutor's window and avatar status.")
                 .changed()
             {
-                ctx.trigger(crate::sync::SetFollowMode { enabled: follow_mode });
+                ctx.trigger(lunco_networking_sync::sync::SetFollowMode { enabled: follow_mode });
             }
         });
     });
@@ -286,7 +280,7 @@ fn register_settings_submenu(world: &mut World) {
 /// Whether a tutor currently holds the view/input lock (before per-peer targeting).
 /// The `tutor_active && !allow_free_movement` core was repeated across the Follow-Mode
 /// toggle's `locked_for_me`, the banner label, and the banner's exit gate.
-fn tutor_lock_active(t: &crate::sync::TutorStatusResource) -> bool {
+fn tutor_lock_active(t: &lunco_networking_sync::sync::TutorStatusResource) -> bool {
     t.tutor_active && !t.allow_free_movement
 }
 
@@ -347,8 +341,8 @@ pub fn draw_collaborator_cursors(
     mut egui_ctx: EguiContexts,
     presence: Res<Presence>,
     local: Res<LocalSession>,
-    tutorial_settings: Res<crate::sync::TutorialSettings>,
-    tutor_status: Res<crate::sync::TutorStatusResource>,
+    tutorial_settings: Res<lunco_networking_sync::sync::TutorialSettings>,
+    tutor_status: Res<lunco_networking_sync::sync::TutorStatusResource>,
     mut commands: Commands,
 ) {
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
@@ -390,7 +384,9 @@ pub fn draw_collaborator_cursors(
                             )
                             .clicked()
                         {
-                            commands.trigger(crate::sync::SetFollowMode { enabled: false });
+                            commands.trigger(lunco_networking_sync::sync::SetFollowMode {
+                                enabled: false,
+                            });
                         }
                     });
                 }
@@ -404,7 +400,7 @@ pub fn draw_collaborator_cursors(
     // active student. (When follow_mode is on, the "Mirroring" banner above
     // already conveys it, so skip to avoid stacking two banners.)
     let is_targeted =
-        tutor_status.target_client.is_none() || tutor_status.target_client == Some(local.0 .0);
+        tutor_status.target_client.is_none() || tutor_status.target_client == Some(local.0.0);
     let is_active_student =
         tutor_status.tutor_active && !tutorial_settings.follow_mode && is_targeted;
     if is_active_student {
@@ -460,7 +456,8 @@ pub fn draw_collaborator_cursors(
                         )
                         .clicked()
                     {
-                        commands.trigger(crate::sync::SetTeachMode { enabled: false });
+                        commands
+                            .trigger(lunco_networking_sync::sync::SetTeachMode { enabled: false });
                     }
                 });
             },
@@ -475,7 +472,7 @@ pub fn draw_collaborator_cursors(
 
     for (user_id, info) in &presence.users {
         // Skip drawing the local user's cursor
-        if user_id.0 == local.0 .0 {
+        if user_id.0 == local.0.0 {
             continue;
         }
 

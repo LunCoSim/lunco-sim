@@ -11,7 +11,7 @@
 use bevy::prelude::*;
 use big_space::prelude::Grid;
 use lunco_camera_core::CameraPoseMode;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_render::SceneCamera;
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -146,10 +146,10 @@ pub fn apply_pending_focus(
         Without<lunco_avatar_core::roles::Avatar>,
     >,
     q_celestial: Query<(), With<lunco_celestial::CelestialBody>>,
-    q_celestial_decl: Query<(), With<lunco_celestial_spatial::CelestialBodyDecl>>,
+    q_celestial_decl: Query<(), With<lunco_celestial_spatial_core::CelestialBodyDecl>>,
     q_children: Query<&Children>,
     mut commands: Commands,
-    mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
+    mut orbital_pin: Option<ResMut<lunco_celestial_spatial_core::OrbitalViewPin>>,
     local_avatar: Option<Res<lunco_avatar_core::roles::TheLocalAvatar>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
@@ -339,7 +339,7 @@ pub fn on_set_camera_look_at(
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_grids: Query<&Grid>,
     mut commands: Commands,
-    mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
+    mut orbital_pin: Option<ResMut<lunco_celestial_spatial_core::OrbitalViewPin>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
@@ -501,10 +501,11 @@ mod tests {
             app.world().get::<CameraPoseMode>(avatar),
             Some(&CameraPoseMode::Explicit)
         );
-        assert!(app
-            .world()
-            .get::<lunco_camera_core::CameraPoseLock>(avatar)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<lunco_camera_core::CameraPoseLock>(avatar)
+                .is_some()
+        );
     }
 
     #[test]

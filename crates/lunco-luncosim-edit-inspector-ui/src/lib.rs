@@ -8,7 +8,7 @@
 
 use bevy::prelude::*;
 use lunco_scene_selection::{SelectedEntities, SelectionTarget};
-use lunco_usd_viewport_ui::UsdViewportState;
+use lunco_usd_viewport_core::UsdViewportState;
 use lunco_workbench_core::WorkbenchPanelAppExt;
 use lunco_workbench_core::view_model::ViewModelAppExt;
 
@@ -98,7 +98,7 @@ impl Plugin for SceneEditInspectorUiPlugin {
                     .before(bevy::camera::CameraUpdateSystems),
             )
                 .chain()
-                .after(lunco_core::SceneViewportSet::Reconcile),
+                .after(lunco_viewport_core::SceneViewportSet::Reconcile),
         );
 
         app.init_resource::<usd_animation::UsdAnimationView>();

@@ -345,8 +345,13 @@ The scene still binds the observer through `LunCoProgramAPI` and
 `info:sourceAsset`. The runner discovers that composed binding and reads the
 literal without executing the script, so USD does not carry a second test-mode
 field and the shell gate does not maintain an exception list. Valid values are
-`"headless"` and `"graphics"`; omit the declaration for the deterministic
-headless default.
+`"headless"`, `"graphics"`, `"render-contract"`, and `"editor"`. Use
+`"graphics"` when the assertion consumes rendered pixels, `"render-contract"`
+when it consumes production GPU/render diagnostics without requiring a valid
+color-phase item (for example a negative shader contract), and `"editor"` when
+the assertion requires the windowed workbench. Omit the declaration for the
+deterministic headless default. Never weaken the ordinary graphics readiness
+gate to accommodate a diagnostic-only fixture.
 
 ## 3b. A rig test needs a CONTROL, and an anti-trivial guard
 

@@ -26,13 +26,13 @@ use big_space::prelude::{CellCoord, Grid};
 
 use lunco_time::WorldTime;
 
-use crate::frame_index::ReferenceFrameIndex;
 use lunco_celestial::geo::{
-    body_rotation, equatorial_frame, geodetic_to_body_fixed, GeodeticAnchor, LocalTangentFrame,
-    SiteAnchor,
+    GeodeticAnchor, LocalTangentFrame, SiteAnchor, body_rotation, equatorial_frame,
+    geodetic_to_body_fixed,
 };
 use lunco_celestial::kepler::KeplerOrbit;
 use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
+use lunco_celestial_spatial_core::{OrbitalViewPin, ReferenceFrameIndex};
 
 /// Map a site-authored pose into the body's rotating surface frame.
 ///
@@ -54,30 +54,6 @@ fn site_enu_to_body_fixed_pose(
         tangent.to_frame(scene_position),
         scene_to_body * scene_rotation,
     )
-}
-
-/// Orbital view mode state.
-///
-/// The camera itself lives in the target body's explicit
-/// [`crate::ReferenceFrame::EclipticJ2000`]. `big_space` propagates the floating origin through
-/// that nested grid hierarchy in high precision. This resource is only the
-/// cross-domain presentation fact consumed by visibility, gravity and lighting;
-/// camera return state belongs to the avatar that owns the camera.
-///
-/// Remaining consumers of the mode flag:
-/// * [`orbital_pin_scene_visibility`] — hides the local scene while orbital;
-/// * `compute_local_gravity` — holds the last surface field;
-/// * exit paths — the avatar restores its transactional orbit-entry snapshot.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
-pub struct OrbitalViewPin {
-    pub active: bool,
-    /// Ephemeris id of the focused body.
-    pub body: i32,
-    /// Unit direction from the body centre toward the viewpoint in the body's
-    /// star-fixed orbit-view frame.
-    pub dir: DVec3,
-    /// Viewpoint distance from the body centre, metres.
-    pub distance: f64,
 }
 
 /// Attach the site scene to the body's body-fixed surface frame.
@@ -820,7 +796,7 @@ pub fn sync_terrain_body_curvature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_celestial::geo::{solar_tangent_frame, Geodetic};
+    use lunco_celestial::geo::{Geodetic, solar_tangent_frame};
 
     /// The align quaternion maps the site ENU axes onto the scene axes.
     #[test]
@@ -1275,10 +1251,11 @@ mod tests {
             app.world().get::<ChildOf>(avatar).unwrap().parent(),
             camera_grid
         );
-        assert!(app
-            .world()
-            .get::<lunco_environment::GravityBody>(avatar)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<lunco_environment::GravityBody>(avatar)
+                .is_none()
+        );
         assert_eq!(
             app.world()
                 .resource::<lunco_spatial::ActivePhysicsFrame>()
@@ -1286,9 +1263,10 @@ mod tests {
             site
         );
         assert!(app.world().get::<CelestialBody>(body).is_some());
-        assert!(app
-            .world()
-            .get::<lunco_spatial::WorldGrid>(world_grid)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<lunco_spatial::WorldGrid>(world_grid)
+                .is_some()
+        );
     }
 }

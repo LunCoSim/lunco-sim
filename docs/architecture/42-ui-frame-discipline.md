@@ -228,7 +228,7 @@ The same ownership rule applies to the measured presentation paths:
   filter text, so steady egui paints reuse matching entity/port indices instead
   of lowercasing and rescanning every metadata row.
 - **Inspector view-model** compares the displayed values and the active-camera
-  identity directly. It does not use `SceneViewport::is_changed()` because the
+  identity directly. It does not use `lunco_viewport_core::SceneViewport::is_changed()` because the
   camera reconciler legitimately mutably borrows that resource every frame;
   that borrow tick is not a presentation change. Joint readouts remain bounded
   to their declared 10 Hz refresh cadence.

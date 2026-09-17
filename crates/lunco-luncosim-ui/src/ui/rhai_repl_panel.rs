@@ -4,7 +4,8 @@
 //! It runs rhai through the exact same path as `window.lunco_rhai(...)`, the
 //! native `luncosim rhai` CLI client, and MCP: a `RunRhai` command over the
 //! in-process API bridge ([`lunco_api_transport::ApiBridge`]). No sockets, no CLI — so it
-//! works in the browser where the TCP-client `rhai_repl` module cannot.
+//! works in the browser where the native `lunco-rhai-repl` terminal adapter is
+//! unavailable.
 //!
 //! Gated on the bridge's availability (`transport-http` on native, always on
 //! wasm) — see the `transport-http` feature in `Cargo.toml`.
@@ -13,6 +14,7 @@
 use std::sync::{Arc, Mutex};
 
 use bevy_egui::egui;
+use lunco_api_contracts::{ApiRequestEnvelope, ApiResponseEnvelope};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Shared inbox: async bridge tasks push `(code, output)` here; `render` drains
@@ -128,19 +130,11 @@ impl Panel for RhaiReplPanel {
 /// Submit `code` as a `RunRhai` command through the bridge on a detached task,
 /// pushing `(code, output)` into `inbox` when the ECS produces the response.
 fn spawn_rhai(bridge: lunco_api_transport::ApiBridge, code: String, inbox: Inbox) {
-    let req = match lunco_api_transport::rhai_request(&code) {
-        Ok(r) => r,
-        Err(e) => {
-            if let Ok(mut v) = inbox.lock() {
-                v.push((code, format!("request error: {e}")));
-            }
-            return;
-        }
-    };
+    let req = ApiRequestEnvelope::execute_command("RunRhai", serde_json::json!({ "code": code }));
     let fut = async move {
-        let out = match bridge.0.execute(req).await {
+        let out = match bridge.execute_envelope(req).await {
             Ok(resp) => format_response(resp),
-            Err(()) => "request dropped (app shutting down?)".to_string(),
+            Err(error) => error,
         };
         if let Ok(mut v) = inbox.lock() {
             v.push((code, out));
@@ -152,15 +146,13 @@ fn spawn_rhai(bridge: lunco_api_transport::ApiBridge, code: String, inbox: Inbox
     bevy::tasks::AsyncComputeTaskPool::get().spawn(fut).detach();
 }
 
-/// Render an [`ApiResponse`](lunco_api::schema::ApiResponse) as REPL output via
-/// the same envelope the HTTP/JS transports use (forward-compatible with new
-/// variants). A bare string `data` (the common rhai stdout shape) is shown as-is.
-fn format_response(resp: lunco_api::schema::ApiResponse) -> String {
-    let env = lunco_api_transport::transports::ApiResponseEnvelope::from(resp);
-    if let Some(err) = env.error {
+/// Render a canonical API response envelope as REPL output. A bare string
+/// `data` is shown as-is.
+fn format_response(resp: ApiResponseEnvelope) -> String {
+    if let Some(err) = resp.error {
         return format!("error: {err}");
     }
-    match env.data {
+    match resp.data {
         Some(serde_json::Value::String(s)) => s,
         Some(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string()),
         None => "ok".to_string(),

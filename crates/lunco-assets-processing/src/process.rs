@@ -1686,7 +1686,11 @@ mod tests {
         for (index, pixel) in image.pixels_mut().enumerate() {
             *pixel = image::Rgb([index as u8, 80, 160]);
         }
-        image.save(&source).expect("RGB source raster");
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut encoded, image::ImageFormat::Tiff)
+            .expect("encode RGB source raster");
+        lunco_storage::write_file_sync(&source, encoded.get_ref()).expect("RGB source raster");
 
         let process = ProcessConfig {
             kind: "map".into(),
@@ -1714,7 +1718,7 @@ mod tests {
 
         let output = tmp.path().join("terrain/test-map.png");
         assert_eq!(
-            std::fs::read_to_string(output.with_extension("mean")).unwrap(),
+            lunco_storage::read_text_file_sync(&output.with_extension("mean")).unwrap(),
             "1.000000\n"
         );
         assert!(processed_output_present(&output, &process, Some(&source)));
@@ -1799,20 +1803,24 @@ mod tests {
     fn cancelled_processing_cannot_commit_a_staged_artifact() {
         let tmp = tempfile::tempdir().expect("temporary processing directory");
         let output = tmp.path().join("texture.png");
-        std::fs::write(&output, b"old").expect("old output");
-        std::fs::write(bake_stamp_path(&output), b"old-key").expect("old stamp");
+        lunco_storage::write_file_sync(&output, b"old").expect("old output");
+        lunco_storage::write_file_sync(&bake_stamp_path(&output), b"old-key").expect("old stamp");
 
         let stage = tmp.path().join(".lunco-process-stage");
-        std::fs::create_dir(&stage).expect("stage directory");
-        std::fs::write(stage.join("texture.png"), b"new").expect("staged output");
-        std::fs::write(stage.join("texture.png.bakekey"), b"new-key").expect("staged stamp");
+        lunco_storage::ensure_directory_sync(&stage).expect("stage directory");
+        lunco_storage::write_file_sync(&stage.join("texture.png"), b"new").expect("staged output");
+        lunco_storage::write_file_sync(&stage.join("texture.png.bakekey"), b"new-key")
+            .expect("staged stamp");
 
         let control = ProcessControl::unrestricted();
         control.cancel.store(true, Ordering::Release);
         assert!(commit_staged_output(&stage, &output, &[], &control).is_err());
-        assert_eq!(std::fs::read(&output).expect("output remains"), b"old");
         assert_eq!(
-            std::fs::read(bake_stamp_path(&output)).expect("stamp remains"),
+            lunco_storage::read_file_sync(&output).expect("output remains"),
+            b"old"
+        );
+        assert_eq!(
+            lunco_storage::read_file_sync(&bake_stamp_path(&output)).expect("stamp remains"),
             b"old-key"
         );
     }
@@ -1902,11 +1910,9 @@ mod tests {
             .collect();
         let tif = encode_tiff_f32(sw, sh, &src);
 
-        let tmp = std::env::temp_dir().join(format!("lunco-assets-dem-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        let src_path = tmp.join("source.tif");
-        std::fs::write(&src_path, &tif).unwrap();
+        let tmp = tempfile::tempdir().expect("temporary DEM processing directory");
+        let src_path = tmp.path().join("source.tif");
+        lunco_storage::write_file_sync(&src_path, &tif).unwrap();
 
         // Center the ROI in the middle of the source; window small enough to
         // fit. The 2-point extent affine (extent corners → raster edges) places
@@ -1935,11 +1941,13 @@ mod tests {
             albedo_illumination_radius_m: None,
             parameters: BTreeMap::new(),
         };
-        let out_dir = tmp.join("site");
+        let out_dir = tmp.path().join("site");
         process_dem(&src_path, &out_dir, &cfg, &control()).expect("dem process should succeed");
 
         // heightmap is square float32.
-        let out_bytes = std::fs::read(out_dir.join("materials/textures/heightmap.tif")).unwrap();
+        let out_bytes =
+            lunco_storage::read_file_sync(&out_dir.join("materials/textures/heightmap.tif"))
+                .unwrap();
         let mut dec = tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
         let (w, h) = dec.dimensions().unwrap();
         assert_eq!(w, 4, "output width is the target");
@@ -1962,8 +1970,6 @@ mod tests {
         let mut tag_dec = tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
         let geo = lunco_geotiff::read_geo_tags(&mut tag_dec).unwrap();
         assert_eq!(geo.frame, Some(lunco_geotiff::LunarFrame::MoonMe));
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// `kind = "dem"` must ingest a PDS3 `.IMG` source using the label's own
@@ -1971,9 +1977,7 @@ mod tests {
     /// non-GeoTIFF path.
     #[test]
     fn dem_process_ingests_pds_img_via_label_extent() {
-        let tmp = std::env::temp_dir().join(format!("lunco-assets-dem-img-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().expect("temporary PDS DEM directory");
 
         // 8×8 PC_REAL grid with an attached label declaring extent + scale.
         let record_bytes: usize = 1024;
@@ -2002,8 +2006,8 @@ mod tests {
         for i in 0..64u32 {
             label.extend_from_slice(&(i as f32 * 5.0).to_le_bytes());
         }
-        let src_path = tmp.join("source.IMG");
-        std::fs::write(&src_path, &label).unwrap();
+        let src_path = tmp.path().join("source.IMG");
+        lunco_storage::write_file_sync(&src_path, &label).unwrap();
 
         let cfg = ProcessConfig {
             kind: "dem".into(),
@@ -2027,10 +2031,12 @@ mod tests {
             albedo_illumination_radius_m: None,
             parameters: BTreeMap::new(),
         };
-        let out_dir = tmp.join("site");
+        let out_dir = tmp.path().join("site");
         process_dem(&src_path, &out_dir, &cfg, &control()).expect("PDS IMG dem ingest succeeds");
 
-        let out_bytes = std::fs::read(out_dir.join("materials/textures/heightmap.tif")).unwrap();
+        let out_bytes =
+            lunco_storage::read_file_sync(&out_dir.join("materials/textures/heightmap.tif"))
+                .unwrap();
         let mut dec = tiff::decoder::Decoder::new(Cursor::new(out_bytes.as_slice())).unwrap();
         let (w, h) = dec.dimensions().unwrap();
         assert_eq!((w, h), (4, 4));
@@ -2041,8 +2047,6 @@ mod tests {
             }
             other => panic!("expected F32 heightmap, got {other:?}"),
         }
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// `kind = "normalmap"` writes an RGB8 PNG whose flat regions encode the
@@ -2056,11 +2060,9 @@ mod tests {
             .collect();
         let tif = encode_tiff_f32(sw, sh, &src);
 
-        let tmp = std::env::temp_dir().join(format!("lunco-assets-nrm-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        let src_path = tmp.join("source.tif");
-        std::fs::write(&src_path, &tif).unwrap();
+        let tmp = tempfile::tempdir().expect("temporary normal-map directory");
+        let src_path = tmp.path().join("source.tif");
+        lunco_storage::write_file_sync(&src_path, &tif).unwrap();
 
         let cfg = ProcessConfig {
             kind: "normalmap".into(),
@@ -2084,10 +2086,11 @@ mod tests {
             albedo_illumination_radius_m: None,
             parameters: BTreeMap::new(),
         };
-        let out_path = tmp.join("normal.png");
+        let out_path = tmp.path().join("normal.png");
         process_normalmap(&src_path, &out_path, &cfg, &control()).expect("normalmap succeeds");
 
-        let png = image::open(&out_path).unwrap().to_rgb8();
+        let output = lunco_storage::read_file_sync(&out_path).unwrap();
+        let png = image::load_from_memory(&output).unwrap().to_rgb8();
         assert_eq!((png.width(), png.height()), (8, 8));
         let c = png.get_pixel(4, 4).0;
         // Up-slope in +x ⇒ normal tilts to -x: R < 128; no z tilt: B ≈ 128;
@@ -2099,16 +2102,12 @@ mod tests {
             "B stays neutral, got {}",
             c[2]
         );
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// `kind = "map"` crops an RGB source to the ROI and keeps colour.
     #[test]
     fn map_process_crops_rgb_source() {
-        let tmp = std::env::temp_dir().join(format!("lunco-assets-map-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = tempfile::tempdir().expect("temporary map directory");
 
         // 16×16 RGB PNG: left half red, right half green.
         let mut img = image::RgbImage::new(16, 16);
@@ -2119,8 +2118,12 @@ mod tests {
                 image::Rgb([10, 200, 10])
             };
         }
-        let src_path = tmp.join("source.png");
-        img.save(&src_path).unwrap();
+        let src_path = tmp.path().join("source.png");
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        lunco_storage::write_file_sync(&src_path, encoded.get_ref()).unwrap();
 
         let cfg = ProcessConfig {
             kind: "map".into(),
@@ -2144,15 +2147,14 @@ mod tests {
             albedo_illumination_radius_m: None,
             parameters: BTreeMap::new(),
         };
-        let out_path = tmp.join("map.png");
+        let out_path = tmp.path().join("map.png");
         process_map(&src_path, &out_path, &cfg, &control()).expect("map crop succeeds");
 
-        let out = image::open(&out_path).unwrap().to_rgb8();
+        let output = lunco_storage::read_file_sync(&out_path).unwrap();
+        let out = image::load_from_memory(&output).unwrap().to_rgb8();
         assert_eq!((out.width(), out.height()), (8, 8));
         assert!(out.get_pixel(1, 4).0[0] > 100, "west side stays red");
         assert!(out.get_pixel(6, 4).0[1] > 100, "east side stays green");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// A grayscale crop carrying a nodata margin must still stretch on its REAL

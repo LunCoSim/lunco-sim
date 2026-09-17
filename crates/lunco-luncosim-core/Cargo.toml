@@ -25,6 +25,7 @@ lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-avatar-camera = { path = "../lunco-avatar-camera" }
 lunco-camera-runtime = { path = "../lunco-camera-runtime" }
 lunco-camera-celestial = { path = "../lunco-camera-celestial" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
@@ -33,6 +34,7 @@ lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-execution = { path = "../lunco-modelica-execution" }
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
@@ -48,13 +50,13 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
+lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
-lunco-usd-sim = { path = "../lunco-usd-sim" }
-lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
@@ -71,6 +73,8 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-storage = { path = "../lunco-storage" }
 lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
 lunco-networking = { path = "../lunco-networking", optional = true, default-features = false }
+lunco-networking-core = { path = "../lunco-networking-core", optional = true }
+lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
 lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -90,13 +94,15 @@ api-transport = [
 transport-http = ["lunco-api-transport/transport-http", "lunco-networking?/transport-http"]
 networking = [
     "dep:lunco-networking",
+    "dep:lunco-networking-core",
+    "dep:lunco-networking-sync",
     "lunco-networking/networking",
     "lunco-luncosim-exposures/networking",
     "api-transport",
     "dep:lunco-twin-journal",
 ]
 net-diag = ["networking", "lunco-networking/net-diag"]
-python = ["lunco-scripting/python", "lunco-usd-sim-cosim/python"]
+python = ["lunco-scripting/python", "lunco-usd-bevy-runtime/python"]
 native-plugins = ["lunco-scripting/native-plugins"]
 sysml = ["dep:lunco-sysml"]
 

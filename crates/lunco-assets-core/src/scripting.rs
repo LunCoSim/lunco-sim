@@ -568,11 +568,11 @@ mod tests {
             .is_none());
 
         let empty = root.path().join("empty");
-        std::fs::create_dir(&empty).expect("empty Rhai directory");
+        lunco_storage::ensure_directory_sync(&empty).expect("empty Rhai directory");
         let error = disk_rhai_files(&empty).expect_err("empty editable source is invalid");
         assert!(error.contains("contains no .rhai files"), "{error}");
 
-        std::fs::write(empty.join("policy.rhai"), "fn policy() { true }")
+        lunco_storage::write_file_sync(&empty.join("policy.rhai"), b"fn policy() { true }")
             .expect("editable Rhai source");
         let files = disk_rhai_files(&empty)
             .expect("editable Rhai source is readable")

@@ -726,7 +726,7 @@ impl Plugin for ModelicaUiPlugin {
             // WP-8 / CQ-207: the experiments plot reads shared `Arc` sample
             // arrays + the variable catalog from `ExperimentsViewModel`,
             // rebuilt only when the twin's run set / sample totals change.
-            .init_resource::<panels::experiments::ExperimentsViewModel>()
+            .init_resource::<lunco_experiments_ui::ExperimentsViewModel>()
             .add_systems(Update, panels::experiments::populate_experiments_view_model)
             .insert_resource(crate::package_tree::PackageTreeCache::new())
             .add_systems(Update, browser_dispatch::drain_browser_actions)
@@ -804,10 +804,10 @@ impl Plugin for ModelicaUiPlugin {
             .register_panel(panels::diagnostics::DiagnosticsPanel)
             .register_panel(panels::journal::JournalPanel)
             .register_panel(panels::experiments::ExperimentsPanel)
-            .init_resource::<panels::experiments::ExperimentVisibility>()
-            .init_resource::<panels::experiments::PlotPanelStates>()
+            .init_resource::<lunco_experiments_ui::ExperimentVisibility>()
+            .init_resource::<lunco_experiments_ui::PlotPanelStates>()
             .init_resource::<doc_pin::DocPinState>()
-            .init_resource::<panels::experiments::ActivePlot>()
+            .init_resource::<lunco_experiments_ui::ActivePlot>()
             .register_panel(panels::canvas_diagram::CanvasDiagramPanel)
             .init_resource::<panels::canvas_diagram::CanvasDiagramState>()
             .init_resource::<panels::canvas_diagram::PaletteSettings>()

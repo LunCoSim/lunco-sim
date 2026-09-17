@@ -2,7 +2,7 @@
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
-use lunco_core::{PointerInteraction, ScenePointerPolicy};
+use lunco_interaction_core::{PointerInteraction, ScenePointerPolicy};
 
 /// Translate the render-free USD policy into Bevy mesh-picking behavior.
 ///

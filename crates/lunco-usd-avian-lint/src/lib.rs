@@ -1316,13 +1316,12 @@ mod tests {
     /// composed opinions and not off a parse of the text.
     fn facts(usda: &str) -> H {
         static N: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join("lunco_usd_lint_facts");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join(format!(
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join(format!(
             "fixture_{}.usda",
             N.fetch_add(1, Ordering::Relaxed)
         ));
-        std::fs::write(&f, usda).unwrap();
+        lunco_storage::write_file_sync(&f, usda.as_bytes()).unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
         let view = StageView::new(&stage);
         physics_facts(&view)

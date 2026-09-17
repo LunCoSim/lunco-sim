@@ -38,6 +38,8 @@ pub mod viz;
 #[cfg(feature = "ui")]
 pub use kinds::line_plot::{LinePlot, LINE_PLOT_KIND};
 #[cfg(feature = "ui")]
+pub use lunco_viz_core::VizId;
+#[cfg(feature = "ui")]
 pub use panel::{VizPanel, VIZ_PANEL_KIND};
 #[cfg(feature = "ui")]
 pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
@@ -55,7 +57,7 @@ pub use telemetry_browser::{
 #[cfg(feature = "ui")]
 pub use view::{Panel2DCtx, ViewKind, ViewTarget};
 #[cfg(feature = "ui")]
-pub use viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizId, VizKindId};
+pub use viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
 
 #[cfg(feature = "ui")]
 use bevy::prelude::*;

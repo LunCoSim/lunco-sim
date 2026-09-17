@@ -46,8 +46,8 @@
 //!   `Rc`-backed and therefore `!Send`: a main-thread `NonSend` resource. It is
 //!   the projection engine — authoring onto it fires the openusd change sink that
 //!   reconciles the ECS (see the runtime projector in
-//!   `lunco-usd-bevy-runtime/src/twin_projection.rs` and
-//!   `lunco-usd-bevy-runtime/src/live_consume.rs`).
+//!   `lunco-usd-bevy-runtime-core/src/twin_projection.rs` and
+//!   `lunco-usd-bevy-runtime-core/src/live_consume.rs`).
 //!
 //! This split is **not** a Rust/`Send` workaround — it is USD's own data model.
 //! Pixar's USD draws the same line between `SdfLayer` (flat authored opinions you

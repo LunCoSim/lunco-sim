@@ -287,6 +287,13 @@ pub fn read_file_sync(path: &Path) -> StorageResult<Vec<u8>> {
     WebStorage::new().read_sync(&StorageHandle::File(path.to_path_buf()))
 }
 
+/// Read UTF-8 text from a file through the [`Storage`] API.
+pub fn read_text_file_sync(path: &Path) -> StorageResult<String> {
+    String::from_utf8(read_file_sync(path)?).map_err(|error| {
+        StorageError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    })
+}
+
 /// Delete a file `path` **through the [`Storage`] API** — the delete
 /// counterpart of [`write_file_sync`]. Routes to whichever backend owns
 /// `StorageHandle::File` on this platform (native [`FileStorage`] / wasm
@@ -332,6 +339,62 @@ pub fn ensure_directory_sync(path: &Path) -> StorageResult<()> {
 #[cfg(target_arch = "wasm32")]
 pub fn ensure_directory_sync(_path: &Path) -> StorageResult<()> {
     Ok(())
+}
+
+/// Create a file symlink through the native storage boundary.
+///
+/// Symlinks are a native filesystem security concern, so higher-level tests
+/// and path-owning crates use this helper instead of importing an OS-specific
+/// filesystem module themselves. Browser storage has no symlink primitive and
+/// therefore does not expose this operation.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+pub fn create_file_symlink_sync(target: &Path, link: &Path) -> StorageResult<()> {
+    std::os::unix::fs::symlink(target, link).map_err(StorageError::Io)
+}
+
+/// Create a directory symlink through the native storage boundary.
+///
+/// See [`create_file_symlink_sync`] for why this operation belongs here.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+pub fn create_directory_symlink_sync(target: &Path, link: &Path) -> StorageResult<()> {
+    std::os::unix::fs::symlink(target, link).map_err(StorageError::Io)
+}
+
+/// Create a file symlink through the native storage boundary on Windows.
+#[cfg(windows)]
+pub fn create_file_symlink_sync(target: &Path, link: &Path) -> StorageResult<()> {
+    std::os::windows::fs::symlink_file(target, link).map_err(StorageError::Io)
+}
+
+/// Create a directory symlink through the native storage boundary on Windows.
+#[cfg(windows)]
+pub fn create_directory_symlink_sync(target: &Path, link: &Path) -> StorageResult<()> {
+    std::os::windows::fs::symlink_dir(target, link).map_err(StorageError::Io)
+}
+
+/// List the direct children of a directory through the active storage
+/// backend. The returned paths are sorted to make source scanners and tests
+/// deterministic.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_directory_sync(path: &Path) -> StorageResult<Vec<PathBuf>> {
+    FileStorage::new()
+        .read_directory_sync(&StorageHandle::File(path.to_path_buf()))
+        .map(|entries| {
+            entries
+                .into_iter()
+                .filter_map(|handle| handle.as_file_path().map(Path::to_path_buf))
+                .collect()
+        })
+}
+
+/// Browser counterpart of [`read_directory_sync`]. Browser local storage has
+/// no native directory tree, so callers must use a backend with directory
+/// semantics when one is available.
+#[cfg(target_arch = "wasm32")]
+pub fn read_directory_sync(_path: &Path) -> StorageResult<Vec<PathBuf>> {
+    Err(StorageError::Unsupported(
+        "WebStorage has no directory listing".into(),
+    ))
 }
 
 /// Identify a path through the platform's default file backend.
@@ -445,6 +508,17 @@ pub trait Storage: Send + Sync {
     /// Synchronous convenience wrapper around [`Storage::ensure_directory`].
     fn ensure_directory_sync(&self, handle: &StorageHandle) -> StorageResult<()> {
         futures_lite::future::block_on(self.ensure_directory(handle))
+    }
+
+    /// List the direct children of a directory.
+    ///
+    /// Backends without directory semantics must return
+    /// [`StorageError::Unsupported`] rather than fabricating an empty list.
+    async fn read_directory(&self, handle: &StorageHandle) -> StorageResult<Vec<StorageHandle>>;
+
+    /// Synchronous convenience wrapper around [`Storage::read_directory`].
+    fn read_directory_sync(&self, handle: &StorageHandle) -> StorageResult<Vec<StorageHandle>> {
+        futures_lite::future::block_on(self.read_directory(handle))
     }
 
     /// Move an entry from one handle to another without changing its bytes.

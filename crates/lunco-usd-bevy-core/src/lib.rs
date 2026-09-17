@@ -15,6 +15,7 @@ pub mod authoring;
 pub mod canonical;
 pub mod compose;
 pub mod instance;
+pub mod live_edit;
 pub mod mount;
 pub mod point_instancer;
 pub mod program;

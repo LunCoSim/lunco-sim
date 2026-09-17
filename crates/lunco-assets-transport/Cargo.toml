@@ -9,7 +9,7 @@ description = "Small native HTTP transport primitives shared by LunCoSim asset c
 lunco-settings = { path = "../lunco-settings" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { workspace = true }
+ureq = { workspace = true, features = ["rustls", "gzip"] }
 
 [lints]
 workspace = true

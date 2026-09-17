@@ -15,8 +15,8 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_spatial::attach::migrate_to_grid;
 
-use crate::frame_index::ReferenceFrameIndex;
-use lunco_celestial::{inherited_reference_frame, CelestialBodyRegistry, ReferenceFrame};
+use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame, inherited_reference_frame};
+use lunco_celestial_spatial_core::ReferenceFrameIndex;
 
 /// Marks a moving object whose concrete BigSpace frame follows the catalog's
 /// sphere-of-influence selection.
@@ -167,7 +167,10 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ReferenceFrameIndex>()
             .insert_resource(CelestialBodyRegistry::default_system())
-            .add_systems(First, crate::frame_index::update_reference_frame_index)
+            .add_systems(
+                First,
+                lunco_celestial_spatial_core::update_reference_frame_index,
+            )
             .add_systems(Update, soi_transition_system);
         app
     }

@@ -2,55 +2,33 @@
 //!
 //! This crate provides a bridge between Bevy's ECS and Modelica simulation models.
 //! It features:
-//! - A background worker thread that owns non-Send `SimulationSession` instances
-//! - Command/response architecture with session ID fencing to prevent stale data
-//! - Command squashing to handle rapid parameter changes without back-pressure
-//! - DAE caching per entity for instant Reset and fast stepper rebuilds
-//! - UI-agnostic telemetry and simulation result streams
+//! - A compiler session with explicit source-root admission
+//! - Document, AST, diagram, and engine synchronization primitives
+//! - UI-agnostic Modelica runtime state and command contracts
 //!
 //! ## Architecture
 //!
-//! The `ModelicaCorePlugin` spawns a background worker thread that owns all simulation
-//! steppers and cached DAEs. The main Bevy thread sends `ModelicaCommand`s via a
-//! crossbeam channel and receives `ModelicaResult`s back. Each entity with a
-//! `ModelicaModel` component gets its own stepper instance, identified by a
-//! `session_id` that increments on each recompile/reset to fence stale results.
-//!
-//! ## DAE Caching
-//!
-//! After a successful compilation, the `CompilationResult` (including the DAE) is
-//! cached per entity. This enables:
-//! - **Instant Reset**: Rebuilds the SimulationSession from the cached DAE without recompilation
-//! - **Fast Step auto-init**: If the stepper was lost, rebuilds from cached DAE instead of
-//!   recompiling from the file on disk
-//! - **Parameter updates**: After UpdateParameters, the modified source is
-//!   compiled and the new DAE replaces the old cache entry
-//!
-//! ## Worker Panic Recovery
-//!
-//! The worker wraps all simulation logic in `catch_unwind`. If a numerical
-//! instability causes a solver panic, the error is caught and reported as
-//! "Solver Error" in the logs rather than crashing the application.
+//! The [`ModelicaCorePlugin`] owns the compiler/document half of the runtime.
+//! Solver workers, experiment execution, and browser transport are supplied by
+//! `lunco_modelica_execution::ModelicaExecutionPlugin`. Keeping that package
+//! above this one means compiler-only consumers do not rebuild the simulation
+//! stack when worker code changes.
 //!
 //! Source parsing, lossless AST edits, source-fragment rendering, and the
 //! reusable diagram graph are provided by `lunco-modelica-ast`. This crate
-//! owns the document lifecycle, compiler session, worker orchestration,
-//! simulation resources, and Modelica-specific runtime integration around
-//! those source contracts. Headless document and source-editing mechanics live
-//! in `lunco-modelica-document`, so compiler consumers do not compile this
-//! crate's document implementation merely to use that lower-level contract.
+//! owns the document lifecycle, compiler session, source-root admission, and
+//! Modelica-specific runtime integration around those source contracts.
+//! Solver orchestration, simulation-result caching, and worker panic isolation
+//! live in `lunco-modelica-execution`. Headless document and source-editing
+//! mechanics live in `lunco-modelica-document`, so compiler consumers do not
+//! compile this crate's document implementation merely to use that lower-level
+//! contract.
 use bevy::prelude::*;
-use crossbeam_channel::unbounded;
 #[cfg(feature = "api")]
 use lunco_api::executor::DeferredCommandAppExt;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_modelica_document::ModelicaDocument;
-use lunco_modelica_runtime::{
-    CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet, SimSampleStream,
-};
 use rumoca_compile::{Session, SessionConfig};
-#[cfg(not(target_arch = "wasm32"))]
-use std::thread;
 
 /// SemVer2 product version stamped into this build.
 pub const PRODUCT_VERSION: &str = env!("LUNCO_RELEASE_VERSION");
@@ -142,7 +120,6 @@ pub mod text_diff;
 /// type references, then primes the engine's icon cache via a single
 /// off-thread task. Drill-in projection sees a populated cache.
 pub mod icon_warmer;
-pub mod lock_ext;
 pub mod source_roots;
 
 const SOURCE_SET_REVISION_VERSION: u32 = 1;
@@ -983,7 +960,7 @@ impl ModelicaCompiler {
     /// Return one deterministic revision for the complete set of admitted
     /// source roots. The ordering of the source-root map is not semantic, so
     /// root identifiers are sorted before hashing.
-    pub(crate) fn library_revision(&self) -> u64 {
+    pub fn library_revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
 
         let mut roots = self
@@ -1053,68 +1030,16 @@ fn diagnostics_from_strict_report(
         .collect()
 }
 
-/// Convert a rumoca-sim runtime/lowering failure into located diagnostics for
-/// the Diagnostics panel — the runtime counterpart of
-/// [`diagnostics_from_strict_report`].
-///
-/// [`rumoca_sim::SimulationDiagnosticError`] is structured: it
-/// carries a stable diagnostic code and (for the `SolveLowering` variant) a
-/// source span via `source_span()`. We surface the code-prefixed `Display`
-/// message and, when a span is present and lands inside the user's model
-/// source, a clickable `(line, column)`. `Solver` runtime blow-ups have no
-/// span and degrade to a single message-only row.
-///
-/// `source` must be the text those byte offsets index into — i.e. the source
-/// that was compiled to the DAE. The compiled text is the *stripped* source
-/// (`strip_input_defaults`, applied at the `seat_user_source` chokepoint), but
-/// the strip BLANKS the binding bytes in place instead of deleting them, so it
-/// is length-preserving: every offset in the stripped source indexes the same
-/// character in the caller's raw buffer, and click-to-source stays correct.
-fn diagnostics_from_sim_error(
-    err: &rumoca_sim::SimulationDiagnosticError,
-    source: &str,
-) -> Vec<lunco_doc::Diagnostic> {
-    use lunco_doc::Diagnostic;
-    let message = format!("[{}] {err}", err.diagnostic_code());
-    match err.source_span() {
-        // `start.0` is a 0-based UTF-8 byte offset; only trust it when it
-        // lands inside the buffer we're resolving against (guards against a
-        // span rooted in a library/compiler-generated source).
-        Some(span) if span.start.0 <= source.len() => {
-            let (line, column) = lunco_modelica_document::document::core::byte_offset_to_line_col(
-                source,
-                span.start.0,
-            );
-            vec![Diagnostic::error(message, Some(line), Some(column))]
-        }
-        _ => vec![Diagnostic::message_only(message)],
-    }
-}
-
-/// Profile-aware run configuration and experiment execution for rumoca.
-pub mod experiments_runner;
 pub mod library_remote;
 pub mod modelica_library_settings;
 /// Bundled Modelica models for web deployment.
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
-pub mod worker;
-
-/// Bevy resource wrapping the singleton [`experiments_runner::ModelicaRunner`].
-/// Stored as `Arc` so UI panels can clone the handle and call
-/// `run_fast` from event handlers without holding a `ResMut` borrow.
-#[derive(Resource, Clone)]
-pub struct ModelicaRunnerResource(pub std::sync::Arc<experiments_runner::ModelicaRunner>);
-/// Wasm-only Web Worker transport — relays `ModelicaCommand` /
-/// `ModelicaResult` between the main wasm instance and the off-thread
-/// worker bundle so the UI never blocks on rumoca compile / step.
-#[cfg(target_arch = "wasm32")]
-pub mod worker_transport;
-use worker::{handle_modelica_responses, spawn_modelica_requests};
+pub mod worker_bridge;
 
 /// Shareable model links (encode model source into a URL fragment).
 pub mod model_share;
-/// Headless Modelica compiler, worker, and simulation plugin.
+/// Headless Modelica compiler and document plugin.
 ///
 /// UI panels and editor state live in `lunco-modelica-ui` and are not part of
 /// this package.
@@ -1123,6 +1048,7 @@ pub struct ModelicaCorePlugin;
 impl Plugin for ModelicaCorePlugin {
     fn build(&self, app: &mut App) {
         build_modelica_core(app);
+        app.init_resource::<worker_bridge::ModelicaWorkerBridge>();
         // Runtime model-input control is a core command, not a UI command.
         // Register it here so headless and workbench hosts expose the same
         // reflected command contract.
@@ -1238,9 +1164,6 @@ fn sync_workspace_on_doc_saved(
     }
 }
 fn build_modelica_core(app: &mut App) {
-    let (tx_cmd, rx_cmd) = unbounded();
-    let (tx_res, rx_res) = unbounded();
-
     // Ensure source library remote management is present (fetching, settings, status).
     // The domain is incomplete without source library access.
     if !app.is_plugin_added::<library_remote::LibraryRemotePlugin>() {
@@ -1258,59 +1181,18 @@ fn build_modelica_core(app: &mut App) {
         std::env::set_var("MODELICAPATH", library.to_string_lossy().to_string());
     }
 
-    // Point rumoca at the workspace's shared `.cache/rumoca/`, the
-    // same one `modelica_run` and the `lunco-modelica-assets` indexer use. Without this
-    // alignment, the workbench reads XDG default (`~/.cache/rumoca`)
-    // while the CLI tools warm `<workspace>/.cache/rumoca` —
-    // the indexer's `--warm` pass then does NOTHING for first workbench
-    // compile, which stretches from ~12 s (warm) to 13+ minutes (cold,
-    // observed). Honor an externally-set `RUMOCA_CACHE_DIR` if the
-    // caller wants a sandboxed location (CI, tests).
+    // Point rumoca at the workspace's shared `.cache/rumoca/`, the same one
+    // the Modelica asset indexer uses. Honor an externally-set
+    // `RUMOCA_CACHE_DIR` when the caller wants a sandboxed location (CI, tests).
     #[cfg(not(target_arch = "wasm32"))]
     if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
         let target = lunco_assets_core::cache_dir().join("rumoca");
         std::env::set_var("RUMOCA_CACHE_DIR", &target);
         log::info!(
-            "[ModelicaCorePlugin] using rumoca cache at {} (set RUMOCA_CACHE_DIR to override)",
+            "[ModelicaCompiler] using rumoca cache at {} (set RUMOCA_CACHE_DIR to override)",
             target.display(),
         );
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        thread::spawn(move || {
-            worker::modelica_worker(rx_cmd, tx_res);
-        });
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    app.insert_resource(ModelicaChannels {
-        tx: tx_cmd,
-        rx: rx_res,
-    });
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Hand the result-side sender to the worker_transport so the JS
-        // `onmessage` callback can deliver decoded results into the same
-        // channel the existing `handle_modelica_responses` system drains.
-        // Cheap to clone; the original still goes into ModelicaChannels.
-        let _ = worker_transport::register_result_sender(tx_res.clone());
-        // Same trick on the command side so the JS test bridge can post
-        // commands without going through the UI.
-        let _ = worker_transport::register_command_sender(tx_cmd.clone());
-        app.insert_resource(ModelicaChannels {
-            tx: tx_cmd,
-            rx: rx_res,
-            rx_cmd,
-            tx_res,
-        });
-    }
-
-    app.init_resource::<lunco_signal::SimRegistry>();
-    app.init_resource::<SimSampleStream>();
-    app.init_resource::<runtime_telemetry::RuntimeTelemetrySessions>();
-    app.add_message::<ModelicaNotice>();
-    app.add_message::<CompileRequested>();
 
     // ── Document foundation (moved out of the UI plugin so a headless server
     // journals + replicates Modelica edits, not just the GUI) ──────────────
@@ -1331,80 +1213,6 @@ fn build_modelica_core(app: &mut App) {
     app.add_observer(sync_workspace_on_doc_closed);
     app.add_observer(sync_workspace_on_doc_changed);
     app.add_observer(sync_workspace_on_doc_saved);
-
-    // Experiments / Fast Run: backend-agnostic registry + this crate's
-    // ModelicaRunner binding. UI for the Run buttons and Experiments
-    // panel is layered in `ui::experiments_panel` (Step 5+).
-    app.add_plugins(lunco_experiments::ExperimentsPlugin);
-    app.insert_resource(ModelicaRunnerResource(std::sync::Arc::new(
-        experiments_runner::ModelicaRunner::new(),
-    )));
-    app.init_resource::<experiments_runner::PendingHandles>();
-    app.init_resource::<experiments_runner::ExperimentDrafts>();
-    app.init_resource::<experiments_runner::ExperimentSources>();
-    app.init_resource::<experiments_runner::PlaybackEntities>();
-    // Persisted concurrency cap for parallel Fast Runs (settings.json
-    // `experiments.max_parallel`; None = platform auto). The apply system
-    // pushes it into the runner on startup and on later edits.
-    use lunco_settings::AppSettingsExt;
-    app.register_settings_section::<experiments_runner::ExperimentSettings>();
-    app.add_systems(
-        Update,
-        (
-            experiments_runner::apply_experiment_settings,
-            experiments_runner::drain_pending_handles,
-        ),
-    );
-
-    // Worker completion is an asynchronous lifecycle event, not simulation
-    // work. It must be drained from Update so scene-readiness loops can hold
-    // the fixed clock at zero while a background compile or step finishes.
-    // The fixed dispatcher remains separate: only it advances the Modelica
-    // master clock and emits the next deterministic communication request.
-    app.configure_sets(Update, ModelicaSet::HandleResponses);
-    app.configure_sets(FixedUpdate, ModelicaSet::SpawnRequests);
-    app.init_resource::<worker::CosimLag>();
-    app.register_type::<ModelicaModel>()
-        .add_observer(worker::on_remove_modelica)
-        .add_systems(
-            Update,
-            handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
-        )
-        .add_systems(
-            Update,
-            runtime_telemetry::retain_modelica_runtime_state.after(ModelicaSet::HandleResponses),
-        )
-        .add_systems(
-            FixedUpdate,
-            spawn_modelica_requests
-                .in_set(ModelicaSet::SpawnRequests)
-                // The shared virtual clock is the sole admission predicate for
-                // continuous Modelica stepping. A held causal barrier may leave
-                // one residual FixedUpdate overstep; do not advance target
-                // clocks or dispatch new requests in that paused boundary.
-                .run_if(lunco_time::simulation_is_running),
-        );
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Modelica work on wasm always goes through the Web Worker. A missing
-        // or stale worker is a terminal runtime error reported through the
-        // existing command/result lifecycle; it is never executed on the UI
-        // thread.
-        app.add_systems(Update, worker_transport::pump_commands_to_worker);
-        // Re-seed source library into workers respawned after a crash, deferred so the
-        // ~165 MB bundle isn't re-allocated on the (memory-starved) crash
-        // stack. Cheap no-op when nothing is pending.
-        app.add_systems(Update, |_world: &mut World| {
-            worker_transport::pump_worker_respawns();
-        });
-        // Drain Web-Worker RunUpdate streams into the runner's
-        // RunHandle receivers and clear the runner's busy flag on
-        // terminal updates. Cheap when no run is in flight.
-        app.add_systems(Update, |_world: &mut World| {
-            experiments_runner::pump_wasm_forwarders();
-        });
-    }
 }
 
 // ---------------------------------------------------------------------------

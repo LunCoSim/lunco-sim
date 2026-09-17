@@ -3,7 +3,9 @@
 //! This package owns camera-mode exclusivity and the pure pose writers that do
 //! not need to know whether a rig is an avatar, inspection camera, or another
 //! authored operator. Avatar input, possession, vessel collision, and
-//! source-specific surface-frame production remain outside this package.
+//! source-specific surface-frame production remain outside this package. It
+//! also owns the generic rule that direct-pose modes cannot retain interaction
+//! easing, so every camera realization has one transform writer.
 
 use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::prelude::*;
@@ -196,6 +198,50 @@ impl Plugin for CameraRuntimePlugin {
                 .chain()
                 .in_set(CameraUpdateSet),
         );
+        app.add_systems(Update, sync_camera_easing);
+    }
+}
+
+/// Keep render-rate interaction easing exclusive to incremental free flight.
+///
+/// Target-following, orbital, surface-relative, and explicitly driven cameras
+/// write their complete pose through their owning realization. Letting one of
+/// those modes retain [`lunco_time::InteractionEased`] would create a second
+/// transform writer and interpolate cell-local poses across a BigSpace rebase.
+pub fn sync_camera_easing(
+    mut commands: Commands,
+    q: Query<
+        (
+            Entity,
+            Has<SpringArmCamera>,
+            Has<OrbitCamera>,
+            Has<SurfaceCamera>,
+            Has<lunco_time::InteractionEased>,
+            Has<CameraPoseLock>,
+        ),
+        With<CameraRig>,
+    >,
+) {
+    for (entity, spring_arm, orbit, surface_camera, eased, cinematic_lock) in q.iter() {
+        if cinematic_lock {
+            if eased {
+                commands
+                    .entity(entity)
+                    .remove::<lunco_time::InteractionEased>();
+            }
+            continue;
+        }
+        if spring_arm || orbit || surface_camera {
+            if eased {
+                commands
+                    .entity(entity)
+                    .remove::<lunco_time::InteractionEased>();
+            }
+        } else if !eased {
+            commands
+                .entity(entity)
+                .try_insert(lunco_time::InteractionEased::default());
+        }
     }
 }
 
@@ -235,6 +281,109 @@ mod camera_input_tests {
 }
 
 register_commands!(on_set_camera_input);
+
+#[cfg(test)]
+mod camera_easing_tests {
+    use super::*;
+
+    #[test]
+    fn pose_owners_exclude_direct_modes_and_restore_easing_for_free_flight() {
+        let mut app = App::new();
+        app.add_systems(Update, sync_camera_easing);
+
+        let spring = app
+            .world_mut()
+            .spawn((
+                SpringArmCamera {
+                    target: Entity::PLACEHOLDER,
+                    distance: 10.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                    vertical_offset: 2.0,
+                    track_heading: true,
+                    attitude: FollowAttitude::Heading,
+                },
+                lunco_time::InteractionEased::default(),
+            ))
+            .id();
+        let orbit = app
+            .world_mut()
+            .spawn((
+                OrbitCamera {
+                    target: Entity::PLACEHOLDER,
+                    distance: 1_800_000.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                    vertical_offset: 0.0,
+                },
+                lunco_time::InteractionEased::default(),
+            ))
+            .id();
+        let surface = app
+            .world_mut()
+            .spawn((
+                SurfaceCamera {
+                    heading: 0.0,
+                    pitch: -0.2,
+                },
+                lunco_time::InteractionEased::default(),
+            ))
+            .id();
+        let free = app
+            .world_mut()
+            .spawn(FreeFlightCamera {
+                yaw: 0.0,
+                pitch: 0.0,
+                damping: None,
+            })
+            .id();
+        let locked = app
+            .world_mut()
+            .spawn((
+                CameraRig,
+                CameraPoseLock,
+                lunco_time::InteractionEased::default(),
+            ))
+            .id();
+
+        app.update();
+
+        for entity in [spring, orbit, surface, locked] {
+            assert!(
+                app.world()
+                    .get::<lunco_time::InteractionEased>(entity)
+                    .is_none(),
+                "a complete or explicitly locked pose must have one writer"
+            );
+        }
+        assert!(
+            app.world()
+                .get::<lunco_time::InteractionEased>(free)
+                .is_some(),
+            "free flight regains interaction easing"
+        );
+
+        app.world_mut()
+            .entity_mut(spring)
+            .remove::<SpringArmCamera>();
+        app.world_mut().entity_mut(orbit).remove::<OrbitCamera>();
+        app.world_mut()
+            .entity_mut(surface)
+            .remove::<SurfaceCamera>();
+        app.update();
+
+        for entity in [spring, orbit, surface] {
+            assert!(
+                app.world()
+                    .get::<lunco_time::InteractionEased>(entity)
+                    .is_some(),
+                "a rig without a direct-pose mode regains easing"
+            );
+        }
+    }
+}
 
 /// Preserve free-flight orientation when its parent frame changes.
 pub fn rebase_freeflight_state(

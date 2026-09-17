@@ -10,7 +10,8 @@
 //!     transitively-referenced `.usda` and fetch its bytes via
 //!     `LoadContext::read_asset_bytes` (native + wasm, routed through Bevy's
 //!     `AssetServer` + our registered sources). openusd's resolver is
-//!     synchronous, so all async fetching happens here, up front.
+//!     synchronous, so all async fetching happens here, up front; a missing
+//!     transitive layer is retained as a recoverable diagnostic.
 //!  2. **Prepare** ([`UsdStageProjectionPlan::from_recipe`]) — compose the
 //!     fetched closure with the same PCP engine and snapshot the composed
 //!     hierarchy, default-time values, transforms, material bindings, and
@@ -26,22 +27,35 @@
 //! referenced wrappers use the same path (openusd has no `SdfFileFormat` plugin
 //! system).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Result};
-use bevy::asset::{AssetPath, LoadContext};
+use bevy::asset::{io::AssetReaderError, AssetPath, LoadContext, ReadAssetBytesError};
 use openusd::usd::Stage;
 
 use lunco_assets_core::asset_path::canonicalize_root;
 
-use lunco_usd_compose::recipe::StageRecipe;
-use lunco_usd_compose::{child_layer_ids, LuncoUsdResolver, SharedLayerBytes};
+use lunco_usd_compose::recipe::{StageClosureLimits, StageDependencyDiagnostic, StageRecipe};
+use lunco_usd_compose::{
+    check_stage_closure_limits, child_layer_ids, LuncoUsdResolver, SharedLayerBytes,
+};
 
-/// Async BFS that fetches the full transitive `.usda` layer closure into an
-/// in-memory, `Send` [`StageRecipe`]. The loader composes this recipe and builds
-/// the initial `UsdStageProjectionPlan` before publishing the asset. The live
-/// `!Send` stage is opened later by the canonical-stage owner when authoring or
-/// incremental projection needs it.
+fn is_missing_asset_read(error: &ReadAssetBytesError) -> bool {
+    match error {
+        ReadAssetBytesError::AssetReaderError(AssetReaderError::NotFound(_)) => true,
+        ReadAssetBytesError::AssetReaderError(AssetReaderError::Io(error)) => {
+            error.kind() == std::io::ErrorKind::NotFound
+        }
+        ReadAssetBytesError::Io { source, .. } => source.kind() == std::io::ErrorKind::NotFound,
+        _ => false,
+    }
+}
+
+/// Async BFS that fetches the available transitive `.usda` layer closure into
+/// an in-memory, `Send` [`StageRecipe`]. The loader composes this recipe and
+/// builds the initial `UsdStageProjectionPlan` before publishing the asset. The
+/// live `!Send` stage is opened later by the canonical-stage owner when
+/// authoring or incremental projection needs it.
 ///
 /// The runtime adapter opens the same recipe in its live canonical-stage owner.
 pub async fn fetch_layer_closure(
@@ -49,22 +63,56 @@ pub async fn fetch_layer_closure(
     root_asset_path: &str,
     root_bytes: Vec<u8>,
 ) -> Result<StageRecipe> {
+    fetch_layer_closure_with_limits(
+        load_context,
+        root_asset_path,
+        root_bytes,
+        StageClosureLimits::default(),
+    )
+    .await
+}
+
+/// Fetch a USD layer closure with an explicit resource budget.
+///
+/// A missing transitive layer is a recoverable USD composition diagnostic: the
+/// remaining siblings continue loading and OpenUSD drops only the unresolved
+/// arc. Every other reader error remains terminal because treating malformed,
+/// forbidden, or unavailable storage as a missing file would hide the actual
+/// ownership failure.
+pub async fn fetch_layer_closure_with_limits(
+    load_context: &mut LoadContext<'_>,
+    root_asset_path: &str,
+    root_bytes: Vec<u8>,
+    limits: StageClosureLimits,
+) -> Result<StageRecipe> {
     let root_id = canonicalize_root(root_asset_path);
+    check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
 
     // 1. Pre-fetch BFS — keyed by the SAME canonical id the resolver will use.
+    let mut total_bytes = root_bytes.len();
     let mut bytes: HashMap<String, Vec<u8>> = HashMap::new();
     bytes.insert(root_id.clone(), root_bytes);
-    let mut queue = vec![root_id.clone()];
+    let mut seen = HashSet::from([root_id.clone()]);
+    let mut missing_ids = HashSet::new();
+    let mut queue = vec![(root_id.clone(), 0_usize)];
+    let mut dependency_diagnostics = Vec::new();
 
-    while let Some(id) = queue.pop() {
-        let raw = bytes
-            .get(&id)
-            .cloned()
-            .expect("queued id is present in map");
-        for child_id in child_layer_ids(&id, &raw)? {
-            if bytes.contains_key(&child_id) {
+    while let Some((id, depth)) = queue.pop() {
+        let raw = bytes.get(&id).expect("queued id is present in map");
+        let child_ids = child_layer_ids(&id, raw)?;
+        check_stage_closure_limits(&limits, seen.len(), depth, child_ids.len(), total_bytes)?;
+        for child_id in child_ids {
+            if !seen.insert(child_id.clone()) {
+                if missing_ids.contains(&child_id) {
+                    dependency_diagnostics.push(StageDependencyDiagnostic::missing(
+                        id.clone(),
+                        child_id.clone(),
+                    ));
+                }
                 continue;
             }
+            let child_depth = depth + 1;
+            check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
             // Parse `child_id` as an `AssetPath` (NOT a `PathBuf`): only the
             // string form parses a `source://` scheme into an asset source.
             // `PathBuf::from("lunco://vessels/…")` keeps the whole string as a
@@ -76,19 +124,33 @@ pub async fn fetch_layer_closure(
                 .await
             {
                 Ok(fetched) => fetched,
-                Err(e) => {
+                Err(error) if is_missing_asset_read(&error) => {
+                    missing_ids.insert(child_id.clone());
+                    dependency_diagnostics.push(StageDependencyDiagnostic::missing(
+                        id.clone(),
+                        child_id.clone(),
+                    ));
+                    continue;
+                }
+                Err(error) => {
                     return Err(anyhow!(
                         "USD composition dependency `{child_id}` referenced by `{id}` could not \
-                         be fetched: {e}"
+                         be fetched: {error}"
                     ));
                 }
             };
+            total_bytes = total_bytes
+                .checked_add(fetched.len())
+                .ok_or_else(|| anyhow!("USD layer closure byte count overflowed"))?;
+            check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
             bytes.insert(child_id.clone(), fetched);
-            queue.push(child_id);
+            queue.push((child_id, child_depth));
         }
     }
 
-    Ok(StageRecipe { root_id, bytes })
+    let mut recipe = StageRecipe::new(root_id, bytes);
+    recipe.dependency_diagnostics = dependency_diagnostics;
+    Ok(recipe)
 }
 
 /// Build an editable stage and return its resolver's
@@ -107,6 +169,26 @@ pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedL
         .open(&recipe.root_id)
         .map_err(|e| anyhow!("USD composition error: {e}"))?;
     Ok((stage, shared))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_not_found_reads_are_recoverable() {
+        let not_found = ReadAssetBytesError::Io {
+            path: "vessels/markers/waypoint.usda".into(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        let denied = ReadAssetBytesError::Io {
+            path: "vessels/markers/waypoint.usda".into(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+
+        assert!(is_missing_asset_read(&not_found));
+        assert!(!is_missing_asset_read(&denied));
+    }
 }
 
 /// Compose a USD layer from disk into a **live** [`Stage`] (read through

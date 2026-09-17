@@ -173,8 +173,7 @@ fn blueprint_tile_look_untextured(
 /// **The celestial ownership marker.** Every celestial-owned root spawned by the
 /// subsystem carries this marker. Teardown despawns those roots recursively, so
 /// their grids, bodies, terrain tiles, labels, and other structural descendants
-/// are removed as one owned hierarchy
-/// ([`teardown_celestial_scene`](crate::teardown_celestial_scene)).
+/// are removed as one owned hierarchy by the scene teardown system.
 ///
 /// This is the *architecture* that keeps scene reload correct: celestial content is
 /// declared per scene (`CelestialBodyDecl`), and everything derived from that

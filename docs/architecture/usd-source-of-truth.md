@@ -77,8 +77,8 @@ document ownership available to the asset differs.
   `sdf::Data`, `commit`s (bumps `generation`), and **returns an inverse op** → undo for
   free.
 - Projected into ECS by the state contract in `lunco-usd-bevy-twin` and the
-  runtime systems in `lunco-usd-bevy-runtime/src/twin_projection.rs` and
-  `lunco-usd-bevy-runtime/src/live_consume.rs`: `sync_twin_overlays` publishes the composed
+  runtime systems in `lunco-usd-bevy-runtime-core/src/twin_projection.rs` and
+  `lunco-usd-bevy-runtime-core/src/live_consume.rs`: `sync_twin_overlays` publishes the composed
   `base ⊕ runtime` source and applies incremental authored changes; the live
   consumer drains the OpenUSD change sink and reconciles the ECS projection.
 - The public Twin-start decision is implemented by the USD scene runtime and
@@ -231,8 +231,12 @@ Built-in projectors:
 | WheelRaycast | `lunco:wheel:<field>` (matches existing `lunco-usd-sim` convention) | float |
 | Transform | `xformOp:translate` / `:orient` / `:scale` (already via `apply_translates`) | — |
 
-Adding a new editable domain = register one entry; no edits to the projection system
-(mirrors `App::add_terrain_layer`).
+Adding a new specialized live-edit domain means registering one
+`UsdLiveEditOwner` in `lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`;
+the generic runtime then invokes the owner without importing that domain crate.
+The owner claims only its authored attributes and performs its validated
+in-place refresh. Ordinary transforms, lights, and structural changes remain
+on the generic projection path.
 
 ### Step 3: generic projection on change (the fast path)
 
@@ -296,12 +300,12 @@ prim→entity.
 - `lunco-scene-authoring/src/properties.rs` — `on_set_object_property`
 - `lunco-usd-document/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
 - `lunco-usd-bevy-twin/src/lib.rs` — document-backed Twin identity, leases, document-to-mounted-stage lookup, and stage ownership state
-- `lunco-usd-bevy-runtime/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
-- `lunco-usd-bevy-runtime/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
-- `lunco-usd-bevy-runtime/src/scene_runtime.rs` — scene command admission and Twin-backed loading
+- `lunco-usd-bevy-runtime-core/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
+- `lunco-usd-bevy-runtime-core/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
+- `lunco-usd-bevy-runtime-core/src/scene_runtime.rs` — scene command admission and Twin-backed loading
 - `lunco-usd-commands/src/lib.rs` — document registration and authoring commands
 - `lunco-usd-bevy-core/src/asset.rs` — `UsdStageAsset`; `lunco-usd-bevy-scene/src/lib.rs` — `UsdPrimPath`
 - `lunco-usd-data/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
-- `lunco-usd-sim-cosim/src/scene.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
+- `lunco-usd-bevy-runtime-core/src/scene.rs` — `LoadScene` / `spawn_scene_root_with_stage`; scene mount and teardown ownership
 - `lunco-usd-terrain/src/lib.rs` — `refresh_layered_terrain_layers` (the
   per-domain projection-on-`Modified` precedent)

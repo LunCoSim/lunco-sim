@@ -63,7 +63,7 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | SHA-256 asset pinning | `lunco-assets-download/src/download.rs` | Integrity + skip-redownload on hash match. |
 | rumoca parse cache | `.cache/rumoca/parsed-files/` (content-hash keyed) + `parsed-library.bin` bincode bundle | Cold-parse avoidance for Modelica source libraries. |
 | Structural change-detection | `Added<SimConnection>` (`lunco-cosim/src/lib.rs:252`), USD `Without<Marker>` gates | Recompute-only-on-change is already idiomatic here. |
-| **Real CIDv1 content-address** | `lunco-networking/src/scenario.rs:54-66` `cid_for_content`/`cid_from_bytes` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`scenario_sync.rs:88-94`). **First real content-addressing in the repo** — but scoped to networking. |
+| **Real CIDv1 content-address** | `lunco-hash/src/lib.rs:118-140`, used by `lunco-networking-sync/src/scenario.rs` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`scenario_sync.rs:88-94`). The hash substrate owns the algorithm; sync owns only its manifest/wire adapter. |
 | **OPFS web blob backend** | `lunco-storage/src/opfs_storage.rs` | Working async `read`/`write`/`exists` on wasm via `createWritable` (main-thread-legal). Path-keyed on `StorageHandle::File`. |
 | **Single asset-resolution owner** | `lunco-assets-core/src/asset_sources.rs` `register_lunco_asset_sources` | The `lunco://` and `twin://` schemes are registered in ONE place before `AssetPlugin`, with every URI-to-location mapping exported from this crate so no consumer re-derives one. |
 | **Shared material cache** | `lunco-render-bevy/src/look_cache.rs` `LookCache<L: CachedLook>` | Content-key → one `Handle<Material>` (the batching property), an `unshared` bypass for animated looks, and ONE `sweep_look_cache` for eviction. Serves both `PbrLook` and `ShaderLook` — they were the same code twice, and had already drifted (the shader cache swept at 1024; the PBR cache never swept and grew unbounded). |
@@ -124,10 +124,11 @@ fn bake_or_load<T: Cacheable>(key: CacheKey, produce: impl FnOnce() -> T) -> T
   reference: it already wraps a `bake_or_load` in exactly that shape.
 - **CID-keyed blob store (this is the dedup the scenario cache lacks).** Store at
   `cache_dir()/precompute/<domain>/<cid>`; identical content in two domains
-  hits the same blob. Lift `cid_for_content`/`cid_from_bytes` + the incremental
-  fail-closed verify + `safe_rel_path` guard **out of `lunco-networking` into the
-  substrate crate**, and invert the dep (networking depends on the substrate).
-  One CID impl, shared by distribution and precompute.
+  hits the same blob. The canonical CID implementation already lives in
+  `lunco-hash`; `lunco-networking-sync` uses it for its manifest/wire adapter,
+  and `lunco-precompute` already depends on the same substrate. The remaining
+  work is the shared CID-keyed blob layout and eviction policy. One CID
+  implementation is shared by distribution and precompute.
 - **Two-tier hashing (resolves "which hash").** Split by *purpose*, not taste:
   - **Durable/shareable disk keys → the existing sha2-256 CID.** Already
     implemented, tested, `ipfs add`-interoperable, fail-closed-verified. Bakes
@@ -332,7 +333,7 @@ the integrator state.
 1. **Compiled connection table** — compiles connection topology into a flat index table rebuilt only on connection change (in `lunco-cosim/src/systems/propagate.rs`). Replaces per-tick string cloning and map accumulation with direct index offsets.
 2. **Avian port resolution index** — resolves name-based ports once during compile (`lunco-port-core/src/ports.rs` `ResolvedPort`) instead of scanning const tables on every tick read/write.
 3. **`sync_collider` volume-dirty gate** — gates `Collider::sphere` rebuilds on volume change (`Changed<>`), eliminating per-frame allocations during steady-state.
-4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica-core/src/worker.rs` owns
+4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica-execution/src/worker.rs` owns
    worker execution, while `worker/cache.rs` owns the prepared-solve cache
    and `worker/scheduling.rs` owns the native command lanes.
    The worker keeps the per-entity `CachedModel` for instant Reset and a worker-owned
@@ -387,7 +388,7 @@ Live sim feeds client prediction + replication; these constraints are hard:
   integrator — state advances under constant input. Only valid at proven steady
   state; not generally safe.
 - **Keep sim math f64.** The 1 mm `i32` position quantization
-  (`networking/sync.rs:65`) is a *wire* format, not sim precision — do not fold
+  (`networking-sync/sync.rs:65`) is a *wire* format, not sim precision — do not fold
   it into the compute path as an approximation. Port values are `f64` end to end
   and are never rounded to a narrower representation in the sim.
 - Client role already skips cosim entirely (renders host snapshots), so all
@@ -396,8 +397,9 @@ Live sim feeds client prediction + replication; these constraints are hard:
 ## 8. Build order
 
 1. **`lunco-precompute` substrate** — generalize `derived_layers.rs`.
-   *Reuses today's landings:* lift the sha2-256 CID + fail-closed verify +
-   `safe_rel_path` out of `lunco-networking` (invert the dep); reuse the
+   *Reuses today's landings:* use the shared sha2-256 CID + fail-closed verify
+  from `lunco-hash` and the separator-neutral path admission from
+  `lunco-assets-core`; keep the dependency one-way from precompute to the
    existing `OpfsStorage` async backend behind one internal `#[cfg]` fork; keep a
    fast non-crypto hash for change-detection (§2 two-tier). *Net-new:*
    `CacheKey{domain,content,lod,variant}` (§2.1), an async `bake_or_load` fronted

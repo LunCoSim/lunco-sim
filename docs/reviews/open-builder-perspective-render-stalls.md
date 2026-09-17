@@ -245,8 +245,8 @@ Focused evidence for this follow-up:
 ## Corrected Inspector invalidation (2026-09-12)
 
 The corrected trace showed one remaining ineffective application gate:
-`inspector_inputs_changed` included `SceneViewport::is_changed()`. The camera
-reconciler has a legitimate `ResMut<SceneViewport>` borrow each frame, so that
+`inspector_inputs_changed` included `lunco_viewport_core::SceneViewport::is_changed()`. The camera
+reconciler has a legitimate `ResMut<lunco_viewport_core::SceneViewport>` borrow each frame, so that
 resource tick was always dirty even when `active_camera` was unchanged. The
 Inspector view-model now stores the active-camera identity and compares that
 value directly; the incidental resource tick is no longer an invalidation

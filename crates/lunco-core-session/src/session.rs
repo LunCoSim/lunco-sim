@@ -27,7 +27,7 @@
 //! wire layer itself (the deep-link `PendingConnect` gate, the wire
 //! `SnapshotSample`/`IncomingSnapshots`, the `DivergenceStats` desync gauge,
 //! `PendingCorrection`, `ContactPredictable`) moved to
-//! `lunco-networking/src/session.rs` — new net-only state belongs there, not here.
+//! `lunco-networking-core/src/session.rs` — new net-only state belongs there, not here.
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -41,11 +41,6 @@ use std::collections::{HashMap, VecDeque};
 /// — even ones without a `lunco-networking` dependency (e.g. the workbench
 /// Network menu) — can reference one constant.
 pub const DEFAULT_HOST_PORT: u16 = 5888;
-
-/// Default HTTP API port when `--api` is passed without an explicit value.
-/// Single source of truth for the `4101` the GUI / headless server bins bind to
-/// (loopback admin API) — matches the `lunco-server.service` unit and DEPLOY.md.
-pub const DEFAULT_API_PORT: u16 = 4101;
 
 /// Which side of the wire is this process? Drives three decisions:
 /// capture (`Standalone` never serializes), id minting (`Host` mints

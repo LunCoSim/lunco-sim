@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// `Panel2D` / `Panel3D` don't carry a panel id — each viz instance
 /// gets its own [`VizPanel`](crate::panel::VizPanel), addressed by its
-/// [`VizId`](crate::viz::VizId). Keeping this enum flat makes it
+/// [`VizId`](lunco_viz_core::VizId). Keeping this enum flat makes it
 /// trivially serializable (workspace files).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ViewTarget {

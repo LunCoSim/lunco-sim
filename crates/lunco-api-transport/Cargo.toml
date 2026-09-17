@@ -12,9 +12,8 @@ winit = ["bevy/bevy_winit"]
 
 [dependencies]
 lunco-api = { path = "../lunco-api" }
-lunco-core-session = { path = "../lunco-core-session" }
+lunco-api-contracts = { path = "../lunco-api-contracts" }
 bevy = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -25,6 +24,10 @@ tokio = { version = "1", default-features = false, features = ["full"], optional
 tokio = { version = "1", default-features = false, features = ["sync"] }
 wasm-bindgen = { workspace = true }
 base64 = { workspace = true }
+
+[dev-dependencies]
+lunco-storage = { path = "../lunco-storage" }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

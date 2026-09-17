@@ -315,14 +315,14 @@ pub fn insert_celestial_comms_components(
     //
     // The scene says which bodies exist; Rust does not. A prim authoring
     // `int lunco:body = 399` IS the Earth, and its presence is what turns the whole
-    // celestial stack on (`lunco_celestial_spatial::celestial_declared`). No such prim ⇒ no
+    // celestial stack on (`lunco_celestial_spatial_core::celestial_declared`). No such prim ⇒ no
     // sky. This replaces `CelestialConfig.spawn_hierarchy`, a code-side boolean that
     // a scene could only trip as a side effect, never actually *request*.
     match read_i32_strict(reader, sdf_path, "lunco:body") {
         Ok(Some(naif)) if naif != 0 => {
             commands
                 .entity(entity)
-                .try_insert(lunco_celestial_spatial::CelestialBodyDecl { naif });
+                .try_insert(lunco_celestial_spatial_core::CelestialBodyDecl { naif });
             info!("[usd-celestial] scene declares celestial body {naif} at {prim_path_str}");
         }
         Ok(Some(_)) | Ok(None) => {}
@@ -397,7 +397,7 @@ pub fn insert_celestial_comms_components(
         if !albedo.is_empty() {
             commands
                 .entity(entity)
-                .try_insert(lunco_celestial_spatial::AuthoredBodyAlbedo { asset: albedo });
+                .try_insert(lunco_celestial_spatial_core::AuthoredBodyAlbedo { asset: albedo });
         }
     }
 

@@ -22,8 +22,8 @@ PORT="${1:-5888}"
 HOST_LOG=/tmp/net_smoke_host.log
 CLIENT_LOG=/tmp/net_smoke_client.log
 
-echo "==> building net_smoke (--features networking, -j2)"
-cargo build -p lunco-networking --bin net_smoke --features networking -j2 || exit 2
+echo "==> building net_smoke (--no-default-features --features networking, -j2)"
+cargo build -p lunco-luncosim --bin net_smoke --no-default-features --features networking -j2 || exit 2
 
 rm -f "$HOST_LOG" "$CLIENT_LOG"
 

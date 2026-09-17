@@ -291,7 +291,7 @@ fn file_discard_invalidates_review_before_source_read_completes() {
     let temp = tempfile::tempdir().expect("discard source directory");
     let path = temp.path().join("Assembly.usda");
     let source = "#usda 1.0\ndef Xform \"Assembly\" {}\n";
-    std::fs::write(&path, source).expect("discard source");
+    lunco_storage::write_file_sync(&path, source.as_bytes()).expect("discard source");
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -410,9 +410,9 @@ fn wait_for_one_usd_document(app: &mut App) {
 #[test]
 fn open_file_for_usd_path_creates_document() {
     // Write a tiny .usda to a tempfile we can resolve.
-    let tmp_dir = std::env::temp_dir();
-    let tmp_path = tmp_dir.join("lunco_usd_open_file_test.usda");
-    std::fs::write(&tmp_path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp_path = tmp_dir.path().join("scene.usda");
+    lunco_storage::write_file_sync(&tmp_path, b"#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
 
     // `UsdCommandsPlugin` owns the document-open pipeline (observer +
     // PendingUsdLoads + drain); scene admission is a separate runtime concern.
@@ -435,14 +435,13 @@ fn open_file_for_usd_path_creates_document() {
         1,
         "exactly one USD doc opened (no duplicate)"
     );
-
-    let _ = std::fs::remove_file(&tmp_path);
 }
 
 #[test]
 fn open_file_file_uri_creates_document() {
-    let tmp_path = std::env::temp_dir().join("lunco_usd_open_file_uri_test.usda");
-    std::fs::write(&tmp_path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp_path = tmp_dir.path().join("scene.usda");
+    lunco_storage::write_file_sync(&tmp_path, b"#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -462,7 +461,6 @@ fn open_file_file_uri_creates_document() {
         1,
         "file:// USD paths must use the filesystem document reader"
     );
-    let _ = std::fs::remove_file(&tmp_path);
 }
 
 #[test]
@@ -730,7 +728,7 @@ fn save_as_untitled_usd_writes_source_and_rebinds_origin() {
 
     let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
     assert_eq!(
-        std::fs::read_to_string(&target).unwrap(),
+        lunco_storage::read_text_file_sync(&target).unwrap(),
         registry.host(doc).unwrap().document().source()
     );
     assert_eq!(

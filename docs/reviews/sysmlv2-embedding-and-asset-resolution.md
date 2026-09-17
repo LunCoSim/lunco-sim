@@ -214,7 +214,8 @@ session:
 - `CompiledSourceRoot::from_parsed_batch_tolerant` indexes a parsed batch once
   and defers strict target compilation;
 - `lunco-modelica-ast` wraps those APIs and exposes only pure parsing/fact
-  extraction, while `lunco-modelica-core` owns Bevy, workers, generations,
+  extraction, while `lunco-modelica-core` owns Bevy/compiler integration and
+  `lunco-modelica-execution` owns workers, generations,
   document ops, and journal integration.
 
 SysML should reuse the same lifecycle decisions: tagged parse results,

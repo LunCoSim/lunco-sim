@@ -73,7 +73,7 @@ pub(crate) struct EditorSessionSelection {
 /// that projection belongs to and restores it after focus changes.
 #[derive(Resource, Default)]
 pub(crate) struct EditorSessionSelections {
-    pub(crate) sessions: HashMap<lunco_usd_viewport_ui::UsdPreviewId, EditorSessionSelection>,
+    pub(crate) sessions: HashMap<lunco_usd_viewport_core::UsdPreviewId, EditorSessionSelection>,
     /// Live-scene selection remains entity-keyed because it is not an authored
     /// USD preview lease and never crosses into an Editor preview.
     live: LiveSceneSelection,
@@ -87,27 +87,27 @@ struct LiveSceneSelection {
 
 fn preview_path_for_entity(
     entity: Entity,
-    preview: &lunco_usd_viewport_ui::UsdPreviewSession,
+    preview: &lunco_usd_viewport_core::UsdPreviewSession,
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<String> {
     q_paths.get(entity).ok().and_then(|(_, path)| {
         (path.stage_handle.id() == preview.stage_handle().id()
-            && lunco_usd_viewport_ui::is_preview_entity(entity, preview.scene_root(), q_parents))
+            && lunco_usd_bevy_scene::is_preview_entity(entity, preview.scene_root(), q_parents))
         .then(|| path.path.clone())
     })
 }
 
 fn preview_entity_for_path(
     path: &str,
-    preview: &lunco_usd_viewport_ui::UsdPreviewSession,
+    preview: &lunco_usd_viewport_core::UsdPreviewSession,
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
     let mut matches = q_paths.iter().filter_map(|(entity, prim)| {
         (prim.stage_handle.id() == preview.stage_handle().id()
             && prim.path == path
-            && lunco_usd_viewport_ui::is_preview_entity(entity, preview.scene_root(), q_parents))
+            && lunco_usd_bevy_scene::is_preview_entity(entity, preview.scene_root(), q_parents))
         .then_some(entity)
     });
     let entity = matches.next()?;
@@ -121,7 +121,7 @@ fn preview_entity_for_path(
 /// `SelectionTarget` are synchronized projections used by existing panels and
 /// gizmo systems.
 fn sync_editor_session_selection(
-    viewport: Option<Res<lunco_usd_viewport_ui::UsdViewportState>>,
+    viewport: Option<Res<lunco_usd_viewport_core::UsdViewportState>>,
     mut selected: ResMut<lunco_scene_selection::SelectedEntities>,
     mut inspector_target: ResMut<lunco_scene_selection::SelectionTarget>,
     q_paths: Query<(Entity, &UsdPrimPath)>,
@@ -129,7 +129,7 @@ fn sync_editor_session_selection(
     q_selected: Query<Entity, With<crate::selection::Selected>>,
     mut commands: Commands,
     mut sessions: ResMut<EditorSessionSelections>,
-    mut last_preview: Local<Option<lunco_usd_viewport_ui::UsdPreviewId>>,
+    mut last_preview: Local<Option<lunco_usd_viewport_core::UsdPreviewId>>,
 ) {
     let focused = viewport
         .as_deref()
@@ -390,7 +390,7 @@ impl Plugin for SceneEditUiPlugin {
         app.add_plugins(edit_gizmo::SceneEditGizmoPlugin)
             .init_resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
             .init_resource::<scene_context_menu::SceneContextMenuState>()
-            .init_resource::<lunco_core::ArmedScriptTool>()
+            .init_resource::<lunco_interaction_core::ArmedScriptTool>()
             .init_resource::<crate::script_tools::ScenePointerDispatch>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
         app.world_mut()
@@ -410,7 +410,7 @@ impl Plugin for SceneEditUiPlugin {
             )
                 .chain()
                 .after(bevy::transform::TransformSystems::Propagate)
-                .after(lunco_core::SceneViewportSet::Reconcile)
+                .after(lunco_viewport_core::SceneViewportSet::Reconcile)
                 .before(bevy::camera::CameraUpdateSystems),
         );
         app.add_systems(
@@ -846,8 +846,8 @@ impl Perspective for ViewPerspective {
     fn scene_visible_when_docked(&self) -> bool {
         true
     }
-    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
-        lunco_core::SceneInteractionMode::Simulation
+    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
+        lunco_interaction_core::SceneInteractionMode::Simulation
     }
     fn layout(&self) -> PerspectiveLayoutPlan {
         PerspectiveLayoutPlan::new()
@@ -868,8 +868,8 @@ impl Perspective for BuildPerspective {
     fn title(&self) -> String {
         "⚒ Build".into()
     }
-    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
-        lunco_core::SceneInteractionMode::Editor
+    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
+        lunco_interaction_core::SceneInteractionMode::Editor
     }
     fn layout_revision(&self) -> u32 {
         // Revision 3 completes the Graphs instance in the bottom-center
@@ -921,8 +921,8 @@ impl Perspective for EditorPerspective {
     fn show_in_switcher(&self) -> bool {
         true
     }
-    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
-        lunco_core::SceneInteractionMode::Editor
+    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
+        lunco_interaction_core::SceneInteractionMode::Editor
     }
     fn layout_revision(&self) -> u32 {
         // The editor now opens directly on the prim tree. Invalidate the
@@ -976,8 +976,8 @@ impl Perspective for TerrainPerspective {
     fn show_in_switcher(&self) -> bool {
         false
     }
-    fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
-        lunco_core::SceneInteractionMode::Editor
+    fn scene_interaction_mode(&self) -> lunco_interaction_core::SceneInteractionMode {
+        lunco_interaction_core::SceneInteractionMode::Editor
     }
     fn layout(&self) -> PerspectiveLayoutPlan {
         PerspectiveLayoutPlan {
@@ -1006,19 +1006,19 @@ mod tests {
     fn perspectives_assign_primary_scene_click_ownership() {
         assert_eq!(
             ViewPerspective.scene_interaction_mode(),
-            lunco_core::SceneInteractionMode::Simulation
+            lunco_interaction_core::SceneInteractionMode::Simulation
         );
         assert_eq!(
             BuildPerspective.scene_interaction_mode(),
-            lunco_core::SceneInteractionMode::Editor
+            lunco_interaction_core::SceneInteractionMode::Editor
         );
         assert_eq!(
             EditorPerspective.scene_interaction_mode(),
-            lunco_core::SceneInteractionMode::Editor
+            lunco_interaction_core::SceneInteractionMode::Editor
         );
         assert_eq!(
             TerrainPerspective.scene_interaction_mode(),
-            lunco_core::SceneInteractionMode::Editor
+            lunco_interaction_core::SceneInteractionMode::Editor
         );
     }
 

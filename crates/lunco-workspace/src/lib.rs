@@ -399,11 +399,7 @@ impl Workspace {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Test fixtures live on disk and run natively — the `disallowed_methods` ban on
-// `std::fs` guards wasm *runtime* paths, not tests (clippy.toml says so; cargo has
-// no path-scoped lint config, so it must be written out).
 #[cfg(test)]
-#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use lunco_twin::TwinMode;
@@ -411,9 +407,9 @@ mod tests {
 
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
+            lunco_storage::ensure_directory_sync(parent).unwrap();
         }
-        std::fs::write(path, contents).unwrap();
+        lunco_storage::write_file_sync(path, contents.as_bytes()).unwrap();
     }
 
     fn load_twin(path: &Path) -> Twin {

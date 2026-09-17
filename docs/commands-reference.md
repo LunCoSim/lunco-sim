@@ -2807,7 +2807,7 @@ actually call, with the fields the deserializer actually accepts. See the
  loading its new scene.) Also useful standalone over the API / MCP as
  a "clear the world" verb.
 
-- *defined in:* `crates/lunco-usd-sim-cosim/src/scene.rs`
+- *defined in:* `crates/lunco-usd-bevy-runtime-core/src/scene.rs`
 - *fields:* none — call with `ClearScene` (no params)
 
 #### `LoadScene`
@@ -2839,7 +2839,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Without these ownership boundaries, repeated reloads accumulate stale
  workers or make an unrelated interactive document disappear.
 
-- *defined in:* `crates/lunco-usd-sim-cosim/src/scene.rs`
+- *defined in:* `crates/lunco-usd-bevy-runtime-core/src/scene.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2862,7 +2862,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Paired with `pause()` this is the "reload-then-freeze" one-liner the workflow
  wanted (`restart_scene(); pause();`).
 
-- *defined in:* `crates/lunco-usd-sim-cosim/src/scene.rs`
+- *defined in:* `crates/lunco-usd-bevy-runtime-core/src/scene.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2870,11 +2870,14 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ### `lunco-usd-viewport-ui` <a id="lunco-usd-viewport-ui"></a>
 
+The typed preview/session commands are defined by `lunco-usd-viewport-core`
+and executed by the render adapter in `lunco-usd-viewport-ui`.
+
 #### `ApplyUsdInspectionPreset`
 
  Apply one persisted presentation preset to an explicit preview view.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2885,7 +2888,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Close one preview session and release all of its presentation resources.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2897,7 +2900,7 @@ actually call, with the fields the deserializer actually accepts. See the
  preview session because a session without a presentation view cannot be
  reached from the editor.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2907,7 +2910,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Delete one persisted presentation preset.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2919,7 +2922,7 @@ actually call, with the fields the deserializer actually accepts. See the
  This command changes only projected Bevy transforms; it never enters the
  USD document, journal, save state, or simulation projection.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2935,7 +2938,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Focus an already-open preview session in the USD dock.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2945,7 +2948,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Focus one presentation view and its parent USD preview session.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2957,7 +2960,7 @@ actually call, with the fields the deserializer actually accepts. See the
  subtree. Selection/reveal remains owned by the Editor selection surface;
  this command only changes presentation camera state.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2969,7 +2972,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Fit one preview view to the projected visual bounds of its USD stage.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2983,7 +2986,7 @@ actually call, with the fields the deserializer actually accepts. See the
  explicit lease. Other sessions keep their roots, cameras, and stages
  untouched.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2997,7 +3000,7 @@ actually call, with the fields the deserializer actually accepts. See the
  The view id is explicit so persisted layouts and agents can address the
  exact camera without relying on tab order or display names.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -3010,7 +3013,7 @@ actually call, with the fields the deserializer actually accepts. See the
  delta to its camera plane using the current projection and render-target
  viewport.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -3021,7 +3024,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Restore one preview view's default orbit pose and fit it to its stage.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -3031,7 +3034,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Save the current presentation pose under one explicit settings name.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -3044,7 +3047,7 @@ actually call, with the fields the deserializer actually accepts. See the
  the editor camera; authored USD camera opinions stay read-only presentation
  input and are never rewritten by a navigation gesture.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -3055,7 +3058,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Change which authored/composed snapshot the Text mode displays.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -3066,7 +3069,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Change only the presentation mode of one existing USD preview view.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -3078,7 +3081,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Zoom one preview view by a positive multiplicative factor. Perspective
  views change orbit distance; orthographic views change projection scale.
 
-- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|

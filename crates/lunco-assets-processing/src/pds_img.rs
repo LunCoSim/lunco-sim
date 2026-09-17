@@ -433,7 +433,7 @@ mod tests {
         file.resize(record_bytes, b' ');
         file.extend_from_slice(pixels);
         let p = dir.join(name);
-        std::fs::write(&p, file).unwrap();
+        lunco_storage::write_file_sync(&p, &file).unwrap();
         p
     }
 
@@ -451,9 +451,7 @@ mod tests {
     /// unnoticed, so both spellings must be tested.
     #[test]
     fn radix_core_null_is_missing() {
-        let dir = std::env::temp_dir().join(format!("lunco-pds-radix-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().expect("temporary PDS directory");
 
         // 0xFF7FFFFB as an IEEE-754 f32 — the ISIS null the real product ships.
         let null = f32::from_bits(0xFF7F_FFFB);
@@ -480,7 +478,7 @@ mod tests {
                        SAMPLE_BITS  = 32\r\n\
                      END_OBJECT = IMAGE\r\n\
                      END\r\n";
-        let p = write_attached_img(&dir, "radix.IMG", label, &px);
+        let p = write_attached_img(dir.path(), "radix.IMG", label, &px);
 
         let img = PdsImage::decode(&p).unwrap();
         assert_eq!((img.width, img.height), (2, 2));
@@ -492,7 +490,6 @@ mod tests {
         // Real measurements must survive untouched.
         assert_eq!(img.samples[0], -1900.0);
         assert_eq!(img.samples[3], -1892.25);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -516,9 +513,7 @@ mod tests {
 
     #[test]
     fn attached_pc_real_with_extent_decodes() {
-        let dir = std::env::temp_dir().join(format!("lunco-pds-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().expect("temporary PDS directory");
 
         // 3×2 little-endian float32 grid, one value flagged missing.
         let vals: [f32; 6] = [1.0, 2.0, 3.0, 4.0, -3.4028227e38, 6.0];
@@ -546,7 +541,7 @@ mod tests {
                        WESTERNMOST_LONGITUDE = 33.1 <DEG>\r\n\
                      END_OBJECT = IMAGE_MAP_PROJECTION\r\n\
                      END\r\n";
-        let p = write_attached_img(&dir, "t.IMG", label, &px);
+        let p = write_attached_img(dir.path(), "t.IMG", label, &px);
 
         let img = PdsImage::decode(&p).unwrap();
         assert_eq!((img.width, img.height), (3, 2));
@@ -557,15 +552,11 @@ mod tests {
         let e = img.extent.unwrap();
         assert_eq!((e.min_lat, e.max_lat), (7.5, 8.5));
         assert_eq!((e.west_lon, e.east_lon), (33.1, 33.3));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn detached_label_and_integer_samples_decode() {
-        let dir = std::env::temp_dir().join(format!("lunco-pds-det-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().expect("temporary PDS directory");
 
         // Raw 2×2 LSB signed 16-bit data file, no attached label.
         let vals: [i16; 4] = [-100, 0, 100, 2000];
@@ -573,8 +564,8 @@ mod tests {
         for v in vals {
             px.extend_from_slice(&v.to_le_bytes());
         }
-        let img_path = dir.join("d.IMG");
-        std::fs::write(&img_path, &px).unwrap();
+        let img_path = dir.path().join("d.IMG");
+        lunco_storage::write_file_sync(&img_path, &px).unwrap();
         // SLDEM-style detached label: scaling turns DN into metres.
         let label = "PDS_VERSION_ID = PDS3\r\n\
                      ^IMAGE = (\"d.IMG\", 1)\r\n\
@@ -588,12 +579,10 @@ mod tests {
                        OFFSET = 10.0\r\n\
                      END_OBJECT = IMAGE\r\n\
                      END\r\n";
-        std::fs::write(dir.join("d.LBL"), label).unwrap();
+        lunco_storage::write_file_sync(&dir.path().join("d.LBL"), label.as_bytes()).unwrap();
 
         let img = PdsImage::decode(&img_path).unwrap();
         assert_eq!((img.width, img.height), (2, 2));
         assert_eq!(img.samples, vec![-40.0, 10.0, 60.0, 1010.0]);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

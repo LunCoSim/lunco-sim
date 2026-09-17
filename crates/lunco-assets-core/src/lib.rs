@@ -729,9 +729,11 @@ mod tests {
     #[test]
     fn cache_subdir_creates_directory() {
         let test_subdir = cache_dir().join("test_subdir");
-        let _ = std::fs::create_dir_all(&test_subdir);
-        assert!(test_subdir.exists());
-        let _ = std::fs::remove_dir_all(&test_subdir);
+        lunco_storage::ensure_directory_sync(&test_subdir).unwrap();
+        assert_eq!(
+            lunco_storage::entry_kind_file_sync(&test_subdir).unwrap(),
+            lunco_storage::StorageEntryKind::Directory
+        );
     }
 
     /// The two caches, and the rule that keeps a twin portable.

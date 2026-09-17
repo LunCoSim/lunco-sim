@@ -35,8 +35,10 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         use lunco_viz::{
-            kinds::line_plot::LINE_PLOT_KIND, view::ViewTarget, viz::SignalBinding,
-            viz::VisualizationConfig, viz::VizId, SignalRef, VisualizationRegistry,
+            kinds::line_plot::LINE_PLOT_KIND,
+            view::ViewTarget,
+            viz::{SignalBinding, VisualizationConfig},
+            SignalRef, VisualizationRegistry, VizId,
         };
         let id = world.resource::<VisualizationRegistry>().allocate_id();
         let source_viz = (ev.source != 0).then_some(VizId(ev.source));
@@ -51,7 +53,7 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
         let cloned_picked: std::collections::BTreeSet<String> = source_viz
             .map(|src| {
                 world
-                    .get_resource::<crate::ui::panels::experiments::PlotPanelStates>()
+                    .get_resource::<lunco_experiments_ui::PlotPanelStates>()
                     .map(|s| s.picked(src))
                     .unwrap_or_default()
             })
@@ -100,13 +102,13 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
         });
         if !cloned_picked.is_empty() {
             if let Some(mut states) =
-                world.get_resource_mut::<crate::ui::panels::experiments::PlotPanelStates>()
+                world.get_resource_mut::<lunco_experiments_ui::PlotPanelStates>()
             {
                 states.entry(id).picked_vars = cloned_picked;
             }
         }
         let restore = world
-            .get_resource::<crate::ui::panels::experiments::ActivePlot>()
+            .get_resource::<lunco_experiments_ui::ActivePlot>()
             .and_then(|active| active.0)
             .map(|active| lunco_workbench_core::TabId::Instance {
                 kind: crate::ui::panels::graphs::MODELICA_PLOT_KIND,
@@ -127,7 +129,7 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
 pub fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        use lunco_viz::{viz::SignalBinding, viz::VizId, SignalRef, VisualizationRegistry};
+        use lunco_viz::{viz::SignalBinding, SignalRef, VisualizationRegistry, VizId};
         let id = if ev.plot == 0 {
             crate::ui::viz::DEFAULT_MODELICA_GRAPH
         } else {

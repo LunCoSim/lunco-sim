@@ -5,10 +5,6 @@ edition = "2021"
 license.workspace = true
 
 [features]
-default = ["ui"]
-# The egui inspector panels (`src/ui/`, CelestialUiPlugin). Off ⇒ no egui; the
-# GravityPlugin + celestial sim stay available (e.g. a headless server).
-ui = ["dep:bevy_egui", "dep:lunco-workbench-core", "dep:lunco-workbench-widgets", "dep:lunco-theme"]
 # Bake Earth/Moon textures + Artemis 2 mission JSON + ephemeris CSV into the
 # binary via `include_bytes!`. Only needed by binaries that actually render
 # celestial bodies on wasm32 (e.g. sandbox). Off by default so the
@@ -52,16 +48,12 @@ embed-assets = []
 # headless server can do, and nothing this crate asks for.
 bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_light", "bevy_picking"] }
 bevy_mesh = { workspace = true }
-# egui shell used only by `src/ui/` (CelestialUiPlugin) — optional for headless.
-bevy_egui = { workspace = true, optional = true }
-lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
-lunco-workbench-widgets = { path = "../lunco-workbench-widgets", optional = true }
-lunco-theme = { path = "../lunco-theme", optional = true }
 big_space = { workspace = true }
 # Headless astronomy and semantic frame types. This is intentionally a
 # one-way dependency: `lunco-celestial` does not depend on this adapter.
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-celestial = { path = "../lunco-celestial" }
+lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 # Heavy VSOP2013/ELP/EOP integration lives in the sibling crate
 # `lunco-celestial-ephemeris`. This crate only defines the
 # `EphemerisProvider` trait and a no-op default; apps that need real
@@ -101,6 +93,7 @@ lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 # non-exclusive). No cycle: terrain-surface does not depend on celestial.
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-terrain-core = { path = "../lunco-terrain-core" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 
 # NOTE: `ureq` used to live here for an ephemeris-download path that no longer
 # exists in this crate (zero references in `src/`). Ephemeris fetching is

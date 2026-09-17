@@ -28,8 +28,9 @@ detail; this file links into them rather than duplicating them:
   spawn authority, clock seam, the `networking` Cargo feature, deferred items).
 - **[SYNC_ARCHITECTURE.md](./SYNC_ARCHITECTURE.md)** — *how everything stays in sync*: the
   seven mechanisms (M1–M7), the case matrix, the tick pipeline, the convergence argument,
-  and the procedure for choosing a mechanism for a new feature. As-built prediction lives
-  in §4.1 (which points back here for the canonical summary).
+  and the procedure for choosing a mechanism for a new feature. The transport-neutral
+  implementation is in `lunco-networking-sync`; as-built prediction lives in §4.1
+  (which points back here for the canonical summary).
 - **[USD_REPLICATION_POLICY.md](./USD_REPLICATION_POLICY.md)** — the entity/state
   **replication contract**: what bodies replicate, how a USD scene declares it (derived by
   default; `lunco:net:*` overrides), and what the internal markers mean.
@@ -68,7 +69,8 @@ removable without affecting simulation correctness:
 Layer 4: UIPlugins            — lunco-workbench, lunco-ui, domain ui/panels
 Layer 3: SimulationPlugins    — Rendering, Cameras, Lighting, 3D viewport, Gizmos
 Layer 2: DomainPlugins        — Celestial, Avatar, Mobility, Robotics, OBC, FSW
-Layer 2b: NetworkingPlugin    — lunco-networking (transport, replication, auth, bridges)
+Layer 2b: NetworkingPlugin    — lunco-networking (transport, auth, bridges)
+             Sync runtime     — lunco-networking-sync (replication, journals, scenarios)
 Layer 1: SimCore              — MinimalPlugins, ScheduleRunner, big_space, Avian3D
 ```
 
@@ -81,7 +83,9 @@ protocol and (planned) external bridges:
 ┌─── Domain Code (lunco-mobility, lunco-celestial, lunco-obc) ──────┐
 │  Port(f64), SimConnection, DVec3, Typed Commands                  │
 └──────────────────────┬────────────────────────────────────────────┘
-                       │  lunco-networking (transport adapter)
+                       │  lunco-networking-core (prediction/session state)
+                       │  lunco-networking-sync (transport-neutral replication runtime)
+                       │      └── lunco-networking (lightyear transport adapter)
     ┌──────────────────┼──────────────────┐
     ▼                  ▼                  ▼
  Internal game     CCSDS / YAMCS     DDS / ROS2
@@ -116,9 +120,10 @@ still never import it: they speak only the semantic API, and everything below
                                                                   (transport tag = diagnostics only)
 ```
 
-The wire itself is **transport-agnostic** (`sync.rs`: codec, command capture/apply, state
-snapshots — no lightyear dep). The lightyear adapter ferries pre-serialized
-`sync::SyncEnvelope`s between `SyncOutbox`/`SyncInbox` and two lightyear messages: a
+The sync runtime is **transport-agnostic** (`lunco-networking-sync`: codec, command
+capture/apply, state snapshots, journals, and scenario distribution — no lightyear dep).
+The lightyear adapter ferries pre-serialized `sync::SyncEnvelope`s between
+`SyncOutbox`/`SyncInbox` and two lightyear messages: a
 **reliable `CmdChannel`** (commands) and a **best-effort `SnapChannel`** (snapshot deltas).
 Above the `Peer` boundary nothing branches on which transport a client used.
 
@@ -170,7 +175,10 @@ so there is zero networking footprint.
 
 ```
 lunco-mobility → lunco-networking (optional, feature: networking)
-lunco-networking           → lunco-core (for GlobalEntityId / Provenance types only)
+lunco-networking → lunco-networking-core (only with feature: networking)
+lunco-networking → lunco-networking-sync (only with feature: networking)
+lunco-networking-core → lunco-core / lunco-core-session (simulation contracts)
+lunco-networking-sync → semantic simulation/session contracts
 ```
 
 **As-built, replication policy is derived from the USD scene, not from a central
@@ -305,8 +313,9 @@ fn apply_drive_commands(mut query: Query<(&DriveCommand, &mut GlobalTransform)>)
 }
 ```
 
-That's it. Replication, prediction, auth, identity, and (planned) CCSDS/YAMCS export — all
-handled by the `lunco-networking` plugin registered at startup.
+That's it. Transport is handled by `lunco-networking`, transport-neutral replication
+by `lunco-networking-sync`, and prediction/reconciliation by
+`lunco-networking-core`. The application composes them through the networking feature.
 
 ---
 

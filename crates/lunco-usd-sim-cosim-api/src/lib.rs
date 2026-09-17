@@ -835,7 +835,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             .collect::<Vec<_>>();
         let Some(mut pending_revolute_query) = QueryState::<
             (),
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
         >::try_new(world) else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::InternalError,
@@ -844,7 +844,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         };
         let Some(mut pending_prismatic_query) = QueryState::<
             (),
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
         >::try_new(world) else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::InternalError,
@@ -853,7 +853,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         };
         let Some(mut pending_fixed_query) = QueryState::<
             (),
-            With<lunco_usd_avian::PendingJoint<avian3d::prelude::FixedJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
         >::try_new(world) else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::InternalError,

@@ -351,8 +351,8 @@ Read: `diffuseColor`, `emissiveColor`, `metallic`, `roughness`, `normal`,
   `bool lunco:surface:unlit = true`. This maps to `PbrLook.unlit`; it is not
   emissive radiance and must not be simulated with an emissive-only surface.
 - Navigational annotations use the authored opacity appropriate to their visual
-  job. The reusable route-point dome is opaque, unlit, and shadowless, with a
-  bright amber pending colour. The generic route policy applies a bright green
+  job. The reusable route-point dome is translucent, unlit, and shadowless,
+  with a bright green unvisited colour. The generic route policy applies a gray
   transient material-colour override when its sensor event reaches the point.
   Its invisible Trigger remains a separate overlap-only prim.
 - For an annotation that is genuinely meant to emit visible radiance, use

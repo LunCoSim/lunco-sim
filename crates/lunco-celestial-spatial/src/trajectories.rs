@@ -1,4 +1,3 @@
-use crate::ReferenceFrameIndex;
 use bevy::asset::RenderAssetUsages;
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -8,6 +7,7 @@ use big_space::prelude::CellCoord;
 use futures_lite::future;
 use lunco_celestial::ephemeris::{EphemerisProvider, EphemerisResource};
 use lunco_celestial::{BodyDescriptor, CelestialBodyRegistry, ReferenceFrame};
+use lunco_celestial_spatial_core::ReferenceFrameIndex;
 use lunco_time::WorldTime;
 use std::sync::Arc;
 

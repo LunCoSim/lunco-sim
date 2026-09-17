@@ -9,6 +9,8 @@ description = "Renderer-independent contracts and read models for LunCoSim workb
 bevy = { workspace = true }
 egui = "0.35"
 lunco-core = { path = "../lunco-core" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 serde = { workspace = true }
 
 [lints]

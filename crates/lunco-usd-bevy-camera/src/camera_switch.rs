@@ -1,6 +1,6 @@
 //! Viewport active-camera switching + the viewport-camera **reconciler**.
 //!
-//! The scene has one main-window [`Viewport`](lunco_core::SceneViewport): it
+//! The scene has one main-window [`Viewport`](lunco_viewport_core::SceneViewport): it
 //! owns *which* camera renders (its **active camera**), *whether* it renders
 //! (visibility), and *what rect* it occupies — modelled on an Omniverse
 //! Viewport. [`reconcile_scene_viewport`] is the **single authority** that
@@ -20,7 +20,7 @@
 //! image-target mirror renders the take.
 //!
 //! Switch surfaces, one mechanism — all funnel through [`ActivateCamera`] →
-//! rebind [`SceneViewport::active_camera`](lunco_core::SceneViewport):
+//! rebind [`SceneViewport::active_camera`](lunco_viewport_core::SceneViewport):
 //! - [`SetActiveCamera`] — director command (API + rhai `set_camera("Name")`);
 //! - [`SetUserCamera`] — explicit operator selection;
 //! - [`ObserveAvatar`] / [`ResumeCameraDirector`] — explicit presentation-mode
@@ -32,11 +32,12 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_core::roles::{LocalAvatar, TheLocalAvatar};
 use lunco_camera_core::DEFAULT_PRESENTATION_HOOK;
-use lunco_core::{on_command, Command, SceneViewport};
+use lunco_core::{on_command, Command};
 use lunco_hooks::HookValue;
 use lunco_render::{GraphicsCameraDefaults, LightGraphicsDefaults, SceneCamera};
 use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_viewport_core::SceneViewport;
 
 use lunco_usd_bevy_scene::UsdPrimPath;
 
@@ -657,14 +658,14 @@ pub fn on_set_user_camera(
 
 #[on_command(ObserveAvatar)]
 pub fn on_observe_avatar(_trigger: On<ObserveAvatar>, mut commands: Commands) {
-    commands.trigger(lunco_core::RequestLocalAvatarView);
+    commands.trigger(lunco_camera_core::RequestLocalAvatarView);
 }
 
 /// Resolve the shared avatar-return intent. Avatar mechanics and the UI use
 /// this same path, so neither can clear the viewport and accidentally leave a
 /// director camera selected behind the scenes.
 pub fn on_request_local_avatar_view(
-    _trigger: On<lunco_core::RequestLocalAvatarView>,
+    _trigger: On<lunco_camera_core::RequestLocalAvatarView>,
     local_avatar: Res<TheLocalAvatar>,
     q_cameras: Query<(), With<SceneCamera>>,
     mut status: ResMut<CameraSelectionStatus>,
@@ -2982,7 +2983,8 @@ mod tests {
         // authoritative slot already names the newest claimant.
         assert_eq!(app.world().resource::<TheLocalAvatar>().0, Some(new));
         assert!(app.world().get::<SceneCamera>(old).is_some());
-        app.world_mut().trigger(lunco_core::RequestLocalAvatarView);
+        app.world_mut()
+            .trigger(lunco_camera_core::RequestLocalAvatarView);
         app.world_mut().flush();
 
         assert_eq!(

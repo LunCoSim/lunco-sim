@@ -10,19 +10,21 @@ semantic reference-frame model.
 ## Semantic frames
 
 `lunco-celestial::ReferenceFrame` is the only semantic frame tag used by the
-runtime. `lunco-celestial-spatial` is the only package that projects those
-semantics into the Bevy/BigSpace scene hierarchy:
+runtime. `lunco-celestial-spatial` is the runtime package that projects those
+semantics into the Bevy/BigSpace scene hierarchy. The lightweight
+`lunco-celestial-spatial-core` package owns the shared frame and surface
+coordinate contracts used by consumers that do not install that runtime:
 
 - `World` — the persistent scene/world frame.
 - `EclipticJ2000 { center }` — non-rotating axes centred on a named NAIF body.
 - `BodyFixed { body }` — IAU/WGCCRE rotating axes for a named body.
 
-`lunco-celestial-spatial::ReferenceFrameIndex` resolves each declaration to exactly one `Grid`. Missing
+`lunco-celestial-spatial-core::ReferenceFrameIndex` resolves each declaration to exactly one `Grid`. Missing
 or duplicate declarations return `None`; callers never choose the first grid,
 infer a frame from entity order, or silently substitute identity.
 
 Analytical conversions use the typed f64 frame tree. Projection between live
-BigSpace grids uses `transform_pose_between_reference_frames`. The caller
+BigSpace grids uses the core package's `transform_pose_between_reference_frames`. The caller
 declares source and target semantics; it never handles `CellCoord` directly.
 
 ## One precision hierarchy

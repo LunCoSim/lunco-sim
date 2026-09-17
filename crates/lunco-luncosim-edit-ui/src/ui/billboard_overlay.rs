@@ -1,5 +1,5 @@
 //! Draws the labels prims asked for via `lunco:billboard*`
-//! ([`UsdBillboard`](lunco_usd_sim::billboard::UsdBillboard)).
+//! ([`UsdBillboard`](lunco_usd_bevy_scene::billboard::UsdBillboard)).
 //!
 //! Screen space is the right space for this. A world-space text mesh would have
 //! to be re-oriented every frame, would scale itself into illegibility, and
@@ -14,7 +14,7 @@
 //! camera-relative poses used by the mesh renderer, so a label cannot combine
 //! an interpolated render pose with an independently sampled grid pose. The
 //! Geodetic text (`{lat}`, `{lon}`, `{height}`) comes from
-//! [`lunco_celestial_spatial::SurfacePoseQuery`], which resolves the entity in the
+//! [`lunco_celestial_spatial_core::SurfacePoseQuery`], which resolves the entity in the
 //! explicit body-fixed frame. Root-world coordinates are never interpreted as
 //! site ENU.
 //!
@@ -40,7 +40,9 @@ use bevy_egui::egui;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::world_vector;
-use lunco_usd_sim::billboard::{render_billboard, BillboardFacts, BillboardIndex, UsdBillboard};
+use lunco_usd_bevy_scene::billboard::{
+    BillboardFacts, BillboardGeo, BillboardIndex, UsdBillboard, render_billboard,
+};
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 
 const BILLBOARD_FONT_SIZE: f32 = 13.0;
@@ -79,8 +81,8 @@ pub fn draw_billboard_overlay(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    surface_pose: lunco_celestial_spatial::SurfacePoseQuery,
-    scene_viewport: Res<lunco_core::SceneViewport>,
+    surface_pose: lunco_celestial_spatial_core::SurfacePoseQuery,
+    scene_viewport: Res<lunco_viewport_core::SceneViewport>,
     panel_rects: Option<Res<PanelRects>>,
     mut egui_ctx: bevy_egui::EguiContexts,
     theme: Option<Res<lunco_theme::Theme>>,
@@ -162,7 +164,11 @@ pub fn draw_billboard_overlay(
         };
 
         let display_name = lunco_core::entity_display_name(Some(name), callsign, catalog_id);
-        let geo = surface_pose.get(entity).map(|pose| pose.geodetic);
+        let geo = surface_pose.get(entity).map(|pose| BillboardGeo {
+            lat_deg: pose.geodetic.lat_deg,
+            lon_deg: pose.geodetic.lon_deg,
+            height_m: pose.geodetic.height_m,
+        });
         let text = render_billboard(
             &bb.template,
             &BillboardFacts {

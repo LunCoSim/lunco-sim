@@ -27,7 +27,7 @@ impl LunCoApiConfig {
     /// Create configuration by parsing CLI arguments (`--api [PORT]`).
     ///
     /// If `--api` is present without a port, it defaults to
-    /// [`DEFAULT_API_PORT`](lunco_core_session::session::DEFAULT_API_PORT).
+    /// [`DEFAULT_API_PORT`](lunco_api_contracts::DEFAULT_API_PORT).
     /// If `--api` is NOT present, returns configuration with HTTP disabled.
     pub fn from_args() -> Self {
         // The CLI port only matters when an outward HTTP transport is compiled
@@ -40,7 +40,7 @@ impl LunCoApiConfig {
 
             for i in 0..args.len() {
                 if args[i] == "--api" {
-                    port = Some(lunco_core_session::session::DEFAULT_API_PORT);
+                    port = Some(lunco_api_contracts::DEFAULT_API_PORT);
                     if i + 1 < args.len() {
                         if let Ok(p) = args[i + 1].parse::<u16>() {
                             port = Some(p);
@@ -255,23 +255,26 @@ impl Plugin for LunCoApiPlugin {
 #[derive(Resource, Clone)]
 pub struct ApiBridge(pub transports::HttpBridge);
 
-/// Build the `RunRhai` API request that carries `code`. Shared by the web
-/// `lunco_rhai` export and the in-app REPL panel so both submit the byte-identical
-/// envelope the HTTP API / native `sandbox rhai` client use. Generic over the
-/// command registry (no dependency on the `RunRhai` type) — the dispatch resolves
-/// `"RunRhai"` by name. Errors only on an internal JSON encode fault.
+/// Submit a wire request through the in-process API bridge.
+///
+/// This is the in-process equivalent of the native HTTP and wasm adapters: it
+/// performs the one wire-to-runtime conversion here, waits for the ECS result,
+/// and returns the same outward envelope that those transports serialize.
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
-pub fn rhai_request(code: &str) -> Result<schema::ApiRequest, String> {
-    let json = serde_json::json!({
-        "type": "ExecuteCommand",
-        "command": "RunRhai",
-        "params": { "code": code }
-    })
-    .to_string();
-    serde_json::from_str::<transports::ApiRequestUnified>(&json)
-        .map_err(|e| format!("rhai_request: {e}"))?
-        .try_into()
-        .map_err(|e| format!("rhai_request: {e}"))
+impl ApiBridge {
+    /// Execute one canonical wire request through the in-process bridge.
+    pub async fn execute_envelope(
+        &self,
+        envelope: lunco_api_contracts::ApiRequestEnvelope,
+    ) -> Result<lunco_api_contracts::ApiResponseEnvelope, String> {
+        let request = transports::envelope::decode_request(envelope)?;
+        let response = self
+            .0
+            .execute(request)
+            .await
+            .map_err(|()| "API bridge request was dropped".to_owned())?;
+        Ok(transports::envelope::encode_response(response))
+    }
 }
 
 /// Receives bridge requests (HTTP or wasm) and injects them as ApiRequestEvent.

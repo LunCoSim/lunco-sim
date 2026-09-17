@@ -1,0 +1,17 @@
+[package]
+name = "lunco-usd-sim-authoring"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Render-free composed USD readers for vehicle simulation authoring"
+
+[dependencies]
+bevy_ecs = { workspace = true }
+bevy_math = { workspace = true }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+openusd = { workspace = true }
+
+[lints]
+workspace = true

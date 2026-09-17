@@ -29,5 +29,9 @@ futures-lite = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = { workspace = true }
 
+[dev-dependencies]
+lunco-storage = { path = "../lunco-storage" }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

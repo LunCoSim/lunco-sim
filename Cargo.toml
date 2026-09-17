@@ -15,7 +15,9 @@ members = [
     "crates/lunco-input-ui",
     "crates/lunco-avatar",
     "crates/lunco-avatar-core",
+    "crates/lunco-avatar-input",
     "crates/lunco-avatar-camera-core",
+    "crates/lunco-avatar-camera",
     "crates/lunco-avatar-policy",
     "crates/lunco-camera-core",
     "crates/lunco-camera-celestial",
@@ -24,13 +26,17 @@ members = [
     "crates/lunco-avatar-ui",
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-core",
+    "crates/lunco-scene-runner",
     "crates/lunco-luncosim-ui",
     "crates/lunco-luncosim-exposures",
     "crates/lunco-usd-ui",
     "crates/lunco-usd-viewport-ui",
+    "crates/lunco-usd-viewport-core",
+    "crates/lunco-viewport-core",
     "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",
+    "crates/lunco-celestial-spatial-core",
     "crates/lunco-celestial-spatial",
     "crates/lunco-celestial-ephemeris",
     "crates/lunco-hardware",
@@ -40,6 +46,7 @@ members = [
     "crates/lunco-modelica-icon-ui",
     "crates/lunco-modelica-docs-ui",
     "crates/lunco-modelica-core",
+    "crates/lunco-modelica-execution",
     "crates/lunco-modelica-document",
     "crates/lunco-modelica-solver",
     "crates/lunco-modelica-index",
@@ -50,6 +57,7 @@ members = [
     "crates/lunco-sysml",
     "crates/lunco-sysml-rhai",
     "crates/lunco-usd-avian",
+    "crates/lunco-usd-avian-joints",
     "crates/lunco-usd-avian-contracts",
     "crates/lunco-usd-avian-reader",
     "crates/lunco-usd-avian-core",
@@ -74,6 +82,7 @@ members = [
     "crates/lunco-usd-authoring",
     "crates/lunco-usd-geometry",
     "crates/lunco-usd-sim",
+    "crates/lunco-usd-sim-authoring",
     "crates/lunco-usd-sim-core",
     "crates/lunco-usd-sim-cosim",
     "crates/lunco-usd-sim-domain",
@@ -108,10 +117,15 @@ members = [
     "crates/lunco-modelica-runtime",
     "crates/lunco-materials",
     "crates/lunco-networking",
+    "crates/lunco-networking-core",
+    "crates/lunco-networking-sync",
+    "crates/lunco-usd-bevy-runtime-core",
     "crates/lunco-command-macro",
     "crates/lunco-terrain-globe",
     "crates/lunco-terrain-core",
     "crates/lunco-api",
+    "crates/lunco-api-contracts",
+    "crates/lunco-api-client",
     "crates/lunco-api-transport",
     "crates/lunco-cosim",
     "crates/lunco-cosim-core",
@@ -143,11 +157,13 @@ members = [
     "crates/lunco-status-core",
     "crates/lunco-web",
     "crates/lunco-scripting",
+    "crates/lunco-rhai-repl",
     "crates/lunco-scripting-bridge-core",
     "crates/lunco-scripting-bridge-spatial",
     "crates/lunco-scripting-bridge-time",
     "crates/lunco-scripting-bridge-usd",
     "crates/lunco-signal",
+    "crates/lunco-viz-core",
     "crates/lunco-viz",
     "crates/lunco-canvas",
     "crates/lunco-theme",
@@ -156,6 +172,7 @@ members = [
     "crates/lunco-workspace-api",
     "crates/lunco-settings",
     "crates/lunco-experiments",
+    "crates/lunco-experiments-ui",
     "crates/lunco-render",
     "crates/lunco-render-recovery",
     "crates/lunco-render-bevy",
@@ -447,8 +464,10 @@ web-sys = "0.3"
 console_error_panic_hook = "0.1"
 
 # ── Misc shared third-party (centralised to kill version drift) ──────
-# v3: TLS moved into the default `rustls` feature (the v2 `tls` flag is gone).
-ureq = "3"
+# Keep the shared HTTP client lean. HTTPS and response compression are enabled
+# only by the asset/update consumers that need them; local API clients opt into
+# TLS through their own feature.
+ureq = { version = "3", default-features = false }
 # NB: bincode 3.0.0 on crates.io is a non-functional troll release
 # (`compile_error!("https://xkcd.com/2347/")`); 2.x is the real latest. The
 # The `serde` feature exposes `bincode::serde::{encode_to_vec,decode_from_slice}`
@@ -460,15 +479,15 @@ rayon = "1"
 base64 = "0.22"
 # Pure-Rust SHA-256 — works on native AND wasm32-unknown-unknown (no
 # getrandom / no C). Used by lunco-assets (asset verify) and
-# lunco-networking (scenario manifest revision digest + asset content
-# addressing on both server and web client).
+# lunco-networking-sync (scenario manifest revision digest; asset content
+# addressing itself is shared through lunco-hash on both server and web client).
 sha2 = "0.11"
 # IPLD content-addressing (IPFS interop). `cid` builds/renders CIDs;
 # `multihash-codetable` provides `Code::Sha2_256.digest(bytes)`. Both
 # pure-Rust and wasm32-safe — the web client verifies asset hashes
 # identically to native and the CIDs it pins are resolvable by `ipfs
 # get`/`ipfs pin`. Wire form is canonical CID bytes (see
-# lunco-networking/src/scenario.rs).
+# lunco-networking-sync/src/scenario.rs).
 cid = { version = "0.11", default-features = false, features = ["alloc", "serde"] }
 multihash-codetable = { version = "0.2", default-features = false, features = ["sha2"] }
 
@@ -477,6 +496,7 @@ multihash-codetable = { version = "0.2", default-features = false, features = ["
 # "0.19" resolving ahead of bevy "0.19.1") risks subtle ABI/derive
 # breakage. Keep every entry == the `bevy` pin.
 bevy_reflect = "0.19.1"
+bevy_math = "0.19.1"
 bevy_mesh = "0.19.1"
 bevy_shader = "0.19.1"
 bevy_asset = "0.19.1"

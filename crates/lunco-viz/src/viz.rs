@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::signal::{PersistedSignalRef, SignalRef, SignalType};
 use crate::view::{Panel2DCtx, ViewKind, ViewTarget};
+use lunco_viz_core::VizId;
 
 /// Identifier for a kind of visualization.
 ///
@@ -43,29 +44,6 @@ impl VizKindId {
     }
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-/// Unique identifier for one live visualization instance.
-///
-/// Generated via [`VizId::next`](Self::next); monotone across a
-/// session. Round-trips through workspace files as a `u64`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub struct VizId(pub u64);
-
-impl VizId {
-    /// Allocate the next `VizId`. Uses a process-global atomic counter;
-    /// collisions with ids loaded from disk are possible if a workspace
-    /// was created in another session — we'll revisit when persistence
-    /// lands.
-    pub fn next() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        VizId(NEXT.fetch_add(1, Ordering::Relaxed))
-    }
-
-    pub fn raw(self) -> u64 {
-        self.0
     }
 }
 

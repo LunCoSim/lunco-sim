@@ -220,10 +220,12 @@ mod tests {
     #[test]
     fn synchronous_twin_reads_share_the_canonical_traversal_guard() {
         let root = tempfile::tempdir().expect("temporary Twin root");
-        std::fs::write(root.path().join("lesson.rhai"), "40 + 2").expect("lesson");
+        lunco_storage::write_file_sync(&root.path().join("lesson.rhai"), b"40 + 2")
+            .expect("lesson");
         let cached = crate::twin_cache_dir(root.path());
-        std::fs::create_dir_all(&cached).expect("cache root");
-        std::fs::write(cached.join("downloaded.rhai"), "20 + 22").expect("cached lesson");
+        lunco_storage::ensure_directory_sync(&cached).expect("cache root");
+        lunco_storage::write_file_sync(&cached.join("downloaded.rhai"), b"20 + 22")
+            .expect("cached lesson");
 
         let id = "twin://example/lesson.rhai";
         assert_eq!(
@@ -284,8 +286,8 @@ mod tests {
     fn library_reads_an_explicit_package_cache_before_the_shared_cache() {
         let package_assets = tempfile::tempdir().expect("temporary package assets root");
         let packed = package_assets.path().join(".cache/scenes/base");
-        std::fs::create_dir_all(&packed).expect("packed cache directory");
-        std::fs::write(packed.join("lunar_surface.usda"), b"packed package asset")
+        lunco_storage::ensure_directory_sync(&packed).expect("packed cache directory");
+        lunco_storage::write_file_sync(&packed.join("lunar_surface.usda"), b"packed package asset")
             .expect("packed asset");
 
         assert_eq!(
@@ -302,8 +304,9 @@ mod tests {
     fn library_reads_normalize_windows_separators_before_lookup() {
         let root = tempfile::tempdir().expect("temporary asset root");
         let scene = root.path().join("scenes/base/lunar_surface.usda");
-        std::fs::create_dir_all(scene.parent().expect("scene parent")).expect("scene directory");
-        std::fs::write(&scene, b"windows-authored path").expect("scene");
+        lunco_storage::ensure_directory_sync(scene.parent().expect("scene parent"))
+            .expect("scene directory");
+        lunco_storage::write_file_sync(&scene, b"windows-authored path").expect("scene");
 
         assert_eq!(
             read_asset_bytes(r"lunco://scenes\base\lunar_surface.usda", Some(root.path()))
@@ -318,8 +321,9 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary Twin root");
         let outside = tempfile::tempdir().expect("temporary outside root");
         let secret = outside.path().join("secret.txt");
-        std::fs::write(&secret, "must not be read").expect("secret");
-        std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
+        lunco_storage::write_file_sync(&secret, b"must not be read").expect("secret");
+        lunco_storage::create_file_symlink_sync(&secret, &root.path().join("linked.txt"))
+            .expect("symlink");
 
         assert!(
             existing_path_within_root(root.path(), Path::new("linked.txt"))
@@ -339,12 +343,14 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary Twin root");
         let outside = tempfile::tempdir().expect("temporary outside root");
         let secret = outside.path().join("secret.txt");
-        std::fs::write(&secret, "must not be read").expect("secret");
-        std::os::unix::fs::symlink(&secret, root.path().join("linked.txt")).expect("symlink");
+        lunco_storage::write_file_sync(&secret, b"must not be read").expect("secret");
+        lunco_storage::create_file_symlink_sync(&secret, &root.path().join("linked.txt"))
+            .expect("symlink");
 
         let cache = crate::twin_cache_dir(root.path());
-        std::fs::create_dir_all(&cache).expect("cache root");
-        std::fs::write(cache.join("linked.txt"), "cache shadow").expect("cache file");
+        lunco_storage::ensure_directory_sync(&cache).expect("cache root");
+        lunco_storage::write_file_sync(&cache.join("linked.txt"), b"cache shadow")
+            .expect("cache file");
 
         let error =
             read_asset_bytes_with_twin_root("twin://example/linked.txt", None, Some(root.path()))
@@ -422,18 +428,13 @@ impl AssetWatcher for FallbackWatcher {}
 /// Only [`AssetReaderError::NotFound`] falls through. A genuine I/O failure —
 /// permissions, a truncated HTTP response — propagates immediately, because
 /// retrying it against the next root would convert a real error into a
-/// confusing "not found" and hide the actual cause. The LAST root's error is
-/// the one returned, so a miss reports the deepest place we looked.
+/// confusing "not found" and hide the actual cause. A complete miss returns
+/// the reader-facing logical path, never the native path of the last root.
 ///
-/// That last part is a trap for whoever reads the log, which is why [`read`]
-/// also names every root. A miss on `lunco://components/cameras/lunar_surface_camera.usda`
-/// surfaced as `Path not found: C:\Users\…\AppData\Local\lunco\environment/…`,
-/// and a bug report reasonably concluded that `lunco://` resolved *into the
-/// AppData cache and never into the install's own `assets/`* — the exact
-/// opposite of the resolution order, which tries `assets/` FIRST. The proposed
-/// remedy ("fall back to `<install>/assets` on a cache miss") was already the
-/// behaviour, in reverse. One root named out of three read as the only root
-/// tried.
+/// [`read`] also names every root in its warning. A miss on
+/// `lunco://components/cameras/lunar_surface_camera.usda` therefore remains
+/// actionable without making a machine-local cache path part of the asset
+/// identity or user-facing error.
 ///
 /// [`read`]: AssetReader::read
 struct FallbackReader {
@@ -478,8 +479,8 @@ macro_rules! try_both {
                 Err(error) => return Err(AssetReaderError::from(error)),
             }
             match reader.$method($path).await {
-                Err(AssetReaderError::NotFound(p)) => {
-                    last = Some(Err(AssetReaderError::NotFound(p)))
+                Err(AssetReaderError::NotFound(_)) => {
+                    last = Some(Err(AssetReaderError::NotFound($path.to_path_buf())))
                 }
                 other => return other,
             }
@@ -556,9 +557,9 @@ mod windows_uri_tests {
     fn reads_a_windows_authored_twin_uri_below_its_registered_root() {
         let root = tempfile::tempdir().expect("temporary Twin root");
         let scene = root.path().join("sim/scenes/traverse.usda");
-        std::fs::create_dir_all(scene.parent().expect("scene parent"))
+        lunco_storage::ensure_directory_sync(scene.parent().expect("scene parent"))
             .expect("create scene parent");
-        std::fs::write(&scene, "#usda 1.0\n").expect("write scene");
+        lunco_storage::write_file_sync(&scene, b"#usda 1.0\n").expect("write scene");
 
         assert_eq!(
             read_asset_bytes_with_twin_root(
@@ -568,6 +569,36 @@ mod windows_uri_tests {
             )
             .expect("Windows-authored Twin URI resolves through the Twin root"),
             b"#usda 1.0\n"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn missing_library_asset_reports_the_logical_path() {
+        let root = tempfile::tempdir().expect("temporary asset root");
+        let roots = [root.path().join("authored"), root.path().join("cache")];
+        let readers = roots
+            .iter()
+            .map(|root| AssetSource::get_default_reader(root.to_string_lossy().into_owned())())
+            .collect();
+        let reader = FallbackReader {
+            readers,
+            roots: roots
+                .iter()
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect(),
+        };
+
+        let error = match futures_lite::future::block_on(AssetReader::read(
+            &reader,
+            Path::new("vessels/markers/waypoint.usda"),
+        )) {
+            Ok(_) => panic!("missing asset unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            AssetReaderError::NotFound(PathBuf::from("vessels/markers/waypoint.usda"))
         );
     }
 }

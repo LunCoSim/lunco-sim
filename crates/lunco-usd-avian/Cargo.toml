@@ -9,9 +9,9 @@ bevy.workspace = true
 avian3d.workspace = true
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-spatial = { path = "../lunco-spatial" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
+lunco-usd-avian-joints = { path = "../lunco-usd-avian-joints" }
 lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
@@ -25,6 +25,7 @@ default = ["3d"]
 
 [dev-dependencies]
 big_space = { workspace = true }
+lunco-storage = { path = "../lunco-storage" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [lints]

@@ -68,8 +68,9 @@ use crate::signal::{
     SignalExposure, SignalPresentation, SignalRef, SignalRegistry, TelemetryFocus,
 };
 use crate::view::ViewTarget;
-use crate::viz::{SignalBinding, VisualizationConfig, VizId};
+use crate::viz::{SignalBinding, VisualizationConfig};
 use crate::{LINE_PLOT_KIND, VIZ_PANEL_KIND};
+use lunco_viz_core::VizId;
 
 /// Panel id — new id, not the deleted stub's `"telemetry"`, so stale
 /// saved layouts referencing the tombstone don't resurrect over us.

@@ -687,7 +687,10 @@ mod tests {
             panic!("created Twin must open in Twin mode");
         };
         assert_eq!(twin.manifest.as_ref().unwrap().name, "Created Twin");
-        assert!(root.join(lunco_twin::MANIFEST_FILENAME).is_file());
+        assert!(matches!(
+            lunco_storage::entry_kind_file_sync(&root.join(lunco_twin::MANIFEST_FILENAME)),
+            Ok(StorageEntryKind::File)
+        ));
 
         let reopened = TwinMode::open(&root).expect("reopen created Twin");
         assert!(matches!(reopened, TwinMode::Twin(_)));
@@ -697,17 +700,17 @@ mod tests {
     fn create_twin_does_not_overwrite_existing_manifest() {
         let tmp = tempfile::tempdir().expect("parent directory");
         let root = tmp.path().join("existing-twin");
-        std::fs::create_dir_all(&root).expect("Twin directory");
-        std::fs::write(
-            root.join(lunco_twin::MANIFEST_FILENAME),
-            "name = \"original\"\nversion = \"0.1.0\"\n",
+        lunco_storage::ensure_directory_sync(&root).expect("Twin directory");
+        lunco_storage::write_file_sync(
+            &root.join(lunco_twin::MANIFEST_FILENAME),
+            b"name = \"original\"\nversion = \"0.1.0\"\n",
         )
         .expect("existing manifest");
 
         let error = create_twin(&root, "replacement").expect_err("existing Twin must reject");
         assert!(error.to_string().contains("already contains"));
         assert!(
-            std::fs::read_to_string(root.join(lunco_twin::MANIFEST_FILENAME))
+            lunco_storage::read_text_file_sync(&root.join(lunco_twin::MANIFEST_FILENAME))
                 .unwrap()
                 .contains("original")
         );
@@ -746,9 +749,9 @@ mod tests {
     #[test]
     fn set_twin_setting_command_persists_generic_value_on_active_twin() {
         let tmp = tempfile::tempdir().expect("Twin directory");
-        std::fs::write(
-            tmp.path().join(lunco_twin::MANIFEST_FILENAME),
-            "name = \"Settings Twin\"\nversion = \"0.1.0\"\n",
+        lunco_storage::write_file_sync(
+            &tmp.path().join(lunco_twin::MANIFEST_FILENAME),
+            b"name = \"Settings Twin\"\nversion = \"0.1.0\"\n",
         )
         .expect("manifest");
         let twin = match TwinMode::open(tmp.path()).expect("open Twin") {
@@ -779,9 +782,9 @@ mod tests {
     #[test]
     fn reset_twin_setting_command_removes_generic_value() {
         let tmp = tempfile::tempdir().expect("Twin directory");
-        std::fs::write(
-            tmp.path().join(lunco_twin::MANIFEST_FILENAME),
-            "name = \"Settings Twin\"\nversion = \"0.1.0\"\n\n[settings]\n\"ui.camera_status\" = true\n",
+        lunco_storage::write_file_sync(
+            &tmp.path().join(lunco_twin::MANIFEST_FILENAME),
+            b"name = \"Settings Twin\"\nversion = \"0.1.0\"\n\n[settings]\n\"ui.camera_status\" = true\n",
         )
         .expect("manifest");
         let twin = match TwinMode::open(tmp.path()).expect("open Twin") {
@@ -817,15 +820,15 @@ mod tests {
     #[test]
     fn failed_replacement_scan_keeps_the_active_twin() {
         let good = tempfile::tempdir().expect("good Twin directory");
-        std::fs::write(
-            good.path().join(lunco_twin::MANIFEST_FILENAME),
-            "name = \"good\"\nversion = \"0.1.0\"\n",
+        lunco_storage::write_file_sync(
+            &good.path().join(lunco_twin::MANIFEST_FILENAME),
+            b"name = \"good\"\nversion = \"0.1.0\"\n",
         )
         .expect("good manifest");
         let bad = tempfile::tempdir().expect("bad Twin directory");
-        std::fs::write(
-            bad.path().join(lunco_twin::MANIFEST_FILENAME),
-            "name = [not valid toml",
+        lunco_storage::write_file_sync(
+            &bad.path().join(lunco_twin::MANIFEST_FILENAME),
+            b"name = [not valid toml",
         )
         .expect("bad manifest");
 

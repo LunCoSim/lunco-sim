@@ -40,6 +40,7 @@ lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
@@ -56,10 +57,11 @@ lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-usd-viewport-core = { path = "../lunco-usd-viewport-core" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-workspace = { path = "../lunco-workspace" }
-lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-render = { path = "../lunco-render" }
@@ -67,6 +69,7 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-scripting = { path = "../lunco-scripting" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 
 [dev-dependencies]
 lunco-usd-compose = { path = "../lunco-usd-compose" }

@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
-use lunco_workbench_widgets::{icon_text_button, UiIcon};
+use lunco_workbench_widgets::{UiIcon, icon_text_button};
 
 use lunco_avatar_core::commands::{FocusTarget, PossessVessel, ReleaseVessel};
 use lunco_avatar_core::roles::Avatar;
@@ -11,10 +11,10 @@ use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_control_core::{ControlBinding, UserIntent};
 use lunco_core::Spacecraft;
-use lunco_input_core::{resolved_input_label, InputBindingsSettings};
+use lunco_input_core::{InputBindingsSettings, resolved_input_label};
 use lunco_time::{
-    realtime_rate_label, SetTimeTransport, TimeTransport, TransportMode, WorldTime,
-    REALTIME_RATE_OPTIONS,
+    REALTIME_RATE_OPTIONS, SetTimeTransport, TimeTransport, TransportMode, WorldTime,
+    realtime_rate_label,
 };
 
 /// Change the host's possession arbitration policy from Mission Control.
@@ -457,7 +457,7 @@ pub fn populate_mission_control_view(
         (With<ControlBinding>, Without<Avatar>),
     >,
     surface: Query<(), With<lunco_camera_core::SurfaceCamera>>,
-    gravity: Option<Res<lunco_celestial_spatial::LocalGravityField>>,
+    gravity: Option<Res<lunco_celestial_spatial_core::LocalGravityField>>,
     changed: Query<
         (),
         Or<(

@@ -1026,13 +1026,13 @@ composition roots remain distinct:
 
 | App | Composition | Startup boundary |
 |-----|-------------|------------------|
-| `luncosim` | GUI workbench plus USD, physics, cosim, mobility, and editor plugins | `--scene` loads a scene; GUI boot policy may select onboarding content |
+| `luncosim` | thin process shell delegating GUI composition to `lunco-luncosim-ui` and headless execution to `lunco-luncosim-core` | `--scene` loads a scene; the UI application boundary applies presentation policy |
 | `luncosim-server` | headless luncosim core; no window, GPU, or egui | `run_headless()` drives the same simulation schedules through `ScheduleRunnerPlugin` |
 | `lunica` | Modelica workbench plus rumoca compile/simulation plugins | opens Modelica documents and uses the same Twin/document services |
 
-`luncosim` still owns a small `setup_luncosim` composition step: it creates
-the persistent world shell, consults the GUI boot policy, and loads an
-explicit native scene. Browser startup loads the deployment Twin through its
+The `lunco-luncosim-ui` application boundary creates the window/render shell,
+consults the GUI boot policy, and composes it with the persistent world supplied
+by `lunco-luncosim-core`. Browser startup loads the deployment Twin through its
 page autoload hook. The server does not use the GUI startup path.
 
 The workbench shell and `lunco-workbench-state` provide document/session UI

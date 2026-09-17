@@ -26,9 +26,12 @@
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy::tasks::AsyncComputeTaskPool;
+#[cfg(not(target_arch = "wasm32"))]
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentOpened;
+#[cfg(not(target_arch = "wasm32"))]
 use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
 
 /// Bevy plugin: registers the `DocumentOpened` observer that fans out
@@ -41,7 +44,16 @@ impl Plugin for IconWarmerPlugin {
     }
 }
 
+/// Wasm has no background task that can safely warm the engine.
+#[cfg(target_arch = "wasm32")]
+fn on_document_opened_warm(
+    _trigger: On<DocumentOpened>,
+    _registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
+) {
+}
+
 /// Observer body — extracted so unit tests can drive it without Bevy.
+#[cfg(not(target_arch = "wasm32"))]
 fn on_document_opened_warm(
     trigger: On<DocumentOpened>,
     registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
@@ -66,28 +78,19 @@ fn on_document_opened_warm(
     // thread on wasm32-unknown-unknown, so the warm task's
     // `engine.icon_for(ty)` calls — each up to ~1.3 s on a cold source library
     // qualified-name lookup — block the UI exactly as if they ran
-    // synchronously. Field telemetry showed `[IconWarmer] doc=N
-    // warmed 0/1 types in 1314ms` immediately after a drill-in,
-    // freezing the first-paint. Native still benefits because
-    // AsyncCompute there has its own threads.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = doc_id;
+    // synchronously. Native still benefits because AsyncCompute there has
+    // its own threads.
+    let types = collect_referenced_types(&host.document().syntax_arc().ast);
+    if types.is_empty() {
         return;
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let types = collect_referenced_types(&host.document().syntax_arc().ast);
-        if types.is_empty() {
-            return;
-        }
-        spawn_warm_task(doc_id, types);
-    }
+    spawn_warm_task(doc_id, types);
 }
 
 /// Walk `ast` collecting every unique fully-qualified or partially-
 /// qualified type reference that's worth warming. Skips Modelica
 /// built-in scalars and bare local names (already in the doc).
+#[cfg(not(target_arch = "wasm32"))]
 fn collect_referenced_types(ast: &StoredDefinition) -> Vec<String> {
     let mut out: HashSet<String> = HashSet::new();
     for class in ast.classes.values() {
@@ -96,6 +99,7 @@ fn collect_referenced_types(ast: &StoredDefinition) -> Vec<String> {
     out.into_iter().collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn walk_class(class: &ClassDef, out: &mut HashSet<String>) {
     lunco_modelica_ast::ast_extract::walk_class_type_names(class, &mut |name| {
         if interesting_type(name) {
@@ -106,6 +110,7 @@ fn walk_class(class: &ClassDef, out: &mut HashSet<String>) {
 
 /// True for type names worth warming. Filters out Modelica built-ins
 /// and bare names (which resolve locally — no warm needed).
+#[cfg(not(target_arch = "wasm32"))]
 fn interesting_type(name: &str) -> bool {
     if name.is_empty() {
         return false;

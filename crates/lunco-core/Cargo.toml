@@ -5,9 +5,7 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
-# `bevy_camera`: Camera / Visibility / ViewVisibility types (ECS-level, no
-# GPU) — optional in bevy 0.19, no longer reached via the substrate features.
-bevy = { workspace = true, features = ["bevy_camera"] }
+bevy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 lunco-command-macro = { path = "../lunco-command-macro" }

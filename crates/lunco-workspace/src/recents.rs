@@ -128,7 +128,7 @@ fn deduplicate_paths(list: &mut Vec<PathBuf>, cap: usize) -> bool {
 /// aliases still collapse without pretending two different missing files are
 /// the same.
 fn canonical_identity(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| lexical_normalize(path))
+    lunco_storage::canonicalize_file_path(path).unwrap_or_else(|_| lexical_normalize(path))
 }
 
 fn lexical_normalize(path: &Path) -> PathBuf {
@@ -180,40 +180,45 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn existing_symlink_aliases_deduplicate_and_reopen_canonical_file() {
-        use std::os::unix::fs::symlink;
-
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("Rover.mo");
         let alias = dir.path().join("alias.mo");
-        std::fs::write(&real, "model Rover end Rover;").unwrap();
-        symlink(&real, &alias).unwrap();
+        lunco_storage::write_file_sync(&real, b"model Rover end Rover;").unwrap();
+        lunco_storage::create_file_symlink_sync(&real, &alias).unwrap();
 
         let mut r = Recents::default();
         r.push_loose(real.clone());
         r.push_loose(alias);
 
         assert_eq!(r.loose_paths.len(), 1);
-        assert_eq!(r.loose_paths[0], std::fs::canonicalize(real).unwrap());
-        assert!(r.loose_paths[0].is_file());
+        assert_eq!(
+            r.loose_paths[0],
+            lunco_storage::canonicalize_file_path(&real).unwrap()
+        );
+        assert_eq!(
+            lunco_storage::entry_kind_file_sync(&r.loose_paths[0]).unwrap(),
+            lunco_storage::StorageEntryKind::File
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn loaded_alias_cleanup_preserves_most_recent_entry() {
-        use std::os::unix::fs::symlink;
-
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("Rover.mo");
         let alias = dir.path().join("alias.mo");
-        std::fs::write(&real, "model Rover end Rover;").unwrap();
-        symlink(&real, &alias).unwrap();
+        lunco_storage::write_file_sync(&real, b"model Rover end Rover;").unwrap();
+        lunco_storage::create_file_symlink_sync(&real, &alias).unwrap();
 
         let mut r = Recents {
             twin_paths: Vec::new(),
             loose_paths: vec![alias, real.clone()],
         };
         assert!(r.deduplicate());
-        assert_eq!(r.loose_paths, vec![std::fs::canonicalize(real).unwrap()]);
+        assert_eq!(
+            r.loose_paths,
+            vec![lunco_storage::canonicalize_file_path(&real).unwrap()]
+        );
         assert!(!r.deduplicate());
     }
 
@@ -237,7 +242,7 @@ mod tests {
         r.push_twin("/projects/lunar_base".into());
         r.push_loose("/scratch/balloon.mo".into());
         r.save(&path).expect("save");
-        assert!(path.exists());
+        assert!(lunco_storage::read_file_sync(&path).is_ok());
         let r2 = Recents::load(&path);
         assert_eq!(r2.twin_paths, r.twin_paths);
         assert_eq!(r2.loose_paths, r.loose_paths);
@@ -256,7 +261,7 @@ mod tests {
     fn load_corrupt_file_returns_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("corrupt.json");
-        std::fs::write(&path, b"this is not json").unwrap();
+        lunco_storage::write_file_sync(&path, b"this is not json").unwrap();
         let r = Recents::load(&path);
         assert!(r.twin_paths.is_empty());
     }

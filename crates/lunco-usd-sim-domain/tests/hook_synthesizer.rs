@@ -114,11 +114,10 @@ fn fixture_classes() -> MemberClasses {
 }
 
 fn scripting_test_source(name: &str) -> String {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/scripting/tests")
-        .join(name)
-        .canonicalize()
-        .and_then(std::fs::read_to_string)
+        .join(name);
+    lunco_assets_core::read_asset_file_string(&path)
         .unwrap_or_else(|error| panic!("read Rhai synthesis contract {name}: {error}"))
 }
 

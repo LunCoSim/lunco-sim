@@ -316,28 +316,24 @@ mod tests {
     /// `save_timeline_file` → `load_timelines_from_dir` round-trips by name.
     #[test]
     fn timeline_file_save_load_roundtrip() {
-        let root = std::env::temp_dir().join(format!("lunco_tl_tline_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let temp = tempfile::tempdir().expect("timeline test directory");
+        let root = temp.path();
 
         let json = r#"[{"wait":1.0},{"emit":"GO"}]"#;
         let path = save_timeline_file(&root, "approach", json).unwrap();
-        assert!(path.exists());
+        assert!(lunco_storage::read_file_sync(&path).is_ok());
         assert_eq!(path, root.join("timelines").join("approach.json"));
 
         let loaded = load_timelines_from_dir(&root);
         assert_eq!(loaded, vec![("approach".to_string(), json.to_string())]);
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A missing `timelines/` dir yields nothing, not an error.
     #[test]
     fn missing_timelines_dir_is_empty_not_error() {
-        let root = std::env::temp_dir().join(format!("lunco_tl_none2_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let temp = tempfile::tempdir().expect("timeline test directory");
+        let root = temp.path();
         assert!(load_timelines_from_dir(&root).is_empty());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -369,13 +365,10 @@ mod tests {
 
     #[test]
     fn twin_events_replace_the_runtime_timeline_scope() {
-        let root =
-            std::env::temp_dir().join(format!("lunco_timeline_scope_{}_{}", std::process::id(), 1));
-        let replacement = root.with_extension("replacement");
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&replacement);
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&replacement).unwrap();
+        let root_temp = tempfile::tempdir().expect("first Twin directory");
+        let replacement_temp = tempfile::tempdir().expect("replacement Twin directory");
+        let root = root_temp.path().to_path_buf();
+        let replacement = replacement_temp.path().to_path_buf();
         save_timeline_file(&root, "old", "[]").unwrap();
         save_timeline_file(&replacement, "new", "[]").unwrap();
 
@@ -424,8 +417,5 @@ mod tests {
         assert_eq!(store.owner(), Some(TimelineOwner::Twin(second_id)));
         assert_eq!(store.get("old"), None);
         assert_eq!(store.get("new"), Some("[]"));
-
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&replacement);
     }
 }

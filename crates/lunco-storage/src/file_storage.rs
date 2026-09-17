@@ -190,6 +190,27 @@ impl Storage for FileStorage {
         }
     }
 
+    async fn read_directory(&self, handle: &StorageHandle) -> StorageResult<Vec<StorageHandle>> {
+        match handle {
+            #[cfg(not(target_arch = "wasm32"))]
+            StorageHandle::File(path) => {
+                let mut entries = std::fs::read_dir(path)
+                    .map_err(|error| match error.kind() {
+                        std::io::ErrorKind::NotFound => StorageError::NotFound,
+                        _ => StorageError::Io(error),
+                    })?
+                    .map(|entry| entry.map(|entry| StorageHandle::File(entry.path())))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(StorageError::Io)?;
+                entries.sort_by_key(|entry| entry.display_name());
+                Ok(entries)
+            }
+            _ => Err(StorageError::Unsupported(
+                "FileStorage does not list web / remote directories".into(),
+            )),
+        }
+    }
+
     async fn rename(&self, from: &StorageHandle, to: &StorageHandle) -> StorageResult<()> {
         match (from, to) {
             #[cfg(not(target_arch = "wasm32"))]
@@ -259,6 +280,7 @@ impl Storage for FileStorage {
 mod tests {
     use super::*;
     use futures_lite::future::block_on;
+    use tempfile::tempdir;
 
     #[test]
     fn memory_roundtrip() {
@@ -288,15 +310,14 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn file_roundtrip_through_tempdir() {
         block_on(async {
-            let dir = std::env::temp_dir().join("lunco-storage-test-rt");
-            std::fs::create_dir_all(&dir).unwrap();
+            let dir = tempdir().unwrap();
+            let dir = dir.path();
             let path = dir.join("file.txt");
             let s = FileStorage::new();
             let h = StorageHandle::File(path.clone());
             s.write(&h, b"persisted").await.unwrap();
             assert!(s.exists(&h).await);
             assert_eq!(s.read(&h).await.unwrap(), b"persisted");
-            let _ = std::fs::remove_file(&path);
         });
     }
 
@@ -328,8 +349,8 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn file_rename_moves_the_entry() {
         block_on(async {
-            let dir = std::env::temp_dir().join("lunco-storage-test-rename");
-            std::fs::create_dir_all(&dir).unwrap();
+            let dir = tempdir().unwrap();
+            let dir = dir.path();
             let from_path = dir.join("from.txt");
             let to_path = dir.join("to.txt");
             let s = FileStorage::new();
@@ -337,9 +358,8 @@ mod tests {
             let to = StorageHandle::File(to_path.clone());
             s.write(&from, b"payload").await.unwrap();
             s.rename(&from, &to).await.unwrap();
-            assert!(!from_path.exists());
+            assert!(!s.exists(&from).await);
             assert_eq!(s.read(&to).await.unwrap(), b"payload");
-            let _ = std::fs::remove_file(&to_path);
         });
     }
 
@@ -347,9 +367,9 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn entry_kind_and_directory_creation_stay_in_the_backend() {
         block_on(async {
-            let root = std::env::temp_dir()
-                .join(format!("lunco-storage-test-kind-{}", std::process::id()));
-            let nested = root.join("nested");
+            let root = tempdir().unwrap();
+            let root_path = root.path();
+            let nested = root_path.join("nested");
             let file_path = nested.join("scene.usda");
             let s = FileStorage::new();
             let directory = StorageHandle::File(nested.clone());
@@ -360,9 +380,14 @@ mod tests {
                 s.entry_kind(&directory).await.unwrap(),
                 StorageEntryKind::Directory
             );
+            assert_eq!(
+                s.read_directory(&StorageHandle::File(root_path.to_path_buf()))
+                    .await
+                    .unwrap(),
+                vec![StorageHandle::File(nested.clone())]
+            );
             s.write(&file, b"#usda 1.0\n").await.unwrap();
             assert_eq!(s.entry_kind(&file).await.unwrap(), StorageEntryKind::File);
-            let _ = std::fs::remove_dir_all(root);
         });
     }
 }

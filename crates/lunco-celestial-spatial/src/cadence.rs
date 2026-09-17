@@ -292,7 +292,8 @@ pub fn bump_celestial_inputs_revision(
 /// ATOMICALLY. Gating only part of the frame projection would put dependent
 /// frames at different epochs — the sun and bodies would disagree and the
 /// world would visibly snap each time the gate finally fired.
-/// [`celestial_needs_solve`], wrapped so its firing rate is reported.
+/// the private `celestial_needs_solve` condition, wrapped so its firing rate is
+/// reported.
 ///
 /// **This is the only way to obtain this gate.** The raw condition is
 /// `pub(crate)` on purpose: a run condition that silently stops gating costs
@@ -467,21 +468,25 @@ mod tests {
     #[test]
     fn exact_override_is_not_accepted_as_a_persisted_preference() {
         assert!(CelestialCadenceSettings::EXACT.validate_section().is_err());
-        assert!(CelestialCadenceSettings {
-            tolerance_deg: f64::NAN
-        }
-        .validate_section()
-        .is_err());
-        assert!(CelestialCadenceSettings::default()
+        assert!(
+            CelestialCadenceSettings {
+                tolerance_deg: f64::NAN
+            }
             .validate_section()
-            .is_ok());
+            .is_err()
+        );
+        assert!(
+            CelestialCadenceSettings::default()
+                .validate_section()
+                .is_ok()
+        );
     }
 
     #[test]
     fn kepler_rate_bound_uses_periapsis_not_mean_motion() {
-        let orbit = crate::KeplerOrbit {
+        let orbit = lunco_celestial::KeplerOrbit {
             body: lunco_celestial::ephemeris_id::EARTH,
-            elements: crate::KeplerianElements {
+            elements: lunco_celestial::KeplerianElements {
                 semi_major_axis_m: 7_000_000.0,
                 eccentricity: 0.5,
                 ..default()

@@ -1,11 +1,11 @@
 //! Mode dispatch + helpers shared by the host and client adapters.
 
-use crate::sync::{DeclareChannelExt, SyncEnvelope};
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
 use lunco_core::{SessionId, SyncChannel};
 use lunco_core_session::{NetStatus, NetworkRole};
+use lunco_networking_sync::sync::DeclareChannelExt;
 #[cfg(not(target_family = "wasm"))]
 use lunco_storage::Storage;
 
@@ -92,55 +92,6 @@ pub(crate) fn is_dev_netcode_key(key: &[u8; 32]) -> bool {
     key == &DEV_NETCODE_KEY
 }
 
-// Wire envelope codec = **bincode** (binary, positional — no field names). This is
-// the hot 20 Hz snapshot path; JSON here roughly doubled the byte count. The inner
-// Reflect command payload (`SyncCommand.data`) still uses serde_json — bincode just
-// frames the envelope around it. Host and client always build together, so the
-// schema-coupled (non-self-describing) binary format is safe.
-/// Hard cap on a single decoded envelope. A hostile/corrupt frame whose bincode
-/// length prefix claims a huge `Vec`/`String` would otherwise make bincode
-/// pre-allocate that many bytes before reading a single field (memory DoS). 16
-/// MiB comfortably exceeds a full connect-baseline snapshot while bounding the
-/// blast radius. The decode path threads this same cap into bincode's
-/// `Configuration::with_limit`, so a smaller frame with a lying length prefix
-/// still can't pre-allocate past it.
-pub(crate) const MAX_ENVELOPE_BYTES: usize = 16 * 1024 * 1024;
-
-// Wire codec = bincode 2 `standard()` (little-endian, variable-int). Encode and
-// decode MUST agree on the config; host and client always build together so the
-// schema-coupled binary format is safe. The decode path additionally clamps the
-// allocation limit — see `MAX_ENVELOPE_BYTES`.
-
-pub(crate) fn serialize_env(env: &SyncEnvelope) -> Option<Vec<u8>> {
-    match bincode::serde::encode_to_vec(env, bincode::config::standard()) {
-        Ok(bytes) => Some(bytes),
-        Err(e) => {
-            warn!("[sync] envelope encode failed: {e}");
-            None
-        }
-    }
-}
-
-pub(crate) fn deserialize_env(bytes: &[u8]) -> Option<SyncEnvelope> {
-    // Reject oversize frames up front, then cap bincode's internal allocation so
-    // a smaller frame with a lying length prefix can't pre-allocate gigabytes.
-    if bytes.len() > MAX_ENVELOPE_BYTES {
-        warn!(
-            "[sync] envelope decode rejected: {} bytes exceeds cap",
-            bytes.len()
-        );
-        return None;
-    }
-    let cfg = bincode::config::standard().with_limit::<MAX_ENVELOPE_BYTES>();
-    match bincode::serde::decode_from_slice::<SyncEnvelope, _>(bytes, cfg) {
-        Ok((env, _)) => Some(env),
-        Err(e) => {
-            warn!("[sync] envelope decode failed ({} bytes): {e}", bytes.len());
-            None
-        }
-    }
-}
-
 /// Deterministic, collision-free `PeerId` → `SessionId`. Netcode peers carry a
 /// distinct `u64`, so sessions are unique per connection without a side table.
 /// `Raw` peers carry a `SocketAddr` instead of a `u64`; hashing its address
@@ -175,13 +126,13 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
     // deep-link seeding, the ui confirm modal, net-diag's divergence report —
     // can take `Res`/`ResMut` without ordering worries. The always-on session
     // substrate itself is installed by `LunCoCoreSessionPlugin` at the host.
-    app.init_resource::<crate::session::PendingConnect>();
-    app.init_resource::<crate::session::IncomingSnapshots>();
-    app.init_resource::<crate::session::DivergenceStats>();
+    app.init_resource::<crate::connection_state::PendingConnect>();
+    app.init_resource::<lunco_networking_core::session::IncomingSnapshots>();
+    app.init_resource::<lunco_networking_core::session::DivergenceStats>();
 
     // The transport-agnostic wire (codec, capture/apply, snapshots) the lightyear
     // ferry below drives. Both Host and Client need it.
-    app.add_plugins(crate::sync::SyncPlugin);
+    app.add_plugins(lunco_networking_sync::sync::SyncPlugin);
 
     // Prediction diagnostics — compiled only under the `net-diag` feature (off in
     // normal builds). Added on both peers so you can compare host (silent) vs client

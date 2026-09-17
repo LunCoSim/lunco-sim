@@ -202,7 +202,7 @@ handle owns a primary drag, the preview camera's competing pan path is
 suppressed so the pointer remains in gizmo mode.
 
 Scene click ownership is perspective-scoped. Read the shared
-`lunco_core::SceneInteractionMode` contract: View/simulation owns unmodified
+`lunco_interaction_core::SceneInteractionMode` contract: View/simulation owns unmodified
 clicks for possession, while Shift/Ctrl clicks remain explicit selection or
 removal intents; editor-facing perspectives own unmodified clicks for
 selection and gizmos. Do not add a second per-crate mode flag or let global

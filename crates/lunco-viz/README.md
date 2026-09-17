@@ -47,6 +47,10 @@ projection publishes them.
 
 ## Crate layout
 
+The render-free `VizId` is owned by [`lunco-viz-core`](../lunco-viz-core/).
+This crate consumes that identifier and owns the UI/rendering side of the
+visualization framework.
+
 | Module              | Role                                                        |
 |---------------------|-------------------------------------------------------------|
 | `signal`            | `SignalRef`, `SignalType`, `SignalMeta`, `SignalPresentation`, `SignalRegistry` |

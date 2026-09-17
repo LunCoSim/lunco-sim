@@ -41,7 +41,7 @@ meanings is not a convenience; it is a correctness hazard.
 
 The current entry points are deliberately split by ownership:
 
-- `validate_scene_address` (`lunco-usd-sim-cosim/src/scene.rs`) — accepts only
+- `validate_scene_address` (`lunco-usd-bevy-runtime-core/src/scene.rs`) — accepts only
   registered scene schemes and rejects bare or filesystem paths.
 - `lunco_assets_core::engine_asset_uri` — converts an in-tree library reference to
   its canonical `lunco://` address at command boundaries.

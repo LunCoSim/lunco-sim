@@ -1,0 +1,73 @@
+[package]
+name = "lunco-modelica-execution"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Modelica solver workers, experiment execution, and transport adapters"
+
+[[bin]]
+name = "lunica_worker"
+path = "src/bin/lunica_worker.rs"
+
+[[bin]]
+name = "modelica_run"
+path = "src/bin/modelica_run.rs"
+
+[[bin]]
+name = "modelica_tester"
+path = "src/bin/modelica_tester.rs"
+
+[dependencies]
+bevy.workspace = true
+crossbeam-channel.workspace = true
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-experiments = { path = "../lunco-experiments" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-document = { path = "../lunco-modelica-document" }
+lunco-modelica-index = { path = "../lunco-modelica-index" }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-modelica-solver = { path = "../lunco-modelica-solver" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-time = { path = "../lunco-time" }
+rumoca-compile.workspace = true
+rumoca-ir-solve.workspace = true
+rumoca-sim.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+web-time.workspace = true
+bincode.workspace = true
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow.workspace = true
+lunco-storage = { path = "../lunco-storage" }
+rayon.workspace = true
+zstd.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+lunco-worker-transport = { path = "../lunco-worker-transport" }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+js-sys.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys = { workspace = true, features = [
+    "console",
+    "DedicatedWorkerGlobalScope",
+    "MessageEvent",
+    "Worker",
+    "WorkerType",
+    "WorkerOptions",
+    "ErrorEvent",
+] }
+console_error_panic_hook.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

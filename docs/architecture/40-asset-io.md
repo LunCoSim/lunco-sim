@@ -91,7 +91,7 @@ backend owner separate:
 | Manifest verification, extraction, and atomic installation | `lunco-assets-download` | none |
 | Native image/DEM/glTF decoding and baking | `lunco-assets-processing` | none |
 | Bevy worker lifecycle and CLI composition | `lunco-assets` | none |
-| Read/write/rename/delete, entry metadata, directory preparation, and backend selection | `lunco-storage` | dispatch a typed command; never call the backend directly |
+| Read/write/rename/delete, entry metadata, directory listing/preparation, and backend selection | `lunco-storage` | dispatch a typed command; never call the backend directly |
 | Twin manifest semantics and recursive file index | `lunco-twin` | render the index and send intents |
 | Open-root/session policy and async Twin admission | `lunco-workspace` | provide the picker seam only |
 | Picker requests and native/wasm dialog backends | `lunco-workbench-file-dialog` | no storage ownership |
@@ -211,7 +211,7 @@ no manual hunt.
 | `lunco-usd-ui/src/ui/browser_dispatch.rs` twin browser open | ✅ routed through the shared `OpenFile` USD document command |
 | `lunco-usd-commands/src/lib.rs` usd document load | ✅ reads through the storage abstraction |
 | `lunco-modelica-core` source-root traversal | ✅ delegated to `lunco-assets-core::discovery::read_files_with_extension`; the compiler only parses and seats returned source files |
-| `lunco-modelica-core/library_remote.rs` source-library fetch | ⚠️ uses the generic browser fetch primitives but remains coupled to Modelica's parsed-bundle protocol; move the protocol boundary to the asset/source package when the web worker contract is next revised |
+| `lunco-modelica-core/library_remote.rs` source-library fetch | ✅ owns source-library admission and browser fetch state; the wasm worker handoff is a typed bridge implemented by `lunco-modelica-execution`, so compiler-only consumers do not link worker transport |
 | `lunco-modelica-core::models::bundled_models()` `include_str!` | ⚠️ candidate for `EmbeddedAssetSource` registration so it looks like every other asset path |
 
 ## Related foot-guns (same rule applies)

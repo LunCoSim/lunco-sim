@@ -739,10 +739,13 @@ pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     fn open_twin(root: &Path, manifest: &str) -> lunco_twin::Twin {
-        fs::write(root.join(lunco_twin::MANIFEST_FILENAME), manifest).unwrap();
+        lunco_storage::write_file_sync(
+            &root.join(lunco_twin::MANIFEST_FILENAME),
+            manifest.as_bytes(),
+        )
+        .unwrap();
         match lunco_twin::TwinMode::open(root).unwrap() {
             lunco_twin::TwinMode::Twin(twin) => twin,
             other => panic!("expected a manifest-backed Twin, got {other:?}"),
@@ -752,8 +755,8 @@ mod tests {
     #[test]
     fn manifest_roots_use_twin_resolver_and_external_directories() {
         let temp = tempfile::tempdir().unwrap();
-        fs::create_dir(temp.path().join("models")).unwrap();
-        fs::create_dir(temp.path().join("shared")).unwrap();
+        lunco_storage::ensure_directory_sync(&temp.path().join("models")).unwrap();
+        lunco_storage::ensure_directory_sync(&temp.path().join("shared")).unwrap();
         let twin = open_twin(
             temp.path(),
             r#"
@@ -781,21 +784,21 @@ externals = [{ name = "Shared", path = "shared" }]
     #[test]
     fn absent_manifest_section_discovers_indexed_package_roots() {
         let temp = tempfile::tempdir().unwrap();
-        fs::create_dir_all(temp.path().join("models/Vehicle/Sub")).unwrap();
-        fs::create_dir_all(temp.path().join("examples")).unwrap();
-        fs::write(
-            temp.path().join("models/Vehicle/package.mo"),
-            "within ; package Vehicle end Vehicle;",
+        lunco_storage::ensure_directory_sync(&temp.path().join("models/Vehicle/Sub")).unwrap();
+        lunco_storage::ensure_directory_sync(&temp.path().join("examples")).unwrap();
+        lunco_storage::write_file_sync(
+            &temp.path().join("models/Vehicle/package.mo"),
+            b"within ; package Vehicle end Vehicle;",
         )
         .unwrap();
-        fs::write(
-            temp.path().join("models/Vehicle/Sub/Part.mo"),
-            "within Vehicle.Sub; model Part end Part;",
+        lunco_storage::write_file_sync(
+            &temp.path().join("models/Vehicle/Sub/Part.mo"),
+            b"within Vehicle.Sub; model Part end Part;",
         )
         .unwrap();
-        fs::write(
-            temp.path().join("examples/Example.mo"),
-            "model Example end Example;",
+        lunco_storage::write_file_sync(
+            &temp.path().join("examples/Example.mo"),
+            b"model Example end Example;",
         )
         .unwrap();
         let twin = open_twin(temp.path(), "name = \"demo\"\nversion = \"0.1.0\"\n");

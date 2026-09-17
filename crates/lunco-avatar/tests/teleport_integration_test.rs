@@ -20,8 +20,6 @@ use big_space::prelude::*;
 use lunco_avatar_core::roles::Avatar;
 use lunco_camera_core::{FreeFlightCamera, OrbitCamera, SurfaceCamera, SurfaceRelativeMode};
 use lunco_celestial::{CelestialBody, ReferenceFrame};
-use lunco_celestial_spatial::PointMassGravity;
-use lunco_environment::GravityProvider;
 
 const MOON_RADIUS: f64 = 1737.0e3;
 const MOON_GRID_CELL_SIZE: f64 = 2_000.0;
@@ -89,22 +87,17 @@ fn test_full_teleport_workflow() {
                 .id();
 
             // Moon Body: child of Moon Grid, at origin (identity transform)
-            let moon_body = commands
-                .spawn((
-                    CelestialBody {
-                        name: "Moon".to_string(),
-                        ephemeris_id: lunco_celestial::ephemeris_id::MOON,
-                        radius_m: MOON_RADIUS,
-                    },
-                    GravityProvider {
-                        model: Box::new(PointMassGravity { gm: 4.904e12 }),
-                    },
-                    CellCoord::default(),
-                    Transform::default(),
-                    GlobalTransform::default(),
-                    ChildOf(moon_grid),
-                ))
-                .id();
+            commands.spawn((
+                CelestialBody {
+                    name: "Moon".to_string(),
+                    ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                    radius_m: MOON_RADIUS,
+                },
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(moon_grid),
+            ));
 
             // Avatar camera — start on Moon Grid in orbit (far from surface)
             let orbit_altitude = MOON_RADIUS * 3.0;
@@ -132,7 +125,6 @@ fn test_full_teleport_workflow() {
                 .id();
 
             test_state.moon_grid = Some(moon_grid);
-            test_state.moon_body = Some(moon_body);
             test_state.avatar = Some(avatar);
         },
     );
@@ -267,6 +259,5 @@ fn test_full_teleport_workflow() {
 #[derive(Resource, Default, Clone)]
 struct TestState {
     moon_grid: Option<Entity>,
-    moon_body: Option<Entity>,
     avatar: Option<Entity>,
 }

@@ -1,5 +1,5 @@
 use crate::transports::{
-    envelope::{ApiRequestUnified, ApiResponseEnvelope},
+    envelope::{decode_request, encode_response},
     HttpBridge,
 };
 use axum::{
@@ -8,17 +8,18 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use lunco_api::schema::{ApiRequest, ApiResponse};
+use lunco_api_contracts::ApiRequestEnvelope;
 
 pub async fn handle_api_commands(
     State(bridge): State<HttpBridge>,
-    Json(req): Json<ApiRequestUnified>,
+    Json(req): Json<ApiRequestEnvelope>,
 ) -> Response {
-    let api_req: ApiRequest = match req.try_into() {
+    let api_req: ApiRequest = match decode_request(req) {
         Ok(request) => request,
         Err(error) => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
-                Json(ApiResponseEnvelope::from(ApiResponse::error(
+                Json(encode_response(ApiResponse::error(
                     lunco_api::schema::ApiErrorCode::DeserializationError,
                     error,
                 ))),
@@ -104,7 +105,7 @@ pub async fn execute_api_request(bridge: HttpBridge, api_req: ApiRequest) -> Res
             .into_response();
     }
 
-    let envelope = ApiResponseEnvelope::from(response);
+    let envelope = encode_response(response);
     // Honour the TYPED error code. Every error used to be a 500, which threw
     // away `CommandNotFound` (400), `EntityNotFound` (404),
     // `CommandRejected` (409), and `DeserializationError` (422) — codes

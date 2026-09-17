@@ -6,11 +6,13 @@ use bevy::prelude::{Res, ResMut};
 impl WorkbenchLayout {
     /// Resolve the active perspective's scene-click owner for the cross-crate
     /// input gate. No active perspective leaves the simulation default intact.
-    pub(crate) fn active_scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
+    pub(crate) fn active_scene_interaction_mode(
+        &self,
+    ) -> lunco_interaction_core::SceneInteractionMode {
         self.active_perspective
             .and_then(|active| self.perspectives.iter().find(|p| p.id() == active))
             .map_or(
-                lunco_core::SceneInteractionMode::Simulation,
+                lunco_interaction_core::SceneInteractionMode::Simulation,
                 |perspective| perspective.scene_interaction_mode(),
             )
     }
@@ -28,7 +30,7 @@ impl WorkbenchLayout {
 /// resource consumed by the selection and possession observers.
 pub(crate) fn sync_scene_interaction_mode(
     layout: Res<WorkbenchLayout>,
-    mut mode: ResMut<lunco_core::SceneInteractionMode>,
+    mut mode: ResMut<lunco_interaction_core::SceneInteractionMode>,
 ) {
     let next = layout.active_scene_interaction_mode();
     if *mode != next {

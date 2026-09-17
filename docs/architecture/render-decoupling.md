@@ -46,13 +46,20 @@ chooses its execution mode. It adds only logging, diagnostics, input/state,
 resource. This remains true when a GUI package is built in the same Cargo
 feature-unified invocation.
 
-The windowed `lunco-luncosim` shell owns `DefaultPlugins`, Bevy light/window
-features, the `LunCoRenderPlugin`, workbench, and render recovery. The scripted
+The windowed `lunco-luncosim-ui` boundary owns `DefaultPlugins`, Bevy
+light/window features, the `LunCoRenderPlugin`, workbench, and render recovery. The scripted
 render-shadow policy is supplied by the application-edge render recovery and
 its owning UI/workbench crates; the default Rhai/world bridge does not depend
 on the render-recovery crate. Likewise, `lunco-usd-queries` disables
 `lunco-doc-bevy`'s egui default because query providers are shared by API and
 headless hosts.
+
+The outward API follows the same split. `lunco-api-contracts` owns only the
+serializable request/response envelopes. `lunco-api-transport` owns server-side
+conversion and ECS bridge delivery. `lunco-api-client` owns native HTTP
+request mechanics, and `lunco-rhai-repl` is only a terminal adapter that sends
+the reflected `RunRhai` command. No client may hand-format HTTP or instantiate
+another scripting runtime.
 
 When adding a crate to the simulation core, check both sides before merging:
 
@@ -75,7 +82,8 @@ whose dependency closure can express the contract:
 | Package | Owns | Must not own |
 | --- | --- | --- |
 | `lunco-luncosim-core` | simulation composition, physics, USD load/projection, and the headless execution plugin | windows, GPU resources, egui, or render policy |
-| `lunco-luncosim` | process/CLI shell and windowed composition | simulation rules or a second headless loop |
+| `lunco-luncosim` | process/CLI dispatch | simulation rules or renderer/window composition |
+| `lunco-luncosim-ui` | window/render composition and interactive presentation | headless simulation rules or a second runtime loop |
 | `lunco-scripting-bridge-core` | interpreter-free language-neutral world bridge mechanism | authored policy, language runtimes, or render/UI dependencies |
 | `lunco-scripting-bridge-spatial` | active-frame pose, navigation, geolocation, and entity projections | generic reflection, language runtime, or render/UI policy |
 | `lunco-scripting-bridge-time` | deterministic simulation-clock and clock-domain projections | spatial pose, authored policy, language runtime, or render/UI dependencies |
@@ -84,6 +92,9 @@ whose dependency closure can express the contract:
 | `lunco-usd-queries` | UI-free document/query providers | egui defaults or workbench state |
 | `lunco-doc-bevy` | ECS document/journal lifecycle | presentation widgets (its egui bridge is opt-in) |
 | `lunco-render-*` | GPU composition and render-recovery policy | simulation state or USD topology |
+| `lunco-api-contracts` | pure serialized API envelopes | ECS, Bevy, HTTP, or command-specific behavior |
+| `lunco-api-client` | generic native API endpoint and HTTP request/response mechanics | Rhai evaluation, ECS access, or simulator policy |
+| `lunco-rhai-repl` | terminal input/output adapter for `RunRhai` | HTTP framing or a second Rhai engine |
 
 When a new capability does not fit one row, split the *contract* first (data
 types and events in a small, UI-free crate), then add one adapter at each edge.

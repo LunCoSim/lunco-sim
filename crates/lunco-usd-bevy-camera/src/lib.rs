@@ -37,7 +37,7 @@ impl Plugin for UsdCameraPlugin {
         }
         register_all_commands(app);
 
-        app.init_resource::<lunco_core::SceneViewport>()
+        app.init_resource::<lunco_viewport_core::SceneViewport>()
             .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<camera_switch::ViewportCameraSelection>()
             .init_resource::<camera_switch::CameraSelectionStatus>()
@@ -56,8 +56,8 @@ impl Plugin for UsdCameraPlugin {
             .configure_sets(
                 PostUpdate,
                 (
-                    lunco_core::SceneViewportSet::Publish,
-                    lunco_core::SceneViewportSet::Reconcile,
+                    lunco_viewport_core::SceneViewportSet::Publish,
+                    lunco_viewport_core::SceneViewportSet::Reconcile,
                 )
                     .chain()
                     .before(bevy::camera::CameraUpdateSystems),
@@ -66,7 +66,7 @@ impl Plugin for UsdCameraPlugin {
                 PostUpdate,
                 (
                     camera_switch::reconcile_scene_viewport
-                        .in_set(lunco_core::SceneViewportSet::Reconcile)
+                        .in_set(lunco_viewport_core::SceneViewportSet::Reconcile)
                         .before(camera_switch::update_camera_origin),
                     camera_switch::update_camera_selection_status
                         .after(camera_switch::reconcile_scene_viewport)

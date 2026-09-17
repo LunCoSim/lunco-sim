@@ -708,12 +708,11 @@ mod tests {
             native_plugins: Vec::new(),
             settings: BTreeMap::new(),
         };
-        let path =
-            std::env::temp_dir().join(format!("lunco_twin_manifest_{}.toml", std::process::id()));
+        let temp = tempfile::tempdir().expect("temporary manifest directory");
+        let path = temp.path().join("twin.toml");
         manifest.write(&path).expect("write via storage");
         let read_back = TwinManifest::read(&path).expect("read via storage");
         assert_eq!(read_back, manifest);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

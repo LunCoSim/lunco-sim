@@ -6,8 +6,11 @@
 `lunco-celestial` owns the solar-system semantic model. `lunco-celestial-
 ephemeris` supplies the concrete ephemeris provider. The
 `lunco-celestial-spatial` adapter projects those semantics into the scene
-hierarchy. USD authors the physical intent; the engine resolves it into the
-existing reference-frame hierarchy.
+hierarchy. Its reusable frame lookup and surface-coordinate contracts live in
+`lunco-celestial-spatial-core`, so camera, avatar, networking, and telemetry
+consumers do not install the terrain/globe/link runtime merely to read a
+celestial pose. USD authors the physical intent; the engine resolves it into
+the existing reference-frame hierarchy.
 
 ## Body catalog
 
@@ -58,7 +61,7 @@ WorldRoot / Solar inertial
 ```
 
 The body entity is an identity child of its body-fixed grid. The grid, not the
-body mesh, carries the rotation. `ReferenceFrameIndex` maps each semantic
+body mesh, carries the rotation. `lunco-celestial-spatial-core::ReferenceFrameIndex` maps each semantic
 frame to one unique concrete grid and fails closed for missing/duplicate
 declarations.
 

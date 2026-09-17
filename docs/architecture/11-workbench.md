@@ -163,13 +163,13 @@ private dock layout.
 5. **Viewport (center)** — the 3D world. **Structurally persistent** —
    always the central region of the window. Not a panel, not a tile.
    Cannot be closed or docked-over. The workbench contributes only the
-   viewport's *visibility* into `lunco_core::SceneViewport`; it never sets
+   viewport's *visibility* into `lunco_viewport_core::SceneViewport`; it never sets
    camera `is_active` — the single-authority reconciler in `lunco-usd-bevy-camera`
    actuates that (see [`17-view-and-intent.md §6`](17-view-and-intent.md)). A
    perspective with central content hides 3D when it has no viewport panel; a
    full-window presentation perspective may explicitly keep the scene visible
    behind transient side or bottom panels. The 3D renders full-window
-   (`SceneViewport::rect` is `None`) and the chrome is layered on top of it —
+   (`lunco_viewport_core::SceneViewport::rect` is `None`) and the chrome is layered on top of it —
    see § 3.1.
 6. **Properties / Inspector (right)** — context-aware content for the
    current selection and workspace. See § 6.
@@ -861,7 +861,7 @@ main 3D scene surrenders any retained egui `TextEdit` focus before publishing
 semantic controls, while focused fields still capture keys until that explicit
 scene press.
 
-Perspective activation also publishes `lunco_core::SceneInteractionMode`, the
+Perspective activation also publishes `lunco_interaction_core::SceneInteractionMode`, the
 single primary-click ownership contract shared by the editor selection and
 avatar possession observers. `sandbox_view` leaves plain clicks available for
 possession while Shift/Ctrl clicks remain explicit selection/removal intents;

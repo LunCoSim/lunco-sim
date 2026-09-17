@@ -49,7 +49,7 @@ limited to entities carrying `PhysicsJointLink`: an ordinary non-joint target
 uses the normal entity-removal path. A target carrying native or pending joint
 state is classified as a joint and must use the physics lifecycle marker. The
 command records any authored endpoint invalidation and never directly removes a
-native joint. The `JointAttachPlugin` consumes that marker at its Update
+native joint. The `lunco-usd-avian-joints::JointAttachPlugin` consumes that marker at its Update
 boundary and performs one transaction in this order:
 
 1. retire the Avian `JointGraph` edge and its `PhysicsIslands` entry;

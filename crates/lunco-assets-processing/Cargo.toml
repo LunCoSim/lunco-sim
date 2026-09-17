@@ -19,6 +19,7 @@ tiny-skia = { workspace = true }
 usvg = { workspace = true }
 
 [dev-dependencies]
+lunco-storage = { path = "../lunco-storage" }
 tempfile = { workspace = true }
 toml = { workspace = true }
 

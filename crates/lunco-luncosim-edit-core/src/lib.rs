@@ -43,8 +43,8 @@ impl Plugin for SceneEditPlugin {
             .init_resource::<spawn::FootprintCache>()
             .init_resource::<spawn::SpawnDiagnostics>()
             .insert_resource(lunco_interaction_core::DragModeActive { active: false })
-            .init_resource::<lunco_core::SpawnToolActive>()
-            .init_resource::<lunco_core::TerrainToolActive>()
+            .init_resource::<lunco_interaction_core::SpawnToolActive>()
+            .init_resource::<lunco_interaction_core::TerrainToolActive>()
             .init_resource::<terrain_tools::TerrainToolState>();
 
         app.add_plugins(commands::SpawnCommandPlugin);

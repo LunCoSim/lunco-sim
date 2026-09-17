@@ -15,5 +15,9 @@ lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 openusd = { workspace = true }
 
+[dev-dependencies]
+lunco-storage = { path = "../lunco-storage" }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

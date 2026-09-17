@@ -8,6 +8,10 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame};
+use lunco_celestial_spatial_core::{
+    AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField, OrbitalViewPin, ReferenceFrameIndex,
+    update_reference_frame_index,
+};
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
@@ -15,7 +19,6 @@ use lunco_environment::{Gravity, GravityBody};
 mod big_space_setup;
 pub mod cadence;
 mod embedded_assets;
-mod frame_index;
 mod globe_lod;
 mod gravity;
 mod imagery;
@@ -25,23 +28,15 @@ pub mod placement;
 pub mod pose;
 pub mod queries;
 mod soi;
-pub mod surface_frame;
-mod surface_pose;
 mod systems;
 mod trajectories;
 pub mod wifi;
 
 pub mod commands;
-/// UI panels for celestial time control and body browser.
-#[cfg(feature = "ui")]
-pub mod ui;
 pub use commands::*;
 
 pub use big_space_setup::*;
 pub use embedded_assets::*;
-pub use frame_index::{
-    transform_pose_between_reference_frames, update_reference_frame_index, ReferenceFrameIndex,
-};
 pub use globe_lod::{GlobeLod, GlobeLodBudget};
 pub use gravity::*;
 pub use link::*;
@@ -49,8 +44,6 @@ pub use missions::*;
 pub use placement::*;
 pub use pose::*;
 pub use soi::*;
-pub use surface_frame::*;
-pub use surface_pose::*;
 pub use systems::*;
 pub use trajectories::*;
 pub use wifi::*;
@@ -67,58 +60,12 @@ pub struct RoverClickEvent {
     pub rover: Entity,
 }
 
-/// A scene-authored declaration that a celestial body exists — the ECS projection
-/// of USD's `LunCoCelestialBodyAPI` (`int lunco:body = 399`).
-///
-/// **This is the switch that turns the sky on**, and it is scene data, not a code
-/// flag. No prim declares a body ⇒ no hierarchy, no globes, no orbit views, no
-/// ephemeris. See [`celestial_declared`].
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CelestialBodyDecl {
-    /// NAIF id: 10 Sun, 399 Earth, 301 Moon.
-    pub naif: i32,
-}
-
-/// A body map authored ON the body prim — the ECS projection of
-/// `asset lunco:body:albedoMap = @lunco://textures/earth.png@`.
-///
-/// Which map a body wears is scene content, and this is the one-attribute way
-/// to say it: no Material network, just a texture, resolved through the
-/// ordinary asset schemes. A Twin can therefore ship its own Earth
-/// (`@twin://mytwin/textures/earth_1970.png@`) without touching the engine's
-/// manifest, and a scene that says nothing falls back to the declared dataset
-/// (see `imagery`), then to the body's own colour.
-///
-/// For anything richer than an albedo map — a custom shader, extra inputs —
-/// bind a `UsdShade` Material to the prim instead; that path already exists
-/// and wins over both.
-#[derive(Component, Debug, Clone, PartialEq, Eq)]
-pub struct AuthoredBodyAlbedo {
-    /// Asset reference exactly as authored, resolved by the `AssetServer`.
-    pub asset: String,
-}
-
-/// Run condition: does the loaded scene actually ask for celestial content?
-///
-/// Replaces `CelestialConfig.spawn_hierarchy` — a boolean in Rust that decided
-/// whether a solar system existed, flipped as a side effect of a scene authoring a
-/// site anchor. A scene could not *say* "I want a Moon"; it could only trip a switch,
-/// and any subsystem that forgot to read the switch leaked planets into scenes that
-/// never asked for them (which is exactly what `TrajectoryPlugin` did — Earth/Moon
-/// orbit views in the flat sandbox arena).
-///
-/// Now the scene declares its bodies in USD and every celestial subsystem gates on
-/// the same authored fact. Re-armable by construction: load a scene with bodies at
-/// runtime and the hierarchy builds then.
-pub fn celestial_declared(q: Query<(), With<CelestialBodyDecl>>) -> bool {
-    !q.is_empty()
-}
-
 /// Host-app policy for the celestial stack (doc 43).
 ///
 /// Note what is NOT here any more: `spawn_hierarchy`. Whether a solar system exists
 /// is the *scene's* call, authored as `LunCoCelestialBodyAPI` prims and gated by
-/// [`celestial_declared`] — not a host-app boolean. This resource now carries only
+/// [`lunco_celestial_spatial_core::celestial_declared`] — not a host-app boolean.
+/// This resource now carries only
 /// genuine host policy: whether the app owns its own camera.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct CelestialConfig {
@@ -197,7 +144,7 @@ impl Plugin for CelestialPlugin {
         // Globe LOD consumes the shared presentation binding, not Bevy's
         // render activation flag. Keep the binding substrate available in
         // standalone celestial hosts as well as the full USD application.
-        app.init_resource::<lunco_core::SceneViewport>();
+        app.init_resource::<lunco_viewport_core::SceneViewport>();
         // Celestial shell geometry uses the same authoritative graphics
         // settings as USD projection. Initialise the documented default here
         // so setup does not substitute a private Balanced profile.
@@ -353,8 +300,8 @@ impl Plugin for CelestialPlugin {
         // is fresh this frame.
         // Orbital view MODE state (scene-hide, gravity hold, camera
         // park/restore) — the camera itself flies to the focused body; the
-        // world is never re-posed for viewing (see `placement::OrbitalViewPin`).
-        app.init_resource::<placement::OrbitalViewPin>();
+        // world is never re-posed for viewing (see `OrbitalViewPin`).
+        app.init_resource::<OrbitalViewPin>();
         app.init_resource::<lunco_environment::SunState>();
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
@@ -510,7 +457,7 @@ fn teardown_celestial_scene(
     q_derived: Query<Entity, With<big_space_setup::CelestialDerived>>,
     q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
     mut registry: ResMut<MissionRegistry>,
-    mut orbital_pin: ResMut<placement::OrbitalViewPin>,
+    mut orbital_pin: ResMut<OrbitalViewPin>,
     curvature: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
 ) {
     // `attach_site_scene_to_surface_grid` selects a celestial surface Grid as
@@ -543,7 +490,7 @@ fn teardown_celestial_scene(
     // orbit transaction is about to be retired with the outgoing scene, so
     // retaining the pin would make the replacement scene look orbital without
     // a valid `OrbitViewReturn` to restore its authored surface camera.
-    *orbital_pin = placement::OrbitalViewPin::default();
+    *orbital_pin = OrbitalViewPin::default();
     if curvature.is_some() {
         commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
     }
@@ -555,7 +502,7 @@ fn teardown_celestial_scene(
 ///
 /// Provides:
 /// - [`Gravity`] resource (Flat or Surface mode)
-/// - [`GravityProvider`] / [`GravityBody`] components
+/// - [`lunco_environment::GravityProvider`] / [`GravityBody`] components
 /// - [`LocalGravityField`] resource + `update_local_gravity_field` for the
 ///   avatar's "up" direction (camera/UI use)
 ///
@@ -577,7 +524,7 @@ impl Plugin for GravityPlugin {
         // entry point, so it must stand alone — otherwise the system panics on
         // a missing `Res` in any app that adds only this. `init_resource` is
         // idempotent, so adding both plugins is still fine.
-        app.init_resource::<placement::OrbitalViewPin>();
+        app.init_resource::<OrbitalViewPin>();
         app.register_type::<GravityBody>();
         // AFTER the celestial epoch chain: this system reads celestial
         // Transform/CellCoords via `world_position_seeded`; unordered it could
@@ -609,7 +556,7 @@ mod scene_teardown_tests {
     fn replacement_declarations_cannot_suppress_celestial_teardown() {
         let mut app = App::new();
         app.init_resource::<MissionRegistry>();
-        app.init_resource::<placement::OrbitalViewPin>();
+        app.init_resource::<OrbitalViewPin>();
         app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
 
         let world_grid = app.world_mut().spawn(lunco_spatial::WorldGrid).id();
@@ -624,7 +571,7 @@ mod scene_teardown_tests {
         let replacement_decl = app
             .world_mut()
             .spawn(CelestialBodyDecl {
-                naif: ephemeris_id::MOON,
+                naif: lunco_celestial::ephemeris_id::MOON,
             })
             .id();
 
@@ -644,7 +591,7 @@ mod scene_teardown_tests {
     fn teardown_frame_reset_cannot_overwrite_replacement_frame() {
         let mut app = App::new();
         app.init_resource::<MissionRegistry>();
-        app.init_resource::<placement::OrbitalViewPin>();
+        app.init_resource::<OrbitalViewPin>();
         app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
 
         let world_grid = app.world_mut().spawn(lunco_spatial::WorldGrid).id();
@@ -677,9 +624,9 @@ mod scene_teardown_tests {
     fn scene_teardown_clears_the_outgoing_orbital_presentation_pin() {
         let mut app = App::new();
         app.init_resource::<MissionRegistry>();
-        app.insert_resource(placement::OrbitalViewPin {
+        app.insert_resource(OrbitalViewPin {
             active: true,
-            body: ephemeris_id::EARTH,
+            body: lunco_celestial::ephemeris_id::EARTH,
             dir: DVec3::X,
             distance: 42.0,
         });
@@ -691,8 +638,8 @@ mod scene_teardown_tests {
         lunco_core::run_scene_teardown(app.world_mut());
 
         assert_eq!(
-            *app.world().resource::<placement::OrbitalViewPin>(),
-            placement::OrbitalViewPin::default()
+            *app.world().resource::<OrbitalViewPin>(),
+            OrbitalViewPin::default()
         );
     }
 }

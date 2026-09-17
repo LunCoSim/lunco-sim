@@ -323,10 +323,13 @@ the right behaviour is for it to visibly do nothing.
    `bevy_pbr` / `bevy_render` are not, and belong in `lunco-render-bevy`.
 4. **Re-project it on edit.** *This is the step people forget.* A structural
    change (new prim) reconciles automatically. An **attribute-only** edit arrives
-   as `info_only`, and `project_stage_changes` only handles the cases it knows —
-   translate, rotate, dome lights. If you add an editable attribute and skip
-   this, `SetFoo` will journal and save correctly and **nothing will move on
-   screen** until reload. Add a handler in `live_consume.rs`.
+   as `info_only`. Standard transforms and lights stay on the generic path; a
+   domain-specific in-place refresh registers a typed `UsdLiveEditOwner` with
+   `lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`. The owner claims only
+   its attributes, invalidates its own projection marker when required, and
+   refreshes from the composed stage. Keep `live_consume.rs` generic: if you add
+   an editable attribute and skip both paths, `SetFoo` will journal and save
+   correctly and **nothing will move on screen** until reload.
 5. **Author it.** Add a command that lowers to `UsdOp`s (Law 1) and register it
    with `register_commands!` — a command is only reachable from the HTTP API /
    MCP / rhai if its *type* is in the reflect registry.

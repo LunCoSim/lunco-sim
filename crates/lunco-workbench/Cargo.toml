@@ -31,11 +31,13 @@ api = [
 bevy = { workspace = true, features = ["bevy_render", "bevy_light", "bevy_pbr"] }
 bevy_egui = { workspace = true }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workbench-file-ops = { path = "../lunco-workbench-file-ops" }
 lunco-workbench-text-editor = { path = "../lunco-workbench-text-editor" }
 lunco-workbench-state = { path = "../lunco-workbench-state" }
 lunco-workbench-window = { path = "../lunco-workbench-window" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-status-core = { path = "../lunco-status-core" }
 # Screenshot commands and GPU readback live in the production capture capability;
 # keeping this dependency optional preserves the shell-only build.

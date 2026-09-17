@@ -2,7 +2,7 @@
 //!
 //! `LinkState` is the direct connectivity graph and remains subject to the
 //! authored `link.connected` policy. Wi-Fi is a
-//! separate domain graph: it consumes [`link::LinkGeometryState`] and applies
+//! separate domain graph: it consumes [`crate::LinkGeometryState`] and applies
 //! only radio endpoint/range eligibility, so adding rover-to-rover radio does
 //! not reopen a direct Earth link or alter its policy.
 
@@ -143,20 +143,22 @@ mod tests {
 
         assert!(app.world().get::<LinkState>(a).is_none());
         assert!(app.world().get::<LinkState>(b).is_none());
-        assert!(app
-            .world()
-            .get::<WifiState>(a)
-            .unwrap()
-            .peers
-            .iter()
-            .any(|peer| peer.peer == 2 && peer.connected));
-        assert!(app
-            .world()
-            .get::<WifiState>(b)
-            .unwrap()
-            .peers
-            .iter()
-            .any(|peer| peer.peer == 1 && peer.connected));
+        assert!(
+            app.world()
+                .get::<WifiState>(a)
+                .unwrap()
+                .peers
+                .iter()
+                .any(|peer| peer.peer == 2 && peer.connected)
+        );
+        assert!(
+            app.world()
+                .get::<WifiState>(b)
+                .unwrap()
+                .peers
+                .iter()
+                .any(|peer| peer.peer == 1 && peer.connected)
+        );
     }
 
     #[test]

@@ -18,7 +18,7 @@ pub struct SetDocumentSource {
 /// originating from `doc`. Empty when the doc has no in-flight run.
 fn live_runs_for_doc(world: &World, doc: DocumentId) -> Vec<lunco_experiments::ExperimentId> {
     let (Some(sources), Some(registry)) = (
-        world.get_resource::<lunco_modelica_core::experiments_runner::ExperimentSources>(),
+        world.get_resource::<lunco_modelica_execution::experiments_runner::ExperimentSources>(),
         world.get_resource::<lunco_experiments::ExperimentRegistry>(),
     ) else {
         return Vec::new();
@@ -56,7 +56,7 @@ fn stop_live_runs_for_doc(world: &mut World, doc: DocumentId) -> usize {
         return 0;
     }
     if let Some(handles) =
-        world.get_resource::<lunco_modelica_core::experiments_runner::PendingHandles>()
+        world.get_resource::<lunco_modelica_execution::experiments_runner::PendingHandles>()
     {
         for h in handles.0.iter() {
             if ids.contains(&h.run_id) {
@@ -120,7 +120,7 @@ pub fn on_set_document_source(trigger: On<SetDocumentSource>, mut commands: Comm
 mod tests {
     use super::*;
     use lunco_experiments::{ExperimentRegistry, ModelRef, RunBounds, RunStatus, TwinId};
-    use lunco_modelica_core::experiments_runner::ExperimentSources;
+    use lunco_modelica_execution::experiments_runner::ExperimentSources;
     use std::collections::BTreeMap;
 
     /// Build a world holding one experiment (originating from `run_doc`) at
@@ -198,7 +198,7 @@ mod tests {
     /// left untouched.
     #[test]
     fn stop_live_runs_cancels_only_target_doc() {
-        use lunco_modelica_core::experiments_runner::PendingHandles;
+        use lunco_modelica_execution::experiments_runner::PendingHandles;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 

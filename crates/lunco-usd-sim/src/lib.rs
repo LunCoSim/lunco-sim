@@ -54,6 +54,7 @@ use lunco_usd_avian_contracts::{
     ShouldBeDynamic,
 };
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
+use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
 use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
@@ -69,19 +70,24 @@ use lunco_cosim::{avian_queries::RaycastObservation, JointTorqueActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::wheel_kinematics::{body_point_velocity, wheel_hub_pose, wheel_roll_rate};
 use lunco_mobility::{
-    DifferentialCoupling, DifferentialDriveType, JointedWheelTire, Suspension, SuspensionPiston,
-    SuspensionSpring, WheelRaycast,
+    DifferentialCoupling, JointedWheelTire, Suspension, SuspensionPiston, SuspensionSpring,
+    WheelRaycast,
 };
 use lunco_port_core::{Port, PortSurface};
 use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
-use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
+use lunco_usd_sim_authoring::{
+    is_gear_drive, read_gear_drive_type, read_gear_drive_values, read_gear_ratio, GearDriveValues,
+    SuspensionParams, WheelParams,
+};
+use lunco_usd_sim_core::{
+    GroundColliderPending, PendingDifferential, PhysicalWheel, UsdSimProcessed, UsdSimSet,
+};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
 
-pub mod wheel_params;
-use wheel_params::{SuspensionParams, WheelParams};
+mod wheel_runtime;
 
 /// Plugin for mapping simulation-specific USD schemas (like NVIDIA PhysX Vehicles)
 /// to LunCo's optimized simulation models.
@@ -342,12 +348,21 @@ mod authored_sun_tests {
 
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<UsdLiveEditRegistry>();
+        app.world_mut()
+            .resource_mut::<UsdLiveEditRegistry>()
+            .register(UsdLiveEditOwner::new(
+                "usd-sim.wheels",
+                wheel_runtime::claims_edit,
+                invalidate_usd_sim_projection,
+                wheel_runtime::resync_wheels_for_stage,
+            ));
         if !app.is_plugin_added::<lunco_avatar_core::roles::AvatarCorePlugin>() {
             app.add_plugins(lunco_avatar_core::roles::AvatarCorePlugin);
         }
         app.init_resource::<lunco_core::RuntimeFaults>();
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
-        crate::shader_ports::build(app);
+        lunco_usd_sim_shader::ports::build(app);
         app.add_plugins(lunco_usd_sim_celestial::CelestialProjectionPlugin);
         app.configure_sets(
             Update,
@@ -361,52 +376,50 @@ impl Plugin for UsdSimPlugin {
         .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_runtime_safety);
         app.add_systems(lunco_core::SceneTeardown, retire_scene_cameras);
-        app.register_type::<PhysicalWheel>()
-            // Client-only: reconstruct a remote rover's wheels from its chassis
-            // (kinematic followers — wheels are no longer replicated), then re-derive
-            // the cosmetic visual roll. Chained so the visual spin layers on the
-            // freshly-placed body. Same `relative_speed > 0` gate as raycast wheels.
-            .add_systems(
-                FixedUpdate,
-                (reconstruct_proxy_wheels, animate_proxy_physical_wheels)
-                    .chain()
-                    .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
-            )
-            .add_systems(
-                FixedPostUpdate,
-                lunco_usd_sim_telemetry::retain_physics_telemetry
-                    .after(PhysicsSystems::StepSimulation),
-            )
-            .add_observer(on_add_usd_sim_prim)
-            .add_systems(PreUpdate, resolve_differential_coupling)
-            // USD → ShaderMaterial authoring. Ordered AFTER the bounded visual
-            // projection and BEFORE `process_usd_sim_prims` consumes the prims,
-            // so the material is present before a wheel is split onto its visual
-            // child. The completed projection boundary also prevents the visual
-            // projector from restoring a cylinder-axis rotation after the
-            // simulator has established the wheel's identity physics frame.
-            // See `lunco-usd-sim-shader`.
-            .add_systems(
-                Update,
-                lunco_usd_sim_shader::apply_usd_shader_materials
-                    .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
-                    .before(process_usd_sim_prims),
-            )
-            // `process_usd_sim_prims` does a per-stage joint scan + per-
-            // entity dispatch — too coupled to fit cleanly into a single
-            // `OnAdd<UsdSceneProjected>` observer. Gating with `run_if`
-            // skips the system entirely on frames with no unprocessed
-            // USD prim (archetype-level check, near-zero cost).
-            .init_resource::<GroundColliderPending>()
-            .init_resource::<JointTopologyIndex>()
-            .init_resource::<lunco_usd_sim_telemetry::PhysicsTelemetryState>()
-            .add_systems(
-                Update,
-                (process_usd_sim_prims
-                    .run_if(any_unprocessed_usd_sim)
-                    .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),)
-                    .in_set(UsdSimSet::Projection),
-            );
+        // Client-only: reconstruct a remote rover's wheels from its chassis
+        // (kinematic followers — wheels are no longer replicated), then re-derive
+        // the cosmetic visual roll. Chained so the visual spin layers on the
+        // freshly-placed body. Same `relative_speed > 0` gate as raycast wheels.
+        app.add_systems(
+            FixedUpdate,
+            (reconstruct_proxy_wheels, animate_proxy_physical_wheels)
+                .chain()
+                .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
+        )
+        .add_systems(
+            FixedPostUpdate,
+            lunco_usd_sim_telemetry::retain_physics_telemetry.after(PhysicsSystems::StepSimulation),
+        )
+        .add_observer(on_add_usd_sim_prim)
+        .add_systems(PreUpdate, resolve_differential_coupling)
+        // USD → ShaderMaterial authoring. Ordered AFTER the bounded visual
+        // projection and BEFORE `process_usd_sim_prims` consumes the prims,
+        // so the material is present before a wheel is split onto its visual
+        // child. The completed projection boundary also prevents the visual
+        // projector from restoring a cylinder-axis rotation after the
+        // simulator has established the wheel's identity physics frame.
+        // See `lunco-usd-sim-shader`.
+        .add_systems(
+            Update,
+            lunco_usd_sim_shader::apply_usd_shader_materials
+                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
+                .before(process_usd_sim_prims),
+        )
+        // `process_usd_sim_prims` does a per-stage joint scan + per-
+        // entity dispatch — too coupled to fit cleanly into a single
+        // `OnAdd<UsdSceneProjected>` observer. Gating with `run_if`
+        // skips the system entirely on frames with no unprocessed
+        // USD prim (archetype-level check, near-zero cost).
+        .init_resource::<GroundColliderPending>()
+        .init_resource::<JointTopologyIndex>()
+        .init_resource::<lunco_usd_sim_telemetry::PhysicsTelemetryState>()
+        .add_systems(
+            Update,
+            (process_usd_sim_prims
+                .run_if(any_unprocessed_usd_sim)
+                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),)
+                .in_set(UsdSimSet::Projection),
+        );
         // Dynamic admission must happen before the fixed loop. The body remains
         // kinematic until the initialization policy has accepted its composed
         // authored state; no terrain system can move it across this boundary.
@@ -435,52 +448,9 @@ impl Plugin for UsdSimPlugin {
     }
 }
 
-/// USD-authored screen-facing text labels (`lunco:billboard*`) — a prim
-/// declares its own label content, including live geolocation.
-pub mod billboard;
-pub mod lint;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
-/// Shader parameters as connection targets — the port backend for what
-/// `lunco-usd-sim-shader` authors.
-pub mod shader_ports;
-
-/// A joint-based wheel: a full rigid body that interacts with terrain through
-/// collision, not raycast suspension. It gets `RigidBody`, `Collider`, and a
-/// solved `JointTorqueActuator` boundary instead of `WheelRaycast` + `RayCaster`.
-///
-/// On the host (and the rover this client owns) the visible spin comes from the
-/// avian joint motor rotating the wheel **body**; the visual mesh is a child and
-/// inherits that rotation. On a networked **client proxy** the chassis is
-/// kinematic and the joint motor is held at zero, so the body never spins — the
-/// fields below let [`animate_proxy_physical_wheels`] re-derive the roll from the
-/// replicated chassis motion and author the visual child directly, mirroring how
-/// raycast wheels are animated on the client.
-#[derive(Component, Debug, Clone, Reflect)]
-#[reflect(Component)]
-pub struct PhysicalWheel {
-    /// The visual mesh child (the entity whose local rotation we author on a
-    /// client proxy). `None` if the wheel prim carried no mesh.
-    pub visual_entity: Option<Entity>,
-    /// Rolling radius (m); the proxy roll rate is `ω = v_long / r`.
-    pub wheel_radius: f32,
-    /// Authored wheel width (m), retained so a live width edit can rebuild the
-    /// collider instead of changing density while leaving the old shape in place.
-    pub wheel_width: f32,
-    /// Visual base orientation (the USD cylinder `axis`). The roll axle is
-    /// `axis_rot · Y` and the visual base composes as `roll · axis_rot`, exactly
-    /// reconstructing the host's `body_spin · axis_rot`.
-    pub axis_rot: Quat,
-    /// Integrated roll angle (rad), wrapped to `[0, 2π)`. Client display state;
-    /// unused on the host (the body carries the real rotation there).
-    pub spin_angle: f32,
-    /// Wheel mount offset in the enclosing vehicle frame. A client proxy can
-    /// reconstruct the wheel's position as `chassis_pos + chassis_rot · mount_local`
-    /// instead of replicating a static mount offset.
-    pub mount_local: Vec3,
-}
-
 /// Process USD prims for sim mapping AFTER their assets are loaded.
 ///
 /// This is the core system that maps USD schemas to LunCoSim components. It runs in the
@@ -672,11 +642,15 @@ fn collect_joint_scan_read(
         ) {
             let body0 = reader
                 .rel_target(&path, "physics:body0")
-                .and_then(|target| lunco_usd_avian::resolve_joint_body_path(reader, &target))
+                .and_then(|target| {
+                    lunco_usd_avian_reader::joint::resolve_joint_body_path(reader, &target)
+                })
                 .unwrap_or_default();
             let body1 = body1_target
                 .clone()
-                .and_then(|target| lunco_usd_avian::resolve_joint_body_path(reader, &target))
+                .and_then(|target| {
+                    lunco_usd_avian_reader::joint::resolve_joint_body_path(reader, &target)
+                })
                 .unwrap_or_default();
             let is_physical_wheel_joint = joint_type.as_deref() == Some("PhysicsRevoluteJoint")
                 && body1_target.as_deref().is_some_and(|target| {
@@ -722,7 +696,7 @@ fn collect_joint_scan_read(
         }
     }
 
-    let attachments = wheel_params::collect_wheel_attachment_topology(reader);
+    let attachments = lunco_usd_sim_authoring::collect_wheel_attachment_topology(reader);
     topology
         .invalid_wheel_attachments
         .extend(attachments.invalid_wheels().cloned());
@@ -746,135 +720,6 @@ fn collect_joint_scan_read(
 /// Per-prim sim-schema extractor (Pass 2) over the live composed [`UsdRead`]
 /// surface — maps one composed prim's authored `lunco:*` / PhysX-vehicle
 /// schemas to its sim/avatar/wheel components.
-#[allow(clippy::too_many_arguments)]
-fn read_gear_drive_real(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-    name: &str,
-    default: f64,
-    allow_infinity: bool,
-) -> Result<f64, ()> {
-    match reader.real(prim, name) {
-        Some(value) if value.is_finite() || (allow_infinity && value == f64::INFINITY) => Ok(value),
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(prim, name) => Err(()),
-        None => Ok(default),
-    }
-}
-
-pub(crate) fn is_gear_drive(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-) -> bool {
-    reader.type_name(prim).as_deref() == Some("PhysxPhysicsGearJoint")
-        && reader.has_api_schema(prim, "PhysicsDriveAPI:angular")
-}
-
-pub(crate) fn read_gear_ratio(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-) -> Option<f64> {
-    reader
-        .real(prim, "physxGearJoint:gearRatio")
-        .filter(|value| value.is_finite() && *value != 0.0)
-}
-
-fn read_gear_drive_values(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-) -> Result<(f64, f64, f64, f64, f64), ()> {
-    let rest_offset = read_gear_drive_real(
-        reader,
-        prim,
-        "drive:angular:physics:targetPosition",
-        0.0,
-        false,
-    )?;
-    let target_velocity = read_gear_drive_real(
-        reader,
-        prim,
-        "drive:angular:physics:targetVelocity",
-        0.0,
-        false,
-    )?;
-    let stiffness =
-        read_gear_drive_real(reader, prim, "drive:angular:physics:stiffness", 0.0, false)?;
-    let damping = read_gear_drive_real(reader, prim, "drive:angular:physics:damping", 0.0, false)?;
-    let max_force = read_gear_drive_real(
-        reader,
-        prim,
-        "drive:angular:physics:maxForce",
-        f64::INFINITY,
-        true,
-    )?;
-    if stiffness < 0.0 || damping < 0.0 || max_force < 0.0 {
-        return Err(());
-    }
-    Ok((rest_offset, target_velocity, stiffness, damping, max_force))
-}
-
-fn read_gear_drive_type(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    prim: &SdfPath,
-) -> Option<DifferentialDriveType> {
-    match reader.text(prim, "drive:angular:physics:type") {
-        Some(value) if value == "force" => Some(DifferentialDriveType::Force),
-        Some(value) if value == "acceleration" => Some(DifferentialDriveType::Acceleration),
-        Some(_) => None,
-        None if reader.has_authored_attribute(prim, "drive:angular:physics:type") => None,
-        None => Some(DifferentialDriveType::Force),
-    }
-}
-
-#[cfg(test)]
-mod gear_drive_tests {
-    use super::{read_gear_drive_type, read_gear_drive_values, DifferentialDriveType};
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_compose::recipe::StageRecipe;
-    use openusd::sdf::Path as SdfPath;
-
-    const FIXTURE: &str = r#"#usda 1.0
-def PhysxPhysicsGearJoint "Differential" (
-    prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-)
-{
-    float physxGearJoint:gearRatio = -1.0
-    float drive:angular:physics:targetPosition = 0.25
-    float drive:angular:physics:targetVelocity = 0.5
-    float drive:angular:physics:stiffness = 8000.0
-    float drive:angular:physics:damping = 1200.0
-    float drive:angular:physics:maxForce = 100.0
-    uniform token drive:angular:physics:type = "force"
-}
-"#;
-
-    #[test]
-    fn reads_standard_angular_drive_parameters_without_solver_defaults() {
-        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("gear.usda", FIXTURE))
-            .expect("gear fixture composes");
-        let view = stage.view();
-        let path = SdfPath::new("/Differential").expect("gear path");
-        assert_eq!(
-            read_gear_drive_values(&view, &path).expect("drive values"),
-            (0.25, 0.5, 8000.0, 1200.0, 100.0)
-        );
-        assert_eq!(
-            read_gear_drive_type(&view, &path),
-            Some(DifferentialDriveType::Force)
-        );
-    }
-
-    #[test]
-    fn rejects_negative_authored_drive_coefficients() {
-        let source = FIXTURE.replace("damping = 1200.0", "damping = -1.0");
-        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("gear.usda", &source))
-            .expect("gear fixture composes");
-        let view = stage.view();
-        let path = SdfPath::new("/Differential").expect("gear path");
-        assert!(read_gear_drive_values(&view, &path).is_err());
-    }
-}
-
 fn read_raycast_observation(
     reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
@@ -1154,7 +999,7 @@ fn process_usd_sim_prim_read(
         }
     };
     if billboard_enabled {
-        let default = billboard::UsdBillboard::default();
+        let default = lunco_usd_bevy_scene::billboard::UsdBillboard::default();
         let billboard = (|| {
             let template = match reader.attr_value(&sdf_path, "lunco:billboard:text") {
                 Some(Value::String(value)) => value,
@@ -1176,7 +1021,7 @@ fn process_usd_sim_prim_read(
             if fade_end <= 0.0 {
                 return Err(());
             }
-            Ok(billboard::UsdBillboard {
+            Ok(lunco_usd_bevy_scene::billboard::UsdBillboard {
                 template,
                 offset_y,
                 fade_end,
@@ -1205,7 +1050,7 @@ fn process_usd_sim_prim_read(
     // primary-button pass-through part to Bevy's `Pickable` component.  This
     // keeps transparent markers usable by every scene and preserves the same
     // contract for future marker assets.
-    if let Some(policy) = lunco_core::ScenePointerPolicy::from_usd(
+    if let Some(policy) = lunco_interaction_core::ScenePointerPolicy::from_usd(
         reader.text(&sdf_path, "lunco:interaction:left").as_deref(),
         reader.text(&sdf_path, "lunco:interaction:right").as_deref(),
     ) {
@@ -1550,8 +1395,13 @@ fn process_usd_sim_prim_read(
                 );
                 return;
             };
-            let Ok((rest_offset, target_velocity, stiffness, damping, max_force)) =
-                read_gear_drive_values(reader, &sdf_path)
+            let Ok(GearDriveValues {
+                rest_offset,
+                target_velocity,
+                stiffness,
+                damping,
+                max_force,
+            }) = read_gear_drive_values(reader, &sdf_path)
             else {
                 warn!(
                     "Gear joint {} has malformed angular PhysicsDriveAPI values; coupling ignored",
@@ -1614,7 +1464,7 @@ fn process_usd_sim_prim_read(
         }
         info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
-        // ONE unified read for BOTH wheel kinds (see `wheel_params`): every
+        // ONE unified read for BOTH wheel kinds (see the authoring reader): every
         // drivetrain/tire/inertia number plus suspension, resolved through the
         // standard attachment relationship or explicit direct wheel/suspension
         // composition. Strict — all missing required attrs are collected and the
@@ -1622,12 +1472,12 @@ fn process_usd_sim_prim_read(
         // components/mobility/wheel.usda, which every wheel composes.
         // Read BEFORE spawning the port entities so an invalid wheel
         // synthesizes nothing.
-        let attachment_susp = wheel_params::attachment_suspension_path(
+        let attachment_susp = wheel_runtime::attachment_suspension_path(
             &prim_path.path,
             &topology.wheel_attachment_targets,
         );
         let attachment_tire =
-            wheel_params::attachment_tire_path(&prim_path.path, &topology.wheel_attachment_tires);
+            wheel_runtime::attachment_tire_path(&prim_path.path, &topology.wheel_attachment_tires);
         let params = match WheelParams::read(
             reader,
             &sdf_path,
@@ -2500,12 +2350,12 @@ fn setup_physical_wheel(
     // Inserting a joint component here directly is what "Neither body … is in an
     // island" was: the wheel and its carrier are spawned by this very pass, so on
     // a scene swap they are routinely not yet admitted at this exact moment.
-    lunco_usd_avian::attach_joint(
+    lunco_usd_avian_joints::attach_joint(
         commands,
         joint_entity,
         carrier,
         entity,
-        lunco_usd_avian::wheel_revolute_joint(carrier, entity, mount_local, axle),
+        lunco_usd_avian_joints::wheel_revolute_joint(carrier, entity, mount_local, axle),
     );
 
     // The wheel's `WheelBodyMount` is the canonical physics ownership boundary.
@@ -2778,7 +2628,10 @@ fn animate_proxy_physical_wheels(
 /// that root processed, so a later schema resync must clear the marker before
 /// the normal projection pass can publish its authored control surface,
 /// wheel wiring, or other simulation components.
-pub fn invalidate_usd_sim_projection(world: &mut World, entity: Entity) -> bool {
+fn invalidate_usd_sim_projection(world: &mut World, entity: Entity) -> bool {
+    if world.get::<lunco_core::MobilityRoot>(entity).is_some() {
+        return false;
+    }
     if world.get::<UsdSimProcessed>(entity).is_none() {
         return false;
     }
@@ -2931,14 +2784,6 @@ fn resolve_differential_coupling(
         );
     }
 }
-
-/// Set while a ground provider's static collider is still building (the DEM
-/// terrain build — tracked by the assembly crate that sees both worlds, e.g.
-/// `lunco-luncosim`). While `true`, [`activate_dynamic_bodies`] holds bodies
-/// kinematic so a rover spawned over not-yet-collidable terrain doesn't
-/// free-fall through the surface during the multi-second collider bake.
-#[derive(Resource, Default)]
-pub struct GroundColliderPending(pub bool);
 
 fn activate_dynamic_bodies(
     mut commands: Commands,

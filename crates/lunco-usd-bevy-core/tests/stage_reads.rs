@@ -23,7 +23,7 @@ fn recipe_with_layers(root_id: &str, root_source: &str, layers: &[(&str, &str)])
     for (layer_id, source) in layers {
         bytes.insert(canonicalize(layer_id, &root_id), source.as_bytes().to_vec());
     }
-    StageRecipe { root_id, bytes }
+    StageRecipe::new(root_id, bytes)
 }
 
 mod inherits_compose_tests {
@@ -95,7 +95,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
             (wrapper_id, wrapper.as_bytes().to_vec()),
         ]);
         let stage =
-            build_stage_from_closure(&lunco_usd_compose::recipe::StageRecipe { root_id, bytes })
+            build_stage_from_closure(&lunco_usd_compose::recipe::StageRecipe::new(root_id, bytes))
                 .expect("compose scene→wrapper→glb");
         let view = StageView::new(&stage);
 

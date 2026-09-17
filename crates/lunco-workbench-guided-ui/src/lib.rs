@@ -742,7 +742,7 @@ fn draw_tour(
     anchors: Res<HelpAnchors>,
     theme: Option<Res<lunco_theme::Theme>>,
     placeholder: Option<Res<ViewportPlaceholder>>,
-    scene_viewport: Option<Res<lunco_core::SceneViewport>>,
+    scene_viewport: Option<Res<lunco_viewport_core::SceneViewport>>,
     mut commands: Commands,
 ) {
     let Some(step) = hud.tour.clone() else { return };

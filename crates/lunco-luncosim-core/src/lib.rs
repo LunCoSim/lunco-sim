@@ -34,9 +34,9 @@ use lunco_usd_bevy_core::program::{
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime::UsdPlugins;
-use lunco_usd_bevy_scene::UsdPrimPath;
 #[cfg(feature = "networking")]
-use lunco_usd_sim_cosim::scene::LoadScene;
+use lunco_usd_bevy_runtime_core::scene::LoadScene;
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 /// Asset registration needed by USD authoring in a headless world. These are
 /// data stores only; no render plugin is installed here.
@@ -298,7 +298,9 @@ pub fn run_headless() -> AppExit {
     };
     log_build_identity(mode);
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("luncosim-server — headless LunCoSim runtime\n\nUsage: luncosim-server [--api PORT] [--scene PATH] [--headless-max-speed]");
+        println!(
+            "luncosim-server — headless LunCoSim runtime\n\nUsage: luncosim-server [--api PORT] [--scene PATH] [--headless-max-speed]"
+        );
         return AppExit::Success;
     }
     let execution_mode = if args.iter().any(|arg| arg == "--headless-max-speed") {
@@ -320,8 +322,10 @@ pub fn run_headless() -> AppExit {
         .remove_resource::<lunco_api_transport::transports::HttpServerStartupError>()
     {
         eprintln!(
-            "luncosim-server: cannot start HTTP API on 127.0.0.1:{}: {}",
-            error.port, error.message
+            "luncosim-server: cannot start HTTP API on {}:{}: {}",
+            std::net::Ipv4Addr::LOCALHOST,
+            error.port,
+            error.message
         );
         return AppExit::error();
     }
@@ -332,8 +336,8 @@ pub fn run_headless() -> AppExit {
 #[cfg(feature = "networking")]
 fn load_ready_scenario(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
-    downloads: Res<lunco_networking::scenario_sync::AssetDownloads>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    downloads: Res<lunco_networking_sync::scenario_sync::AssetDownloads>,
     // Twin roots: a downloaded scenario is mounted here as a root over its cache
     // dir, so it loads under the SAME `twin://<name>/<rel>` the host uses.
     twins: Res<lunco_assets_core::twin_source::TwinRoots>,
@@ -370,7 +374,7 @@ fn load_ready_scenario(
     // it exercises URI agreement but never the cache-root mount. It fails
     // silently: a wrong root gives that peer its own `GlobalEntityId`s, so
     // possession and client prediction never bind while the scene still renders.
-    let uri = match lunco_networking::scenario_sync::mount_scenario_twin(
+    let uri = match lunco_networking_sync::scenario_sync::mount_scenario_twin(
         &twins,
         &m.scenario_id,
         &m.name,
@@ -436,9 +440,9 @@ fn load_ready_scenario(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
-    local_scenario: Option<Res<lunco_networking::scenario::ScenarioManifestResource>>,
+    local_scenario: Option<Res<lunco_networking_sync::scenario::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     mut registry: ResMut<
         lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
@@ -478,7 +482,8 @@ fn replay_scenario_journal(
     };
     let doc = *doc;
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::scene_ops_after(&journal, base, &me, &applied);
+    let pending =
+        lunco_networking_sync::journal_plane::scene_ops_after(&journal, base, &me, &applied);
     for (id, op) in pending {
         registry.replay_op(doc, &op);
         applied.insert(id);
@@ -489,7 +494,7 @@ fn replay_scenario_journal(
 /// [`replay_scenario_journal`] for the model domain. The journal plane, its merge,
 /// and the strategy-honoring op selector are all domain-generic; only this consume
 /// leg is per-domain. Selects the merged, not-yet-applied `Modelica` op entries via
-/// [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
+/// [`domain_ops_after`](lunco_networking_sync::journal_plane::domain_ops_after)
 /// (`DomainKind::Modelica`) — so a scripted merge policy reorders Modelica replay
 /// identically to USD — and applies each through the generic Modelica document
 /// registry's `replay_op`
@@ -503,7 +508,7 @@ fn replay_scenario_journal(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_modelica(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
@@ -530,7 +535,7 @@ fn replay_scenario_journal_modelica(
     };
     let doc = *doc;
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -545,7 +550,7 @@ fn replay_scenario_journal_modelica(
 
 /// Per-domain journal consume leg for `DomainKind::Script` — the script twin of
 /// [`replay_scenario_journal_modelica`]. Selects the merged, not-yet-applied
-/// `Script` op entries via [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
+/// `Script` op entries via [`domain_ops_after`](lunco_networking_sync::journal_plane::domain_ops_after)
 /// (so a scripted merge policy reorders script replay identically to USD/Modelica)
 /// and applies each through `ScriptRegistry::replay_op` (no re-recording), so a
 /// live rover-behaviour edit (`ScriptOp::SetSource`) recorded on one peer projects
@@ -559,7 +564,7 @@ fn replay_scenario_journal_modelica(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_script(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scripting::ScriptRegistry>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -582,7 +587,7 @@ fn replay_scenario_journal_script(
     };
     let doc = *doc;
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -605,7 +610,7 @@ fn replay_scenario_journal_script(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_experiment(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -622,7 +627,7 @@ fn replay_scenario_journal_experiment(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -645,7 +650,7 @@ fn replay_scenario_journal_experiment(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_shader(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scene_authoring::shader_doc::ShaderRegistry>>,
     asset_server: Option<Res<AssetServer>>,
@@ -666,7 +671,7 @@ fn replay_scenario_journal_shader(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -704,7 +709,7 @@ fn replay_scenario_journal_shader(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_obstacle(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     spec: Option<ResMut<lunco_obstacle_field::ObstacleFieldSpec>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -721,7 +726,7 @@ fn replay_scenario_journal_obstacle(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -752,7 +757,7 @@ fn replay_scenario_journal_obstacle(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_tools(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     scoped: Option<ResMut<lunco_scripting::tool_libs::TwinToolLibraries>>,
@@ -780,7 +785,7 @@ fn replay_scenario_journal_tools(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -806,7 +811,7 @@ fn replay_scenario_journal_tools(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_timeline(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     store: Option<ResMut<lunco_scripting::timelines::TimelineStore>>,
@@ -831,7 +836,7 @@ fn replay_scenario_journal_timeline(
         manifest.journal_head.as_ref()
     };
     let me = journal.local_author();
-    let pending = lunco_networking::journal_plane::domain_ops_after(
+    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
         base,
         &me,
@@ -965,7 +970,7 @@ fn load_run_result_artifacts(
 fn request_rebuild_after_result(
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
     role: Option<Res<lunco_core_session::NetworkRole>>,
-    mut rebuild: ResMut<lunco_networking::sync::RequestManifestRebuild>,
+    mut rebuild: ResMut<lunco_networking_sync::sync::RequestManifestRebuild>,
 ) {
     if !matches!(role.as_deref(), Some(lunco_core_session::NetworkRole::Host)) {
         return;
@@ -984,7 +989,7 @@ fn request_rebuild_after_result(
 #[cfg(feature = "networking")]
 fn broadcast_run_status(
     role: Option<Res<lunco_core_session::NetworkRole>>,
-    mut outbox: ResMut<lunco_networking::sync::SyncOutbox>,
+    mut outbox: ResMut<lunco_networking_sync::sync::SyncOutbox>,
     mut progress: MessageReader<lunco_experiments::RunProgress>,
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
     mut failed: MessageReader<lunco_experiments::RunFailed>,
@@ -995,7 +1000,7 @@ fn broadcast_run_status(
         return;
     }
     use lunco_core::SyncChannel;
-    use lunco_networking::sync::{RunStatusMsg, SyncEnvelope};
+    use lunco_networking_sync::sync::{RunStatusMsg, SyncEnvelope};
     let msg = |id: lunco_experiments::ExperimentId,
                phase: u8,
                t_current: f64,
@@ -1046,7 +1051,7 @@ fn broadcast_run_status(
 /// carries the trajectory; a late progress packet must not downgrade it).
 #[cfg(feature = "networking")]
 fn apply_run_status(
-    mut pending: ResMut<lunco_networking::sync::PendingRunStatus>,
+    mut pending: ResMut<lunco_networking_sync::sync::PendingRunStatus>,
     mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
 ) {
     if pending.0.is_empty() {
@@ -1760,6 +1765,7 @@ impl Plugin for LunCoSimCorePlugin {
             })
             .add_plugins(lunco_celestial_spatial::CelestialPlugin)
             .add_plugins(lunco_camera_celestial::CelestialSurfaceCameraPlugin)
+            .add_plugins(lunco_avatar_camera::AvatarCelestialCameraPlugin)
             // Real VSOP2013/ELP body positions on ALL platforms (wasm too) —
             // this is the explicit provider required by orbital scenes.
             .add_plugins(lunco_celestial_ephemeris::EphemerisPlugin)
@@ -1906,12 +1912,12 @@ impl Plugin for LunCoSimCorePlugin {
             // here, in `LunCoSimCorePlugin`, so BOTH the GUI and the headless server
             // get it exactly once; gated on `networking` like every other
             // `lunco_networking` use in this crate.
-            app.add_plugins(lunco_networking::prediction::NetcodePredictionPlugin);
+            app.add_plugins(lunco_networking_core::prediction::NetcodePredictionPlugin);
             // Scenario distribution Phase 4: once a connected client has fully
             // downloaded the host's advertised scenario, load its entry scene from
             // the cache mounted as a Twin root (read-only consume). The bridge lives here —
             // the assembly crate that owns both the wire (`lunco-networking`) and
-            // the scene loader (`lunco_usd_sim_cosim::scene::LoadScene`) — keeping each of those
+            // the scene loader (`lunco_usd_bevy_runtime_core::scene::LoadScene`) — keeping each of those
             // crates free of the other.
             app.add_systems(Update, load_ready_scenario);
             // Layer B: project peers' live journal edits onto the local scene
@@ -1945,8 +1951,8 @@ impl Plugin for LunCoSimCorePlugin {
             // Presence/rebuild resources are consumed by the systems below for any
             // role; init here (idempotent with the host-side init) so a standalone
             // or client app never hits a missing resource.
-            app.init_resource::<lunco_networking::sync::PendingRunStatus>();
-            app.init_resource::<lunco_networking::sync::RequestManifestRebuild>();
+            app.init_resource::<lunco_networking_sync::sync::PendingRunStatus>();
+            app.init_resource::<lunco_networking_sync::sync::RequestManifestRebuild>();
             // Result artifacts themselves are written/loaded by the CORE persistence
             // systems (registered unconditionally below — storage-backed, all
             // platforms). Networking only adds the *distribution* trigger: when a
@@ -1975,7 +1981,7 @@ impl Plugin for LunCoSimCorePlugin {
         // deterministic physics, and the crate links no render code.
         app.add_plugins(lunco_usd_terrain::UsdTerrainPlugin);
         // The activation gate stays here — it is the assembly point that sees both the
-        // terrain request and `lunco-usd-sim`'s `GroundColliderPending`.
+        // terrain request and the USD simulation readiness contract.
         app.add_systems(
             Update,
             track_ground_collider_pending.after(lunco_usd_terrain::UsdTerrainSet::Bridge),
@@ -2017,7 +2023,7 @@ fn track_ground_collider_pending(
             With<lunco_usd_terrain::DemDatasetPending>,
         )>,
     >,
-    mut pending: ResMut<lunco_usd_sim::GroundColliderPending>,
+    mut pending: ResMut<lunco_usd_sim_core::GroundColliderPending>,
 ) {
     pending.0 = !building.is_empty();
 }
@@ -2030,7 +2036,7 @@ mod ground_collider_gate_tests {
     fn only_an_active_dem_request_holds_dynamic_activation() {
         let mut app = App::new();
         app.insert_resource(Time::<()>::default())
-            .init_resource::<lunco_usd_sim::GroundColliderPending>()
+            .init_resource::<lunco_usd_sim_core::GroundColliderPending>()
             .add_systems(Update, track_ground_collider_pending);
 
         // A loaded USD stage contains many prims that are not terrain. They do
@@ -2043,7 +2049,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             !app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
 
@@ -2061,7 +2067,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
 
@@ -2071,7 +2077,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             !app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
     }
@@ -2079,7 +2085,7 @@ mod ground_collider_gate_tests {
     #[test]
     fn an_uninstalled_twin_dem_keeps_dynamic_activation_held() {
         let mut app = App::new();
-        app.init_resource::<lunco_usd_sim::GroundColliderPending>()
+        app.init_resource::<lunco_usd_sim_core::GroundColliderPending>()
             .add_systems(Update, track_ground_collider_pending);
 
         let pending = app
@@ -2091,7 +2097,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
 
@@ -2099,7 +2105,7 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(
             !app.world()
-                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
     }
@@ -2137,13 +2143,12 @@ impl Plugin for LunCoSimHeadlessPlugin {
             "ClearTour",
         ]));
 
-        // Modelica COMPILE CORE only (channels + worker thread + `.mo` asset
-        // loader + compile-dispatch systems) — NO egui/viz/workbench. Windowed
-        // builds get this transitively via `ModelicaWorkbenchPlugin`; headless
-        // must add it directly or the cosim `on_load_scene` observer panics on a
-        // missing `Res<ModelicaChannels>`. The server runs Modelica cosim models
-        // authoritatively, so it needs the real compile path, not a stub.
+        // Modelica compiler/document core plus the separate execution plugin —
+        // NO egui/viz/workbench. The split keeps compiler-only consumers free
+        // of solver workers while this runtime still installs the authoritative
+        // Modelica compile and execution path used by cosim scenes.
         app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
+        app.add_plugins(lunco_modelica_execution::ModelicaExecutionPlugin);
 
         // Spawn-command CORE (runtime spawn/move/property commands + the
         // `apply_net_replication` system that tags dynamic scene bodies with

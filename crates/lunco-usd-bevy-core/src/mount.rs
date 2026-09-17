@@ -401,7 +401,7 @@ pub fn read_plug(reader: &crate::StageView<'_>, part: &str) -> Option<MountPlug>
 
 /// The plug frame of a component **asset that is not yet on the live stage** — the
 /// piece the *new-attach* flow needs (unlike a retrofit, the plug lives inside the
-/// asset file, not in the composed scene). Composes the asset's full closure
+/// asset file, not in the composed scene). Composes the asset's available closure
 /// off-thread-safe via [`compose_file_to_stage`](crate::compose::compose_file_to_stage)
 /// (resolving its references, anchored at the file's own directory), then reads the
 /// plug off its `defaultPrim` — the part every `AttachSpec` references in.

@@ -8,7 +8,7 @@ script reflection writes, and canonicalizes journal authors against the connecti
 ## Enforced boundaries
 
 - The host rejects undeclared and `Local` reflected command types before they reach the
-  reflection registry (`crates/lunco-networking/src/sync.rs`).
+  reflection registry (`crates/lunco-networking-sync/src/sync.rs`).
 - Native netcode loads `LUNCO_NETCODE_KEY` or `LUNCO_NETCODE_KEY_FILE`. Missing keys use
   a marked development key and force a loopback bind; a public bind requires a real key
   and `LUNCO_NET_BIND`.

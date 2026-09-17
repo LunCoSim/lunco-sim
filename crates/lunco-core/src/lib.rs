@@ -215,68 +215,6 @@ impl std::str::FromStr for GlobalEntityId {
     }
 }
 
-/// The main window's 3D **viewport**: which camera it renders from, whether
-/// it's shown, and the sub-rect it occupies. A single reconciler
-/// (`lunco_usd_bevy::reconcile_scene_viewport`) turns this into Bevy's
-/// per-camera `Camera::is_active` + `Camera::viewport` — the ONE authority over
-/// window-camera activation. Models an Omniverse Viewport (which owns an active
-/// `camera`), reusing Bevy's own `is_active`/`viewport` rather than inventing a
-/// bespoke "view" concept.
-///
-/// Contributors write DATA here and NEVER touch `Camera::is_active` themselves:
-/// - an explicit camera presentation request rebinds [`active_camera`];
-/// - the workbench sets [`visible`] + [`rect`] from its layout perspective.
-///
-/// [`active_camera`]: SceneViewport::active_camera
-/// [`visible`]: SceneViewport::visible
-/// [`rect`]: SceneViewport::rect
-#[derive(Resource, Debug, Clone)]
-pub struct SceneViewport {
-    /// The bound (active) camera — which window `Camera3d` renders. Revalidated
-    /// each frame by the reconciler. `None` is an intentional no-camera state;
-    /// it is never replaced by an implicit avatar or first-camera choice.
-    pub active_camera: Option<Entity>,
-    /// Whether the 3D scene renders at all (the workbench Design perspective
-    /// sets this `false`). Defaults `true` so tooling/headless binaries with no
-    /// workbench Just Work.
-    pub visible: bool,
-    /// Physical `(position, size)` sub-rect the viewport occupies within the
-    /// window, or `None` for the full window (the current default).
-    pub rect: Option<(UVec2, UVec2)>,
-}
-
-/// Presentation intent emitted by avatar workflows that explicitly return the
-/// operator to the local avatar. The camera subsystem owns resolution and
-/// activation; this event keeps avatar mechanics independent of USD camera
-/// projection details.
-#[derive(Event, Clone, Copy, Debug, Default)]
-pub struct RequestLocalAvatarView;
-
-impl Default for SceneViewport {
-    fn default() -> Self {
-        Self {
-            active_camera: None,
-            visible: true,
-            rect: None,
-        }
-    }
-}
-
-/// Ordering boundary for the main presentation viewport.
-///
-/// The workbench publishes layout data in [`SceneViewportSet::Publish`]. The
-/// USD/render camera owner then reconciles that data in
-/// [`SceneViewportSet::Reconcile`] before Bevy updates camera projections. The
-/// shared set is the cross-crate schedule contract; neither contributor needs
-/// to depend on the other's implementation crate.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SceneViewportSet {
-    /// Publish visibility and layout data into [`SceneViewport`].
-    Publish,
-    /// Reconcile the explicit viewport binding into render-camera state.
-    Reconcile,
-}
-
 /// Defines a spacecraft entity with its ephemeris and physical constraints.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
@@ -323,55 +261,6 @@ pub struct SelectableRoot;
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component)]
 pub struct MobilityRoot;
-
-/// Button-specific interaction intent authored by a USD prim.
-///
-/// This deliberately lives in the render-free core.  USD loading can describe
-/// the interaction contract without depending on Bevy's picking backend, while
-/// the GUI picking layer can translate `PassThrough` into `Pickable` behavior.
-/// Keeping the two policies independent is what lets a transparent marker pass
-/// through a primary click and still receive a secondary-click context menu.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PointerInteraction {
-    /// The prim is the normal target and blocks lower hits.
-    #[default]
-    Block,
-    /// The prim may receive an event, but does not block geometry behind it.
-    PassThrough,
-    /// The prim remains a target for a context-menu observer.
-    Context,
-}
-
-/// USD-authored pointer behavior for a scene prim or its visual mesh.
-#[derive(Component, Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ScenePointerPolicy {
-    pub left: PointerInteraction,
-    pub right: PointerInteraction,
-}
-
-impl ScenePointerPolicy {
-    /// Parse the small stable vocabulary used by USD `lunco:interaction:*`
-    /// attributes. Unknown values intentionally fall back to `Block`: an
-    /// authoring typo must not make an object accidentally click-through.
-    pub fn from_usd(left: Option<&str>, right: Option<&str>) -> Option<Self> {
-        fn parse(value: Option<&str>) -> Option<PointerInteraction> {
-            match value {
-                Some("pass_through") => Some(PointerInteraction::PassThrough),
-                Some("context") => Some(PointerInteraction::Context),
-                Some("block") => Some(PointerInteraction::Block),
-                Some(_) => Some(PointerInteraction::Block),
-                None => None,
-            }
-        }
-
-        let left = parse(left);
-        let right = parse(right);
-        (left.is_some() || right.is_some()).then(|| Self {
-            left: left.unwrap_or_default(),
-            right: right.unwrap_or_default(),
-        })
-    }
-}
 
 /// Marker component for terrain/ground entities that should be excluded
 /// from vessel possession and editing interactions.
@@ -448,175 +337,6 @@ pub const MOON_MEAN_RADIUS_M: f64 = 1_737_400.0;
 // every gate (the `SimTick` advance below + the physics-stepping systems in
 // hardware/mobility/usd-sim) reads `relative_speed_f64() > 0`. One representation,
 // no drift.
-
-/// Marker resource indicating a click-to-place spawn tool is armed.
-///
-/// Set by scene-edit's spawn placement system whenever `SpawnState`
-/// is `Selecting`. Read by avatar possession to suppress vessel
-/// possession on the placement click.
-#[derive(Resource, Default)]
-pub struct SpawnToolActive(pub bool);
-
-/// Which subsystem owns primary scene clicks for the active workbench mode.
-///
-/// This is a cross-crate interaction contract rather than a workbench UI detail:
-/// the editor selection observer and avatar possession observer both receive the
-/// same global pointer event, so they must consult the same authoritative mode.
-/// Binaries without a workbench keep the simulation default and retain normal
-/// possession behavior.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SceneInteractionMode {
-    /// Plain scene clicks may claim a controllable endpoint.
-    #[default]
-    Simulation,
-    /// Plain scene clicks belong to editor selection and manipulation.
-    Editor,
-}
-
-impl SceneInteractionMode {
-    /// Whether the editor selection observer owns this primary scene click.
-    ///
-    /// Simulation keeps plain clicks for possession, while explicit modifier
-    /// clicks remain selection/removal intents in every perspective.
-    pub const fn selection_owns_click(self, modified: bool) -> bool {
-        modified || matches!(self, Self::Editor)
-    }
-
-    /// Whether avatar possession owns this primary scene click.
-    ///
-    /// Simulation reserves unmodified clicks for possession; explicit modifier
-    /// clicks belong to selection/removal in every perspective.
-    pub const fn possession_owns_click(self, modified: bool) -> bool {
-        !modified && matches!(self, Self::Simulation)
-    }
-}
-
-#[cfg(test)]
-mod scene_interaction_mode_tests {
-    use super::SceneInteractionMode;
-
-    #[test]
-    fn primary_click_has_one_owner_per_mode() {
-        assert!(SceneInteractionMode::Simulation.possession_owns_click(false));
-        assert!(!SceneInteractionMode::Simulation.possession_owns_click(true));
-        assert!(!SceneInteractionMode::Simulation.selection_owns_click(false));
-        assert!(SceneInteractionMode::Simulation.selection_owns_click(true));
-        assert!(SceneInteractionMode::Editor.selection_owns_click(false));
-        assert!(!SceneInteractionMode::Editor.possession_owns_click(false));
-        assert!(!SceneInteractionMode::Editor.possession_owns_click(true));
-    }
-}
-
-/// Camera ray for a discrete scene click — the SINGLE shared entry point for
-/// every scene-click observer (possession, selection, placement).
-///
-/// Returns the world-space ray from `camera` through `cursor`, or `None` when
-/// `pointer_blocked` is true or the ray can't be built.
-///
-/// `wants_pointer` is a **global** signal, and now (fed by the workbench's
-/// egui-authoritative `pointer_over_scene` hit test) it is `false` over the
-/// transparent docked `ViewportPanel` leaf yet `true` over ANY real chrome. That
-/// globality matters: a `Pointer<Click>` over chrome can fire on more than one
-/// entity (the egui host AND an underlying scene entity), so a per-target chrome
-/// check would leak the second fire through — gating on the global flag stands the
-/// observer down for every fire that frame.
-///
-/// The chrome guard is `wants_pointer`, NOT `click.hit.position.is_none()`: that
-/// old check was overloaded — it silently rejected valid scene clicks whenever
-/// bevy_picking found no mesh under the cursor (streamed terrain with no pickable
-/// tile that frame, or an analytic celestial/spacecraft body — the "can't place
-/// on the ground" bug). Callers cast the returned ray themselves — against avian
-/// colliders (`SpatialQuery`, e.g. the terrain) or their own analytic shapes
-/// (hit-spheres).
-pub fn scene_click_ray(
-    pointer_blocked: bool,
-    camera: &Camera,
-    cam_gtf: &GlobalTransform,
-    cursor: Vec2,
-) -> Option<Ray3d> {
-    if pointer_blocked {
-        return None;
-    }
-    // `cursor` is bevy_picking's pointer position: LOGICAL pixels from the WINDOW
-    // top-left. `Camera::viewport_to_world` expects a position in the camera's own
-    // VIEWPORT space (it divides by `logical_viewport_size` and never adds the
-    // viewport origin), so it is only correct when the camera's viewport starts at
-    // the window origin. Today `apply_workbench_viewport` keeps the scene camera
-    // full-window (`SceneViewport.rect = None`), so the offset is zero and this is a
-    // no-op. It is a guard for the planned sub-rect confinement noted there ("a
-    // future sub-rect would derive it from the ViewportPanel's recorded rect"): the
-    // instant the camera is confined to the offset ViewportPanel leaf, feeding the
-    // raw WINDOW cursor here would skew every ray by the chrome offset and silently
-    // break spawn/select/possess in the middle of the Build view. Subtracting the
-    // logical viewport origin keeps both modes on one correct path.
-    let local = camera
-        .logical_viewport_rect()
-        .map_or(cursor, |rect| cursor - rect.min);
-    camera.viewport_to_world(cam_gtf, local).ok()
-}
-
-/// Marker resource indicating a terrain-sculpt tool is armed.
-///
-/// Set by scene-edit's terrain-tools system whenever a [`TerrainTool`] is
-/// selected in the Tools palette. Read by avatar possession and entity
-/// selection to suppress their click handling — while a sculpt brush is armed
-/// every scene click applies terrain, not possess/select. Mirrors
-/// [`SpawnToolActive`].
-///
-/// [`TerrainTool`]: (scene-edit) crate::terrain_tools::TerrainTool
-#[derive(Resource, Default)]
-pub struct TerrainToolActive(pub bool);
-
-/// The SCRIPT-AUTHORED click tool currently armed, by tool name (`"recover"`),
-/// or `None`.
-///
-/// A script tool is any registered `lunco_tools` tool exposing `on_click/1`;
-/// the editor lists them in the Tools palette and hands a structured scene-click
-/// context to the tool's own handler. So this is deliberately a NAME and not an enum:
-/// the set of tools is data (a `.rhai` file), not a Rust type, and adding one
-/// must not require editing this crate.
-///
-/// Read by avatar possession and entity selection so a click while a tool is
-/// armed goes to the tool instead of possessing or selecting. Mirrors
-/// [`SpawnToolActive`] / [`TerrainToolActive`], which gate the Rust-side tools.
-#[derive(Resource, Default)]
-pub struct ArmedScriptTool(pub Option<String>);
-
-impl ArmedScriptTool {
-    /// Whether any script tool is armed.
-    pub fn armed(&self) -> bool {
-        self.0.is_some()
-    }
-
-    /// Whether `name` is the armed tool.
-    pub fn is(&self, name: &str) -> bool {
-        self.0.as_deref() == Some(name)
-    }
-}
-
-/// "A cursor-driven editor mode owns the pointer" — the one gate, in one place.
-///
-/// The spawn ghost, terrain brush, and authored script tools can own the cursor.
-/// The click observers already consult these flags one-by-one; this bundles them
-/// so the shared cancel intent honours exactly the same set.
-#[derive(bevy::ecs::system::SystemParam)]
-pub struct CursorModeActive<'w> {
-    spawn_tool: Option<Res<'w, SpawnToolActive>>,
-    terrain_tool: Option<Res<'w, TerrainToolActive>>,
-    script_tool: Option<Res<'w, ArmedScriptTool>>,
-}
-
-impl CursorModeActive<'_> {
-    /// True while any editor mode is using the cursor.
-    pub fn any(&self) -> bool {
-        self.spawn_tool.as_ref().is_some_and(|t| t.0)
-            || self.terrain_tool.as_ref().is_some_and(|t| t.0)
-            || self.script_tool.as_ref().is_some_and(|t| t.armed())
-    }
-}
-
-/// Per-entity marker: this entity is currently being dragged by the editor
-/// transform gizmo.
 ///
 /// The fixed-simulation rate, in Hz. The **single source of truth** for every
 /// fixed-step clock in the system: it drives `Time::<Fixed>` (set by each app
@@ -794,11 +514,6 @@ impl Plugin for LunCoCorePlugin {
 /// everywhere. The `core_substrate_resources_present` test guards this.
 pub(crate) fn register_core_resources(app: &mut App) {
     app.init_resource::<SimTick>()
-        // The scene viewport's active-camera binding (+ visibility/rect). The
-        // single source of truth the viewport-camera reconciler actuates; the
-        // switch and workbench write it. Core-guaranteed so every windowed
-        // binary has it without ordering worries.
-        .init_resource::<SceneViewport>()
         .init_resource::<SceneMountState>()
         // Command-result substrate: result-reporting `#[on_command]` observers
         // require these to exist (the same always-on resource rule enforced by
@@ -840,25 +555,6 @@ fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn scene_pointer_policy_has_fail_safe_usd_semantics() {
-        assert_eq!(
-            ScenePointerPolicy::from_usd(Some("pass_through"), Some("context")),
-            Some(ScenePointerPolicy {
-                left: PointerInteraction::PassThrough,
-                right: PointerInteraction::Context,
-            })
-        );
-        assert_eq!(ScenePointerPolicy::from_usd(None, None), None);
-        assert_eq!(
-            ScenePointerPolicy::from_usd(Some("typo"), None),
-            Some(ScenePointerPolicy {
-                left: PointerInteraction::Block,
-                right: PointerInteraction::Block,
-            })
-        );
-    }
 
     #[test]
     fn sim_tick_advances_under_run_paused_does_not() {

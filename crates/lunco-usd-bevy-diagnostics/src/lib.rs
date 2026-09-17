@@ -2,7 +2,7 @@
 //!
 //! This production package owns the optional visual placeholder shown when an
 //! external glTF asset fails. Render-free stage-load failure state belongs to
-//! the USD scene lifecycle package.
+//! `lunco-usd-bevy-runtime-core`.
 //! It is installed by the aggregate USD plugin, but the visual USD projector
 //! does not depend on this package: ordinary projection changes therefore do
 //! not rebuild diagnostic code.

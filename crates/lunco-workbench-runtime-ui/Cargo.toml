@@ -24,6 +24,7 @@ lunco-status-core = { path = "../lunco-status-core" }
 lunco-theme = { path = "../lunco-theme" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-workbench-state = { path = "../lunco-workbench-state" }
 lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }

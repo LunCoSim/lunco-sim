@@ -221,11 +221,16 @@ fn invalid_edit_checks(doc) {
         program.programs[0]["path"]
     } else { () };
     let program_delete = waypoint_editor::on_delete(context(doc, program_path, ()));
+    let program_as_route = context(doc, (), [0.0, 1.0, -7.0]);
+    program_as_route.route_path = program_path;
+    let normalized = waypoint_editor::route_edit_path(program_as_route);
     let after = route_revision(doc);
     [
         t_true(missing_context.ok == false, "click without a world position is rejected"),
         t_true(missing_position.ok == false, "move without a world position is rejected"),
         t_true(program_delete.ok == false, "delete cannot target the route program"),
+        t_true(normalized == ROUTE,
+            "a program identity is normalized to its containing route scope"),
         t_true(before == after, "invalid route edits do not advance the USD revision"),
     ]
 }
@@ -493,6 +498,20 @@ fn on_tick(me, ctx) {
         let position = point_position(this.doc, this.new_point);
         this.checks.push(t_true(position != () && position[2] == -32.0,
             "appended point has the clicked world position"));
+        let nested = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: this.new_point + "/Dome",
+        });
+        this.checks.push(t_true(nested != () && nested.ok != false,
+            "a route point reference composes its marker subtree under a referenced route parent"));
+        let authored = query("ResolveUsdTarget", #{
+            doc_id: this.doc,
+            path: this.new_point,
+            edit_target: "@runtime@",
+        });
+        this.checks.push(t_true(authored != () && authored.ok != false
+            && authored.authored_here == true,
+            "a nested route-point spawn is authored in the runtime layer of the canonical document"));
         let secondary = context(this.doc, this.new_point, ());
         secondary.button = "secondary";
         secondary.modifiers = #{ alt: false, shift: false, ctrl: false };
@@ -769,10 +788,12 @@ fn on_tick(me, ctx) {
         // for the route program's stop edge before checking the authority
         // release. This keeps the test at the same lifecycle boundary as the
         // production UI and avoids a fixed-delay assertion.
-        if this.stopped == 0 || is_controlled(this.subject) { return; }
+        let program_active = port(this.subject, "program_active");
+        if this.stopped == 0 || program_active == () || program_active > 0.5 { return; }
         this.checks.push(t_true(true, "the program HUD toggles the route off"));
-        this.checks.push(t_true(true,
-            "stopping the route releases its generic control claim"));
+        this.checks.push(t_true(is_controlled(this.subject)
+            && owner_of(this.subject) == local_session_id(),
+            "stopping the route releases program authority without dropping human possession"));
         let points = direct_points(this.doc);
         if points.len() == 0 { return; }
         let delete_path = points[0];

@@ -10,7 +10,7 @@ Keep this page operational. The complete contract is in
 | Concern | Owner | Canonical boundary |
 |---|---|---|
 | Semantic astronomical frame | `lunco-celestial` | `ReferenceFrame`, `FrameTree` |
-| Grid lookup | `lunco-celestial-spatial` | `ReferenceFrameIndex` |
+| Grid lookup | `lunco-celestial-spatial-core` | `ReferenceFrameIndex` |
 | f64 pose composition | `lunco-spatial` | `ActiveFramePoseQuery`, frame helpers |
 | Cell/local split | `big_space` | `Grid::translation_to_grid` |
 | Camera origin | `lunco-spatial` + `lunco-usd-bevy` | persistent `OriginAnchor`; viewport projects the selected camera pose into its `WorldGrid` cell |

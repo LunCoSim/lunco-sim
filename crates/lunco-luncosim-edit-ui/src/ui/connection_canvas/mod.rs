@@ -43,7 +43,7 @@ use lunco_modelica_ui_core::FocusDocumentByName;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_document::document::{LayerId, UsdOp};
-use lunco_usd_viewport_ui::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
+use lunco_usd_viewport_core::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 
 use projection::{
     build_scene, collect_graph, project_schema, schema_roots, PrimNode, UsdPrimNodeData,
@@ -242,7 +242,7 @@ fn produce_usd_canvas_session(
     state.generation = session.projected_generation();
 
     let is_preview_entity =
-        |entity: Entity| lunco_usd_viewport_ui::is_preview_entity(entity, preview_root, q_parents);
+        |entity: Entity| lunco_usd_bevy_scene::is_preview_entity(entity, preview_root, q_parents);
     if canonical.get(stage_id).is_none() {
         if let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) {
             canonical.get_or_build(stage_id, &recipe);

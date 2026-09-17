@@ -48,6 +48,7 @@ use big_space::prelude::{CellCoord, Grid};
 // Gravity configuration *types* now live in `lunco-environment` (environmental
 // state, sibling to lighting). This crate owns only the `PointMassGravity`
 // model impl, the cached `LocalGravityField`, and the system that fills it.
+use lunco_celestial_spatial_core::LocalGravityField;
 use lunco_environment::{Gravity, GravityBody, GravityModel, GravityProvider};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -74,39 +75,6 @@ impl GravityModel for PointMassGravity {
 // ─────────────────────────────────────────────────────────────────────────────
 // Local gravity field (cached for camera/UI)
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Cached gravity state at the avatar's position.
-///
-/// Camera and UI systems read this resource to determine "up" direction
-/// and surface gravity magnitude. Updated each frame in `PreUpdate`.
-#[derive(Resource)]
-pub struct LocalGravityField {
-    /// The body we're gravitationally bound to.
-    pub body_entity: Option<Entity>,
-    /// Avatar position relative to the bound body's centre, expressed in the
-    /// body's rotating frame.  This is the canonical position for surface
-    /// decisions: it is composed through the shared BigSpace grid branch and
-    /// never obtained by subtracting two root-frame `GlobalTransform`s.
-    pub body_relative_position: DVec3,
-    /// "Up" direction in world space.
-    pub up: DVec3,
-    /// "Up" direction in body-local space.
-    pub local_up: DVec3,
-    /// Surface gravity magnitude (m/s²).
-    pub surface_g: f64,
-}
-
-impl Default for LocalGravityField {
-    fn default() -> Self {
-        Self {
-            body_entity: None,
-            body_relative_position: DVec3::ZERO,
-            up: DVec3::Y,
-            local_up: DVec3::Y,
-            surface_g: 0.0,
-        }
-    }
-}
 
 // Note: Gravity realization moved to `lunco-environment`.
 // See `lunco_environment::sync_local_gravity_to_avian` — it projects the
@@ -143,7 +111,7 @@ pub fn update_local_gravity_field(
     q_bodies: Query<&GravityProvider>,
     gravity: Res<Gravity>,
     mut field: ResMut<LocalGravityField>,
-    orbital_pin: Res<crate::placement::OrbitalViewPin>,
+    orbital_pin: Res<lunco_celestial_spatial_core::OrbitalViewPin>,
 ) {
     // Orbital VIEW active: the camera has flown to the focused body, but the
     // scene/physics stayed at the site. A field computed at the camera's
@@ -167,10 +135,10 @@ pub fn update_local_gravity_field(
             &q_bodies,
         ) else {
             error_once!(
-                    "cannot publish gravity for avatar {:?}: body {:?} is disconnected or has no gravity provider",
-                    avatar_ent,
-                    gb.body_entity
-                );
+                "cannot publish gravity for avatar {:?}: body {:?} is disconnected or has no gravity provider",
+                avatar_ent,
+                gb.body_entity
+            );
             // A failed frame resolution must not leave the previous body's
             // field active. Clearing the derived state makes the invalid
             // coordinate explicit to every consumer instead of preserving a
@@ -274,7 +242,7 @@ mod tests {
         app.add_plugins(BigSpaceMinimalPlugins);
         app.insert_resource(Gravity::surface());
         app.init_resource::<LocalGravityField>();
-        app.init_resource::<crate::placement::OrbitalViewPin>();
+        app.init_resource::<lunco_celestial_spatial_core::OrbitalViewPin>();
         app.add_systems(Update, update_local_gravity_field);
 
         let grid = app
@@ -331,9 +299,11 @@ mod tests {
 
         let field = app.world().resource::<LocalGravityField>();
         assert_eq!(field.body_entity, Some(body));
-        assert!(field
-            .body_relative_position
-            .abs_diff_eq(DVec3::X * 10.0, 1e-9));
+        assert!(
+            field
+                .body_relative_position
+                .abs_diff_eq(DVec3::X * 10.0, 1e-9)
+        );
         assert!(field.local_up.abs_diff_eq(DVec3::X, 1e-9));
 
         // Removing the authoritative association must clear it immediately;

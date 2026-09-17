@@ -189,7 +189,8 @@ refactor, and should be taken explicitly rather than arrived at.
 ### Modelica compile-core split — completed
 
 `lunco-modelica-document` now owns the headless Modelica document and source
-editing seams. `lunco-modelica-core` owns the compiler, worker, and simulation
+editing seams. `lunco-modelica-core` owns the compiler/document boundary, while
+`lunco-modelica-execution` owns workers and simulation
 seams. `lunco-modelica-index` owns the reusable AST projection,
 editor-index artifact, diagram metadata, and package-browser values. The API
 and native indexing tools consume those boundaries explicitly; `lunco-modelica-ui`

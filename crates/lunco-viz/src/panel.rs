@@ -19,7 +19,7 @@ use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 
 use crate::registry::{VisualizationRegistry, VizKindCatalog};
 use crate::view::{Panel2DCtx, ViewTarget};
-use crate::viz::VizId;
+use lunco_viz_core::VizId;
 
 /// Bind a dropped telemetry channel to a visualization instance.
 #[derive(Event, Clone, Debug)]

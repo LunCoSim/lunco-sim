@@ -28,7 +28,8 @@ The USD-specific boundary is split between
 owns composed component-network facts, Modelica projection, and authored
 synthesizer dispatch; the domain API package owns optional generated-source
 queries; the vehicle package owns vehicle realization; and the cosim package
-owns participant orchestration, wiring, readiness, and scene lifecycle. The
+owns participant orchestration, wiring, readiness, and Modelica/script
+exchange. The scene runtime owns scene admission and mounting. The
 optional [`lunco-usd-sim-cosim-api`](../../crates/lunco-usd-sim-cosim-api/)
 package owns the transport-facing cosim queries. Shared USD-simulation markers
 and ordering are in the small
@@ -193,7 +194,7 @@ algebraic cycle from depending on Bevy system insertion order. Modelica input
 sampling and script input sampling therefore occur at named schedule edges,
 not as unsynchronised per-frame callbacks.
 
-Because the wait is real, it is **surfaced**: `lunco_modelica_core::worker::CosimLag`
+Because the wait is real, it is **surfaced**: `lunco_modelica_execution::worker::CosimLag`
 records the communication gap for every live participant every fixed tick, and
 `warn!`s (rate-limited) past 0.25 s. An off-thread worker is not a second
 simulation clock. An independent model still uses the same authoritative world
@@ -478,8 +479,9 @@ The fixed-step exchange implementation lives in
 [`lunco-usd-sim-cosim::sync`](../../crates/lunco-usd-sim-cosim/src/sync.rs): it
 copies Modelica and scripted participant values through the shared
 `SimComponent` surface and projects authored event edges. USD participant
-discovery, connection derivation, and scene lifecycle remain separate owners in
-the parent package.
+discovery and connection derivation remain separate owners in the parent
+package. Scene admission and mounting are owned by
+`lunco-usd-bevy-runtime-core`.
 
 It used to wait for `variables`. For the few hundred milliseconds until the
 worker answered, the prim existed with **no ports at all** — so every wire into
@@ -569,7 +571,8 @@ log polling.
 
 - [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md) — engineering docs
 - [`../../crates/lunco-usd-sim/README.md`](../../crates/lunco-usd-sim/README.md) — vehicle translator details
-- [`../../crates/lunco-usd-sim-cosim/`](../../crates/lunco-usd-sim-cosim/) — USD program, wiring, and scene-lifecycle translator
+- [`../../crates/lunco-usd-sim-cosim/`](../../crates/lunco-usd-sim-cosim/) — USD program discovery, wiring, readiness, and participant exchange
+- [`../../crates/lunco-usd-bevy-runtime-core/`](../../crates/lunco-usd-bevy-runtime-core/) — scene admission, mounting, and live-stage lifecycle
 - [`../../crates/lunco-usd-sim-cosim-api/`](../../crates/lunco-usd-sim-cosim-api/) — optional transport-facing cosimulation query providers
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific design
 - [`23-domain-environment.md`](23-domain-environment.md) — environment/gravity integration

@@ -366,8 +366,8 @@ pub fn project_run_results_to_ui(
     sources: Res<crate::experiments_runner::ExperimentSources>,
     mut playback: ResMut<crate::experiments_runner::PlaybackEntities>,
     mut console: Option<ResMut<LogBuffer>>,
-    mut plot_states: Option<ResMut<crate::ui::panels::experiments::PlotPanelStates>>,
-    active_plot: Option<Res<crate::ui::panels::experiments::ActivePlot>>,
+    mut plot_states: Option<ResMut<lunco_experiments_ui::PlotPanelStates>>,
+    active_plot: Option<Res<lunco_experiments_ui::ActivePlot>>,
     mut signals: Option<ResMut<SignalRegistry>>,
 ) {
     for ev in ev_completed.read() {
@@ -395,7 +395,7 @@ pub fn project_run_results_to_ui(
                 .as_deref()
                 .copied()
                 .unwrap_or_default()
-                .or_default();
+                .or_default(crate::ui::viz::DEFAULT_MODELICA_GRAPH);
             let entry = states.entry(viz);
             entry.visible_experiments.insert(run_id);
             if entry.picked_vars.is_empty() {

@@ -1,6 +1,5 @@
-//! Integration test: writes a minimal USDA fixture to disk and loads it. Native-only, so
-//! the workspace `std::fs` ban (a wasm-runtime guard) does not apply — exactly the
-//! `tests/` exemption `clippy.toml` describes but cargo cannot express as config.
+//! Integration test: writes a minimal USDA fixture to disk and loads it through
+//! the storage-backed native composition path.
 //!
 //! Asserts on the render-free appearance **intent** ([`PbrLook`]) rather than on a
 //! `StandardMaterial`: `lunco-usd-bevy` no longer names `bevy_pbr` (see
@@ -9,7 +8,6 @@
 //! belongs to the generic appearance projection contract. Asset-specific
 //! annotation appearance is asserted by the production Rhai graphics scene,
 //! where composed USD is the authoritative input.
-#![allow(clippy::disallowed_methods)]
 
 use bevy::prelude::*;
 use lunco_render::{PbrLook, SurfaceAlpha};

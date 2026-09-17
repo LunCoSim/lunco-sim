@@ -27,6 +27,7 @@ ui = [
 ]
 
 [dependencies]
+lunco-viz-core = { path = "../lunco-viz-core" }
 bevy = { workspace = true, optional = true }
 bevy_egui = { workspace = true, optional = true }
 egui_plot = { workspace = true, optional = true }

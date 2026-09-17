@@ -3,11 +3,12 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use lunco_core::{on_command, register_commands, Command, SceneViewport};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::GridPos;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, stage_default_prim};
+use lunco_viewport_core::SceneViewport;
 use std::collections::HashMap;
 
 use crate::surface_pick::{
@@ -542,7 +543,7 @@ pub fn update_spawn_ghost(
 pub fn spawn_tool_state_system(
     mut commands: Commands,
     mut spawn_state: ResMut<SpawnState>,
-    mut tool_active: ResMut<lunco_core::SpawnToolActive>,
+    mut tool_active: ResMut<lunco_interaction_core::SpawnToolActive>,
     cancel: lunco_control_core::CancelIntent,
     q_ghost: Query<Entity, With<SpawnGhost>>,
 ) {
@@ -616,7 +617,7 @@ pub fn on_scene_click_spawn(
         }
         return;
     }
-    let Some(ray) = lunco_core::scene_click_ray(
+    let Some(ray) = lunco_viewport_core::scene_click_ray(
         egui_focus.wants_pointer,
         camera,
         cam_gtf,

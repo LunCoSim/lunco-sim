@@ -18,9 +18,10 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
-use crate::transports::envelope::{ApiRequestUnified, ApiResponseEnvelope};
+use crate::transports::envelope::{decode_request, encode_response};
 use crate::transports::HttpBridge;
 use lunco_api::schema::{ApiRequest, ApiResponse};
+use lunco_api_contracts::{ApiRequestEnvelope, ApiResponseEnvelope};
 
 thread_local! {
     /// The bridge tx, installed by `LunCoApiPlugin` during `build()`. `None`
@@ -44,9 +45,9 @@ pub async fn lunco_api(json: String) -> Result<String, JsValue> {
         .with(|b| b.borrow().clone())
         .ok_or_else(|| JsValue::from_str("lunco_api: app not ready (bridge unset)"))?;
 
-    let req: ApiRequest = serde_json::from_str::<ApiRequestUnified>(&json)
-        .map_err(|e| JsValue::from_str(&format!("lunco_api: bad request JSON: {e}")))?
-        .try_into()
+    let envelope: ApiRequestEnvelope = serde_json::from_str(&json)
+        .map_err(|e| JsValue::from_str(&format!("lunco_api: bad request JSON: {e}")))?;
+    let req: ApiRequest = decode_request(envelope)
         .map_err(|e| JsValue::from_str(&format!("lunco_api: invalid request: {e}")))?;
 
     let resp = bridge
@@ -66,7 +67,7 @@ pub async fn lunco_api(json: String) -> Result<String, JsValue> {
             .map_err(|e| JsValue::from_str(&format!("lunco_api: encode failed: {e}")));
     }
 
-    let envelope = ApiResponseEnvelope::from(resp);
+    let envelope = encode_response(resp);
     serde_json::to_string(&envelope)
         .map_err(|e| JsValue::from_str(&format!("lunco_api: encode failed: {e}")))
 }
@@ -79,7 +80,7 @@ pub async fn lunco_api(json: String) -> Result<String, JsValue> {
 ///
 /// Thin convenience over [`lunco_api`] that wraps `code` in the `RunRhai`
 /// envelope, so the web build runs rhai through the **exact same** ECS dispatch
-/// as the native `sandbox rhai` client and MCP — no sockets. Returns the JSON
+/// as the native `luncosim rhai` client and MCP — no sockets. Returns the JSON
 /// response envelope string; its `data` carries the script's captured stdout.
 #[wasm_bindgen]
 pub async fn lunco_rhai(code: String) -> Result<String, JsValue> {
@@ -87,15 +88,15 @@ pub async fn lunco_rhai(code: String) -> Result<String, JsValue> {
         .with(|b| b.borrow().clone())
         .ok_or_else(|| JsValue::from_str("lunco_rhai: app not ready (bridge unset)"))?;
 
-    let req =
-        crate::rhai_request(&code).map_err(|e| JsValue::from_str(&format!("lunco_rhai: {e}")))?;
+    let req = ApiRequestEnvelope::execute_command("RunRhai", serde_json::json!({ "code": code }));
+    let req = decode_request(req).map_err(|e| JsValue::from_str(&format!("lunco_rhai: {e}")))?;
 
     let resp = bridge
         .execute(req)
         .await
         .map_err(|_| JsValue::from_str("lunco_rhai: request dropped (app shutting down?)"))?;
 
-    let envelope = ApiResponseEnvelope::from(resp);
+    let envelope = encode_response(resp);
     serde_json::to_string(&envelope)
         .map_err(|e| JsValue::from_str(&format!("lunco_rhai: encode failed: {e}")))
 }

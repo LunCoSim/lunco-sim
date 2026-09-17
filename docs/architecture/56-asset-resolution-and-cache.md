@@ -175,10 +175,35 @@ no path under `assets/` at all). If code needs bytes, it goes through the
 it asks `lunco-assets-core`. Joining `"assets"`, stripping a scheme prefix, or
 splitting a `twin://` authority by hand are all the same defect.
 
-What legitimately stays outside: `lunco-usd-bevy`'s `canonicalize` and
+What legitimately stays outside: `lunco-usd-compose`'s `canonicalize_at` and
 `LuncoUsdResolver`. Those anchor a *relative* reference to its **referencing
 layer** and plug into `openusd`'s `ar::Resolver` — USD composition semantics that
 must sit next to the `Stage`, not asset-source knowledge.
+
+### USD references stay logical through loading
+
+USD asset literals are logical identifiers. They use forward slashes and either
+the authored layer's relative namespace or an explicit `lunco://`/`twin://`
+source; they never contain a native cache path. Every prefetch and resolver
+lookup goes through the same `AssetPath`/`lunco-assets-core` path algebra, so a
+Windows path separator cannot turn a URI into a default-source filename.
+
+Opening the root layer is terminal when it cannot be read. A missing
+transitive sublayer, reference, or payload is different: the loader retains
+the available closure, OpenUSD leaves only that arc unresolved, and the runtime
+publishes a scene-scoped diagnostic containing the referring layer and logical
+dependency. Malformed data, unsafe traversal, permission failures, and closure
+resource limits remain terminal at the owning boundary. No missing asset is
+silently aliased to another file.
+The warning is published from the stage-load event itself, so it remains visible
+even when the available root does not yet project a prim; it does not depend on
+the missing arc producing a placeholder entity.
+
+Consequently, a stale authored name such as `lunco://vessels/markers/waypoint.usda`
+must be corrected in the Twin's USD/library owner (or restored as an actually
+shipped asset). It must not be mapped at runtime to a newer name such as
+`route_point.usda`: that would hide a broken composition contract and make
+different Twins resolve the same authored identifier differently.
 
 ## Industry practice
 
@@ -194,7 +219,7 @@ Every mature system separates *declared identity* from *materialised bytes*:
 The USD-native answer is the asset resolver (`Ar` 2.0): layers reference logical
 asset paths and a pluggable resolver maps them to bytes — the seam studios use
 to attach asset-management systems. We have that seam
-(`crates/lunco-usd-bevy/src/resolver.rs`); it is extended rather than
+(`crates/lunco-usd-compose/src/resolver.rs`); it is extended rather than
 supplemented with one Bevy `AssetSource` per storage backend.
 
 `Assets.toml` already carries `url`, `dest`, `sha256`. That is a lockfile.

@@ -8,6 +8,7 @@
 //! the visual implementation. It also owns the shared composed collision
 //! envelopes used for placement and read-only scene inspection.
 
+pub mod billboard;
 pub mod collision;
 mod geometry;
 
@@ -292,6 +293,32 @@ pub fn is_preview_only_entity(world: &World, entity: Entity) -> bool {
             return false;
         };
         current = parent;
+    }
+    warn!(
+        "[usd-scene] preview hierarchy exceeded 1024 ancestors at {:?}",
+        entity
+    );
+    false
+}
+
+/// Return whether an entity belongs to a preview's authoritative hierarchy.
+///
+/// The preview root itself is included. The bounded walk prevents malformed
+/// ECS hierarchies from turning a selection or readiness query into an
+/// unbounded loop.
+pub fn is_preview_entity(entity: Entity, root: Entity, parents: &Query<&ChildOf>) -> bool {
+    if entity == root {
+        return true;
+    }
+    let mut current = entity;
+    for _ in 0..1024 {
+        let Ok(parent) = parents.get(current) else {
+            return false;
+        };
+        current = parent.parent();
+        if current == root {
+            return true;
+        }
     }
     warn!(
         "[usd-scene] preview hierarchy exceeded 1024 ancestors at {:?}",

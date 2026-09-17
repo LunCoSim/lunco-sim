@@ -113,7 +113,7 @@ when the user is looking through that path's own camera because the trajectory i
 not legible from the eye it passes through.
 
 The overlay and `AddCameraHere` resolve the camera through
-`SceneViewport::active_camera`. They do not scan for the first active camera:
+`lunco_viewport_core::SceneViewport::active_camera`. They do not scan for the first active camera:
 render-to-texture and sensor cameras may be active for their own consumers, and
 entity order is not presentation ownership. If the viewport has no unique
 window camera, capture reports an error and the overlay does not guess.

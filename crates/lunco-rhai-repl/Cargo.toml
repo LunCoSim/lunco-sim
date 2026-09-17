@@ -1,0 +1,23 @@
+[package]
+name = "lunco-rhai-repl"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Small CLI client for the production LunCoSim Rhai command surface"
+
+[features]
+default = []
+tls = ["lunco-api-client/tls"]
+
+[lib]
+name = "lunco_rhai_repl"
+path = "src/lib.rs"
+
+[dependencies]
+lunco-api-client = { path = "../lunco-api-client" }
+lunco-api-contracts = { path = "../lunco-api-contracts" }
+lunco-storage = { path = "../lunco-storage" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

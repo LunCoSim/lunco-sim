@@ -28,7 +28,7 @@ use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_spatial::coords::{GridPos, GridRot};
 use lunco_spatial::ActivePhysicsFrame;
 use lunco_usd_geometry::ribbon::{build_ribbon_mesh, RibbonPoint};
-use lunco_usd_sim::PhysicalWheel;
+use lunco_usd_sim_core::PhysicalWheel;
 
 /// Minimum horizontal travel before a new history sample is admitted.
 const TRAIL_SAMPLE_SPACING_M: f64 = 0.5;

@@ -1148,12 +1148,8 @@ mod tests {
     #[test]
     fn save_load_roundtrip_and_collision_guard() {
         lunco_settings::isolate_config_dir_for_tests("workbench-state");
-        let root = std::env::temp_dir()
-            .join(format!(
-                "lunco-ws-state-test-{:016x}",
-                fnv1a64(b"roundtrip-fixture")
-            ))
-            .join("proj");
+        let temp = tempfile::tempdir().expect("temporary workspace-state directory");
+        let root = temp.path().join("proj");
         let state = WorkspaceState {
             schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
             twin_root: root.clone(),
