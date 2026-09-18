@@ -16,8 +16,9 @@ command/query API the HTTP API, MCP, and UI use.
 | Lua | Reserved language id; not implemented. |
 
 The language-neutral core means a backend supplies only the interpreter
-mechanics; lifecycle, scheduling, hot-reload, pause, teardown, diagnostics, and
-the generic world mechanism is shared. Domain-specific world verbs are provided
+mechanics; lifecycle, scheduling, hot-reload, pause, teardown, and the generic
+world mechanism are shared. Rhai authoring queries and dataset projections are
+installed by the companion `lunco-scripting-rhai` package. Domain-specific world verbs are provided
 by the spatial, time, and USD bridge adapters (see the package layout below).
 
 ## Model
@@ -121,7 +122,7 @@ and one typed conversion; it does not choose domain defaults or inject a global
 | [`lunco-scripting-bridge-usd`](../lunco-scripting-bridge-usd) | USD document and prim-path projections |
 | [`src/scenario.rs`](src/scenario.rs) | language-neutral lifecycle driver |
 | [`src/commands.rs`](src/commands.rs) | the `#[Command]` entry points |
-| [`src/catalog.rs`](src/catalog.rs) · [`src/diagnostics.rs`](src/diagnostics.rs) | discovery + introspection queries |
+| [`lunco-scripting-rhai`](../lunco-scripting-rhai) (`src/catalog.rs`, `src/diagnostics.rs`, `src/dataset_queries.rs`) | Rhai discovery, introspection, and dataset queries |
 | [`src/tool_libs.rs`](src/tool_libs.rs) · [`src/timelines.rs`](src/timelines.rs) | tool / timeline registries + Twin persistence |
 | [`prelude/`](../../assets/scripting/prelude) · [`examples/`](../../assets/scripting/examples) · [`tools/`](../../assets/scripting/tools) | the helper library, example scenarios, example tool libraries |
 

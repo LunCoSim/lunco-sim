@@ -1,16 +1,7 @@
 use bevy::prelude::*;
 
 pub mod backend;
-/// Authoring catalog (`ScriptingCatalog` query) — the discoverability surface
-/// for editor completion / hover / docs.
-#[cfg(feature = "rhai")]
-pub mod catalog;
 pub mod commands;
-#[cfg(feature = "rhai")]
-pub mod dataset_queries;
-/// Scripting adapter onto the unified diagnostics store (`ScriptStatus` query).
-#[cfg(feature = "rhai")]
-pub mod diagnostics;
 pub mod doc;
 /// `import` resolution over the asset pipeline. Holds no path logic of its own —
 /// ids come from `lunco_assets_core::script_source::ScriptSources`.
@@ -393,12 +384,6 @@ impl Plugin for LunCoScriptingPlugin {
             timelines::register_queries(app);
             app.add_observer(timelines::sync_timelines_on_twin_added);
             app.add_observer(timelines::wind_down_timelines_on_twin_closed);
-            diagnostics::register_queries(app);
-            dataset_queries::register_queries(app);
-            // Authoring catalog: ScriptingCatalog aggregates the full callable
-            // surface (verbs + commands + queries + tools + prelude) for editor
-            // completion / hover / docs and agent discovery.
-            catalog::register_queries(app);
             // One-shot `RunRhai` evals stay host-authoritative — they carry no
             // `ScriptScope`, so a client cannot run arbitrary sim-mutating
             // snippets through the REPL/world-script queue. The drain belongs
@@ -407,8 +392,7 @@ impl Plugin for LunCoScriptingPlugin {
             // must remain responsive while the sky advances.
             app.add_systems(
                 Update,
-                world_bridge::prepare_builtin_rhai_assets
-                    .after(source_asset::RhaiSourceAssetSet),
+                world_bridge::prepare_builtin_rhai_assets.after(source_asset::RhaiSourceAssetSet),
             );
             app.add_systems(
                 Update,

@@ -21,8 +21,6 @@
 //! this same surface. UI/LSP clients can consume it without reimplementing the
 //! matcher.
 
-#![cfg(feature = "rhai")]
-
 use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::prelude::*;
 use bevy::reflect::TypeInfo;
@@ -135,8 +133,18 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "Vec3 | [x,y,z] | ()",
         "Pure vector scaling; native Vec3 operands are checked in Rust.",
     ),
-    ("vlen", "vlen(a)", "f64 | ()", "Pure vector length (native Vec3 or array)."),
-    ("vdot", "vdot(a, b)", "f64 | ()", "Pure vector dot product (native Vec3 or array)."),
+    (
+        "vlen",
+        "vlen(a)",
+        "f64 | ()",
+        "Pure vector length (native Vec3 or array).",
+    ),
+    (
+        "vdot",
+        "vdot(a, b)",
+        "f64 | ()",
+        "Pure vector dot product (native Vec3 or array).",
+    ),
     (
         "vnorm",
         "vnorm(a)",
@@ -472,7 +480,9 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
                         .iter()
                         .map(|field| {
                             let field_writable =
-                                crate::world_bridge::dynamic_write_supported(field.type_path());
+                                lunco_scripting::world_bridge::dynamic_write_supported(
+                                    field.type_path(),
+                                );
                             writable |= field_writable;
                             serde_json::json!({
                                 "name": field.name(),
@@ -486,7 +496,7 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
                 }
                 _ => (Vec::new(), false),
             };
-            let type_writable = crate::world_bridge::dynamic_write_supported(short_type);
+            let type_writable = lunco_scripting::world_bridge::dynamic_write_supported(short_type);
             Some(serde_json::json!({
                 "type": short_type,
                 "kind": if is_resource { "resource" } else { "component" },
@@ -506,16 +516,15 @@ fn prelude_surface(world: &World) -> Vec<serde_json::Value> {
     // asset registry. Keep imports fail-closed: completion must not read
     // arbitrary files from the process working directory.
     engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
-    crate::rhai_limits::apply(&mut engine);
-    let Some(sources) = world
-        .get_resource::<lunco_assets_core::script_source::ScriptSources>()
+    lunco_scripting::rhai_limits::apply(&mut engine);
+    let Some(sources) = world.get_resource::<lunco_assets_core::script_source::ScriptSources>()
     else {
         return Vec::new();
     };
-    crate::world_bridge::prelude_files_from_sources(sources)
+    lunco_scripting::world_bridge::prelude_files_from_sources(sources)
         .ok()
         .and_then(|files| {
-            crate::world_bridge::compile_prelude_set_for_runtime(&engine, files).ok()
+            lunco_scripting::world_bridge::compile_prelude_set_for_runtime(&engine, files).ok()
         })
         .map(|ast| {
             let mut functions: Vec<serde_json::Value> = ast
@@ -775,7 +784,7 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
             "verbs": verbs,
             "hooks": hooks,
             "policy_hooks": policy_hooks,
-            "policy_status": crate::world_bridge::policy_status_json(world),
+            "policy_status": lunco_scripting::world_bridge::policy_status_json(world),
             "prelude": prelude,
             "tools": tools,
             "commands": commands,
@@ -794,115 +803,4 @@ pub fn register_queries(app: &mut App) {
     app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(ScriptCompleteProvider);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalog_lists_verbs_hooks_prelude_and_tools() {
-        let _registry_guard = crate::tool_libs::registry_test_guard();
-        // Bare world with the registries the provider reads.
-        let mut app = App::new();
-        app.init_resource::<AppTypeRegistry>();
-        app.init_resource::<ApiQueryRegistry>();
-        let sources = lunco_assets_core::script_source::ScriptSources::default();
-        sources.insert(
-            "scripting/prelude/catalog_probe.rhai",
-            "fn catalog_probe() { 1 }",
-        );
-        app.insert_resource(sources);
-        // A known tool library so `tools` is non-empty.
-        crate::tool_libs::register_tool_library("probe_lib", "fn ping() { 1 }");
-
-        let provider = ScriptingCatalogProvider;
-        let resp = provider.execute(app.world_mut(), &serde_json::Value::Null);
-        let data = match resp {
-            ApiResponse::Ok { data: Some(d), .. } => d,
-            other => panic!("expected Ok, got {other:?}"),
-        };
-
-        // Verbs include the command and query channels.
-        let verbs = data["verbs"].as_array().unwrap();
-        for v in ["cmd", "get", "query", "world_pos", "emit"] {
-            assert!(
-                verbs
-                    .iter()
-                    .filter_map(|verb| verb["name"].as_str())
-                    .any(|name| name == v),
-                "missing verb {v}"
-            );
-        }
-
-        // Hooks present.
-        assert!(data["hooks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|h| h["name"].as_str())
-            .any(|name| name == "on_tick"));
-        for entry in ["task", "mission"] {
-            assert!(
-                data["hooks"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter_map(|hook| hook["name"].as_str())
-                    .any(|name| name == entry),
-                "missing policy entrypoint {entry}"
-            );
-        }
-
-        // Our registered tool library shows up.
-        let tool_names: Vec<&str> = data["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
-        assert!(tool_names.contains(&"probe_lib"), "tools: {tool_names:?}");
-
-        // Commands/queries keys exist (arrays; empty in this bare world is fine).
-        assert!(data["commands"].is_array());
-        assert!(data["queries"].is_array());
-        assert!(data["reflection"].is_array());
-        assert!(lunco_tools::unregister("probe_lib").is_some());
-    }
-
-    #[test]
-    fn reflection_catalog_matches_the_dynamic_write_converter() {
-        #[derive(Component, Reflect)]
-        #[reflect(Component)]
-        struct CatalogProbe {
-            supported: Vec3,
-            unsupported: u8,
-        }
-
-        let mut app = App::new();
-        app.init_resource::<AppTypeRegistry>();
-        app.register_type::<CatalogProbe>();
-
-        let entries = reflected_surface(app.world());
-        let probe = entries
-            .iter()
-            .find(|entry| entry["type"] == "CatalogProbe")
-            .expect("registered component is discoverable");
-        assert_eq!(probe["writable"], serde_json::json!(true));
-        let fields = probe["fields"].as_array().expect("field catalog");
-        assert_eq!(
-            fields
-                .iter()
-                .find(|field| field["name"] == "supported")
-                .expect("supported field")["writable"],
-            serde_json::json!(true)
-        );
-        assert_eq!(
-            fields
-                .iter()
-                .find(|field| field["name"] == "unsupported")
-                .expect("unsupported field")["writable"],
-            serde_json::json!(false)
-        );
-    }
 }

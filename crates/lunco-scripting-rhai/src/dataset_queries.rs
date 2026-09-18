@@ -30,7 +30,7 @@ impl ApiQueryProvider for ListDatasetsProvider {
                 return ApiResponse::error(
                     ApiErrorCode::DeserializationError,
                     "ListDatasets: `scope` must be a string",
-                )
+                );
             }
         };
         let Some(registry) = world.get_resource::<lunco_assets_datasets::DatasetRegistry>() else {

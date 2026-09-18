@@ -6,19 +6,17 @@
 //! is the rhai analogue of Modelica's `CompileStatus` query — same JSON shape,
 //! so any caller (HTTP API, MCP, UI) polls scenario health the same way.
 
-#![cfg(feature = "rhai")]
-
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::GlobalEntityId;
-use lunco_doc::{status_json, Document, DocumentId};
+use lunco_doc::{Document, DocumentId, status_json};
 use lunco_doc_bevy::DocumentDiagnostics;
 
-use crate::doc::{ScriptLanguage, ScriptedModel};
-use crate::scenario::ScenarioDriver;
-use crate::world_bridge::RhaiScenarioRuntime;
+use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
+use lunco_scripting::scenario::ScenarioDriver;
+use lunco_scripting::world_bridge::RhaiScenarioRuntime;
 use lunco_scripting_bridge_core::JsonBuilder;
 
 /// `ScriptStatus { target }` → `{ state, ok, diagnostics: [{severity,message,line,col}] }`
@@ -93,7 +91,7 @@ impl ApiQueryProvider for InspectScriptDocumentProvider {
             );
         }
         let Some(host) = world
-            .get_resource::<crate::ScriptRegistry>()
+            .get_resource::<lunco_scripting::ScriptRegistry>()
             .and_then(|registry| registry.documents.get(&doc_id))
         else {
             return ApiResponse::error(

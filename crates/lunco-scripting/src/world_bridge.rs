@@ -584,7 +584,7 @@ fn dyn_f64s(v: &Dynamic, n: usize) -> Result<Vec<f64>, String> {
 /// concrete type drives the coercion (scalars widen/truncate as needed; arrays
 /// become glam vectors/quats), so `native → reflect` happens in one hop with no
 /// JSON. Unsupported field types return an error the script verb surfaces.
-pub(crate) fn dynamic_write_supported(type_path: &str) -> bool {
+pub fn dynamic_write_supported(type_path: &str) -> bool {
     matches!(
         type_path.rsplit("::").next().unwrap_or(type_path),
         "f64"
@@ -694,7 +694,7 @@ fn apply_dynamic_fields(
 /// syntax error is logged with the offending file's name and a position relative
 /// to that file (error locality). Both prelude uses — the global module and the
 /// per-scenario `prelude_ast` merge — go through here.
-pub(crate) fn compile_prelude_set_for_runtime(
+pub fn compile_prelude_set_for_runtime(
     engine: &Engine,
     files: Vec<(String, String)>,
 ) -> Result<AST, String> {
@@ -2173,7 +2173,7 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
     engine
 }
 
-pub(crate) fn prelude_files_from_sources(
+pub fn prelude_files_from_sources(
     sources: &lunco_assets_core::script_source::ScriptSources,
 ) -> Result<Vec<(String, String)>, String> {
     let mut files = Vec::new();

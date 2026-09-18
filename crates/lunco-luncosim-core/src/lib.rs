@@ -1908,6 +1908,7 @@ impl Plugin for LunCoSimCorePlugin {
             .add_plugins(LunCoControllerPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
+            .add_plugins(lunco_scripting_rhai::LunCoScriptingRhaiPlugin)
             .add_systems(Startup, setup_luncosim)
             .add_systems(Startup, load_startup_scene_on_boot.after(setup_luncosim))
             // Fail loud if the requested `--scene` never loads (e.g. a wrong

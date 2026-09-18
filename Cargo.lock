@@ -7782,6 +7782,7 @@ dependencies = [
  "lunco-scene-validation",
  "lunco-scripting",
  "lunco-scripting-bridge-core",
+ "lunco-scripting-rhai",
  "lunco-spatial",
  "lunco-storage",
  "lunco-sysml",
@@ -8469,6 +8470,7 @@ dependencies = [
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
  "lunco-scripting",
+ "lunco-scripting-rhai",
  "lunco-settings",
  "lunco-signal",
  "lunco-status-core",
@@ -8976,7 +8978,6 @@ dependencies = [
  "libloading",
  "lunco-api",
  "lunco-assets-core",
- "lunco-assets-datasets",
  "lunco-behavior",
  "lunco-core",
  "lunco-core-session",
@@ -9064,6 +9065,25 @@ dependencies = [
  "lunco-scripting-bridge-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-document",
+]
+
+[[package]]
+name = "lunco-scripting-rhai"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-api",
+ "lunco-assets-core",
+ "lunco-assets-datasets",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-hooks",
+ "lunco-scripting",
+ "lunco-scripting-bridge-core",
+ "lunco-tools",
+ "rhai",
+ "serde_json",
 ]
 
 [[package]]

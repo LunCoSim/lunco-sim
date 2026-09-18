@@ -78,9 +78,9 @@ lunco-hooks-native = { path = "../lunco-hooks-native", optional = true }
 # The prelude, tools, examples, and policies are authored under
 # `assets/scripting/` and loaded through the shared asset/storage boundary. Drop
 # a `.rhai` in the shipped asset tree; the runtime manifest and authored policy
-# decide how it is used without rebuilding this crate. Both packages are
-# Rhai-only and are omitted from Python-only/script-free builds.
-lunco-assets-datasets = { path = "../lunco-assets-datasets", optional = true }
+# decide how it is used without rebuilding this crate. The dataset query
+# adapter lives in `lunco-scripting-rhai`, so the runtime does not acquire the
+# dataset state graph.
 lunco-assets-core = { path = "../lunco-assets-core", optional = true }
 # Twin persistence: the `TwinAdded` event + `WorkspaceResource` (twin→root path)
 # let the tool-library loader scan `<twin>/tools/*.rhai` on open. Gated on `rhai`
@@ -98,7 +98,6 @@ rhai = [
     "dep:getrandom",
     "dep:lunco-api",
     "dep:lunco-assets-core",
-    "dep:lunco-assets-datasets",
     "dep:lunco-behavior",
     "dep:lunco-core-session",
     "dep:lunco-hash",

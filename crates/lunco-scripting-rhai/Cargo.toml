@@ -1,0 +1,24 @@
+[package]
+name = "lunco-scripting-rhai"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Rhai authoring, discovery, diagnostics, and dataset query surfaces"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
+lunco-tools = { path = "../lunco-tools" }
+rhai = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -72,6 +72,9 @@ impl Plugin for ModelicaPlugin {
         if !app.is_plugin_added::<lunco_scripting::LunCoScriptingPlugin>() {
             app.add_plugins(lunco_scripting::LunCoScriptingPlugin);
         }
+        if !app.is_plugin_added::<lunco_scripting_rhai::LunCoScriptingRhaiPlugin>() {
+            app.add_plugins(lunco_scripting_rhai::LunCoScriptingRhaiPlugin);
+        }
 
         app.insert_resource(source_roots::SourceRootRegistry::build());
         app.add_systems(Update, source_roots::load_twin_source_roots);
