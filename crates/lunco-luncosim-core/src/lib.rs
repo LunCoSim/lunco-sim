@@ -16,10 +16,10 @@ use big_space::prelude::*;
 
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
+use lunco_cosim::CoSimPlugin;
 use lunco_cosim_core::schedule::{
     CosimApplySet as ApplyForcesCosimSet, CosimSet as PropagateCosimSet,
 };
-use lunco_cosim::CoSimPlugin;
 use lunco_environment::EnvironmentPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
 use lunco_mobility::LunCoMobilityPlugin;
@@ -729,7 +729,7 @@ fn replay_scenario_journal_script(
 /// own cross-peer-stable id (the authored UUID, replayed via `insert_with_id`),
 /// so any number of experiments route correctly. Run results/status are NOT here
 /// — they ride the content/presence planes. No-ops when registry/journal absent.
-#[cfg(feature = "networking")]
+#[cfg(all(feature = "networking", feature = "experiments"))]
 fn replay_scenario_journal_experiment(
     role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
@@ -992,6 +992,7 @@ fn replay_scenario_journal_timeline(
 /// it writes nothing (it *receives* the artifact). Recovered from the registry
 /// (core writes it there before `RunCompleted` fires — same pattern as
 /// `project_run_results_to_ui`). JSON today; parquet is a deferred format swap.
+#[cfg(feature = "experiments")]
 fn write_run_result_artifact(
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
     registry: Res<lunco_experiments::ExperimentRegistry>,
@@ -1017,8 +1018,8 @@ fn write_run_result_artifact(
         };
         // The storage layer creates parent dirs on write (FileStorage tmp+rename;
         // WebStorage is key-based), so no explicit mkdir — all I/O goes through it.
-        let dest = lunco_twin::results_dir(&twin.root)
-            .join(format!("{}.json", id.as_artifact_stem()));
+        let dest =
+            lunco_twin::results_dir(&twin.root).join(format!("{}.json", id.as_artifact_stem()));
         match serde_json::to_vec_pretty(result) {
             Ok(bytes) => match lunco_storage::write_file_sync(&dest, &bytes) {
                 Ok(()) => info!("[experiment] wrote result artifact {dest:?}"),
@@ -1039,6 +1040,7 @@ fn write_run_result_artifact(
 /// Change-driven on [`ExperimentRegistry`] mutation (a definition synced, a run
 /// completed, a status update) — so a just-synced result file is picked up on the
 /// next registry change (e.g. the presence status flip) rather than by polling.
+#[cfg(feature = "experiments")]
 fn load_run_result_artifacts(
     mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
@@ -1046,7 +1048,10 @@ fn load_run_result_artifacts(
     let Some(active) = workspace.active_twin else {
         return;
     };
-    let Some(root) = workspace.twin(active).map(|t| lunco_twin::results_dir(&t.root)) else {
+    let Some(root) = workspace
+        .twin(active)
+        .map(|t| lunco_twin::results_dir(&t.root))
+    else {
         return;
     };
     // Ids known but resultless — the only candidates worth a storage read.
@@ -1086,7 +1091,7 @@ fn load_run_result_artifacts(
 /// just-written result artifact now (serviced by `service_manifest_rebuild_request`
 /// in lunco-networking). The write itself is the core persistence system's job;
 /// this only nudges distribution. Host-only.
-#[cfg(feature = "networking")]
+#[cfg(all(feature = "networking", feature = "experiments"))]
 fn request_rebuild_after_result(
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
     role: Option<Res<lunco_core_session::NetworkRole>>,
@@ -1106,7 +1111,7 @@ fn request_rebuild_after_result(
 /// `ControlStream`, terminal states the reliable `CommandBus` (so the final
 /// flip is never dropped). Host-only; the assembly crate maps `RunStatus` to the
 /// primitive `RunStatusMsg` here (keeping networking free of an experiments dep).
-#[cfg(feature = "networking")]
+#[cfg(all(feature = "networking", feature = "experiments"))]
 fn broadcast_run_status(
     role: Option<Res<lunco_core_session::NetworkRole>>,
     mut outbox: ResMut<lunco_networking_sync::sync::SyncOutbox>,
@@ -1169,7 +1174,7 @@ fn broadcast_run_status(
 /// `ExperimentRegistry` so a synced experiment's row advances Running → Done.
 /// Won't clobber a `Done` already loaded from the result artifact (the artifact
 /// carries the trajectory; a late progress packet must not downgrade it).
-#[cfg(feature = "networking")]
+#[cfg(all(feature = "networking", feature = "experiments"))]
 fn apply_run_status(
     mut pending: ResMut<lunco_networking_sync::sync::PendingRunStatus>,
     mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
@@ -1969,6 +1974,7 @@ impl Plugin for LunCoSimCorePlugin {
         // history survives a restart. Networking additionally distributes the same
         // files via the content plane. Guarded so a config without experiments /
         // workspace simply skips.
+        #[cfg(feature = "experiments")]
         app.add_systems(
             Update,
             write_run_result_artifact.run_if(
@@ -1979,6 +1985,7 @@ impl Plugin for LunCoSimCorePlugin {
         // Load half is change-driven on the registry (a definition synced, a run
         // completed, a status flip) — so a just-arrived result file is picked up on
         // the next registry change instead of by polling.
+        #[cfg(feature = "experiments")]
         app.add_systems(
             Update,
             load_run_result_artifacts.run_if(
@@ -1986,10 +1993,6 @@ impl Plugin for LunCoSimCorePlugin {
                     .and_then(resource_exists::<lunco_workspace::WorkspaceResource>),
             ),
         );
-
-        // Dismiss the HTML loading screen once the first frame paints (wasm-only;
-        // no-op on native). Pairs with `web/index.html` → `lunco-boot.js`.
-        app.add_plugins(lunco_web::WebReadyPlugin);
 
         // HTTP automation bridge — native `--api` server / wasm JS bridge. Linked
         // in the GUI and the headless compile server alike.
@@ -2054,6 +2057,7 @@ impl Plugin for LunCoSimCorePlugin {
             app.add_systems(Update, replay_scenario_journal_script);
             // Same Layer B for experiment *definitions* (`DomainKind::Experiment`):
             // a peer's sweep setup projects onto the local ExperimentRegistry.
+            #[cfg(feature = "experiments")]
             app.add_systems(Update, replay_scenario_journal_experiment);
             // Same Layer B for shaders (`DomainKind::Shader`): a peer's WGSL edit
             // projects onto the local ShaderRegistry + hot-reloads Assets<Shader>.
@@ -2080,6 +2084,7 @@ impl Plugin for LunCoSimCorePlugin {
             // platforms). Networking only adds the *distribution* trigger: when a
             // run finishes on the host, ask for an immediate manifest rebuild so
             // already-connected peers pull the just-written result now.
+            #[cfg(feature = "experiments")]
             app.add_systems(
                 Update,
                 request_rebuild_after_result
@@ -2089,6 +2094,7 @@ impl Plugin for LunCoSimCorePlugin {
             // applies them so a synced experiment's row advances live. Guarded on
             // the registry existing so a config without experiments just skips
             // (the MessageReaders would otherwise have no registered messages).
+            #[cfg(feature = "experiments")]
             app.add_systems(
                 Update,
                 (broadcast_run_status, apply_run_status)

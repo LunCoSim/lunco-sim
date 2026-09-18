@@ -87,7 +87,7 @@ package-icons = ["lunco-luncosim-ui?/package-icons"]
 # Lean headless multiplayer server: API + networking host, NO `ui`. Build with
 # `--no-default-features --features server`. Celestial data remains external
 # through the runtime asset and dataset pipelines.
-server = ["api-transport", "transport-http", "networking"]
+server = ["api-transport", "transport-http", "networking", "lunco-luncosim-core/experiments"]
 luncosim = []
 # Compile the API in. Transport is chosen automatically: the native HTTP
 # server comes from `lunco-api-transport/transport-http` (added to `default` above);

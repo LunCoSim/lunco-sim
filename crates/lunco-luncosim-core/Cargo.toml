@@ -43,7 +43,7 @@ lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 lunco-sysml = { path = "../lunco-sysml", optional = true }
 lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
-lunco-experiments = { path = "../lunco-experiments" }
+lunco-experiments = { path = "../lunco-experiments", optional = true }
 serde_json = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
@@ -66,13 +66,12 @@ lunco-scene-camera = { path = "../lunco-scene-camera" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-scene-authoring = { path = "../lunco-scene-authoring" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
-lunco-web = { workspace = true }
 lunco-assets-datasets = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-storage = { path = "../lunco-storage" }
+lunco-storage = { path = "../lunco-storage", optional = true }
 lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
 lunco-networking = { path = "../lunco-networking", optional = true, default-features = false }
 lunco-networking-core = { path = "../lunco-networking-core", optional = true }
@@ -84,7 +83,8 @@ mimalloc = "0.1"
 
 [features]
 default = ["sysml"]
-server = ["api-transport", "transport-http", "networking"]
+experiments = ["dep:lunco-experiments", "dep:lunco-storage"]
+server = ["api-transport", "transport-http", "networking", "experiments"]
 api-transport = [
     "dep:lunco-api-transport",
     "dep:lunco-modelica-api",

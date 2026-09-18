@@ -595,6 +595,9 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         headless: false,
         startup_scene: None,
     });
+    // The browser boot-screen handshake is an application-shell concern. Keep
+    // it at the UI edge so headless/server compositions do not carry web glue.
+    app.add_plugins(lunco_web::WebReadyPlugin);
     // Provisioning is an explicit GUI application capability. The shared core
     // installs only the lightweight registry/discovery plugin, so headless and
     // server compositions do not inherit native HTTP/archive/image workers.
