@@ -797,7 +797,7 @@ pub(crate) fn render_help_menu(
     world: &mut World,
     menus: &mut WorkbenchMenuRegistry,
 ) {
-    if let Some(identity) = world.get_resource::<BuildIdentity>() {
+    if let Some(identity) = world.get_resource::<lunco_workbench_core::BuildIdentity>() {
         ui.label(format!(
             "{} · {}",
             running_app_name(),
@@ -2858,7 +2858,7 @@ mod tests {
 
     #[test]
     fn build_identity_formats_the_shared_version_label() {
-        let identity = BuildIdentity::new(
+        let identity = lunco_workbench_core::BuildIdentity::new(
             "0.6.0-nightly.37.1",
             "abc12345-dirty",
             "https://github.com/LunCoSim/lunco-sim",
@@ -3494,11 +3494,11 @@ mod tests {
         });
 
         assert_eq!(
-            perspective_help::visible_perspective_title(&layout, PerspectiveId("visible")),
+            lunco_workbench_help_ui::visible_perspective_title(&layout, PerspectiveId("visible"),),
             Some("Build".to_owned())
         );
         assert_eq!(
-            perspective_help::visible_perspective_title(&layout, PerspectiveId("hidden")),
+            lunco_workbench_help_ui::visible_perspective_title(&layout, PerspectiveId("hidden"),),
             None
         );
     }

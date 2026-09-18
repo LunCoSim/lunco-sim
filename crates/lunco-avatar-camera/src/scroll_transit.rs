@@ -13,8 +13,8 @@ use lunco_camera_core::{
     CameraPoseLock, CameraZoomInput, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
     SurfaceRelativeMode, math::zoom_factor,
 };
+use lunco_celestial::CelestialBody;
 use lunco_celestial::{GeodeticAnchor, SiteAnchor};
-use lunco_core::CelestialBody;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::GravityBody;
 use lunco_interaction_core::DragModeActive;

@@ -17,7 +17,10 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
+use crate::components::CelestialBody;
 use crate::iau::IauRotation;
+
+pub use lunco_celestial_data::MOON_MEAN_RADIUS_M;
 
 /// Canonical NAIF ephemeris identifiers used by the built-in solar-system
 /// projection.
@@ -48,18 +51,6 @@ pub struct CelestialBodyRegistry {
     /// The collection of all known celestial bodies.
     pub bodies: Vec<BodyDescriptor>,
 }
-
-pub use lunco_core::CelestialBody;
-
-/// **The** lunar radius, in metres — declared once in [`lunco_core`] and
-/// re-exported here, where the simulation side has always named it.
-///
-/// The number itself lives in `lunco-core` because the offline `lunco-assets`
-/// build tool stamps the same datum into every baked GeoTIFF and must not take
-/// a Bevy-heavy dependency on this crate to reach it. See
-/// [`lunco_core::MOON_MEAN_RADIUS_M`] for the IAU/WGCCRE citation and the
-/// history. Do not re-type the value anywhere.
-pub use lunco_core::MOON_MEAN_RADIUS_M;
 
 /// Semantic identity of a celestial coordinate frame.
 ///

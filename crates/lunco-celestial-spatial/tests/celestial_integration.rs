@@ -75,7 +75,7 @@ fn solar_system_root_is_singular() {
 
     let bearers: Vec<Entity> = app
         .world_mut()
-        .query_filtered::<Entity, With<lunco_celestial_spatial::SolarSystemRoot>>()
+        .query_filtered::<Entity, With<lunco_celestial_spatial_core::SolarSystemRoot>>()
         .iter(app.world())
         .collect();
 
@@ -161,7 +161,8 @@ fn site_anchor_mounts_under_the_body_surface_grid() {
     );
     let solar_roots = {
         let world = app.world_mut();
-        let mut q = world.query_filtered::<(), With<lunco_celestial_spatial::SolarSystemRoot>>();
+        let mut q =
+            world.query_filtered::<(), With<lunco_celestial_spatial_core::SolarSystemRoot>>();
         q.iter(world).count()
     };
     assert_eq!(
@@ -366,70 +367,6 @@ fn each_builtin_orbit_target_has_one_colocated_star_fixed_grid() {
 }
 
 #[test]
-fn trajectories_mount_only_in_their_declared_frame_class() {
-    let mut app = celestial_test_app();
-    app.insert_resource(EphemerisResource {
-        provider: Arc::new(StubEphemeris),
-    });
-    app.update();
-    app.update();
-
-    let moon = lunco_celestial::ephemeris_id::MOON;
-    let earth = lunco_celestial::ephemeris_id::EARTH;
-    let body_fixed = app
-        .world_mut()
-        .spawn((
-            lunco_celestial_spatial::TrajectoryView {
-                tracked_id: earth,
-                reference_id: moon,
-                frame: lunco_celestial_spatial::TrajectoryFrame::BodyFixed,
-                ..Default::default()
-            },
-            lunco_celestial_spatial::TrajectoryPath::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-        ))
-        .id();
-    let inertial = app
-        .world_mut()
-        .spawn((
-            lunco_celestial_spatial::TrajectoryView {
-                tracked_id: -10_001,
-                reference_id: moon,
-                frame: lunco_celestial_spatial::TrajectoryFrame::Inertial,
-                ..Default::default()
-            },
-            lunco_celestial_spatial::TrajectoryPath::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-        ))
-        .id();
-
-    app.update();
-    app.update();
-
-    let fixed_parent = app.world().get::<ChildOf>(body_fixed).unwrap().parent();
-    let fixed_frame = app
-        .world()
-        .get::<lunco_celestial::ReferenceFrame>(fixed_parent)
-        .expect("a body-fixed trajectory must parent to a body-fixed frame Grid");
-    assert_eq!(
-        *fixed_frame,
-        lunco_celestial::ReferenceFrame::BodyFixed { body: moon }
-    );
-
-    let inertial_parent = app.world().get::<ChildOf>(inertial).unwrap().parent();
-    let inertial_frame = app
-        .world()
-        .get::<lunco_celestial::ReferenceFrame>(inertial_parent)
-        .expect("an inertial trajectory must parent to an inertial frame Grid");
-    assert_eq!(
-        *inertial_frame,
-        lunco_celestial::ReferenceFrame::EclipticJ2000 { center: moon }
-    );
-}
-
-#[test]
 fn spacecraft_mount_only_in_their_declared_inertial_reference_grid() {
     let mut app = celestial_test_app();
     app.insert_resource(EphemerisResource {
@@ -442,7 +379,7 @@ fn spacecraft_mount_only_in_their_declared_inertial_reference_grid() {
     let spacecraft = app
         .world_mut()
         .spawn((
-            lunco_core::Spacecraft {
+            lunco_celestial::Spacecraft {
                 name: "Frame probe".into(),
                 ephemeris_id: -10_001,
                 reference_id: moon,
@@ -588,7 +525,7 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
     );
     assert!(
         app.world_mut()
-            .query_filtered::<(), With<lunco_celestial_spatial::SolarSystemRoot>>()
+            .query_filtered::<(), With<lunco_celestial_spatial_core::SolarSystemRoot>>()
             .iter(app.world())
             .next()
             .is_none(),
@@ -815,7 +752,7 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
     // so this is "the gate held", not "nothing ran".
     let mut q = app
         .world_mut()
-        .query_filtered::<(), With<lunco_celestial_spatial::SolarSystemRoot>>();
+        .query_filtered::<(), With<lunco_celestial_spatial_core::SolarSystemRoot>>();
     assert_eq!(
         q.iter(app.world()).count(),
         1,
@@ -912,7 +849,7 @@ fn the_celestial_takeover_spawns_no_sun_of_its_own() {
     // not "the hierarchy never came up".
     let mut q_grid = app
         .world_mut()
-        .query_filtered::<(), With<lunco_celestial_spatial::SolarSystemRoot>>();
+        .query_filtered::<(), With<lunco_celestial_spatial_core::SolarSystemRoot>>();
     assert_eq!(
         q_grid.iter(app.world()).count(),
         1,

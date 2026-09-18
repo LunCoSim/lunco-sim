@@ -91,6 +91,17 @@ layout facts from the snapshot, and depend on the concrete shell only when
 they use those presentation services. Do not expose or consume the shell's
 private `WorkbenchLayout` outside that crate.
 
+Keep application-edge presentation separate from the reusable shell:
+lunco-luncosim-presentation owns the final status/environment, terrain-horizon,
+USD camera/light, capture, and scene-presentation bridges, while
+lunco-luncosim-ui owns window/plugin composition and installs that package at
+the boundary. Native updater startup and its rendered surface belong to the
+optional lunco-updater package, not to the ordinary UI closure. Similarly,
+celestial trajectory rendering belongs to lunco-celestial-presentation;
+the spatial runtime owns cadence and headless-safe scene projection, gravity,
+links, and commands. Do not add a forwarding module or public re-export in the
+host crate when the owning presentation package can be installed directly.
+
 For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources as
 one linked material contract: both stages read the same `@binding(0)` uniform
 block, so their `Material` fields, order, and WGSL types must agree. The

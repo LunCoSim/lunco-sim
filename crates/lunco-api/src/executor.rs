@@ -20,6 +20,7 @@ use crate::{
 };
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
+use lunco_celestial::CelestialBody;
 
 /// Events that transport adapters send to request API operations.
 #[derive(Event, Debug)]
@@ -87,7 +88,7 @@ pub fn api_request_observer(
         Option<&lunco_core::markers::Callsign>,
         Option<&lunco_core::CatalogEntryId>,
         Has<lunco_control_core::ControlBinding>,
-        Option<&lunco_core::CelestialBody>,
+        Option<&CelestialBody>,
         Option<&lunco_core::UsdPrimKind>,
     )>,
     // Which commands answer later, on the correlation id. Populated by whichever crate owns
@@ -723,7 +724,7 @@ fn execute_request(
         Option<&lunco_core::markers::Callsign>,
         Option<&lunco_core::CatalogEntryId>,
         Has<lunco_control_core::ControlBinding>,
-        Option<&lunco_core::CelestialBody>,
+        Option<&CelestialBody>,
         Option<&lunco_core::UsdPrimKind>,
     )>,
     deferred_commands: Option<&DeferredCommands>,

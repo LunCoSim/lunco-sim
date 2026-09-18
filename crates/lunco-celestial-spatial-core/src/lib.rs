@@ -13,9 +13,11 @@ mod mission;
 pub mod surface_frame;
 mod surface_pose;
 mod tracking;
+mod trajectory;
 
 pub use components::{
-    AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField, OrbitalViewPin, celestial_declared,
+    AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField, OrbitalViewPin, SolarSystemRoot,
+    celestial_declared,
 };
 pub use connectivity::{
     LinkGeometryPeer, LinkGeometryState, LinkNode, LinkOccluder, LinkPeer, LinkState, WifiNode,
@@ -33,3 +35,4 @@ pub use surface_pose::{
     BodyFixedPosition, SitePosition, SurfacePose, SurfacePoseQuery, resolve_surface_pose,
 };
 pub use tracking::SolarTracked;
+pub use trajectory::{TrajectoryFrame, TrajectoryPath, TrajectoryView};

@@ -138,7 +138,7 @@ fn main() {
     // bundle the sandbox embeds as its Design tab.
     #[cfg(feature = "ui")]
     if !headless {
-        app.insert_resource(lunco_workbench::BuildIdentity::new(
+        app.insert_resource(lunco_workbench_core::BuildIdentity::new(
             lunco_modelica_core::PRODUCT_VERSION,
             lunco_modelica_core::GIT_SHA,
             lunco_modelica_core::REPOSITORY_URL,

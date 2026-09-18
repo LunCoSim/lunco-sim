@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::{
     update_reference_frame_index, AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField,
-    OrbitalViewPin, ReferenceFrameIndex,
+    OrbitalViewPin, ReferenceFrameIndex, SolarSystemRoot,
 };
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
@@ -28,7 +28,6 @@ pub mod pose;
 pub mod queries;
 mod soi;
 mod systems;
-mod trajectories;
 pub mod wifi;
 
 pub mod commands;
@@ -43,7 +42,6 @@ pub use placement::*;
 pub use pose::*;
 pub use soi::*;
 pub use systems::*;
-pub use trajectories::*;
 pub use wifi::*;
 
 #[derive(Event, Debug, Clone, Copy)]
@@ -158,6 +156,8 @@ impl Plugin for CelestialPlugin {
         // the sole `SolarFramePose` reader path, including scene-local prims.
         queries::register_celestial_queries(app);
         app.register_type::<lunco_celestial_spatial_core::SolarTracked>();
+        app.register_type::<lunco_celestial::CelestialBody>();
+        app.register_type::<lunco_celestial::Spacecraft>();
         app.add_systems(
             Update,
             pose::update_solar_poses.run_if(cadence::tracked_needs_solve()),
@@ -238,9 +238,6 @@ impl Plugin for CelestialPlugin {
         if app.world().get_resource::<Gravity>().is_none() {
             app.insert_resource(Gravity::surface());
         }
-        app.register_type::<TrajectoryView>();
-        app.register_type::<TrajectoryFrame>();
-        app.register_type::<TrajectoryPath>();
         app.register_type::<ReferenceFrame>();
         app.init_resource::<ReferenceFrameIndex>();
         app.add_observer(tag_world_reference_frame);
@@ -255,8 +252,8 @@ impl Plugin for CelestialPlugin {
         app.insert_resource(CelestialBodyRegistry::default_system());
 
         // big_space::prelude::BigSpaceDefaultPlugins should be added by the application entry point
-        // after disabling TransformPlugin.
-        app.add_plugins(trajectories::TrajectoryPlugin);
+        // after disabling TransformPlugin. Trajectory mesh/sampling presentation is installed by
+        // the presentation composition, not by this headless spatial runtime.
         app.add_plugins(missions::MissionPlugin);
 
         if !app.is_plugin_added::<GravityPlugin>() {

@@ -610,7 +610,7 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         brightness: 0.0,
         ..Default::default()
     });
-    crate::register_presentation_bridges(&mut app);
+    lunco_luncosim_presentation::register(&mut app);
     app
 }
 

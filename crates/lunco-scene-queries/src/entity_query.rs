@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_celestial::CelestialBody;
 use lunco_core::{CatalogEntryId, GlobalEntityId, UsdPrimKind};
 use lunco_scene_catalog::catalog::SpawnCatalog;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -47,7 +48,7 @@ impl ApiQueryProvider for QueryEntityProvider {
             Option<&Name>,
             Option<&lunco_core::markers::Callsign>,
             Has<lunco_control_core::ControlBinding>,
-            Option<&lunco_core::CelestialBody>,
+            Option<&CelestialBody>,
             Option<&Transform>,
             Option<&CatalogEntryId>,
             Option<&UsdPrimKind>,
@@ -125,7 +126,7 @@ pub fn register(app: &mut App) {
     world.register_component::<Name>();
     world.register_component::<lunco_core::markers::Callsign>();
     world.register_component::<lunco_control_core::ControlBinding>();
-    world.register_component::<lunco_core::CelestialBody>();
+    world.register_component::<CelestialBody>();
     world.register_component::<Transform>();
     world.register_component::<CatalogEntryId>();
     world.register_component::<UsdPrimKind>();

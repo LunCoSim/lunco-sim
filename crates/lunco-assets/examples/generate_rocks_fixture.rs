@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let geo = GeoTransform::centred_square(
         TERRAIN_SIDE_M,
         SAMPLE_SIDE,
-        lunco_core::MOON_MEAN_RADIUS_M,
+        lunco_celestial_data::MOON_MEAN_RADIUS_M,
         SITE_LAT_DEG,
         SITE_LON_DEG,
     )

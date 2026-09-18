@@ -30,7 +30,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use lunco_core::CelestialBody;
+use lunco_celestial::CelestialBody;
 use lunco_time::{ClockId, ClockParent, Clocks, SetClock, TimeDomain, WorldTime};
 use lunco_workbench_core::MenuCtx;
 

@@ -9,8 +9,8 @@
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
+use lunco_celestial::CelestialBody as CoreCelestialBody;
 use lunco_celestial::{GeodeticAnchor, SiteAnchor};
-use lunco_core::CelestialBody as CoreCelestialBody;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::GravityBody;
 use lunco_spatial::SceneSpatialHandoffSet;

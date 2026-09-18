@@ -74,7 +74,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod layout_render;
-mod perspective_help;
 mod render;
 mod session;
 mod twin_settings;
@@ -99,58 +98,6 @@ pub mod control_status;
 pub mod perf_hud;
 pub mod perspective_command;
 pub mod theme_command;
-
-pub use perspective_help::{
-    HelpMouse, HelpPopup, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp,
-    PerspectiveHelpPlugin, PerspectiveHelpRegistry,
-};
-/// Authoritative version and build identity supplied by the host application.
-///
-/// Workbench is shared by multiple binaries, so its own package metadata is
-/// not the product identity users are running. Each host inserts its stamped
-/// identity, and Workbench only presents it in shared UI such as Help.
-#[derive(Resource, Clone, Debug, PartialEq, Eq)]
-pub struct BuildIdentity {
-    /// Release or product version shown to users.
-    pub version: String,
-    /// Build identifier, normally the short source revision.
-    pub build: String,
-    /// Canonical GitHub repository containing the source revision.
-    pub repository: String,
-}
-
-impl BuildIdentity {
-    /// Create an identity from the host application's stamped values.
-    pub fn new(
-        version: impl Into<String>,
-        build: impl Into<String>,
-        repository: impl Into<String>,
-    ) -> Self {
-        Self {
-            version: version.into(),
-            build: build.into(),
-            repository: repository.into(),
-        }
-    }
-
-    /// Format the canonical version line shared by Help and Settings.
-    pub fn version_label(&self) -> String {
-        format!("Version {} ({})", self.version, self.build)
-    }
-
-    /// Return the exact source revision URL when the build has a known SHA.
-    pub fn source_url(&self) -> Option<String> {
-        let revision = self.build.strip_suffix("-dirty").unwrap_or(&self.build);
-        if revision.is_empty() || revision == "unknown" {
-            return None;
-        }
-        Some(format!(
-            "{}/commit/{}",
-            self.repository.trim_end_matches('/'),
-            revision
-        ))
-    }
-}
 
 /// Desired pixel widths for the side / right dock panes. Read each
 /// frame by [`WorkbenchLayout::enforce_fixed_widths`] which rewrites
@@ -789,8 +736,8 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<lunco_workbench_text_editor::TextEditorPlugin>() {
             app.add_plugins(lunco_workbench_text_editor::TextEditorPlugin);
         }
-        if !app.is_plugin_added::<perspective_help::PerspectiveHelpPlugin>() {
-            app.add_plugins(perspective_help::PerspectiveHelpPlugin);
+        if !app.is_plugin_added::<lunco_workbench_help_ui::PerspectiveHelpPlugin>() {
+            app.add_plugins(lunco_workbench_help_ui::PerspectiveHelpPlugin);
         }
         app.init_resource::<WorkbenchLayout>()
             .init_resource::<WorkbenchMenuRegistry>()
@@ -886,7 +833,11 @@ pub trait WorkbenchAppExt {
     fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) -> &mut Self;
 
     /// Register help content for a perspective.
-    fn register_perspective_help(&mut self, id: PerspectiveId, help: PerspectiveHelp) -> &mut Self;
+    fn register_perspective_help(
+        &mut self,
+        id: PerspectiveId,
+        help: lunco_workbench_help_ui::PerspectiveHelp,
+    ) -> &mut Self;
 }
 
 impl WorkbenchAppExt for App {
@@ -908,20 +859,27 @@ impl WorkbenchAppExt for App {
         self
     }
 
-    fn register_perspective_help(&mut self, id: PerspectiveId, help: PerspectiveHelp) -> &mut Self {
-        if !self.world().contains_resource::<PerspectiveHelpRegistry>() {
-            self.init_resource::<PerspectiveHelpRegistry>();
+    fn register_perspective_help(
+        &mut self,
+        id: PerspectiveId,
+        help: lunco_workbench_help_ui::PerspectiveHelp,
+    ) -> &mut Self {
+        if !self
+            .world()
+            .contains_resource::<lunco_workbench_help_ui::PerspectiveHelpRegistry>()
+        {
+            self.init_resource::<lunco_workbench_help_ui::PerspectiveHelpRegistry>();
         }
         // First registration for this id also contributes the Help-menu
         // item — so a subsystem gets both popup and menu entry from this
         // single call, with no central list to maintain.
         let is_new = self
             .world()
-            .resource::<PerspectiveHelpRegistry>()
+            .resource::<lunco_workbench_help_ui::PerspectiveHelpRegistry>()
             .get(id)
             .is_none();
         self.world_mut()
-            .resource_mut::<PerspectiveHelpRegistry>()
+            .resource_mut::<lunco_workbench_help_ui::PerspectiveHelpRegistry>()
             .register(id, help);
         if is_new {
             if !self.world().contains_resource::<WorkbenchLayout>() {
@@ -939,7 +897,7 @@ impl WorkbenchAppExt for App {
                     self.init_resource::<WorkbenchMenuRegistry>();
                 }
                 let mut menus = self.world_mut().resource_mut::<WorkbenchMenuRegistry>();
-                perspective_help::register_help_menu_item(&mut menus, id, title);
+                lunco_workbench_help_ui::register_help_menu_item(&mut menus, id, title);
             }
         }
         self

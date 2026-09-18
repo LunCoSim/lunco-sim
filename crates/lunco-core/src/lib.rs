@@ -188,26 +188,6 @@ impl std::str::FromStr for GlobalEntityId {
     }
 }
 
-/// Defines a spacecraft entity with its ephemeris and physical constraints.
-#[derive(Component, Reflect, Default)]
-#[reflect(Component)]
-pub struct Spacecraft {
-    /// Human-readable name of the spacecraft.
-    pub name: String,
-    /// ID used for ephemeris lookups (e.g., SPICE ID).
-    pub ephemeris_id: i32,
-    /// Reference body ID (e.g., Earth, Moon).
-    pub reference_id: i32,
-    /// Start of valid data range in Julian Date.
-    pub start_epoch_jd: Option<f64>,
-    /// End of valid data range in Julian Date.
-    pub end_epoch_jd: Option<f64>,
-    /// Collision/interaction radius for simple math-based proximity checks.
-    pub hit_radius_m: f32,
-    /// Whether this spacecraft should be rendered and listed in the UI.
-    pub user_visible: bool,
-}
-
 // NOTE: there is intentionally NO `Vessel` / `RoverVessel` / `LanderVessel`
 // marker. "Possessable / controllable" is derived from TOPOLOGY: an entity is
 // controllable iff it exposes writable control ports — an authored command
@@ -250,55 +230,3 @@ pub struct Ground;
 /// (`"LodTile d3 4,7"`) — names are display text and will drift.
 #[derive(Component)]
 pub struct SystemManaged;
-
-/// Physical properties used for gravity, collision, and mass-based calculations.
-///
-/// These properties use double precision (`f64`) to maintain simulation integrity
-/// over astronomical scales as mandated by the project constitution.
-#[derive(Component, Debug, Clone, Reflect, Default)]
-#[reflect(Component)]
-pub struct PhysicalProperties {
-    /// Radius of the body in meters.
-    pub radius_m: f64,
-    /// Mass of the body in kilograms.
-    pub mass_kg: f64,
-}
-
-/// Represents a major celestial body (planet, moon, asteroid) in the simulation.
-#[derive(Component, Debug, Clone, Reflect, Default)]
-#[reflect(Component)]
-pub struct CelestialBody {
-    /// Name of the celestial body.
-    pub name: String,
-    /// Unique identifier for ephemeris data retrieval.
-    pub ephemeris_id: i32,
-    /// Mean radius in meters, used for rendering and approximate physics.
-    pub radius_m: f64,
-}
-
-/// **The** lunar radius, in metres. Every place that needs "how big is the
-/// Moon" — body placement, colliders, ground-relative altitude, the body-radius
-/// citation stamped into a baked GeoTIFF — refers to this.
-///
-/// Source: IAU/WGCCRE mean radius of the Moon, 1737.4 km
-/// (Archinal et al., *Report of the IAU Working Group on Cartographic
-/// Coordinates and Rotational Elements*). The same value the LOLA/LRO products
-/// the terrain pipeline ingests are referenced to.
-///
-/// It exists because the tree carried three disagreeing values (`1737.0e3`,
-/// `1.7374e6` in the sandbox UI, `1_737_400.0` in tests) — a 400 m spread, i.e.
-/// a real altitude/georeferencing bias the moment anything reports a height.
-/// Do not re-type the number; a fourth copy is the bug coming back.
-///
-/// It is LOAD-BEARING for site placement, not just visuals:
-/// `geodetic_to_body_fixed` derives the site anchor from it and the DEM frame
-/// contract ties that anchor to the baked grid, so perturbing it desyncs the anchor
-/// from the baked DEM (shrinking it by 10 km to lower the rendered globe moved the
-/// anchor ~772 m and tripped the frame check on load). To move the globe shell,
-/// offset the GLOBE RENDER radius (see `lunco_celestial_spatial::globe_lod`), never this.
-///
-/// It lives HERE, in the one dependency-light leaf every consumer already sees,
-/// rather than in `lunco-celestial`: the offline `lunco-assets` build tool needs
-/// the same datum for the GeoTIFF it writes and must not take a Bevy-heavy
-/// simulation dependency to get it. `lunco_celestial::registry` re-exports it.
-pub const MOON_MEAN_RADIUS_M: f64 = 1_737_400.0;

@@ -16,6 +16,7 @@ lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-download = { path = "../lunco-assets-download" }
 lunco-assets-processing = { path = "../lunco-assets-processing" }
+lunco-celestial-data = { path = "../lunco-celestial-data" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
 # A broken `Assets.toml` or a failed dataset download has to REACH the user, and

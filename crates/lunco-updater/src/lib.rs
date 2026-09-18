@@ -8,11 +8,11 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bevy::prelude::*;
-use bevy::tasks::{futures_lite::future, IoTaskPool, Task};
+use bevy::tasks::{IoTaskPool, Task, futures_lite::future};
 use bevy_egui::egui;
 use lunco_settings::AppSettingsExt;
 use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};
@@ -22,6 +22,12 @@ use velopack::sources::UpdateSource;
 use velopack::{
     NetworkError, UpdateCheck, UpdateInfo, UpdateManager, VelopackAsset, VelopackAssetFeed,
 };
+
+/// Run the native package-manager startup hook before CLI dispatch.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn initialize_velopack() {
+    velopack::VelopackApp::build().run();
+}
 
 const UPDATE_STATUS_SOURCE: &str = "updates";
 /// Public machine-only repository containing immutable update releases.
@@ -452,7 +458,8 @@ struct UpdateDialogState {
     last_status: Option<UpdateStatus>,
 }
 
-pub(crate) struct UpdatePlugin;
+/// Installs the native updater settings, menu, and asynchronous update tasks.
+pub struct UpdatePlugin;
 
 impl Plugin for UpdatePlugin {
     fn build(&self, app: &mut App) {
@@ -515,7 +522,7 @@ fn register_update_settings_menu(world: &mut World) {
     };
     menus.register_settings_submenu("Updates", |ui, ctx| {
         ui.label(egui::RichText::new("Velopack updates").weak().small());
-        let identity = ctx.resource::<lunco_workbench::BuildIdentity>();
+        let identity = ctx.resource::<lunco_workbench_core::BuildIdentity>();
         egui::Grid::new("updates_build_identity")
             .num_columns(2)
             .spacing([8.0, 4.0])

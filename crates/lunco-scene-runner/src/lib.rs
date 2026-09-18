@@ -1138,6 +1138,7 @@ pub fn run() -> u8 {
         Some(cli.scene.clone()),
     );
     app.add_plugins(LunCoSimHeadlessPlugin::default());
+    app.add_plugins(lunco_celestial_presentation::CelestialPresentationPlugin);
     // The component runner has already resolved the manifest-selected scene.
     // Re-assert that resolved value at the application boundary immediately
     // before startup schedules are built. This keeps the runner independent of
@@ -1556,7 +1557,7 @@ pub fn run() -> u8 {
                         app.world_mut()
                             .query_filtered::<(&GlobalTransform, &bevy::camera::primitives::Aabb), (
                                 With<Mesh3d>,
-                                Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
+                                Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
                                 Without<lunco_core::programs::ProgramDriverId>,
                                 Without<lunco_core::NoSelectionBounds>,
                             )>();
@@ -1564,7 +1565,7 @@ pub fn run() -> u8 {
                     let mut state_skip = app.world_mut().query_filtered::<(), Or<(
                         With<big_space::prelude::Grid>,
                         With<big_space::prelude::CellCoord>,
-                        With<lunco_celestial_spatial::TrajectoryMeshMarker>,
+                        With<lunco_celestial_presentation::TrajectoryMeshMarker>,
                         With<lunco_core::programs::ProgramDriverId>,
                         With<lunco_core::NoSelectionBounds>,
                     )>>();

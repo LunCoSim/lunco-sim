@@ -51,8 +51,10 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-celestial`** | Headless celestial semantics: canonical body catalog/NAIF identities, ephemeris contracts, typed f64 frame transforms, geodesy, body rotation, and Kepler propagation. |
+| **`lunco-celestial-data`** | Dependency-free authoritative celestial constants shared by semantic and asset-processing packages without making the general core depend on the celestial domain. |
 | **`lunco-celestial-spatial-core`** | Lightweight Bevy/BigSpace contracts shared by celestial consumers: semantic frame lookup, canonical surface poses, surface axes, scene body declarations, orbital-view state, cached local-gravity facts, and render-independent connectivity state. |
-| **`lunco-celestial-spatial`** | Headless Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, links, trajectories, cadence, and runtime celestial commands. Application UI owns celestial panels. |
+| **`lunco-celestial-spatial`** | Headless Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, links, cadence, and runtime celestial commands. It consumes the separate presentation package for trajectory rendering. |
+| **`lunco-celestial-presentation`** | Render-facing trajectory sampling and presentation for celestial runtime facts. It depends on the spatial contracts but keeps mesh/material and presentation scheduling out of the semantic spatial runtime. |
 | **`lunco-celestial-ephemeris`** | Concrete high-fidelity ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
 | **`lunco-terrain-core`** | Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde), shared by both the planar DEM streamer and the cube-sphere planetary tiler. |
@@ -180,6 +182,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench-layout`** | Renderer-independent `egui_dock` layout state: perspective registration/activation, dock snapshots, panel placement, split sanitization, and scene-interaction synchronization. It consumes workbench contracts/state without the concrete Bevy/egui shell. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `bevy_egui` rendering, panel-host consumption, viewport integration, and shell-owned command observers. Dock layout state and perspective materialization are supplied by `lunco-workbench-layout`; headless adapters use the core/layout contracts without linking this shell. |
+| **`lunco-workbench-help-ui`** | Optional rendered Help/About perspective presentation: help registry, perspective help menu item, and version/source display. It consumes workbench contracts without putting egui rendering into `lunco-workbench-core. |
 | **`lunco-workbench-guided-ui`** | Optional application-level guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
 | **`lunco-workbench-file-dialog`** | Reusable native/wasm file-dialog capability: typed open/save/folder requests, backend resolution events, browser-picked text, and browser downloads. It owns dialog dependencies (`rfd`/wasm DOM) outside storage, document, and shell contracts. |
 | **`lunco-workbench-file-ops`** | Reusable windowed file-workflow adapter: typed picker commands, picker-result routing, Twin/document save and rename coordination. It reuses `lunco-storage`, `lunco-workbench-file-dialog`, `lunco-workspace`, and document contracts without making storage own UI policy. |
@@ -260,6 +263,8 @@ Primary entry points and simulation assembly targets.
 | :--- | :--- | :--- |
 | **`lunco-luncosim-exposures`** | — | Headless-safe runtime exposure projection plugin. Resolves authoritative ECS/domain state and authored telemetry into the shared `EngineExposures` registry for HTML, egui, API, telemetry, and remote consumers; it has no renderer or UI dependency. |
 | **`lunco-luncosim`** | `luncosim` | Thin process/CLI shell and production authored-scene test command. It dispatches headless mode to `lunco-luncosim-runtime`, GUI mode to `lunco-luncosim-ui`, and the `rhai` subcommand to `lunco-rhai-repl`. |
+| **`lunco-luncosim-presentation`** | — | Application-edge visual bridges: status/environment projection, terrain horizon, USD camera/light composition, capture integration, and scene presentation wiring. |
+| **`lunco-updater`** | — | Native desktop update capability and rendered update surface. It owns Velopack admission and update UI behind the application’s opt-in `updates` feature. |
 | **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, readiness barriers, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
 | **`lunco-luncosim-core`** | — | Headless-safe generic simulation substrate shared by the GUI shell, `luncosim-server`, and scene-test runner. It owns simulation composition and renderer-independent domain mechanisms, not application services. |
 | **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, and persisted experiment artifacts. It is composed by the runtime boundary rather than embedded in the generic core. |
@@ -414,10 +419,19 @@ telemetry, USD projection, and UI. It depends only on the semantic celestial
 package, generic spatial coordinates, and the Bevy/BigSpace types required by
 those contracts. It does not install a celestial runtime or pull terrain,
 globe, link solving, imagery, trajectory sampling, cadence, or asset
-integration.
+integration. It also owns the render-independent trajectory view/frame/path
+contracts consumed by both the spatial mission projector and the optional
+trajectory presentation package.
 
 **`lunco-celestial-spatial`**
-Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, globe/imagery integration, links, trajectories, cadence, and runtime commands. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
+Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, globe/imagery integration, links, cadence, and runtime commands. Trajectory data contracts live in `lunco-celestial-spatial-core`; mesh sampling and trajectory alignment are installed by `lunco-celestial-presentation`. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
+
+**`lunco-celestial-presentation`**
+Presentation adapter for celestial runtime facts. It owns trajectory sampling,
+mesh/view construction, alignment, and visibility, while `lunco-celestial-spatial` remains the
+headless-safe owner of scene projection, gravity, links, and commands. This
+boundary prevents rendering-oriented changes from rebuilding the semantic
+spatial package's consumers.
 
 **`lunco-celestial-ephemeris`**
 Concrete high-fidelity ephemeris provider for `lunco-celestial`. The heavy half of the celestial split and the one place `celestial-time` is allowed: pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real planetary positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`.
@@ -976,6 +990,11 @@ shell. The shared input keymap is owned by `lunco-input-core`; the recording
 overlay is supplied by `lunco-input-ui`, so the shell does not depend on the
 full vessel-control adapter.
 
+**`lunco-workbench-help-ui`**
+Rendered Help/About presentation for the Workbench. It owns the help registry's
+egui menu item and version/source view and consumes `BuildIdentity` from
+`lunco-workbench-core`; the core contract remains usable by headless hosts.
+
 **`lunco-workbench-layout`**
 Renderer-independent workbench layout owner. It materializes perspective
 presets, maintains per-perspective dock state, sanitizes persisted split
@@ -1246,6 +1265,18 @@ Production application integration above the generic simulation substrate. It in
 
 **`lunco-luncosim-ui`**
 Windowed LunCoSim application and presentation boundary: Bevy window/render plugin composition and CLI render choices, egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, and native desktop integration. Platform icon rasterization and live window-icon installation are isolated behind the packaging-only `package-icons` feature; `scripts/build_native.sh` enables it for packaged `luncosim` builds. Optional offscreen, networking, and updater edges are feature-scoped; native Velopack update handling is behind the opt-in `updates` feature, which the package script enables for installed desktop builds. The headless application core and ordinary UI builds do not compile the icon graphics toolchain or updater closure.
+
+**`lunco-luncosim-presentation`**
+Application-edge presentation composition. It owns the status/environment,
+terrain-horizon, USD camera/light, capture, and scene-presentation bridges that
+are needed by the windowed application but are not part of the reusable UI
+shell's feature closure. The UI crate installs this package directly at the
+application composition boundary.
+
+**`lunco-updater`**
+Optional native desktop update capability. It owns the Velopack startup hook and
+the rendered update panel, so the `updates` feature adds one explicit updater
+edge instead of putting updater dependencies into every UI build.
 
 **`lunco-luncosim-exposures`**
 Production integration crate for the renderer-independent runtime exposure projection. `RuntimeExposuresPlugin` registers the single shared path from authoritative ECS/domain state and authored telemetry to `lunco_core::exposure::EngineExposures`; HTML, egui, API, telemetry, and remote clients consume that registry. It owns no UI, renderer, or tutorial policy, so changing exposure derivation does not recompile the application composition root.

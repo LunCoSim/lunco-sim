@@ -630,13 +630,13 @@ fn process_dem(
         // pipeline ingests are themselves referenced to.
         //
         // ⚠ DO NOT re-type this number. It is declared once, in `lunco-core`
-        // (`lunco_core::MOON_MEAN_RADIUS_M`), precisely so this offline build tool
+        // (`lunco_celestial_data::MOON_MEAN_RADIUS_M`), precisely so this offline build tool
         // and the simulation's `lunco_celestial::registry` — which re-exports it —
         // cannot stamp two different datums. This site used to mirror the VALUE.
         let mut geo = lunco_geotiff::GeoTransform::centred_square(
             win as f64 * scale,
             out_n,
-            lunco_core::MOON_MEAN_RADIUS_M,
+            lunco_celestial_data::MOON_MEAN_RADIUS_M,
             center_lat,
             center_lon,
         );

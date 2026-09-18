@@ -1,0 +1,17 @@
+[package]
+name = "lunco-workbench-help-ui"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Reusable perspective help and live-help overlay for LunCoSim workbenches"
+
+[dependencies]
+bevy = { workspace = true }
+bevy_egui = { workspace = true, features = ["render"] }
+lunco-theme = { path = "../lunco-theme" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-layout = { path = "../lunco-workbench-layout" }
+lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
+
+[lints]
+workspace = true

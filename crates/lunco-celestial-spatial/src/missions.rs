@@ -12,13 +12,11 @@
 //! onto the declaration components below. No mission prim ⇒ no mission. There is
 //! no filesystem scan and no implicit set.
 
-use crate::trajectories::{
-    TrajectoryFrame, TrajectoryPath, TrajectoryRuntimeState, TrajectoryView,
-};
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_celestial_spatial_core::{
     MissionDecl, MissionSpacecraftDecl, MissionTrajectoryDecl, ReferenceFrameIndex,
+    TrajectoryFrame, TrajectoryPath, TrajectoryView,
 };
 use lunco_render::{PbrLook, WorldLabel};
 
@@ -40,7 +38,7 @@ pub struct MissionRegistry {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct MissionSpawned;
 
-use lunco_core::Spacecraft;
+use lunco_celestial::Spacecraft;
 
 #[derive(Component)]
 pub struct SpacecraftBillboard;
@@ -222,7 +220,6 @@ pub fn spawn_declared_missions(
                 end_epoch: traj.end_epoch_jd,
             },
             TrajectoryPath::default(),
-            TrajectoryRuntimeState::default(),
             Transform::default(),
             GlobalTransform::default(),
             Visibility::default(),

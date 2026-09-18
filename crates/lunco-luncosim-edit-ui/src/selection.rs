@@ -768,7 +768,7 @@ pub fn compute_selection_aabb(
         (&GlobalTransform, &Aabb),
         (
             With<Mesh3d>,
-            Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
+            Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
             Without<lunco_core::programs::ProgramDriverId>,
             Without<lunco_core::NoSelectionBounds>,
         ),
@@ -779,7 +779,7 @@ pub fn compute_selection_aabb(
         Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial_spatial::TrajectoryMeshMarker>,
+            With<lunco_celestial_presentation::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>,
@@ -837,7 +837,7 @@ pub fn draw_selection_bounds(
         (&GlobalTransform, &Aabb),
         (
             With<Mesh3d>,
-            Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
+            Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
             Without<lunco_core::programs::ProgramDriverId>,
             Without<lunco_core::NoSelectionBounds>,
         ),
@@ -848,7 +848,7 @@ pub fn draw_selection_bounds(
         Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial_spatial::TrajectoryMeshMarker>,
+            With<lunco_celestial_presentation::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>,
@@ -1316,7 +1316,7 @@ mod tests {
 
         let mut q = app.world_mut().query_filtered::<Entity, (
             With<Mesh3d>,
-            Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
+            Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
             Without<lunco_core::programs::ProgramDriverId>,
             Without<lunco_core::NoSelectionBounds>,
         )>();
@@ -1367,7 +1367,7 @@ mod tests {
             .world_mut()
             .query_filtered::<(&GlobalTransform, &Aabb), (
                 With<Mesh3d>,
-                Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
+                Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
                 Without<lunco_core::programs::ProgramDriverId>,
                 Without<lunco_core::NoSelectionBounds>,
             )>();
@@ -1375,7 +1375,7 @@ mod tests {
         let mut state_skip = app.world_mut().query_filtered::<(), Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial_spatial::TrajectoryMeshMarker>,
+            With<lunco_celestial_presentation::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>>();
@@ -1429,7 +1429,7 @@ mod tests {
             .world_mut()
             .query_filtered::<(&GlobalTransform, &Aabb), (
                 With<Mesh3d>,
-                Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
+                Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
                 Without<lunco_core::programs::ProgramDriverId>,
                 Without<lunco_core::NoSelectionBounds>,
             )>();
@@ -1437,7 +1437,7 @@ mod tests {
         let mut state_skip = app.world_mut().query_filtered::<(), Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial_spatial::TrajectoryMeshMarker>,
+            With<lunco_celestial_presentation::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>>();

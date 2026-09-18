@@ -40,7 +40,7 @@ networking = [
 ]
 # Native Velopack update checks and package installation. Kept opt-in for
 # consumers that use the interactive UI shell without desktop packaging.
-updates = ["dep:lunco-assets-transport", "dep:velopack", "dep:ureq"]
+updates = ["dep:lunco-updater"]
 # Rasterize and embed the platform icon only for native package builds. Normal
 # UI development keeps the icon installer inactive, so the build script does
 # not compile the SVG/image toolchain.
@@ -84,7 +84,7 @@ winit = { version = "0.30.13" }
 
 lunco-api-contracts = { path = "../lunco-api-contracts" }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
-lunco-assets-transport = { workspace = true, optional = true }
+lunco-updater = { path = "../lunco-updater", optional = true }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets = { path = "../lunco-assets" }
@@ -97,6 +97,7 @@ lunco-avatar-ui = { path = "../lunco-avatar-ui", optional = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-camera-celestial = { path = "../lunco-camera-celestial" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false, optional = true }
+lunco-celestial-presentation = { path = "../lunco-celestial-presentation" }
 lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-control-core = { path = "../lunco-control-core" }
@@ -151,6 +152,7 @@ lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-usd-viewport-runtime = { path = "../lunco-usd-viewport-runtime" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
+lunco-luncosim-presentation = { path = "../lunco-luncosim-presentation" }
 lunco-web = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-workbench-runtime-ui = { path = "../lunco-workbench-runtime-ui" }
@@ -182,10 +184,6 @@ winresource = { version = "0.1.31", optional = true }
 # package the desktop icon there and are intentionally build-only and
 # packaging-feature-only.
 ignored = ["image", "resvg", "usvg", "winresource"]
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-velopack = { version = "=1.2.110-ge826545", optional = true, features = ["public-utils"] }
-ureq = { workspace = true, optional = true, features = ["rustls", "gzip"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }

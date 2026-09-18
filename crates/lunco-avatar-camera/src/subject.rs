@@ -17,11 +17,12 @@ use lunco_camera_core::{
     FollowTarget, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
     SurfaceRelativeMode,
 };
+use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial_core::{
     LocalGravityField, surface_axes_for_grid_position, surface_axes_in_grid,
 };
 use lunco_control_core::ControlLink;
-use lunco_core::{CelestialBody, on_command};
+use lunco_core::on_command;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::GravityBody;
 use lunco_spatial::attach::{migrate_to_grid, migrate_to_grid_local_pose};

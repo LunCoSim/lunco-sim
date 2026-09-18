@@ -15,16 +15,16 @@ use lunco_luncosim_edit_gizmo_ui as edit_gizmo;
 use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
 use lunco_port_core::InputPorts;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_workbench::{
-    HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp, ViewportPanel,
-    WorkbenchAppExt,
-};
+use lunco_workbench::{ViewportPanel, WorkbenchAppExt};
 use lunco_workbench_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench_core::view_model::{ViewModelAppExt, ViewModelSet};
 use lunco_workbench_core::viewport::VIEWPORT_PANEL_ID;
 use lunco_workbench_core::{
     PanelId, PanelSlot, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
     WorkbenchPanelAppExt,
+};
+use lunco_workbench_help_ui::{
+    HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp,
 };
 
 pub mod asset_visibility;

@@ -80,9 +80,6 @@ impl Plugin for LunCoCoreRuntimePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<lunco_core::PhysicsPoseAuthoritative>()
             .register_type::<lunco_core::ModelStateRevision>()
-            .register_type::<lunco_core::PhysicalProperties>()
-            .register_type::<lunco_core::CelestialBody>()
-            .register_type::<lunco_core::Spacecraft>()
             .register_type::<lunco_core::MobilityRoot>()
             .register_type::<lunco_core::GlobalEntityId>()
             .register_type::<lunco_core::Provenance>()

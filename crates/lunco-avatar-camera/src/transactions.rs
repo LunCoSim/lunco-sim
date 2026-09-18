@@ -15,8 +15,9 @@ use lunco_camera_core::{
     AdaptiveNearPlane, CameraZoomInput, FocusTarget, FreeFlightCamera, OrbitCamera,
     ReturnFromOrbit, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
+use lunco_celestial::{CelestialBody, Spacecraft};
 use lunco_control_core::{IntentAnalogState, UserIntent};
-use lunco_core::{CelestialBody, Spacecraft, on_command};
+use lunco_core::on_command;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::GravityBody;
 use lunco_input_core::InputBindingsSettings;

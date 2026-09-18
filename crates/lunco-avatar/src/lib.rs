@@ -31,10 +31,11 @@ use lunco_camera_core::{
     AdaptiveNearPlane, CameraUpdateSet, FreeFlightCamera, OrbitCamera, SpringArmCamera,
     SurfaceRelativeMode,
 };
+use lunco_celestial::{CelestialBody, Spacecraft};
 use lunco_control_core::{
     AcquireControl, ControlLink, IntentAnalogState, IntentState, ReleaseControlSource, UserIntent,
 };
-use lunco_core::{on_command, register_commands, CelestialBody, Spacecraft};
+use lunco_core::{on_command, register_commands};
 use lunco_core_session::commands::UpdateProfile;
 use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};

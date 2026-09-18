@@ -6,6 +6,7 @@
 //! frame conversion. The sibling `lunco-celestial-spatial` package owns the
 //! scene/runtime projection.
 
+pub mod components;
 pub mod coords;
 pub mod ephemeris;
 pub mod frames;
@@ -15,6 +16,7 @@ pub mod kepler;
 pub mod registry;
 pub mod transform;
 
+pub use components::*;
 pub use ephemeris::*;
 pub use geo::*;
 pub use iau::*;

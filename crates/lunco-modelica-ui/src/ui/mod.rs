@@ -67,6 +67,7 @@ use lunco_workbench_core::{
     MenuCtx, PanelId, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
     UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchPanelAppExt,
 };
+use lunco_workbench_help_ui::{HelpMouse, HelpShortcut, PerspectiveHelp};
 
 /// The [`PanelId`] under which `ModelViewPanel` is registered. Lives in the
 /// `ui` module because `PanelId` is a workbench (UI) panel-registry key — the
@@ -848,21 +849,21 @@ impl Plugin for ModelicaUiPlugin {
             })
             .register_perspective_help(
                 lunco_workbench_core::PerspectiveId("modelica_analyze"),
-                lunco_workbench::PerspectiveHelp {
+                PerspectiveHelp {
                     description: "Modelica engineering workbench. Author models as \
                                   text or wired diagrams, then compile and simulate.",
                     shortcuts: vec![
-                        lunco_workbench::HelpShortcut { keys: "F5", description: "Compile & run the active model" },
-                        lunco_workbench::HelpShortcut { keys: "Ctrl+N", description: "New untitled model" },
-                        lunco_workbench::HelpShortcut { keys: "Ctrl+S", description: "Save the active model" },
-                        lunco_workbench::HelpShortcut { keys: "Ctrl+Z", description: "Undo" },
-                        lunco_workbench::HelpShortcut { keys: "Ctrl+Shift+Z", description: "Redo" },
-                        lunco_workbench::HelpShortcut { keys: "F2", description: "Rename selected item in browser" },
+                        HelpShortcut { keys: "F5", description: "Compile & run the active model" },
+                        HelpShortcut { keys: "Ctrl+N", description: "New untitled model" },
+                        HelpShortcut { keys: "Ctrl+S", description: "Save the active model" },
+                        HelpShortcut { keys: "Ctrl+Z", description: "Undo" },
+                        HelpShortcut { keys: "Ctrl+Shift+Z", description: "Redo" },
+                        HelpShortcut { keys: "F2", description: "Rename selected item in browser" },
                     ],
                     mouse: vec![
-                        lunco_workbench::HelpMouse { interaction: "Drag", description: "Move components · drag a part onto the diagram" },
-                        lunco_workbench::HelpMouse { interaction: "Drag port → port", description: "Connect two component ports" },
-                        lunco_workbench::HelpMouse { interaction: "Scroll", description: "Zoom the diagram canvas" },
+                        HelpMouse { interaction: "Drag", description: "Move components · drag a part onto the diagram" },
+                        HelpMouse { interaction: "Drag port → port", description: "Connect two component ports" },
+                        HelpMouse { interaction: "Scroll", description: "Zoom the diagram canvas" },
                     ],
                 },
             );

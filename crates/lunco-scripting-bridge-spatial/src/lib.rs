@@ -11,7 +11,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_core::CelestialBody;
+use lunco_celestial::CelestialBody;
 use lunco_scripting_bridge_core::{ValueBuilder, resolve_entity, vec3_value, with_world};
 use lunco_spatial::{
     NavigationCommand, SteeringGeometry,

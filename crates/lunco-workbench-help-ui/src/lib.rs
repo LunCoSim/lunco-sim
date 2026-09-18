@@ -12,10 +12,10 @@
 //! with Esc or by clicking the dimmed backdrop.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use lunco_workbench_core::{PerspectiveId, WorkbenchMenuRegistry};
 use lunco_workbench_layout::WorkbenchLayout;
-use lunco_workbench_widgets::{icon_button, paint_icon, UiIcon};
+use lunco_workbench_widgets::{UiIcon, icon_button, paint_icon};
 use std::collections::HashMap;
 
 /// A single keyboard shortcut entry.
@@ -114,13 +114,10 @@ impl Plugin for PerspectiveHelpPlugin {
 }
 
 /// Add a Help-menu entry that opens `id`'s help popup. Called by
-/// [`WorkbenchAppExt::register_perspective_help`](crate::WorkbenchAppExt)
+/// `WorkbenchAppExt::register_perspective_help` in `lunco-workbench`
 /// so each subsystem contributes its *own* menu item at the point it
 /// registers its perspective — the workbench never hardcodes a list.
-pub(crate) fn visible_perspective_title(
-    layout: &WorkbenchLayout,
-    id: PerspectiveId,
-) -> Option<String> {
+pub fn visible_perspective_title(layout: &WorkbenchLayout, id: PerspectiveId) -> Option<String> {
     layout
         .perspectives
         .iter()
@@ -128,7 +125,7 @@ pub(crate) fn visible_perspective_title(
         .map(|perspective| perspective.title())
 }
 
-pub(crate) fn register_help_menu_item(
+pub fn register_help_menu_item(
     menus: &mut WorkbenchMenuRegistry,
     id: PerspectiveId,
     title: String,

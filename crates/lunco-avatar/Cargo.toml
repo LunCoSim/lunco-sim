@@ -29,6 +29,7 @@ lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-spatial = { path = "../lunco-spatial" }

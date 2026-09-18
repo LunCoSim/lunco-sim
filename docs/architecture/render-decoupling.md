@@ -56,6 +56,14 @@ on the render-recovery crate. Likewise, `lunco-usd-queries` disables
 `lunco-doc-bevy`'s egui default because query providers are shared by API and
 headless hosts.
 
+The application presentation closure is kept in lunco-luncosim-presentation.
+It owns status/environment projection, terrain horizon, USD camera/light
+composition, capture integration, and the final scene presentation bridges.
+The UI shell calls that package at the application composition boundary instead
+of retaining those bridges as private modules. The updater is a second explicit
+edge in lunco-updater, enabled only by the updates feature; ordinary UI builds
+do not acquire Velopack or its native update surface.
+
 The outward API follows the same split. `lunco-api-contracts` owns only the
 serializable request/response envelopes. `lunco-api-transport` owns server-side
 conversion and ECS bridge delivery. `lunco-api-client` owns native HTTP
@@ -86,7 +94,9 @@ whose dependency closure can express the contract:
 | --- | --- | --- |
 | `lunco-luncosim-core` | simulation composition, physics, USD load/projection, and the headless execution plugin | windows, GPU resources, egui, or render policy |
 | `lunco-luncosim` | process/CLI dispatch | simulation rules or renderer/window composition |
-| `lunco-luncosim-ui` | window/render composition and interactive presentation | headless simulation rules or a second runtime loop |
+| `lunco-luncosim-ui` | window/render composition and interactive shell assembly | headless simulation rules, application presentation bridges, or a second runtime loop |
+| `lunco-luncosim-presentation` | application-edge status, environment, camera/light, terrain-horizon, capture, and scene presentation bridges | headless simulation rules or reusable shell contracts |
+| `lunco-updater` | optional native update startup and update presentation | ordinary UI builds, headless runtime, or update policy in simulation core |
 | `lunco-scripting-bridge-core` | interpreter-free language-neutral world bridge mechanism | authored policy, language runtimes, or render/UI dependencies |
 | `lunco-scripting-bridge-spatial` | active-frame pose, navigation, geolocation, and entity projections | generic reflection, language runtime, or render/UI policy |
 | `lunco-scripting-bridge-time` | deterministic simulation-clock and clock-domain projections | spatial pose, authored policy, language runtime, or render/UI dependencies |

@@ -7,7 +7,10 @@ use big_space::prelude::CellCoord;
 use futures_lite::future;
 use lunco_celestial::ephemeris::{EphemerisProvider, EphemerisResource};
 use lunco_celestial::{BodyDescriptor, CelestialBodyRegistry, ReferenceFrame};
-use lunco_celestial_spatial_core::ReferenceFrameIndex;
+use lunco_celestial_spatial_core::{
+    ReferenceFrameIndex, TrajectoryFrame, TrajectoryPath, TrajectoryView,
+};
+use lunco_spatial;
 use lunco_time::WorldTime;
 use std::sync::Arc;
 
@@ -16,64 +19,6 @@ use bevy::math::cubic_splines::CubicCardinalSpline;
 use lunco_render::{PbrLook, SurfaceAlpha};
 
 pub struct TrajectoryPlugin;
-
-#[derive(Component, Reflect, Clone, Copy, Debug)]
-#[reflect(Component)]
-pub struct TrajectoryView {
-    pub tracked_id: i32,
-    pub reference_id: i32,
-    pub frame: TrajectoryFrame,
-    pub color: LinearRgba,
-    pub is_visible: bool,   // Controlled by mission range logic
-    pub user_visible: bool, // Controlled by UI checkbox
-    pub sampling_days: f64,
-    pub sampling_step: f64,
-    pub start_epoch: Option<f64>,
-    pub end_epoch: Option<f64>,
-}
-
-#[derive(Reflect, Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum TrajectoryFrame {
-    #[default]
-    Inertial,
-    BodyFixed,
-}
-
-impl Default for TrajectoryView {
-    fn default() -> Self {
-        Self {
-            tracked_id: lunco_celestial::ephemeris_id::EARTH,
-            reference_id: lunco_celestial::ephemeris_id::SUN,
-            frame: TrajectoryFrame::Inertial,
-            color: LinearRgba::WHITE,
-            is_visible: true,
-            user_visible: true,
-            sampling_days: 200.0,
-            sampling_step: 1.0,
-            start_epoch: None,
-            end_epoch: None,
-        }
-    }
-}
-
-#[derive(Component, Default, Reflect)]
-#[reflect(Component)]
-pub struct TrajectoryPath {
-    pub points: Vec<bevy::math::DVec3>,
-    pub update_epoch: f64,
-    /// Reference-frame offset that was subtracted from every point (the
-    /// tracked body's position at `update_epoch`). Applied back as the view
-    /// entity's cell + translation by `trajectory_alignment_system`, so the
-    /// f32 mesh vertices stay SMALL near the tracked body. `anchored` is the
-    /// authoritative mode bit; the offset itself may legitimately be zero.
-    pub anchor: bevy::math::DVec3,
-    /// Whether the sampled points are relative to the tracked body's frame.
-    pub anchored: bool,
-    /// Monotonic revision of the committed sampled geometry. Mesh and alpha
-    /// workers fence their results against this value instead of using an epoch
-    /// as an identity stamp.
-    pub geometry_revision: u64,
-}
 
 /// Minimum wall-clock seconds between trajectory rebuilds.
 ///
@@ -141,7 +86,7 @@ fn ephemeris_revision(ephemeris: Option<&EphemerisResource>) -> EphemerisRevisio
 /// separate from `TrajectoryPath`: the wall-clock scheduler must not make the
 /// geometry component look changed and trigger a mesh rebuild.
 #[derive(Component, Debug)]
-pub(crate) struct TrajectoryRuntimeState {
+struct TrajectoryRuntimeState {
     presentation_revision: u64,
     sampling_revision: u64,
     view_signature: Option<TrajectoryViewSignature>,
@@ -397,7 +342,7 @@ impl Plugin for TrajectoryPlugin {
                 // Epoch motion uses the shared celestial cadence; a new or
                 // edited frame assignment is handled immediately.
                 .run_if(
-                    crate::cadence::tracked_needs_solve()
+                    lunco_celestial_spatial::cadence::tracked_needs_solve()
                         .or_else(trajectory_frame_assignment_changed),
                 ),
         );

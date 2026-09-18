@@ -35,10 +35,6 @@ mod scenario_fixture;
 /// Application-owned tutorial catalog menu. Tutorial behavior itself remains
 /// authored Rhai and is launched through the generic scripting command.
 mod tutorial_menu;
-/// Native Velopack update checks and package installation. WASM has no native
-/// process/update helper and intentionally does not compile this module.
-#[cfg(all(feature = "updates", not(target_arch = "wasm32")))]
-mod update;
 /// Typed intent emitted by the authored terrain-progress surface.
 #[derive(Event, Clone, Debug)]
 struct DismissTerrainOverlay;
@@ -146,7 +142,7 @@ impl Plugin for LunCoSimUiPlugin {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
-        app.insert_resource(lunco_workbench::BuildIdentity::new(
+        app.insert_resource(lunco_workbench_core::BuildIdentity::new(
             self.config.product_version,
             self.config.git_sha,
             self.config.repository_url,
@@ -233,7 +229,7 @@ impl Plugin for LunCoSimUiPlugin {
             );
         }
         #[cfg(all(feature = "updates", not(target_arch = "wasm32")))]
-        app.add_plugins(update::UpdatePlugin);
+        app.add_plugins(lunco_updater::UpdatePlugin);
         if args.iter().any(|arg| arg == "--windowed-ui") {
             app.insert_resource(lunco_workbench::OfflineRecordingPresentation {
                 retain_workbench_chrome: true,
@@ -454,7 +450,7 @@ fn on_runtime_ui_action(
             With<lunco_embodiment_core::roles::LocalEmbodiment>,
         ),
     >,
-    q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
+    q_bodies: Query<(Entity, &lunco_celestial::CelestialBody)>,
     orbital_pin: Option<Res<lunco_celestial_spatial_core::OrbitalViewPin>>,
     manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
@@ -521,7 +517,7 @@ fn on_runtime_ui_action(
 
 fn runtime_focus_body(
     ephemeris_id: i32,
-    q_bodies: &Query<(Entity, &lunco_core::CelestialBody)>,
+    q_bodies: &Query<(Entity, &lunco_celestial::CelestialBody)>,
     commands: &mut Commands,
 ) -> bool {
     if let Some((target, _)) = q_bodies

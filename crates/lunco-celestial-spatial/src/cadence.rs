@@ -30,6 +30,7 @@
 
 use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, KeplerOrbit};
+use lunco_celestial_spatial_core::{CelestialBodyDecl, SolarSystemRoot};
 use lunco_settings::SettingsSection;
 use lunco_time::{CelestialTime, WorldTime};
 use serde::{Deserialize, Serialize};
@@ -161,7 +162,7 @@ pub fn refresh_motion_bound(
     };
 }
 
-pub(crate) fn provider_motion_changed(
+pub fn provider_motion_changed(
     ephemeris: Option<Res<lunco_celestial::ephemeris::EphemerisResource>>,
     bound: Res<CelestialMotionBound>,
 ) -> bool {
@@ -236,11 +237,11 @@ pub fn bump_celestial_inputs_revision(
     mut rev: ResMut<CelestialInputsRevision>,
     site_added: Query<(), Added<lunco_celestial::geo::SiteAnchor>>,
     site_moved: Query<(), Changed<lunco_celestial::geo::GeodeticAnchor>>,
-    decl_added: Query<(), Added<crate::CelestialBodyDecl>>,
-    grid_added: Query<(), Added<crate::big_space_setup::SolarSystemRoot>>,
+    decl_added: Query<(), Added<CelestialBodyDecl>>,
+    grid_added: Query<(), Added<SolarSystemRoot>>,
     orbit_changed: Query<(), Or<(Added<KeplerOrbit>, Changed<KeplerOrbit>)>>,
     directional_light_added: Query<(), Added<bevy::light::DirectionalLight>>,
-    mut decl_removed: RemovedComponents<crate::CelestialBodyDecl>,
+    mut decl_removed: RemovedComponents<CelestialBodyDecl>,
     mut orbit_removed: RemovedComponents<KeplerOrbit>,
     // [frames, bumps, site_added, site_moved, decl_added, grid_added,
     //  orbit_changed, directional_light_added, removed]

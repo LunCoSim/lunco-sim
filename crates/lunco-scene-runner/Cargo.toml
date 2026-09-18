@@ -17,6 +17,7 @@ bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] 
 big_space = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
+lunco-celestial-presentation = { path = "../lunco-celestial-presentation" }
 lunco-core = { path = "../lunco-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }

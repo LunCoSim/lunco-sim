@@ -15,6 +15,10 @@ pub struct CelestialBodyDecl {
     pub naif: i32,
 }
 
+/// Marker for the inertial solar-system root grid owned by the spatial runtime.
+#[derive(Component)]
+pub struct SolarSystemRoot;
+
 /// A body map authored on a celestial body prim.
 ///
 /// The value remains the authored asset reference. Resolution and loading are

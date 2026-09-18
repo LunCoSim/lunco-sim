@@ -532,9 +532,10 @@ mod terrain_status_tests {
             let bus = app
                 .world()
                 .resource::<lunco_status_core::status_bus::StatusBus>();
-            assert!(bus
-                .active_progress()
-                .all(|event| event.source != lunco_status_core::status_bus::TERRAIN_SOURCE));
+            assert!(
+                bus.active_progress()
+                    .all(|event| event.source != lunco_status_core::status_bus::TERRAIN_SOURCE)
+            );
             let history: Vec<_> = bus.history().collect();
             assert_eq!(history.len(), 1);
             assert_eq!(history[0].message, "Terrain streaming ready (2/2)");
@@ -878,11 +879,12 @@ mod modelica_status_tests {
             .expect("Modelica model")
             .is_compiling = true;
         app.update();
-        assert!(app
-            .world()
-            .resource::<lunco_status_core::status_bus::StatusBus>()
-            .active_progress()
-            .any(|event| event.source == lunco_status_core::status_bus::MODELICA_SOURCE));
+        assert!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .active_progress()
+                .any(|event| event.source == lunco_status_core::status_bus::MODELICA_SOURCE)
+        );
 
         app.world_mut()
             .entity_mut(first)
@@ -898,9 +900,10 @@ mod modelica_status_tests {
         // consecutive identical discrete snapshots by contract.
         assert_eq!(bus.history().count(), 1);
         assert_eq!(bus.history_total(), 1);
-        assert!(bus
-            .active_progress()
-            .all(|event| { event.source != lunco_status_core::status_bus::MODELICA_SOURCE }));
+        assert!(
+            bus.active_progress()
+                .all(|event| { event.source != lunco_status_core::status_bus::MODELICA_SOURCE })
+        );
     }
 
     #[test]

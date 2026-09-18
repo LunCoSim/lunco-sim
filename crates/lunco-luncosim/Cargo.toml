@@ -46,6 +46,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false, optiona
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
 lunco-luncosim-runtime = { path = "../lunco-luncosim-runtime", default-features = false }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
+lunco-updater = { path = "../lunco-updater", optional = true }
 lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
 lunco-networking-core = { path = "../lunco-networking-core", optional = true }
 lunco-scripting-rhai-world = { path = "../lunco-scripting-rhai-world" }
@@ -87,7 +88,7 @@ ui = [
 # Installed desktop packages carry the native Velopack updater. Keeping this
 # separate from `ui` avoids compiling its HTTP/update closure for ordinary
 # source and headless development builds; the package script opts in here.
-updates = ["ui", "lunco-luncosim-ui/updates"]
+updates = ["ui", "lunco-luncosim-ui/updates", "dep:lunco-updater"]
 # Native package builds opt into icon rasterization only when the packaging
 # script requests it; ordinary GUI development keeps those build dependencies
 # out of the UI package graph.

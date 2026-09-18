@@ -89,6 +89,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
+use lunco_celestial_spatial_core::SolarSystemRoot;
 use lunco_environment::{Gravity, GravityProvider};
 use lunco_materials::ShaderLook;
 use lunco_render::PbrLook;
@@ -151,15 +152,6 @@ pub fn adopt_authored_body_look(
 /// `CelestialDerived`.*
 #[derive(Component)]
 pub struct CelestialDerived;
-
-/// Marker for the solar system root grid (inertial, no rotation).
-///
-/// **Exactly one entity carries this marker, and it is a `Grid`.** It identifies
-/// the inertial solar frame for hierarchy construction and structural cadence
-/// tracking. Site scenes are mounted under their body's surface grid; this
-/// marker is never re-posed to make a site coincide with the world origin.
-#[derive(Component)]
-pub struct SolarSystemRoot;
 
 /// Marker for the Earth-Moon barycenter grid (genuinely inertial — the EMB is a
 /// barycenter, so it has no IAU rotation model and `body_rotation_system` skips

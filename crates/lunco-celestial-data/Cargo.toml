@@ -1,0 +1,9 @@
+[package]
+name = "lunco-celestial-data"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Dependency-free authoritative celestial physical constants"
+
+[lints]
+workspace = true

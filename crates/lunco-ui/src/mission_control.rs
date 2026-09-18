@@ -7,10 +7,10 @@ use lunco_workbench_widgets::{icon_text_button, UiIcon};
 
 use lunco_camera_core::FocusTarget;
 use lunco_celestial::CelestialBody;
+use lunco_celestial::Spacecraft;
 use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_control_core::{AcquireControl, ReleaseControlSource};
 use lunco_control_core::{ControlBinding, UserIntent};
-use lunco_core::Spacecraft;
 use lunco_embodiment_core::roles::Embodiment;
 use lunco_input_core::{resolved_input_label, InputBindingsSettings};
 use lunco_time::{

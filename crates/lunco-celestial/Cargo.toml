@@ -9,7 +9,7 @@ description = "Headless celestial mechanics, ephemeris, geodesy, and semantic re
 # Semantic astronomy uses ECS components/resources and Bevy's double-precision
 # math, but it does not depend on BigSpace, Avian, terrain, rendering, or UI.
 bevy = { workspace = true }
-lunco-core = { path = "../lunco-core" }
+lunco-celestial-data = { path = "../lunco-celestial-data" }
 lunco-time = { path = "../lunco-time" }
 serde = { workspace = true }
 

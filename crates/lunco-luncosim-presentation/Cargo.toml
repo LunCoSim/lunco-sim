@@ -1,0 +1,29 @@
+[package]
+name = "lunco-luncosim-presentation"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "LunCoSim application presentation bridges and streamed-terrain visual integration"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_camera"] }
+big_space = { workspace = true }
+lunco-capture = { path = "../lunco-capture", features = ["api"] }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
+lunco-celestial-presentation = { path = "../lunco-celestial-presentation" }
+lunco-core = { path = "../lunco-core" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-render = { path = "../lunco-render" }
+lunco-status-core = { path = "../lunco-status-core" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-time = { path = "../lunco-time" }
+lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
+lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
+lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
+
+[lints]
+workspace = true

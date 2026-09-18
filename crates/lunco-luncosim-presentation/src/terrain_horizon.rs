@@ -24,15 +24,15 @@ use std::sync::Arc;
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
-use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 
 use lunco_core::HorizonShadowTerrain;
-use lunco_environment::horizon::{
-    pick_sun, HorizonShadowCacheConfig, SunQuery, TerrainSunProjectionCache,
-};
 use lunco_environment::SunRenderState;
+use lunco_environment::horizon::{
+    HorizonShadowCacheConfig, SunQuery, TerrainSunProjectionCache, pick_sun,
+};
 use lunco_environment::{
-    install_horizon_map_from_field, HeightField, HorizonMap, HorizonShadowCache,
+    HeightField, HorizonMap, HorizonShadowCache, install_horizon_map_from_field,
 };
 use lunco_terrain_surface::{DemHeightField, HeightSource, TerrainLodViz, TileShadowCache};
 

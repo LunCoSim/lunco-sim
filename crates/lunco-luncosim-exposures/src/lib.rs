@@ -14,14 +14,15 @@ use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Ro
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
+use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial_core::LinkState;
 use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_control_core::ControlLink;
 use lunco_core::exposure::{
     EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
 };
+use lunco_core::GlobalEntityId;
 use lunco_core::SceneMountState;
-use lunco_core::{CelestialBody, GlobalEntityId};
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_hooks::HookValue;

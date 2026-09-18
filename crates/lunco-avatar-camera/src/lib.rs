@@ -25,11 +25,12 @@ use lunco_camera_core::{
     math::{apply_scroll_zoom, camera_decay_alpha, surface_camera_angles, surface_camera_rotation},
 };
 use lunco_camera_core::{FocusTarget, ReturnFromOrbit};
+use lunco_celestial::{CelestialBody, Spacecraft};
 use lunco_celestial_spatial::{CelestialPresentationGrid, LeaveSurface, TeleportToSurface};
 use lunco_celestial_spatial_core::{
     LocalGravityField, surface_axes_for_grid_position, surface_axes_in_grid,
 };
-use lunco_core::{CelestialBody, Spacecraft, on_command, register_commands};
+use lunco_core::{on_command, register_commands};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_spatial::attach::{local_pose_to_grid_storage, migrate_to_grid_local_pose};
