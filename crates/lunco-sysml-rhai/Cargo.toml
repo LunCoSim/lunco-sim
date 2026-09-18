@@ -6,6 +6,7 @@ license.workspace = true
 description = "Read-only Rhai reporting adapter for SysML v2 analysis"
 
 [dependencies]
+bevy = { workspace = true }
 lunco-sysml-ast = { path = "../lunco-sysml-ast" }
 rhai = { workspace = true }
 serde = { workspace = true }

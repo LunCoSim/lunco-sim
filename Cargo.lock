@@ -9361,6 +9361,7 @@ dependencies = [
  "lunco-scripting-bridge-usd",
  "lunco-scripting-rhai-core",
  "lunco-storage",
+ "lunco-sysml-rhai",
  "lunco-telemetry-core",
  "lunco-tools",
  "lunco-tools-rhai",
@@ -9437,6 +9438,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets-core",
  "lunco-assets-runtime",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -9455,6 +9457,7 @@ dependencies = [
  "lunco-hash",
  "lunco-hooks",
  "serde",
+ "sysmlv2-model",
  "sysmlv2-semantics",
  "sysmlv2-stdlib",
  "sysmlv2-syntax",
@@ -9472,6 +9475,7 @@ dependencies = [
 name = "lunco-sysml-rhai"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "lunco-sysml-ast",
  "rhai",
  "serde",

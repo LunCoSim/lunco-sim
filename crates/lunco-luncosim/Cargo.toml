@@ -145,7 +145,12 @@ native-plugins = [
 # Optional HTTPS support for `luncosim rhai --api-url`; local loopback HTTP
 # remains the default without compiling the TLS backend.
 rhai-tls = ["lunco-rhai-repl/tls"]
-sysml = ["lunco-luncosim-core/sysml", "lunco-scene-runner/sysml"]
+sysml = [
+    "lunco-luncosim-core/sysml",
+    "lunco-luncosim-runtime/sysml",
+    "lunco-scene-runner/sysml",
+    "lunco-scripting-rhai-world/sysml",
+]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the
 # tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p

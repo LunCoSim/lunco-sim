@@ -7,6 +7,7 @@
 
 use bevy::prelude::*;
 use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
+use lunco_command_contracts::Ack;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId, FileBacked, OpenOutcome};
 use lunco_doc_bevy::{
@@ -53,6 +54,16 @@ pub struct ApplySysmlOps {
     pub parent_generation: Option<u64>,
 }
 
+/// Persist one SysML document without colliding with the domain-generic
+/// `SaveDocument` command.  The shared verb is still useful to UI code, but
+/// the transport-facing Rhai editor needs an owner-specific terminal command
+/// while multiple document domains observe the same generic event.
+#[Command(default)]
+pub struct SaveSysmlDocument {
+    /// Explicit SysML document id.
+    pub doc_id: DocumentId,
+}
+
 /// Register the SysML command and query adapters.
 pub struct SysmlApiPlugin;
 
@@ -70,6 +81,7 @@ register_commands!(
     on_open_sysml_file,
     on_new_sysml_document,
     on_apply_sysml_ops,
+    on_save_sysml_document_explicit,
     on_undo_sysml_document,
     on_redo_sysml_document,
     on_save_sysml_document,
@@ -223,6 +235,61 @@ fn on_apply_sysml_ops(
         "doc_id": doc_id.raw(),
     }));
     Ok(ack)
+}
+
+/// Persist a SysML document through its owning registry and return a typed
+/// command result to Rhai/API callers.
+#[on_command(SaveSysmlDocument)]
+fn on_save_sysml_document_explicit(
+    trigger: On<SaveSysmlDocument>,
+    mut registry: ResMut<DocumentRegistry<SysmlDocument>>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
+    let doc_id = trigger.event().doc_id;
+    let Some(host) = registry.host(doc_id) else {
+        return Err(format!(
+            "SaveSysmlDocument: unknown SysML document {doc_id}"
+        ));
+    };
+    let document = host.document();
+    let Some(path) = document
+        .origin()
+        .canonical_path()
+        .map(std::path::Path::to_path_buf)
+    else {
+        return Err(format!(
+            "SaveSysmlDocument: {doc_id} has no file path; SaveAsDocument is required"
+        ));
+    };
+    if !document.origin().is_writable() {
+        return Err(format!("SaveSysmlDocument: {doc_id} is read-only"));
+    }
+    let source = document.source().to_owned();
+    let generation = document.generation();
+    let storage = lunco_storage::FileStorage::new();
+    let handle = lunco_storage::StorageHandle::File(path.clone());
+    storage
+        .write_sync(&handle, source.as_bytes())
+        .map_err(|error| {
+            format!(
+                "SaveSysmlDocument: save {} failed: {error:?}",
+                path.display()
+            )
+        })?;
+    if let Some(host) = registry.host_mut(doc_id) {
+        host.document_mut().mark_saved();
+    }
+    registry.note_saved(doc_id);
+    commands.trigger(DocumentSaved::local(doc_id));
+    Ok(Ack {
+        data: Some(serde_json::json!({
+            "doc_id": doc_id.raw(),
+            "path": path,
+            "generation": generation,
+            "action": "saved",
+        })),
+        ..Default::default()
+    })
 }
 
 /// Undo the most recent SysML history group through the shared document verb.

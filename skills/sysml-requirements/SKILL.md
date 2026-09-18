@@ -284,12 +284,14 @@ map keyed by each qualified SysML name), `attribute_collisions`,
 `verification_registry`, `verification_registry_errors`, `source_files`,
 `source_revision`, and `source_revision_hex`. Use native report maps in Rhai;
 use JSON only at an external/logging boundary. `attributes: []` is a bounded
-selection request: the generic `sysml_requirements::attribute` helper resolves
-the requested qualified literal through the same validated provider and fails
-on ambiguity or absence. Callers that need several literals should request
-them together through the provider's `attributes` selector; never reconstruct
-a short-name map, because colliding component attributes must remain
-distinct.
+selection request: it carries no literal or collision table. The generic
+`sysml_requirements::attribute` helper resolves the requested qualified literal
+through the same validated provider and fails on ambiguity or absence. Callers
+that need several literals should request them together through the provider's
+`attributes` selector; a selected short name retains only its relevant
+collision record, while a qualified selector receives its exact typed value.
+Never reconstruct a short-name map, because colliding component attributes
+must remain distinct.
 
 For a component-owned observer, resolve the manifest binding through the
 generic helper instead of repeating scene/script or qualified-verification

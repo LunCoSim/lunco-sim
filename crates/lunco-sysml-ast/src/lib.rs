@@ -9,7 +9,9 @@
 pub mod lint_facts;
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
+use sysml_model::{ElementKind, Value};
 use sysml_semantics::Workspace;
 use sysml_syntax::TextRange;
 
@@ -103,8 +105,47 @@ pub struct SysmlReference {
     pub end: u32,
     /// Final name segment as written.
     pub name: String,
+    /// Qualified element that owns the reference expression.
+    pub from: String,
     /// Root-qualified target name.
     pub target: String,
+}
+
+/// One standard KerML/SysML relationship projected without losing its typed
+/// reference properties.  The metamodel has many relationship subtypes
+/// (specialization, typing, connection, flow, satisfy, verify, metadata, and
+/// so on); keeping the standard kind plus named reference properties lets
+/// Rust, Rhai, and Modelica adapters consume the same graph without inventing
+/// a parallel string grammar for each domain.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlRelationship {
+    /// Source-backed relationship element.
+    pub element: SysmlElement,
+    /// Standard metamodel reference properties and their resolved targets.
+    pub properties: Vec<SysmlRelationshipProperty>,
+}
+
+/// A named relationship property such as `specific`, `general`, `source`,
+/// `target`, `typedFeature`, or `verifiedRequirement`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlRelationshipProperty {
+    /// Property name from the KerML/SysML metamodel.
+    pub name: String,
+    /// Qualified target elements, in authored/model order.
+    pub targets: Vec<String>,
+}
+
+/// A constraint or assertion with its authored expression kept opaque.
+/// Evaluation belongs to the owning Twin/Rhai/Modelica adapter; the SysML
+/// bridge only guarantees source identity and does not guess expression
+/// semantics from text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlConstraint {
+    /// Source-backed constraint element.
+    pub element: SysmlElement,
+    /// Authored body when the semantic model provides one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
 }
 
 /// A finite numeric literal projected from SysML source.
@@ -136,6 +177,340 @@ impl PartialEq for SysmlNumber {
 
 impl Eq for SysmlNumber {}
 
+/// The semantic category of a SysML/KerML type.
+///
+/// This is deliberately independent of the syntax spelling.  A user-defined
+/// `Position` value type and a standard-library geometry type can therefore be
+/// mapped to the same runtime category without turning the source model into
+/// a collection of string conventions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlTypeCategory {
+    Primitive,
+    Quantity,
+    Enumeration,
+    Structured,
+    Collection,
+    Part,
+    Item,
+    Port,
+    Reference,
+    Unknown,
+}
+
+/// Kernel scalar types that have a direct Rust/Modelica representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlPrimitiveType {
+    Boolean,
+    Integer,
+    Rational,
+    Real,
+    Complex,
+    String,
+}
+
+/// The collection cardinality and collection semantics of a feature.
+///
+/// SysML multiplicity is more expressive than a Rust `Vec<T>`: it constrains
+/// cardinality and also carries ordering/uniqueness semantics.  Keeping it
+/// explicit prevents `Real[3]` from being mistaken for a geometric Vec3.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlMultiplicity {
+    pub lower: usize,
+    pub upper: Option<usize>,
+    pub ordered: bool,
+    pub unique: bool,
+}
+
+impl SysmlMultiplicity {
+    pub const fn one() -> Self {
+        Self {
+            lower: 1,
+            upper: Some(1),
+            ordered: false,
+            unique: true,
+        }
+    }
+
+    pub const fn fixed(size: usize) -> Self {
+        Self {
+            lower: size,
+            upper: Some(size),
+            ordered: true,
+            unique: false,
+        }
+    }
+
+    pub fn is_collection(self) -> bool {
+        self.upper != Some(1) || self.lower != 1
+    }
+}
+
+/// Modelica's type vocabulary for the subset that can cross the existing
+/// experiment/solver parameter boundary without inventing a second value
+/// encoding.  Structured values remain typed in the SysML/Rhai side and are
+/// lowered to Modelica records or arrays by the owning adapter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlModelicaType {
+    Real,
+    Integer,
+    Boolean,
+    String,
+    Enumeration,
+    RealArray,
+    IntegerArray,
+    BooleanArray,
+    StringArray,
+    Structured,
+    Unsupported,
+}
+
+/// The declared SysML value type for an attribute.
+///
+/// `type_name` remains available on `SysmlAttribute` as lossless authored
+/// text, but consumers that need to make decisions must use this structured
+/// projection. Fixed collection dimensions are represented natively instead
+/// of being inferred by splitting a string initializer.  The semantic fields
+/// below are intentionally small and stable: they are the common contract for
+/// SysML, Rhai, Modelica adapters, and requirement verification.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlType {
+    /// Scalar SysML type name, for example `Real` or `String`.
+    pub base: String,
+    /// Fixed collection dimensions in declaration order, for example
+    /// `Real[2][3]` becomes `[2, 3]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dimensions: Vec<usize>,
+    /// Resolved semantic category.
+    #[serde(default = "default_type_category")]
+    pub category: SysmlTypeCategory,
+    /// Kernel primitive, when the type is one of the scalar data types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primitive: Option<SysmlPrimitiveType>,
+    /// Feature cardinality and collection semantics.
+    #[serde(default = "SysmlMultiplicity::one")]
+    pub multiplicity: SysmlMultiplicity,
+    /// Quantity kind, such as `Length`, `Mass`, or `Power`, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantity_kind: Option<String>,
+    /// Unit attached to an authored quantity literal, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+}
+
+impl SysmlType {
+    /// Parse the fixed-cardinality type syntax used by Twin requirements.
+    pub fn parse(source: &str) -> Option<Self> {
+        Self::parse_with_catalog(source, &BTreeMap::new())
+    }
+
+    /// Parse a type while using the resolved project element kinds to classify
+    /// user-defined parts, items, ports, and enumerations.
+    pub fn parse_with_catalog(
+        source: &str,
+        known_types: &BTreeMap<String, SysmlTypeCategory>,
+    ) -> Option<Self> {
+        let mut rest = source.trim();
+        let base_end = rest.find('[').unwrap_or(rest.len());
+        let base = rest[..base_end].trim();
+        if base.is_empty() {
+            return None;
+        }
+        rest = &rest[base_end..];
+        let mut dimensions = Vec::new();
+        let mut multiplicity = SysmlMultiplicity::one();
+        while !rest.is_empty() {
+            let close = rest.strip_prefix('[')?.find(']')? + 1;
+            let bound = rest[1..close].trim();
+            if let Ok(size) = bound.parse::<usize>() {
+                dimensions.push(size);
+                multiplicity = SysmlMultiplicity::fixed(size);
+            } else {
+                multiplicity = parse_multiplicity(bound)?;
+            }
+            rest = &rest[close + 1..];
+        }
+
+        let short_base = base.rsplit("::").next().unwrap_or(base);
+        let primitive = primitive_type(short_base);
+        let category = known_types
+            .get(base)
+            .or_else(|| known_types.get(short_base))
+            .copied()
+            .unwrap_or_else(|| inferred_category(short_base, primitive, !dimensions.is_empty()));
+        let quantity_kind = quantity_kind(short_base).map(str::to_owned);
+        Some(Self {
+            base: base.to_owned(),
+            dimensions,
+            category,
+            primitive,
+            multiplicity,
+            quantity_kind,
+            unit: None,
+        })
+    }
+
+    pub fn modelica_type(&self) -> SysmlModelicaType {
+        if self.multiplicity.is_collection() {
+            return match self.primitive {
+                Some(SysmlPrimitiveType::Real)
+                    if self.category == SysmlTypeCategory::Primitive
+                        || self.category == SysmlTypeCategory::Collection =>
+                {
+                    SysmlModelicaType::RealArray
+                }
+                Some(SysmlPrimitiveType::Integer) => SysmlModelicaType::IntegerArray,
+                Some(SysmlPrimitiveType::Boolean) => SysmlModelicaType::BooleanArray,
+                Some(SysmlPrimitiveType::String) => SysmlModelicaType::StringArray,
+                None if self.quantity_kind.is_some() && !is_structured_type_name(&self.base) => {
+                    SysmlModelicaType::RealArray
+                }
+                _ => SysmlModelicaType::Unsupported,
+            };
+        }
+        match self.category {
+            SysmlTypeCategory::Quantity => SysmlModelicaType::Real,
+            SysmlTypeCategory::Enumeration => SysmlModelicaType::Enumeration,
+            SysmlTypeCategory::Structured => SysmlModelicaType::Structured,
+            _ => match self.primitive {
+                Some(SysmlPrimitiveType::Real) => SysmlModelicaType::Real,
+                Some(SysmlPrimitiveType::Integer) => SysmlModelicaType::Integer,
+                Some(SysmlPrimitiveType::Boolean) => SysmlModelicaType::Boolean,
+                Some(SysmlPrimitiveType::String) => SysmlModelicaType::String,
+                _ => SysmlModelicaType::Unsupported,
+            },
+        }
+    }
+}
+
+fn is_structured_type_name(name: &str) -> bool {
+    matches!(
+        name.rsplit("::").next().unwrap_or(name),
+        "Vec2"
+            | "Vec3"
+            | "Position"
+            | "Direction"
+            | "Quaternion"
+            | "Quat"
+            | "Transform"
+            | "Dimensions"
+            | "Bounds"
+    )
+}
+
+fn default_type_category() -> SysmlTypeCategory {
+    SysmlTypeCategory::Unknown
+}
+
+fn primitive_type(name: &str) -> Option<SysmlPrimitiveType> {
+    Some(match name {
+        "Boolean" => SysmlPrimitiveType::Boolean,
+        "Integer" | "Natural" => SysmlPrimitiveType::Integer,
+        "Rational" => SysmlPrimitiveType::Rational,
+        "Real" => SysmlPrimitiveType::Real,
+        "Complex" => SysmlPrimitiveType::Complex,
+        "String" => SysmlPrimitiveType::String,
+        _ => return None,
+    })
+}
+
+fn quantity_kind(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Length" | "Distance" | "Position" => "Length",
+        "Angle" => "Angle",
+        "Mass" => "Mass",
+        "Time" | "Duration" => "Time",
+        "Velocity" | "Speed" => "Velocity",
+        "Acceleration" => "Acceleration",
+        "Force" => "Force",
+        "Power" => "Power",
+        "Energy" => "Energy",
+        "Temperature" => "Temperature",
+        _ => return None,
+    })
+}
+
+fn inferred_category(
+    name: &str,
+    primitive: Option<SysmlPrimitiveType>,
+    collection: bool,
+) -> SysmlTypeCategory {
+    if collection {
+        return SysmlTypeCategory::Collection;
+    }
+    if primitive.is_some() {
+        return SysmlTypeCategory::Primitive;
+    }
+    if is_structured_type_name(name) {
+        return SysmlTypeCategory::Structured;
+    }
+    if quantity_kind(name).is_some() {
+        return SysmlTypeCategory::Quantity;
+    }
+    SysmlTypeCategory::Unknown
+}
+
+fn parse_multiplicity(source: &str) -> Option<SysmlMultiplicity> {
+    let (lower, upper) = source.split_once("..")?;
+    let lower = lower.trim().parse().ok()?;
+    let upper = match upper.trim() {
+        "*" => None,
+        value => Some(value.parse().ok()?),
+    };
+    Some(SysmlMultiplicity {
+        lower,
+        upper,
+        ordered: false,
+        unique: true,
+    })
+}
+
+/// Literal categories are typed for adapters; `SysmlLiteral::kind` remains as
+/// a compatibility spelling for existing reports and scripts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlLiteralKind {
+    Integer,
+    Real,
+    Boolean,
+    String,
+    Quantity,
+    Collection,
+    Expression,
+}
+
+impl SysmlLiteralKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Integer => "integer",
+            Self::Real => "real",
+            Self::Boolean => "boolean",
+            Self::String => "string",
+            Self::Quantity => "quantity",
+            Self::Collection => "vector",
+            Self::Expression => "expression",
+        }
+    }
+}
+
+/// A quantity literal kept in a native, unit-aware form for language
+/// adapters.  The numeric payload remains the validated f64 wrapper used by
+/// the source projection, so non-finite values cannot cross the boundary.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlQuantityValue {
+    pub value: SysmlNumber,
+    pub unit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantity_kind: Option<String>,
+}
+
+/// A typed enumeration literal.  The literal name is intentionally not
+/// represented as an unqualified free-form attribute string in the semantic
+/// projection; the declaring type travels with it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlEnumValue {
+    pub type_name: String,
+    pub literal: String,
+}
+
 /// A literal value written on a SysML attribute.
 ///
 /// The semantic model keeps the authored expression text.  This projection
@@ -146,8 +521,11 @@ impl Eq for SysmlNumber {}
 pub struct SysmlLiteral {
     /// Authored expression, without the trailing semicolon.
     pub literal: String,
-    /// `integer`, `real`, `boolean`, `string`, or `expression`.
+    /// `integer`, `real`, `boolean`, `string`, `vector`, or `expression`.
     pub kind: String,
+    /// Structured literal classification for typed adapters.
+    #[serde(default = "default_literal_kind")]
+    pub literal_kind: SysmlLiteralKind,
     /// Canonical numeric text when the literal is an integer or real.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number: Option<String>,
@@ -155,6 +533,30 @@ pub struct SysmlLiteral {
     /// The authored text above remains the lossless source-of-truth value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number_value: Option<SysmlNumber>,
+    /// Exact integer projection when the literal is an Integer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integer_value: Option<i64>,
+    /// Boolean projection when the literal is a Boolean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boolean_value: Option<bool>,
+    /// Unquoted string projection when the literal is a String.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub string_value: Option<String>,
+    /// Unit suffix when the literal is a quantity value, for example `m`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// Nested values when the initializer is a literal vector/tuple.
+    ///
+    /// This is deliberately a recursive lossless projection rather than a
+    /// `Vec<f64>`: SysML collections may contain strings, booleans, nested
+    /// vectors, or expressions, and the authored literal remains the source
+    /// of truth for values that we do not evaluate at this boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elements: Option<Vec<SysmlLiteral>>,
+}
+
+fn default_literal_kind() -> SysmlLiteralKind {
+    SysmlLiteralKind::Expression
 }
 
 /// An authored SysML attribute with its source span and owning element.
@@ -169,6 +571,9 @@ pub struct SysmlAttribute {
     /// Declared type text, if present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub type_name: Option<String>,
+    /// Parsed declared type, including fixed collection cardinality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_type: Option<SysmlType>,
     /// Authored literal, if the attribute has an initializer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<SysmlLiteral>,
@@ -231,6 +636,8 @@ pub struct SysmlAnalysis {
     diagnostics: Vec<SysmlDiagnostic>,
     elements: Vec<SysmlElement>,
     references: Vec<SysmlReference>,
+    relationships: Vec<SysmlRelationship>,
+    constraints: Vec<SysmlConstraint>,
     attributes: Vec<SysmlAttribute>,
     requirements: Vec<SysmlRequirementRecord>,
     verifications: Vec<SysmlVerificationRecord>,
@@ -363,11 +770,15 @@ impl SysmlAnalysis {
                     )
                     .unwrap_or_default()
                     .to_string(),
+                from: workspace.qualified_name_of(reference.from),
                 target: workspace.qualified_name_of(reference.target),
             });
         }
 
-        let attributes = project_attributes(&files, &elements);
+        let type_catalog = type_catalog(&elements);
+        let relationships = project_relationships(&workspace, &elements, &project_indices);
+        let constraints = project_constraints(&workspace, &elements, &project_indices);
+        let attributes = project_attributes(&files, &elements, &type_catalog);
         let requirements = project_requirements(&files, &elements, &attributes);
         let verifications = project_verifications(&files, &elements);
 
@@ -376,6 +787,8 @@ impl SysmlAnalysis {
             diagnostics,
             elements,
             references,
+            relationships,
+            constraints,
             attributes,
             requirements,
             verifications,
@@ -444,6 +857,16 @@ impl SysmlAnalysis {
     /// Successfully resolved source references in project files.
     pub fn references(&self) -> &[SysmlReference] {
         &self.references
+    }
+
+    /// Standard KerML/SysML relationships in the project source set.
+    pub fn relationships(&self) -> &[SysmlRelationship] {
+        &self.relationships
+    }
+
+    /// Constraints and assertions in the project source set.
+    pub fn constraints(&self) -> &[SysmlConstraint] {
+        &self.constraints
     }
 
     /// Source-backed attributes with typed literal classification.
@@ -525,7 +948,109 @@ fn source_fingerprint(files: &[(String, String)], includes_stdlib: bool) -> u64 
     hash.finish()
 }
 
-fn project_attributes(files: &[SysmlFile], elements: &[SysmlElement]) -> Vec<SysmlAttribute> {
+fn type_catalog(elements: &[SysmlElement]) -> BTreeMap<String, SysmlTypeCategory> {
+    let mut catalog = BTreeMap::new();
+    for element in elements {
+        let category = match element.kind.as_str() {
+            "EnumerationDefinition" | "EnumerationUsage" => SysmlTypeCategory::Enumeration,
+            "PartDefinition" | "PartUsage" => SysmlTypeCategory::Part,
+            "ItemDefinition" | "ItemUsage" => SysmlTypeCategory::Item,
+            "PortDefinition" | "PortUsage" => SysmlTypeCategory::Port,
+            "AttributeDefinition" => SysmlTypeCategory::Structured,
+            _ => continue,
+        };
+        catalog.insert(element.qualified_name.clone(), category);
+        if let Some(short) = element.qualified_name.rsplit("::").next() {
+            catalog.entry(short.to_owned()).or_insert(category);
+        }
+    }
+    catalog
+}
+
+fn project_relationships(
+    workspace: &Workspace,
+    elements: &[SysmlElement],
+    project_files: &[usize],
+) -> Vec<SysmlRelationship> {
+    let model = workspace.model();
+    let mut relationships = Vec::new();
+    for &file in project_files {
+        for &id in workspace.file_elements(file) {
+            if !model.kind(id).is_a(ElementKind::Relationship) {
+                continue;
+            }
+            let Some(element) = elements.iter().find(|element| element.id == id.index() as u32)
+            else {
+                continue;
+            };
+            let mut properties = model
+                .props(id)
+                .filter_map(|(name, value)| {
+                    let targets = match value {
+                        Value::Ref(target) => vec![workspace.qualified_name_of(*target)],
+                        Value::RefList(targets) => targets
+                            .iter()
+                            .map(|target| workspace.qualified_name_of(*target))
+                            .collect(),
+                        _ => return None,
+                    };
+                    (!targets.is_empty()).then_some(SysmlRelationshipProperty {
+                        name: name.to_owned(),
+                        targets,
+                    })
+                })
+                .collect::<Vec<_>>();
+            properties.sort_by(|left, right| left.name.cmp(&right.name));
+            relationships.push(SysmlRelationship {
+                element: element.clone(),
+                properties,
+            });
+        }
+    }
+    relationships
+}
+
+fn project_constraints(
+    workspace: &Workspace,
+    elements: &[SysmlElement],
+    project_files: &[usize],
+) -> Vec<SysmlConstraint> {
+    let model = workspace.model();
+    let mut constraints = Vec::new();
+    for &file in project_files {
+        for &id in workspace.file_elements(file) {
+            let kind = model.kind(id);
+            if !matches!(
+                kind,
+                ElementKind::ConstraintDefinition
+                    | ElementKind::ConstraintUsage
+                    | ElementKind::AssertConstraintUsage
+                    | ElementKind::Invariant
+            ) {
+                continue;
+            }
+            let Some(element) = elements.iter().find(|element| element.id == id.index() as u32)
+            else {
+                continue;
+            };
+            let expression = model
+                .maybe(id, "body")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            constraints.push(SysmlConstraint {
+                element: element.clone(),
+                expression,
+            });
+        }
+    }
+    constraints
+}
+
+fn project_attributes(
+    files: &[SysmlFile],
+    elements: &[SysmlElement],
+    type_catalog: &BTreeMap<String, SysmlTypeCategory>,
+) -> Vec<SysmlAttribute> {
     elements
         .iter()
         .filter(|element| element.kind == "AttributeDefinition" || element.kind == "AttributeUsage")
@@ -552,6 +1077,9 @@ fn project_attributes(files: &[SysmlFile], elements: &[SysmlElement]) -> Vec<Sys
                 .map(|(_, tail)| tail.split(['=', ';']).next().unwrap_or(tail).trim())
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned);
+            let declared_type = type_name
+                .as_deref()
+                .and_then(|type_name| SysmlType::parse_with_catalog(type_name, type_catalog));
             let value = rest
                 .split_once('=')
                 .map(|(_, tail)| tail.trim().trim_end_matches(';').trim())
@@ -567,6 +1095,7 @@ fn project_attributes(files: &[SysmlFile], elements: &[SysmlElement]) -> Vec<Sys
                 name: name.to_owned(),
                 qualified_name: element.qualified_name.clone(),
                 type_name,
+                declared_type,
                 value,
                 file: element.file.clone(),
                 start: element.start,
@@ -577,24 +1106,180 @@ fn project_attributes(files: &[SysmlFile], elements: &[SysmlElement]) -> Vec<Sys
 }
 
 fn parse_literal(literal: &str) -> SysmlLiteral {
-    let number_value = literal.parse::<f64>().ok().and_then(SysmlNumber::new);
-    let kind = if literal.parse::<i64>().is_ok() {
-        "integer"
-    } else if number_value.is_some() {
-        "real"
-    } else if literal == "true" || literal == "false" {
-        "boolean"
-    } else if literal.starts_with('"') && literal.ends_with('"') {
-        "string"
+    let literal = literal.trim();
+    let elements = parse_vector_literal(literal);
+    let (number_text, number_value, unit) = parse_number_with_unit(literal);
+    let integer_value = if unit.is_none() {
+        literal.parse::<i64>().ok()
     } else {
-        "expression"
+        None
+    };
+    let boolean_value = match literal {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    };
+    let string_value = parse_string_literal(literal);
+    let literal_kind = if elements.is_some() {
+        SysmlLiteralKind::Collection
+    } else if unit.is_some() {
+        SysmlLiteralKind::Quantity
+    } else if integer_value.is_some() {
+        SysmlLiteralKind::Integer
+    } else if number_value.is_some() {
+        SysmlLiteralKind::Real
+    } else if boolean_value.is_some() {
+        SysmlLiteralKind::Boolean
+    } else if string_value.is_some() {
+        SysmlLiteralKind::String
+    } else {
+        SysmlLiteralKind::Expression
     };
     SysmlLiteral {
         literal: literal.to_owned(),
-        kind: kind.to_owned(),
-        number: number_value.map(|_| literal.to_owned()),
+        kind: literal_kind.as_str().to_owned(),
+        literal_kind,
+        number: number_text,
         number_value,
+        integer_value,
+        boolean_value,
+        string_value,
+        unit,
+        elements,
     }
+}
+
+fn parse_number_with_unit(literal: &str) -> (Option<String>, Option<SysmlNumber>, Option<String>) {
+    if let Some(value) = literal.parse::<f64>().ok().and_then(SysmlNumber::new) {
+        return (Some(literal.to_owned()), Some(value), None);
+    }
+
+    if let Some(open) = literal.find('[') {
+        if literal.ends_with(']') {
+            let number = literal[..open].trim();
+            let unit = literal[open + 1..literal.len() - 1].trim();
+            if !unit.is_empty() {
+                if let Some(value) = number.parse::<f64>().ok().and_then(SysmlNumber::new) {
+                    return (Some(number.to_owned()), Some(value), Some(unit.to_owned()));
+                }
+            }
+        }
+    }
+
+    let mut parts = literal.split_whitespace();
+    let number = parts.next().unwrap_or_default();
+    let unit = parts.next().unwrap_or_default();
+    if !number.is_empty() && !unit.is_empty() && parts.next().is_none() {
+        if let Some(value) = number.parse::<f64>().ok().and_then(SysmlNumber::new) {
+            return (Some(number.to_owned()), Some(value), Some(unit.to_owned()));
+        }
+    }
+    (None, None, None)
+}
+
+fn parse_string_literal(literal: &str) -> Option<String> {
+    let inner = literal.strip_prefix('"')?.strip_suffix('"')?;
+    let mut output = String::with_capacity(inner.len());
+    let mut escaped = false;
+    for character in inner.chars() {
+        if escaped {
+            output.push(match character {
+                '"' => '"',
+                '\\' => '\\',
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                other => other,
+            });
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else {
+            output.push(character);
+        }
+    }
+    if escaped {
+        output.push('\\');
+    }
+    Some(output)
+}
+
+/// Parse a bracketed vector/tuple without evaluating expressions.
+///
+/// SysML source in the current Twin uses bracketed values for station tables,
+/// while tuple-style values are common in textual SysML examples. Supporting
+/// both here keeps the projection useful without inventing a second data
+/// language. A parenthesized expression without a top-level comma remains an
+/// expression, not a vector.
+fn parse_vector_literal(literal: &str) -> Option<Vec<SysmlLiteral>> {
+    let bytes = literal.as_bytes();
+    let open = match (bytes.first().copied(), bytes.last().copied()) {
+        (Some(b'['), Some(b']')) => b'[',
+        (Some(b'('), Some(b')')) => b'(',
+        _ => return None,
+    };
+
+    let inner = &literal[1..literal.len().saturating_sub(1)];
+    if open == b'(' && !has_top_level_comma(inner) && !inner.trim().is_empty() {
+        return None;
+    }
+
+    let parts = split_top_level_commas(inner)?;
+    Some(parts.into_iter().map(parse_literal).collect())
+}
+
+fn has_top_level_comma(value: &str) -> bool {
+    split_top_level_commas(value)
+        .map(|parts| parts.len() > 1)
+        .unwrap_or(false)
+}
+
+/// Split a collection body at commas that are not nested or quoted.
+fn split_top_level_commas(value: &str) -> Option<Vec<&str>> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut depth = 0_u32;
+    let mut quote = false;
+    let mut escaped = false;
+
+    for (index, character) in value.char_indices() {
+        if quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quote = false;
+            }
+            continue;
+        }
+
+        match character {
+            '"' => quote = true,
+            '[' | '(' => depth = depth.checked_add(1)?,
+            ']' | ')' => depth = depth.checked_sub(1)?,
+            ',' if depth == 0 => {
+                let part = value[start..index].trim();
+                if part.is_empty() {
+                    return None;
+                }
+                parts.push(part);
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    if quote || depth != 0 {
+        return None;
+    }
+    let tail = value[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    } else if !value.trim().is_empty() {
+        return None;
+    }
+    Some(parts)
 }
 
 fn project_requirements(
@@ -808,6 +1493,68 @@ mod tests {
         let value = mass.value.as_ref().expect("mass literal");
         assert_eq!(value.number.as_deref(), Some("2.5"));
         assert_eq!(value.number_value.map(SysmlNumber::as_f64), Some(2.5));
+        assert_eq!(value.integer_value, None);
+        assert_eq!(value.literal_kind, SysmlLiteralKind::Real);
+    }
+
+    #[test]
+    fn standard_aware_types_keep_multiplicity_quantity_and_modelica_mapping() {
+        let analysis = SysmlAnalysis::from_files_without_stdlib([(
+            "types.sysml",
+            r#"package Example {
+                enum def Pose { Transport; Landed; }
+                part def Lander {
+                    attribute body : Position;
+                    attribute stations : Real[7];
+                    attribute mass : Mass = 1200 [kg];
+                    attribute pose : Pose = "Landed";
+                }
+            }"#,
+        )]);
+        let attributes = analysis.attributes();
+        let stations = attributes
+            .iter()
+            .find(|attribute| attribute.name == "stations")
+            .expect("station attribute");
+        let station_type = stations.declared_type.as_ref().expect("station type");
+        assert_eq!(station_type.primitive, Some(SysmlPrimitiveType::Real));
+        assert_eq!(station_type.category, SysmlTypeCategory::Collection);
+        assert_eq!(station_type.dimensions, [7]);
+        assert_eq!(station_type.multiplicity, SysmlMultiplicity::fixed(7));
+        assert_eq!(station_type.modelica_type(), SysmlModelicaType::RealArray);
+
+        let mass = attributes
+            .iter()
+            .find(|attribute| attribute.name == "mass")
+            .expect("mass attribute");
+        let mass_value = mass.value.as_ref().expect("mass value");
+        assert_eq!(mass_value.literal_kind, SysmlLiteralKind::Quantity);
+        assert_eq!(mass_value.number_value.map(SysmlNumber::as_f64), Some(1200.0));
+        assert_eq!(mass_value.unit.as_deref(), Some("kg"));
+
+        let pose = attributes
+            .iter()
+            .find(|attribute| attribute.name == "pose")
+            .expect("pose attribute");
+        assert_eq!(
+            pose.declared_type.as_ref().map(|value| value.category),
+            Some(SysmlTypeCategory::Enumeration)
+        );
+        assert_eq!(
+            pose.value
+                .as_ref()
+                .and_then(|value| value.string_value.as_deref()),
+            Some("Landed")
+        );
+    }
+
+    #[test]
+    fn semantic_geometry_names_are_not_inferred_from_generic_real_arrays() {
+        let vector = SysmlType::parse("Real[3]").expect("numeric collection");
+        assert_eq!(vector.category, SysmlTypeCategory::Collection);
+        let position = SysmlType::parse("Position").expect("semantic position");
+        assert_eq!(position.category, SysmlTypeCategory::Structured);
+        assert_eq!(position.quantity_kind.as_deref(), Some("Length"));
     }
 
     #[test]

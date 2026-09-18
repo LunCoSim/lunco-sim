@@ -92,7 +92,11 @@ Supported observations are `assert`, `exists`, `children`, `attribute`,
 literal SysML attribute by its qualified source name, so numeric limits are not
 copied into a Rhai script. The compact bridge exposes one qualified attribute
 map and intentionally omits a duplicate short-name map; every collision is
-therefore explicit rather than silently selecting one component's literal.
+therefore explicit rather than silently selecting one component's literal. For
+`attributes: []`, it also omits the collision table; for a selected short name
+it returns only that name's collision record. Thus the lazy source request
+stays bounded while an ambiguous short selector remains an explicit failure
+rather than silently selecting one component's literal.
 Every check carries a component and requirement ID, producing a per-component
 evidence record with the source revision and exact USD path.
 

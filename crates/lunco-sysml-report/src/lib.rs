@@ -5,7 +5,7 @@
 //! crate owns only the lossless JSON shape shared at those boundaries; it has
 //! no Bevy, filesystem, Twin, or scripting dependency.
 
-use lunco_sysml_ast::{SysmlAnalysis, SysmlAttribute};
+use lunco_sysml_ast::{SysmlAnalysis, SysmlAttribute, SysmlLiteral};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
@@ -54,24 +54,37 @@ pub fn attribute_collisions(analysis: &SysmlAnalysis) -> Value {
 
 /// Return one source-backed, typed attribute record.
 pub fn attribute_record(attribute: &SysmlAttribute) -> Value {
-    let value = attribute.value.as_ref().map(|literal| {
-        let number = literal.number_value.map(|value| value.as_f64());
-        json!({
-            "literal": literal.literal,
-            "kind": literal.kind,
-            "number": number,
-            "number_value": number,
-        })
-    });
+    let value = attribute.value.as_ref().map(literal_record);
     json!({
         "owner": attribute.owner,
         "name": attribute.name,
         "qualified_name": attribute.qualified_name,
         "type_name": attribute.type_name,
+        "declared_type": attribute.declared_type,
         "value": value,
         "file": attribute.file,
         "start": attribute.start,
         "end": attribute.end,
+    })
+}
+
+fn literal_record(literal: &SysmlLiteral) -> Value {
+    let number = literal.number_value.map(|value| value.as_f64());
+    let elements = literal
+        .elements
+        .as_ref()
+        .map(|items| items.iter().map(literal_record).collect::<Vec<_>>());
+    json!({
+        "literal": literal.literal,
+        "kind": literal.kind,
+        "literal_kind": literal.literal_kind.as_str(),
+        "number": number,
+        "number_value": number,
+        "integer_value": literal.integer_value,
+        "boolean_value": literal.boolean_value,
+        "string_value": literal.string_value,
+        "unit": literal.unit,
+        "elements": elements,
     })
 }
 

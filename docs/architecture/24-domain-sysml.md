@@ -1,6 +1,6 @@
 # 24 — SysML Domain
 
-> Status: Foundation + Twin source/document loading implemented · Audience: contributors extending SysML v2 structure & requirements
+> Status: Foundation + Twin source/document loading + typed semantic values implemented · Audience: contributors extending SysML v2 structure & requirements
 >
 SysML v2 is the source of truth for **system structure and
 requirements** — a peer domain inside a Twin, co-equal with Modelica
@@ -111,6 +111,24 @@ source-backed elements, typed attributes/literals, requirement records,
 verification records, resolved references, and syntax/name/collision
 diagnostics; the upstream model remains private to the AST boundary.
 
+The typed projection now also preserves the standard concepts needed by the
+Griffin component model:
+
+- kernel primitive categories (`Boolean`, `Integer`, `Rational`, `Real`,
+  `Complex`, and `String`);
+- feature multiplicity, including lower/upper bounds and ordered/unique flags;
+- quantity kind and unit-bearing literals;
+- enumeration and structured-value categories;
+- part, item, and port element categories from resolved definitions;
+- an explicit Modelica mapping for scalar/quantity values, primitive arrays,
+  enumerations, and structured values.
+
+Spatial values do not use a second vector implementation. The Rhai adapter
+lowers semantic `Position`/`Vec3` values to the existing f64 Bevy/glam
+`DVec3`, and quaternions to `DQuat`, which are already registered by the
+shared Rhai math bridge. Bevy f32 render transforms remain a later projection
+boundary, never the SysML requirement representation.
+
 **Supported subset (initial):**
 
 - `package` declarations with attributes, imports
@@ -131,6 +149,13 @@ diagnostics; the upstream model remains private to the AST boundary.
 - Behavior definitions (activities, actions)
 - Allocations, refinements
 - Analysis/verification execution
+
+The typed value layer is intentionally not a claim that all of SysML v2 or
+KerML is executed. Constraint expressions, general derived-feature
+evaluation, N-dimensional non-Real collections, full quantity conversion,
+redefinition/subsetting semantics, and behavior execution still need an
+owning semantic engine. The current boundary reports these as typed
+unresolved values rather than guessing from strings.
 
 The runtime accepts source-level replace/range edits through the
 `ApplySysmlOps { doc_id, ops, parent_generation? }` command. The command uses

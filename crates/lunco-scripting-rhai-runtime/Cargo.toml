@@ -37,6 +37,7 @@ lunco-scripting-rhai-world = { path = "../lunco-scripting-rhai-world", default-f
 default = ["rhai"]
 rhai = ["lunco-scripting/rhai"]
 native-plugins = ["lunco-scripting-rhai-world/native-plugins", "rhai"]
+sysml = ["lunco-scripting-rhai-world/sysml", "rhai"]
 
 [dev-dependencies]
 tempfile.workspace = true
