@@ -3,7 +3,8 @@
 //! A timeline is the pure-DATA mission format `RunTimeline` executes (a JSON
 //! steps array, or `{ name?, steps: [...] }`). This module gives timelines the
 //! same durable, discoverable treatment shared tool libraries get
-//! ([`crate::tool_libs`]): named timelines persist as `<twin>/timelines/*.json`
+//! (the sibling `lunco-scripting-rhai-world::tool_libs` registry): named
+//! timelines persist as `<twin>/timelines/*.json`
 //! files (the file IS the source of truth, loaded on active Twin open), and the API can
 //! enumerate / fetch / run them by name.
 //!

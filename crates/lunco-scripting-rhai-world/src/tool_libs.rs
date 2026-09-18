@@ -126,7 +126,7 @@ impl TwinToolLibraries {
 
 /// Register the small native tool that is part of the generic scripting
 /// substrate. Source-defined tools are installed by the Bevy asset pipeline.
-pub(crate) fn register_native_builtins() {
+pub fn register_native_builtins() {
     lunco_tools_rhai::register_native_tool("mathx", vec!["lerp/3".into()], |_engine| {
         let mut m = rhai::Module::new();
         m.set_native_fn("lerp", |a: f64, b: f64, t: f64| Ok(a + (b - a) * t));

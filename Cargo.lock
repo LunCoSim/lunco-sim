@@ -7753,7 +7753,7 @@ dependencies = [
  "lunco-scene-runner",
  "lunco-scene-validation",
  "lunco-scripting-bridge-core",
- "lunco-scripting-rhai-runtime",
+ "lunco-scripting-rhai-world",
  "lunco-telemetry-core",
  "lunco-twin-journal",
  "lunco-usd-bevy-runtime",
@@ -8023,6 +8023,7 @@ dependencies = [
  "lunco-scripting-bridge-core",
  "lunco-scripting-rhai",
  "lunco-scripting-rhai-runtime",
+ "lunco-scripting-rhai-world",
  "lunco-twin-journal",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -9173,7 +9174,7 @@ dependencies = [
  "lunco-hooks-rhai",
  "lunco-scripting",
  "lunco-scripting-bridge-core",
- "lunco-scripting-rhai-runtime",
+ "lunco-scripting-rhai-world",
  "lunco-tools",
  "rhai",
  "serde_json",
@@ -9194,13 +9195,39 @@ dependencies = [
 name = "lunco-scripting-rhai-runtime"
 version = "0.1.0-dev"
 dependencies = [
- "anyhow",
  "bevy",
  "lunco-api",
  "lunco-assets-core",
  "lunco-command-contracts",
  "lunco-core",
  "lunco-core-session",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-scripting",
+ "lunco-scripting-bridge-core",
+ "lunco-scripting-rhai-core",
+ "lunco-scripting-rhai-world",
+ "lunco-spatial",
+ "lunco-storage",
+ "lunco-telemetry-core",
+ "lunco-tools",
+ "lunco-twin-journal",
+ "lunco-workspace",
+ "rhai",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "lunco-scripting-rhai-world"
+version = "0.1.0-dev"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "lunco-api",
+ "lunco-assets-core",
+ "lunco-command-contracts",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-hash",
@@ -9215,7 +9242,6 @@ dependencies = [
  "lunco-scripting-bridge-time",
  "lunco-scripting-bridge-usd",
  "lunco-scripting-rhai-core",
- "lunco-spatial",
  "lunco-storage",
  "lunco-telemetry-core",
  "lunco-tools",
@@ -9225,7 +9251,6 @@ dependencies = [
  "rhai",
  "serde",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]

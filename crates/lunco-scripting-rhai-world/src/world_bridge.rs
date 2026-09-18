@@ -34,8 +34,6 @@
 //! rhai callback, and execution is single-threaded (FixedUpdate / wasm), so no
 //! aliasing occurs.
 
-#![cfg(feature = "rhai")]
-
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
@@ -2635,13 +2633,13 @@ impl RhaiScenarioRuntime {
 /// prelude. Scenario execution stays closed until the complete prelude is
 /// available, while tool sources are admitted independently.
 #[derive(Resource, Default)]
-pub(crate) struct RhaiRuntimeStatus {
+pub struct RhaiRuntimeStatus {
     ready: bool,
     error: Option<String>,
 }
 
 /// Gate scenario execution on the authored prelude being installed.
-pub(crate) fn rhai_runtime_ready(status: Option<Res<RhaiRuntimeStatus>>) -> bool {
+pub fn rhai_runtime_ready(status: Option<Res<RhaiRuntimeStatus>>) -> bool {
     status.is_some_and(|status| status.ready)
 }
 
@@ -2651,7 +2649,7 @@ pub(crate) fn rhai_runtime_ready(status: Option<Res<RhaiRuntimeStatus>>) -> bool
 /// walk. The asset handles are retained by [`source_asset::BuiltinRhaiAssets`];
 /// edits arrive through Bevy's normal asset events and are visible to the next
 /// engine generation.
-pub(crate) fn prepare_builtin_rhai_assets(
+pub fn prepare_builtin_rhai_assets(
     manifest: Option<Res<lunco_assets_core::discovery::AssetManifest>>,
     builtins: Option<ResMut<crate::source_asset::BuiltinRhaiAssets>>,
     assets: Option<Res<Assets<crate::source_asset::RhaiSource>>>,

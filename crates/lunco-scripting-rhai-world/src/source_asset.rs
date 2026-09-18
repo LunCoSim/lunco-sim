@@ -105,7 +105,7 @@ fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, an
 /// source roles are decided by authored policy.
 #[cfg(feature = "rhai")]
 #[derive(Resource, Default)]
-pub(crate) struct BuiltinRhaiAssets {
+pub struct BuiltinRhaiAssets {
     pub(crate) handles: BTreeMap<String, Handle<RhaiSource>>,
     pub(crate) processed: HashMap<String, (String, u64)>,
 }

@@ -2,9 +2,9 @@
 //!
 //! The language-neutral scripting package owns documents, backend-neutral
 //! lifecycle state, and Python support. This package owns the high-churn Rhai
-//! world bridge, authored source graph, commands, tools, timelines, and
-//! policy activation. Keeping that closure here prevents Rhai edits from
-//! rebuilding consumers that only need the generic scripting substrate.
+//! authored source graph, commands, tools, and timelines. The reusable world
+//! bridge and policy runtime lives in `lunco-scripting-rhai-world`, so changes
+//! to application composition do not rebuild its high-churn world closure.
 
 #[cfg(feature = "rhai")]
 use bevy::prelude::*;
@@ -13,20 +13,10 @@ use lunco_api::executor::DeferredCommandAppExt;
 
 #[cfg(feature = "rhai")]
 pub mod commands;
-#[cfg(feature = "native-plugins")]
-pub mod native_plugins;
-#[cfg(feature = "rhai")]
-pub mod policy;
 #[cfg(feature = "rhai")]
 pub mod registration_journal;
 #[cfg(feature = "rhai")]
-pub mod source_asset;
-#[cfg(feature = "rhai")]
 pub mod timelines;
-#[cfg(feature = "rhai")]
-pub mod tool_libs;
-#[cfg(feature = "rhai")]
-pub mod world_bridge;
 
 /// Install the Rhai runtime and its authored policy/application seams.
 ///
@@ -48,38 +38,44 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             app.add_plugins(lunco_scripting::LunCoScriptingPlugin);
         }
 
-        if !app.is_plugin_added::<source_asset::RhaiSourceAssetPlugin>() {
-            app.add_plugins(source_asset::RhaiSourceAssetPlugin);
+        if !app.is_plugin_added::<lunco_scripting_rhai_world::source_asset::RhaiSourceAssetPlugin>()
+        {
+            app.add_plugins(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetPlugin);
         }
-        tool_libs::register_native_builtins();
+        lunco_scripting_rhai_world::tool_libs::register_native_builtins();
         app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
-            .init_resource::<world_bridge::PendingWorldScripts>()
-            .init_resource::<world_bridge::RhaiRuntimeStatus>();
+            .init_resource::<lunco_scripting_rhai_world::world_bridge::PendingWorldScripts>()
+            .init_resource::<lunco_scripting_rhai_world::world_bridge::RhaiRuntimeStatus>();
         #[cfg(feature = "native-plugins")]
-        app.init_resource::<native_plugins::NativeTwinPlugins>();
-        app.add_systems(Startup, policy::load_application_policies_on_startup)
-            .add_observer(policy::sync_policies_on_twin_added)
-            .add_observer(policy::wind_down_policies_on_twin_closed)
-            .register_deferred_command::<commands::RunRhai>()
-            .register_deferred_command::<commands::RunRhaiTool>()
-            .register_deferred_command::<commands::RunRhaiToolHook>()
-            .init_resource::<lunco_scripting::scenario::ScenarioDriver<world_bridge::RhaiScenarioRuntime>>();
+        app.init_resource::<lunco_scripting_rhai_world::native_plugins::NativeTwinPlugins>();
+        app.add_systems(
+            Startup,
+            lunco_scripting_rhai_world::policy::load_application_policies_on_startup,
+        )
+        .add_observer(lunco_scripting_rhai_world::policy::sync_policies_on_twin_added)
+        .add_observer(lunco_scripting_rhai_world::policy::wind_down_policies_on_twin_closed)
+        .register_deferred_command::<commands::RunRhai>()
+        .register_deferred_command::<commands::RunRhaiTool>()
+        .register_deferred_command::<commands::RunRhaiToolHook>()
+        .init_resource::<lunco_scripting::scenario::ScenarioDriver<
+            lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+        >>();
 
         let sources = app
             .world()
-            .resource::<
-                lunco_scripting::scenario::ScenarioDriver<world_bridge::RhaiScenarioRuntime>,
-            >()
+            .resource::<lunco_scripting::scenario::ScenarioDriver<
+                lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+            >>()
             .runtime
             .script_sources();
         app.insert_resource(sources)
             .init_resource::<lunco_scripting::scenario::ScriptEventInbox>()
             .add_observer(lunco_scripting::scenario::collect_script_events);
 
-        tool_libs::register_queries(app);
-        app.init_resource::<tool_libs::TwinToolLibraries>()
-            .add_observer(tool_libs::sync_tools_on_twin_added)
-            .add_observer(tool_libs::wind_down_tools_on_twin_closed)
+        lunco_scripting_rhai_world::tool_libs::register_queries(app);
+        app.init_resource::<lunco_scripting_rhai_world::tool_libs::TwinToolLibraries>()
+            .add_observer(lunco_scripting_rhai_world::tool_libs::sync_tools_on_twin_added)
+            .add_observer(lunco_scripting_rhai_world::tool_libs::wind_down_tools_on_twin_closed)
             .init_resource::<timelines::TimelineStore>();
         timelines::register_queries(app);
         app.add_observer(timelines::sync_timelines_on_twin_added)
@@ -87,11 +83,13 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             .add_systems(lunco_core::SceneTeardown, stop_scene_owned_scripts)
             .add_systems(
                 Update,
-                world_bridge::prepare_builtin_rhai_assets.after(source_asset::RhaiSourceAssetSet),
+                lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets
+                    .after(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetSet),
             )
             .add_systems(
                 Update,
-                world_bridge::drain_world_scripts.run_if(scripts_run_here),
+                lunco_scripting_rhai_world::world_bridge::drain_world_scripts
+                    .run_if(scripts_run_here),
             )
             .add_systems(
                 PreUpdate,
@@ -104,17 +102,17 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             )
             .add_systems(
                 FixedUpdate,
-                world_bridge::tick_rhai_scenarios
+                lunco_scripting_rhai_world::world_bridge::tick_rhai_scenarios
                     .in_set(lunco_scripting::ScriptingSet)
                     .run_if(lunco_scripting::scenario::scenario_execution_enabled)
-                    .run_if(world_bridge::rhai_runtime_ready)
+                    .run_if(lunco_scripting_rhai_world::world_bridge::rhai_runtime_ready)
                     .run_if(lunco_scripting::scenario::simulation_is_running),
             )
             .add_systems(
                 Update,
-                world_bridge::tick_rhai_scenarios_while_paused
+                lunco_scripting_rhai_world::world_bridge::tick_rhai_scenarios_while_paused
                     .run_if(lunco_scripting::scenario::scenario_execution_enabled)
-                    .run_if(world_bridge::rhai_runtime_ready)
+                    .run_if(lunco_scripting_rhai_world::world_bridge::rhai_runtime_ready)
                     .run_if(lunco_scripting::scenario::simulation_is_paused),
             );
 
@@ -138,9 +136,9 @@ pub fn stop_scene_owned_scripts(world: &mut World) {
     };
 
     for (entity, document_id) in targets {
-        lunco_scripting::scenario::ScenarioDriver::<world_bridge::RhaiScenarioRuntime>::stop_entity(
-            world, entity,
-        );
+        lunco_scripting::scenario::ScenarioDriver::<
+            lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+        >::stop_entity(world, entity);
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.remove::<lunco_scripting::doc::ScriptedModel>();
         }

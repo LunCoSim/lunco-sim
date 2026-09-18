@@ -12,8 +12,6 @@
 //! Interpreter-specific commands belong to that interpreter's runtime package;
 //! the generic scripting host owns backend-neutral lifecycle/document commands.
 
-#[cfg(feature = "rhai")]
-use crate::world_bridge::{PendingWorldScript, PendingWorldScripts};
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
 use lunco_api::executor::PendingApiRequest;
@@ -32,6 +30,8 @@ use lunco_scripting::doc::{
 };
 #[cfg(feature = "rhai")]
 use lunco_scripting_bridge_core as bridge_core;
+#[cfg(feature = "rhai")]
+use lunco_scripting_rhai_world::world_bridge::{PendingWorldScript, PendingWorldScripts};
 #[cfg(feature = "rhai")]
 use lunco_telemetry_core::TelemetryValue;
 
@@ -448,7 +448,7 @@ fn on_run_scenario_asset(
         }
         Some(scene)
     };
-    let handle = asset_server.load::<crate::source_asset::RhaiSource>(path);
+    let handle = asset_server.load::<lunco_scripting_rhai_world::source_asset::RhaiSource>(path);
     commands.entity(target).try_insert(PendingScenarioAsset {
         handle,
         params: cmd.params.clone(),
@@ -613,7 +613,7 @@ fn attach_rhai_scenario(
 #[cfg(feature = "rhai")]
 #[derive(Component, Debug, Clone)]
 pub struct PendingScenarioAsset {
-    pub handle: Handle<crate::source_asset::RhaiSource>,
+    pub handle: Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
     pub params: ScenarioParameters,
     pub reload_policy: ScenarioReloadPolicy,
     pub authority: Option<lunco_command_contracts::SessionId>,
@@ -624,7 +624,7 @@ pub struct PendingScenarioAsset {
 #[cfg(feature = "rhai")]
 pub fn attach_requested_scenarios(
     q: Query<(Entity, &PendingScenarioAsset)>,
-    assets: Res<Assets<crate::source_asset::RhaiSource>>,
+    assets: Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>,
     asset_server: Res<AssetServer>,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
@@ -770,7 +770,7 @@ pub struct ScenarioAssetId(pub String);
 /// synchronous import registry — controls residency and Twin teardown.
 #[cfg(feature = "rhai")]
 #[derive(Component, Debug, Clone)]
-pub struct ScenarioAssetHandle(pub Handle<crate::source_asset::RhaiSource>);
+pub struct ScenarioAssetHandle(pub Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>);
 
 /// LOAD half for FILE-backed scenarios: entities the USD loader stamped with
 /// [`lunco_core::EmbeddedScenarioPath`] (an `info:sourceAsset` attribute). Loads
@@ -786,9 +786,14 @@ pub fn resolve_embedded_scenario_paths(
         (Entity, &lunco_core::EmbeddedScenarioPath),
         Without<lunco_core::EmbeddedScenarioSource>,
     >,
-    sources: Res<Assets<crate::source_asset::RhaiSource>>,
+    sources: Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>,
     asset_server: Res<AssetServer>,
-    mut pending: Local<std::collections::HashMap<Entity, Handle<crate::source_asset::RhaiSource>>>,
+    mut pending: Local<
+        std::collections::HashMap<
+            Entity,
+            Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
+        >,
+    >,
     mut removed: RemovedComponents<lunco_core::EmbeddedScenarioPath>,
     mut commands: Commands,
 ) {
@@ -887,7 +892,7 @@ pub fn resolve_embedded_scenario_paths(
 
 /// Register (or hot-replace) a named rhai **tool library** — a reusable bundle
 /// of selection / behaviour policy callable from any scenario as
-/// `name::fn(...)` (see [`crate::tool_libs`]). The scenario-authoring counterpart
+/// `name::fn(...)` (see [`lunco_scripting_rhai_world::tool_libs`]). The scenario-authoring counterpart
 /// to RunScenario: RunScenario attaches a program to ONE entity; this publishes
 /// shared library code every scenario can call, with no Rust rebuild. Idempotent
 /// + hot-reload — re-registering a name replaces it and the runtime picks it up
@@ -903,7 +908,7 @@ pub struct RegisterToolLibrary {
 #[on_command(RegisterToolLibrary)]
 fn on_register_tool_library(
     _t: On<RegisterToolLibrary>,
-    mut scoped: ResMut<crate::tool_libs::TwinToolLibraries>,
+    mut scoped: ResMut<lunco_scripting_rhai_world::tool_libs::TwinToolLibraries>,
     // Optional: present only when the workspace plugin is installed. Used to
     // persist the library to the active Twin's `tools/` dir. `None` (headless /
     // no-twin) just keeps the in-memory registration.
@@ -920,7 +925,7 @@ fn on_register_tool_library(
 ) -> Result<Ack, String> {
     lunco_scripting_rhai_core::names::validate_file_stem(&cmd.name)
         .map_err(|error| format!("RegisterToolLibrary: {error}"))?;
-    let functions = crate::world_bridge::validate_tool_library(
+    let functions = lunco_scripting_rhai_world::world_bridge::validate_tool_library(
         &cmd.name,
         &cmd.source,
         sources.as_deref().cloned().unwrap_or_default(),
@@ -947,9 +952,12 @@ fn on_register_tool_library(
             .and_then(|workspace| workspace.twin(twin_id))
             .map(|twin| twin.root.clone())
             .expect("active Twin was validated above");
-        crate::tool_libs::save_tool_library_file(&root, &cmd.name, &cmd.source).map_err(
-            |error| format!("RegisterToolLibrary: could not persist Twin file: {error}"),
-        )?;
+        lunco_scripting_rhai_world::tool_libs::save_tool_library_file(
+            &root,
+            &cmd.name,
+            &cmd.source,
+        )
+        .map_err(|error| format!("RegisterToolLibrary: could not persist Twin file: {error}"))?;
     }
     if let Some(twin_id) = active_twin {
         scoped.ensure_active(twin_id);
@@ -959,7 +967,7 @@ fn on_register_tool_library(
     } else {
         // Explicit headless/session scope. A present Workspace always
         // produces an active Twin above; it never falls back to this path.
-        crate::tool_libs::register_tool_library(&cmd.name, &cmd.source);
+        lunco_scripting_rhai_world::tool_libs::register_tool_library(&cmd.name, &cmd.source);
     }
     if let Some(journal) = journal.as_ref() {
         crate::registration_journal::record_tool_library(journal, &cmd.name, &cmd.source);
@@ -983,11 +991,11 @@ fn on_register_tool_library(
             "name": cmd.name,
             "active_twin": active_twin.map(|twin| twin.raw()),
             "scope": scope,
-            "registry_generation": crate::tool_libs::generation(),
+            "registry_generation": lunco_scripting_rhai_world::tool_libs::generation(),
             "functions": function_details,
             "callable": true,
             "diagnostics": [],
-            "libraries": crate::tool_libs::library_names(),
+            "libraries": lunco_scripting_rhai_world::tool_libs::library_names(),
         }),
     ))
 }

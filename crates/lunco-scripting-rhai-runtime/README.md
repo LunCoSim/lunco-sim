@@ -2,15 +2,19 @@
 
 Production Rhai runtime integration for LunCoSim.
 
-This package owns the high-churn interpreter/application boundary:
+This package owns the application-facing interpreter boundary:
 
-- the reflected world bridge and `RhaiScenarioRuntime`;
-- Rhai commands, authored policy activation, tools, and timelines;
+- Rhai commands;
+- tool and timeline persistence;
 - `.rhai` asset loading and import dependency tracking;
-- Twin-scoped native hook-provider lifecycle.
+- composition of the language-neutral host with
+  [`lunco-scripting-rhai-world`](../lunco-scripting-rhai-world).
 
 [`lunco-scripting`](../lunco-scripting) remains the language-neutral host for
 documents, backend-neutral scenario lifecycle, and optional Python support.
+[`lunco-scripting-rhai-world`](../lunco-scripting-rhai-world) owns the reflected
+world bridge, `RhaiScenarioRuntime`, authored policy activation, and optional
+Twin-scoped native hook providers.
 [`lunco-scripting-rhai-core`](../lunco-scripting-rhai-core) remains the
 reusable interpreter substrate, while [`lunco-scripting-rhai`](../lunco-scripting-rhai)
 owns catalog, diagnostics, and dataset-query projections.

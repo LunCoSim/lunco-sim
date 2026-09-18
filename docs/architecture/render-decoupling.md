@@ -92,7 +92,8 @@ whose dependency closure can express the contract:
 | `lunco-scripting-bridge-time` | deterministic simulation-clock and clock-domain projections | spatial pose, authored policy, language runtime, or render/UI dependencies |
 | `lunco-scripting-bridge-usd` | composed USD document-generation and prim-path projections | authored policy, language runtime, or render/UI dependencies |
 | `lunco-scripting` | language-neutral documents/lifecycle plus optional Python backend | Rhai world runtime, authored Rhai policy, or unconditional render/UI dependencies |
-| `lunco-scripting-rhai-runtime` | Rhai world bridge, commands, policies, tools, timelines, and source assets | render/UI dependencies or a second scripting lifecycle |
+| `lunco-scripting-rhai-world` | Rhai world bridge, scenario runtime, policies, and native hook-provider lifecycle | render/UI dependencies or a second scripting lifecycle |
+| `lunco-scripting-rhai-runtime` | Rhai commands, tools, timelines, and source assets; composes the world package | render/UI dependencies or a second scripting lifecycle |
 | `lunco-usd-queries` | UI-free document/query providers | egui defaults or workbench state |
 | `lunco-doc-bevy` | ECS document/journal lifecycle | presentation widgets (its egui bridge is opt-in) |
 | `lunco-render-*` | GPU composition and render-recovery policy | simulation state or USD topology |

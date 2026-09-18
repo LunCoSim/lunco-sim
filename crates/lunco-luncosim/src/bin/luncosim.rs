@@ -49,8 +49,8 @@ fn main() -> lunco_luncosim_core::AppExit {
             // the same authored application policy manifest used at startup,
             // but keep its derived registry local to this one-shot command.
             let mut policy_registry =
-                lunco_scripting_rhai_runtime::policy::ScriptedPolicyRegistry::default();
-            let report = lunco_scripting_rhai_runtime::policy::load_application_policies(
+                lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry::default();
+            let report = lunco_scripting_rhai_world::policy::load_application_policies(
                 &mut policy_registry,
                 None,
             );

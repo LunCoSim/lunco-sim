@@ -486,7 +486,7 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
                         .iter()
                         .map(|field| {
                             let field_writable =
-                                lunco_scripting_rhai_runtime::world_bridge::dynamic_write_supported(
+                                lunco_scripting_rhai_world::world_bridge::dynamic_write_supported(
                                     field.type_path(),
                                 );
                             writable |= field_writable;
@@ -503,7 +503,7 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
                 _ => (Vec::new(), false),
             };
             let type_writable =
-                lunco_scripting_rhai_runtime::world_bridge::dynamic_write_supported(short_type);
+                lunco_scripting_rhai_world::world_bridge::dynamic_write_supported(short_type);
             Some(serde_json::json!({
                 "type": short_type,
                 "kind": if is_resource { "resource" } else { "component" },
@@ -528,10 +528,10 @@ fn prelude_surface(world: &World) -> Vec<serde_json::Value> {
     else {
         return Vec::new();
     };
-    lunco_scripting_rhai_runtime::world_bridge::prelude_files_from_sources(sources)
+    lunco_scripting_rhai_world::world_bridge::prelude_files_from_sources(sources)
         .ok()
         .and_then(|files| {
-            lunco_scripting_rhai_runtime::world_bridge::compile_prelude_set_for_runtime(
+            lunco_scripting_rhai_world::world_bridge::compile_prelude_set_for_runtime(
                 &engine, files,
             )
             .ok()
@@ -794,7 +794,7 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
             "verbs": verbs,
             "hooks": hooks,
             "policy_hooks": policy_hooks,
-            "policy_status": lunco_scripting_rhai_runtime::world_bridge::policy_status_json(world),
+            "policy_status": lunco_scripting_rhai_world::world_bridge::policy_status_json(world),
             "prelude": prelude,
             "tools": tools,
             "commands": commands,

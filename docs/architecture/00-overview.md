@@ -75,7 +75,8 @@ Apps (luncosim, luncosim-server, lunica)
    │     lunco-interaction-core  lunco-input-core  lunco-controller
    │     lunco-scripting-bridge-core ← interpreter-free reflected world mechanism
    │     lunco-scripting   ← language-neutral lifecycle + Python backend
-   │     lunco-scripting-rhai-runtime ← Rhai world runtime and op-graph generators
+   │     lunco-scripting-rhai-world ← Rhai world runtime and policy substrate
+   │     lunco-scripting-rhai-runtime ← Rhai commands, tools, timelines, assets
    │          │
    │          ▼
    ├── UI adapters
@@ -132,7 +133,7 @@ Arrows point at dependencies, and two edges deserve calling out explicitly:
 We are moving from a **Sandbox** (physics validation) toward a **Mission Stack**:
 1. **Core Co-Sim (Built)**: USD + Modelica + Physics integration.
 2. **Native Collab (Built/Active)**: WebTransport + Replication (`lunco-networking` landed, RBAC policy substrate in place).
-3. **Scripting (Built)**: interpreter-neutral bridge mechanism plus separate language/runtime and query boundaries (`lunco-scripting-bridge-core`, `lunco-scripting`, `lunco-scripting-rhai-runtime`, `lunco-scripting-rhai`, `lunco-tools-rhai`). Spatial, time, and USD bridge adapters remain domain-specific edges.
+3. **Scripting (Built)**: interpreter-neutral bridge mechanism plus separate language/runtime and query boundaries (`lunco-scripting-bridge-core`, `lunco-scripting`, `lunco-scripting-rhai-world`, `lunco-scripting-rhai-runtime`, `lunco-scripting-rhai`, `lunco-tools-rhai`). Spatial, time, and USD bridge adapters remain domain-specific edges.
 4. **Experiments (Built)**: parameter sweeps + parallel runs (`lunco-experiments`).
 5. **Mission Timeline (Planned)**: Scheduling, event graphs, and automated CONOPS rehearsal.
 6. **HIL/SIL (Planned)**: Hardware/Software-in-the-loop validation for physical flight controllers.

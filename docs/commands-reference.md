@@ -1066,7 +1066,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Register (or hot-replace) a named rhai **tool library** — a reusable bundle
  of selection / behaviour policy callable from any scenario as
- `name::fn(...)` (see `lunco_scripting_rhai_runtime::tool_libs`). The scenario-authoring counterpart
+ `name::fn(...)` (see `lunco_scripting_rhai_world::tool_libs`). The scenario-authoring counterpart
  to RunScenario: RunScenario attaches a program to ONE entity; this publishes
  shared library code every scenario can call, with no Rust rebuild. Idempotent
  + hot-reload — re-registering a name replaces it and the runtime picks it up

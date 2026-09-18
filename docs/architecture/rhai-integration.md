@@ -130,7 +130,7 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
 - **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
   attach `ScriptedModel { language: Rhai, document_id }`.
 
-### Lifecycle hooks (per-entity runtime, `lunco-scripting-rhai-runtime/src/world_bridge.rs` `tick_rhai_models`)
+### Lifecycle hooks (per-entity runtime, `lunco-scripting-rhai-world/src/world_bridge.rs` `tick_rhai_scenarios`)
 
 ```rhai
 fn task(me, ctx) { ... }            // builds the native task tree once
@@ -159,7 +159,7 @@ on their live per-tick paths because they are state, not structural invalidation
 Structural edits still go through the typed USD owner, which advances the same
 generation and makes the cache refresh deterministic.
 
-### Host verbs (the entire Rust-exposed vocabulary — `lunco-scripting-rhai-runtime/src/world_bridge.rs`)
+### Host verbs (the entire Rust-exposed vocabulary — `lunco-scripting-rhai-world/src/world_bridge.rs`)
 
 | verb | channel | purpose |
 |------|---------|---------|

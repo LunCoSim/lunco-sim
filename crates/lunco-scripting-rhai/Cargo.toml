@@ -16,7 +16,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
-lunco-scripting-rhai-runtime = { path = "../lunco-scripting-rhai-runtime" }
+lunco-scripting-rhai-world = { path = "../lunco-scripting-rhai-world" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-tools = { path = "../lunco-tools" }
 rhai = { workspace = true }

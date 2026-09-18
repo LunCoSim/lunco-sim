@@ -1,15 +1,16 @@
 [package]
-name = "lunco-scripting-rhai-runtime"
+name = "lunco-scripting-rhai-world"
 version = "0.1.0-dev"
 edition = "2024"
 license.workspace = true
-description = "Production Rhai application runtime, commands, tools, and authored source loading"
+description = "Rhai world bridge, scenario runtime, and authored policy activation"
 
 [lib]
-name = "lunco_scripting_rhai_runtime"
+name = "lunco_scripting_rhai_world"
 path = "src/lib.rs"
 
 [dependencies]
+anyhow = { workspace = true }
 bevy = { workspace = true }
 rhai = { workspace = true }
 serde = { workspace = true }
@@ -17,28 +18,31 @@ serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
-lunco-core = { path = "../lunco-core" }
-lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-hash = { path = "../lunco-hash" }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
+lunco-input-core = { path = "../lunco-input-core" }
+lunco-physics = { path = "../lunco-physics" }
 lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
+lunco-scripting-bridge-spatial = { path = "../lunco-scripting-bridge-spatial" }
+lunco-scripting-bridge-time = { path = "../lunco-scripting-bridge-time" }
+lunco-scripting-bridge-usd = { path = "../lunco-scripting-bridge-usd" }
 lunco-scripting-rhai-core = { path = "../lunco-scripting-rhai-core" }
-lunco-storage = { path = "../lunco-storage" }
-lunco-spatial = { path = "../lunco-spatial" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
-lunco-tools = { path = "../lunco-tools" }
+lunco-tools-rhai = { path = "../lunco-tools-rhai" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-workspace = { path = "../lunco-workspace" }
-lunco-scripting-rhai-world = { path = "../lunco-scripting-rhai-world", default-features = false, features = ["rhai"] }
+lunco-hooks-native = { path = "../lunco-hooks-native", optional = true }
+lunco-storage = { path = "../lunco-storage" }
+lunco-tools = { path = "../lunco-tools" }
 
 [features]
 default = ["rhai"]
-rhai = ["lunco-scripting/rhai"]
-native-plugins = ["lunco-scripting-rhai-world/native-plugins", "rhai"]
-
-[dev-dependencies]
-tempfile.workspace = true
+rhai = []
+native-plugins = ["dep:lunco-hooks-native"]
 
 [lints]
 workspace = true

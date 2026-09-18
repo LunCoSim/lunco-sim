@@ -20,12 +20,13 @@ scheduling, hot-reload, pause, teardown, lifecycle/document commands, and the
 generic scenario contract. Window presence is an opt-in application adapter
 (`window-audience`); headless and server builds do not compile Bevy's window
 subsystem into this crate.
-The Rhai runtime, world bridge, commands, authored policies, source graph,
-tools, and timelines live in the companion `lunco-scripting-rhai-runtime`
-package. Reusable Rhai backend mechanics are installed by
-`lunco-scripting-rhai-core`; authoring queries and dataset projections are
-installed by `lunco-scripting-rhai`. Domain-specific world verbs are provided
-by the spatial, time, and USD bridge adapters.
+The Rhai world bridge, scenario runtime, authored policies, and Twin-scoped
+native providers live in `lunco-scripting-rhai-world`. Application commands,
+tool/timeline persistence, and the Rhai source graph are composed by the
+companion `lunco-scripting-rhai-runtime` package. Reusable Rhai backend
+mechanics are installed by `lunco-scripting-rhai-core`; authoring queries and
+dataset projections are installed by `lunco-scripting-rhai`. Domain-specific
+world verbs are provided by the spatial, time, and USD bridge adapters.
 
 ## Model
 
@@ -121,7 +122,8 @@ and one typed conversion; it does not choose domain defaults or inject a global
 
 | Path | What |
 |---|---|
-| [`lunco-scripting-rhai-runtime`](../lunco-scripting-rhai-runtime) | Rhai runtime plugin, world bridge, commands, policies, tools, timelines, and Rhai source assets |
+| [`lunco-scripting-rhai-world`](../lunco-scripting-rhai-world) | Rhai world bridge, scenario runtime, authored policies, and Twin-scoped native providers |
+| [`lunco-scripting-rhai-runtime`](../lunco-scripting-rhai-runtime) | Application Rhai plugin, commands, tool/timeline persistence, and Rhai source assets; composes the world package |
 | [`lunco-scripting-bridge-core`](../lunco-scripting-bridge-core) | language-neutral world mechanism (`ValueBuilder`) |
 | [`lunco-scripting-bridge-spatial`](../lunco-scripting-bridge-spatial) | pose, navigation, geolocation, and entity projections |
 | [`lunco-scripting-bridge-time`](../lunco-scripting-bridge-time) | deterministic simulation-clock projections |
@@ -130,7 +132,7 @@ and one typed conversion; it does not choose domain defaults or inject a global
 | [`lunco-scripting-rhai-runtime/src/commands.rs`](../lunco-scripting-rhai-runtime/src/commands.rs) | the Rhai `#[Command]` entry points |
 | [`lunco-scripting-rhai-core`](../lunco-scripting-rhai-core) | reusable Rhai backend mechanics: module resolution, native math, task-tree lowering, UI values, and persisted-name validation |
 | [`lunco-scripting-rhai`](../lunco-scripting-rhai) (`src/catalog.rs`, `src/diagnostics.rs`, `src/dataset_queries.rs`) | Rhai discovery, introspection, and dataset queries |
-| [`lunco-scripting-rhai-runtime/src/tool_libs.rs`](../lunco-scripting-rhai-runtime/src/tool_libs.rs) · [`src/timelines.rs`](../lunco-scripting-rhai-runtime/src/timelines.rs) | tool / timeline registries + Twin persistence |
+| [`lunco-scripting-rhai-world/src/tool_libs.rs`](../lunco-scripting-rhai-world/src/tool_libs.rs) · [`lunco-scripting-rhai-runtime/src/timelines.rs`](../lunco-scripting-rhai-runtime/src/timelines.rs) | tool registry and world binding · timeline registry + Twin persistence |
 | [`prelude/`](../../assets/scripting/prelude) · [`examples/`](../../assets/scripting/examples) · [`tools/`](../../assets/scripting/tools) | the helper library, example scenarios, example tool libraries |
 
 ## Cargo features
