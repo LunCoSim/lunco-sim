@@ -179,7 +179,7 @@ fn record_rejected_command(
 ) {
     world.resource_mut::<lunco_core::CommandResults>().insert(
         id,
-        lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(message)),
+        lunco_core::CommandOutcome::Rejected(lunco_command_contracts::Reject::InvalidOp(message)),
     );
     emit_command_response(world, correlation_id, id);
 }
@@ -257,7 +257,7 @@ fn command_response_from_normalized(result: NormalizedCommandResult) -> ApiRespo
 }
 
 fn normalize_command_handler_result(
-    result: &Result<lunco_core::Ack, String>,
+    result: &Result<lunco_command_contracts::Ack, String>,
     error_code: ApiErrorCode,
 ) -> NormalizedCommandResult {
     match result {
@@ -275,7 +275,7 @@ fn normalize_command_handler_result(
 /// Variant for a deferred owner whose failed result is a valid command that
 /// the current simulation state rejected rather than an internal failure.
 fn command_response_from_result_with_error_code(
-    result: &Result<lunco_core::Ack, String>,
+    result: &Result<lunco_command_contracts::Ack, String>,
     error_code: ApiErrorCode,
 ) -> ApiResponse {
     command_response_from_normalized(normalize_command_handler_result(result, error_code))
@@ -289,7 +289,7 @@ pub fn finish_command_result(
     world: &mut World,
     command_id: Option<u64>,
     correlation_id: Option<u64>,
-    result: Result<lunco_core::Ack, String>,
+    result: Result<lunco_command_contracts::Ack, String>,
     error_code: ApiErrorCode,
 ) {
     let response = correlation_id.map(|correlation_id| ApiResponseEvent {
@@ -1015,9 +1015,8 @@ impl Plugin for ApiExecutorPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_core::{
-        on_command, Ack, ActiveCommandId, Command, CommandOutcome, CommandResults, OpId,
-    };
+    use lunco_command_contracts::{Ack, OpId};
+    use lunco_core::{on_command, ActiveCommandId, Command, CommandOutcome, CommandResults};
 
     #[test]
     fn internal_command_id_generation() {

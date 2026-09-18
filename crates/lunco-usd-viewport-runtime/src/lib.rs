@@ -62,7 +62,8 @@ use lunco_api::executor::{finish_command_result, PendingApiRequest};
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_assets_core::twin_source::TwinRoots;
-use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, OpId};
+use lunco_command_contracts::{Ack, OpId};
+use lunco_core::{on_command, register_commands, ActiveCommandId};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed};
 use lunco_render::{

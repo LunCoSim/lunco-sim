@@ -34,9 +34,8 @@ use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_api::executor::{finish_command_result, DeferredCommandAppExt, PendingApiRequest};
 use lunco_api::schema::ApiErrorCode;
-use lunco_core::{
-    on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
-};
+use lunco_command_contracts::{Ack, OpId};
+use lunco_core::{on_command, register_commands, ActiveCommandId, Command, CommandResults};
 use lunco_doc::OpenOutcome;
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::DocumentRegistry;

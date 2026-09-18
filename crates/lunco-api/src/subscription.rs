@@ -5,7 +5,7 @@ use crate::{
     schema::{ApiResponse, TelemetryFilter, TelemetryResponse},
 };
 use bevy::prelude::*;
-use lunco_core::SessionId;
+use lunco_command_contracts::SessionId;
 
 /// Telemetry events ride the same `ApiResponseEvent` channel as HTTP
 /// request/response, but they are server-pushed packets, not replies to a

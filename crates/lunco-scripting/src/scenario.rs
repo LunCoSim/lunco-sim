@@ -32,7 +32,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_core::SessionId;
+use lunco_command_contracts::SessionId;
 use lunco_doc::{Diagnostic, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_telemetry_core::TelemetryEvent;

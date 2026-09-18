@@ -10,6 +10,8 @@ default = []
 layout-sync = ["dep:lunco-workbench-core"]
 
 [dependencies]
+lunco-id = { path = "../lunco-id" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 avian3d = { workspace = true }
 bevy = { workspace = true }
 big_space = { workspace = true }

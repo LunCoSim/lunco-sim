@@ -61,6 +61,8 @@ layout-sync = ["dep:lunco-workbench-core", "lunco-networking-sync/layout-sync"]
 transport-http = ["networking", "lunco-api-transport/transport-http"]
 
 [dependencies]
+lunco-id = { path = "../lunco-id" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy = { workspace = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-core = { path = "../lunco-core" }

@@ -6,6 +6,7 @@ license.workspace = true
 description = "USD-backed scene property and shader authoring commands"
 
 [dependencies]
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 # This is the authoring tier for property/shader edits and document ownership
 # resolution. It deliberately does not depend on the scene mutation crate;
 # `lunco-scene-commands` installs it as a sibling plugin.

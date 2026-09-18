@@ -33,11 +33,12 @@ use crate::ScriptRegistry;
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
 use lunco_api::executor::PendingApiRequest;
+use lunco_command_contracts::{Ack, OpId};
 use lunco_core::register_commands;
 #[cfg(feature = "rhai")]
 use lunco_core::ActiveCommandId;
 #[cfg(any(feature = "rhai", feature = "python"))]
-use lunco_core::{on_command, Ack, Command, OpId};
+use lunco_core::{on_command, Command};
 #[cfg(feature = "rhai")]
 use lunco_doc::DocumentId;
 #[cfg(any(feature = "rhai", feature = "python"))]
@@ -601,7 +602,7 @@ fn attach_rhai_scenario(
     // be wound down with that scene.
     scene_owned: bool,
     reload_policy: ScenarioReloadPolicy,
-    authority: Option<lunco_core::SessionId>,
+    authority: Option<lunco_command_contracts::SessionId>,
     registry: &mut ScriptRegistry,
     q_existing: &Query<&ScriptedModel>,
     commands: &mut Commands,
@@ -690,7 +691,7 @@ pub struct PendingScenarioAsset {
     pub handle: Handle<crate::source_asset::RhaiSource>,
     pub params: ScenarioParameters,
     pub reload_policy: ScenarioReloadPolicy,
-    pub authority: Option<lunco_core::SessionId>,
+    pub authority: Option<lunco_command_contracts::SessionId>,
 }
 
 /// Resolve [`RunScenarioAsset`] requests once the root and all imported source

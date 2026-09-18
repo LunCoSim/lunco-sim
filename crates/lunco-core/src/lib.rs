@@ -11,7 +11,7 @@
 // commands on exactly the same macro/reflection path as plugin commands.
 extern crate self as lunco_core;
 
-/// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `SyncChannel`.
+/// Runtime command markers, reflection, and result storage.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
 pub mod commands;
@@ -19,9 +19,6 @@ pub mod commands;
 /// ids are *derived*; the session identity-admission system is the only place they
 /// are *minted*.
 pub mod identity;
-/// Shared 53-bit time-sorted id generator backing `GlobalEntityId`
-/// and `commands::OpId`.
-pub mod ids;
 /// Shared semantic labels for UI, API, and scripting presentation.
 pub mod labels;
 /// Architectural marker components shared by engine subsystems.
@@ -60,8 +57,8 @@ pub mod pacing;
 pub mod gate;
 
 pub use commands::{
-    Ack, ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOutcome, CommandResults,
-    EditIntent, MarkClientLocalExt, Mutation, OpId, Reject, SessionId, SpawnEntity, SyncChannel,
+    ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOutcome, CommandResults,
+    EditIntent, MarkClientLocalExt, SpawnEntity,
 };
 pub use derived::RebuildOnChange;
 pub use events::{trigger_runtime_error, CommandOccurred, RuntimeError, SubsystemStateChanged};
@@ -134,7 +131,7 @@ pub struct LunCoCorePlugin;
 /// of two ways, both admitted by the session-layer identity system:
 /// - **derived** from [`Provenance`] (Content/Derived) — deterministic, same on
 ///   every peer, no coordination;
-/// - **server-allocated** ([`Provenance::Authoritative`]) via [`crate::ids`],
+/// - **server-allocated** ([`Provenance::Authoritative`]) via `lunco-id`,
 ///   then replicated down.
 ///
 /// [`from_raw`](Self::from_raw) reconstructs an id from a value already known
@@ -173,7 +170,7 @@ impl GlobalEntityId {
     /// `lunco-core-session` identity-admission system is the sole production
     /// owner that calls this boundary.
     pub fn allocate_authoritative() -> Self {
-        Self(crate::ids::make_id_53())
+        Self(lunco_id::make_id_53())
     }
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "lunco-id"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Platform-neutral ID generation for stable operation and entity identities"
+
+[dependencies]
+getrandom_02 = { workspace = true }
+web-time = { workspace = true }
+
+[lints]
+workspace = true

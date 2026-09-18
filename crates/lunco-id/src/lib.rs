@@ -1,7 +1,7 @@
 //! Shared 53-bit time-sorted id generator.
 //!
-//! Used by [`crate::GlobalEntityId`] (entity identity) and
-//! [`crate::commands::OpId`] (event identity), and by `lunco-doc` for live
+//! Used by the stable entity identity (entity identity) and
+//! operation IDs (event identity), and by `lunco-doc` for live
 //! document handles. The identities are newtype-distinct; the generator
 //! producing their underlying `u64` is shared.
 //!
@@ -65,14 +65,10 @@ pub fn random_u64() -> u64 {
 /// connection so a client can neither pick nor guess its own authority identity
 /// (review H4/H5); masked to the 53-bit JS-safe range (session ids travel through
 /// JSON to the web/MCP clients) and never `0`, which is reserved for the
-/// local/host session ([`crate::commands::SessionId::LOCAL`]).
+/// local/host session (the reserved local session).
 pub fn random_session_id() -> u64 {
     let v = rand_entropy() & 0x1F_FFFF_FFFF_FFFF;
-    if v == 0 {
-        1
-    } else {
-        v
-    }
+    if v == 0 { 1 } else { v }
 }
 
 /// A 128-bit unpredictable authentication token as lowercase hex. The host mints

@@ -6,7 +6,7 @@
 
 use crate::session::{SessionRbac, SessionRegistry};
 use bevy::prelude::*;
-use lunco_core::SessionId;
+use lunco_command_contracts::SessionId;
 use std::fmt;
 
 /// The result of a control-authority transition.

@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
-use lunco_core::{SessionId, SyncChannel};
+use lunco_command_contracts::{SessionId, SyncChannel};
 use lunco_core_session::{NetStatus, NetworkRole};
 use lunco_networking_sync::sync::DeclareChannelExt;
 #[cfg(not(target_family = "wasm"))]
@@ -248,7 +248,9 @@ fn add_protocol(app: &mut App) {
         SyncChannel::CommandBus,
     );
     app.declare_channel::<lunco_control_core::commands::AcquireControl>(SyncChannel::CommandBus);
-    app.declare_channel::<lunco_control_core::commands::ReleaseControlSource>(SyncChannel::CommandBus);
+    app.declare_channel::<lunco_control_core::commands::ReleaseControlSource>(
+        SyncChannel::CommandBus,
+    );
     app.declare_channel::<lunco_core_session::commands::UpdateProfile>(SyncChannel::CommandBus);
     // `SpawnEntity`'s TYPE lives in lunco-core (review A6) — declaring its channel
     // needs the type, not the editor that handles it. This crate has no dependency

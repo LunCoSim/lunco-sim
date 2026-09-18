@@ -13,8 +13,8 @@
 
 use bevy::prelude::*;
 use egui;
+use lunco_command_contracts::OpId;
 use lunco_control_core::{EguiFocus, IntentState, UserIntent};
-use lunco_core::OpId;
 use lunco_doc::Document;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_modelica_ui_core::SetModelicaParameter;

@@ -8,9 +8,9 @@ use bevy::asset::{AssetEvent, AssetLoadFailedEvent, AssetServer, Handle};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{
-    Command, SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted,
-    SceneTransitionCompleted, SceneTransitionCoordinator, SceneTransitionFailed,
-    SceneTransitionIntent, SceneTransitionRequest, on_command, register_commands,
+    on_command, register_commands, Command, SceneTransition, SceneTransitionAdmission,
+    SceneTransitionAdmitted, SceneTransitionCompleted, SceneTransitionCoordinator,
+    SceneTransitionFailed, SceneTransitionIntent, SceneTransitionRequest,
 };
 use lunco_cosim_core::SimConnection;
 use lunco_spatial::{OriginAnchor, WorldGrid};
@@ -947,12 +947,11 @@ mod tests {
             app.world().resource::<CompletedTransitions>().0,
             vec![transition]
         );
-        assert!(
-            app.world()
-                .resource::<SceneTransitionCoordinator>()
-                .active()
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .resource::<SceneTransitionCoordinator>()
+            .active()
+            .is_none());
     }
 
     #[test]

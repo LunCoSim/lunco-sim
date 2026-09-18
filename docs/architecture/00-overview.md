@@ -103,7 +103,8 @@ Apps (luncosim, luncosim-server, lunica)
    │     lunco-storage    ← I/O backend (read/write only)
    │          │
    │          ▼
-   ├── lunco-core         ← dependency-light engine substrate, Mutation<P> command substrate, fundamentals
+   ├── lunco-core         ← dependency-light ECS engine substrate and command runtime
+   ├── lunco-command-contracts ← pure Mutation<P>/ack/rejection/session contracts
    ├── lunco-spatial      ← BigSpace shell, f64 coordinate conversion, and spatial invariants
    └── lunco-core-session ← session, authority, and prediction layer above core
 ```

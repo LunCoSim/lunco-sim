@@ -10,7 +10,8 @@ use lightyear::prelude::*;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
-use lunco_core::{SessionId, SimTick, SyncChannel};
+use lunco_command_contracts::{SessionId, SyncChannel};
+use lunco_core::SimTick;
 use lunco_core_session::{NetStatus, SessionProfiles, SessionRegistry};
 use lunco_doc_bevy::JournalResource;
 use lunco_networking_scenario::{
@@ -25,7 +26,7 @@ use lunco_workspace::{Twin, TwinAdded, WorkspaceResource};
 
 /// Host-authoritative map: live connection (deterministic netcode peer key) →
 /// **server-assigned** [`SessionId`]. The authority id is drawn from server
-/// entropy at connect (`lunco_core::ids::random_session_id`), NOT derived from the
+/// entropy at connect (`lunco_id::random_session_id`), NOT derived from the
 /// client-chosen netcode id, so a client can neither pick nor guess its own
 /// identity (review H4) and two clients cannot collide (H5). Every authority
 /// decision — RBAC, ownership, and the inbound-sender binding in `host_recv_inbox`
@@ -48,7 +49,7 @@ impl AssignedSessions {
         *self
             .by_peer
             .entry(peer_key)
-            .or_insert_with(|| SessionId(lunco_core::ids::random_session_id()))
+            .or_insert_with(|| SessionId(lunco_id::random_session_id()))
     }
     fn get(&self, peer_key: u64) -> Option<SessionId> {
         self.by_peer.get(&peer_key).copied()
@@ -628,7 +629,7 @@ fn on_server_connected(
     // Server-side credential for `is_authorized`. It is NOT sent to the client any
     // more (review N6): the client stored it and never read it back, while real
     // authority is bound to the connection.
-    let token = lunco_core::ids::random_token();
+    let token = lunco_id::random_token();
 
     // Initialize client session in RBAC registry as an *authenticated* Observer with
     // its server-issued token. Observer-authorized-by-default: read-only telemetry

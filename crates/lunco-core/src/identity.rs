@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 
-/// 53-bit JS-safe identity space (same width as [`crate::ids::make_id_53`]).
+/// 53-bit JS-safe identity space (same width as `lunco_id::make_id_53`).
 pub const ID_MASK_53: u64 = (1u64 << 53) - 1;
 
 /// Where an entity's identity *comes from* — the required input to identity.

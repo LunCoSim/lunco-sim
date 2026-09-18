@@ -232,7 +232,7 @@ mechanism is independently convergent — therefore the world converges.**
   `set_parent_in_place` to enforce it. M2 named-frame state is converted before
   this local projection, so replicated position, orientation and velocity axes
   survive grid crossings together; the private split never crosses peers.
-- **M3** ⇐ the existing `#[Command]` + `lunco-core::Mutation<P>` envelope (already
+- **M3** ⇐ the existing `#[Command]` + `lunco-command-contracts::Mutation<P>` envelope (already
   built — it *is* the op-log).
 - **M5** ⇐ the Yjs/yrs plan in the README (Modelica text).
 - **M7** ⇐ today's local components (camera, selection) — unchanged.

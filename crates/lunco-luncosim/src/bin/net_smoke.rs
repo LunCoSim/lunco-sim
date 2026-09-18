@@ -44,7 +44,7 @@
 
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use lunco_core::SessionId;
+use lunco_command_contracts::SessionId;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::JournalResource;
 use lunco_networking::{LunCoNetworkingPlugin, NetworkMode};

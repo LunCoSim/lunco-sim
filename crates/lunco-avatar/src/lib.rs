@@ -955,10 +955,10 @@ mod tests {
         {
             let mut registry = world.resource_mut::<lunco_core_session::SessionRegistry>();
             registry
-                .claim(lunco_core::SessionId::LOCAL, scene_gid)
+                .claim(lunco_command_contracts::SessionId::LOCAL, scene_gid)
                 .unwrap();
             registry
-                .claim(lunco_core::SessionId::LOCAL, persistent_gid)
+                .claim(lunco_command_contracts::SessionId::LOCAL, persistent_gid)
                 .unwrap();
         }
 
@@ -970,7 +970,7 @@ mod tests {
         assert_eq!(registry.owner_of(scene_gid), None);
         assert_eq!(
             registry.owner_of(persistent_gid),
-            Some(lunco_core::SessionId::LOCAL)
+            Some(lunco_command_contracts::SessionId::LOCAL)
         );
     }
 
@@ -1089,7 +1089,7 @@ mod tests {
         assert_eq!(registry.owner_of(0xA1), None);
         assert_eq!(
             registry.owner_of(0xB2),
-            Some(lunco_core::SessionId::LOCAL),
+            Some(lunco_command_contracts::SessionId::LOCAL),
             "handoff leaves the session owning only the selected target"
         );
     }

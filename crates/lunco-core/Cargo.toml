@@ -6,18 +6,15 @@ license.workspace = true
 
 [dependencies]
 bevy = { workspace = true }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 serde = { workspace = true }
-serde_json = { workspace = true }
 lunco-command-macro = { path = "../lunco-command-macro" }
-# The workspace hashing substrate (fast tier). `identity` derives cross-peer ids
-# with byte-wise FNV-1a; this is the one canonical impl, shared with terrain
-# cache keys + precompute, instead of a copy-pasted fold. Dependency-free.
+# ID generation is owned by the platform-neutral ID substrate rather than the
+# ECS core, so document and protocol consumers do not pull this crate.
+lunco-id = { path = "../lunco-id" }
+# Deterministic provenance hashing remains an identity concern of this ECS
+# component until that component is migrated as a whole.
 lunco-hash = { path = "../lunco-hash" }
-# `std::time::SystemTime::now()` panics on wasm32-unknown-unknown.
-web-time = { workspace = true }
-# Real entropy for the per-process id seed (`ids.rs`). The workspace pin enables
-# getrandom's `js` feature so this also works on wasm32 (crypto.getRandomValues).
-getrandom_02 = { workspace = true }
 
 [lints]
 workspace = true

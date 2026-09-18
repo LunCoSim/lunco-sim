@@ -8,7 +8,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use lunco_core::commands::SessionId;
+use lunco_command_contracts::SessionId;
 use lunco_core_session::{
     authorize, AuthorityRole, CommandPolicyRegistry, ControlPathRegistry, SessionRbac,
     SessionRegistry, UserSession, AUTHORIZE_HOOK,

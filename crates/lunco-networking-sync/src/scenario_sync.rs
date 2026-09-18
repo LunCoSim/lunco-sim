@@ -33,18 +33,18 @@
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use lunco_core::{SessionId, SyncChannel};
+use lunco_command_contracts::{SessionId, SyncChannel};
 use lunco_core_session::NetworkRole;
 use lunco_storage::StorageHandle;
 
 use crate::sync::{SyncEnvelope, SyncOutbox};
 use lunco_networking_scenario::{
-    AssetChunkMsg, AssetRequestMsg, ScenarioJournalHead, ScenarioManifestMsg, cid_from_bytes,
+    cid_from_bytes, AssetChunkMsg, AssetRequestMsg, ScenarioJournalHead, ScenarioManifestMsg,
 };
 
 /// Convert the journal runtime's identity into the scenario wire contract at
@@ -432,7 +432,7 @@ pub fn offer_asset_to_host(
     }
     let cid = lunco_networking_scenario::cid_for_content(&bytes).to_bytes();
     outbox.0.push((
-        lunco_core::SyncChannel::BulkData,
+        lunco_command_contracts::SyncChannel::BulkData,
         crate::sync::SyncEnvelope::AssetOffer(lunco_networking_scenario::AssetOfferMsg {
             path: path.into(),
             cid,

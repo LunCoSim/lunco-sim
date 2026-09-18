@@ -37,7 +37,6 @@ lunco-workspace = { path = "../lunco-workspace" }
 [dev-dependencies]
 avian3d = { workspace = true }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

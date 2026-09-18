@@ -6,6 +6,7 @@ license.workspace = true
 description = "The render-free scene/document mutation layer: runtime spawn, move, delete, camera, and USD edits authored on the open document's runtime layer"
 
 [dependencies]
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 # NO `bevy_pbr` — this crate names no material type (`MeshMaterial3d`,
 # `StandardMaterial`, `ShaderMaterial`). Appearance authoring lives in the
 # sibling `lunco-scene-authoring` package; this package owns runtime scene

@@ -316,8 +316,7 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
                 __lunco_active_id: bevy::prelude::Res<::lunco_core::ActiveCommandId>,
             ) {
                 let cmd = trigger.event();
-                let __lunco_outcome: ::core::result::Result<::lunco_core::Ack, ::std::string::String> =
-                    (|| #fn_body)();
+                let __lunco_outcome = (|| #fn_body)();
                 if let Some(__id) = __lunco_active_id.get() {
                     __lunco_cmd_results.record(__id, __lunco_outcome);
                 }

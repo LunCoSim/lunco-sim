@@ -41,7 +41,7 @@ use bevy::prelude::*;
 
 use std::sync::Arc;
 
-use lunco_core::{Ack, OpId};
+use lunco_command_contracts::{Ack, OpId};
 use lunco_hash::Fnv1a;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 
@@ -3532,7 +3532,7 @@ pub enum PendingWorldScript {
     Code {
         id: u64,
         code: String,
-        authority: Option<lunco_core::SessionId>,
+        authority: Option<lunco_command_contracts::SessionId>,
         correlation_id: Option<u64>,
     },
     Tool {
@@ -3540,7 +3540,7 @@ pub enum PendingWorldScript {
         tool: String,
         hook: String,
         args: TelemetryValue,
-        authority: Option<lunco_core::SessionId>,
+        authority: Option<lunco_command_contracts::SessionId>,
         correlation_id: Option<u64>,
     },
 }
@@ -3611,7 +3611,7 @@ pub fn eval_with_world(world: &mut World, code: &str) -> Result<String, String> 
 pub fn eval_with_world_as(
     world: &mut World,
     code: &str,
-    authority: Option<lunco_core::SessionId>,
+    authority: Option<lunco_command_contracts::SessionId>,
 ) -> Result<String, String> {
     use std::sync::{Arc, Mutex};
 
@@ -3663,7 +3663,7 @@ pub fn eval_tool_with_world_as(
     tool: &str,
     hook: &str,
     args: &TelemetryValue,
-    authority: Option<lunco_core::SessionId>,
+    authority: Option<lunco_command_contracts::SessionId>,
 ) -> Result<String, String> {
     if tool.is_empty()
         || !tool

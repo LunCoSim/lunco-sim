@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/lunco-core",
+    "crates/lunco-id",
+    "crates/lunco-command-contracts",
     "crates/lunco-port-core",
     "crates/lunco-spatial",
     "crates/lunco-core-session",

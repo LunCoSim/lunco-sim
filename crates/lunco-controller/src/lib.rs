@@ -43,11 +43,12 @@ use bevy::input::{
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
 use leafwing_input_manager::prelude::ActionState;
+use lunco_command_contracts::{Ack, OpId};
 use lunco_control_core::ControlLink;
 use lunco_control_core::{
     ensure_control_plugin, ControlBinding, InteractionControlSet, UserIntent,
 };
-use lunco_core::{on_command, register_commands, Ack, Command, OpId};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_input_core::InputBindingsSettings;
 use serde::{Deserialize, Serialize};
 
@@ -1155,7 +1156,8 @@ fn record_control_input(
 #[cfg(test)]
 mod input_ack_tests {
     use super::*;
-    use lunco_core::{GlobalEntityId, SessionId, SimTick};
+    use lunco_command_contracts::SessionId;
+    use lunco_core::{GlobalEntityId, SimTick};
     use lunco_core_session::{
         AppliedInputSeq, BufferedClientInputs, LocalDriveInput, LocalSession, NetworkRole,
         OwnedInputLog, SessionRegistry,

@@ -1,0 +1,14 @@
+[package]
+name = "lunco-command-contracts"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Pure mutation, session, acknowledgement, and rejection contracts"
+
+[dependencies]
+lunco-id = { path = "../lunco-id" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

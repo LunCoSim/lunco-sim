@@ -1126,7 +1126,7 @@ fn broadcast_run_status(
     if !matches!(role.as_deref(), Some(lunco_core_session::NetworkRole::Host)) {
         return;
     }
-    use lunco_core::SyncChannel;
+    use lunco_command_contracts::SyncChannel;
     use lunco_networking_sync::sync::{RunStatusMsg, SyncEnvelope};
     let msg = |id: lunco_experiments::ExperimentId,
                phase: u8,

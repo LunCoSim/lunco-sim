@@ -7,7 +7,8 @@ pub mod doc;
 pub mod util;
 
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Ack, Command, OpId};
+use lunco_command_contracts::{Ack, OpId};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_modelica_ast::pretty::{

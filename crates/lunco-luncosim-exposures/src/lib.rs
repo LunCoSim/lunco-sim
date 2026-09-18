@@ -2180,7 +2180,7 @@ fn publish_runtime_surface_exposures(
     roots: &[AuthoredRuntimeSurface],
     retired_surface_ids: &[String],
     sessions: &lunco_core_session::SessionRegistry,
-    local_session: lunco_core::SessionId,
+    local_session: lunco_command_contracts::SessionId,
     q_inputs: &Query<&InputPorts>,
 ) {
     for surface_id in retired_surface_ids {

@@ -5,6 +5,7 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # RENDER-FREE. `bevy_camera` gives `Camera` / `Projection` / `Visibility` /
 # `RenderLayers`, `bevy_light` the lights, `bevy_mesh` `Mesh3d` — none of them pulls

@@ -59,7 +59,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub use lunco_core::{Ack, Mutation, OpId, Reject, SessionId};
+pub use lunco_command_contracts::{Ack, Mutation, OpId, Reject, SessionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Submodules: domain engine abstraction + cross-doc reference index
@@ -189,7 +189,7 @@ impl DocumentId {
     /// generator, independent of domain and registry lifetime. Session restore
     /// remaps stored references to freshly allocated handles.
     pub fn fresh() -> Self {
-        Self(lunco_core::ids::make_id_53())
+        Self(lunco_id::make_id_53())
     }
 
     /// Construct a [`crate::DocumentId`] from a raw `u64`.

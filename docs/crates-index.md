@@ -9,7 +9,9 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Dependency-light engine primitives (the typed `Mutation<P>` command substrate, `SimTick`), typed scene transitions, `SceneMountState` and the `SceneTeardown` schedule, canonical diagram data types, shared human-readable entity labels, and shared terminal runtime faults/fixed-step coupling state. Core carries no viewport, camera, avatar-role, port-registry, BigSpace, session/authority, or vehicle-specific motion policy. |
+| **`lunco-core`** | Dependency-light ECS engine primitives and command runtime (`SimTick`, reflection, typed scene transitions, `SceneMountState`, `SceneTeardown`, canonical diagram data, labels, and runtime faults). Pure mutation/session envelopes live in `lunco-command-contracts`; core carries no viewport, camera, avatar-role, port-registry, BigSpace, session/authority, or vehicle-specific motion policy. |
+| **`lunco-command-contracts`** | Pure mutation, session, acknowledgement, rejection, and synchronization-channel contracts shared by document, transport, networking, and runtime adapters without ECS. |
+| **`lunco-id`** | Platform-neutral 53-bit operation/entity ID generation shared by document and runtime identity boundaries. |
 | **`lunco-viewport-core`** | Renderer-independent viewport contract: explicit active-camera binding, scene visibility and layout state, viewport scheduling boundary, and the shared camera-ray construction used by scene-click owners. |
 | **`lunco-interaction-core`** | Renderer-independent cursor interaction contract: pointer policy, primary-click ownership, editor tool gates, drag state, and the affected-entity marker consumed by scene, avatar, and camera runtimes. |
 | **`lunco-port-core`** | Shared co-simulation port substrate: `Port`, endpoint/control-surface components, `PortRegistry`, backend registration and resolution, topology invalidation state, metadata, collision reporting, and resolved fast-path handles. It is independent of the general engine core. |
@@ -277,7 +279,7 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 ### Core Foundation
 
 **`lunco-core`**
-The bedrock of the simulation. It defines the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). It owns generic engine lifecycle and runtime state but has no port-registry, BigSpace, or celestial semantics.
+The bedrock of the simulation. It defines the runtime command machinery, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). Pure mutation envelopes are owned by `lunco-command-contracts`. It owns generic engine lifecycle and runtime state but has no port-registry, BigSpace, or celestial semantics.
 
 **`lunco-port-core`**
 Owns the shared scalar port substrate (`Port`, endpoint/control-surface components, `PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction. It is independent of `lunco-core`, so changes to engine-only core types do not rebuild the port implementation.

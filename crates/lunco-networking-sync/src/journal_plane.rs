@@ -28,7 +28,7 @@ use lunco_storage::{FileStorage, Storage, StorageHandle};
 use lunco_twin_journal::{AuthorId, DomainKind, EntryId, EntryKind, JournalEntry};
 
 use crate::sync::{SyncEnvelope, SyncOutbox};
-use lunco_core::SyncChannel;
+use lunco_command_contracts::SyncChannel;
 
 /// Host → client: one Twin-journal entry, carried as **JSON text** (not the
 /// typed [`JournalEntry`]) because it rides the positional `bincode` codec,
@@ -70,7 +70,7 @@ fn author_from_override(value: Option<&str>) -> Option<AuthorId> {
 
 /// Canonical journal author for a live network connection. The server chooses
 /// this value and sends it in the handshake; payloads may not choose an author.
-pub fn author_for_session(session: lunco_core::SessionId) -> String {
+pub fn author_for_session(session: lunco_command_contracts::SessionId) -> String {
     format!("net-session-{:016x}", session.0)
 }
 
@@ -99,7 +99,7 @@ fn fresh_install_id(
     path: &std::path::Path,
     handle: &StorageHandle,
 ) -> String {
-    let fresh = format!("peer-{:016x}", lunco_core::ids::random_u64());
+    let fresh = format!("peer-{:016x}", lunco_id::random_u64());
     if let Some(parent) = path.parent() {
         let parent_handle = StorageHandle::File(parent.to_path_buf());
         if let Err(error) = storage.ensure_directory_sync(&parent_handle) {
@@ -131,7 +131,7 @@ fn persisted_install_id() -> String {
     // TODO(web-identity): persist via localStorage/OPFS so a browser peer keeps a
     // stable identity across reloads. For now a per-page-load id (stable within a
     // session, not across reloads).
-    format!("peer-{:016x}", lunco_core::ids::random_u64())
+    format!("peer-{:016x}", lunco_id::random_u64())
 }
 
 /// Stamp this peer's local install id ([`local_author_id`]) as the journal's

@@ -13,7 +13,8 @@ use avian3d::prelude::{AngularVelocity, LinearVelocity, RigidBody};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, register_commands, Ack, Command, OpId, SpawnEntity};
+use lunco_command_contracts::{Ack, OpId};
+use lunco_core::{on_command, register_commands, Command, SpawnEntity};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_scene_catalog::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
@@ -312,7 +313,7 @@ fn runtime_spawn_ops(
     // OpIds are process-unique, JS-safe and already the identity source for
     // document mutations. Unlike a Local<u32>, this cannot collide with a
     // restored runtime-layer spawn after reload.
-    let name = format!("{stem}_{}", lunco_core::OpId::new());
+    let name = format!("{stem}_{}", lunco_command_contracts::OpId::new());
     let parent_path = parent_path.trim_end_matches('/');
     let parent_path = if parent_path.is_empty() {
         "/".to_string()

@@ -57,11 +57,12 @@ use lunco_cosim_core::{
     PortHolds, RealtimeSafe, SimComponent, SimConnection, SimStatus, TorqueActuator,
 };
 
-// Typed-command machinery (re-exported from `lunco-core`, which re-exports
-// the `lunco-command-macro` proc-macros). Used by the `SetPorts` command +
+// Typed-command machinery: command contracts are separate from the Bevy-backed
+// runtime core, while the `Command` macro/reflection path remains in core. Used by the `SetPorts` command +
 // observer defined below — the ONE generic vessel-control command (a batch of
 // named input-port writes), driving landers, rovers, and any port-bearing vessel.
-use lunco_core::{on_command, register_commands, Ack, OpId};
+use lunco_command_contracts::{Ack, OpId};
+use lunco_core::{on_command, register_commands};
 use lunco_cosim_core::commands::{ReleaseControl, ReleasePort, SetPorts};
 
 fn endpoint_ready_on_add<T: Component>(

@@ -31,7 +31,7 @@
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use lunco_core::commands::{Reject, SessionId};
+use lunco_command_contracts::{Reject, SessionId};
 use std::collections::{HashMap, VecDeque};
 
 /// Default WebTransport port for the listen-server / host and for any client
@@ -1322,7 +1322,7 @@ pub fn may_take_control(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_core::commands::SessionId;
+    use lunco_command_contracts::SessionId;
 
     const A: SessionId = SessionId(1);
     const B: SessionId = SessionId(2);

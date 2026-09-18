@@ -1,7 +1,8 @@
 //! LunCoSim networking — a **thin lightyear (WebTransport) adapter**.
 //!
-//! Identity primitives (`Provenance`, `GlobalEntityId`, `SimTick`, and
-//! `Mutation`) live in `lunco-core`; session/authority primitives (`NetworkRole`
+//! Identity primitives (`Provenance`, `GlobalEntityId`, `SimTick`) live in
+//! `lunco-core`; mutation/session wire contracts live in
+//! `lunco-command-contracts`; session/authority primitives (`NetworkRole`
 //! — whose `is_authoritative()` is the sole authority flag — plus status,
 //! possession, and prediction markers) live in `lunco-core-session`. The
 //! transport-neutral synchronization runtime lives in
@@ -199,7 +200,7 @@ pub(crate) fn next_client_id() -> u64 {
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        lunco_core::ids::random_u64()
+        lunco_id::random_u64()
     }
 }
 

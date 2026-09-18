@@ -7054,6 +7054,7 @@ name = "lunco-api"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-hooks",
@@ -7212,6 +7213,7 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-avatar-camera-core",
  "lunco-camera-core",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
@@ -7460,6 +7462,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-command-contracts"
+version = "0.1.0-dev"
+dependencies = [
+ "lunco-id",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lunco-command-macro"
 version = "0.1.0-dev"
 dependencies = [
@@ -7484,6 +7495,7 @@ version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "leafwing-input-manager",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
@@ -7502,12 +7514,11 @@ name = "lunco-core"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
- "getrandom 0.2.17",
+ "lunco-command-contracts",
  "lunco-command-macro",
  "lunco-hash",
+ "lunco-id",
  "serde",
- "serde_json",
- "web-time",
 ]
 
 [[package]]
@@ -7515,6 +7526,7 @@ name = "lunco-core-session"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-hooks",
  "lunco-port-core",
@@ -7527,6 +7539,7 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
@@ -7548,7 +7561,8 @@ name = "lunco-doc"
 version = "0.1.0"
 dependencies = [
  "bevy_reflect",
- "lunco-core",
+ "lunco-command-contracts",
+ "lunco-id",
  "serde",
  "serde_json",
 ]
@@ -7664,6 +7678,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-id"
+version = "0.1.0-dev"
+dependencies = [
+ "getrandom 0.2.17",
+ "web-time",
+]
+
+[[package]]
 name = "lunco-input-core"
 version = "0.1.0-dev"
 dependencies = [
@@ -7715,6 +7737,7 @@ dependencies = [
  "lunco-api-transport",
  "lunco-assets-core",
  "lunco-assets-path",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
@@ -7753,6 +7776,7 @@ dependencies = [
  "lunco-avatar",
  "lunco-celestial-ephemeris",
  "lunco-celestial-spatial",
+ "lunco-command-contracts",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -7871,6 +7895,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets-core",
  "lunco-celestial",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-cosim-core",
@@ -7920,6 +7945,7 @@ dependencies = [
  "lunco-canvas",
  "lunco-celestial-spatial",
  "lunco-celestial-spatial-core",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-cosim-core",
@@ -7980,6 +8006,7 @@ dependencies = [
  "big_space",
  "lunco-celestial",
  "lunco-celestial-spatial-core",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
@@ -8146,6 +8173,7 @@ dependencies = [
  "crossbeam-channel",
  "lunco-api",
  "lunco-assets-core",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -8231,6 +8259,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets-core",
  "lunco-assets-path",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8565,11 +8594,13 @@ dependencies = [
  "lunco-api-transport",
  "lunco-assets-core",
  "lunco-assets-path",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
  "lunco-doc-bevy",
+ "lunco-id",
  "lunco-networking-core",
  "lunco-networking-scenario",
  "lunco-networking-sync",
@@ -8625,12 +8656,14 @@ dependencies = [
  "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial-core",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-embodiment-core",
+ "lunco-id",
  "lunco-networking-core",
  "lunco-networking-scenario",
  "lunco-scripting",
@@ -8777,6 +8810,7 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-assets-core",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8847,6 +8881,7 @@ dependencies = [
  "big_space",
  "lunco-api",
  "lunco-assets-core",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-core-session",
@@ -8989,6 +9024,7 @@ dependencies = [
  "libloading",
  "lunco-api",
  "lunco-assets-core",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -9026,6 +9062,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-session",
  "lunco-port-core",
@@ -9716,7 +9753,6 @@ dependencies = [
  "lunco-usd-sim-core",
  "lunco-workspace",
  "openusd",
- "tempfile",
 ]
 
 [[package]]
@@ -9773,6 +9809,7 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-assets-core",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -10173,6 +10210,7 @@ dependencies = [
  "bevy_egui",
  "lunco-api",
  "lunco-assets-core",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",

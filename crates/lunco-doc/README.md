@@ -8,13 +8,13 @@ structured artifacts used throughout LunCoSim (Modelica models, USD
 scenes, SysML blocks, missions, connection graphs). Domain crates
 provide concrete implementations; apps compose them inside a Twin.
 
-**Dependencies.** Not dependency-free anymore: it pulls `lunco-core`
-(for the `Mutation` / `Ack` / `Reject` envelope + `OpId` / `SessionId`),
-`bevy_reflect` (so `DocumentId` derives `Reflect`), and `serde` /
-`serde_json` (stable disk + wire formats — journal entries, save/restore,
-`status_json`, lunco-api command payloads). `lunco-core` drags bevy in
-transitively, a regression on the original "headless data model" stance;
-splitting a bevy-free identity sub-crate out is the long-term move.
+**Dependencies.** Not dependency-free: it uses `lunco-command-contracts`
+for the `Mutation` / `Ack` / `Reject` envelope and `lunco-id` for operation
+and document identities. It also uses `bevy_reflect` (so `DocumentId`
+derives `Reflect`) and `serde` / `serde_json` (stable disk + wire formats —
+journal entries, save/restore, `status_json`, and lunco-api command payloads).
+The document engine therefore remains independent from the Bevy ECS/runtime
+crate; applications add the runtime integration separately.
 
 **Unix convention.** A Document *is* a file. We do not invent a
 container format — `.mo` files, `.usda` stages, `.sysml` sources
@@ -34,7 +34,7 @@ tracked by the Twin and edited externally. See
 | [`DocumentHost<D>`] | Wraps a Document + grouped undo/redo history, op-id dedup, recorder |
 | [`DocumentError`] | Fallible-apply error type (`ValidationFailed` / `ReadOnly` / `Internal`) |
 | [`DocumentOrigin`] | Where a doc came from (`Untitled` / `Bundled` / `File`); drives save + read-only |
-| `Mutation` / `Ack` / `Reject` | Re-exported from `lunco-core` — the apply envelope (op-id, parent-gen, origin) |
+| `Mutation` / `Ack` / `Reject` | Re-exported from `lunco-command-contracts` — the apply envelope (op-id, parent-gen, origin) |
 
 ### Cross-document + domain machinery
 

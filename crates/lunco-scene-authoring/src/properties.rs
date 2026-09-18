@@ -858,7 +858,7 @@ pub fn on_reload_shader(
     trigger: On<ReloadShader>,
     asset_server: Res<AssetServer>,
     shaders: Res<Assets<bevy::shader::Shader>>,
-) -> Result<lunco_core::Ack, String> {
+) -> Result<lunco_command_contracts::Ack, String> {
     let requested = trigger.event().path.trim().to_string();
     if !requested.is_empty() && !is_wgsl_shader_path(&requested) {
         return Err(format!(
@@ -892,8 +892,8 @@ pub fn on_reload_shader(
             requested.as_str()
         }
     );
-    Ok(lunco_core::Ack::with_data(
-        lunco_core::OpId::new(),
+    Ok(lunco_command_contracts::Ack::with_data(
+        lunco_command_contracts::OpId::new(),
         serde_json::json!({
             "accepted": true,
             "requested": requested,
@@ -926,7 +926,7 @@ pub fn on_set_shader_source(
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
     mut registry: ResMut<crate::shader_doc::ShaderRegistry>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
-) -> Result<lunco_core::Ack, String> {
+) -> Result<lunco_command_contracts::Ack, String> {
     let ev = trigger.event();
     let requested = ev.path.trim();
     // Compile/replace first. A rejected source must not create a journal
@@ -946,8 +946,8 @@ pub fn on_set_shader_source(
         paths.len(),
         ev.source.len()
     );
-    Ok(lunco_core::Ack::with_data(
-        lunco_core::OpId::new(),
+    Ok(lunco_command_contracts::Ack::with_data(
+        lunco_command_contracts::OpId::new(),
         serde_json::json!({
             "accepted": true,
             "requested": requested,
@@ -975,10 +975,9 @@ pub fn shader_asset_path_for(
 ) -> Result<String, lunco_assets_core::TwinRootsError> {
     Ok(
         match twin_roots.map(|t| t.primary()).transpose()?.flatten() {
-            Some((name, _)) => lunco_assets_core::twin_uri(
-                &name,
-                lunco_assets_core::engine_shader_asset_rel(stem),
-            ),
+            Some((name, _)) => {
+                lunco_assets_core::twin_uri(&name, lunco_assets_core::engine_shader_asset_rel(stem))
+            }
             None => lunco_assets_core::engine_shader_asset_rel(stem),
         },
     )
@@ -1052,10 +1051,7 @@ fn install_shader(
     };
     let (asset_path, disk_path): (String, std::path::PathBuf) = match primary {
         Some((name, root)) => (
-            lunco_assets_core::twin_uri(
-                &name,
-                lunco_assets_core::engine_shader_asset_rel(stem),
-            ),
+            lunco_assets_core::twin_uri(&name, lunco_assets_core::engine_shader_asset_rel(stem)),
             root.join(lunco_assets_core::engine_shader_asset_rel(stem)),
         ),
         None => (

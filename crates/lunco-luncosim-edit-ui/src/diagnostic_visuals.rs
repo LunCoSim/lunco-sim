@@ -9,9 +9,8 @@ use avian3d::prelude::{Collider, ColliderOf};
 use bevy::camera::{Camera, Projection};
 use bevy::prelude::*;
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_core::{
-    on_command, register_commands, Ack, Command, GlobalEntityId, OpId, SceneMountState,
-};
+use lunco_command_contracts::{Ack, OpId};
+use lunco_core::{on_command, register_commands, Command, GlobalEntityId, SceneMountState};
 use lunco_render::SceneCamera;
 use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_viewport_core::SceneViewport;
