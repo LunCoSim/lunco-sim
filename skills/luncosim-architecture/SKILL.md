@@ -150,6 +150,10 @@ owns one app-level local intent surface for editor actions when an isolated
 preview has no avatar. Shared actions such as `CancelIntent` read that surface
 through the same `InputBindingsSettings` map, while avatar control continues to
 use its own surface; neither path may introduce a raw-key or duplicate binding.
+The Workbench may use `InputBindingsSettings::input_map_or_empty` only while the
+application-owned authored defaults are loading: it must publish the rejected
+settings as a status-bar warning, keep the UI host alive with no active
+bindings, and replace the empty map when the authored projection becomes valid.
 
 ## Source-backed program attachment
 

@@ -303,6 +303,9 @@ pub const RENDER_SOURCE: &str = "render";
 /// one render frame after the shot's first frame.
 pub const RUNTIME_UI_SOURCE: &str = "runtime-ui";
 
+/// The status source for the shared input-bindings projection.
+pub const INPUT_SOURCE: &str = "input";
+
 /// Workbench-wide status bus. Insert via [`StatusBusPlugin`].
 ///
 /// Carries two flavours of state — discrete history events (info / warn /

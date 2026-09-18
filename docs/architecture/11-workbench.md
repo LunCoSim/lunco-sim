@@ -852,7 +852,11 @@ surfaces, and user-global preferences remain in `settings.json`.
   `lunco.input-bindings.v1` kind through the runtime asset manifest; it is not
   compiled into the input contract. The same resolved resource feeds the live
   input map, help surfaces, input injection, and Rhai tutorial labels. There is
-  no separate `keybinds.toml` registry.
+  no separate `keybinds.toml` registry. During startup, before the authored
+  document is available, the Workbench uses the input contract's empty map and
+  publishes a warning through the status bar for the rejected settings; the
+  authored map replaces it when the runtime asset load completes. An invalid
+  settings section must never panic the UI host.
 
 Both are simple pass-throughs to egui and `bevy_workbench`-style registries;
 no novel design.

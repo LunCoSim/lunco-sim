@@ -178,6 +178,16 @@ impl InputBindingsSettings {
         Ok(build_input_map(bindings, button))
     }
 
+    /// Build an empty map while the application-owned authored defaults are
+    /// still loading. The caller must report the returned error; the empty map
+    /// does not replace validation or the later authored projection.
+    pub fn input_map_or_empty(&self) -> (InputMap<UserIntent>, Option<String>) {
+        match self.input_map() {
+            Ok(map) => (map, None),
+            Err(error) => (InputMap::default(), Some(error)),
+        }
+    }
+
     /// Return resolved key bindings for help, tutorials, and input injection.
     pub fn key_bindings(&self) -> Result<Vec<(UserIntent, Vec<KeyCode>)>, String> {
         self.bindings
@@ -481,5 +491,29 @@ mod tests {
         assert_eq!(settings.look_button, "Right");
         assert!(settings.key_bindings().unwrap().len() >= 8);
         settings.input_map().expect("bundled map must build");
+    }
+
+    #[test]
+    fn authored_defaults_replace_the_startup_empty_map() {
+        let mut settings = InputBindingsSettings::default();
+        let (empty, reason) = settings.input_map_or_empty();
+
+        assert_eq!(reason.as_deref(), Some("invalid look_button ''"));
+        assert!(empty.get_dual_axislike(&UserIntent::Look).is_none());
+        assert!(empty.get_axislike(&UserIntent::Zoom).is_none());
+
+        settings
+            .apply_defaults_json(
+                r#"{
+                    "kind": "lunco.input-bindings.v1",
+                    "look_button": "Right",
+                    "forward": ["KeyW"]
+                }"#,
+            )
+            .expect("authored defaults are valid");
+
+        let (resolved, reason) = settings.input_map_or_empty();
+        assert!(reason.is_none());
+        assert!(resolved.get_buttonlike(&UserIntent::MoveForward).is_some());
     }
 }

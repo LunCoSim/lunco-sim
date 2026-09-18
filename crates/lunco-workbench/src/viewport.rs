@@ -81,6 +81,7 @@ use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 use lunco_control_core::{IntentState, LocalIntentSurface};
 use lunco_input_core::InputBindingsSettings;
 use lunco_render::SceneCamera;
+use lunco_status_core::status_bus::{StatusBus, StatusLevel, INPUT_SOURCE};
 use lunco_viewport_core::PanelRect;
 use lunco_viewport_core::SceneViewport;
 use lunco_workbench_core::presentation::ViewportPlaceholder;
@@ -94,6 +95,11 @@ use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 /// marker keeps the ownership boundary explicit.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct WorkbenchEguiHost;
+
+#[derive(Resource, Default)]
+struct InputBindingsStatus {
+    unavailable: bool,
+}
 
 /// Measurement emitted by the transparent viewport panel after it has read
 /// its egui geometry. The panel cannot mutate either view-model directly;
@@ -270,18 +276,35 @@ fn egui_host_camera() -> Camera {
 ///
 /// Always disables `EguiGlobalSettings::auto_create_primary_context` so
 /// bevy_egui cannot choose a different camera as primary. Idempotent: re-running
-/// will not spawn duplicates.
-pub(crate) fn ensure_egui_host(
+/// will not spawn duplicates. Before the application-owned authored input
+/// defaults arrive, the input contract supplies an empty map and this owner
+/// reports the rejected settings instead of panicking.
+fn ensure_egui_host(
     mut commands: Commands,
     mut egui_global: ResMut<EguiGlobalSettings>,
     existing: Query<(), With<PrimaryEguiContext>>,
     bindings: Res<InputBindingsSettings>,
+    mut status: ResMut<StatusBus>,
+    mut bindings_status: ResMut<InputBindingsStatus>,
 ) {
     egui_global.auto_create_primary_context = false;
     if existing.iter().next().is_none() {
-        let input_map = bindings
-            .input_map()
-            .expect("registered input bindings must satisfy their settings contract");
+        let (input_map, fallback_reason) = bindings.input_map_or_empty();
+        if let Some(reason) = fallback_reason {
+            warn!(
+                "Workbench input bindings are not ready ({reason}); using an empty \
+                 input map until authored defaults are installed"
+            );
+            status.push(
+                INPUT_SOURCE,
+                StatusLevel::Warn,
+                format!(
+                    "Input bindings are unavailable ({reason}); controls are disabled until \
+                     authored defaults load"
+                ),
+            );
+            bindings_status.unavailable = true;
+        }
         commands.spawn((
             Camera2d,
             // `order = 1` places egui strictly after the scene Camera3d.
@@ -302,6 +325,38 @@ pub(crate) fn ensure_egui_host(
             input_map,
             Name::new("WorkbenchEguiHost"),
         ));
+    }
+}
+
+fn report_input_bindings_status(
+    bindings: Res<InputBindingsSettings>,
+    mut status: ResMut<StatusBus>,
+    mut bindings_status: ResMut<InputBindingsStatus>,
+) {
+    if !bindings.is_changed() {
+        return;
+    }
+    let valid = bindings.input_map().is_ok();
+    if valid && bindings_status.unavailable {
+        status.push(
+            INPUT_SOURCE,
+            StatusLevel::Info,
+            "Input bindings loaded; controls are available",
+        );
+        bindings_status.unavailable = false;
+    } else if !valid && !bindings_status.unavailable {
+        let reason = bindings
+            .input_map()
+            .expect_err("invalid input bindings must have a diagnostic");
+        status.push(
+            INPUT_SOURCE,
+            StatusLevel::Warn,
+            format!(
+                "Input bindings are unavailable ({reason}); controls are disabled until \
+                 authored defaults load"
+            ),
+        );
+        bindings_status.unavailable = true;
     }
 }
 
@@ -659,11 +714,16 @@ impl Plugin for WorkbenchViewportPlugin {
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }
+        if !app.is_plugin_added::<lunco_status_core::status_bus::StatusBusPlugin>() {
+            app.add_plugins(lunco_status_core::status_bus::StatusBusPlugin);
+        }
         app.init_resource::<PanelRects>()
             .init_resource::<ScenePickGate>()
             .init_resource::<ViewportPlaceholder>()
+            .init_resource::<InputBindingsStatus>()
             .add_observer(apply_viewport_panel_measurement)
             .add_systems(Startup, ensure_egui_host)
+            .add_systems(Update, report_input_bindings_status)
             // Clear the pick gate's per-frame inputs. `First` — NOT the egui pass —
             // because this must happen even on frames where the egui pass is
             // skipped; that's what lets `resolve_scene_pointer` tell "no inputs"
@@ -732,6 +792,61 @@ mod tests {
                 clear_color: ClearColorConfig::Default,
             }
         ));
+    }
+
+    #[test]
+    fn invalid_input_settings_do_not_panic_egui_host_startup() {
+        let mut app = App::new();
+        app.init_resource::<EguiGlobalSettings>()
+            .insert_resource(InputBindingsSettings::default())
+            .add_plugins(lunco_status_core::status_bus::StatusBusPlugin)
+            .init_resource::<InputBindingsStatus>()
+            .add_systems(Startup, ensure_egui_host);
+
+        app.update();
+
+        let mut hosts = app.world_mut().query::<&WorkbenchEguiHost>();
+        let host_count = hosts.iter(app.world()).count();
+        assert_eq!(host_count, 1);
+
+        let bus = app.world().resource::<StatusBus>();
+        assert!(bus.history().any(|event| {
+            event.source == INPUT_SOURCE
+                && event.level == StatusLevel::Warn
+                && event.message.contains("controls are disabled")
+        }));
+    }
+
+    #[test]
+    fn input_status_warning_clears_after_authored_defaults_load() {
+        let mut app = App::new();
+        app.add_plugins(lunco_status_core::status_bus::StatusBusPlugin)
+            .insert_resource(InputBindingsSettings::default())
+            .init_resource::<InputBindingsStatus>()
+            .add_systems(Update, report_input_bindings_status);
+
+        app.update();
+        assert!(app.world().resource::<InputBindingsStatus>().unavailable);
+
+        app.world_mut()
+            .resource_mut::<InputBindingsSettings>()
+            .apply_defaults_json(
+                r#"{
+                    "kind": "lunco.input-bindings.v1",
+                    "look_button": "Right",
+                    "forward": ["KeyW"]
+                }"#,
+            )
+            .expect("authored defaults are valid");
+        app.update();
+
+        assert!(!app.world().resource::<InputBindingsStatus>().unavailable);
+        let bus = app.world().resource::<StatusBus>();
+        assert!(bus.history().any(|event| {
+            event.source == INPUT_SOURCE
+                && event.level == StatusLevel::Info
+                && event.message.contains("controls are available")
+        }));
     }
 
     // ── SceneViewport layout contribution ──────────────────────────────────
