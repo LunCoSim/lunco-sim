@@ -1,0 +1,75 @@
+[package]
+name = "lunco-luncosim-services"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Application services for the LunCoSim production composition"
+
+[lib]
+name = "lunco_luncosim_services"
+path = "src/lib.rs"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_shader"] }
+lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
+lunco-command-contracts = { path = "../lunco-command-contracts", optional = true }
+lunco-core = { path = "../lunco-core", optional = true }
+lunco-core-session = { path = "../lunco-core-session", optional = true }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false, optional = true }
+lunco-experiments = { path = "../lunco-experiments", optional = true }
+lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false, optional = true }
+lunco-modelica-document = { path = "../lunco-modelica-document", optional = true }
+lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
+lunco-networking-core = { path = "../lunco-networking-core", optional = true }
+lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
+lunco-obstacle-field = { path = "../lunco-obstacle-field", optional = true }
+lunco-scene-authoring = { path = "../lunco-scene-authoring", optional = true }
+lunco-storage = { path = "../lunco-storage", optional = true }
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
+lunco-twin = { path = "../lunco-twin" }
+lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core", optional = true }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-document = { path = "../lunco-usd-document", optional = true }
+lunco-workspace = { path = "../lunco-workspace" }
+lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
+serde_json = { workspace = true }
+
+[features]
+default = []
+experiments = ["dep:lunco-experiments", "dep:lunco-storage", "dep:lunco-core-session"]
+api-transport = [
+    "dep:lunco-api-transport",
+    "dep:lunco-modelica-api",
+    "dep:lunco-modelica-core",
+    "dep:lunco-workspace-api",
+    "lunco-modelica-core/api",
+]
+transport-http = ["api-transport", "lunco-api-transport/transport-http"]
+networking = [
+    "dep:lunco-command-contracts",
+    "dep:lunco-core",
+    "dep:lunco-core-session",
+    "dep:lunco-doc-bevy",
+    "dep:lunco-modelica-core",
+    "dep:lunco-modelica-document",
+    "dep:lunco-networking",
+    "dep:lunco-networking-core",
+    "dep:lunco-networking-sync",
+    "dep:lunco-obstacle-field",
+    "dep:lunco-scene-authoring",
+    "dep:lunco-usd-bevy-runtime-core",
+    "dep:lunco-usd-document",
+    "lunco-networking/networking",
+    "api-transport",
+    "dep:lunco-twin-journal",
+]
+net-diag = ["networking", "lunco-networking/net-diag"]
+server = ["api-transport", "transport-http", "networking", "experiments"]
+
+[lints]
+workspace = true

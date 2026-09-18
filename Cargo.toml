@@ -30,6 +30,7 @@ members = [
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-core",
     "crates/lunco-luncosim-runtime",
+    "crates/lunco-luncosim-services",
     "crates/lunco-scene-runner",
     "crates/lunco-luncosim-ui",
     "crates/lunco-luncosim-exposures",

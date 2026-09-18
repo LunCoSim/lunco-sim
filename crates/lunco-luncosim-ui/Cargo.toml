@@ -18,6 +18,7 @@ api-transport = [
     "dep:lunco-scene-camera",
     "dep:lunco-scene-commands",
     "dep:lunco-scripting-bridge-core",
+    "lunco-luncosim-runtime/api-transport",
     "lunco-modelica-ui/api",
 ]
 # Native HTTP transport for the in-process Rhai REPL panel. The panel remains
@@ -35,6 +36,7 @@ networking = [
     "dep:lunco-networking-sync",
     "dep:lunco-storage",
     "lunco-networking/networking",
+    "lunco-luncosim-runtime/networking",
 ]
 # Native Velopack update checks and package installation. Kept opt-in for
 # consumers that use the interactive UI shell without desktop packaging.
@@ -106,8 +108,9 @@ lunco-hooks = { path = "../lunco-hooks" }
 lunco-luncosim-edit-core = { path = "../lunco-luncosim-edit-core" }
 lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui" }
 lunco-luncosim-edit-inspector-ui = { path = "../lunco-luncosim-edit-inspector-ui" }
-lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false, features = ["experiments"] }
+lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
 lunco-luncosim-runtime = { path = "../lunco-luncosim-runtime", default-features = false }
+lunco-luncosim-services = { path = "../lunco-luncosim-services", default-features = false }
 lunco-usd-prim-tree-ui = { path = "../lunco-usd-prim-tree-ui" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false, optional = true }
 lunco-modelica-execution = { path = "../lunco-modelica-execution", optional = true }

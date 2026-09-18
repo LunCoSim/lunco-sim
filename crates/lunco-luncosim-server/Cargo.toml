@@ -12,8 +12,8 @@ path = "src/main.rs"
 [dependencies]
 # Link the production headless runtime directly. The GUI shell is not part of
 # this dependency closure, so window/render/CLI changes do not rebuild the server.
-lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false, features = ["server"] }
-lunco-luncosim-runtime = { path = "../lunco-luncosim-runtime", default-features = false, features = ["api-transport", "transport-http", "networking"] }
+lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
+lunco-luncosim-runtime = { path = "../lunco-luncosim-runtime", default-features = false, features = ["server"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mimalloc = "0.1"

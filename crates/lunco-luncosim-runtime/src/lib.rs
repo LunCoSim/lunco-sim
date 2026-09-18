@@ -20,16 +20,25 @@ pub struct LunCoSimRuntimePlugin {
     /// Whether the host has no presentation surface and should acknowledge
     /// presentation-only scenario commands without executing them.
     pub headless: bool,
+    /// Explicit startup scene supplied by the application boundary.
+    pub startup_scene: Option<String>,
 }
 
 impl Default for LunCoSimRuntimePlugin {
     fn default() -> Self {
-        Self { headless: false }
+        Self {
+            headless: false,
+            startup_scene: None,
+        }
     }
 }
 
 impl Plugin for LunCoSimRuntimePlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(lunco_luncosim_services::LunCoSimServicesPlugin {
+            headless: self.headless,
+            startup_scene: self.startup_scene.clone(),
+        });
         app.add_plugins(lunco_scripting::LunCoScriptingPlugin)
             .add_plugins(lunco_scripting_rhai::LunCoScriptingRhaiPlugin);
 
@@ -77,8 +86,11 @@ pub fn build_headless_app_with_scene(
     compute_threads: Option<usize>,
     startup_scene: Option<String>,
 ) -> App {
-    let mut app = lunco_luncosim_core::build_core_app_with_scene(compute_threads, startup_scene);
-    app.add_plugins(LunCoSimRuntimePlugin { headless: true });
+    let mut app = lunco_luncosim_core::build_core_app(compute_threads);
+    app.add_plugins(LunCoSimRuntimePlugin {
+        headless: true,
+        startup_scene,
+    });
     app
 }
 

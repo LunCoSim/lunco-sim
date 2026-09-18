@@ -188,8 +188,9 @@ struct Cli {
     /// USD scene path. Accepts an asset-root-relative path such as
     /// `scenes/tests/drivetrain_parity.usda`, a cwd-relative path, or an
     /// absolute path into a custom Twin.
-    /// Consumed by `LunCoSimCorePlugin`, which does its own `--scene` parse off
-    /// `std::env::args()`; we parse it too only so we can REQUIRE it and print it.
+    /// Consumed by the application services, which resolve `--scene` through
+    /// the same Twin-opening path as interactive loads. The runner parses it
+    /// too so it can require the argument and print it.
     scene: String,
     max_ticks: u64,
     tick_hz: f64,
@@ -1141,7 +1142,7 @@ pub fn run() -> u8 {
     // Re-assert that resolved value at the application boundary immediately
     // before startup schedules are built. This keeps the runner independent of
     // process argv and makes the scene hand-off explicit for every test mode.
-    app.insert_resource(lunco_luncosim_core::ScenePath(Some(cli.scene.clone())));
+    app.insert_resource(lunco_luncosim_services::ScenePath(Some(cli.scene.clone())));
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────
     //

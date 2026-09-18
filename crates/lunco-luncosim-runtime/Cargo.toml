@@ -16,6 +16,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
+lunco-luncosim-services = { path = "../lunco-luncosim-services", default-features = false }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-scripting-rhai = { path = "../lunco-scripting-rhai" }
@@ -29,9 +30,21 @@ lunco-workspace = { path = "../lunco-workspace" }
 
 [features]
 default = []
-api-transport = ["dep:lunco-api-transport", "lunco-luncosim-core/api-transport"]
+api-transport = [
+    "dep:lunco-api-transport",
+    "lunco-luncosim-core/api-transport",
+    "lunco-luncosim-services/api-transport",
+]
 transport-http = ["api-transport", "lunco-api-transport/transport-http"]
-networking = ["dep:lunco-networking-sync", "dep:lunco-twin-journal"]
+networking = [
+    "dep:lunco-networking-sync",
+    "dep:lunco-twin-journal",
+    "lunco-luncosim-core/networking",
+    "lunco-luncosim-services/networking",
+]
+net-diag = ["networking", "lunco-luncosim-services/net-diag"]
+experiments = ["lunco-luncosim-services/experiments"]
+server = ["api-transport", "transport-http", "networking", "experiments"]
 python = ["lunco-scripting/python", "lunco-luncosim-core/python"]
 native-plugins = ["lunco-scripting/native-plugins"]
 

@@ -7,8 +7,9 @@
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
 use lunco_luncosim_core::AppExit;
-use lunco_luncosim_core::{LunCoSimCorePlugin, ScenePath};
+use lunco_luncosim_core::LunCoSimCorePlugin;
 use lunco_luncosim_runtime::LunCoSimRuntimePlugin;
+use lunco_luncosim_services::ScenePath;
 
 /// The luncosim's process-start render choice. The binary selects it while
 /// `lunco-render-bevy` owns how the policy is rendered.
@@ -592,10 +593,7 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         }
         app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
     }
-    app.add_plugins(LunCoSimCorePlugin {
-        headless: false,
-        startup_scene: None,
-    });
+    app.add_plugins(LunCoSimCorePlugin);
     app.add_plugins(LunCoSimRuntimePlugin::default());
     crate::camera::install_interactive_camera(&mut app);
     // The browser boot-screen handshake is an application-shell concern. Keep
