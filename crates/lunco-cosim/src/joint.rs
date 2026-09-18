@@ -56,28 +56,10 @@ use bevy::prelude::*;
 use std::collections::HashSet;
 
 use crate::ports::{AvianGroup, AvianPort};
+use lunco_physics::joint::{
+    JOINT_ANGLE_PORT, JOINT_DISPLACEMENT_PORT, JOINT_FORCE_PORT, JOINT_VELOCITY_PORT,
+};
 use lunco_port_core::ports::PortDirection;
-
-/// The port name a revolute joint exposes in both directions.
-pub const JOINT_ANGLE_PORT: &str = "angle";
-
-/// The port name a prismatic joint exposes in both directions.
-pub const JOINT_DISPLACEMENT_PORT: &str = "displacement";
-
-/// The port name a prismatic joint exposes for its slide RATE (m/s). `Out` only —
-/// a rate is measured, and the way to command one is the `displacement` setpoint.
-/// Mirrors `PhysxJointStateAPI:linear physics:velocity`.
-pub const JOINT_VELOCITY_PORT: &str = "velocity";
-
-/// The port name a prismatic joint exposes for its axial reaction force (N).
-/// `Out` only — the force is a *result* of the authored load law and the joint's
-/// realized state, so there is nothing to command.
-///
-/// Unlike `displacement`/`velocity` this is a LunCo name, not a standard one:
-/// `PhysxJointStateAPI` stops at position and velocity, and no UsdPhysics schema
-/// spells joint-force readback. Ports are not USD schemas, so a plain name is
-/// right here — inventing a `lunco:*` USD attribute to match would not be.
-pub const JOINT_FORCE_PORT: &str = "force";
 
 /// Maximum torque (N·m) the joint motor may apply to reach the commanded angle.
 /// Generous so the joint holds its target against gravity for the structures we
@@ -511,23 +493,6 @@ fn displacement_along_axis(
     let a1 = p1 + r1 * anchor1;
     let a2 = p2 + r2 * anchor2;
     (a2 - a1).dot(axis)
-}
-
-/// First entity in `root`'s subtree carrying a [`RevoluteJoint`] (the joint that
-/// exposes the `angle` port). Selection targets the logical root, but the joint
-/// prim is usually nested (e.g. `/SolarTower/Hinge`), so the inspector resolves
-/// it through here. Keeps the avian-type coupling inside this crate.
-pub fn joint_angle_holder(world: &mut World, root: Entity) -> Option<Entity> {
-    let mut stack = vec![root];
-    while let Some(e) = stack.pop() {
-        if world.get::<RevoluteJoint>(e).is_some() {
-            return Some(e);
-        }
-        if let Some(children) = world.get::<Children>(e) {
-            stack.extend(children.iter());
-        }
-    }
-    None
 }
 
 /// Avian's `Rotation` wraps a `DQuat` (f64 build); narrow to a glam `Quat`

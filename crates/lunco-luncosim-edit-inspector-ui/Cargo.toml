@@ -24,7 +24,6 @@ lunco-api = { path = "../lunco-api" }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
@@ -36,6 +35,7 @@ lunco-materials = { path = "../lunco-materials" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+lunco-physics = { path = "../lunco-physics" }
 lunco-render = { path = "../lunco-render" }
 lunco-scene-authoring = { path = "../lunco-scene-authoring" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }

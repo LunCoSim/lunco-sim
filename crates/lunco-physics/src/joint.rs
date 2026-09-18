@@ -9,6 +9,18 @@ use avian3d::prelude::RevoluteJoint;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
+/// The port name a revolute joint exposes in both directions.
+pub const JOINT_ANGLE_PORT: &str = "angle";
+
+/// The port name a prismatic joint exposes in both directions.
+pub const JOINT_DISPLACEMENT_PORT: &str = "displacement";
+
+/// The port name a prismatic joint exposes for its slide rate (m/s).
+pub const JOINT_VELOCITY_PORT: &str = "velocity";
+
+/// The port name a prismatic joint exposes for its axial reaction force (N).
+pub const JOINT_FORCE_PORT: &str = "force";
+
 /// A solved scalar torque applied across a revolute joint.
 ///
 /// The scalar is a physical torque from an authored runtime port. The joint
@@ -57,6 +69,20 @@ impl Default for JointTorqueActuator {
 pub fn revolute_hinge_axis_world(joint: &RevoluteJoint, body1_rotation: DQuat) -> Option<DVec3> {
     let local_axis = joint.local_hinge_axis1()?;
     (body1_rotation * local_axis).try_normalize()
+}
+
+/// Return the first revolute joint in `root`'s subtree.
+pub fn joint_angle_holder(world: &World, root: Entity) -> Option<Entity> {
+    let mut stack = vec![root];
+    while let Some(entity) = stack.pop() {
+        if world.get::<RevoluteJoint>(entity).is_some() {
+            return Some(entity);
+        }
+        if let Some(children) = world.get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    None
 }
 
 /// Resolve the physical brake torque for one fixed step.
