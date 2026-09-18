@@ -29,6 +29,11 @@
 //! app shell (window + frame pacing + native `--api`).
 
 use bevy::prelude::*;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 // The egui workbench shell — UI only. A headless `--no-ui` (or `--no-default-
 // features`) lunica adds the Modelica compiler and execution plugins instead.
 #[cfg(feature = "ui")]

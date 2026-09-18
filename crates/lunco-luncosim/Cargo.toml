@@ -51,6 +51,7 @@ lunco-workspace = { path = "../lunco-workspace", optional = true }
 serde_json = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mimalloc = "0.1"
 lunco-rhai-repl = { path = "../lunco-rhai-repl" }
 # The authored scene-test command is a production runner, but its readiness
 # harness is a separate native edge so runner edits do not rebuild this GUI

@@ -7721,6 +7721,7 @@ dependencies = [
  "lunco-usd-bevy-runtime",
  "lunco-usd-bevy-scene",
  "lunco-workspace",
+ "mimalloc",
  "serde_json",
 ]
 
@@ -7791,7 +7792,6 @@ dependencies = [
  "lunco-usd-terrain",
  "lunco-workspace",
  "lunco-workspace-api",
- "mimalloc",
  "serde_json",
 ]
 
@@ -7989,6 +7989,7 @@ name = "lunco-luncosim-server"
 version = "0.6.0-dev"
 dependencies = [
  "lunco-luncosim-core",
+ "mimalloc",
 ]
 
 [[package]]
@@ -8465,6 +8466,7 @@ dependencies = [
  "lunco-workbench-window",
  "lunco-workspace",
  "lunco-workspace-api",
+ "mimalloc",
  "rumoca-compile",
  "rumoca-tool-fmt",
  "rumoca-tool-lint",

@@ -190,6 +190,7 @@ log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"
 # (missing `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs).
 # Enable with `cargo run --features tracy --bin lunica` when profiling.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mimalloc = "0.1"
 lunco-modelica-assets = { path = "../lunco-modelica-assets", optional = true }
 lunco-assets-datasets = { path = "../lunco-assets-datasets", optional = true }
 # OS clipboard for the code editor's menu / toolbar / right-click Paste

@@ -5,10 +5,6 @@
 //! workbench, picking, or tutorial policy. Those capabilities are layered by
 //! the application/UI packages.
 
-#[cfg(not(target_arch = "wasm32"))]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 use avian3d::prelude::PhysicsPlugins;
 use bevy::asset::{AssetLoadFailedEvent, AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;

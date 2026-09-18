@@ -14,6 +14,9 @@ path = "src/main.rs"
 # this dependency closure, so window/render/CLI changes do not rebuild the server.
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false, features = ["server"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mimalloc = "0.1"
+
 [features]
 default = ["sysml"]
 sysml = ["lunco-luncosim-core/sysml"]

@@ -1,6 +1,10 @@
 //! The LunCoSim process entry point. GUI composition is delegated to
 //! `lunco-luncosim-ui`; the headless `luncosim-server` uses the core directly.
 
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> lunco_luncosim_core::AppExit {
     // The UI package owns the Velopack process hook. It must see the original
     // process before CLI dispatch. It does not perform the GitHub update check;

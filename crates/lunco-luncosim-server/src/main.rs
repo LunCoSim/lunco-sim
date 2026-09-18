@@ -14,6 +14,10 @@
 //! it isn't there — a client just gets connection-refused.
 //!
 //!     cargo run -p lunco-luncosim-server -- --api 4101
+
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> lunco_luncosim_core::AppExit {
     lunco_luncosim_core::run_headless()
 }
