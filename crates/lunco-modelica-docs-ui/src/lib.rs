@@ -5,7 +5,7 @@
 //! interception that routes `modelica://` links back through the workbench
 //! registry. Document selection and panel layout remain with the Modelica UI.
 
-use bevy_egui::egui;
+use egui;
 use lunco_workbench_core::PanelCtx;
 
 /// Render one HTML documentation fragment as cached CommonMark.

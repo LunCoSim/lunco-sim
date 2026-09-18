@@ -6,7 +6,7 @@
 //! body. Keeping that contract here prevents each panel from growing a
 //! slightly different tree renderer.
 
-use bevy_egui::egui;
+use egui;
 
 /// Render one standard workbench tree branch.
 ///

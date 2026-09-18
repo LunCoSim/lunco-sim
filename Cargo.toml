@@ -328,6 +328,9 @@ leafwing-input-manager = "0.21.0"
 # agree on the egui minor or it dual-links. The maintained Bevy 0.19 and egui
 # 0.35 LunCoSim fork is vendored in the workspace for the shared viewport map.
 bevy_egui = { version = "0.41", features = ["serde"] }
+# UI component crates that only exchange egui values should not depend on the
+# Bevy integration. Bevy hosts opt into `bevy_egui` separately.
+egui = "0.35"
 # Runtime-authored View HUD templates. Both target Bevy 0.19; they are optional
 # so the headless luncosim server does not link Bevy UI/text presentation.
 bevy_hui = "0.7"

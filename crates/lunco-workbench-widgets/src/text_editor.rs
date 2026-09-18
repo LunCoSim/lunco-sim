@@ -4,7 +4,7 @@
 //! language-specific behavior. These builders own the common egui setup so a
 //! source editor has the same typography and interaction baseline everywhere.
 
-use bevy_egui::egui;
+use egui;
 
 /// Build the standard monospace multiline editor used for source and script
 /// text. Callers may continue configuring the returned builder for their own

@@ -4,7 +4,7 @@
 //! when the host font has no symbol glyph and gives every UI crate one icon
 //! vocabulary instead of each panel inventing a different Unicode fallback.
 
-use bevy_egui::egui;
+use egui;
 
 /// The semantic control icons shared by the workbench and its overlays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -375,7 +375,7 @@ pub fn icon_text_button(
 #[cfg(test)]
 mod tests {
     use super::icon_drawing_rect;
-    use bevy_egui::egui;
+    use egui;
 
     #[test]
     fn icon_canvas_is_square_and_centered_in_titlebar_button() {
