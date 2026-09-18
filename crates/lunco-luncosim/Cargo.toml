@@ -80,6 +80,10 @@ ui = [
     "lunco-scene-runner/ui",
     "lunco-luncosim-ui/avatar-ui",
 ]
+# Native package builds opt into icon rasterization only when the packaging
+# script requests it; ordinary GUI development keeps those build dependencies
+# out of the UI package graph.
+package-icons = ["lunco-luncosim-ui?/package-icons"]
 # Lean headless multiplayer server: API + networking host, NO `ui`. Build with
 # `--no-default-features --features server`. Celestial data remains external
 # through the runtime asset and dataset pipelines.

@@ -24,9 +24,9 @@ pub(crate) use save_scenario::SaveScenario;
 pub fn register_presentation_bridges(app: &mut bevy::prelude::App) {
     presentation_bridge::register(app);
 }
-pub use ui::{
-    add_runtime_ui_layer, InitialScenePath, LunCoSimUiConfig, LunCoSimUiPlugin, WindowIconBytes,
-};
+#[cfg(feature = "package-icons")]
+pub use ui::WindowIconBytes;
+pub use ui::{add_runtime_ui_layer, InitialScenePath, LunCoSimUiConfig, LunCoSimUiPlugin};
 
 /// Run the native package-manager startup hook before CLI dispatch.
 ///
@@ -39,7 +39,8 @@ pub fn initialize_velopack() {
     velopack::VelopackApp::build().run();
 }
 
-/// Rasterized 64x64 RGBA bytes for the native LunCoSim window icon.
+/// Rasterized 64x64 RGBA bytes for the packaged native LunCoSim window icon.
+#[cfg(feature = "package-icons")]
 pub fn window_icon_bytes() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/luncosim-icon.rgba"))
 }

@@ -89,10 +89,11 @@ impl RuntimeUiDropdownState {
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct InitialScenePath(pub Option<String>);
 
-/// Window icon bytes prepared by this crate's UI build script.
+/// Window icon bytes prepared by this crate's packaging-only build script.
 ///
 /// Packaging owns rasterization because the icon is also used for desktop
-/// metadata. This crate owns only installing it on the live native window.
+/// metadata. Ordinary UI builds do not install a generated icon.
+#[cfg(feature = "package-icons")]
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct WindowIconBytes(pub &'static [u8]);
 
@@ -150,7 +151,7 @@ impl Plugin for LunCoSimUiPlugin {
             self.config.git_sha,
             self.config.repository_url,
         ));
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(feature = "package-icons", not(target_arch = "wasm32")))]
         app.add_systems(Update, install_window_icon);
         app.insert_resource(InitialScenePath(self.config.initial_scene.clone()));
         // Winit frame pacing. Continuous while focused lets vsync (Fifo present /
@@ -953,7 +954,7 @@ fn init_current_scene_path(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "package-icons", not(target_arch = "wasm32")))]
 fn install_window_icon(
     windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
     winit_windows: Option<NonSend<bevy_winit::WinitWindows>>,

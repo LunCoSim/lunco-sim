@@ -605,10 +605,16 @@ fi
 info "Building $BINARY ($CRATE) — $PROFILE_LABEL, target: $TRIPLE"
 cd "$PROJECT_DIR"
 
+ICON_FEATURE_ARGS=()
+if [ "$BINARY" = "luncosim" ]; then
+    ICON_FEATURE_ARGS+=(--features package-icons)
+fi
+
     LUNCOSIM_ICON_OUTPUT_DIR="$ICON_OUTPUT_DIR" \
     LUNCOSIM_ICON_OUTPUT_STAMP="$ICON_OUTPUT_STAMP" \
     cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" -j 4 \
     --bin "$BINARY" -p "$CRATE" \
+    "${ICON_FEATURE_ARGS[@]+"${ICON_FEATURE_ARGS[@]}"}" \
     "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
 if [ ! -f "$PROJECT_DIR/$BIN_PATH" ]; then

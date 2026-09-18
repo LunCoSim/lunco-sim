@@ -39,6 +39,10 @@ networking = [
 # Native Velopack update checks and package installation. Kept opt-in for
 # consumers that use the interactive UI shell without desktop packaging.
 updates = ["dep:lunco-assets-transport", "dep:velopack", "dep:ureq"]
+# Rasterize and embed the platform icon only for native package builds. Normal
+# UI development keeps the icon installer inactive, so the build script does
+# not compile the SVG/image toolchain.
+package-icons = ["dep:resvg", "dep:usvg", "dep:image", "dep:winresource"]
 # Opt-in profiling for the complete GPU-backed application composition.
 tracy = ["bevy/trace_tracy"]
 
@@ -146,16 +150,19 @@ serde_json = { workspace = true }
 [build-dependencies]
 # The desktop icon is UI/package artwork. Keeping rasterization here prevents
 # the headless application and server from compiling the graphics toolchain.
-resvg = { workspace = true }
-usvg = { workspace = true }
-image = { workspace = true, features = ["ico"] }
+# These are optional because Cargo always compiles build dependencies for a
+# package, even when the package's normal features do not use the generator.
+resvg = { workspace = true, optional = true }
+usvg = { workspace = true, optional = true }
+image = { workspace = true, features = ["ico"], optional = true }
 
 [target.'cfg(windows)'.build-dependencies]
-winresource = "0.1.31"
+winresource = { version = "0.1.31", optional = true }
 
 [package.metadata.cargo-machete]
 # Cargo machete does not inspect build.rs; these dependencies rasterize and
-# package the desktop icon there and are intentionally build-only.
+# package the desktop icon there and are intentionally build-only and
+# packaging-feature-only.
 ignored = ["image", "resvg", "usvg", "winresource"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

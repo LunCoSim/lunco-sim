@@ -1,8 +1,10 @@
 # LunCoSim (LCS) app icons — night theme
 
 The three SVGs in `svg/` are the source of truth. `scripts/build_native.sh`
-asks the Rust build script to derive the platform-native outputs required by
-the package consumer, so a clean GitHub runner does not depend on ImageMagick.
+enables the `package-icons` feature for `luncosim` and asks its Rust build
+script to derive the platform-native outputs required by the package consumer,
+so a clean GitHub runner does not depend on ImageMagick. Ordinary Cargo UI
+builds do not compile that packaging-only rasterizer.
 Derived files are generated under `target/package-icons/` and staged into the
 native package; icon changes are made once in SVG and regenerated for every
 target package.

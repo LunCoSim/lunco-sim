@@ -246,9 +246,7 @@ pub(crate) fn sync_program_contracts(
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&asset.text) else {
             continue;
         };
-        if value.get("kind").and_then(serde_json::Value::as_str)
-            != Some(PROGRAM_CONTRACTS_KIND)
-        {
+        if value.get("kind").and_then(serde_json::Value::as_str) != Some(PROGRAM_CONTRACTS_KIND) {
             continue;
         }
         match serde_json::from_value::<ProgramContractManifest>(value) {

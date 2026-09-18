@@ -127,9 +127,7 @@ fn sync_bundled_tutorial_catalog(
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&asset.text) else {
             continue;
         };
-        if value.get("kind").and_then(serde_json::Value::as_str)
-            != Some(TUTORIAL_CATALOG_KIND)
-        {
+        if value.get("kind").and_then(serde_json::Value::as_str) != Some(TUTORIAL_CATALOG_KIND) {
             continue;
         }
 
@@ -141,7 +139,10 @@ fn sync_bundled_tutorial_catalog(
                 ));
             }
             Err(error) => {
-                catalog_error = Some(format!("{}: invalid tutorial catalog: {error}", candidate.asset_path));
+                catalog_error = Some(format!(
+                    "{}: invalid tutorial catalog: {error}",
+                    candidate.asset_path
+                ));
             }
         }
     }

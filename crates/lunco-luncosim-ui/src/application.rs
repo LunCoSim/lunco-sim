@@ -522,6 +522,7 @@ pub fn run_gui() -> AppExit {
     }
 
     if !offscreen {
+        #[cfg(feature = "package-icons")]
         app.insert_resource(crate::WindowIconBytes(crate::window_icon_bytes()));
         app.add_plugins(crate::LunCoSimUiPlugin {
             config: crate::LunCoSimUiConfig {
