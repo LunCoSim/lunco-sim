@@ -985,26 +985,16 @@ mod tests {
     #[test]
     fn safe_rel_dest_rejects_traversal_and_absolute() {
         // Parent escape — the whole point of the guard.
-        assert!(!lunco_assets_path::is_safe_relative_path(
-            "../escape.tif"
-        ));
+        assert!(!lunco_assets_path::is_safe_relative_path("../escape.tif"));
         assert!(!lunco_assets_path::is_safe_relative_path(
             "terrain/../../escape.tif"
         ));
-        assert!(!lunco_assets_path::is_safe_relative_path(
-            "a/../b/../../x"
-        ));
+        assert!(!lunco_assets_path::is_safe_relative_path("a/../b/../../x"));
         // Absolute (Unix + Windows drive).
-        assert!(!lunco_assets_path::is_safe_relative_path(
-            "/etc/passwd"
-        ));
-        assert!(!lunco_assets_path::is_safe_relative_path(
-            "C:/Users/x"
-        ));
+        assert!(!lunco_assets_path::is_safe_relative_path("/etc/passwd"));
+        assert!(!lunco_assets_path::is_safe_relative_path("C:/Users/x"));
         // Backslash is a traversal vector on Windows; reject everywhere.
-        assert!(!lunco_assets_path::is_safe_relative_path(
-            r"terrain\..\x"
-        ));
+        assert!(!lunco_assets_path::is_safe_relative_path(r"terrain\..\x"));
         // Empty / leading-slash-adjacent.
         assert!(!lunco_assets_path::is_safe_relative_path(""));
         assert!(!lunco_assets_path::is_safe_relative_path("."));

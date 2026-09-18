@@ -24,10 +24,10 @@
 
 use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-use lunco_core::{on_command, register_commands, Command};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
-use lunco_workbench_widgets::{icon_text_button, paint_icon, UiIcon};
+use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
 
 /// Shared layer for guided presentation. Workbench menus and window controls
 /// use egui's `Foreground` order, so guided HUDs, rings, coach cards, and

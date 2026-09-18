@@ -355,9 +355,7 @@ pub fn source_pool_path(root: &Path, url: &str) -> PathBuf {
         .split(['?', '#'])
         .next()
         .and_then(|url| url.rsplit('/').next())
-        .filter(|name| {
-            !name.is_empty() && lunco_assets_path::is_safe_relative_path(name)
-        })
+        .filter(|name| !name.is_empty() && lunco_assets_path::is_safe_relative_path(name))
         .unwrap_or("download.bin");
     root.join("sources").join(&hash[..16]).join(base)
 }
