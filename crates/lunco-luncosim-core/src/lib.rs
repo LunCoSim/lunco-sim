@@ -25,9 +25,7 @@ use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
 use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
 use lunco_usd_avian_filters::filtered_pairs::UsdCollisionFilter;
-use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime::UsdPlugins;
-use lunco_usd_bevy_scene::UsdPrimPath;
 
 const INPUT_BINDINGS_KIND: &str = "lunco.input-bindings.v1";
 
@@ -671,7 +669,7 @@ impl Plugin for LunCoSimCorePlugin {
 /// The USD terrain bridge is ordered before this system and its deferred commands
 /// are flushed at that boundary, so the query sees the authoritative
 /// [`DemTerrainRequest`] for a newly composed terrain in the same update. A query
-/// over every [`UsdPrimPath`] is incorrect: most USD prims are not terrain and
+/// over every [`lunco_usd_bevy_scene::UsdPrimPath`] is incorrect: most USD prims are not terrain and
 /// would keep the entire simulation kinematic until an arbitrary timeout.
 ///
 /// The request is removed together with the finished collider/oracle by the
@@ -696,6 +694,8 @@ fn track_ground_collider_pending(
 #[cfg(test)]
 mod ground_collider_gate_tests {
     use super::*;
+    use lunco_usd_bevy_core::UsdStageAsset;
+    use lunco_usd_bevy_scene::UsdPrimPath;
 
     #[test]
     fn only_an_active_dem_request_holds_dynamic_activation() {
