@@ -1905,7 +1905,6 @@ impl Plugin for LunCoSimCorePlugin {
             // just produces no input while the Drive/Brake/Possess command
             // observers + wire-type registrations the host needs stay live.
             .add_plugins(LunCoControllerPlugin)
-            .add_plugins(lunco_camera_runtime::CameraRuntimePlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
             .add_systems(Startup, setup_luncosim)
