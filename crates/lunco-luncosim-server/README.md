@@ -10,7 +10,7 @@ no winit, egui, workbench, or render/UI code is compiled for this binary.
 `lunco_luncosim_runtime::run_headless()`.
 
 ```rust
-fn main() -> lunco_luncosim_runtime::AppExit {
+fn main() -> lunco_luncosim_core::AppExit {
     lunco_luncosim_runtime::run_headless()
 }
 ```

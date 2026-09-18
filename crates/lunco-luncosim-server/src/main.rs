@@ -18,6 +18,6 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-fn main() -> lunco_luncosim_runtime::AppExit {
+fn main() -> lunco_luncosim_core::AppExit {
     lunco_luncosim_runtime::run_headless()
 }

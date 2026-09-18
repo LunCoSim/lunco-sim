@@ -15,8 +15,6 @@ use lunco_usd_bevy_core::program::{
 };
 use lunco_usd_bevy_core::read::UsdReadObject;
 
-pub use lunco_luncosim_core::AppExit;
-
 /// Install the application-level scripting and policy integration.
 pub struct LunCoSimRuntimePlugin {
     /// Whether the host has no presentation surface and should acknowledge
