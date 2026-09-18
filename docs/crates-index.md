@@ -152,7 +152,8 @@ External communication, ECS replication, telemetry extraction, and distributed a
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-networking-core`** | Transport-independent client netcode: snapshot interpolation, ownership prediction, rollback/reconciliation, correction smoothing, and their session state. It has no WebTransport/lightyear dependency. |
-| **`lunco-networking-sync`** | Transport-neutral Bevy synchronization runtime: replicated state, journal convergence, scenario manifest/asset distribution, typed bounded envelopes, and sync policy execution. It has no WebTransport/lightyear dependency; adapters provide the wire channels. |
+| **`lunco-networking-scenario`** | Transport-neutral scenario manifest and asset wire contracts: CID identity/revision calculation, manifest/chunk/offer messages, and client/host manifest resources. It has no transport, asset I/O, or sync-runtime dependency. |
+| **`lunco-networking-sync`** | Transport-neutral Bevy synchronization runtime: replicated state, journal convergence, scenario asset transfer, typed bounded envelopes, and sync policy execution. Scenario manifest contracts live in `lunco-networking-scenario`; this package has no WebTransport/lightyear dependency. |
 | **`lunco-networking`** | Multiplayer replication and lightyear WebTransport adapter. It owns transport setup, peer/session handshakes, channel ferrying, and network-only adapters while consuming the transport-neutral `lunco-networking-sync` runtime. |
 | **`lunco-api-contracts`** | Pure API wire envelopes and shared API endpoint constants. It has no ECS or language-runtime dependency, so native clients and transport adapters compile against the same contract without linking the runtime. |
 | **`lunco-api-client`** | Generic native command-API client. It owns endpoint configuration and HTTP request/response handling; it knows no Rhai command or simulator implementation. |

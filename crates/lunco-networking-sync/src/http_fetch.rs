@@ -28,10 +28,10 @@
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender, bounded};
 
+use crate::scenario_sync::{AssetDownloads, AssetPersist, asset_storage_handle};
 use lunco_core_session::NetworkRole;
 
-use crate::scenario::{RemoteScenarioManifest, cid_for_content};
-use crate::scenario_sync::{AssetDownloads, AssetPersist, asset_storage_handle};
+use lunco_networking_scenario::{RemoteScenarioManifest, cid_for_content};
 
 /// Max asset fetches in flight at once. Bounded so a many-file scenario doesn't open
 /// dozens of sockets (and, on wasm, doesn't queue dozens of `fetch()` promises); the
@@ -151,7 +151,7 @@ pub fn fetch_missing_assets_http(
         if downloads.is_requested(&asset.cid) {
             continue;
         }
-        let Some(cid) = crate::scenario::cid_from_bytes(&asset.cid) else {
+        let Some(cid) = lunco_networking_scenario::cid_from_bytes(&asset.cid) else {
             continue;
         };
         downloads.mark_requested(asset.cid.clone());

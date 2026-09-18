@@ -7772,6 +7772,7 @@ dependencies = [
  "lunco-modelica-runtime",
  "lunco-networking",
  "lunco-networking-core",
+ "lunco-networking-scenario",
  "lunco-networking-sync",
  "lunco-obstacle-field",
  "lunco-physics",
@@ -8571,6 +8572,7 @@ dependencies = [
  "lunco-cosim-core",
  "lunco-doc-bevy",
  "lunco-networking-core",
+ "lunco-networking-scenario",
  "lunco-networking-sync",
  "lunco-storage",
  "lunco-twin",
@@ -8599,6 +8601,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-networking-scenario"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-hash",
+ "lunco-twin-journal",
+ "serde",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "lunco-networking-sync"
 version = "0.1.0-dev"
 dependencies = [
@@ -8621,8 +8634,8 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-embodiment-core",
- "lunco-hash",
  "lunco-networking-core",
+ "lunco-networking-scenario",
  "lunco-scripting",
  "lunco-settings",
  "lunco-spatial",

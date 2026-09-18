@@ -70,7 +70,8 @@ Layer 4: UIPlugins            — lunco-workbench, lunco-ui, domain ui/panels
 Layer 3: SimulationPlugins    — Rendering, Cameras, Lighting, 3D viewport, Gizmos
 Layer 2: DomainPlugins        — Celestial, Embodiment, Mobility, Robotics, OBC, FSW
 Layer 2b: NetworkingPlugin    — lunco-networking (transport, auth, bridges)
-             Sync runtime     — lunco-networking-sync (replication, journals, scenarios)
+             Scenario wire     — lunco-networking-scenario (manifest + asset contracts)
+             Sync runtime       — lunco-networking-sync (replication, journals, transfer)
 Layer 1: SimCore              — MinimalPlugins, ScheduleRunner, big_space, Avian3D
 ```
 
@@ -121,7 +122,10 @@ still never import it: they speak only the semantic API, and everything below
 ```
 
 The sync runtime is **transport-agnostic** (`lunco-networking-sync`: codec, command
-capture/apply, state snapshots, journals, and scenario distribution — no lightyear dep).
+capture/apply, state snapshots, journals, and asset transfer — no lightyear dep).
+The reusable manifest and asset wire contracts live in `lunco-networking-scenario`,
+so a transport or cache consumer can depend on those contracts without compiling
+the state-sync runtime.
 The lightyear adapter ferries pre-serialized `sync::SyncEnvelope`s between
 `SyncOutbox`/`SyncInbox` and two lightyear messages: a
 **reliable `CmdChannel`** (commands) and a **best-effort `SnapChannel`** (snapshot deltas).
@@ -176,9 +180,11 @@ so there is zero networking footprint.
 ```
 lunco-mobility → lunco-networking (optional, feature: networking)
 lunco-networking → lunco-networking-core (only with feature: networking)
+lunco-networking → lunco-networking-scenario (only with feature: networking)
 lunco-networking → lunco-networking-sync (only with feature: networking)
 lunco-networking-core → lunco-core / lunco-core-session (simulation contracts)
-lunco-networking-sync → semantic simulation/session contracts
+lunco-networking-scenario → lunco-hash / lunco-twin-journal / serde (wire contracts)
+lunco-networking-sync → semantic simulation/session contracts and scenario transfer
 ```
 
 **As-built, replication policy is derived from the USD scene, not from a central

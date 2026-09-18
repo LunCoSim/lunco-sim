@@ -1,6 +1,6 @@
 //! Scenario **asset transfer** — Phase 3 of scenario distribution (the bytes).
 //!
-//! Phase 1 ([`crate::scenario`]) publishes the manifest: "scenario X at revision
+//! Phase 1 ([`lunco_networking_scenario`]) publishes the manifest: "scenario X at revision
 //! R with these asset CIDs". This module moves the actual **bytes**, one-way
 //! host → client, so a joined client can materialise the scenario in its local
 //! cache (`<cache_dir>/scenarios/<scenario_id>/<path>`). It is deliberately the
@@ -10,7 +10,7 @@
 //! Flow:
 //! - **client** ([`request_missing_assets`]): when a new manifest lands, diff its
 //!   asset CIDs against what we've already fetched this session and emit one
-//!   [`AssetRequestMsg`](crate::scenario::AssetRequestMsg) for the missing set on
+//!   [`AssetRequestMsg`](lunco_networking_scenario::AssetRequestMsg) for the missing set on
 //!   the reliable [`SyncChannel::BulkData`] lane.
 //! - **host** ([`serve_asset_requests`]): a client's request is queued by the
 //!   inbox drain into [`PendingAssetRequests`]; this system resolves each CID to
@@ -42,10 +42,10 @@ use lunco_core::{SessionId, SyncChannel};
 use lunco_core_session::NetworkRole;
 use lunco_storage::StorageHandle;
 
-use crate::scenario::{
+use crate::sync::{SyncEnvelope, SyncOutbox};
+use lunco_networking_scenario::{
     AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest, ScenarioManifestMsg, cid_from_bytes,
 };
-use crate::sync::{SyncEnvelope, SyncOutbox};
 
 // ── In-session chunk transfer: the FALLBACK bytes path ───────────────────────
 //
@@ -354,7 +354,7 @@ pub struct PendingAssetRequests(pub Vec<(SessionId, Vec<Vec<u8>>)>);
 /// sender (like [`PendingAssetRequests`]) so a disconnect can sweep its queued
 /// offers before they're ingested.
 #[derive(Resource, Default)]
-pub struct PendingAssetOffers(pub Vec<(SessionId, crate::scenario::AssetOfferMsg)>);
+pub struct PendingAssetOffers(pub Vec<(SessionId, lunco_networking_scenario::AssetOfferMsg)>);
 
 /// Client → host: offer an asset the local peer just imported so the host writes it
 /// into the shared twin and redistributes it (the bidirectional counterpart of the
@@ -364,7 +364,7 @@ pub struct PendingAssetOffers(pub Vec<(SessionId, crate::scenario::AssetOfferMsg
 /// TODO(bidirectional-content): wire the call site — fire this from the actual
 /// import surface (file-open / drag-drop / palette add) when a NEW asset enters the
 /// twin. Today it's the mechanism, not yet the trigger. Also cap `bytes` and chunk
-/// large offers (see [`AssetOfferMsg`](crate::scenario::AssetOfferMsg)).
+/// large offers (see [`AssetOfferMsg`](lunco_networking_scenario::AssetOfferMsg)).
 pub fn offer_asset_to_host(
     outbox: &mut crate::sync::SyncOutbox,
     path: impl Into<String>,
@@ -381,10 +381,10 @@ pub fn offer_asset_to_host(
         );
         return;
     }
-    let cid = crate::scenario::cid_for_content(&bytes).to_bytes();
+    let cid = lunco_networking_scenario::cid_for_content(&bytes).to_bytes();
     outbox.0.push((
         lunco_core::SyncChannel::BulkData,
-        crate::sync::SyncEnvelope::AssetOffer(crate::scenario::AssetOfferMsg {
+        crate::sync::SyncEnvelope::AssetOffer(lunco_networking_scenario::AssetOfferMsg {
             path: path.into(),
             cid,
             data: bytes,
@@ -1220,7 +1220,7 @@ lunco_core::register_commands!(on_promote_scenario);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenario::cid_for_content;
+    use lunco_networking_scenario::cid_for_content;
 
     /// Two byte-identical files share ONE CID (the transfer is content-addressed,
     /// so the host streams those bytes once). The client must materialize the blob

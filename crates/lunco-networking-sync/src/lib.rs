@@ -8,7 +8,6 @@
 
 pub mod http_fetch;
 pub mod journal_plane;
-pub mod scenario;
 pub mod scenario_sync;
 pub mod sync;
 

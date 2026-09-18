@@ -29,8 +29,8 @@ lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-hash = { path = "../lunco-hash", features = ["cid"] }
 lunco-networking-core = { path = "../lunco-networking-core" }
+lunco-networking-scenario = { path = "../lunco-networking-scenario" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-storage = { path = "../lunco-storage" }

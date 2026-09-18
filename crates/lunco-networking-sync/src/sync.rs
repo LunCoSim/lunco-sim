@@ -38,13 +38,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use leafwing_input_manager::prelude::ActionState;
-use lunco_embodiment_core::roles::{EmbodimentCorePlugin, LocalEmbodiment};
 use lunco_core::{GlobalEntityId, Mutation, OpId, SessionId, SimTick, SyncChannel};
 use lunco_core_session::{
     AppliedInputSeq, LocalSession, NetReplicate, NetSpawn, NetworkRole, PendingReplicatedSpawns,
     ReplicatedSpawn, SessionProfiles, SessionRegistry, SyncApplyGuard, authorize,
 };
 use lunco_doc::DocumentId;
+use lunco_embodiment_core::roles::{EmbodimentCorePlugin, LocalEmbodiment};
 use lunco_networking_core::session::{IncomingSnapshots, SnapshotSample};
 use lunco_spatial::ActivePhysicsFrame;
 
@@ -280,7 +280,7 @@ pub struct InboundClientCtx<'w, 's> {
     // Client-side stash of the host's scenario manifest (filled by the
     // `ScenarioManifest` arm). Bundled here for the same 16-arg-limit reason;
     // host-side arms are no-ops.
-    remote_scenario: ResMut<'w, crate::scenario::RemoteScenarioManifest>,
+    remote_scenario: ResMut<'w, lunco_networking_scenario::RemoteScenarioManifest>,
     // Phase-3 asset transfer queues (bundled for the same 16-arg reason). The
     // arms only enqueue; the actual work runs in `crate::scenario_sync` systems.
     // Client fills `incoming_chunks` (host arm is a no-op); host fills
@@ -577,13 +577,13 @@ pub enum SyncEnvelope {
     // needs no further enum edit; the handlers land then.
     //
     // Host → client: the scenario manifest (CID-addressed assets + revision).
-    ScenarioManifest(crate::scenario::ScenarioManifestMsg),
+    ScenarioManifest(lunco_networking_scenario::ScenarioManifestMsg),
     // Client → host: "I'm missing these CIDs, send bytes" (Phase 3).
-    AssetRequest(crate::scenario::AssetRequestMsg),
+    AssetRequest(lunco_networking_scenario::AssetRequestMsg),
     // Host → client: one chunk of an asset's bytes (Phase 3).
-    AssetChunk(crate::scenario::AssetChunkMsg),
+    AssetChunk(lunco_networking_scenario::AssetChunkMsg),
     // Peer → host: "I already have this CID" dedupe hint (Phase 3+).
-    AssetHave(crate::scenario::AssetHaveMsg),
+    AssetHave(lunco_networking_scenario::AssetHaveMsg),
     // Host → client: a Twin-journal entry (journal plane). Appended LAST (same
     // positional-codec rule): a stale peer that predates journal sync simply
     // never sends/handles it; prior discriminants stay put. Type owned by the
@@ -591,7 +591,7 @@ pub enum SyncEnvelope {
     JournalEntry(crate::journal_plane::JournalEntryMsg),
     // Peer → host: an imported asset offered for redistribution (bidirectional
     // content ingest). Appended LAST (positional-codec rule).
-    AssetOffer(crate::scenario::AssetOfferMsg),
+    AssetOffer(lunco_networking_scenario::AssetOfferMsg),
     // Host → client: ephemeral experiment run-status (presence plane). Appended
     // LAST (positional-codec rule) — a stale peer never sends/handles it.
     RunStatus(RunStatusMsg),
@@ -3322,7 +3322,7 @@ impl Plugin for SyncPlugin {
             // `drain_sync_inbox`). Host-side publisher resource
             // (`ScenarioManifestResource`) is initialized in `setup_host` —
             // it's host-only and must not exist in single-player/client builds.
-            .init_resource::<crate::scenario::RemoteScenarioManifest>()
+            .init_resource::<lunco_networking_scenario::RemoteScenarioManifest>()
             // Phase-3 asset transfer: the client-side download bookkeeping +
             // inbound chunk queue, and the host-side request queue. All three are
             // touched by the shared `drain_sync_inbox` (via `InboundClientCtx`) /
@@ -3802,16 +3802,17 @@ mod codec_roundtrip {
             "ViewCenter discriminant moved"
         );
 
-        let manifest = SyncEnvelope::ScenarioManifest(crate::scenario::ScenarioManifestMsg {
-            scenario_id: [0u8; 16],
-            revision: [0u8; 32],
-            name: String::new(),
-            default_scene: None,
-            assets: Vec::new(),
-            journal_head: None,
-            asset_base_url: None,
-            twin_scene: None,
-        });
+        let manifest =
+            SyncEnvelope::ScenarioManifest(lunco_networking_scenario::ScenarioManifestMsg {
+                scenario_id: [0u8; 16],
+                revision: [0u8; 32],
+                name: String::new(),
+                default_scene: None,
+                assets: Vec::new(),
+                journal_head: None,
+                asset_base_url: None,
+                twin_scene: None,
+            });
         assert_eq!(
             discriminant_of(&manifest),
             13,
@@ -3820,7 +3821,7 @@ mod codec_roundtrip {
 
         assert_eq!(
             discriminant_of(&SyncEnvelope::AssetRequest(
-                crate::scenario::AssetRequestMsg {
+                lunco_networking_scenario::AssetRequestMsg {
                     missing: Vec::new(),
                 }
             )),
@@ -3829,20 +3830,22 @@ mod codec_roundtrip {
         );
 
         assert_eq!(
-            discriminant_of(&SyncEnvelope::AssetChunk(crate::scenario::AssetChunkMsg {
-                cid: Vec::new(),
-                offset: 0,
-                total: 0,
-                data: Vec::new(),
-            })),
+            discriminant_of(&SyncEnvelope::AssetChunk(
+                lunco_networking_scenario::AssetChunkMsg {
+                    cid: Vec::new(),
+                    offset: 0,
+                    total: 0,
+                    data: Vec::new(),
+                },
+            )),
             15,
             "AssetChunk must be index 15"
         );
 
         assert_eq!(
-            discriminant_of(&SyncEnvelope::AssetHave(crate::scenario::AssetHaveMsg {
-                cid: Vec::new(),
-            })),
+            discriminant_of(&SyncEnvelope::AssetHave(
+                lunco_networking_scenario::AssetHaveMsg { cid: Vec::new() },
+            )),
             16,
             "AssetHave must be index 16"
         );
@@ -3911,7 +3914,7 @@ mod codec_roundtrip {
 
     #[test]
     fn scenario_manifest_envelope_roundtrips() {
-        use crate::scenario::{
+        use lunco_networking_scenario::{
             ScenarioAsset, ScenarioManifestMsg, cid_for_content, scenario_revision,
         };
         // A realistic manifest: two assets with real CIDs + a computed revision.

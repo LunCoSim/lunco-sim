@@ -13,7 +13,7 @@ use std::net::{IpAddr, SocketAddr};
 use lunco_core::{SessionId, SimTick, SyncChannel};
 use lunco_core_session::{NetStatus, SessionProfiles, SessionRegistry};
 use lunco_doc_bevy::JournalResource;
-use lunco_networking_sync::scenario::{
+use lunco_networking_scenario::{
     ScenarioAsset, ScenarioManifestMsg, ScenarioManifestResource, cid_for_content,
     scenario_revision,
 };
@@ -284,7 +284,7 @@ impl AssetHttpServer {
         for (cid, path) in cid_paths {
             // Key on the canonical base32 string — exactly what a client puts in
             // the URL — so the handler never parses or trusts caller-shaped input.
-            if let Some(cid) = lunco_networking_sync::scenario::cid_from_bytes(cid) {
+            if let Some(cid) = lunco_networking_scenario::cid_from_bytes(cid) {
                 map.insert(cid.to_string(), path.clone());
             }
         }
@@ -1129,7 +1129,7 @@ struct ScenarioBuildInput {
     default_scene: Option<String>,
     /// Entry scene relative to the Twin root (pre-re-rooting), for a client that
     /// has the Twin locally to load `twin://` host-identically. See
-    /// [`ScenarioManifestMsg::twin_scene`](lunco_networking_sync::scenario::ScenarioManifestMsg::twin_scene).
+    /// [`ScenarioManifestMsg::twin_scene`](lunco_networking_scenario::ScenarioManifestMsg::twin_scene).
     twin_scene: Option<String>,
     descriptors: Vec<AssetDescriptor>,
     /// The host's journal head at build time — the base the asset snapshot
@@ -1536,7 +1536,7 @@ fn ingest_asset_offers(
         }
         // Fail-closed: the bytes must hash to the advertised CID (never trust a
         // wire-supplied path/bytes pairing).
-        if lunco_networking_sync::scenario::cid_for_content(&offer.data).to_bytes() != offer.cid {
+        if lunco_networking_scenario::cid_for_content(&offer.data).to_bytes() != offer.cid {
             warn!(
                 "[net] rejected asset offer: bytes don't match CID ({})",
                 offer.path
@@ -1607,7 +1607,7 @@ fn drain_and_send_asset_chunks(
     time: Res<Time>,
     // Carries chunks not yet flushed (per-frame cap / still-arriving tasks) across
     // frames. A `Local` (not a resource) — this is the only reader/writer.
-    mut ready: Local<Vec<(SessionId, lunco_networking_sync::scenario::AssetChunkMsg)>>,
+    mut ready: Local<Vec<(SessionId, lunco_networking_scenario::AssetChunkMsg)>>,
     // Per-peer estimate of chunks lightyear still holds unacked (sends minus the
     // assumed drain) — the sender-side high-water mark. See
     // [`MAX_UNACKED_CHUNK_ESTIMATE`](lunco_networking_sync::scenario_sync::MAX_UNACKED_CHUNK_ESTIMATE).

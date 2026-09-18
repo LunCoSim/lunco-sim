@@ -454,7 +454,7 @@ pub fn run_headless() -> AppExit {
 #[cfg(feature = "networking")]
 fn load_ready_scenario(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
     downloads: Res<lunco_networking_sync::scenario_sync::AssetDownloads>,
     // Twin roots: a downloaded scenario is mounted here as a root over its cache
     // dir, so it loads under the SAME `twin://<name>/<rel>` the host uses.
@@ -558,9 +558,9 @@ fn load_ready_scenario(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
-    local_scenario: Option<Res<lunco_networking_sync::scenario::ScenarioManifestResource>>,
+    local_scenario: Option<Res<lunco_networking_scenario::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     mut registry: ResMut<
         lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
@@ -626,7 +626,7 @@ fn replay_scenario_journal(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_modelica(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
@@ -682,7 +682,7 @@ fn replay_scenario_journal_modelica(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_script(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scripting::ScriptRegistry>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -728,7 +728,7 @@ fn replay_scenario_journal_script(
 #[cfg(all(feature = "networking", feature = "experiments"))]
 fn replay_scenario_journal_experiment(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -768,7 +768,7 @@ fn replay_scenario_journal_experiment(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_shader(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scene_authoring::shader_doc::ShaderRegistry>>,
     asset_server: Option<Res<AssetServer>>,
@@ -827,7 +827,7 @@ fn replay_scenario_journal_shader(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_obstacle(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     spec: Option<ResMut<lunco_obstacle_field::ObstacleFieldSpec>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -875,7 +875,7 @@ fn replay_scenario_journal_obstacle(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_tools(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     scoped: Option<ResMut<lunco_scripting::tool_libs::TwinToolLibraries>>,
@@ -929,7 +929,7 @@ fn replay_scenario_journal_tools(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_timeline(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     store: Option<ResMut<lunco_scripting::timelines::TimelineStore>>,

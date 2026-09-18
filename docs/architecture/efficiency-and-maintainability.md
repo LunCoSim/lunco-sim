@@ -370,7 +370,7 @@ hand-rolled and duplicated:
 |---|---|---|---|
 | **Fast change / cache keys** | `lunco-terrain-surface/derived_layers.rs` `cache_key`; scattered `DefaultHasher` in `networking/shared.rs`, `modelica/experiments_runner.rs`, `modelica/.../render.rs`, `lunco-theme` | FNV-1a word-fold **or** std `DefaultHasher` | frozen to *nothing* — bump a format version to invalidate |
 | **Cross-peer identity** | `lunco-core/identity.rs` `fnv1a64`→`fold_53`; reference copy in `networking/proto-tests` | byte-wise FNV-1a | frozen to the **wire** (two peers must agree) |
-| **Content addressing (CID)** | `lunco-networking-sync/scenario.rs` `cid_for_content` | CIDv1 `raw`(0x55)+sha2-256 | frozen to **IPFS** (`ipfs add --raw-leaves --cid-version 1`) |
+| **Content addressing (CID)** | `lunco-networking-scenario/src/lib.rs` `cid_for_content` | CIDv1 `raw`(0x55)+sha2-256 | frozen to **IPFS** (`ipfs add --raw-leaves --cid-version 1`) |
 
 The FNV-1a constants (`0xcbf2…` basis, `0x0100…01b3` prime) were literally
 copy-pasted between `identity.rs` and `derived_layers.rs`. `DefaultHasher` was
@@ -422,7 +422,7 @@ collision-resistant for adversarial/wire content and has no IPFS framing.
 - **Landed:** `lunco-core/identity.rs` (byte-wise, via `fnv1a64`);
   `lunco-terrain-surface/derived_layers.rs` `cache_key` (word-fold, via `Fnv1a` —
   byte-identical to the old inline fold, so existing cache entries stay valid);
-  `lunco-networking-sync/scenario.rs` CID (via `content::cid` — dropped the direct
+  `lunco-networking-scenario/src/lib.rs` CID (via `content::cid` — dropped the direct
   `cid`/`multihash-codetable` deps).
 - **Next:** **Substrate B `lunco-precompute`** keys its `bake_or_load` disk cache
   with the fast tier and content-addresses persisted blobs with the CID tier —
