@@ -168,9 +168,10 @@ USD separates raw source from the composed runtime stage:
 
 - `UsdSourceText` loads one `.usda` layer through `AssetServer`;
 - `UsdStageAsset` represents the prepared/composed stage;
-- `UsdPlugins` composes visual, Avian, simulation, and document command
-  plugins; hosts that execute authored Modelica/Rhai participants enable its
-  `cosim` feature;
+- `UsdPlugins` composes visual, Avian, and document-command plugins plus the
+  default `simulation` projector; lean hosts may omit that feature, while
+  hosts that execute authored Modelica/Rhai participants enable its `cosim`
+  feature, which also enables simulation;
 - the Twin projection waits for the source asset event, opens one document,
   publishes the composed bytes as a `twin://` overlay, and mounts the stage.
 
