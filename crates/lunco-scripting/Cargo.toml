@@ -9,7 +9,8 @@ bevy = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
 # The task-tree tick engine (`this.task` in scenarios) — scripts author pure
 # data maps; the dependency-free kernel ticks them (see src/task_tree.rs).
-lunco-behavior = { path = "../lunco-behavior" }
+# Rhai-only: Python and script-free consumers do not need task execution.
+lunco-behavior = { path = "../lunco-behavior", optional = true }
 # Shared per-document diagnostics store (the unified error-reporting substrate
 # used by Modelica + scripting). `default-features = false` drops its egui `ui`
 # feature so headless / wasm scripting builds don't pull bevy_egui→winit.
@@ -28,23 +29,27 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # lunco-api dep. Lua remains only a reserved language id; it has no command.
 lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial", optional = true }
-lunco-core-session = { path = "../lunco-core-session" }
+# Backend runtime state (network role, authority guard). Only a real script
+# backend can observe or use these resources.
+lunco-core-session = { path = "../lunco-core-session", optional = true }
 # The Rhai tutorial bridge reads the shared resolved keymap. Optional so
 # Python-only and script-free builds do not acquire the input projection.
 lunco-input-core = { path = "../lunco-input-core", optional = true }
 lunco-physics = { path = "../lunco-physics", optional = true }
 # For the readiness policy contract declared by its owning crate.
 lunco-readiness = { workspace = true }
-# `fnv1a64` — content-address a scenario's source to a cache key for the
+# `fnv1a64` — content-address a Rhai scenario's source to a cache key for the
 # compiled-AST memo (Substrate E fast tier; local/ephemeral, never on wire).
-lunco-hash = { path = "../lunco-hash" }
+lunco-hash = { path = "../lunco-hash", optional = true }
 lunco-time = { path = "../lunco-time" }
-lunco-storage = { path = "../lunco-storage" }
+# Named Rhai tools and timelines use the shared storage boundary. Backend
+# builds that do not expose Rhai do not compile this file-I/O capability.
+lunco-storage = { path = "../lunco-storage", optional = true }
 pyo3 = { version = "0.23", optional = true }
 libloading = { version = "0.8", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
-anyhow = { workspace = true }
+anyhow = { workspace = true, optional = true }
 # Default scripting backend: pure-Rust, wasm-clean, sandboxed. Optional so the
 # crate (and any binary) can be built with no interpreter at all.
 rhai = { workspace = true, optional = true }
@@ -72,9 +77,10 @@ lunco-hooks-native = { path = "../lunco-hooks-native", optional = true }
 # The prelude, tools, examples, and policies are authored under
 # `assets/scripting/` and loaded through the shared asset/storage boundary. Drop
 # a `.rhai` in the shipped asset tree; the runtime manifest and authored policy
-# decide how it is used without rebuilding this crate.
-lunco-assets-datasets = { path = "../lunco-assets-datasets" }
-lunco-assets-core = { path = "../lunco-assets-core" }
+# decide how it is used without rebuilding this crate. Both packages are
+# Rhai-only and are omitted from Python-only/script-free builds.
+lunco-assets-datasets = { path = "../lunco-assets-datasets", optional = true }
+lunco-assets-core = { path = "../lunco-assets-core", optional = true }
 # Twin persistence: the `TwinAdded` event + `WorkspaceResource` (twin→root path)
 # let the tool-library loader scan `<twin>/tools/*.rhai` on open. Gated on `rhai`
 # (the tool subsystem is rhai). No cycle: lunco-workspace has no scripting dep.
@@ -84,11 +90,45 @@ lunco-workspace = { path = "../lunco-workspace", optional = true }
 # rhai on by default — the browser-capable backend. Turn it off
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
-rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-input-core", "dep:lunco-scripting-bridge-core", "lunco-scripting-bridge-core/workspace", "dep:lunco-scripting-bridge-spatial", "dep:lunco-scripting-bridge-time", "dep:lunco-scripting-bridge-usd", "dep:lunco-physics", "dep:lunco-spatial", "lunco-twin-journal/hooks"]
+rhai = [
+    "dep:rhai",
+    "dep:anyhow",
+    "dep:serde_json",
+    "dep:getrandom",
+    "dep:lunco-api",
+    "dep:lunco-assets-core",
+    "dep:lunco-assets-datasets",
+    "dep:lunco-behavior",
+    "dep:lunco-core-session",
+    "dep:lunco-hash",
+    "dep:lunco-storage",
+    "dep:lunco-tools",
+    "dep:lunco-tools-rhai",
+    "dep:lunco-workspace",
+    "dep:lunco-hooks",
+    "dep:lunco-hooks-rhai",
+    "dep:lunco-input-core",
+    "dep:lunco-scripting-bridge-core",
+    "lunco-scripting-bridge-core/workspace",
+    "dep:lunco-scripting-bridge-spatial",
+    "dep:lunco-scripting-bridge-time",
+    "dep:lunco-scripting-bridge-usd",
+    "dep:lunco-physics",
+    "dep:lunco-spatial",
+    "lunco-twin-journal/hooks",
+]
 native-plugins = ["dep:lunco-hooks-native", "rhai"]
 # Python enables the same language-neutral bridge package as Rhai; its Python
 # binding remains a separate optional backend.
-python = ["dep:pyo3", "dep:libloading", "dep:serde_json", "dep:lunco-api", "dep:lunco-scripting-bridge-core"]
+python = [
+    "dep:anyhow",
+    "dep:pyo3",
+    "dep:libloading",
+    "dep:serde_json",
+    "dep:lunco-api",
+    "dep:lunco-core-session",
+    "dep:lunco-scripting-bridge-core",
+]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # rhai → ahash/const-random pull getrandom 0.3, which on wasm needs BOTH the
