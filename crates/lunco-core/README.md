@@ -31,7 +31,6 @@ lunco-core/src
   ├── identity.rs        — deterministic network identity from provenance (M1)
   ├── session.rs         — networking authority substrate (SessionId, roles) — no wire dep
   ├── reconcile.rs       — predict-own reconciliation decision (input-replay)
-  └── mocks.rs           — test mocks
 ```
 
 ### ComponentGraph

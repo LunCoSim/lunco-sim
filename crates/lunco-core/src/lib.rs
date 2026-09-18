@@ -27,7 +27,6 @@ pub mod labels;
 pub mod log;
 /// Architectural marker components shared by engine subsystems.
 pub mod markers;
-pub mod mocks;
 pub mod physics_state;
 pub mod programs;
 /// M4 — pure predict-own reconciliation decision (input-replay, D2). The
@@ -67,7 +66,6 @@ pub use faults::{
 };
 pub use markers::NoSelectionBounds;
 pub use mobility::Mobility;
-pub use mocks::*;
 pub use model_state::ModelStateRevision;
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
