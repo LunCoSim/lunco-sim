@@ -1485,7 +1485,9 @@ actually call, with the fields the deserializer actually accepts. See the
  * **seek** — `epoch_jd` on the celestial clock, or `offset` in seconds.
 
  World state, not a view preference: it goes through the command/journal path, so
- every client sees the same sky and a replay reproduces it.
+ every client sees the same sky and a replay reproduces it. The command publishes
+ the presentation-only `CelestialTime`; it does not overwrite causal
+ `WorldTime`, advance physics, or re-pose the active surface frame.
 
 - *defined in:* `crates/lunco-time/src/domain.rs`
 

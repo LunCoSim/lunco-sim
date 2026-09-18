@@ -75,37 +75,50 @@ const TERRAIN_SCHEMA_PROPERTIES: &[&str] = &[
 
 #[derive(Resource, Debug, Clone, Default)]
 struct TerrainSchemaStatus {
+    /// Schema assets are registered asynchronously by the USD runtime. `false`
+    /// means validation has not reached the owning LunCo schema yet, not that
+    /// the terrain contract is invalid.
+    ready: bool,
     error: Option<String>,
+    published: bool,
 }
 
 impl TerrainSchemaStatus {
-    fn from_registry() -> Self {
+    fn validate_registered_schema(&mut self) {
         let registry = match lunco_usd_authoring::schema::SchemaRegistry::global().read() {
             Ok(registry) => registry,
             Err(_) => {
-                return Self {
-                    error: Some("the schema registry lock is unavailable".to_owned()),
-                };
+                self.ready = true;
+                self.error = Some("the schema registry lock is unavailable".to_owned());
+                return;
             }
         };
+        // Schema sources arrive through Bevy's asset server. Do not freeze an
+        // empty registry into an invalid state during plugin construction.
+        if !registry
+            .api_schemas()
+            .iter()
+            .any(|schema| schema == "LunCoTerrainAPI")
+        {
+            return;
+        }
+        self.ready = true;
         let missing = TERRAIN_SCHEMA_PROPERTIES
             .iter()
             .copied()
             .filter(|name| registry.property(name).is_none())
             .collect::<Vec<_>>();
-        Self {
-            error: (!missing.is_empty()).then(|| {
-                format!(
-                    "missing {} canonical properties: {}",
-                    missing.len(),
-                    missing.join(", ")
-                )
-            }),
-        }
+        self.error = (!missing.is_empty()).then(|| {
+            format!(
+                "missing {} canonical properties: {}",
+                missing.len(),
+                missing.join(", ")
+            )
+        });
     }
 
     fn is_valid(&self) -> bool {
-        self.error.is_none()
+        self.ready && self.error.is_none()
     }
 }
 
@@ -116,15 +129,22 @@ impl TerrainSchemaStatus {
 /// needs a DEM collider, so admitting a rover is a one-frame free-fall race.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UsdTerrainSet {
+    /// Wait for and validate the asynchronously loaded LunCo USD schema.
+    Schema,
     /// Examines every USD prim and starts any authored DEM terrain request.
     Bridge,
 }
 
 impl Plugin for UsdTerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(Update, UsdTerrainSet::Bridge);
-        app.insert_resource(TerrainSchemaStatus::from_registry())
-            .add_systems(Startup, publish_terrain_schema_status);
+        app.configure_sets(Update, UsdTerrainSet::Schema.before(UsdTerrainSet::Bridge));
+        app.init_resource::<TerrainSchemaStatus>();
+        app.add_systems(
+            Update,
+            (validate_terrain_schema, publish_terrain_schema_status)
+                .chain()
+                .in_set(UsdTerrainSet::Schema),
+        );
         app.add_systems(
             Update,
             (
@@ -152,13 +172,21 @@ impl Plugin for UsdTerrainPlugin {
     }
 }
 
+fn validate_terrain_schema(mut status: ResMut<TerrainSchemaStatus>) {
+    if status.ready {
+        return;
+    }
+    status.validate_registered_schema();
+}
+
 /// Publish schema drift through the shared telemetry event lane. The workbench
 /// projects Error/Critical telemetry to its status bar, while headless/API users
 /// still receive the same event through the normal telemetry stream.
-fn publish_terrain_schema_status(status: Res<TerrainSchemaStatus>, mut commands: Commands) {
-    if status.is_valid() {
+fn publish_terrain_schema_status(mut status: ResMut<TerrainSchemaStatus>, mut commands: Commands) {
+    if !status.ready || status.published {
         return;
     }
+    status.published = true;
     let Some(error) = status.error.as_deref() else {
         return;
     };

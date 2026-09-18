@@ -12,7 +12,7 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, PrimaryEguiContext};
+use bevy_egui::{PrimaryEguiContext, egui};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress, Tags,
@@ -500,6 +500,11 @@ impl Plugin for RuntimeUiPlugin {
         .init_resource::<RuntimeUiRecordingContract>()
         .init_resource::<RuntimeUiCaptureState>()
         .init_resource::<RuntimeUiGates>()
+        // Manifest discovery is asynchronous after the move to the shared
+        // TextAsset catalog, but the update systems still own the state from
+        // their first scheduled frame. Initialize the lifecycle resource at
+        // plugin installation rather than relying on a removed Startup loader.
+        .init_resource::<RuntimeUiManifestState>()
         .add_systems(
             Update,
             (
@@ -1358,14 +1363,14 @@ fn parse_runtime_ui_manifest(
 ) -> Result<Option<RuntimeUiManifest>, String> {
     let value = serde_json::from_str::<serde_json::Value>(source)
         .map_err(|error| format!("{path}: invalid JSON: {error}"))?;
-    if value.get("kind").and_then(serde_json::Value::as_str)
-        != Some(RUNTIME_UI_MANIFEST_KIND)
-    {
+    if value.get("kind").and_then(serde_json::Value::as_str) != Some(RUNTIME_UI_MANIFEST_KIND) {
         return Ok(None);
     }
     let manifest = serde_json::from_value::<RuntimeUiManifest>(value)
         .map_err(|error| format!("{path}: invalid runtime UI manifest: {error}"))?;
-    manifest.validate().map_err(|error| format!("{path}: {error}"))?;
+    manifest
+        .validate()
+        .map_err(|error| format!("{path}: {error}"))?;
     Ok(Some(manifest))
 }
 

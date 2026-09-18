@@ -268,9 +268,16 @@ pub(crate) fn wire_tile_shadow_cache(
                             to_sun_world,
                             sun_revision,
                         );
-                        cache_quality_valid
-                            && cfg.enabled
-                            && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg)
+                        // Freshness is a scheduling input, not a presentation
+                        // input. `c` is the last committed image; dropping it
+                        // while its replacement is being baked re-enables the
+                        // per-pixel march for every streamed tile and toggles
+                        // terrain shadow-caster ownership. At accelerated
+                        // presentation time that becomes a render-quality
+                        // oscillation. Keep the committed image active for the
+                        // whole above-horizon interval and let the environment
+                        // cache scheduler replace it atomically when ready.
+                        cache_quality_valid && cfg.enabled && sun_local.y > 0.0
                     });
                 (Some(c.image.clone()), if on { 1.0 } else { 0.0 })
             }

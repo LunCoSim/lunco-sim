@@ -9218,6 +9218,7 @@ dependencies = [
  "lunco-storage",
  "lunco-terrain-bake",
  "lunco-terrain-core",
+ "lunco-viewport-core",
  "serde",
  "serde_json",
  "wasm-bindgen",

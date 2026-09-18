@@ -33,6 +33,23 @@ WorldRoot
     └── body-fixed grid
         └── surface grid
             └── terrain, rovers, surface camera, surface trajectories
+
+Separately, a body may have a detached presentation branch below the inertial
+solar hierarchy:
+
+```text
+Solar inertial grid
+└── body presentation grid
+    └── globe presentation surface
+        └── streamed globe LOD tiles
+```
+
+The two grids are deliberately not interchangeable. The physical surface grid
+is the authoritative parent for authored terrain, vehicles, physics, and local
+cameras. The globe presentation surface is derived render content and may
+follow an accelerated celestial presentation clock. `GlobeLod` stores both
+identities explicitly; using the presentation grid as a site parent would move
+the physical scene whenever presentation time advances.
 ```
 
 The body-fixed grid is the object that rotates. The body entity itself stays
@@ -98,8 +115,9 @@ The active surface physics partition is explicitly bound through
 `ActivePhysicsFrame`; the persistent shell does not select it implicitly. Avian receives f64 poses through
 `BigSpacePhysicsBridgePlugin`; celestial parent motion does not become rover
 motion. Terrain colliders and rover roots must share the active body-fixed
-surface grid. A streamed tile is attached once to its owning grid, not repaired
-by a per-frame offset.
+surface grid. A streamed globe tile is attached once to the globe presentation
+surface, while authored site terrain is attached once to the physical surface
+grid. Neither path is repaired by a per-frame offset.
 
 ## Extension rule
 

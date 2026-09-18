@@ -27,8 +27,8 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_time::WorldTime;
 
 use lunco_celestial::geo::{
-    GeodeticAnchor, LocalTangentFrame, SiteAnchor, body_rotation, equatorial_frame,
-    geodetic_to_body_fixed,
+    body_rotation, equatorial_frame, geodetic_to_body_fixed, GeodeticAnchor, LocalTangentFrame,
+    SiteAnchor,
 };
 use lunco_celestial::kepler::KeplerOrbit;
 use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
@@ -796,7 +796,7 @@ pub fn sync_terrain_body_curvature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_celestial::geo::{Geodetic, solar_tangent_frame};
+    use lunco_celestial::geo::{solar_tangent_frame, Geodetic};
 
     /// The align quaternion maps the site ENU axes onto the scene axes.
     #[test]
@@ -891,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn site_scene_and_physics_share_the_authored_surface_grid() {
+    fn site_scene_uses_physical_grid_separate_from_globe_presentation() {
         let mut app = App::new();
         app.insert_resource(lunco_spatial::WorldGridConfig::default());
         app.add_systems(Update, attach_site_scene_to_surface_grid);
@@ -922,6 +922,15 @@ mod tests {
                 ChildOf(body_fixed_grid),
             ))
             .id();
+        let globe_grid = app
+            .world_mut()
+            .spawn((
+                lunco_spatial::WorldGridConfig::default().grid(),
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(world_grid),
+            ))
+            .id();
         let body = app
             .world_mut()
             .spawn((
@@ -933,6 +942,7 @@ mod tests {
                 crate::globe_lod::GlobeLod {
                     radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                     surface_grid,
+                    globe_grid,
                     look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                     res: 8,
                     max_lod: 1,
@@ -972,6 +982,10 @@ mod tests {
             site
         );
         assert_eq!(world.get::<ChildOf>(site).unwrap().parent(), surface_grid);
+        let lod = world.get::<crate::globe_lod::GlobeLod>(body).unwrap();
+        assert_eq!(lod.surface_grid, surface_grid);
+        assert_eq!(lod.globe_grid, globe_grid);
+        assert_ne!(lod.surface_grid, lod.globe_grid);
         assert!(world.get::<Grid>(site).is_some());
         assert_eq!(world.get::<ChildOf>(rigid_body).unwrap().parent(), site);
         assert_eq!(
@@ -1068,6 +1082,7 @@ mod tests {
             crate::globe_lod::GlobeLod {
                 radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 surface_grid,
+                globe_grid: surface_grid,
                 look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                 res: 8,
                 max_lod: 1,
@@ -1127,6 +1142,7 @@ mod tests {
             crate::globe_lod::GlobeLod {
                 radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 surface_grid,
+                globe_grid: surface_grid,
                 look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                 res: 8,
                 max_lod: 1,
@@ -1203,6 +1219,7 @@ mod tests {
                 crate::globe_lod::GlobeLod {
                     radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                     surface_grid,
+                    globe_grid: surface_grid,
                     look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                     res: 8,
                     max_lod: 1,
@@ -1251,11 +1268,10 @@ mod tests {
             app.world().get::<ChildOf>(avatar).unwrap().parent(),
             camera_grid
         );
-        assert!(
-            app.world()
-                .get::<lunco_environment::GravityBody>(avatar)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .get::<lunco_environment::GravityBody>(avatar)
+            .is_none());
         assert_eq!(
             app.world()
                 .resource::<lunco_spatial::ActivePhysicsFrame>()
@@ -1263,10 +1279,9 @@ mod tests {
             site
         );
         assert!(app.world().get::<CelestialBody>(body).is_some());
-        assert!(
-            app.world()
-                .get::<lunco_spatial::WorldGrid>(world_grid)
-                .is_some()
-        );
+        assert!(app
+            .world()
+            .get::<lunco_spatial::WorldGrid>(world_grid)
+            .is_some());
     }
 }

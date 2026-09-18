@@ -35,16 +35,22 @@
 //!         ├── EMB Grid (inertial — a barycenter has no rotation model)
 //!         │     ├── Earth Grid (ROTATING: ephemeris + IAU spin)
 //!         │     │     ├── Earth Body (mesh+collider, identity transform)
-//!         │     │     └── Earth Surface Grid (surface sub-frame, body-fixed)
-//!         │     │           └── terrain tiles + rovers + surface ops
+//!         │     │     └── Earth Surface Grid (physical surface sub-frame)
+//!         │     │           └── terrain + rovers + surface ops
 //!         │     ├── Earth Inertial Anchor (position only, NO spin)
 //!         │     │     └── Observer Camera  ← star-fixed
 //!         │     └── Moon Grid (ROTATING: ephemeris + IAU spin)
 //!         │           ├── Moon Body (mesh+collider, identity transform)
-//!         │           └── Moon Surface Grid (surface sub-frame, body-fixed)
-//!         │                 └── terrain tiles + rovers + surface ops
+//!         │           └── Moon Surface Grid (physical surface sub-frame)
+//!         │                 └── terrain + rovers + surface ops
 //!         └── Other planets (simple entities)
 //! ```
+//!
+//! Each body also has a detached presentation branch below the solar grid. Its
+//! globe presentation surface owns streamed planetary tiles only. `GlobeLod`
+//! keeps that grid separate from the physical surface grid so accelerated
+//! presentation time can move globe imagery without moving a site, terrain,
+//! rover, or surface camera.
 //!
 //! ## Why an inertial anchor
 //!
@@ -182,6 +188,27 @@ pub struct EarthSurfaceRoot;
 /// Marker for Moon's surface sub-grid. See [`EarthSurfaceRoot`].
 #[derive(Component)]
 pub struct MoonSurfaceRoot;
+
+/// A render-only celestial frame driven by [`CelestialTime`].
+///
+/// Physical bodies and surface scenes stay under the [`ReferenceFrame`] tree
+/// driven by [`WorldTime`]. Globe imagery is presentation content, however:
+/// when an operator detaches the celestial clock for a time-lapse, the visible
+/// Earth/Moon must move without teleporting the physical body, terrain, or
+/// Avian frame. This marker deliberately is *not* a `ReferenceFrame`, so the
+/// causal ephemeris and body-rotation systems cannot accidentally write it.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct CelestialPresentationGrid {
+    /// NAIF id whose position is relative to this grid's parent.
+    pub body: i32,
+    /// Whether this frame carries the body's IAU rotation.
+    ///
+    /// A body-fixed globe and its co-located inertial camera anchor have the
+    /// same translated origin but different orientation. Keeping that fact on
+    /// the frame contract prevents orbit presentation from accidentally
+    /// inheriting surface rotation.
+    pub body_fixed: bool,
+}
 
 /// Sets up the complete big_space entity hierarchy.
 ///
@@ -367,11 +394,19 @@ pub fn setup_big_space_hierarchy(
         ))
         .id();
 
-    // ── Sun (simple entity on Solar Grid, no grid of its own) ─────────────
+    // ── Sun (picking identity on Solar Grid, no grid of its own) ──────────
     //
     // Deliberately NOT tagged `SolarSystemRoot`: that marker names the one Solar
     // Grid entity, and the Sun is reached as a body (`CelestialBody`/ephemeris 10)
     // like any other.
+    // The Sun is not a local surface. A real-radius sphere is therefore the
+    // wrong render primitive here: its astronomical AABB intersects every
+    // local shadow cascade, and a shadow-map implementation can legitimately
+    // consider it before the render-only exclusion marker is extracted. The
+    // directional light below is the Sun's illumination; sky/point
+    // presentation owns any visible solar disc. Keep this entity as the
+    // catalog/picking/gravity identity, but do not submit astronomical-scale
+    // geometry to the local mesh renderer.
     let _sun_body = commands
         .spawn((
             sun.body_component(),
@@ -380,36 +415,9 @@ pub fn setup_big_space_hierarchy(
             GlobalTransform::default(),
             Visibility::Visible,
             InheritedVisibility::default(),
-            // The sun's own visual sphere must NEVER cast shadows: it sits exactly
-            // along the `DirectionalLight` direction, so as a caster it pancakes
-            // into every cascade map and "eclipses" the whole scene — with the
-            // celestial hierarchy enabled, every fragment within
-            // `shadow_max_distance` rendered fully shadowed (the pitch-black
-            // site-anchored surface), while terrain beyond cascade range lit fine.
-            bevy::light::NotShadowCaster,
-            Mesh3d(meshes.add(Sphere::new(sun.radius_m as f32).mesh().ico(4).unwrap())),
-            // `no_shadow_cast` mirrors the `NotShadowCaster` above and is NOT optional:
-            // the binder's `Changed<PbrLook>` pass reconciles the marker from the look, so
-            // a look that said `false` would STRIP the marker on the first frame and bring
-            // back the sun-eclipses-everything bug the comment above describes.
-            PbrLook {
-                base_color: LinearRgba::BLACK,
-                emissive: LinearRgba::from(Color::srgb(1.0, 0.9, 0.4)) * 5.0,
-                // `StandardMaterial`'s default, which this spawn used to inherit via
-                // `..default()`. `PbrLook`'s own default is 1.0 (regolith), so it must be
-                // stated explicitly to keep the sun disc's shading identical.
-                perceptual_roughness: 0.5,
-                no_shadow_cast: true,
-                ..default()
-            },
             Name::new("Sun Body"),
-            // PICKING-ONLY GEOMETRY. The empty collision filter is what keeps this
-            // collider out of Avian's physical contact graph; the absence of a
-            // `RigidBody` alone is not sufficient because collider-only geometry is
-            // still broad-phase indexed.
-            // It remains in the spatial-query BVH for body picking. Vehicle/sensor rays
-            // mask `CELESTIAL_COLLISION_LAYER` because a planet-sized sphere can contain
-            // the whole local scene and otherwise returns a distance-0 hit.
+            // PICKING-ONLY COLLISION. The empty filter keeps the identity out of
+            // Avian's contact graph while preserving body queries.
             Collider::sphere(sun.radius_m),
             CELESTIAL_PICKING_LAYERS,
             ChildOf(solar_grid),
@@ -556,8 +564,80 @@ pub fn setup_big_space_hierarchy(
         ))
         .id();
 
+    // Globe imagery follows the detached celestial presentation clock. Keep it
+    // on a separate high-precision branch: the physical body, picker collider,
+    // and surface scene remain in the causal WorldTime branch above. The
+    // presentation branch must preserve the complete ephemeris ancestry: an
+    // Earth child below the causal EMB would only follow the Earth-vs-EMB
+    // barycentric wobble while its parent stayed at the causal epoch.
+    let emb_presentation_grid = commands
+        .spawn((
+            CelestialDerived,
+            CelestialPresentationGrid {
+                body: lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER,
+                body_fixed: false,
+            },
+            make_grid(),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("EMB Globe Presentation Grid"),
+            ChildOf(solar_grid),
+        ))
+        .id();
+    let _earth_presentation_inertial_grid = commands
+        .spawn((
+            CelestialDerived,
+            CelestialPresentationGrid {
+                body: lunco_celestial::ephemeris_id::EARTH,
+                body_fixed: false,
+            },
+            make_grid(),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Earth Globe Presentation Inertial Anchor"),
+            ChildOf(emb_presentation_grid),
+        ))
+        .id();
+    let earth_presentation_grid = commands
+        .spawn((
+            CelestialDerived,
+            CelestialPresentationGrid {
+                body: lunco_celestial::ephemeris_id::EARTH,
+                body_fixed: true,
+            },
+            make_grid(),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Earth Globe Presentation Grid"),
+            ChildOf(emb_presentation_grid),
+        ))
+        .id();
+    let earth_globe_surface_grid = commands
+        .spawn((
+            CelestialDerived,
+            make_grid(),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Earth Globe Presentation Surface"),
+            ChildOf(earth_presentation_grid),
+        ))
+        .id();
+
     // Earth terrain: camera-driven cube-sphere LOD (replaces the old fixed 24-tile
-    // shell). `update_globe_lod` streams tiles parented to the Earth Surface Grid.
+    // shell). `update_globe_lod` streams tiles parented to the detached Earth
+    // Globe Presentation Surface, not the physical Earth Surface Grid.
     // Earth reads as EARTH with no imagery at all: ocean blue under the
     // graticule. Imagery, if a scene has any, arrives the ordinary way — a
     // `UsdShade` Material bound to the body prim, adopted by
@@ -566,6 +646,7 @@ pub fn setup_big_space_hierarchy(
         crate::globe_lod::GlobeLod {
             radius_m: earth.radius_m,
             surface_grid: earth_surface_grid,
+            globe_grid: earth_globe_surface_grid,
             look: earth_look,
             res: 32,
             max_lod: 8,
@@ -652,11 +733,60 @@ pub fn setup_big_space_hierarchy(
         ))
         .id();
 
+    let moon_presentation_grid = commands
+        .spawn((
+            CelestialDerived,
+            CelestialPresentationGrid {
+                body: lunco_celestial::ephemeris_id::MOON,
+                body_fixed: true,
+            },
+            make_grid(),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Moon Globe Presentation Grid"),
+            ChildOf(emb_presentation_grid),
+        ))
+        .id();
+    let _moon_presentation_inertial_grid = commands
+        .spawn((
+            CelestialDerived,
+            CelestialPresentationGrid {
+                body: lunco_celestial::ephemeris_id::MOON,
+                body_fixed: false,
+            },
+            make_grid(),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Moon Globe Presentation Inertial Anchor"),
+            ChildOf(emb_presentation_grid),
+        ))
+        .id();
+    let moon_globe_surface_grid = commands
+        .spawn((
+            CelestialDerived,
+            make_grid(),
+            CellCoord::default(),
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            Name::new("Moon Globe Presentation Surface"),
+            ChildOf(moon_presentation_grid),
+        ))
+        .id();
+
     // Moon terrain: camera-driven cube-sphere LOD (replaces the fixed 24-tile shell).
     commands.entity(moon_body).try_insert((
         crate::globe_lod::GlobeLod {
             radius_m: moon.radius_m,
             surface_grid: moon_surface_grid,
+            globe_grid: moon_globe_surface_grid,
             look: moon_look,
             res: 32,
             max_lod: 8,
