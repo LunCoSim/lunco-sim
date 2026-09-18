@@ -23,7 +23,7 @@ use avian3d::prelude::{
     NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position, RevoluteJoint,
     RigidBody, Rotation, Sleeping, WriteRigidBodyForces,
 };
-use bevy::math::{DQuat, DVec3};
+use bevy::math::DVec3;
 use bevy::prelude::*;
 
 use crate::ports::{AvianGroup, AvianPort};

@@ -65,6 +65,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-networking-core = { path = "../lunco-networking-core", optional = true }
 lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-control-core = { path = "../lunco-control-core" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
 # Native builds still get transport-http via lunco-luncosim's own default features.

@@ -348,7 +348,7 @@ impl Plugin for CoSimPlugin {
             FixedUpdate,
             (
                 systems::propagate::propagate_connections
-                    .in_set(lunco_cosim_core::CosimSet::Propagate)
+                    .in_set(lunco_cosim_core::schedule::CosimSet::Propagate)
                     .run_if(lunco_time::simulation_is_running),
                 // The avian boundary consumers: apply solved joint torques and
                 // drain net force/torque ports plus USD-authored point-force

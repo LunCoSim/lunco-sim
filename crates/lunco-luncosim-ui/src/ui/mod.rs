@@ -293,7 +293,7 @@ impl Plugin for LunCoSimUiPlugin {
                 app.add_observer(models_palette::clear_program_catalog_on_twin_closed);
                 // In-app rhai REPL — runs snippets against the live app through the
                 // API bridge, on web + native. Gated on bridge availability.
-                #[cfg(any(feature = "api-transport", feature = "transport-http"))]
+                #[cfg(any(target_arch = "wasm32", feature = "transport-http"))]
                 app.register_panel(rhai_repl_panel::RhaiReplPanel::default());
                 app.init_resource::<models_palette::AttachState>();
                 // Disarm on scene teardown — see `AttachState`.

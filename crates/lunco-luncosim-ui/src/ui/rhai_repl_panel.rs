@@ -9,7 +9,7 @@
 //!
 //! Gated on the bridge's availability (`transport-http` on native, always on
 //! wasm) — see the `transport-http` feature in `Cargo.toml`.
-#![cfg(any(feature = "api-transport", feature = "transport-http"))]
+#![cfg(any(target_arch = "wasm32", feature = "transport-http"))]
 
 use std::sync::{Arc, Mutex};
 
