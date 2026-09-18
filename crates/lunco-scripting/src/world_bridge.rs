@@ -926,9 +926,7 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 /// relative to the process working directory — a sandbox escape in a system that
 /// otherwise routes every asset through a scoped source. Installing ours closes it.
 ///
-fn build_world_engine_base(
-    sources: lunco_assets_core::script_source::ScriptSources,
-) -> Engine {
+fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
 
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
@@ -2136,6 +2134,29 @@ fn build_world_engine_base(
     // ("" if none), for source-set and asset-provider queries.
     engine.register_fn("twin_name", || -> String { bridge_core::twin_name() });
 
+    // asset_source_relative_uri(document, relative) -> an addressable URI.
+    // This is the Rhai-facing form of the generic asset identity operation: it
+    // preserves the document's registered source (including a Twin authority)
+    // while rejecting unsafe relative input. It does not read the filesystem;
+    // authored tools and scene gates use it to exercise the same URI algebra as
+    // the runtime loader.
+    engine.register_fn(
+        "asset_source_relative_uri",
+        |document: ImmutableString,
+         relative: ImmutableString|
+         -> Result<ImmutableString, Box<rhai::EvalAltResult>> {
+            let path = bevy::asset::AssetPath::parse(document.as_str()).into_owned();
+            lunco_assets_core::asset_path::source_relative_uri(&path, relative.as_str())
+                .map(Into::into)
+                .ok_or_else(|| {
+                    format!(
+                        "asset_source_relative_uri rejected relative asset `{relative}` for `{document}`"
+                    )
+                    .into()
+                })
+        },
+    );
+
     // is_unattended() -> bool — is there NOBODY at the controls? A scenario
     // branches on it to decide whether to drive ITSELF:
     // `if !is_unattended() { return; }` at the top of an authored driver leaves the
@@ -2591,10 +2612,7 @@ impl RhaiScenarioRuntime {
 
     /// Install the externally loaded prelude as the runtime's global module and
     /// merge source functions into future scenario ASTs.
-    pub(crate) fn install_prelude(
-        &mut self,
-        files: Vec<(String, String)>,
-    ) -> Result<(), String> {
+    pub(crate) fn install_prelude(&mut self, files: Vec<(String, String)>) -> Result<(), String> {
         let mut rebuilt = build_world_engine_base(self.sources.clone());
         rebuilt.on_print(|s| info!("[rhai] {s}"));
         let prelude_ast = install_prelude_on_engine(&mut rebuilt, files.clone())?;
@@ -2617,9 +2635,7 @@ pub(crate) struct RhaiRuntimeStatus {
 }
 
 /// Gate scenario execution on the authored prelude being installed.
-pub(crate) fn rhai_runtime_ready(
-    status: Option<Res<RhaiRuntimeStatus>>,
-) -> bool {
+pub(crate) fn rhai_runtime_ready(status: Option<Res<RhaiRuntimeStatus>>) -> bool {
     status.is_some_and(|status| status.ready)
 }
 
@@ -2638,8 +2654,14 @@ pub(crate) fn prepare_builtin_rhai_assets(
     driver: Option<ResMut<crate::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
     mut status: ResMut<RhaiRuntimeStatus>,
 ) {
-    let (Some(manifest), Some(mut builtins), Some(assets), Some(asset_server), Some(sources), Some(mut driver)) =
-        (manifest, builtins, assets, asset_server, sources, driver)
+    let (
+        Some(manifest),
+        Some(mut builtins),
+        Some(assets),
+        Some(asset_server),
+        Some(sources),
+        Some(mut driver),
+    ) = (manifest, builtins, assets, asset_server, sources, driver)
     else {
         return;
     };
@@ -2678,7 +2700,9 @@ pub(crate) fn prepare_builtin_rhai_assets(
         if builtins
             .processed
             .get(&rel)
-            .is_some_and(|(text, generation)| text == &source.text && *generation == hook_generation)
+            .is_some_and(|(text, generation)| {
+                text == &source.text && *generation == hook_generation
+            })
         {
             continue;
         }

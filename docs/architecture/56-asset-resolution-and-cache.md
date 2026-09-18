@@ -155,6 +155,12 @@ re-derives one:
 | Id → disk path | `id_to_disk_path` |
 | Scenario staging dir | `scenarios_dir` |
 
+The same document-relative operation is available to authored Rhai as
+`asset_source_relative_uri(document, relative)`. It performs URI algebra only
+and preserves the document's registered source authority; the production
+`scripting_asset_contracts` scene is the acceptance test for that public
+surface, while the runtime shader loader calls the Rust owner directly.
+
 `LUNCO_ASSET_ROOT` is an explicit native launch/test boundary. It names the
 directory containing the selected `assets/` library and fails at startup when
 the directory does not exist; it never silently falls through to the packaged

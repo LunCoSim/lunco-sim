@@ -427,6 +427,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "READ. Stable twin:// authority of the active Twin, or an empty string.",
     ),
     (
+        "asset_source_relative_uri",
+        "asset_source_relative_uri(document, relative)",
+        "string | error",
+        "READ. Resolve a safe document-relative asset while preserving the document's registered source authority (for example, twin://name). This is URI algebra only; it does not read files.",
+    ),
+    (
         "is_unattended",
         "is_unattended()",
         "bool",
@@ -507,16 +513,13 @@ fn prelude_surface(world: &World) -> Vec<serde_json::Value> {
     // arbitrary files from the process working directory.
     engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
     crate::rhai_limits::apply(&mut engine);
-    let Some(sources) = world
-        .get_resource::<lunco_assets_core::script_source::ScriptSources>()
+    let Some(sources) = world.get_resource::<lunco_assets_core::script_source::ScriptSources>()
     else {
         return Vec::new();
     };
     crate::world_bridge::prelude_files_from_sources(sources)
         .ok()
-        .and_then(|files| {
-            crate::world_bridge::compile_prelude_set_for_runtime(&engine, files).ok()
-        })
+        .and_then(|files| crate::world_bridge::compile_prelude_set_for_runtime(&engine, files).ok())
         .map(|ast| {
             let mut functions: Vec<serde_json::Value> = ast
                 .iter_functions()
