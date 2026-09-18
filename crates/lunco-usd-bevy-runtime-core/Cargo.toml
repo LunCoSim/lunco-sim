@@ -11,7 +11,6 @@ big_space = { workspace = true }
 openusd = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
-lunco-control-core = { path = "../lunco-control-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
@@ -21,11 +20,11 @@ lunco-hooks = { path = "../lunco-hooks" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-time = { path = "../lunco-time" }
-lunco-port-core = { path = "../lunco-port-core" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-authored-runtime = { path = "../lunco-usd-bevy-authored-runtime" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-bevy-runtime-persistence = { path = "../lunco-usd-bevy-runtime-persistence" }

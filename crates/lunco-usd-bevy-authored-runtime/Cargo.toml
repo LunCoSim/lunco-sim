@@ -1,0 +1,19 @@
+[package]
+name = "lunco-usd-bevy-authored-runtime"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Reusable Bevy adapter for authored USD control and program behavior"
+
+[dependencies]
+bevy = { workspace = true }
+openusd = { workspace = true }
+lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-control-core = { path = "../lunco-control-core" }
+lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+
+[lints]
+workspace = true

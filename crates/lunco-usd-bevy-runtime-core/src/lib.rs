@@ -16,9 +16,7 @@
 
 use bevy::prelude::{App, IntoScheduleConfigs, Plugin};
 
-mod control_runtime;
 mod live_consume;
-mod program_runtime;
 pub mod scene;
 mod scene_runtime;
 mod schema_assets;
@@ -113,11 +111,7 @@ impl Plugin for UsdSceneRuntimePlugin {
                     >,
                 ),
         );
-        app.add_systems(
-            bevy::prelude::Update,
-            control_runtime::project_authored_runtime_components
-                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),
-        );
+        app.add_plugins(lunco_usd_bevy_authored_runtime::UsdAuthoredRuntimePlugin);
         scene::register_all_commands(app);
         scene_runtime::register_all_commands(app);
     }

@@ -6,10 +6,10 @@
 //! policy.
 
 use bevy::asset::AssetId;
-use bevy::prelude::{warn, Entity, World};
+use bevy::prelude::{Entity, World, warn};
 use openusd::sdf::Path as SdfPath;
 
-use lunco_usd_bevy_core::{canonical::CanonicalStages, program, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages, program};
 use lunco_usd_bevy_scene::UsdPrimPath;
 
 /// Re-read the generic program children of one existing owner.

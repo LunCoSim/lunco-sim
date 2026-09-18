@@ -127,6 +127,7 @@ members = [
     "crates/lunco-networking-core",
     "crates/lunco-networking-sync",
     "crates/lunco-usd-bevy-runtime-core",
+    "crates/lunco-usd-bevy-authored-runtime",
     "crates/lunco-usd-bevy-runtime-persistence",
     "crates/lunco-command-macro",
     "crates/lunco-terrain-globe",

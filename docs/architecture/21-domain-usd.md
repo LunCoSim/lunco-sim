@@ -7,7 +7,7 @@
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-document/`](../../crates/lunco-usd-document), [`../../crates/lunco-usd-data/`](../../crates/lunco-usd-data), [`../../crates/lunco-usd-authoring/`](../../crates/lunco-usd-authoring), [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core), [`../../crates/lunco-usd-commands/`](../../crates/lunco-usd-commands/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian-joints`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
-> `lunco-usd-bevy-runtime-core`, `lunco-usd-bevy-runtime-persistence`, `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
+> `lunco-usd-bevy-runtime-core`, `lunco-usd-bevy-authored-runtime`, `lunco-usd-bevy-runtime-persistence`, `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
 > `lunco-usd-sim-authoring`, `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
 > `lunco-usd-sim-domain`, `lunco-usd-sim-domain-api`.
@@ -26,8 +26,9 @@ UI-free public query providers and their `UsdQueriesPlugin` registration for
 document inspection, edit sessions, document synchronization, and explicit
 assembly-target resolution;
 `lunco-usd-bevy-runtime-core` owns scene admission, Twin-backed stage loading,
-live document projection, and generic authored runtime surfaces (control
-bindings and executable programs); `lunco-usd-bevy-runtime-persistence` owns
+live document projection, and generic projection boundaries;
+`lunco-usd-bevy-authored-runtime` owns the reusable authored control/program
+adapter; `lunco-usd-bevy-runtime-persistence` owns
 the opt-in Twin-scoped runtime-overlay load/save observers and restore operation;
 `lunco-usd-bevy-scene-ports` owns the Bevy scene-property port backend;
 `lunco-usd-bevy-runtime`

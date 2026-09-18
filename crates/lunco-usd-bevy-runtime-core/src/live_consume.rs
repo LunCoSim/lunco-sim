@@ -959,7 +959,7 @@ pub(crate) fn reconcile_structural_live(
                 })
         };
         if let Some(owner) = program_owner {
-            crate::program_runtime::refresh_program_owner(world, id, owner);
+            lunco_usd_bevy_authored_runtime::refresh_program_owner(world, id, owner);
         }
         let exists = {
             let Some(stages) = world.get_non_send::<CanonicalStages>() else {
