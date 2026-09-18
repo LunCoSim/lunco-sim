@@ -6,18 +6,18 @@
 use std::path::Path;
 
 use crate::scene::{
-    clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
     ClearScene, LoadScene, SceneEntities, SceneLoadInFlight, SceneStageAssetOutcome,
+    clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
 };
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands};
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
-use lunco_usd_bevy_core::{source::UsdSourceText, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
-use lunco_usd_core::commands::{is_usd_path, EmptyViewportReason};
+use lunco_usd_bevy_stage::{UsdStageAsset, source::UsdSourceText};
+use lunco_usd_core::commands::{EmptyViewportReason, is_usd_path};
 use lunco_usd_document::document::UsdDocument;
-use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
+use lunco_workspace::open::{PendingTwinOpens, TwinOpenMode, spawn_twin_scan};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 
 /// Telemetry mnemonic for a default Twin scene whose authoritative source did
@@ -68,7 +68,7 @@ pub(crate) fn clear_scene_on_twin_closed(
 /// Skips child Twins — they raise their own `TwinAdded` when the
 /// workspace eagerly opens them, each resolving its own starting scene.
 pub(crate) fn open_usd_docs_on_twin_asset_mounted(
-    trigger: On<lunco_assets_core::TwinAssetMounted>,
+    trigger: On<lunco_assets_runtime::TwinAssetMounted>,
     workspace: Res<WorkspaceResource>,
     // Optional because a document-only host may not install the asset pipeline.
     // The authoritative doc-backed mount below is the only scene-loading path;

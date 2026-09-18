@@ -1,7 +1,7 @@
 use avian3d::prelude::JointDamping;
 use bevy::math::{DQuat, DVec3};
 use lunco_usd_avian_contracts::{JointDrive, PendingUsdJoint};
-use lunco_usd_bevy_core::world_transform;
+use lunco_usd_bevy_stage::world_transform;
 use openusd::schemas::physics::{DriveType, tokens as ptok};
 use openusd::sdf::Path as SdfPath;
 
@@ -18,7 +18,7 @@ use crate::{read_authored_quat, read_authored_real, read_authored_vec3};
 /// answers the same way for the prepared initial plan and the live edited stage,
 /// independently of where the prim happens to sit in the ECS.
 pub fn has_rigid_body_ancestor(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> bool {
     let mut cur = sdf_path.parent();
@@ -42,7 +42,7 @@ pub fn has_rigid_body_ancestor(
 ///
 /// A collider that DOES have a rigid-body ancestor is not a body — it is folded
 /// into that ancestor's compound shape — so it is deliberately not one here.
-fn is_avian_body(reader: &dyn lunco_usd_bevy_core::read::UsdReadObject, path: &SdfPath) -> bool {
+fn is_avian_body(reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject, path: &SdfPath) -> bool {
     reader.has_api_schema(path, ptok::API_RIGID_BODY)
         || reader.has_api_schema(path, "LunCoTerrainAPI")
         || (reader.has_api_schema(path, ptok::API_COLLISION)
@@ -71,7 +71,7 @@ fn is_avian_body(reader: &dyn lunco_usd_bevy_core::read::UsdReadObject, path: &S
 /// and that derivation must run against the frame of the body the joint is really
 /// built on. Resolving later would leave the anchor expressed in the wrong frame.
 pub fn nearest_body_path(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<SdfPath> {
     let mut cur = Some(path.clone());
@@ -90,7 +90,7 @@ pub fn nearest_body_path(
 /// Resolve a USD joint relationship target to the rigid-body prim that owns
 /// the endpoint.
 pub fn resolve_joint_body_path(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     target: &str,
 ) -> Option<String> {
     let path = SdfPath::new(target).ok()?;
@@ -108,7 +108,7 @@ pub fn resolve_joint_body_path(
 /// local anchor). Relative, hence invariant under the reference/path-translation that
 /// drops a shared component onto each rover root.
 fn derive_joint_anchor(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     body0: &str,
     body1: &str,
 ) -> Option<(DVec3, DVec3)> {
@@ -129,7 +129,7 @@ fn derive_joint_anchor(
 /// is resolved from the authored body relationship and applied wheel schema,
 /// never from a prim name or a joint-name convention.
 pub fn joint_targets_simulated_wheel(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> bool {
     let targets = reader.rel_targets(path, "physics:body1");
@@ -162,7 +162,7 @@ struct JointBaseRead {
 /// (owned by `lunco-usd-sim`). Revolute limits are converted degrees→radians
 /// (the `PendingUsdJoint` contract); prismatic/distance stay in scene units.
 pub fn read_joint_spec(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<PendingUsdJoint> {
     read_joint_spec_with_policy(reader, path, true)
@@ -175,14 +175,14 @@ pub fn read_joint_spec(
 /// constraint merely because the test needs to prove that the linter catches
 /// it.
 pub fn read_joint_spec_for_lint(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<PendingUsdJoint> {
     read_joint_spec_with_policy(reader, path, false)
 }
 
 fn read_joint_spec_with_policy(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
     skip_lint_only: bool,
 ) -> Option<PendingUsdJoint> {
@@ -213,7 +213,7 @@ fn read_joint_spec_with_policy(
     // Read raw it would hinge about the wrong axis while the meshes and colliders
     // (which do convert, via `local_transform_at`) sit correctly: a silently
     // wrong joint in a visually right assembly.
-    let conv = lunco_usd_bevy_core::stage_convention(view).ok()?;
+    let conv = lunco_usd_bevy_stage::stage_convention(view).ok()?;
     let read_real_or_default = |name: &str, default: f64| -> Option<f64> {
         match view.real(path, name) {
             Some(value) => Some(value),
@@ -280,7 +280,7 @@ fn read_joint_spec_with_policy(
     // `world_transform` → `local_transform_at`, which already converted. Applying
     // the convention to both would double-convert the derived path.
     let base = || -> Option<JointBaseRead> {
-        let conv = lunco_usd_bevy_core::stage_convention(reader).ok()?;
+        let conv = lunco_usd_bevy_stage::stage_convention(reader).ok()?;
         // An endpoint that names a prim which is not itself a body resolves to
         // the body that prim is rigidly part of — see [`nearest_body_path`].
         // This is what lets a mounted mechanism name its own root instead of its
@@ -669,7 +669,7 @@ fn read_joint_spec_with_policy(
 /// (`limit:{transX..rotZ}`). A DOF is locked when `low > high` and free when
 /// the limit schema is absent or its bounds are unauthored.
 fn reduce_generic_joint(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<(&'static str, DVec3, f64, f64, bool)> {
     const DOFS: [(&str, DVec3, bool); 6] = [

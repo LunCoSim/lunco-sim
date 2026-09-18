@@ -8,7 +8,7 @@
 //!
 //! Catalog *discovery* lives in ONE place — `lunco-scene-catalog`'s
 //! `maintain_catalogs`, which scans engine + Twin shaders via the shared
-//! `lunco_assets_core::discovery` walk. This module does not embed or name a
+//! `lunco_assets_runtime::discovery` walk. This module does not embed or name a
 //! shader file.
 
 use bevy::prelude::*;
@@ -32,7 +32,7 @@ pub struct ShaderEntry {
 /// The shaders the Inspector's picker offers. Seeded with the curated prop
 /// shaders (so it is never empty and works on wasm, where there is no
 /// filesystem to scan), then augmented on native by `lunco-scene-catalog`'s
-/// `maintain_catalogs` (via the shared `lunco_assets_core::discovery` walk).
+/// `maintain_catalogs` (via the shared `lunco_assets_runtime::discovery` walk).
 #[derive(Resource, Clone, Debug)]
 pub struct ShaderCatalog {
     pub entries: Vec<ShaderEntry>,
@@ -68,7 +68,9 @@ impl ShaderCatalog {
 
 impl Default for ShaderCatalog {
     fn default() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 }
 

@@ -16,9 +16,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 // The runtime projector and the per-prim binder share this same composed read
 // contract. A prepared asset plan implements it without retaining OpenUSD
 // handles, while live edits continue to use StageView.
-use crate::read::UsdReadObject;
 use bevy::asset::{AssetId, AssetServer};
 use bevy::prelude::{Entity, World};
+use lunco_usd_bevy_stage::read::UsdReadObject;
 use openusd::sdf::Path as SdfPath;
 
 /// Why a prim that claims to be a Modelica program facet cannot be used as one.
@@ -85,7 +85,7 @@ pub struct ResolvedProgram {
 pub fn apply_program_resolution(
     world: &mut World,
     entity: Entity,
-    stage_id: AssetId<crate::UsdStageAsset>,
+    stage_id: AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
     resolved: Option<ResolvedProgram>,
 ) {
     let rhai_asset = resolved.as_ref().and_then(|resolved| {
@@ -93,7 +93,11 @@ pub fn apply_program_resolution(
             return None;
         };
         (resolved.backend == ProgramBackend::Rhai).then(|| {
-            crate::asset::resolve_stage_asset_path(world.resource::<AssetServer>(), stage_id, asset)
+            lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                world.resource::<AssetServer>(),
+                stage_id,
+                asset,
+            )
         })
     });
     let mut entity = world.entity_mut(entity);
@@ -692,14 +696,14 @@ mod tests {
     struct TestStage(openusd::usd::Stage);
 
     impl TestStage {
-        fn view(&self) -> crate::view::StageView<'_> {
-            crate::view::StageView::new(&self.0)
+        fn view(&self) -> lunco_usd_bevy_stage::view::StageView<'_> {
+            lunco_usd_bevy_stage::view::StageView::new(&self.0)
         }
     }
 
     fn program_stage(source: &str) -> TestStage {
         let recipe = lunco_usd_compose::recipe::StageRecipe::from_source("programs.usda", source);
-        let stage = crate::compose::build_stage_with_resolver(&recipe)
+        let stage = lunco_usd_bevy_stage::compose::build_stage_with_resolver(&recipe)
             .expect("build program stage")
             .0;
         TestStage(stage)

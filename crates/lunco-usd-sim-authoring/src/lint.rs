@@ -7,7 +7,7 @@
 //! `assets/scripting/policy/lint_usd.rhai`.
 
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy_core::{StageView, UsdRead};
+use lunco_usd_bevy_stage::{StageView, UsdRead};
 
 use crate::{is_gear_drive, read_gear_drive_type, read_gear_drive_values, read_gear_ratio};
 use lunco_mobility::DifferentialDriveType;

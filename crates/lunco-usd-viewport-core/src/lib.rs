@@ -14,8 +14,8 @@ use bevy::prelude::{
 use lunco_core::Command;
 use lunco_doc::DocumentId;
 use lunco_settings::SettingsSection;
-use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::{UsdPrimPath, is_preview_entity};
+use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_usd_document::document::LayerId;
 use lunco_viewport_core::PanelRect;
 

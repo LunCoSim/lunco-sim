@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::{Sender, unbounded};
 use lunco_experiments::{
     Experiment, ExperimentId, ExperimentRegistry, ExperimentRunner, ModelRef, ParamPath,
     ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta, RunProgress,

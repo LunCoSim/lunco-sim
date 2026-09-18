@@ -8,11 +8,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bevy::asset::{io::Reader, AssetLoader, AssetServer, LoadContext};
+use bevy::asset::{AssetLoader, AssetServer, LoadContext, io::Reader};
 use bevy::prelude::{Asset, TypePath};
 
-use crate::compose::fetch_layer_closure;
 use crate::UsdStageProjectionPlan;
+use crate::compose::fetch_layer_closure;
 use lunco_assets_core::asset_path::anchor_of;
 
 /// A Bevy asset representing a loaded, composed USD stage.

@@ -6,6 +6,7 @@ license.workspace = true
 description = "Reusable generic text source editor for LunCoSim workbench hosts"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true }
 egui = { workspace = true }
 crossbeam-channel = { workspace = true }

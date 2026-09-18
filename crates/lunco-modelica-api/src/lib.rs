@@ -101,12 +101,12 @@ impl ApiQueryProvider for ListBundledProvider {
             .iter()
             .map(|model| model.filename.to_string())
             .collect::<Vec<_>>();
-        let packages = match lunco_assets_core::models::package_roots() {
+        let packages = match lunco_assets_runtime::models::package_roots() {
             Ok(packages) => packages,
             Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
         };
         for package in packages {
-            let files = match lunco_assets_core::models::package_files(&package) {
+            let files = match lunco_assets_runtime::models::package_files(&package) {
                 Ok(files) => files,
                 Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
             };

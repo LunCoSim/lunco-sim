@@ -5,6 +5,7 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 # THE COMMAND LAYER, now its own crate. Spawn/move/delete/set-property, the spawn +
 # shader catalogs and runtime-layer USD persisters — everything
 # a `--no-ui` server needs and an editor is merely one caller of. The editor DEPENDS
@@ -30,7 +31,6 @@ lunco-control-core = { path = "../lunco-control-core" }
 lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-physics = { path = "../lunco-physics" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 # Terrain shader-mode selector (Lit / Debug-LOD / Plain) in the Inspector.
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }

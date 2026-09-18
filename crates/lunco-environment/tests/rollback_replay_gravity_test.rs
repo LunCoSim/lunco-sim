@@ -5,7 +5,7 @@
 //! projection of the cached `LocalGravity` field.
 //!
 //! Client rollback does not re-run `FixedUpdate`. `replay_one_tick`
-//! (`lunco-networking`) runs `lunco_core::RollbackReplay` and then steps
+//! (`lunco-networking`) runs `lunco_core_runtime::RollbackReplay` and then steps
 //! `PhysicsSchedule`. The standard acceleration component is consumed directly
 //! by Avian's integrator in that schedule, so a replayed tick solves with the
 //! same gravity field as the live tick. With gravity absent from that schedule
@@ -31,7 +31,7 @@ use lunco_environment::{EnvironmentPlugin, Gravity, LocalGravity};
 /// One replayed tick, mirroring `lunco-networking`'s `replay_one_tick`: run the
 /// actuation chain, then advance the physics clocks and step the solver.
 fn replay_one_tick(world: &mut World, dt: std::time::Duration) {
-    world.run_schedule(lunco_core::RollbackReplay);
+    world.run_schedule(lunco_core_runtime::RollbackReplay);
 
     world.resource_mut::<Time<Physics>>().advance_by(dt);
     let SubstepCount(substeps) = *world.resource::<SubstepCount>();
@@ -52,7 +52,7 @@ fn rollback_replay_applies_local_gravity() {
         .insert_resource(avian3d::prelude::Gravity::ZERO)
         .insert_resource(Gravity::flat(1.62, DVec3::NEG_Y))
         .add_plugins(EnvironmentPlugin);
-    app.init_schedule(lunco_core::RollbackReplay);
+    app.init_schedule(lunco_core_runtime::RollbackReplay);
     app.finish();
     app.cleanup();
 

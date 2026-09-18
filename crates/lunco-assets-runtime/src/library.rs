@@ -54,7 +54,7 @@ impl InMemoryLibrary {
     pub fn as_source_pairs(&self) -> Vec<(String, String)> {
         let mut out = Vec::with_capacity(self.files.len());
         for (path, bytes) in &self.files {
-            let uri = crate::asset_path::slashed(path);
+            let uri = lunco_assets_path::slashed(path);
             if let Ok(source) = std::str::from_utf8(bytes) {
                 out.push((uri, source.to_string()));
             }

@@ -236,7 +236,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
-            lunco_core::LunCoCorePlugin,
+            lunco_core_runtime::LunCoCoreRuntimePlugin,
             lunco_telemetry_core::LunCoTelemetryCorePlugin,
         ));
         let schema = discover_schema(app.world());

@@ -6,10 +6,10 @@ license.workspace = true
 description = "Render-free USD geometry projection into Bevy mesh assets"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh"] }
 bevy_mesh = { workspace = true }
 lunco-render = { path = "../lunco-render" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-lathe = { path = "../lunco-usd-bevy-lathe" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }

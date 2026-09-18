@@ -6,6 +6,8 @@ license.workspace = true
 description = "API query providers for the USD co-simulation runtime"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 avian3d = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 lunco-api = { path = "../lunco-api" }
@@ -22,7 +24,6 @@ lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-avian-joints = { path = "../lunco-usd-avian-joints" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }

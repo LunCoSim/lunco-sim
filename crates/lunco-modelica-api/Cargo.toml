@@ -6,6 +6,7 @@ license.workspace = true
 description = "Transport-free API query providers for Modelica documents and runs"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }

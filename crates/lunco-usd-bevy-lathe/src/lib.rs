@@ -425,7 +425,7 @@ impl UsdLathe {
 /// the natural authoring and a strict `double` read of it is indistinguishable from
 /// "unauthored", which would silently substitute a default.
 pub fn read_lathe(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &openusd::sdf::Path,
 ) -> Option<UsdLathe> {
     let kind = reader.text(path, "lunco:lathe:profile")?;
@@ -502,7 +502,7 @@ pub fn read_lathe(
 /// Read a required standard `NurbsPatch` integer without inventing a sampling
 /// profile when an author omitted or mistyped it.
 pub fn read_required_nurbs_int(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &openusd::sdf::Path,
     name: &str,
 ) -> Option<usize> {

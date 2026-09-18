@@ -524,7 +524,7 @@ fn prelude_surface(world: &World) -> Vec<serde_json::Value> {
     // arbitrary files from the process working directory.
     engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
     lunco_hooks_rhai::rhai_limits::apply(&mut engine);
-    let Some(sources) = world.get_resource::<lunco_assets_core::script_source::ScriptSources>()
+    let Some(sources) = world.get_resource::<lunco_assets_runtime::script_source::ScriptSources>()
     else {
         return Vec::new();
     };

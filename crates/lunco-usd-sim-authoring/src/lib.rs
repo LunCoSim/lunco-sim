@@ -31,7 +31,7 @@ pub struct GearDriveValues {
 
 /// Whether a prim is a PhysX gear joint with an angular drive.
 pub fn is_gear_drive(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &openusd::sdf::Path,
 ) -> bool {
     reader.type_name(prim).as_deref() == Some("PhysxPhysicsGearJoint")
@@ -40,7 +40,7 @@ pub fn is_gear_drive(
 
 /// Read the finite, non-zero ratio of a PhysX gear joint.
 pub fn read_gear_ratio(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &openusd::sdf::Path,
 ) -> Option<f64> {
     reader
@@ -50,7 +50,7 @@ pub fn read_gear_ratio(
 
 /// Read and validate the scalar angular drive values of a PhysX gear joint.
 pub fn read_gear_drive_values(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &openusd::sdf::Path,
 ) -> Result<GearDriveValues, ()> {
     let read = |name: &str, default: f64, allow_infinity: bool| match reader.real(prim, name) {
@@ -74,7 +74,7 @@ pub fn read_gear_drive_values(
 
 /// Read the authored angular drive realization of a PhysX gear joint.
 pub fn read_gear_drive_type(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &openusd::sdf::Path,
 ) -> Option<lunco_mobility::DifferentialDriveType> {
     match reader.text(prim, "drive:angular:physics:type") {

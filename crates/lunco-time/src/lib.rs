@@ -1,6 +1,6 @@
 //! Unified mission-time spine (architecture doc 19 — T1).
 //!
-//! One stored master — the [`SimTick`](lunco_core::SimTick) in `lunco-core` (the
+//! One stored master — the [`SimTick`](lunco_core_runtime::SimTick) in `lunco-core` (the
 //! netcode/integrator substrate) — and **everything calendar/celestial is
 //! *derived*, never accumulated**. This crate owns the layer *above* the tick:
 //! the conversion anchor (tick ↔ epoch), the transport (play/pause/rate), the
@@ -20,7 +20,7 @@
 use bevy::prelude::*;
 use std::time::Duration;
 
-use lunco_core::{SimTick, SECS_PER_TICK};
+use lunco_core_runtime::{SimTick, SECS_PER_TICK};
 
 pub mod domain;
 pub use domain::*;
@@ -407,7 +407,7 @@ pub fn advance_world_clock(
     clock: Res<MissionClock>,
     mut world: ResMut<WorldTime>,
     mut virtual_time: ResMut<Time<Virtual>>,
-    coupling: Option<Res<lunco_core::SimulationBarrier>>,
+    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
 ) {
     // A Modelica result that feeds an Avian force/torque port is a barrier for
     // the whole deterministic simulation, not just for Avian. If only the
@@ -527,7 +527,7 @@ impl Plugin for TimePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_core::FIXED_HZ;
+    use lunco_core_runtime::FIXED_HZ;
 
     const EPS: f64 = 1e-9;
 
@@ -711,7 +711,7 @@ mod tests {
             (TransportMode::Playing, 0.0), // rate 0 is also "frozen"
         ] {
             let mut world = bevy::prelude::World::new();
-            world.insert_resource(lunco_core::SimTick(0));
+            world.insert_resource(lunco_core_runtime::SimTick(0));
             world.insert_resource(TimeTransport { mode, rate });
             world.insert_resource(MissionClock::default());
             world.insert_resource(WorldTime::default());
@@ -738,7 +738,7 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = bevy::prelude::World::new();
-        world.insert_resource(lunco_core::SimTick(0));
+        world.insert_resource(lunco_core_runtime::SimTick(0));
         world.insert_resource(TimeTransport {
             mode: TransportMode::Playing,
             rate: 2.0,
@@ -761,12 +761,12 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = bevy::prelude::World::new();
-        world.insert_resource(lunco_core::SimTick(0));
+        world.insert_resource(lunco_core_runtime::SimTick(0));
         world.insert_resource(TimeTransport::default());
         world.insert_resource(MissionClock::default());
         world.insert_resource(WorldTime::default());
         world.insert_resource(Time::<Virtual>::default());
-        world.insert_resource(lunco_core::SimulationBarrier {
+        world.insert_resource(lunco_core_runtime::SimulationBarrier {
             held: true,
             ..Default::default()
         });

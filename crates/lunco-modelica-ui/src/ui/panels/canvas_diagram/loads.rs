@@ -419,9 +419,11 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
     // panel owning a separate bundled opener. Match the top-level qualified
     // segment against a bundled model's filename stem and open it in-memory.
     let stem = qualified.split('.').next().unwrap_or(qualified);
-    if crate::models::bundled_models()
-        .is_ok_and(|models| models.iter().any(|m| m.filename.trim_end_matches(".mo") == stem))
-    {
+    if crate::models::bundled_models().is_ok_and(|models| {
+        models
+            .iter()
+            .any(|m| m.filename.trim_end_matches(".mo") == stem)
+    }) {
         bevy::log::info!("[CanvasDiagram] drill-in: opening bundled `{stem}`");
         crate::ui::panels::package_browser::open_class(
             world,

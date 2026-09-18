@@ -10,12 +10,12 @@ use bevy::prelude::*;
 use openusd::schemas::geom::tokens as gtok;
 use openusd::sdf::Path as SdfPath;
 
-use lunco_usd_bevy_core::{
-    canonical::CanonicalStages, read, stage_convention, UsdRead, UsdStageAsset,
-};
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_scene::{
     read_usd_mesh_points, read_usd_mesh_topology, ShapeDims, UsdPrimPath, UsdStageRevision,
+};
+use lunco_usd_bevy_stage::{
+    canonical::CanonicalStages, read, stage_convention, UsdRead, UsdStageAsset,
 };
 
 /// Dimensions are decoded by `lunco-usd-bevy-scene`, the shared owner used by

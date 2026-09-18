@@ -5,6 +5,7 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 # RENDER-FREE by construction (docs/architecture/render-decoupling.md): NO
 # `bevy_pbr` / `bevy_core_pipeline` / `bevy_post_process` / `bevy_anti_alias`.
 # This crate states appearance + camera INTENT (`lunco_render::{PbrLook,

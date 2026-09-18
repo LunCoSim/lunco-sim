@@ -46,7 +46,7 @@
 use bevy_ecs::entity::Entity;
 use bevy_math::DVec3;
 use lunco_mobility::{Suspension, TireLateralStiffnessGraph, WheelRaycast};
-use lunco_usd_bevy_core::read::{UsdReadObject, read_vec3_f64};
+use lunco_usd_bevy_stage::read::{UsdReadObject, read_vec3_f64};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{HashMap, HashSet};
 

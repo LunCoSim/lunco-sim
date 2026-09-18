@@ -6,9 +6,9 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_embodiment_core::roles::TheLocalEmbodiment;
-use lunco_core::GlobalEntityId;
 use lunco_control_core::ControlLink;
+use lunco_core::GlobalEntityId;
+use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_scene_selection::SelectedEntities;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -104,7 +104,10 @@ impl Panel for CommandDeck {
         ui.separator();
         if view.driving {
             if ui.button("Release control").clicked() {
-                if let Some(avatar) = ctx.resource::<TheLocalEmbodiment>().and_then(|value| value.0) {
+                if let Some(avatar) = ctx
+                    .resource::<TheLocalEmbodiment>()
+                    .and_then(|value| value.0)
+                {
                     ctx.trigger(lunco_control_core::ReleaseControlSource { source: avatar });
                 }
             }

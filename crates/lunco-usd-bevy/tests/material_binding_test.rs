@@ -12,8 +12,8 @@
 use bevy::prelude::*;
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::UsdVisualPlugin;
-use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
+use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_usd_compose::recipe::StageRecipe;
 
 #[test]

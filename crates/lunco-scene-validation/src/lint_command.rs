@@ -37,8 +37,8 @@ use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, StageView, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, StageView, UsdRead, UsdStageAsset};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 
@@ -305,7 +305,7 @@ fn live_runtime_connection_facts(
                     continue;
                 };
                 if view.attr_type_name(&source_prim, source_property).is_some()
-                    || !lunco_usd_bevy_core::read::has_runtime_port_surface(view, &source_prim)
+                    || !lunco_usd_bevy_stage::read::has_runtime_port_surface(view, &source_prim)
                 {
                     continue;
                 }
@@ -329,8 +329,9 @@ fn live_runtime_connection_facts(
                 let pending = source_entity
                     .and_then(|entity| world.get::<lunco_port_core::PortSurfacePending>(entity))
                     .is_some();
-                let provider = lunco_usd_bevy_core::read::runtime_port_provider(view, &source_prim)
-                    .unwrap_or("runtime provider");
+                let provider =
+                    lunco_usd_bevy_stage::read::runtime_port_provider(view, &source_prim)
+                        .unwrap_or("runtime provider");
                 facts.push(H::map([
                     ("subject", H::str(format!("{}.{}", sink, attribute))),
                     ("source", H::str(source)),
@@ -881,8 +882,8 @@ mod tests {
     use bevy::asset::Handle;
     use bevy::prelude::*;
     use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
-    use lunco_usd_bevy_core::{canonical::CanonicalStage, UsdRead, UsdStageAsset};
     use lunco_usd_bevy_scene::UsdPrimPath;
+    use lunco_usd_bevy_stage::{canonical::CanonicalStage, UsdRead, UsdStageAsset};
     use lunco_usd_compose::recipe::StageRecipe;
 
     #[derive(Component)]

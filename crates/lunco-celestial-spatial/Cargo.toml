@@ -5,6 +5,8 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # BigSpace/runtime adapter for celestial mechanics. The sibling
 # `lunco-celestial` package owns the headless astronomy and frame semantics;
@@ -66,7 +68,6 @@ lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
-lunco-assets-core = { path = "../lunco-assets-core" }
 avian3d = { workspace = true }
 lunco-input-core = { path = "../lunco-input-core" }
 futures-lite = { workspace = true }

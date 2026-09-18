@@ -6,6 +6,7 @@ license.workspace = true
 description = "Reusable HUI/Flair runtime-authored surface presentation for LunCoSim hosts"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true, features = [
     "bevy_asset",
     "bevy_render",
@@ -20,7 +21,6 @@ bevy_hui = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 # Use the shared runtime text-asset catalog; this crate does not own a second
 # JSON loader or a path-specific manifest convention.
-lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-render = { path = "../lunco-render" }
 lunco-status-core = { path = "../lunco-status-core" }

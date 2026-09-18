@@ -26,7 +26,7 @@
 //!    (initial mount, open-time `restore_runtime`, or a later spawn/move), refresh the
 //!    twin **overlay** (for persistence / re-open) and **author the delta onto
 //!    the live composed stage**: translates and structural spawns/removes are
-//!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy_core::canonical::CanonicalStage)
+//!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy_stage::canonical::CanonicalStage)
 //!    directly, firing its openusd change sink so `project_stage_changes`
 //!    projects the edit in place — no whole-scene asset reload. A referenced
 //!    spawn whose asset isn't loaded yet is fetched once through
@@ -55,12 +55,12 @@ use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets_core::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
-use lunco_usd_bevy_core::{
-    source::UsdSourceText, UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan,
-};
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued,
     UsdSceneProjectionReset, UsdSceneRoot,
+};
+use lunco_usd_bevy_stage::{
+    UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan, source::UsdSourceText,
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake};
 
@@ -156,7 +156,7 @@ impl PendingTwinDocs {
 /// the openusd change sink fires and `project_stage_changes` instantiates the
 /// composed subtree — no whole-scene reload.
 struct RefSpawn {
-    /// The scene whose live [`CanonicalStage`](lunco_usd_bevy_core::canonical::CanonicalStage)
+    /// The scene whose live [`CanonicalStage`](lunco_usd_bevy_stage::canonical::CanonicalStage)
     /// the spawn is authored onto.
     scene_id: AssetId<UsdStageAsset>,
     /// The prim path to spawn (e.g. `/World/rover_1`).
@@ -731,7 +731,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // explicit authoring operation rather than a second initial-load
             // reader or a per-frame rebuild.
             let stage_ready = world
-                .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+                .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
                 .is_some_and(|stages| stages.get(scene_id).is_some());
             if has_work && !stage_ready {
                 let recipe = world
@@ -746,7 +746,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     continue;
                 };
                 let built = world
-                    .get_non_send_mut::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+                    .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
                     .is_some_and(|mut stages| stages.get_or_build(scene_id, &recipe).is_some());
                 if !built {
                     continue;
@@ -917,7 +917,7 @@ fn refresh_dependent_stage_assets(
         }
 
         let rebuilt = world
-            .get_non_send_mut::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+            .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
             .is_some_and(|mut stages| stages.rebuild(stage_id, &recipe));
         if rebuilt {
             // This stage-scoped refresh retires only projected USD entities.  A
@@ -1108,7 +1108,7 @@ fn incremental_api_schemas(schemas: &[String]) -> bool {
 /// ECS. Only incremental ops reach here; coarse ops ([`op_needs_rebuild`]) rebuild
 /// instead. Reads/authors the `!Send` stage under short borrows.
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
 
     // A referenced AddPrim may be waiting on its asset closure. Preserve every
     // later edit whose owner is inside that not-yet-live subtree; otherwise a
@@ -1665,7 +1665,7 @@ fn spawn_prim_op(
     reference: Option<String>,
     reference_prim_path: Option<String>,
 ) {
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
     let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
     let Ok(sp) = openusd::sdf::Path::new(prim_path) else {
         return;
@@ -1944,7 +1944,7 @@ fn rebuild_scene_from_composed(
     scene_id: AssetId<UsdStageAsset>,
     composed_source: &str,
 ) {
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
     use lunco_usd_compose::recipe::StageRecipe;
     // Recipe = the edited composed source as the root layer + every referenced
     // `.usda` the current stage already loaded (keyed by the same canonical ids).
@@ -1999,7 +1999,7 @@ fn ensure_reference_layers_for_rebuild(
     for asset_path in references {
         let reference_id = {
             let Some(cs) = world
-                .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+                .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
                 .and_then(|stages| stages.get(scene_id))
             else {
                 return false;
@@ -2039,7 +2039,7 @@ fn ensure_reference_layers_for_rebuild(
         return true;
     }
     world
-        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
         .and_then(|stages| stages.get(scene_id))
         .is_some_and(|cs| cs.add_layer_bytes(extra))
 }
@@ -2050,7 +2050,7 @@ fn ensure_reference_layers_for_rebuild(
 /// instantiates the composed subtree. Exclusive: authors onto the `!Send`
 /// `CanonicalStage`.
 pub(crate) fn drain_ref_spawns(world: &mut World) {
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
     if world.resource::<PendingRefSpawns>().items.is_empty() {
         return;
     }
@@ -2229,11 +2229,12 @@ mod tests {
             .resource_mut::<Assets<UsdStageAsset>>()
             .remove(handle.id());
         app.update();
-        assert!(app
-            .world()
-            .resource::<lunco_core::RuntimeDiagnostics>()
-            .findings
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2260,11 +2261,13 @@ mod tests {
             Ok(ComponentRefreshDecision::Reject)
         );
         assert!(parse_component_refresh_decision(&HookValue::Unit).is_err());
-        assert!(parse_component_refresh_decision(&HookValue::map([(
-            "action",
-            HookValue::str("unknown"),
-        )]))
-        .is_err());
+        assert!(
+            parse_component_refresh_decision(&HookValue::map([(
+                "action",
+                HookValue::str("unknown"),
+            )]))
+            .is_err()
+        );
     }
 
     #[test]
@@ -2501,24 +2504,27 @@ mod tests {
             PathBuf::from("/twins/incoming"),
         );
 
-        assert!(!app
-            .world()
-            .resource::<PendingTwinDocs>()
-            .has_terminal_source_event());
+        assert!(
+            !app.world()
+                .resource::<PendingTwinDocs>()
+                .has_terminal_source_event()
+        );
         app.world_mut()
             .resource_mut::<Messages<bevy::asset::AssetEvent<UsdSourceText>>>()
             .write(bevy::asset::AssetEvent::Added { id: handle.id() });
         app.update();
 
-        assert!(app
-            .world()
-            .resource::<PendingTwinDocs>()
-            .has_terminal_source_event());
-        assert!(app
-            .world()
-            .resource::<PendingTwinDocs>()
-            .ready
-            .contains(&handle.id()));
+        assert!(
+            app.world()
+                .resource::<PendingTwinDocs>()
+                .has_terminal_source_event()
+        );
+        assert!(
+            app.world()
+                .resource::<PendingTwinDocs>()
+                .ready
+                .contains(&handle.id())
+        );
     }
 
     #[test]

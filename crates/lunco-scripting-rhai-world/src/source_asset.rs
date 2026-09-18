@@ -88,7 +88,7 @@ fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, an
             paths
                 .into_iter()
                 .map(|path| {
-                    lunco_assets_core::script_source::ScriptSources::canonical_id(
+                    lunco_assets_runtime::script_source::ScriptSources::canonical_id(
                         &path,
                         Some(importer),
                         "rhai",
@@ -115,7 +115,7 @@ pub struct BuiltinRhaiAssets {
 /// no directory scan or compiled file list is required.
 #[cfg(feature = "rhai")]
 fn request_builtin_rhai_assets(
-    manifest: Option<Res<lunco_assets_core::discovery::AssetManifest>>,
+    manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
     asset_server: Option<Res<AssetServer>>,
     mut builtins: ResMut<BuiltinRhaiAssets>,
 ) {
@@ -164,7 +164,7 @@ fn publish_rhai_sources(
     mut events: MessageReader<AssetEvent<RhaiSource>>,
     assets: Res<Assets<RhaiSource>>,
     asset_server: Res<AssetServer>,
-    sources: Res<lunco_assets_core::script_source::ScriptSources>,
+    sources: Res<lunco_assets_runtime::script_source::ScriptSources>,
     mut registry: ResMut<lunco_scripting::ScriptRegistry>,
 ) {
     for ev in events.read() {
@@ -220,7 +220,7 @@ fn publish_rhai_sources(
 fn publish_rhai_source(
     canonical: &str,
     text: &str,
-    sources: &lunco_assets_core::script_source::ScriptSources,
+    sources: &lunco_assets_runtime::script_source::ScriptSources,
     registry: &mut lunco_scripting::ScriptRegistry,
 ) {
     sources.insert(canonical, text);
@@ -275,7 +275,7 @@ impl Plugin for RhaiSourceAssetPlugin {
                 Update,
                 (publish_rhai_sources,)
                     .in_set(RhaiSourceAssetSet)
-                    .run_if(resource_exists::<lunco_assets_core::script_source::ScriptSources>),
+                    .run_if(resource_exists::<lunco_assets_runtime::script_source::ScriptSources>),
             );
     }
 }

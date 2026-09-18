@@ -6,6 +6,8 @@ license.workspace = true
 description = "Production asset, loaded-stage, and Twin validation for LunCoSim"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
 lunco-api = { path = "../lunco-api" }

@@ -15,6 +15,7 @@ extern crate self as lunco_core;
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
 pub mod commands;
+pub mod faults;
 /// M1 — deterministic identity from `Provenance`. The only place network
 /// ids are *derived*; the session identity-admission system is the only place they
 /// are *minted*.
@@ -31,9 +32,7 @@ pub mod programs;
 pub mod reconcile;
 /// Typed requests and lifecycle edges for scene ownership and transitions.
 pub mod scene;
-/// Shared scene teardown schedule for all scene-owned subsystems.
-mod scene_lifecycle;
-pub mod subsystems;
+pub mod scene_lifecycle;
 /// Recoverable locking for shared process state.
 pub mod sync;
 
@@ -44,17 +43,10 @@ pub mod exposure;
 
 pub mod events;
 
-pub mod faults;
-
 pub mod mobility;
 /// Generic authored-model invalidation shared by all backend adapters.
 pub mod model_state;
 pub mod tools;
-
-pub mod pacing;
-
-/// Run-condition effectiveness — see [`gate::tracked`].
-pub mod gate;
 
 pub use commands::{
     ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOutcome, CommandResults,
@@ -63,8 +55,7 @@ pub use commands::{
 pub use derived::RebuildOnChange;
 pub use events::{trigger_runtime_error, CommandOccurred, RuntimeError, SubsystemStateChanged};
 pub use faults::{
-    clear_runtime_diagnostics, DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics,
-    RuntimeFault, RuntimeFaults,
+    DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics, RuntimeFault, RuntimeFaults,
 };
 pub use identity::Provenance;
 pub use labels::{entity_display_name, humanize_identifier};
@@ -77,9 +68,6 @@ pub use markers::{
 };
 pub use mobility::Mobility;
 pub use model_state::ModelStateRevision;
-pub use pacing::{
-    KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
-};
 pub use physics_state::*;
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{
@@ -114,14 +102,7 @@ pub use lunco_command_macro::{on_command, register_commands, Command};
 /// transitively through `lunco-core`.
 pub use serde;
 
-use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
-
-/// The central plugin for the LunCo simulation core.
-///
-/// Registers all core types for reflection and initializes essential systems
-/// like the physical/digital port wiring.
-pub struct LunCoCorePlugin;
 
 /// Stable identity for entities across the simulation and API.
 ///
@@ -321,243 +302,3 @@ pub struct CelestialBody {
 /// the same datum for the GeoTIFF it writes and must not take a Bevy-heavy
 /// simulation dependency to get it. `lunco_celestial::registry` re-exports it.
 pub const MOON_MEAN_RADIUS_M: f64 = 1_737_400.0;
-
-// `TimeWarpState` was removed (doc 19): "is physics advancing" had three
-// redundant encodings (`physics_enabled` ≡ `is_running()` ≡
-// `Time<Virtual>.relative_speed > 0`). The single source is now the direct clock
-// state on `Time<Virtual>` — the `lunco-time` spine sets `relative_speed`, and
-// every gate (the `SimTick` advance below + the physics-stepping systems in
-// hardware/mobility/usd-sim) reads `relative_speed_f64() > 0`. One representation,
-// no drift.
-///
-/// The fixed-simulation rate, in Hz. The **single source of truth** for every
-/// fixed-step clock in the system: it drives `Time::<Fixed>` (set by each app
-/// binary), [`SimTick`] advancement ([`advance_sim_tick`], one tick per fixed
-/// step), and the lightyear tick. The snapshot interpolation converts host ticks
-/// → seconds via [`SECS_PER_TICK`], so every one of these MUST agree — hence one
-/// constant rather than a `60.0` literal sprinkled across crates.
-pub const FIXED_HZ: f64 = 60.0;
-
-/// Seconds per fixed tick / per [`SimTick`] (= `1.0 / FIXED_HZ`). Used to place
-/// snapshot samples on the interpolation timebase.
-pub const SECS_PER_TICK: f64 = 1.0 / FIXED_HZ;
-
-/// Monotonic discrete **simulation tick** — the netcode time substrate (M6).
-///
-/// The `lunco-time` spine (`WorldTime`/`TimeTransport`) gives *continuous* sim
-/// time + warp; netcode
-/// also needs a monotonic integer counter that prediction, rollback,
-/// input-stamping and the shared clock all key off. Advanced once per
-/// `FixedUpdate` step (see [`advance_sim_tick`]). Warp-independent: warp scales
-/// `dt`, not the tick count, so peers can compare ticks directly. Not yet
-/// consumed anywhere — it's the substrate the networking layer (Ph3/Ph4) drives.
-#[derive(
-    Resource,
-    Default,
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Reflect,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-#[reflect(Resource)]
-pub struct SimTick(pub u64);
-
-impl SimTick {
-    /// Signed tick distance `self - other`, wrapping-safe.
-    pub fn wrapping_diff(self, other: SimTick) -> i64 {
-        self.0.wrapping_sub(other.0) as i64
-    }
-}
-
-/// Control-signal propagation set: values move along `SimConnection`s from
-/// source port to target. Runs on the **fixed** clock so the actuation path
-/// is frame-rate-independent and identical on every peer.
-///
-/// This is load-bearing for client-prediction determinism. Propagation must not
-/// run in `Update` (render rate) while its producer (flight-software command
-/// observers) and consumers (wheel/hardware actuators) run in `FixedUpdate`: the
-/// latency between "input applied" and "force applied" would be coupled to frame
-/// rate, so the same input `seq` would land on the wheels a *different* number of
-/// physics ticks apart on host vs client (which render at independent rates), the
-/// client's prediction would never match the host, and every snapshot ack would
-/// correct — showing up as steering jitter.
-///
-/// The set is the ordering ANCHOR: actuators that read a port order `.after`
-/// it, and `lunco_cosim`'s `CosimSet::Propagate` is nested INSIDE it so those
-/// orderings keep their meaning. Adding a propagation system elsewhere without
-/// putting it in this set silently breaks that contract.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ControlDacSet;
-
-/// The **rollback replay** schedule: exactly the actuation chain of one simulation
-/// tick (FSW command surface → drive mix → DAC → wheel/hardware actuators), and
-/// NOTHING else — no tick advance, no scenario scripts, no sensors, no networking,
-/// no journaling.
-///
-/// Deterministic rollback re-simulates the owned rover's unacked inputs by running
-/// this schedule + avian's `PhysicsSchedule` once per replayed input. We cannot
-/// simply re-run `FixedMain`: Bevy's `run_schedule` takes the schedule *out* of the
-/// world, so re-entering `FixedMain` from inside it is impossible — and it would
-/// also re-run every unrelated fixed-tick system (scripts, sensors, the sim-tick
-/// advance) N times per correction. Mirroring only the actuation chain here keeps
-/// replay faithful AND side-effect free.
-///
-/// INVARIANT: every system a rover's actuation depends on in `FixedUpdate` must be
-/// registered here too, in the same relative order (see `ControlDacSet`). A system
-/// added to the live chain but forgotten here silently makes replay diverge from
-/// the host — the exact class of bug rollback exists to eliminate.
-#[derive(ScheduleLabel, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RollbackReplay;
-
-/// True only while the client is re-simulating the owned rover inside a rollback.
-///
-/// Systems that must NOT run during a replay step guard on this: the input source
-/// (`drive_from_bindings` — replay feeds *recorded* inputs, not the live keyboard),
-/// the proxy drivers, and the reconcilers/recorders (which would otherwise fold a
-/// correction into the very trajectory they are correcting). Everything scheduled
-/// in `Update` is naturally exempt — replay only runs `RollbackReplay` +
-/// `PhysicsSchedule`.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RollbackInProgress(pub bool);
-
-/// Run condition: true when NOT inside a rollback replay. Attach to any fixed-tick
-/// system whose side effects must happen exactly once per real tick.
-pub fn not_rolling_back(rb: Option<Res<RollbackInProgress>>) -> bool {
-    !rb.is_some_and(|r| r.0)
-}
-
-/// Ordering anchor for the client-netcode `Update` pipeline, which now **spans two
-/// crates**: the spawn half (`apply_replicated_spawns`, in `lunco-scene-commands`,
-/// because it instantiates from the spawn catalog) must run before the prediction
-/// half (interp / kinematic-pin / reconcile / rollback, in `lunco-networking`).
-/// The two used to sit in one `.chain()` in a single file; a plain `.chain()` can't
-/// express the ordering across the crate boundary, and neither crate may depend on
-/// the other (`lunco-networking` must never gain an editor-package edge — see
-/// its Cargo.toml, review A6). `lunco-core` is the one crate both already depend on,
-/// so the shared set lives here.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum NetcodeSet {
-    /// Instantiate host-replicated spawns (`apply_replicated_spawns`, scene-edit).
-    InstantiateSpawns,
-    /// The client-prediction pipeline (`lunco-networking::prediction`), after the
-    /// spawns it may act on exist.
-    Predict,
-}
-
-impl Plugin for LunCoCorePlugin {
-    fn build(&self, app: &mut App) {
-        // Scene projection has an ownership fence independent of the USD
-        // plugins.  Load/restart/clear invalidate it synchronously, while the
-        // deferred root spawner registers the replacement after creation.
-        app.init_resource::<SceneMountState>();
-        app.register_type::<PhysicsPoseAuthoritative>()
-            .register_type::<ModelStateRevision>()
-            .register_type::<PhysicalProperties>()
-            .register_type::<CelestialBody>()
-            .register_type::<Spacecraft>()
-            .register_type::<MobilityRoot>()
-            .register_type::<GlobalEntityId>()
-            .register_type::<Provenance>()
-            .register_type::<SimTick>();
-
-        // All always-on core/substrate resources live in one function so a
-        // unit test can assert the full set is present without building the
-        // heavier LunCoCorePlugin (core registrations). See its doc comment for
-        // the invariant this enforces.
-        register_core_resources(app);
-        app.add_systems(
-            SceneTeardown,
-            (clear_runtime_diagnostics, reset_core_scene_state),
-        );
-        // Runtime subsystem toggles (progressive-fidelity substrate) +
-        // `SetSubsystemEnabled` command.
-        subsystems::build_subsystems(app);
-        app.add_systems(FixedUpdate, advance_sim_tick);
-        // Port propagation on rollback replay is registered by `lunco_cosim`
-        // (its `CosimSet::Propagate` nests inside `ControlDacSet`). This crate
-        // contributes nothing to the replayed chain — `advance_sim_tick` is
-        // deliberately excluded, since a replayed tick must not advance the
-        // simulation's tick counter.
-        app.init_resource::<RollbackInProgress>();
-    }
-}
-
-/// Initialize every always-on core/substrate resource.
-///
-/// **Invariant:** any resource consumed via `Res`/`ResMut` by a system or
-/// observer that is registered unconditionally (i.e. not behind the
-/// `networking` feature or some other optional plugin) MUST be initialized
-/// here — never only inside a feature-gated plugin like
-/// `lunco_networking::SyncPlugin`. Otherwise builds without that feature
-/// panic at runtime with "Resource does not exist". `lunco-core` is a
-/// dependency of every crate, so initializing here guarantees presence
-/// everywhere. The `core_substrate_resources_present` test guards this.
-pub(crate) fn register_core_resources(app: &mut App) {
-    app.init_resource::<SimTick>()
-        .init_resource::<SceneMountState>()
-        // Command-result substrate: result-reporting `#[on_command]` observers
-        // require these to exist (the same always-on resource rule enforced by
-        // LunCoCoreSessionPlugin for the session layer).
-        .init_resource::<CommandResults>()
-        .init_resource::<ActiveCommandId>()
-        .init_resource::<exposure::EngineExposures>()
-        .init_resource::<exposure::ExposureRefresh>()
-        .init_resource::<RuntimeFaults>()
-        .init_resource::<RuntimeDiagnostics>()
-        .init_resource::<pacing::SimulationBarrier>()
-        .init_resource::<pacing::SimulationBarrierParticipants>();
-}
-
-/// Reset core-owned scene state before the outgoing entities are despawned.
-fn reset_core_scene_state(mut rollback: ResMut<RollbackInProgress>) {
-    rollback.0 = false;
-}
-
-/// Advance the discrete [`SimTick`] once per fixed step, *only while time is
-/// actually flowing* (so a paused/zero-speed/warping world freezes the tick and
-/// peers stay comparable). The gate is the direct clock state
-/// `Time<Virtual>.effective_speed > 0` — the same predicate the physics-stepping
-/// systems use. `effective_speed`, not `relative_speed`: the spine expresses
-/// "frozen" with Bevy's paused flag (which zeroes the former but not the latter),
-/// because `relative_speed` is a rate that consumers divide by.
-/// `Time<Virtual>` is the mandatory admission clock. A schedule that omitted
-/// it (for example, a partially constructed host) fails closed instead of
-/// advancing the master tick outside the shared time spine.
-fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>) {
-    // The core time spine is mandatory in a running app. A bare schedule that
-    // omitted Time<Virtual> must not silently advance the master tick.
-    let running = vtime.is_some_and(|t| !t.is_paused() && t.relative_speed_f64() > 0.0);
-    if running {
-        tick.0 = tick.0.wrapping_add(1);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sim_tick_advances_under_run_paused_does_not() {
-        let mut app = App::new();
-        app.init_resource::<SimTick>()
-            .add_systems(FixedUpdate, advance_sim_tick)
-            .insert_resource(Time::<Virtual>::default());
-
-        app.world_mut().run_schedule(FixedUpdate);
-        assert_eq!(app.world().resource::<SimTick>().0, 1);
-        app.world_mut().run_schedule(FixedUpdate);
-        assert_eq!(app.world().resource::<SimTick>().0, 2);
-
-        app.world_mut().resource_mut::<Time<Virtual>>().pause();
-        app.world_mut().run_schedule(FixedUpdate);
-        assert_eq!(app.world().resource::<SimTick>().0, 2);
-
-        app.world_mut().resource_mut::<Time<Virtual>>().unpause();
-        app.world_mut().run_schedule(FixedUpdate);
-        assert_eq!(app.world().resource::<SimTick>().0, 3);
-    }
-}

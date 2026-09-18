@@ -307,7 +307,7 @@ impl Plugin for CoSimPlugin {
         );
 
         // `CosimSet::Propagate` IS the control DAC. Nesting it inside
-        // `lunco_core::ControlDacSet` is what gives that anchor its meaning:
+        // `lunco_core_runtime::ControlDacSet` is what gives that anchor its meaning:
         // every actuator that reads a `Port` orders `.after(ControlDacSet)`
         // (lunco-controller, lunco-hardware, lunco-mobility) and
         // those edges must resolve against the system that actually writes the
@@ -317,7 +317,8 @@ impl Plugin for CoSimPlugin {
         // under prediction.
         app.configure_sets(
             FixedUpdate,
-            lunco_cosim_core::schedule::CosimSet::Propagate.in_set(lunco_core::ControlDacSet),
+            lunco_cosim_core::schedule::CosimSet::Propagate
+                .in_set(lunco_core_runtime::ControlDacSet),
         );
 
         // Rollback replay re-simulates the owned rover's unacked inputs by running
@@ -329,19 +330,20 @@ impl Plugin for CoSimPlugin {
         // nesting as `FixedUpdate` so the `.after(ControlDacSet)` mirrors in
         // lunco-hardware / lunco-mobility keep their relative order.
         app.configure_sets(
-            lunco_core::RollbackReplay,
-            lunco_cosim_core::schedule::CosimSet::Propagate.in_set(lunco_core::ControlDacSet),
+            lunco_core_runtime::RollbackReplay,
+            lunco_cosim_core::schedule::CosimSet::Propagate
+                .in_set(lunco_core_runtime::ControlDacSet),
         );
         app.add_systems(
-            lunco_core::RollbackReplay,
+            lunco_core_runtime::RollbackReplay,
             systems::propagate::propagate_connections
                 .in_set(lunco_cosim_core::schedule::CosimSet::Propagate)
                 .run_if(lunco_time::simulation_is_running),
         );
         app.add_systems(
-            lunco_core::RollbackReplay,
+            lunco_core_runtime::RollbackReplay,
             avian::apply_joint_torque_actuators
-                .after(lunco_core::ControlDacSet)
+                .after(lunco_core_runtime::ControlDacSet)
                 .run_if(resource_exists::<Time<avian3d::prelude::Physics>>),
         );
 
@@ -983,7 +985,7 @@ mod binding_lifecycle_tests {
 ///
 /// 1. **Producer ordering (not in this crate) — DECLARED.** `drive_from_bindings`
 ///    (`lunco-controller`) and other generic input producers register
-///    with an explicit `.before(lunco_core::ControlDacSet)` edge, so the
+///    with an explicit `.before(lunco_core_runtime::ControlDacSet)` edge, so the
 ///    `SetPorts` they emit is flushed — and the source `Port` written — before
 ///    propagation carries it across the `Wire` and the wheel systems read it.
 ///    Any NEW input-producer system must carry the same edge, or an unrelated
@@ -1362,9 +1364,9 @@ mod control_intent_tests {
         app.world_mut()
             .resource_mut::<lunco_time::TimeTransport>()
             .mode = lunco_time::TransportMode::Playing;
-        app.init_resource::<lunco_core::SimulationBarrier>();
+        app.init_resource::<lunco_core_runtime::SimulationBarrier>();
         app.world_mut()
-            .resource_mut::<lunco_core::SimulationBarrier>()
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
             .held = true;
         app.world_mut().trigger(SetPorts {
             target,

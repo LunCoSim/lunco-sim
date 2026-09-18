@@ -6,9 +6,9 @@
 
 use anyhow::Result;
 use lunco_assets_path::{canonicalize, canonicalize_root};
-use lunco_usd_bevy_core::compose::build_stage_with_resolver;
-use lunco_usd_bevy_core::read::runtime_port_provider;
-use lunco_usd_bevy_core::{StageView, UsdRead};
+use lunco_usd_bevy_stage::compose::build_stage_with_resolver;
+use lunco_usd_bevy_stage::read::runtime_port_provider;
+use lunco_usd_bevy_stage::{StageView, UsdRead};
 use lunco_usd_compose::recipe::StageRecipe;
 use openusd::usd::Stage;
 use std::collections::HashMap;
@@ -137,7 +137,7 @@ mod stage_view_tests {
     //! Stage): the cross-file inherit/subLayer opinion the entity translator
     //! consumes must land on the vessel after full PCP composition.
 
-    use super::{build_stage_from_closure, recipe_with_layers, StageRecipe, StageView, UsdRead};
+    use super::{StageRecipe, StageView, UsdRead, build_stage_from_closure, recipe_with_layers};
     use openusd::sdf::Path as SdfPath;
     #[test]
     fn collection_members_uses_standard_subtree_expansion() {
@@ -543,8 +543,8 @@ mod real_reader_tests {
     //! strict scalar reads match only one USD type and silently drop the rest.
 
     use super::UsdRead;
-    use lunco_usd_bevy_core::compose::build_stage_with_resolver;
-    use lunco_usd_bevy_core::StageView;
+    use lunco_usd_bevy_stage::StageView;
+    use lunco_usd_bevy_stage::compose::build_stage_with_resolver;
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::{Path as SdfPath, Value};
     use openusd::usd::Stage;
@@ -898,11 +898,11 @@ def Xform "World" (
         let view = cs.view();
 
         assert_eq!(
-            lunco_usd_bevy_core::resolve_stage_prim_path(&view, ""),
+            lunco_usd_bevy_stage::resolve_stage_prim_path(&view, ""),
             Some("/Apollo".into())
         );
         assert_eq!(
-            lunco_usd_bevy_core::resolve_stage_prim_path(&view, "/Apollo/Embodiment"),
+            lunco_usd_bevy_stage::resolve_stage_prim_path(&view, "/Apollo/Embodiment"),
             Some("/Apollo/Embodiment".into())
         );
     }

@@ -13,7 +13,7 @@ use avian3d::prelude::{
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
-use lunco_core::SimTick;
+use lunco_core_runtime::SimTick;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;

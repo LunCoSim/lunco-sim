@@ -928,7 +928,7 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 /// relative to the process working directory — a sandbox escape in a system that
 /// otherwise routes every asset through a scoped source. Installing ours closes it.
 ///
-fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSources) -> Engine {
+fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
 
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
@@ -2200,7 +2200,7 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
 }
 
 pub fn prelude_files_from_sources(
-    sources: &lunco_assets_core::script_source::ScriptSources,
+    sources: &lunco_assets_runtime::script_source::ScriptSources,
 ) -> Result<Vec<(String, String)>, String> {
     let mut files = Vec::new();
     for id in sources.ids() {
@@ -2242,12 +2242,12 @@ fn install_prelude_on_engine(
 /// not arrived yet this returns a diagnostic instead of evaluating a partial
 /// engine.
 pub fn build_world_engine(
-    sources: lunco_assets_core::script_source::ScriptSources,
+    sources: lunco_assets_runtime::script_source::ScriptSources,
 ) -> Result<Engine, String> {
     let files = {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let authored = lunco_assets_core::scripting::rhai_sources()?;
+            let authored = lunco_assets_runtime::scripting::rhai_sources()?;
             for (id, source) in &authored {
                 sources.insert(id.clone(), source.clone());
             }
@@ -2270,7 +2270,7 @@ pub fn build_world_engine(
 pub fn validate_tool_library(
     name: &str,
     source: &str,
-    sources: lunco_assets_core::script_source::ScriptSources,
+    sources: lunco_assets_runtime::script_source::ScriptSources,
 ) -> Result<Vec<String>, String> {
     let engine = build_world_engine(sources)?;
     lunco_tools_rhai::validate_rhai_tool_with_engine(name, source, &engine)
@@ -2570,7 +2570,7 @@ pub struct RhaiScenarioRuntime {
     tool_gen: u64,
     /// The script registry backing `import`. Shared (`Arc`) with the engine's
     /// module resolver and with the Bevy resource the asset side fills.
-    sources: lunco_assets_core::script_source::ScriptSources,
+    sources: lunco_assets_runtime::script_source::ScriptSources,
 }
 
 impl Default for RhaiScenarioRuntime {
@@ -2580,7 +2580,7 @@ impl Default for RhaiScenarioRuntime {
         // asset-loading side fills) and the copy captured by the engine's module
         // resolver are the same map — a script loaded later is importable without
         // rebuilding the engine.
-        let sources = lunco_assets_core::script_source::ScriptSources::default();
+        let sources = lunco_assets_runtime::script_source::ScriptSources::default();
         let mut engine = build_world_engine_base(sources.clone());
         engine.on_print(|s| info!("[rhai] {s}"));
         Self {
@@ -2604,7 +2604,7 @@ impl RhaiScenarioRuntime {
     /// Insert this as a Bevy resource so the asset side and the engine's module
     /// resolver share ONE map — they are `Arc` clones of the same storage, which is
     /// what lets a script loaded after engine construction still be importable.
-    pub fn script_sources(&self) -> lunco_assets_core::script_source::ScriptSources {
+    pub fn script_sources(&self) -> lunco_assets_runtime::script_source::ScriptSources {
         self.sources.clone()
     }
 
@@ -2650,11 +2650,11 @@ pub fn rhai_runtime_ready(status: Option<Res<RhaiRuntimeStatus>>) -> bool {
 /// edits arrive through Bevy's normal asset events and are visible to the next
 /// engine generation.
 pub fn prepare_builtin_rhai_assets(
-    manifest: Option<Res<lunco_assets_core::discovery::AssetManifest>>,
+    manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
     builtins: Option<ResMut<crate::source_asset::BuiltinRhaiAssets>>,
     assets: Option<Res<Assets<crate::source_asset::RhaiSource>>>,
     asset_server: Option<Res<AssetServer>>,
-    sources: Option<Res<lunco_assets_core::script_source::ScriptSources>>,
+    sources: Option<Res<lunco_assets_runtime::script_source::ScriptSources>>,
     driver: Option<ResMut<lunco_scripting::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
     mut status: ResMut<RhaiRuntimeStatus>,
 ) {
@@ -3650,7 +3650,7 @@ pub fn eval_with_world_as(
     // make the REPL a place where imports mysteriously fail — the kind of
     // inconsistency that costs an hour to diagnose.
     let sources = world
-        .get_resource::<lunco_assets_core::script_source::ScriptSources>()
+        .get_resource::<lunco_assets_runtime::script_source::ScriptSources>()
         .cloned()
         .unwrap_or_default();
     let mut engine = build_world_engine(sources)?;
@@ -3710,7 +3710,7 @@ pub fn eval_tool_with_world_as(
 
     use std::sync::{Arc, Mutex};
     let sources = world
-        .get_resource::<lunco_assets_core::script_source::ScriptSources>()
+        .get_resource::<lunco_assets_runtime::script_source::ScriptSources>()
         .cloned()
         .unwrap_or_default();
     let mut engine = build_world_engine(sources)?;
@@ -4064,7 +4064,7 @@ mod tests {
 
     /// Two scripts, one engine, one registry — the shape a scenario compile has.
     fn engine_with_sibling(sibling_id: &str, sibling_src: &str) -> rhai::Engine {
-        let sources = lunco_assets_core::script_source::ScriptSources::default();
+        let sources = lunco_assets_runtime::script_source::ScriptSources::default();
         sources.insert(sibling_id, sibling_src);
         super::build_world_engine_base(sources)
     }

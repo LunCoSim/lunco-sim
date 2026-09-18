@@ -41,14 +41,14 @@ use std::{
 
 use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
-    authz_target_gid, command_result_json, validate_command_params, ApiCommandEvent,
+    ApiCommandEvent, authz_target_gid, command_result_json, validate_command_params,
 };
 use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_command_contracts::{OpId, SessionId};
 use lunco_core::{CommandResults, GlobalEntityId};
-use lunco_core_session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
+use lunco_core_session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
 // ── Native value construction ──────────────────────────────────────────────
@@ -554,7 +554,7 @@ pub fn local_session_id() -> Option<u64> {
     with_world(|world| {
         world
             .get_resource::<lunco_core_session::LocalSession>()
-            .map(|session| session.0 .0)
+            .map(|session| session.0.0)
     })
     .flatten()
 }
@@ -690,7 +690,7 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
             if owns_target && name == "SetPorts" {
                 if let Some(gid) = command_target_gid(world, name, &params) {
                     let tick = world
-                        .get_resource::<lunco_core::SimTick>()
+                        .get_resource::<lunco_core_runtime::SimTick>()
                         .map_or(0, |t| t.0);
                     let seq = world
                         .get_resource_mut::<lunco_core_session::OwnedInputLog>()

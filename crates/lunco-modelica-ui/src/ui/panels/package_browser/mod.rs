@@ -50,14 +50,14 @@ pub(crate) fn on_open_package_class_requested(
 /// ready and does nothing further. Cheap no-op every frame until ready.
 pub fn reconcile_library_roots_on_ready(
     mut cache: ResMut<PackageTreeCache>,
-    state: Option<Res<lunco_assets_core::library::LibraryLoadState>>,
+    state: Option<Res<lunco_assets_runtime::library::LibraryLoadState>>,
 ) {
     if cache.library_roots_synced {
         return;
     }
     if !matches!(
         state.as_deref(),
-        Some(lunco_assets_core::library::LibraryLoadState::Ready { .. })
+        Some(lunco_assets_runtime::library::LibraryLoadState::Ready { .. })
     ) {
         return;
     }
@@ -560,7 +560,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
     } else {
         Some(class.qualified())
     };
-    let read_only_library = lunco_assets_core::library::owns_filesystem_path(&path);
+    let read_only_library = lunco_assets_runtime::library::owns_filesystem_path(&path);
     // Non-`.mo` files have no Modelica classes to render in Canvas
     // mode — default the tab to Text mode so the user sees the raw
     // file contents instead of an empty diagram.

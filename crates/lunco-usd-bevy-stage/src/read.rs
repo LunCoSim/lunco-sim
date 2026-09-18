@@ -967,11 +967,7 @@ pub fn attr_has_time_samples(reader: &dyn UsdReadObject, path: &SdfPath, attr: &
 /// default so an invalid stage cannot freeze a time-domain conversion.
 pub fn stage_time_codes_per_second(reader: &dyn UsdReadObject) -> f64 {
     let tcps = reader.time_codes_per_second();
-    if tcps > 0.0 {
-        tcps
-    } else {
-        24.0
-    }
+    if tcps > 0.0 { tcps } else { 24.0 }
 }
 
 pub fn read_token_at(

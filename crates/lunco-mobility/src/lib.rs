@@ -170,8 +170,8 @@ impl Plugin for LunCoMobilityPlugin {
                     .chain()
                     // Read the actuator `Port` AFTER wire propagation has carried this
                     // tick's command into it (same fixed tick), so actuation isn't
-                    // delayed an extra tick. See `lunco_core::ControlDacSet`.
-                    .after(lunco_core::ControlDacSet)
+                    // delayed an extra tick. See `lunco_core_runtime::ControlDacSet`.
+                    .after(lunco_core_runtime::ControlDacSet)
                     .run_if(
                         // Run wherever physics is live. On a pure client this used to be
                         // skipped entirely (replicated rovers are server-authoritative
@@ -203,7 +203,7 @@ impl Plugin for LunCoMobilityPlugin {
             FixedUpdate,
             (sync_input_ports, apply_vehicle_brake)
                 .chain()
-                .before(lunco_core::ControlDacSet),
+                .before(lunco_core_runtime::ControlDacSet),
         );
 
         // Keep raycast wheels' physics `Position`/`Rotation` grid-absolute so their
@@ -225,13 +225,13 @@ impl Plugin for LunCoMobilityPlugin {
         // a replay step is an instantaneous re-simulation, not a wall-clock tick, so
         // it must run regardless of the pause/speed state of the virtual clock.
         app.add_systems(
-            lunco_core::RollbackReplay,
+            lunco_core_runtime::RollbackReplay,
             (sync_input_ports, apply_vehicle_brake)
                 .chain()
-                .before(lunco_core::ControlDacSet),
+                .before(lunco_core_runtime::ControlDacSet),
         );
         app.add_systems(
-            lunco_core::RollbackReplay,
+            lunco_core_runtime::RollbackReplay,
             (
                 apply_wheel_suspension,
                 update_raycast_support_state,
@@ -247,7 +247,7 @@ impl Plugin for LunCoMobilityPlugin {
                 apply_wheel_drive,
             )
                 .chain()
-                .after(lunco_core::ControlDacSet),
+                .after(lunco_core_runtime::ControlDacSet),
         );
     }
 }
@@ -262,27 +262,25 @@ impl Plugin for LunCoMobilityPlugin {
 /// path, name, or drivetrain variant participates in the result.
 fn sync_raycast_assembly_filters(
     joints: Option<Res<avian3d::dynamics::solver::joint_graph::JointGraph>>,
-    mut raycasters: Query<(
-        &WheelBodyMount,
-        &mut RayCaster,
-        Option<&mut lunco_physics::PhysicsWheelRaycastFilter>,
-    ), With<WheelRaycast>>,
+    mut raycasters: Query<
+        (
+            &WheelBodyMount,
+            &mut RayCaster,
+            Option<&mut lunco_physics::PhysicsWheelRaycastFilter>,
+        ),
+        With<WheelRaycast>,
+    >,
     colliders: Query<(Entity, Option<&ColliderOf>), With<Collider>>,
     changed_colliders: Query<Entity, Or<(Added<Collider>, Changed<ColliderOf>)>>,
     removed_colliders: RemovedComponents<Collider>,
 ) {
     let graph_changed = joints.as_ref().is_some_and(Res::is_changed);
-    let collider_topology_changed =
-        !changed_colliders.is_empty() || !removed_colliders.is_empty();
+    let collider_topology_changed = !changed_colliders.is_empty() || !removed_colliders.is_empty();
     for (mount, mut raycaster, mut filter_snapshot) in &mut raycasters {
         let filter_added = filter_snapshot
             .as_ref()
             .is_some_and(|filter| filter.is_added());
-        if !graph_changed
-            && !collider_topology_changed
-            && !raycaster.is_added()
-            && !filter_added
-        {
+        if !graph_changed && !collider_topology_changed && !raycaster.is_added() && !filter_added {
             continue;
         }
 
@@ -322,9 +320,8 @@ fn sync_raycast_assembly_filters(
                 .collect::<Vec<_>>();
             excluded_entities.sort_by_key(|entity| entity.to_bits());
             filter_snapshot.excluded_entities = excluded_entities;
-            filter_snapshot.signature = raycast_filter_signature(
-                &raycaster.query_filter.excluded_entities,
-            );
+            filter_snapshot.signature =
+                raycast_filter_signature(&raycaster.query_filter.excluded_entities);
         }
     }
 }
@@ -337,15 +334,14 @@ where
     I: IntoIterator,
     I::Item: Borrow<Entity>,
 {
-    excluded_entities.into_iter().fold(
-        0u64,
-        |signature, entity| {
+    excluded_entities
+        .into_iter()
+        .fold(0u64, |signature, entity| {
             let entity = entity.borrow();
             let bits = entity.to_bits();
             let mixed = bits ^ bits.rotate_left(29) ^ 0x9e37_79b9_7f4a_7c15;
             signature.wrapping_add(mixed.rotate_left((bits & 63) as u32))
-        },
-    )
+        })
 }
 
 /// Marks a rigid-body carrier whose raycast-wheel mass has already been folded
@@ -478,7 +474,7 @@ fn publish_raycast_support_footprints(
 fn update_raycast_support_state(
     wheels: Query<(&WheelRaycast, &Suspension, &RayHits, &WheelBodyMount)>,
     mut roots: Query<&mut lunco_physics::PhysicsSupportState, With<MobilityRoot>>,
-    tick: Res<lunco_core::SimTick>,
+    tick: Res<lunco_core_runtime::SimTick>,
 ) {
     for mut state in &mut roots {
         state.active_contact_count = 0;
@@ -509,24 +505,26 @@ fn initialize_raycast_wheel_contact_diagnostics(
     wheels: Query<(Entity, &WheelBodyMount), Without<lunco_physics::PhysicsWheelContact>>,
 ) {
     for (wheel_entity, mount) in &wheels {
-        commands.entity(wheel_entity).insert(lunco_physics::PhysicsWheelContact {
-            owner: mount.body,
-            contact_valid: false,
-            hit_entity: None,
-            distance_m: None,
-            normal: DVec3::ZERO,
-            normal_force_n: 0.0,
-            suspension_rest_length_m: 0.0,
-            suspension_compression_m: 0.0,
-            tire_force: DVec3::ZERO,
-            ray_hit_count: 0,
-            valid_ray_hit_count: 0,
-            raycast_filter_excluded_entity_count: 0,
-            ray_origin: DVec3::ZERO,
-            ray_direction: DVec3::ZERO,
-            ray_max_distance_m: 0.0,
-            sample_tick: 0,
-        });
+        commands
+            .entity(wheel_entity)
+            .insert(lunco_physics::PhysicsWheelContact {
+                owner: mount.body,
+                contact_valid: false,
+                hit_entity: None,
+                distance_m: None,
+                normal: DVec3::ZERO,
+                normal_force_n: 0.0,
+                suspension_rest_length_m: 0.0,
+                suspension_compression_m: 0.0,
+                tire_force: DVec3::ZERO,
+                ray_hit_count: 0,
+                valid_ray_hit_count: 0,
+                raycast_filter_excluded_entity_count: 0,
+                ray_origin: DVec3::ZERO,
+                ray_direction: DVec3::ZERO,
+                ray_max_distance_m: 0.0,
+                sample_tick: 0,
+            });
         commands
             .entity(wheel_entity)
             .insert(lunco_physics::PhysicsWheelRaycastFilter::default());
@@ -547,7 +545,7 @@ fn publish_raycast_wheel_contact_diagnostics(
         Option<&mut lunco_physics::PhysicsWheelRaycastFilter>,
         &mut lunco_physics::PhysicsWheelContact,
     )>,
-    tick: Res<lunco_core::SimTick>,
+    tick: Res<lunco_core_runtime::SimTick>,
 ) {
     for (wheel, suspension, hits, mount, raycaster, mut filter_snapshot, mut snapshot) in
         &mut wheels
@@ -1567,10 +1565,8 @@ fn sync_raycast_wheel_physics_pose(
             // `Dir3::NEG_Y` is the generic world-down support probe. Rotating the
             // caster by wheel heading/vehicle attitude turns a ground probe
             // sideways on a ramp and is especially wrong when the rover rolls.
-            let ray_origin = hub_rot.0 * DVec3::Y * strut_offset(
-                suspension.rest_length,
-                wheel.wheel_radius,
-            );
+            let ray_origin =
+                hub_rot.0 * DVec3::Y * strut_offset(suspension.rest_length, wheel.wheel_radius);
             // A NaN rotation or origin poisons the cast and avian asserts on it.
             // avian's `raycast` asserts `origin.is_finite()` and takes the whole
             // app down with it. Do not leave the wheel on an old pose and let the
@@ -2726,7 +2722,7 @@ mod differential_tests {
     use super::*;
 
     const PRODUCTION_SUBSTEP_DT: f64 =
-        1.0 / (lunco_core::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64);
+        1.0 / (lunco_core_runtime::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64);
 
     #[test]
     fn force_drive_impulse_is_finite_and_limited() {

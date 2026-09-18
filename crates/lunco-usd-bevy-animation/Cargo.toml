@@ -6,6 +6,7 @@ license.workspace = true
 description = "Render-free USD time-sample animation projection for Bevy"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-render = { path = "../lunco-render" }
 lunco-time = { path = "../lunco-time" }

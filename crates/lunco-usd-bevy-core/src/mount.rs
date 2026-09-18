@@ -43,8 +43,8 @@
 use bevy::prelude::Transform;
 use openusd::sdf::Path as SdfPath;
 
-use crate::local_transform_at;
-use crate::read::UsdRead;
+use lunco_usd_bevy_stage::local_transform_at;
+use lunco_usd_bevy_stage::read::UsdRead;
 
 /// A socket explicitly advertised by a host body, carrying `lunco:mount:socket`.
 /// What a snap reads to place the part it holds.
@@ -116,7 +116,10 @@ fn compose(a: Transform, b: Transform) -> Transform {
 
 /// Read a local frame while distinguishing USD's identity-for-unauthored
 /// transform from a malformed authored transform.
-fn local_mount_transform(reader: &crate::StageView<'_>, path: &SdfPath) -> Option<Transform> {
+fn local_mount_transform(
+    reader: &lunco_usd_bevy_stage::StageView<'_>,
+    path: &SdfPath,
+) -> Option<Transform> {
     match local_transform_at(reader, path, 0.0) {
         Ok(Some(transform)) => Some(transform),
         Ok(None) => Some(Transform::IDENTITY),
@@ -136,13 +139,13 @@ fn local_mount_transform(reader: &crate::StageView<'_>, path: &SdfPath) -> Optio
 /// placement is **not** (we want a body-local frame). An unauthored xform reads
 /// as USD's identity; a malformed authored xform rejects the frame.
 pub fn frame_in_body(
-    reader: &crate::StageView<'_>,
+    reader: &lunco_usd_bevy_stage::StageView<'_>,
     body_root: &str,
     mount_prim: &SdfPath,
 ) -> Option<Transform> {
     let body_root = body_root.trim_end_matches('/');
     let body_root_path = SdfPath::new(body_root).ok()?;
-    if !crate::is_descendant_or_self(mount_prim, body_root) {
+    if !lunco_usd_bevy_stage::is_descendant_or_self(mount_prim, body_root) {
         bevy::log::warn!(
             "mount frame {} is outside body root {}; mount rejected",
             mount_prim.as_str(),
@@ -173,7 +176,7 @@ pub fn frame_in_body(
 
 /// Every socket a `host` body advertises through `lunco:mount:sockets`. The
 /// relationship is the topology authority; no child/group name is special.
-pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> MountReadout {
+pub fn read_sockets(reader: &lunco_usd_bevy_stage::StageView<'_>, host: &str) -> MountReadout {
     let Ok(host_path) = SdfPath::new(host.trim_end_matches('/')) else {
         return MountReadout {
             sockets: Vec::new(),
@@ -189,7 +192,7 @@ pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> MountReadout {
     let mut out = Vec::new();
     let mut diagnostics = Vec::new();
     for child in reader.rel_targets(&host_path, "lunco:mount:sockets") {
-        if child.is_property_path() || !crate::is_descendant_or_self(&child, host) {
+        if child.is_property_path() || !lunco_usd_bevy_stage::is_descendant_or_self(&child, host) {
             reject_socket(
                 &mut diagnostics,
                 host,
@@ -291,7 +294,9 @@ pub fn read_sockets(reader: &crate::StageView<'_>, host: &str) -> MountReadout {
         }
         let part = match part_targets.into_iter().next() {
             Some(path) => {
-                if path.is_property_path() || !crate::is_descendant_or_self(&path, host) {
+                if path.is_property_path()
+                    || !lunco_usd_bevy_stage::is_descendant_or_self(&path, host)
+                {
                     reject_socket(
                         &mut diagnostics,
                         host,
@@ -356,7 +361,10 @@ fn reject_socket(
 /// Read the exact joint recorded by an attached component. The relationship is
 /// the only supported identity path; callers must not reconstruct a joint name
 /// from the component leaf.
-pub fn read_attachment_joint(reader: &crate::StageView<'_>, part: &str) -> Option<String> {
+pub fn read_attachment_joint(
+    reader: &lunco_usd_bevy_stage::StageView<'_>,
+    part: &str,
+) -> Option<String> {
     let part_path = SdfPath::new(part).ok()?;
     if !reader.has_api_schema(&part_path, "LunCoMountAttachmentAPI") {
         return None;
@@ -383,7 +391,7 @@ pub struct MountPlug {
     pub frame: Transform,
 }
 
-pub fn read_plug(reader: &crate::StageView<'_>, part: &str) -> Option<MountPlug> {
+pub fn read_plug(reader: &lunco_usd_bevy_stage::StageView<'_>, part: &str) -> Option<MountPlug> {
     let part_path = SdfPath::new(part).ok()?;
     if !reader.has_api_schema(&part_path, "LunCoMountPlugAPI") {
         return None;
@@ -412,8 +420,8 @@ pub fn read_plug(reader: &crate::StageView<'_>, part: &str) -> Option<MountPlug>
 /// Native-only: composition does file I/O.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_plug(asset_path: &std::path::Path) -> Option<MountPlug> {
-    let stage = crate::compose::compose_file_to_stage(asset_path).ok()?;
-    let cs = crate::canonical::CanonicalStage::from_stage(
+    let stage = lunco_usd_bevy_stage::compose::compose_file_to_stage(asset_path).ok()?;
+    let cs = lunco_usd_bevy_stage::canonical::CanonicalStage::from_stage(
         stage,
         asset_path.to_string_lossy().to_string(),
     );
@@ -432,7 +440,7 @@ mod mount_reader_tests {
     //! bug the design deferred the UI for; this pins it deterministically.
 
     use super::{read_plug, read_sockets};
-    use crate::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
 
     // Base at (5,6,5); a socket 2.5 up under an arbitrary Interfaces group

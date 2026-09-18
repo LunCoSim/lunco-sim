@@ -8,7 +8,7 @@
 //! reads live with the animation projector, not here.)
 
 use openusd::sdf::{Path as SdfPath, Value};
-use openusd::usd::{compute_included_paths, Collection, PrimPredicate, Stage};
+use openusd::usd::{Collection, PrimPredicate, Stage, compute_included_paths};
 
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
 /// reads. `!Send` — construct per-system from the runtime adapter's `NonSend`

@@ -76,8 +76,9 @@ use std::collections::{HashMap, HashSet};
 use avian3d::prelude::MotorModel;
 use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy_core::read::has_runtime_port_surface;
-use lunco_usd_bevy_core::{program::ProgramGraph, StageView, UsdRead};
+use lunco_usd_bevy_core::program::ProgramGraph;
+use lunco_usd_bevy_stage::read::has_runtime_port_surface;
+use lunco_usd_bevy_stage::{StageView, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
@@ -202,7 +203,7 @@ fn local_bounds(reader: &StageView<'_>, p: &SdfPath) -> Option<(Vec3, Vec3)> {
 /// and taking its local box as world would understate how low its corner hangs.
 fn world_aabb(reader: &StageView<'_>, p: &SdfPath) -> Option<(Vec3, Vec3)> {
     let (lo, hi) = local_bounds(reader, p)?;
-    let t = lunco_usd_bevy_core::world_transform(reader, p).ok()?;
+    let t = lunco_usd_bevy_stage::world_transform(reader, p).ok()?;
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for i in 0..8 {
@@ -327,8 +328,8 @@ fn body_has_proxy(
         }
         let Ok(p) = SdfPath::new(s) else { continue };
         if is_vehicle_geometry_type(&reader.prim_type_name(&p).unwrap_or_default())
-            && lunco_usd_bevy_core::effective_purpose(reader, &p)
-                == lunco_usd_bevy_core::Purpose::Proxy
+            && lunco_usd_bevy_stage::effective_purpose(reader, &p)
+                == lunco_usd_bevy_stage::Purpose::Proxy
         {
             return true;
         }
@@ -384,10 +385,10 @@ fn vehicle_part_facts(
                     None => "missing",
                 }
             };
-            let purpose = lunco_usd_bevy_core::effective_purpose(reader, path);
+            let purpose = lunco_usd_bevy_stage::effective_purpose(reader, path);
             let render_excluded_by_proxy =
-                purpose == lunco_usd_bevy_core::Purpose::Render && proxy_bodies.contains(&body);
-            let visual_only = purpose == lunco_usd_bevy_core::Purpose::Guide
+                purpose == lunco_usd_bevy_stage::Purpose::Render && proxy_bodies.contains(&body);
+            let visual_only = purpose == lunco_usd_bevy_stage::Purpose::Guide
                 || collision_state == "disabled"
                 || render_excluded_by_proxy;
             let covered =
@@ -437,10 +438,10 @@ fn vehicle_part_facts(
                 (
                     "purpose",
                     H::str(match purpose {
-                        lunco_usd_bevy_core::Purpose::Default => "default",
-                        lunco_usd_bevy_core::Purpose::Render => "render",
-                        lunco_usd_bevy_core::Purpose::Proxy => "proxy",
-                        lunco_usd_bevy_core::Purpose::Guide => "guide",
+                        lunco_usd_bevy_stage::Purpose::Default => "default",
+                        lunco_usd_bevy_stage::Purpose::Render => "render",
+                        lunco_usd_bevy_stage::Purpose::Proxy => "proxy",
+                        lunco_usd_bevy_stage::Purpose::Guide => "guide",
                     }),
                 ),
                 ("collision_api", H::Bool(collision_api)),
@@ -1201,7 +1202,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                             prim_exists && has_runtime_port_surface(reader, &source_prim);
                         let runtime_provider_name = prim_exists
                             .then(|| {
-                                lunco_usd_bevy_core::read::runtime_port_provider(
+                                lunco_usd_bevy_stage::read::runtime_port_provider(
                                     reader,
                                     &source_prim,
                                 )
@@ -1271,7 +1272,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                             .is_some(),
                     ),
                 ),
-                ("fixed_hz", H::Float(lunco_core::FIXED_HZ)),
+                ("fixed_hz", H::Float(lunco_core_runtime::FIXED_HZ)),
                 (
                     "physics_substeps",
                     H::Int(lunco_physics::DEFAULT_SUBSTEP_COUNT as i64),
@@ -1279,7 +1280,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 (
                     "substep_dt",
                     H::Float(
-                        1.0 / (lunco_core::FIXED_HZ * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64),
+                        1.0 / (lunco_core_runtime::FIXED_HZ
+                            * lunco_physics::DEFAULT_SUBSTEP_COUNT as f64),
                     ),
                 ),
             ]),
@@ -1309,7 +1311,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy_core::compose::compose_file_to_stage;
+    use lunco_usd_bevy_stage::compose::compose_file_to_stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Compose a fixture through the real composer, so facts are read off

@@ -86,6 +86,8 @@ path = "src/bin/lunica.rs"
 # API, no egui/winit). `lunica.rs` cfg-gates the UI paths, so no required-features.
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy.workspace = true
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }

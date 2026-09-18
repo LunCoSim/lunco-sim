@@ -22,6 +22,7 @@ description = "Physics readiness gate: suspend rigid-body integration (avian's T
 avian-validate = ["avian3d/validate"]
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # Substrate only — no render, no window. This crate exists to be depended on by
 # the terrain/obstacle generators (which run headless and on wasm) as well as the

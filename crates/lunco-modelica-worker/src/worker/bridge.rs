@@ -73,8 +73,8 @@ pub fn spawn_modelica_requests(
     mut fixed_time: ResMut<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
     mut lag: ResMut<CosimLag>,
-    participants: Option<Res<lunco_core::SimulationBarrierParticipants>>,
-    coupling: Option<ResMut<lunco_core::SimulationBarrier>>,
+    participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
+    coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     // Auto-compile request goes out as a core event; the UI relays it to the
     // `CompileModel` command. Core no longer references the UI command.
@@ -353,8 +353,8 @@ pub fn handle_modelica_responses(
     mut sample_stream: ResMut<SimSampleStream>,
     runner_res: Option<Res<lunco_modelica_runner::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
-    participants: Option<Res<lunco_core::SimulationBarrierParticipants>>,
-    coupling: Option<ResMut<lunco_core::SimulationBarrier>>,
+    participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
+    coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
     let mut compile_states = compile_states;

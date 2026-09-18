@@ -6,6 +6,7 @@ license.workspace = true
 description = "Render-free USD/Avian physics telemetry for LunCoSim"
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 avian3d = { workspace = true }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }

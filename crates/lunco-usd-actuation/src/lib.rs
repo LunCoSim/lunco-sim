@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 use lunco_cosim_core::{ForceActuator, TorqueActuator};
-use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_stage::read::UsdReadObject;
 use openusd::sdf::Path as SdfPath;
 
 const FORCE_ACTUATOR_API: &str = "LunCoForceActuatorAPI";
@@ -47,7 +47,7 @@ pub fn force_actuator_from_usd(
         return None;
     };
     let Some(relative) =
-        lunco_usd_bevy_core::transform_in_body_frame(reader, &body_path, actuator_path)
+        lunco_usd_bevy_stage::transform_in_body_frame(reader, &body_path, actuator_path)
     else {
         warn!(
             "[usd-actuation] force actuator {} could not derive its body-frame transform",

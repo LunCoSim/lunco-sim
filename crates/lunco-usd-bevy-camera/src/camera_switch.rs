@@ -30,13 +30,13 @@
 use bevy::camera::{primitives::Aabb, RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_embodiment_core::roles::{LocalEmbodiment, TheLocalEmbodiment};
 use lunco_camera_core::DEFAULT_PRESENTATION_HOOK;
 use lunco_core::{on_command, Command};
+use lunco_embodiment_core::roles::{LocalEmbodiment, TheLocalEmbodiment};
 use lunco_hooks::HookValue;
 use lunco_render::{GraphicsCameraDefaults, LightGraphicsDefaults, SceneCamera};
 use lunco_spatial::{OriginAnchor, WorldGrid};
-use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_viewport_core::SceneViewport;
 
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -2139,7 +2139,8 @@ fn request_authored_local_avatar_view(
             .any(|(entity, _, _, local)| entity == target && local)
     {
         return Err(
-            "the LocalEmbodiment role slot does not identify a live SceneCamera candidate".to_string(),
+            "the LocalEmbodiment role slot does not identify a live SceneCamera candidate"
+                .to_string(),
         );
     }
     let action =

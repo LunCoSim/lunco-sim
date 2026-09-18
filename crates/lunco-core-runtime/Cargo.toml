@@ -1,0 +1,14 @@
+[package]
+name = "lunco-core-runtime"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Bevy runtime schedules and scene-scoped engine resources for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

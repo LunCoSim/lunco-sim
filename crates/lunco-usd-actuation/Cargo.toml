@@ -6,9 +6,9 @@ license.workspace = true
 description = "Composed USD actuation readers for co-simulation projections"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy.workspace = true
 lunco-cosim-core = { path = "../lunco-cosim-core" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 openusd = { workspace = true }
 
 [lints]

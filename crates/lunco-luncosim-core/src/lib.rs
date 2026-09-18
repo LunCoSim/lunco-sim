@@ -31,7 +31,7 @@ const INPUT_BINDINGS_KIND: &str = "lunco.input-bindings.v1";
 
 struct PendingInputBindingsAsset {
     path: String,
-    handle: Handle<lunco_assets_core::TextAsset>,
+    handle: Handle<lunco_assets_runtime::TextAsset>,
 }
 
 /// Runtime state for the application-owned input defaults.
@@ -48,9 +48,9 @@ struct InputBindingsDefaults {
 
 fn load_input_bindings_defaults(
     mut state: ResMut<InputBindingsDefaults>,
-    catalog: Option<Res<lunco_assets_core::TextAssetCatalog>>,
+    catalog: Option<Res<lunco_assets_runtime::TextAssetCatalog>>,
     asset_server: Option<Res<AssetServer>>,
-    assets: Option<Res<Assets<lunco_assets_core::TextAsset>>>,
+    assets: Option<Res<Assets<lunco_assets_runtime::TextAsset>>>,
     mut settings: Option<ResMut<lunco_input_core::InputBindingsSettings>>,
     mut commands: Commands,
 ) {
@@ -289,7 +289,7 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
 /// owned by `lunco-luncosim-runtime`.
 pub fn build_core_app(compute_threads: Option<usize>) -> App {
     let mut app = App::new();
-    lunco_assets_core::register_lunco_asset_sources(&mut app);
+    lunco_assets_runtime::register_lunco_asset_sources(&mut app);
 
     let mut plugins = default_plugins();
     let compute = if let Some(threads) = compute_threads {
@@ -317,7 +317,7 @@ pub fn build_core_app(compute_threads: Option<usize>) -> App {
         },
     });
     app.add_plugins(plugins);
-    lunco_assets_core::register_lunco_asset_types(&mut app);
+    lunco_assets_runtime::register_lunco_asset_types(&mut app);
     app.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
         compute_threads,
     ));
@@ -457,14 +457,14 @@ impl Plugin for LunCoSimCorePlugin {
         // the scene mutation command crate.
         app.add_plugins(lunco_scene_validation::SceneValidationPlugin);
 
-        app.add_plugins(lunco_core::gate::GatePlugin);
+        app.add_plugins(lunco_core_runtime::gate::GatePlugin);
 
         app
             // Match the workbench theme's backdrop so the window's first-frame
             // clear lines up with egui's panel fill (no "left hairline" at panel
             // boundaries under non-integer DPRs). Harmless headless.
             .insert_resource(ClearColor(Color::srgb_u8(0x1a, 0x1a, 0x1a)))
-            .insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ))
+            .insert_resource(Time::<Fixed>::from_hz(lunco_core_runtime::FIXED_HZ))
             .insert_resource(avian3d::prelude::Gravity::ZERO)
             // The luncosim's gravity BEFORE any scene loads. Lunar, because every
             // vehicle in it is: the rovers' drivetrains, the lander's struts and
@@ -525,7 +525,7 @@ impl Plugin for LunCoSimCorePlugin {
             // this choice at the physics owner prevents the GUI, server, and web
             // application paths from silently simulating different mechanics.
             .add_plugins(CoSimPlugin)
-            .add_plugins(lunco_core::LunCoCorePlugin)
+            .add_plugins(lunco_core_runtime::LunCoCoreRuntimePlugin)
             .add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin)
             .add_plugins(lunco_core_session::LunCoCoreSessionPlugin)
             // Renderer-independent exposure aggregation is kept in its own
@@ -694,8 +694,8 @@ fn track_ground_collider_pending(
 #[cfg(test)]
 mod ground_collider_gate_tests {
     use super::*;
-    use lunco_usd_bevy_core::UsdStageAsset;
     use lunco_usd_bevy_scene::UsdPrimPath;
+    use lunco_usd_bevy_stage::UsdStageAsset;
 
     #[test]
     fn only_an_active_dem_request_holds_dynamic_activation() {
@@ -779,13 +779,13 @@ mod ground_collider_gate_tests {
 pub struct LunCoSimHeadlessPlugin {
     /// Host execution policy. Max-speed mode uses an explicit fixed duration
     /// and a zero-wait runner; realtime mode remains wall-clock paced.
-    pub execution_mode: lunco_core::SimulationExecutionMode,
+    pub execution_mode: lunco_core_runtime::SimulationExecutionMode,
 }
 
 impl Default for LunCoSimHeadlessPlugin {
     fn default() -> Self {
         Self {
-            execution_mode: lunco_core::SimulationExecutionMode::Realtime,
+            execution_mode: lunco_core_runtime::SimulationExecutionMode::Realtime,
         }
     }
 }
@@ -815,12 +815,12 @@ impl Plugin for LunCoSimHeadlessPlugin {
         // one fixed duration per update and removes the wait entirely. Both
         // modes still execute the same schedules and the same causal barrier.
         let wait = match self.execution_mode {
-            lunco_core::SimulationExecutionMode::Realtime => {
-                std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ)
+            lunco_core_runtime::SimulationExecutionMode::Realtime => {
+                std::time::Duration::from_secs_f64(1.0 / lunco_core_runtime::FIXED_HZ)
             }
-            lunco_core::SimulationExecutionMode::MaxSpeed => {
+            lunco_core_runtime::SimulationExecutionMode::MaxSpeed => {
                 app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-                    std::time::Duration::from_secs_f64(lunco_core::SECS_PER_TICK),
+                    std::time::Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK),
                 ));
                 std::time::Duration::ZERO
             }

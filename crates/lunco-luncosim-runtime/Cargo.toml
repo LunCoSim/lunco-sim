@@ -10,6 +10,8 @@ name = "lunco_luncosim_runtime"
 path = "src/lib.rs"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_shader"] }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 lunco-core = { path = "../lunco-core" }

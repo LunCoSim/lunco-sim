@@ -29,15 +29,15 @@
 
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{anyhow, Result};
-use bevy::asset::{io::AssetReaderError, AssetPath, LoadContext, ReadAssetBytesError};
+use anyhow::{Result, anyhow};
+use bevy::asset::{AssetPath, LoadContext, ReadAssetBytesError, io::AssetReaderError};
 use openusd::usd::Stage;
 
 use lunco_assets_path::canonicalize_root;
 
 use lunco_usd_compose::recipe::{StageClosureLimits, StageDependencyDiagnostic, StageRecipe};
 use lunco_usd_compose::{
-    check_stage_closure_limits, child_layer_ids, LuncoUsdResolver, SharedLayerBytes,
+    LuncoUsdResolver, SharedLayerBytes, check_stage_closure_limits, child_layer_ids,
 };
 
 fn is_missing_asset_read(error: &ReadAssetBytesError) -> bool {

@@ -41,7 +41,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::world_vector;
 use lunco_usd_bevy_scene::billboard::{
-    BillboardFacts, BillboardGeo, BillboardIndex, UsdBillboard, render_billboard,
+    render_billboard, BillboardFacts, BillboardGeo, BillboardIndex, UsdBillboard,
 };
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 

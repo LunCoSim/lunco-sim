@@ -6,13 +6,13 @@ license.workspace = true
 description = "UI-free public query providers for USD documents and edit sessions"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-doc = { path = "../lunco-doc" }
 # Query providers are shared by headless/API hosts. The optional egui bridge is
 # a UI composition concern and must not enter this crate's dependency closure.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }

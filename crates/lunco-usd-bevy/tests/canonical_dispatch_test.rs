@@ -13,9 +13,9 @@
 
 use bevy::prelude::*;
 use lunco_render::{PbrLook, ProceduralSkybox};
-use lunco_usd_bevy_core::canonical::{CanonicalStage, CanonicalStages};
-use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjectionFailed, UsdSceneProjectionQueued};
+use lunco_usd_bevy_stage::canonical::{CanonicalStage, CanonicalStages};
+use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_usd_compose::recipe::StageRecipe;
 
 const SCENE: &str = r#"#usda 1.0

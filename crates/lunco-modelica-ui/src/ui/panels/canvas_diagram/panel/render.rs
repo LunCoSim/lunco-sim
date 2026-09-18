@@ -180,7 +180,7 @@ pub(crate) fn render_diagram_canvas(
                     .map(|host| crate::ui::document_context::is_generated_document(host.document()))
             })
             .unwrap_or(false);
-        let library_state = ctx.resource::<lunco_assets_core::library::LibraryLoadState>();
+        let library_state = ctx.resource::<lunco_assets_runtime::library::LibraryLoadState>();
         let library_resident =
             lunco_modelica_library::source_library::global_parsed_source_bundle().is_some()
                 || ctx
@@ -192,7 +192,7 @@ pub(crate) fn render_diagram_canvas(
         // the download/parse is — not just a static "loading" string.
         let (library_message, library_is_loading) = match (library_state, library_resident) {
             (
-                Some(lunco_assets_core::library::LibraryLoadState::Loading {
+                Some(lunco_assets_runtime::library::LibraryLoadState::Loading {
                     phase,
                     bytes_done,
                     bytes_total,
@@ -206,10 +206,10 @@ pub(crate) fn render_diagram_canvas(
                 )),
                 true,
             ),
-            (Some(lunco_assets_core::library::LibraryLoadState::Failed(msg)), false) => {
+            (Some(lunco_assets_runtime::library::LibraryLoadState::Failed(msg)), false) => {
                 (Some(format!("Source library error: {msg}")), false)
             }
-            (Some(lunco_assets_core::library::LibraryLoadState::NotStarted), false) => {
+            (Some(lunco_assets_runtime::library::LibraryLoadState::NotStarted), false) => {
                 (Some("Source library unavailable".to_string()), false)
             }
             _ => (None, false),
@@ -444,11 +444,11 @@ fn apply_pending_fit(
 /// phase carries file counts in `done`/`total`; other phases carry bytes.
 /// Falls back to a bare phase label when `total` is unknown (`0`).
 fn format_library_loading_hint(
-    phase: lunco_assets_core::library::LibraryLoadPhase,
+    phase: lunco_assets_runtime::library::LibraryLoadPhase,
     done: u64,
     total: u64,
 ) -> String {
-    use lunco_assets_core::library::LibraryLoadPhase;
+    use lunco_assets_runtime::library::LibraryLoadPhase;
     let label = phase.as_str();
     match phase {
         LibraryLoadPhase::Parsing if total > 0 => {

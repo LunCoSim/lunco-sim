@@ -11,12 +11,12 @@ use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use lunco_camera_core::SetCameraInput;
 use lunco_camera_core::{
     CameraDefaults, CameraFollow, CameraPoseLock, CameraPoseMode, CameraRig, CameraUpdateSet,
     FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera, SpringArmCamera,
     SurfaceCamera, SurfaceCameraFrame, math::surface_camera_rotation,
 };
-use lunco_camera_core::SetCameraInput;
 use lunco_core::{on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 

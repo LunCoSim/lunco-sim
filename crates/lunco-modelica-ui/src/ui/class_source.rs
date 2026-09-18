@@ -63,7 +63,9 @@ pub(crate) fn find_open_doc_with_class(
 /// top-level class. Pure (no `World`), so it's unit-testable.
 pub(crate) fn bundled_source_for(qualified: &str) -> Option<String> {
     let head = qualified.split('.').next().unwrap_or(qualified);
-    crate::models::get_model(&format!("{head}.mo")).ok().flatten()
+    crate::models::get_model(&format!("{head}.mo"))
+        .ok()
+        .flatten()
 }
 
 /// Resolve `qualified` to its source text across all backends, in the
@@ -77,8 +79,8 @@ pub(crate) fn resolve_class_source(world: &World, qualified: &str) -> Option<Res
     if let Some(path) = crate::library_fs::resolve_class_path_indexed(qualified)
         .or_else(|| crate::library_fs::locate_library_file(qualified))
     {
-        if let Some(source) =
-            lunco_assets_core::library::library_read(&path).and_then(|b| String::from_utf8(b).ok())
+        if let Some(source) = lunco_assets_runtime::library::library_read(&path)
+            .and_then(|b| String::from_utf8(b).ok())
         {
             return Some(ResolvedClassSource {
                 source,

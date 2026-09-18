@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
 use lunco_command_contracts::{SessionId, SyncChannel};
-use lunco_core::SimTick;
+use lunco_core_runtime::SimTick;
 use lunco_core_session::{NetStatus, SessionProfiles, SessionRegistry};
 use lunco_doc_bevy::JournalResource;
 use lunco_networking_scenario::{

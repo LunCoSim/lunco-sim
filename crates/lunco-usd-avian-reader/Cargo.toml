@@ -6,11 +6,11 @@ license.workspace = true
 description = "Shared OpenUSD physics geometry and joint readers for Avian adapters"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 avian3d = { workspace = true }
 bevy = { workspace = true }
 lunco-physics = { path = "../lunco-physics" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
 

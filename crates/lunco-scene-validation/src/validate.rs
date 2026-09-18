@@ -41,7 +41,7 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy_core::{canonical::CanonicalStage, UsdRead};
+use lunco_usd_bevy_stage::{canonical::CanonicalStage, UsdRead};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -505,7 +505,7 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
     }
 
     let engine_assets = engine_assets_root();
-    let stage = match lunco_usd_bevy_core::compose::compose_file_to_stage_with_assets(
+    let stage = match lunco_usd_bevy_stage::compose::compose_file_to_stage_with_assets(
         path,
         Some(engine_assets.as_path()),
     ) {

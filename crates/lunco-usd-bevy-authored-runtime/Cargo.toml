@@ -6,6 +6,7 @@ license.workspace = true
 description = "Reusable Bevy adapter for authored USD control and program behavior"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true }
 openusd = { workspace = true }
 lunco-camera-core = { path = "../lunco-camera-core" }

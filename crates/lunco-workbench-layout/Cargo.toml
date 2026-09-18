@@ -1,0 +1,17 @@
+[package]
+name = "lunco-workbench-layout"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Renderer-independent egui-dock layout state for the LunCo workbench"
+
+[dependencies]
+bevy = { workspace = true }
+egui_dock = { version = "0.20", features = ["serde"] }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-state = { path = "../lunco-workbench-state" }
+lunco-interaction-core = { path = "../lunco-interaction-core" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

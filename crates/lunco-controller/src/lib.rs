@@ -655,9 +655,9 @@ impl Plugin for LunCoControllerPlugin {
             // schedule's parallel layout, and prediction diverges from the host
             // on that coin flip.
             drive_from_bindings
-                .run_if(lunco_core::not_rolling_back)
+                .run_if(lunco_core_runtime::not_rolling_back)
                 .run_if(lunco_time::simulation_is_running)
-                .before(lunco_core::ControlDacSet),
+                .before(lunco_core_runtime::ControlDacSet),
         );
         // The SELF-DRIVER half runs on the INTERACTION cadence, not the sim tick.
         //
@@ -729,7 +729,7 @@ const INPUT_EPS: f64 = 1e-3;
 /// the command uses `seq = 0`. Silent idle ticks leave the domain writer alone.
 fn drive_from_bindings(
     role: Res<lunco_core_session::NetworkRole>,
-    tick: Res<lunco_core::SimTick>,
+    tick: Res<lunco_core_runtime::SimTick>,
     mut log: ResMut<lunco_core_session::OwnedInputLog>,
     // Spec 034 yield: control authority is vessel ownership, so the human keyboard
     // drives ONLY vessels the local session owns. A vessel owned by another actor
@@ -1041,7 +1041,7 @@ fn drive_self_drivers(
 fn record_control_input(
     trigger: On<lunco_cosim_core::commands::SetPorts>,
     role: Res<lunco_core_session::NetworkRole>,
-    sim_tick: Res<lunco_core::SimTick>,
+    sim_tick: Res<lunco_core_runtime::SimTick>,
     virtual_time: Option<Res<Time<Virtual>>>,
     mut owned_log: ResMut<lunco_core_session::OwnedInputLog>,
     mut applied: ResMut<lunco_core_session::AppliedInputSeq>,
@@ -1157,7 +1157,8 @@ fn record_control_input(
 mod input_ack_tests {
     use super::*;
     use lunco_command_contracts::SessionId;
-    use lunco_core::{GlobalEntityId, SimTick};
+    use lunco_core::GlobalEntityId;
+    use lunco_core_runtime::SimTick;
     use lunco_core_session::{
         AppliedInputSeq, BufferedClientInputs, LocalDriveInput, LocalSession, NetworkRole,
         OwnedInputLog, SessionRegistry,
@@ -1790,7 +1791,7 @@ mod tests {
             InputManagerPlugin::<UserIntent>::default(),
         ));
         app.insert_resource(lunco_core_session::NetworkRole::Host)
-            .init_resource::<lunco_core::SimTick>()
+            .init_resource::<lunco_core_runtime::SimTick>()
             .init_resource::<lunco_core_session::OwnedInputLog>()
             .init_resource::<VesselControlObserved>()
             .add_observer(observe_vessel_control)

@@ -6,6 +6,7 @@ license.workspace = true
 description = "Readiness registry: what the world is still waiting on, and — by authored policy — whether that waiting freezes the world, one object, or nothing"
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 # Substrate only. Deliberately NO avian and NO domain crates: this crate answers
 # "what is still pending and what should that hold?", and knows nothing about how
 # a hold is enforced. The physics effector lives in `lunco-physics`, so producers

@@ -35,7 +35,7 @@
 //! 1. **`TimeUpdateStrategy::ManualDuration(dt)`** — the clock no longer reads
 //!    the wall. Every `app.update()` advances `Time<Virtual>` by exactly `dt`,
 //!    which `Time<Fixed>` drains into exactly one `FixedUpdate` tick when
-//!    `--tick-hz` matches `lunco_core::FIXED_HZ`. So the run is BOTH
+//!    `--tick-hz` matches `lunco_core_runtime::FIXED_HZ`. So the run is BOTH
 //!    bit-reproducible (identical dt sequence every time, no frame-time noise
 //!    leaking into the solver) and as fast as the CPU can go (no sleeping, no
 //!    vsync, no realtime pacing).
@@ -159,7 +159,7 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use lunco_core::SimTick;
+use lunco_core_runtime::SimTick;
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_core::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
@@ -270,7 +270,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut twin: Option<String> = None;
     let mut component: Option<String> = None;
     let mut max_ticks = DEFAULT_MAX_TICKS;
-    let mut tick_hz = lunco_core::FIXED_HZ;
+    let mut tick_hz = lunco_core_runtime::FIXED_HZ;
     let mut verdict_channel: Option<String> = None;
     let mut verification: Option<String> = None;
     let mut threads: usize = 1;
@@ -488,7 +488,7 @@ USAGE:
                              absolute path into a custom Twin.
     --max-ticks N            Safety bound on simulated ticks (default {DEFAULT_MAX_TICKS}).
                              Exhausting it with no verdict exits 2.
-    --tick-hz HZ             Manual clock step rate (default {hz}, = lunco_core::FIXED_HZ).
+    --tick-hz HZ             Manual clock step rate (default {hz}, = lunco_core_runtime::FIXED_HZ).
                              Keep it at FIXED_HZ for exactly one physics tick
                              per update.
     --verdict-channel NAME   Only accept a PASS/FAIL from this telemetry channel.
@@ -530,7 +530,7 @@ EXIT CODES:
     0  scenario emitted PASS
     1  scenario emitted FAIL
     2  no verdict (max ticks exhausted, early app exit, or bad arguments)",
-        hz = lunco_core::FIXED_HZ,
+        hz = lunco_core_runtime::FIXED_HZ,
         seed = DEFAULT_SEED,
         readiness_timeout = DEFAULT_READINESS_TIMEOUT_SECS,
     )
@@ -829,7 +829,7 @@ fn pause_modelica_participants(world: &mut World) {
     // fence. Clear the projected barrier together with those model states;
     // otherwise the time spine sees a stale `held` bit, pauses Time<Virtual>,
     // and the first prime request is correctly (but permanently) gated out.
-    if let Some(mut barrier) = world.get_resource_mut::<lunco_core::SimulationBarrier>() {
+    if let Some(mut barrier) = world.get_resource_mut::<lunco_core_runtime::SimulationBarrier>() {
         barrier.held = false;
         barrier.worst_lag_secs = 0.0;
         barrier.worst_entity = None;
@@ -1063,7 +1063,7 @@ fn hold_scenarios_closed(app: &mut App) {
 fn discard_fixed_overstep_while_barrier_held(app: &mut App) {
     let held = app
         .world()
-        .get_resource::<lunco_core::SimulationBarrier>()
+        .get_resource::<lunco_core_runtime::SimulationBarrier>()
         .is_some_and(|barrier| barrier.held);
     if !held {
         return;
@@ -1396,7 +1396,7 @@ pub fn run() -> u8 {
             // while still allowing models with different periods to prime.
             let barrier_held = app
                 .world()
-                .get_resource::<lunco_core::SimulationBarrier>()
+                .get_resource::<lunco_core_runtime::SimulationBarrier>()
                 .is_some_and(|barrier| barrier.held);
             app.insert_resource(TimeUpdateStrategy::ManualDuration(if barrier_held {
                 Duration::ZERO
@@ -1506,7 +1506,7 @@ pub fn run() -> u8 {
         // duration enters either clock or the authored physics state.
         if app
             .world()
-            .get_resource::<lunco_core::SimulationBarrier>()
+            .get_resource::<lunco_core_runtime::SimulationBarrier>()
             .is_some_and(|barrier| barrier.held)
         {
             discard_fixed_overstep_while_barrier_held(&mut app);
@@ -1529,7 +1529,7 @@ pub fn run() -> u8 {
         #[cfg(feature = "ui")]
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
-                use lunco_luncosim_edit_ui::selection::{compute_selection_aabb, Selected};
+                use lunco_luncosim_edit_ui::selection::{Selected, compute_selection_aabb};
                 use lunco_usd_bevy_scene::UsdPrimPath;
 
                 let target_ent = {

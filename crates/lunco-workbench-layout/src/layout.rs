@@ -22,14 +22,14 @@ use std::collections::HashMap;
 /// user via egui_dock's drag-and-drop UI; perspectives return a
 /// `PerspectiveLayoutPlan` that the shell materializes here.
 #[derive(Resource)]
-pub(crate) struct WorkbenchLayout {
-    pub(crate) panels: HashMap<PanelId, Box<dyn Panel>>,
+pub struct WorkbenchLayout {
+    pub panels: HashMap<PanelId, Box<dyn Panel>>,
     /// Registered multi-instance panel kinds (one entry per
     /// [`InstancePanel::kind`]). Instances share the same renderer;
     /// each tab picks its behaviour via `TabId::Instance { kind, … }`.
-    pub(crate) instance_panels: HashMap<PanelId, Box<dyn InstancePanel>>,
-    pub(crate) perspectives: Vec<Box<dyn Perspective>>,
-    pub(crate) active_perspective: Option<PerspectiveId>,
+    pub instance_panels: HashMap<PanelId, Box<dyn InstancePanel>>,
+    pub perspectives: Vec<Box<dyn Perspective>>,
+    pub active_perspective: Option<PerspectiveId>,
     /// Presentation-owned perspective required by an active guided flow.
     ///
     /// A guided may point at view-local `HelpAnchors`. While that flow is
@@ -38,25 +38,25 @@ pub(crate) struct WorkbenchLayout {
     /// guided sets this at its launch boundary and clears it when the flow
     /// ends; every perspective entry point is then constrained in one place.
     required_perspective: Option<String>,
-    pub(crate) activity_bar: bool,
+    pub activity_bar: bool,
 
     // Slot intent — kept so perspectives can rebuild the dock when activated.
     // User drags after that mutate `dock` directly; intent goes stale until
     // the next perspective activation. Each side slot is a Vec so multiple
     // panels can be tabbed in the same dock region. The secondary vectors
     // describe the optional lower leaf used by the split Build layout.
-    pub(crate) side_browser: Vec<PanelId>,
-    pub(crate) side_browser_bottom: Vec<PanelId>,
-    pub(crate) center: Vec<PanelId>,
-    pub(crate) active_center_tab: usize,
-    pub(crate) right_inspector: Vec<PanelId>,
-    pub(crate) right_inspector_bottom: Vec<PanelId>,
-    pub(crate) bottom: Vec<PanelId>,
+    pub side_browser: Vec<PanelId>,
+    pub side_browser_bottom: Vec<PanelId>,
+    pub center: Vec<PanelId>,
+    pub active_center_tab: usize,
+    pub right_inspector: Vec<PanelId>,
+    pub right_inspector_bottom: Vec<PanelId>,
+    pub bottom: Vec<PanelId>,
 
     /// The live dock tree — what egui_dock actually renders. Stores
     /// [`TabId`]s so both singleton panels and multi-instance tabs
     /// coexist in the same tree.
-    pub(crate) dock: DockState<TabId>,
+    pub dock: DockState<TabId>,
 
     /// Per-perspective snapshots of the live dock + slot intent, so
     /// switching back to a perspective restores *its own* open tabs and
@@ -66,7 +66,7 @@ pub(crate) struct WorkbenchLayout {
     /// and restored on the way back; a first visit has no entry, so the
     /// perspective's preset is built fresh. This is what keeps Build's
     /// tabs and Design's tabs separate: each lives in its own dock tree.
-    pub(crate) dock_cache: HashMap<PerspectiveId, PerspectiveDockSlot>,
+    pub dock_cache: HashMap<PerspectiveId, PerspectiveDockSlot>,
 }
 
 /// Cached snapshot of one perspective's dock tree + slot intent — the
@@ -74,15 +74,15 @@ pub(crate) struct WorkbenchLayout {
 /// return visit restores the exact layout (tabs + splits + which centre
 /// tab was active) the user left, rather than the preset.
 #[derive(Clone)]
-pub(crate) struct PerspectiveDockSlot {
-    pub(crate) dock: DockState<TabId>,
-    pub(crate) side_browser: Vec<PanelId>,
-    pub(crate) side_browser_bottom: Vec<PanelId>,
-    pub(crate) center: Vec<PanelId>,
-    pub(crate) active_center_tab: usize,
-    pub(crate) right_inspector: Vec<PanelId>,
-    pub(crate) right_inspector_bottom: Vec<PanelId>,
-    pub(crate) bottom: Vec<PanelId>,
+pub struct PerspectiveDockSlot {
+    pub dock: DockState<TabId>,
+    pub side_browser: Vec<PanelId>,
+    pub side_browser_bottom: Vec<PanelId>,
+    pub center: Vec<PanelId>,
+    pub active_center_tab: usize,
+    pub right_inspector: Vec<PanelId>,
+    pub right_inspector_bottom: Vec<PanelId>,
+    pub bottom: Vec<PanelId>,
 }
 
 impl Default for WorkbenchLayout {
@@ -116,12 +116,11 @@ impl WorkbenchLayout {
     /// panel to the active layout. A perspective that wants a late-registered
     /// panel declares its id through its `PerspectiveLayoutPlan`, and the
     /// rebuild below then realizes that declaration.
-    #[cfg(test)]
-    pub(crate) fn register<P: Panel + 'static>(&mut self, panel: P) {
+    pub fn register<P: Panel + 'static>(&mut self, panel: P) {
         self.register_boxed(Box::new(panel));
     }
 
-    pub(crate) fn register_boxed(&mut self, panel: Box<dyn Panel>) {
+    pub fn register_boxed(&mut self, panel: Box<dyn Panel>) {
         let id = panel.id();
         let slot = panel.default_slot();
         // A perspective may declare a panel before the domain plugin registers
@@ -169,12 +168,11 @@ impl WorkbenchLayout {
     ///
     /// A given kind should only be registered once per App; re-registering
     /// replaces the previous renderer.
-    #[cfg(test)]
-    pub(crate) fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) {
+    pub fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) {
         self.register_instance_panel_boxed(Box::new(panel));
     }
 
-    pub(crate) fn register_instance_panel_boxed(&mut self, panel: Box<dyn InstancePanel>) {
+    pub fn register_instance_panel_boxed(&mut self, panel: Box<dyn InstancePanel>) {
         self.instance_panels.insert(panel.kind(), panel);
     }
 
@@ -186,7 +184,7 @@ impl WorkbenchLayout {
     /// id and focuses it if found; otherwise adds a new tab to the
     /// **center** leaf — identified by matching any singleton tab
     /// currently in the `center` slot intent.
-    pub(crate) fn open_instance(&mut self, kind: PanelId, instance: u64) {
+    pub fn open_instance(&mut self, kind: PanelId, instance: u64) {
         self.open_instance_with_slot(kind, instance, None);
     }
 
@@ -325,7 +323,7 @@ impl WorkbenchLayout {
     }
 
     /// Open an instance tab without changing the user's current tab.
-    pub(crate) fn open_instance_without_focus(
+    pub fn open_instance_without_focus(
         &mut self,
         kind: PanelId,
         instance: u64,
@@ -358,7 +356,7 @@ impl WorkbenchLayout {
     /// - if `right_inspector` non-empty, the right-inspector split
     ///   is the previous root, i.e. at `NodeIndex(2)` when wrapped
     ///   by a side-left split, or at `NodeIndex(0)` otherwise.
-    pub(crate) fn enforce_widths(&mut self, window_w: f32, side_px: f32, right_px: f32) {
+    pub fn enforce_widths(&mut self, window_w: f32, side_px: f32, right_px: f32) {
         // Reject non-finite inputs up front: `f32::clamp` propagates NaN, so a
         // NaN px width would be written straight into a split fraction and
         // panic egui_dock's separator layout on the next frame.
@@ -406,7 +404,7 @@ impl WorkbenchLayout {
     }
 
     /// Close a multi-instance tab if present. Idempotent.
-    pub(crate) fn close_instance(&mut self, kind: PanelId, instance: u64) {
+    pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
         if let Some(pos) = self.dock.find_tab(&tab) {
             self.dock.remove_tab(pos);
@@ -416,7 +414,7 @@ impl WorkbenchLayout {
     /// Materialize a renderer-independent perspective plan into the concrete
     /// dock tree. Only this shell method knows how semantic slots map to
     /// `egui_dock` nodes.
-    pub(super) fn apply_perspective_plan(&mut self, plan: PerspectiveLayoutPlan) {
+    pub fn apply_perspective_plan(&mut self, plan: PerspectiveLayoutPlan) {
         self.activity_bar = plan.activity_bar;
         self.side_browser = plan.side_browser.primary;
         self.side_browser_bottom = plan.side_browser.secondary;
@@ -436,7 +434,7 @@ impl WorkbenchLayout {
 
     /// Register a perspective (named workbench layout). The first one
     /// registered becomes the active default.
-    pub(crate) fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) {
+    pub fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) {
         let id = perspective.id();
         let first = self.perspectives.is_empty();
         self.perspectives.push(Box::new(perspective));
@@ -455,7 +453,7 @@ impl WorkbenchLayout {
     /// — and the live dock is cleared first so the new perspective doesn't
     /// inherit the outgoing one's tabs (the old "VSCode never closes
     /// editors" merge is what made Build show Design's tabs).
-    pub(crate) fn activate_perspective(&mut self, id: PerspectiveId) {
+    pub fn activate_perspective(&mut self, id: PerspectiveId) {
         // Guided presentations own their authored chrome for the duration of
         // the flow. This applies equally to the title-bar switcher, the typed
         // API command, and internal callers because they all converge here.
@@ -563,7 +561,7 @@ impl WorkbenchLayout {
     }
 
     /// Which perspective is currently active, if any.
-    pub(crate) fn active_perspective(&self) -> Option<PerspectiveId> {
+    pub fn active_perspective(&self) -> Option<PerspectiveId> {
         self.active_perspective
     }
 
@@ -574,7 +572,7 @@ impl WorkbenchLayout {
     /// author perspective ids, while [`PerspectiveId`] is a static registry
     /// key. The requirement is resolved against the registered perspectives
     /// at activation time and never persisted as workspace state.
-    pub(crate) fn set_required_perspective(&mut self, id: Option<&str>) {
+    pub fn set_required_perspective(&mut self, id: Option<&str>) {
         self.required_perspective = id.map(str::to_owned);
     }
 
@@ -584,7 +582,7 @@ impl WorkbenchLayout {
     /// importantly the 3D `ViewportPanel`, whose absence leaves the centre blank
     /// and the viewport camera inactive. Exposed as the `ResetWorkspaceLayout`
     /// command and the View ▸ "Reset Layout" menu item.
-    pub(crate) fn reset_to_default_layout(&mut self) {
+    pub fn reset_to_default_layout(&mut self) {
         let id = self
             .active_perspective
             .or_else(|| self.perspectives.first().map(|p| p.id()));
@@ -604,7 +602,7 @@ impl WorkbenchLayout {
     /// [`Self::reset_to_default_layout`]: opening a guided guided must not
     /// inherit the user's current perspective or any cached per-perspective
     /// tabs and splits.
-    pub(crate) fn reset_to_default_perspective(&mut self) {
+    pub fn reset_to_default_perspective(&mut self) {
         let Some(id) = self
             .required_perspective
             .as_deref()
@@ -634,7 +632,7 @@ impl WorkbenchLayout {
     /// open path, so reading it here is what makes hot-exit restore the
     /// *correct* active tab. Returns `None` when the focused tab is a
     /// singleton panel (not a document) or nothing is focused.
-    pub(crate) fn active_tab_instance(&self) -> Option<u64> {
+    pub fn active_tab_instance(&self) -> Option<u64> {
         let tree = self.dock.main_surface();
         let node = tree.focused_leaf()?;
         if let egui_dock::Node::Leaf(leaf) = &tree[node] {
@@ -649,7 +647,7 @@ impl WorkbenchLayout {
     /// leaf) to JSON for per-Twin hot-exit. `TabId`/`PanelId` carry serde
     /// impls (`panel.rs`); the egui_dock `serde` feature does the rest.
     /// Returns `None` if serialization fails (never expected).
-    pub(crate) fn dock_json(&self) -> Option<serde_json::Value> {
+    pub fn dock_json(&self) -> Option<serde_json::Value> {
         serde_json::to_value(&self.dock).ok()
     }
 
@@ -666,7 +664,7 @@ impl WorkbenchLayout {
     /// recomputed from the window each layout pass and aren't persisted
     /// intent, so hashing them (as the JSON did) re-fired the save on every
     /// window resize.
-    pub(crate) fn dock_layout_hash(&self) -> u64 {
+    pub fn dock_layout_hash(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for (path, node) in self.dock.iter_all_nodes() {
@@ -717,7 +715,7 @@ impl WorkbenchLayout {
     /// ([`set_dock_from_json`]) and the per-perspective cache seeding
     /// ([`seed_perspective_docks`]) so cached trees go through the same
     /// cross-app reconciliation as the active one.
-    pub(crate) fn reconcile_dock(
+    pub fn reconcile_dock(
         &self,
         value: serde_json::Value,
         id_map: &HashMap<(&'static str, u64), u64>,
@@ -850,7 +848,7 @@ impl WorkbenchLayout {
     /// (leaving the current dock untouched) when the JSON won't parse or the
     /// reconciled tree would be empty — the caller then keeps whatever the
     /// codec-driven open path produced.
-    pub(crate) fn set_dock_from_json(
+    pub fn set_dock_from_json(
         &mut self,
         value: serde_json::Value,
         id_map: &HashMap<(&'static str, u64), u64>,
@@ -872,7 +870,7 @@ impl WorkbenchLayout {
     /// of [`seed_perspective_docks`]. The active perspective is captured
     /// last so an id that's somehow both live and cached resolves to the
     /// live tree.
-    pub(crate) fn capture_perspective_docks(
+    pub fn capture_perspective_docks(
         &self,
     ) -> std::collections::HashMap<String, PerspectiveDockSnapshot> {
         let mut out: std::collections::HashMap<String, PerspectiveDockSnapshot> =
@@ -940,7 +938,7 @@ impl WorkbenchLayout {
     /// onto live tabs across ALL trees (instance ids are global — the doc
     /// set is opened once). Perspectives not registered in this app are
     /// skipped (a `luncosim`-only perspective loaded into `lunica`).
-    pub(crate) fn seed_perspective_docks(
+    pub fn seed_perspective_docks(
         &mut self,
         docks: &std::collections::HashMap<String, PerspectiveDockSnapshot>,
         id_map: &HashMap<(&'static str, u64), u64>,
@@ -1034,7 +1032,7 @@ impl WorkbenchLayout {
     /// `String`, so restore looks the string up here and drops ids that
     /// aren't registered in the current binary (e.g. a perspective only
     /// `luncosim` ships, loaded into `lunica`).
-    pub(crate) fn activate_perspective_by_str(&mut self, id: &str) -> bool {
+    pub fn activate_perspective_by_str(&mut self, id: &str) -> bool {
         let found = self
             .perspectives
             .iter()
@@ -1084,7 +1082,7 @@ impl WorkbenchLayout {
     /// the perspective preset doesn't track. Picks a leaf based on
     /// the panel's default slot; falls back to the focused leaf.
     /// Returns true if the panel was inserted.
-    pub(crate) fn insert_panel_into_dock(&mut self, id: PanelId, slot: PanelSlot) -> bool {
+    pub fn insert_panel_into_dock(&mut self, id: PanelId, slot: PanelSlot) -> bool {
         let tab = TabId::Singleton(id);
         // Already there? No-op.
         if self.dock.iter_all_tabs().any(|(_, t)| *t == tab) {
@@ -1139,7 +1137,7 @@ impl WorkbenchLayout {
     /// Used by the [`FocusPanel`] typed command so HTTP / scripting
     /// callers can deterministically bring a panel forward (e.g.
     /// activating Experiments before screenshotting it).
-    pub(crate) fn focus_singleton(&mut self, id: PanelId) -> bool {
+    pub fn focus_singleton(&mut self, id: PanelId) -> bool {
         let tab = TabId::Singleton(id);
         if let Some(pos) = self.dock.find_tab(&tab) {
             self.dock.set_focused_node_and_surface(pos.node_path());
@@ -1158,7 +1156,7 @@ impl WorkbenchLayout {
 
     /// Remove a panel from the live dock without rebuilding from
     /// scratch. Companion to [`insert_panel_into_dock`].
-    pub(crate) fn remove_panel_from_dock(&mut self, id: PanelId) -> bool {
+    pub fn remove_panel_from_dock(&mut self, id: PanelId) -> bool {
         let tab = TabId::Singleton(id);
         let mut removed = false;
         let main = self.dock.main_surface_mut();
@@ -1189,7 +1187,7 @@ impl WorkbenchLayout {
         removed
     }
 
-    pub(crate) fn rebuild_dock(&mut self) {
+    pub fn rebuild_dock(&mut self) {
         // Filter slot intent down to panels actually registered in this
         // app, so perspective presets can optimistically list panels that
         // may only exist in some binaries (e.g. a rover-only Code tab
@@ -1381,7 +1379,7 @@ impl WorkbenchLayout {
     /// documents or the chrome. Viewport-only perspectives (no
     /// registered centre singleton — the luncosim's `View`) are left
     /// untouched: their chrome lives outside the dock by design.
-    pub(crate) fn ensure_chrome_present(&mut self) {
+    pub fn ensure_chrome_present(&mut self) {
         if !self.perspective_chrome_complete() {
             warn!(
                 "[WorkspaceState] restored dock missing perspective chrome; \
@@ -1404,7 +1402,7 @@ impl WorkbenchLayout {
     /// e.g. mid perspective-switch through the viewport-only
     /// [`Self::rebuild_dock`] branch — never round-trips as a layout with
     /// missing side panels).
-    pub(crate) fn perspective_chrome_complete(&self) -> bool {
+    pub fn perspective_chrome_complete(&self) -> bool {
         self.chrome_complete(
             &self.dock,
             &self.side_browser,
@@ -1466,7 +1464,7 @@ impl WorkbenchLayout {
 ///
 /// The provider keeps persisted session logic independent from this shell,
 /// while all dock reconciliation remains owned by `WorkbenchLayout`.
-pub(super) struct WorkbenchLayoutStateProvider;
+pub struct WorkbenchLayoutStateProvider;
 
 impl WorkspaceStateLayoutProvider for WorkbenchLayoutStateProvider {
     fn active_perspective(&self, world: &World) -> Option<String> {

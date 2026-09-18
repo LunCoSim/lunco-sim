@@ -13,8 +13,8 @@ use bevy::ecs::resource::Resource;
 use bevy::ecs::world::World;
 use openusd::sdf::Path as SdfPath;
 
-use crate::read::UsdReadObject;
-use crate::UsdStageAsset;
+use lunco_usd_bevy_stage::read::UsdReadObject;
+use lunco_usd_bevy_stage::UsdStageAsset;
 
 /// One specialized owner of a live USD edit surface.
 ///

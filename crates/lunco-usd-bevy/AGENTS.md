@@ -9,9 +9,9 @@ scene-property port surfaces are projected by
 `lunco-usd-avian` and `lunco-usd-sim` and run after visual projection.
 
 Read alongside `crates/lunco-usd-bevy/src/lib.rs` (the visual sync systems),
-`crates/lunco-usd-bevy-core/src/read.rs` (the `UsdRead` seam),
-`crates/lunco-usd-bevy-core/src/view.rs` /
-`crates/lunco-usd-bevy-core/src/canonical.rs` (the live canonical stage), and
+`crates/lunco-usd-bevy-stage/src/read.rs` (the `UsdRead` seam),
+`crates/lunco-usd-bevy-stage/src/view.rs` /
+`crates/lunco-usd-bevy-stage/src/canonical.rs` (the live canonical stage), and
 `docs/architecture/21-domain-usd.md` (the system-level overview).
 
 ## Reading USD attributes
@@ -78,7 +78,7 @@ only inside our pipeline. A future collaborative/Nucleus-like protocol should
 take a distinct scheme (e.g. `lunco-net://`).
 
 **USD composition resolution is separate from asset-source resolution.** The
-asset-source boundary belongs to `lunco-assets-core`; this crate owns `canonicalize`
+asset-source boundary belongs to `lunco-assets-runtime`; this crate owns `canonicalize`
 and `LuncoUsdResolver` — anchoring a *relative* reference to its referencing
 layer, which is USD composition semantics. It must not re-derive where a scheme
 points: ask `lunco_assets_core` (`has_scheme`, `local_path`, `shipped_asset_root`,

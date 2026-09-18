@@ -16,7 +16,7 @@ use lunco_time::{Clocks, MissionClock, ResolvedDomains, TimeTransport, WorldTime
 pub fn sim_tick() -> i64 {
     with_world(|world| {
         world
-            .get_resource::<lunco_core::SimTick>()
+            .get_resource::<lunco_core_runtime::SimTick>()
             .map(|tick| tick.0 as i64)
             .unwrap_or_else(|| {
                 report_clock_contract_fault(world, "sim-tick-missing", "SimTick is absent");
@@ -57,12 +57,12 @@ pub fn dt() -> f64 {
 }
 
 /// `elapsed_seconds()` — deterministic simulation seconds derived from the
-/// integer [`lunco_core::SimTick`], not Bevy's accumulated fixed-clock
+/// integer [`lunco_core_runtime::SimTick`], not Bevy's accumulated fixed-clock
 /// bookkeeping. The core tick and fixed clock are mandatory; absence is a
 /// terminal contract fault.
 pub fn elapsed_seconds() -> f64 {
     with_world(|world| {
-        let Some(tick) = world.get_resource::<lunco_core::SimTick>().map(|tick| tick.0) else {
+        let Some(tick) = world.get_resource::<lunco_core_runtime::SimTick>().map(|tick| tick.0) else {
             report_clock_contract_fault(world, "sim-tick-missing", "SimTick is absent");
             return f64::NAN;
         };
@@ -106,7 +106,7 @@ fn report_clock_contract_fault(world: &mut World, kind: &'static str, detail: im
 }
 
 /// Read the complete simulation clock snapshot exposed to every scripting
-/// backend. The integer [`lunco_core::SimTick`] is the deterministic master;
+/// backend. The integer [`lunco_core_runtime::SimTick`] is the deterministic master;
 /// all other simulation-domain values are derived or projected from it.
 ///
 /// The mandatory `SimTick` + `Time<Fixed>` + `Time<Virtual>` spine is never
@@ -121,7 +121,7 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
         // compile. The snapshot below is therefore a value-level view of the
         // clocks, not a set of live ECS references.
         let tick = world
-            .get_resource::<lunco_core::SimTick>()
+            .get_resource::<lunco_core_runtime::SimTick>()
             .map(|value| value.0);
         let fixed_snapshot = world.get_resource::<Time<bevy::time::Fixed>>().map(|time| {
             (
@@ -193,7 +193,7 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             .copied()
             .unwrap_or_default();
         let barrier = world
-            .get_resource::<lunco_core::SimulationBarrier>()
+            .get_resource::<lunco_core_runtime::SimulationBarrier>()
             .copied()
             .unwrap_or_default();
 

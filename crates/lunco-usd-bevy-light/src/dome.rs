@@ -54,9 +54,9 @@ use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_render::{RenderQualityProfile, RenderingQualitySettings, SceneCamera};
-use lunco_usd_bevy_core::canonical::CanonicalStages;
-use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneInfoChanged};
+use lunco_usd_bevy_stage::canonical::CanonicalStages;
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::Path as SdfPath;
 use wgpu_types::{
@@ -103,7 +103,7 @@ pub struct UsdDomeEnvironment {
 }
 
 fn read_dome_format(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &openusd::sdf::Path,
 ) -> Result<(), crate::light::LightReadError> {
     match reader.text(path, ltok::A_TEXTURE_FORMAT).as_deref() {
@@ -341,10 +341,10 @@ fn load_dome_texture(asset_server: &AssetServer, path: &str) -> Handle<Image> {
 /// command runtime. Two copies would drift, and the symptom would
 /// be a dome that loads one way from disk and another way after an edit.
 pub fn read_dome_environment(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     sdf_path: &openusd::sdf::Path,
     asset_server: &AssetServer,
-    stage_id: bevy::asset::AssetId<lunco_usd_bevy_core::UsdStageAsset>,
+    stage_id: bevy::asset::AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
     quality: RenderQualityProfile,
 ) -> Result<Option<UsdDomeEnvironment>, crate::light::LightReadError> {
     let texture_authored = reader.has_authored_attribute(sdf_path, ltok::A_TEXTURE_FILE)
@@ -361,7 +361,7 @@ pub fn read_dome_environment(
     }
     let texture_path = texture_value
         .filter(|p| !p.is_empty())
-        .map(|p| lunco_usd_bevy_core::asset::resolve_stage_asset_path(asset_server, stage_id, &p));
+        .map(|p| lunco_usd_bevy_stage::asset::resolve_stage_asset_path(asset_server, stage_id, &p));
     let Some(texture_path) = texture_path else {
         return Ok(None);
     };
@@ -816,7 +816,7 @@ def DomeLight "Dome"
 }
 "#,
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build dome");
         let path = openusd::sdf::Path::new("/Dome").unwrap();
         assert!(read_dome_format(&stage.view(), &path).is_err());

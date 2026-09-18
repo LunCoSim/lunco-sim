@@ -9,11 +9,11 @@
 use bevy::asset::{AssetEvent, AssetServer};
 use bevy::prelude::*;
 
-use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_core::program::{
     ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
 };
-use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_stage::UsdStageAsset;
+use lunco_usd_bevy_stage::read::UsdReadObject;
 
 /// Install the application-level scripting and policy integration.
 pub struct LunCoSimRuntimePlugin {
@@ -126,9 +126,9 @@ pub fn run_headless() -> lunco_luncosim_core::AppExit {
         return lunco_luncosim_core::AppExit::Success;
     }
     let execution_mode = if args.iter().any(|arg| arg == "--headless-max-speed") {
-        lunco_core::SimulationExecutionMode::MaxSpeed
+        lunco_core_runtime::SimulationExecutionMode::MaxSpeed
     } else {
-        lunco_core::SimulationExecutionMode::Realtime
+        lunco_core_runtime::SimulationExecutionMode::Realtime
     };
     let mut app = build_headless_app_with_threads(Some(1));
 
@@ -201,7 +201,7 @@ fn append_usd_policies(
 
 fn extract_active_usd_policies(
     stages: &Assets<UsdStageAsset>,
-    canonical: &lunco_usd_bevy_core::canonical::CanonicalStages,
+    canonical: &lunco_usd_bevy_stage::canonical::CanonicalStages,
     roots: impl IntoIterator<Item = AssetId<UsdStageAsset>>,
 ) -> Vec<AuthoredPolicy> {
     let mut out = Vec::new();
@@ -236,7 +236,7 @@ fn resolve_policy_source_file(
         return PolicySource::Failed;
     };
     let asset_id =
-        lunco_usd_bevy_core::asset::resolve_stage_asset_path(asset_server, stage_id, path);
+        lunco_usd_bevy_stage::asset::resolve_stage_asset_path(asset_server, stage_id, path);
     let handle = pending.entry(asset_id.clone()).or_insert_with(|| {
         asset_server.load(bevy::asset::AssetPath::parse(&asset_id).into_owned())
     });
@@ -263,7 +263,7 @@ fn resolve_policy_source_file(
 #[allow(clippy::type_complexity)]
 fn project_usd_policies(
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
     roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     mut registry: ResMut<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>,
     mut synthesizers: ResMut<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>,
@@ -273,7 +273,7 @@ fn project_usd_policies(
     mut pending: Local<
         std::collections::HashMap<
             String,
-        Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
+            Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
         >,
     >,
     mut source_events: MessageReader<
@@ -311,7 +311,7 @@ fn project_usd_policies(
         .iter()
         .filter_map(|a| {
             a.source_path.as_deref().map(|path| {
-                lunco_usd_bevy_core::asset::resolve_stage_asset_path(
+                lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
                     &asset_server,
                     a.stage_id,
                     path,

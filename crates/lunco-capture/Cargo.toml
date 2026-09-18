@@ -14,6 +14,7 @@ name = "capture_from_camera_test"
 required-features = ["api"]
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_render", "bevy_window"] }
 image = { workspace = true, optional = true }
 lunco-api = { path = "../lunco-api", optional = true }

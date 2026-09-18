@@ -53,13 +53,13 @@ use bevy::prelude::*;
 use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
-use lunco_usd_bevy_core::{
-    effective_purpose, world_transform, Purpose, TransformReadError, UsdInstanceProjection,
-    UsdInstanceRoot, UsdRead, UsdStageAsset,
-};
 use lunco_usd_bevy_scene::{
     instance_key, is_preview_only, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected,
     UsdSceneRoot,
+};
+use lunco_usd_bevy_stage::{
+    effective_purpose, world_transform, Purpose, TransformReadError, UsdInstanceProjection,
+    UsdInstanceRoot, UsdRead, UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
@@ -651,7 +651,7 @@ const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 fn add_collider_from_usd(
     commands: &mut Commands,
     entity: Entity,
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), ColliderProjectionError> {
     if let Some(collider) = build_collider_from_usd(reader, sdf_path)? {
@@ -899,7 +899,7 @@ fn process_usd_avian_prims(
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     mount_state: Option<Res<lunco_core::SceneMountState>>,
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
     mut group_tables: ResMut<CollisionGroupTables>,
     mut commands: Commands,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -981,10 +981,10 @@ fn process_usd_avian_prims(
 /// scene author only the half it cares about — a lunar scene names 1.62 and says
 /// nothing about direction.
 fn read_physics_scene_gravity(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(f64, DVec3), &'static str> {
-    let convention = lunco_usd_bevy_core::stage_convention(reader)
+    let convention = lunco_usd_bevy_stage::stage_convention(reader)
         .map_err(|_| "stage convention metadata is invalid")?;
     let magnitude = match reader.real(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
         Some(value) if value < 0.0 => lunco_environment::EARTH_SURFACE_GRAVITY,
@@ -1021,7 +1021,7 @@ fn read_physics_scene_gravity(
 }
 
 fn apply_physics_scene_gravity(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
     commands: &mut Commands,
 ) {
@@ -1074,7 +1074,7 @@ fn apply_physics_scene_gravity(
 /// shared reader boundary. Split out of the observer so the read body can be
 /// driven directly by tests.
 fn is_physics_joint_type(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> bool {
     matches!(
@@ -1097,7 +1097,7 @@ fn is_physics_joint_type(
 /// can arrive before the stage. This keeps valid joints and malformed-joint
 /// faults independent of loading order.
 fn project_pending_joint(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     entity: Entity,
     sdf_path: &SdfPath,
     commands: &mut Commands,
@@ -1134,7 +1134,7 @@ fn project_pending_joint(
 }
 
 fn extract_avian_prim(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     entity: Entity,
     sdf_path: &SdfPath,
     groups: &CollisionGroupTable,
@@ -1466,7 +1466,7 @@ fn apply_collision_groups(
 /// Avian's runtime velocity components are world-frame. Keep that rotation in
 /// one helper so linear and angular initial state share the same convention.
 fn local_vector_to_world(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
     local: DVec3,
 ) -> Result<DVec3, TransformReadError> {
@@ -1484,7 +1484,7 @@ fn on_add_usd_prim(
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
     mut commands: Commands,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -1974,7 +1974,7 @@ fn build_usd_physics_joints(
 fn apply_rigid_body_mass_props(
     commands: &mut Commands,
     entity: Entity,
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), ()> {
     // Each of `Mass` / `AngularInertia` / `CenterOfMass` is only an OVERRIDE if the
@@ -1998,7 +1998,7 @@ fn apply_rigid_body_mass_props(
     // MassAPI's ZERO is a sentinel, not a value: `mass = 0`, `density = 0` and
     // `diagonalInertia = (0,0,0)` all mean "unauthored — compute me". Treating
     // them as overrides hands the solver a degenerate body.
-    let conv = lunco_usd_bevy_core::stage_convention(reader).map_err(|_| ())?;
+    let conv = lunco_usd_bevy_stage::stage_convention(reader).map_err(|_| ())?;
     let mpu = conv.length(1.0);
     if !mpu.is_finite() || mpu <= 0.0 {
         return Err(());
@@ -2157,7 +2157,7 @@ fn apply_rigid_body_mass_props(
 fn apply_physics_material(
     commands: &mut Commands,
     entity: Entity,
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), ()> {
     // Friction/restitution come from a bound `UsdPhysicsMaterialAPI` material —
@@ -2229,7 +2229,7 @@ mod collider_parity_tests {
 
     use super::build_collider_from_usd;
     use bevy::math::DVec3;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
@@ -2336,8 +2336,8 @@ mod extract_parity_tests {
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
     use lunco_usd_avian_filters::collision_groups::CollisionGroupTable;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_bevy_core::StageView;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::StageView;
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
@@ -2595,7 +2595,7 @@ mod joint_reader_tests {
     use avian3d::prelude::MotorModel;
     use bevy::math::DVec3;
     use lunco_usd_avian_reader::joint::read_joint_spec_for_lint;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
@@ -2820,7 +2820,7 @@ def PhysicsPrismaticJoint "FixtureSpring" (
     float drive:linear:physics:stiffness = 4000.0
 }
 "#;
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(
             &lunco_usd_compose::recipe::StageRecipe::from_source("lint_only.usda", source),
         )
         .expect("compose lint-only fixture");
@@ -3234,7 +3234,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
 #[cfg(test)]
 mod collider_ownership_tests {
     use super::*;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
     use std::collections::HashMap;
 
@@ -3402,7 +3402,10 @@ def Xform "Mission"
 "#;
 
     /// Run the extractor on one prim and return its resulting components.
-    fn extract(view: &lunco_usd_bevy_core::StageView<'_>, path: &str) -> (bool, Option<RigidBody>) {
+    fn extract(
+        view: &lunco_usd_bevy_stage::StageView<'_>,
+        path: &str,
+    ) -> (bool, Option<RigidBody>) {
         let mut world = World::new();
         let entity = world.spawn_empty().id();
         let sdf = SdfPath::new(path).unwrap();

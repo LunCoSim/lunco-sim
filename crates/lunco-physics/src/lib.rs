@@ -54,8 +54,8 @@ pub mod escape;
 pub mod force_ports;
 pub mod joint;
 pub mod pose;
-pub mod readiness;
 pub mod raycast;
+pub mod readiness;
 pub mod spatial;
 pub mod support;
 pub use avian_backend::{
@@ -74,8 +74,7 @@ pub use support::{
     PhysicsInitializationSubject, PhysicsJointDetachRequested, PhysicsJointDetachSet,
     PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact, PhysicsSupportFootprint,
     PhysicsSupportSet, PhysicsSupportState, PhysicsWheelContact, PhysicsWheelRaycastFilter,
-    PHYSICS_INITIALIZATION_HOOK_PREFIX,
-    STRICT_AUTHORED_INITIALIZATION_POLICY,
+    PHYSICS_INITIALIZATION_HOOK_PREFIX, STRICT_AUTHORED_INITIALIZATION_POLICY,
 };
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.
@@ -853,7 +852,7 @@ pub fn physics_is_live(
 /// it is also self-healing if anything pauses the physics clock out of band.
 pub fn apply_physics_holds(
     holds: Res<PhysicsHolds>,
-    coupling: Option<Res<lunco_core::SimulationBarrier>>,
+    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut physics_time: ResMut<Time<Physics>>,
 ) {
@@ -921,7 +920,7 @@ fn reset_scene_physics_state(
 /// integrated step.
 pub fn grant_physics_step(
     holds: Res<PhysicsHolds>,
-    coupling: Option<Res<lunco_core::SimulationBarrier>>,
+    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
     mut steps: ResMut<PhysicsStepRequest>,
     mut physics_time: ResMut<Time<Physics>>,
@@ -1811,7 +1810,7 @@ mod tests {
         world.insert_resource(PhysicsHolds::default());
         world.insert_resource(PhysicsStepRequest::default());
         world.insert_resource(Time::<Physics>::default());
-        world.insert_resource(lunco_core::SimulationBarrier {
+        world.insert_resource(lunco_core_runtime::SimulationBarrier {
             held: true,
             ..Default::default()
         });
@@ -1824,7 +1823,9 @@ mod tests {
         assert!(world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<PhysicsStepRequest>().steps, 1);
 
-        world.resource_mut::<lunco_core::SimulationBarrier>().held = false;
+        world
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+            .held = false;
         world.run_system_once(grant_physics_step).unwrap();
         assert!(!world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);

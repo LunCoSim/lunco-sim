@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use bevy::asset::{AssetId, AssetServer, Assets};
 use bevy::prelude::*;
-use lunco_usd_bevy_core::source::UsdSourceText;
+use lunco_usd_bevy_stage::source::UsdSourceText;
 
 #[derive(Resource)]
 pub(crate) struct PendingSchemaAssets {
@@ -23,7 +23,7 @@ pub(crate) struct PendingSchemaAssets {
 pub(crate) fn request_schema_assets(
     mut commands: Commands,
     asset_server: Option<Res<AssetServer>>,
-    manifest: Option<Res<lunco_assets_core::discovery::AssetManifest>>,
+    manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
     pending: Option<Res<PendingSchemaAssets>>,
 ) {
     if pending.is_some() {
@@ -44,11 +44,11 @@ pub(crate) fn request_schema_assets(
         .rels()
         .iter()
         .filter_map(|path| {
-            let owner = lunco_assets_core::discovery::schema_asset_owner(path)?;
+            let owner = lunco_assets_runtime::discovery::schema_asset_owner(path)?;
             let path = std::path::Path::new(path);
             let module = path.file_stem()?.to_str()?.to_owned();
             Some((
-                owner == lunco_assets_core::discovery::SchemaAssetOwner::Lunco,
+                owner == lunco_assets_runtime::discovery::SchemaAssetOwner::Lunco,
                 module,
                 asset_server.load::<UsdSourceText>(path.to_string_lossy().into_owned()),
             ))
@@ -71,8 +71,7 @@ pub(crate) fn register_ready_schema_assets(
     assets: Option<Res<Assets<UsdSourceText>>>,
     asset_server: Option<Res<AssetServer>>,
 ) {
-    let (Some(mut pending), Some(assets), Some(asset_server)) =
-        (pending, assets, asset_server)
+    let (Some(mut pending), Some(assets), Some(asset_server)) = (pending, assets, asset_server)
     else {
         return;
     };

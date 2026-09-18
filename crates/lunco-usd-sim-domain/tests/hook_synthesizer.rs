@@ -83,13 +83,13 @@ fn emit(net) {
 }
 "#;
 
-fn stage(fixture: &str) -> lunco_usd_bevy_core::canonical::CanonicalStage {
+fn stage(fixture: &str) -> lunco_usd_bevy_stage::canonical::CanonicalStage {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(fixture);
     let composed =
-        lunco_usd_bevy_core::compose::compose_file_to_stage(&path).expect("compose fixture");
-    lunco_usd_bevy_core::canonical::CanonicalStage::from_stage(
+        lunco_usd_bevy_stage::compose::compose_file_to_stage(&path).expect("compose fixture");
+    lunco_usd_bevy_stage::canonical::CanonicalStage::from_stage(
         composed,
         path.to_string_lossy().to_string(),
     )

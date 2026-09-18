@@ -6,6 +6,8 @@ license.workspace = true
 description = "Render runtime for USD preview sessions and views"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true, features = [
@@ -22,7 +24,6 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-render = { path = "../lunco-render" }
 lunco-settings = { path = "../lunco-settings" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }

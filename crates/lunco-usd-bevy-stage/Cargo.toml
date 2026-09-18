@@ -1,0 +1,21 @@
+[package]
+name = "lunco-usd-bevy-stage"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Composed OpenUSD stage reader and immutable projection plans"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset"] }
+anyhow = { workspace = true }
+openusd = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
+lunco-usd-data = { path = "../lunco-usd-data" }
+
+[dev-dependencies]
+lunco-usd-authoring = { path = "../lunco-usd-authoring" }
+
+[lints]
+workspace = true

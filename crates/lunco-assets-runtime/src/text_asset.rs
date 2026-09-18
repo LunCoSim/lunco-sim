@@ -5,7 +5,7 @@
 //! Bevy path on native and wasm instead of a synchronous filesystem read or a
 //! compiled-in snapshot.
 
-use bevy::asset::{io::Reader, AssetLoader, LoadContext};
+use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;
 
 use crate::discovery::AssetManifest;
@@ -97,7 +97,9 @@ fn discover_text_assets(
         .iter()
         .filter(|path| {
             matches!(
-                std::path::Path::new(path).extension().and_then(|ext| ext.to_str()),
+                std::path::Path::new(path)
+                    .extension()
+                    .and_then(|ext| ext.to_str()),
                 Some("json" | "toml")
             )
         })

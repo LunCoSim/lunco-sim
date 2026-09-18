@@ -6,6 +6,7 @@ license.workspace = true
 description = "Twin and workspace Modelica source-root admission for the Rumoca worker"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy.workspace = true
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }

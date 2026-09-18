@@ -16,10 +16,10 @@ use bevy::log::info;
 use bevy::log::warn;
 use bevy::prelude::*;
 
-use lunco_usd_bevy_core::UsdStageAsset;
 #[cfg(feature = "networking")]
 use lunco_usd_bevy_runtime_core::scene::LoadScene;
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::UsdStageAsset;
 
 /// Production application-service composition.
 pub struct LunCoSimServicesPlugin {

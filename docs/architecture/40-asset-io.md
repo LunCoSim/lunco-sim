@@ -5,8 +5,9 @@
 **TL;DR.** Domain crates read shippable assets through
 `bevy::asset::AssetServer`; user-data bytes and mutations go through
 `lunco-storage`; platform-neutral URI and relative-path rules belong to
-`lunco-assets-path`, while roots, source readers, and cache policy belong to
-`lunco-assets-core`. Dataset declarations and lifecycle state belong to
+`lunco-assets-path`, while roots and cache identity belong to
+`lunco-assets-core`, and registered source readers belong to
+`lunco-assets-runtime`. Dataset declarations and lifecycle state belong to
 `lunco-assets-datasets`; native provisioning is composed by `lunco-assets`
 from the transport, download, and processing packages. The shared
 retry/backoff policy is owned by
@@ -118,7 +119,7 @@ different loading/saving sequences.
 
 | Loader | Asset type | Where | Extensions |
 |---|---|---|---|
-| `UsdLoader` | `UsdStageAsset` | `lunco-usd-bevy-core` | `.usda` |
+| `UsdLoader` | `UsdStageAsset` | `lunco-usd-bevy-stage` | `.usda` |
 | `ModelicaSourceLoader` | `ModelicaSource` | `lunco-modelica-runtime` | `.mo` |
 | `PythonSourceLoader` | `PythonSource` | `lunco-scripting` (`python` feature) | `.py` |
 | `RhaiSourceLoader` | `RhaiSource` | `lunco-scripting-rhai-runtime` | `.rhai` |
@@ -137,8 +138,8 @@ policy decides which of those sources become callable libraries.
 
 Three classes of crate legitimately bypass `AssetServer`:
 
-- **Filesystem-owning crates.** `lunco-assets-core` (asset roots, source
-  resolution, and runtime asset access), `lunco-assets-download`
+- **Filesystem-owning crates.** `lunco-assets-core` (asset roots and source
+  identity), `lunco-assets-runtime` (runtime source access), `lunco-assets-download`
   (download/extract/install), `lunco-assets-processing` (native processing),
   `lunco-assets` (worker lifecycle and CLI composition),
   `lunco-modelica-assets` (native Modelica packaging and indexing tools),
@@ -214,14 +215,14 @@ no manual hunt.
 
 | Site | Status |
 |---|---|
-| `lunco-usd-bevy-core/UsdLoader` | ✅ Bevy AssetLoader |
-| `lunco-usd-bevy-core/compose.rs` compose (resolver-backed stage, injected fetcher) | ✅ injected fetcher, wasm path pre-fetches via `LoadContext::read_asset_bytes` |
+| `lunco-usd-bevy-stage/UsdLoader` | ✅ Bevy AssetLoader |
+| `lunco-usd-bevy-stage/compose.rs` compose (resolver-backed stage, injected fetcher) | ✅ injected fetcher, wasm path pre-fetches via `LoadContext::read_asset_bytes` |
 | `lunco-usd-sim-cosim/src/lib.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
 | `lunco-usd-ui/src/ui/browser_dispatch.rs` twin browser open | ✅ routed through the shared `OpenFile` USD document command |
 | `lunco-usd-commands/src/lib.rs` usd document load | ✅ reads through the storage abstraction |
-| Modelica source-root admission | ✅ `lunco-modelica-source-roots` owns registry/lifecycle state and manifest-aware Twin resolution; filesystem enumeration is delegated to `lunco-assets-core`, and the compiler host parses and seats the returned source files |
+| Modelica source-root admission | ✅ `lunco-modelica-source-roots` owns registry/lifecycle state and manifest-aware Twin resolution; filesystem enumeration is delegated to `lunco-assets-runtime`, and the compiler host parses and seats the returned source files |
 | `lunco-modelica-library/source_library.rs` source-library fetch | ✅ owns source-library admission and browser fetch state; the wasm worker handoff is a typed bridge implemented by `lunco-modelica-execution`, so compiler-only consumers do not own the fetch implementation |
-| `lunco-assets-core::models` runtime inventory | ✅ reads the authored `assets/models/` tree through `lunco-storage`; no compiled snapshot or embedded fallback |
+| `lunco-assets-runtime::models` runtime inventory | ✅ reads the authored `assets/models/` tree through `lunco-storage`; no compiled snapshot or embedded fallback |
 
 ## Related foot-guns (same rule applies)
 

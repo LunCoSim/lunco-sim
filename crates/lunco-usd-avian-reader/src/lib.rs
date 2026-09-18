@@ -5,7 +5,7 @@
 //! systems, create entities, apply runtime policy, or own scene lifecycle.
 
 use bevy::math::{DQuat, DVec3};
-use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_stage::read::UsdReadObject;
 use openusd::sdf::Path as SdfPath;
 
 pub mod collider;

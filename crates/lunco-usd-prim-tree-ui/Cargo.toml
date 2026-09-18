@@ -6,13 +6,13 @@ license.workspace = true
 description = "Reusable composed-USD prim tree panel for LunCoSim editors"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true }
 egui = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-render = { path = "../lunco-render" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-viewport-core = { path = "../lunco-usd-viewport-core" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

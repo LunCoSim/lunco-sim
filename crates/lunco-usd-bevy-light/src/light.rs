@@ -57,7 +57,7 @@ use bevy::prelude::*;
 use lunco_render::{
     LightGraphicsDefaults, LunarSunShadow, RenderQualityProfile, ShadowRangeAuthorship,
 };
-use lunco_usd_bevy_core::read::get_attribute_as_vec3;
+use lunco_usd_bevy_stage::read::get_attribute_as_vec3;
 use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::{Path as SdfPath, Value};
 
@@ -310,7 +310,7 @@ pub fn ambient_fill_saturates(requested_total: f32, other_domes_total: f32) -> b
 /// but the photometric conversion is identical, so it lives here once. `Err`
 /// means an authored intensity/exposure could not be interpreted safely.
 pub fn read_intensity_with_exposure(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     default_intensity: f32,
 ) -> Result<f32, LightReadError> {
@@ -318,7 +318,7 @@ pub fn read_intensity_with_exposure(
 }
 
 fn resolve_intensity_with_exposure(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     default_intensity: f32,
 ) -> Result<(f32, bool, f32), LightReadError> {
@@ -353,7 +353,7 @@ pub struct DomeIntensity {
 /// only when USD omits `inputs:intensity` and preserving authored intensity and
 /// exposure exactly.
 pub fn read_dome_intensity(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     quality: RenderQualityProfile,
 ) -> Result<DomeIntensity, LightReadError> {
@@ -371,7 +371,7 @@ pub fn read_dome_intensity(
 /// non-finite authored values are rejected instead of being converted into a
 /// plausible-looking light.
 fn read_authored_real(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     name: &str,
 ) -> Result<Option<f32>, LightReadError> {
@@ -407,7 +407,7 @@ fn read_authored_real(
 /// `inputs:enableColorTemperature` is authored `true` — the `UsdLuxLightAPI`
 /// rule, shared by every light arm here and the dome tint in `dome.rs`.
 pub(crate) fn read_light_color(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
 ) -> Result<Vec3, LightReadError> {
     let color = if reader.has_authored_attribute(path, ltok::A_COLOR)
@@ -450,7 +450,7 @@ pub(crate) fn read_light_color(
 /// Read an authored USD boolean, preserving the distinction between an omitted
 /// attribute and a malformed value.
 pub(crate) fn read_authored_bool(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     name: &str,
 ) -> Result<Option<bool>, LightReadError> {
@@ -530,7 +530,7 @@ fn positive_length(
 }
 
 fn read_positive_length(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     name: &str,
     default: f32,
@@ -564,7 +564,7 @@ fn area_scale(normalize: bool, area_ratio: f32) -> Option<f32> {
 /// default here, not "zero metres"; negative authored values are invalid.
 ///
 fn read_light_range(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     default: f32,
     convention: lunco_usd_data::units::ConventionTransform,
@@ -601,7 +601,7 @@ fn read_light_range(
 /// API without overriding the attribute therefore lands on the engine default,
 /// while other invalid negative/zero values are rejected.
 fn read_shadow_distance(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     default: f32,
     convention: lunco_usd_data::units::ConventionTransform,
@@ -647,7 +647,7 @@ const USDLUX_SHADOW_ENABLE: bool = true;
 /// and the `UsdLuxShadowAPI` schema fallback is used only when the attribute is
 /// omitted.
 fn read_shadow_enable(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
 ) -> Result<bool, LightReadError> {
     Ok(read_authored_bool(reader, path, ltok::A_SHADOW_ENABLE)?.unwrap_or(USDLUX_SHADOW_ENABLE))
@@ -658,7 +658,7 @@ fn read_shadow_enable(
 /// `instantiate_usd_prim`; the prim's transform/visibility are applied by
 /// the shared path there.
 pub fn instantiate_light_prim(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     commands: &mut Commands,
@@ -667,7 +667,7 @@ pub fn instantiate_light_prim(
     // stage layer, so resolving it needs both the server and the stage it came
     // from — same pair `apply_standard_material` uses for its texture inputs.
     asset_server: &AssetServer,
-    stage_id: bevy::asset::AssetId<lunco_usd_bevy_core::UsdStageAsset>,
+    stage_id: bevy::asset::AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
     quality: lunco_render::RenderQualityProfile,
     scope: LightProjectionScope,
 ) -> bool {
@@ -678,7 +678,7 @@ pub fn instantiate_light_prim(
         // preview mutate the live ambient/sky contract.
         return false;
     }
-    let convention = match lunco_usd_bevy_core::units::stage_convention(reader) {
+    let convention = match lunco_usd_bevy_stage::units::stage_convention(reader) {
         Ok(convention) => convention,
         Err(error) => {
             error!(
@@ -1455,8 +1455,8 @@ def DomeLight "Scalar"
 #[cfg(test)]
 mod photometry_tests {
     use super::*;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_bevy_core::read::UsdRead;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::read::UsdRead;
     use lunco_usd_compose::recipe::StageRecipe;
 
     #[test]
@@ -1532,7 +1532,7 @@ def Xform "World"
         let view = stage.view();
         let lamp = SdfPath::new("/World/Lamp").unwrap();
         let convention =
-            lunco_usd_bevy_core::units::stage_convention(&view).expect("valid stage convention");
+            lunco_usd_bevy_stage::units::stage_convention(&view).expect("valid stage convention");
 
         assert_eq!(
             read_light_range(&view, &lamp, 30.0, convention),
@@ -1599,7 +1599,7 @@ def DistantLight "Sun"
             &view,
             &sun,
             1500.0,
-            lunco_usd_bevy_core::units::stage_convention(&view).expect("valid stage convention"),
+            lunco_usd_bevy_stage::units::stage_convention(&view).expect("valid stage convention"),
         )
         .is_err());
         assert!(read_shadow_enable(&view, &sun).is_err());

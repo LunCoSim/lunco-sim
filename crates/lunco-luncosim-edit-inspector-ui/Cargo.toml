@@ -6,6 +6,7 @@ license.workspace = true
 description = "Inspector and authored USD panels for LunCoSim's scene editor"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true, features = [

@@ -1,6 +1,6 @@
 use bevy::prelude::{error, Quat, Vec3};
-use lunco_usd_bevy_core::read::UsdReadObject;
-use lunco_usd_bevy_core::stage_convention;
+use lunco_usd_bevy_stage::read::UsdReadObject;
+use lunco_usd_bevy_stage::stage_convention;
 use openusd::schemas::geom::tokens;
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
@@ -281,7 +281,7 @@ fn read_int_array(reader: &dyn UsdReadObject, path: &SdfPath, attr: &str) -> Opt
 #[cfg(test)]
 mod primitive_attribute_tests {
     use super::{read_shape_dims, ShapeDims};
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use openusd::sdf::Path as SdfPath;
 
     fn parse(source: &str) -> CanonicalStage {
@@ -351,7 +351,7 @@ def Xform "World"
 mod indexed_mesh_tests {
     //! Native USD mesh topology tests for the render-free scene contract.
     use super::read_usd_mesh_indexed;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use openusd::sdf::Path as SdfPath;
 
     fn parse(usda: &str) -> CanonicalStage {
@@ -403,8 +403,8 @@ mod stage_metrics_import_tests {
     //! and its canonical SI Y-up output.
     use super::{read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims};
     use bevy::prelude::{Quat, Vec3};
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_bevy_core::{local_transform_at, stage_convention};
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::{local_transform_at, stage_convention};
     use lunco_usd_data::units::{StageMetrics, UpAxis};
     use openusd::sdf::Path as SdfPath;
 

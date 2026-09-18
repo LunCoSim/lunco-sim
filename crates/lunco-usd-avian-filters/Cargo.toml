@@ -6,10 +6,10 @@ license.workspace = true
 description = "USD/Avian collision filtering and contact-hook integration"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 avian3d.workspace = true
 bevy.workspace = true
 lunco-core = { path = "../lunco-core" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
 

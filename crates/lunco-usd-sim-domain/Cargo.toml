@@ -6,6 +6,9 @@ license.workspace = true
 description = "USD component-network facts and Modelica domain projection"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
 web-time = { workspace = true }

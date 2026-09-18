@@ -195,7 +195,7 @@ impl ModelicaCompiler {
             return true;
         }
         let live_dir = lunco_assets_core::models_package_root_path(root);
-        let files = lunco_assets_core::models::package_files_live(root);
+        let files = lunco_assets_runtime::models::package_files_live(root);
         if let Ok(files) = files {
             if files.is_empty() {
                 return false;
@@ -233,7 +233,7 @@ impl ModelicaCompiler {
         // source-root admission covers both package and example entries in the
         // asset inventory.
         let filename = format!("{root}.mo");
-        let Ok(Some(source)) = lunco_assets_core::models::model_source(&filename) else {
+        let Ok(Some(source)) = lunco_assets_runtime::models::model_source(&filename) else {
             return false;
         };
         log::info!("[ModelicaCompiler] seated bundled root `{root}` ({filename})",);
@@ -643,7 +643,7 @@ impl ModelicaCompiler {
         // model loses its runtime input slots and every wire is dropped),
         // so read the tree here and seat it through the in-memory path.
         let (files, read_diagnostics) =
-            lunco_assets_core::discovery::read_files_with_extension(root_dir, "mo");
+            lunco_assets_runtime::discovery::read_files_with_extension(root_dir, "mo");
         for diagnostic in &read_diagnostics {
             log::warn!("[ModelicaCompiler] source root `{id}`: {diagnostic}");
         }

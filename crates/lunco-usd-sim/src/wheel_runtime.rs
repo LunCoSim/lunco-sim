@@ -6,8 +6,8 @@ use bevy::log::{error, info};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, World};
 use lunco_mobility::{JointedWheelTire, Suspension, WheelRaycast};
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_sim_authoring::WheelParams;
 use lunco_usd_sim_core::PhysicalWheel;
 use openusd::sdf::Path as SdfPath;
@@ -42,7 +42,7 @@ pub(crate) fn attachment_tire_path(
 /// `physxVehicleWheel:mass` is claimed only on a wheel prim — on a chassis it must keep
 /// the normal refresh path (mass overrides are rebuilt by `lunco-usd-avian`).
 pub(crate) fn claims_edit(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
     attr: &str,
 ) -> bool {

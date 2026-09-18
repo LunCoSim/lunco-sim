@@ -6,6 +6,7 @@ license.workspace = true
 description = "Modelica worker engine, live co-simulation bridge, and worker-local caches"
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy.workspace = true
 crossbeam-channel.workspace = true
 lunco-core = { path = "../lunco-core" }

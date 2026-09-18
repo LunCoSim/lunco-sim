@@ -329,14 +329,14 @@ pub fn bump_celestial_inputs_revision(
 /// evaluates it separately, so the tally counts evaluations, not frames — the
 /// rate is what matters, not the absolute count.
 pub fn tracked_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
-    lunco_core::gate::tracked("celestial_needs_solve", celestial_needs_solve)
+    lunco_core_runtime::gate::tracked("celestial_needs_solve", celestial_needs_solve)
 }
 
 /// Gate the render-only celestial sun projection using the same certified
 /// angular error budget as the causal celestial solve, but against the
 /// detached presentation epoch. Structural changes always reopen it.
 pub fn presentation_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
-    lunco_core::gate::tracked(
+    lunco_core_runtime::gate::tracked(
         "celestial_presentation_needs_solve",
         celestial_presentation_needs_solve,
     )
@@ -362,7 +362,7 @@ pub(crate) fn celestial_needs_solve(
     settings: Option<Res<CelestialCadenceSettings>>,
     motion: Res<CelestialMotionBound>,
     revision: Res<CelestialInputsRevision>,
-    activity: Option<Res<lunco_core::gate::GateActivity>>,
+    activity: Option<Res<lunco_core_runtime::gate::GateActivity>>,
 ) -> bool {
     let step = settings.map_or_else(
         || CelestialCadenceSettings::default().max_epoch_step_jd(motion.maximum_rate_rad_per_day),
@@ -386,7 +386,7 @@ pub(crate) fn celestial_presentation_needs_solve(
     settings: Option<Res<CelestialCadenceSettings>>,
     motion: Res<CelestialMotionBound>,
     revision: Res<CelestialInputsRevision>,
-    activity: Option<Res<lunco_core::gate::GateActivity>>,
+    activity: Option<Res<lunco_core_runtime::gate::GateActivity>>,
 ) -> bool {
     let step = settings.map_or_else(
         || CelestialCadenceSettings::default().max_epoch_step_jd(motion.maximum_rate_rad_per_day),

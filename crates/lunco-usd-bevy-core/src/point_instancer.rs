@@ -39,7 +39,7 @@ pub struct UsdPointInstancePlan {
 /// `orientationsf` takes precedence over `orientations` when non-empty. The
 /// returned data is owned so it works for both the prepared worker snapshot and
 /// the live canonical reader.
-pub fn read_point_instancer<R: crate::UsdRead>(
+pub fn read_point_instancer<R: lunco_usd_bevy_stage::UsdRead>(
     reader: &R,
     path: &SdfPath,
     time: f64,
@@ -108,9 +108,10 @@ pub fn read_point_instancer<R: crate::UsdRead>(
     let invisible_ids = optional_int64s(reader, path, "invisibleIds", time)?.unwrap_or_default();
 
     let convention =
-        crate::stage_convention(reader as &dyn crate::UsdReadObject).map_err(|error| {
-            anyhow::anyhow!("{} has invalid stage convention: {error}", path.as_str())
-        })?;
+        lunco_usd_bevy_stage::stage_convention(reader as &dyn lunco_usd_bevy_stage::UsdReadObject)
+            .map_err(|error| {
+                anyhow::anyhow!("{} has invalid stage convention: {error}", path.as_str())
+            })?;
 
     positions
         .into_iter()
@@ -166,7 +167,7 @@ pub fn read_point_instancer<R: crate::UsdRead>(
         .collect()
 }
 
-fn required_points<R: crate::UsdRead>(
+fn required_points<R: lunco_usd_bevy_stage::UsdRead>(
     reader: &R,
     path: &SdfPath,
     name: &str,
@@ -182,7 +183,7 @@ fn required_points<R: crate::UsdRead>(
     }
 }
 
-fn required_ints<R: crate::UsdRead>(
+fn required_ints<R: lunco_usd_bevy_stage::UsdRead>(
     reader: &R,
     path: &SdfPath,
     name: &str,
@@ -195,7 +196,7 @@ fn required_ints<R: crate::UsdRead>(
     }
 }
 
-fn optional_vec3<R: crate::UsdRead>(
+fn optional_vec3<R: lunco_usd_bevy_stage::UsdRead>(
     reader: &R,
     path: &SdfPath,
     name: &str,
@@ -221,7 +222,7 @@ fn optional_vec3<R: crate::UsdRead>(
     }
 }
 
-fn optional_quats<R: crate::UsdRead>(
+fn optional_quats<R: lunco_usd_bevy_stage::UsdRead>(
     reader: &R,
     path: &SdfPath,
     name: &str,
@@ -263,7 +264,7 @@ fn optional_quats<R: crate::UsdRead>(
     }
 }
 
-fn optional_int64s<R: crate::UsdRead>(
+fn optional_int64s<R: lunco_usd_bevy_stage::UsdRead>(
     reader: &R,
     path: &SdfPath,
     name: &str,
@@ -306,7 +307,7 @@ fn validate_optional_len(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::UsdStageProjectionPlan;
+    use lunco_usd_bevy_stage::UsdStageProjectionPlan;
 
     const VALID_SCENE: &str = r#"#usda 1.0
 (

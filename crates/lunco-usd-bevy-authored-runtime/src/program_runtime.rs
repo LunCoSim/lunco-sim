@@ -9,8 +9,9 @@ use bevy::asset::AssetId;
 use bevy::prelude::{Entity, World, warn};
 use openusd::sdf::Path as SdfPath;
 
-use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages, program};
+use lunco_usd_bevy_core::program;
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 
 /// Re-read the generic program children of one existing owner.
 ///

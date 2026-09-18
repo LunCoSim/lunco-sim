@@ -6,6 +6,7 @@ license.workspace = true
 description = "Renderer-independent contracts and read models for LunCoSim workbench panels and perspectives"
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy = { workspace = true }
 egui = { workspace = true }
 lunco-core = { path = "../lunco-core" }

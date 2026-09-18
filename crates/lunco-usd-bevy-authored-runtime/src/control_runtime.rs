@@ -12,8 +12,8 @@ use bevy::prelude::{Added, Entity, Without, World};
 use lunco_camera_core::{CameraFollow, parse_camera_follow};
 use lunco_control_core::ControlBinding;
 use lunco_port_core::InputPorts;
-use lunco_usd_bevy_core::{UsdRead, canonical::CanonicalStages};
 use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjected};
+use lunco_usd_bevy_stage::{UsdRead, canonical::CanonicalStages};
 use openusd::sdf::Path as SdfPath;
 
 /// A control surface prepared from one composed USD owner.

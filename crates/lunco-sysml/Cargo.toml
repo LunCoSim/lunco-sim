@@ -6,6 +6,7 @@ license.workspace = true
 description = "Headless SysML v2 document, asset, and Bevy integration"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 anyhow = { workspace = true }
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }

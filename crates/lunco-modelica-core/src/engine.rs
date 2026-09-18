@@ -561,12 +561,12 @@ impl ModelicaEngine {
         if self.failed_source_roots.contains_key(root) {
             return false;
         }
-        if !lunco_assets_core::models::package_roots_live()
+        if !lunco_assets_runtime::models::package_roots_live()
             .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root))
         {
             return false;
         }
-        let files = match lunco_assets_core::models::package_files_live(root) {
+        let files = match lunco_assets_runtime::models::package_files_live(root) {
             Ok(files) if !files.is_empty() => files,
             Ok(_) => return false,
             Err(error) => {

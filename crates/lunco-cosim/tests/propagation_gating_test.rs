@@ -12,7 +12,7 @@
 //!    a predicted rover silently stops driving on clients while working
 //!    perfectly on the host.
 //! 2. **Rollback replay must re-derive port values.** Replay re-runs the
-//!    actuation chain (`lunco_core::RollbackReplay`) per unacked input. If
+//!    actuation chain (`lunco_core_runtime::RollbackReplay`) per unacked input. If
 //!    propagation is not in that schedule, the replayed actuators read whatever
 //!    the ports happened to hold, the replay's forces differ from the host's, and
 //!    prediction diverges on the one body rollback exists to keep in sync.
@@ -191,7 +191,7 @@ fn host_propagates_into_replicated_target() {
 
 /// **Failure mode 2.** Rollback replay re-runs the actuation chain for each
 /// unacked input; propagation is part of that chain and must be registered in
-/// `lunco_core::RollbackReplay`. Running that schedule alone (exactly how
+/// `lunco_core_runtime::RollbackReplay`. Running that schedule alone (exactly how
 /// `run_rollback_replay` drives it — no `FixedUpdate`, no `app.update()`) must
 /// still carry the source value into the target. With propagation absent from
 /// the schedule this asserts 0.0 and fails.
@@ -206,7 +206,8 @@ fn rollback_replay_propagates() {
     app.world_mut().get_mut::<Port>(target).unwrap().value = 0.0;
 
     // Replay runs this schedule and `PhysicsSchedule` only after admission.
-    app.world_mut().run_schedule(lunco_core::RollbackReplay);
+    app.world_mut()
+        .run_schedule(lunco_core_runtime::RollbackReplay);
 
     assert_eq!(
         value_of(&app, target),
@@ -225,7 +226,8 @@ fn rollback_replay_skips_replicated_only_target() {
 
     app.update();
     app.world_mut().get_mut::<Port>(target).unwrap().value = 0.0;
-    app.world_mut().run_schedule(lunco_core::RollbackReplay);
+    app.world_mut()
+        .run_schedule(lunco_core_runtime::RollbackReplay);
 
     assert_eq!(value_of(&app, target), 0.0);
 }

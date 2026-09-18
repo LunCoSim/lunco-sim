@@ -31,7 +31,7 @@ pub struct SubsystemToggles {
 /// The command is intentionally generic: authored scenarios may use it for a
 /// progressive-fidelity flow, while the core only validates the registered
 /// subsystem name and publishes the resulting state.
-#[crate::Command(default)]
+#[lunco_core::Command(default)]
 pub struct SetSubsystemEnabled {
     /// Registered subsystem key.
     pub name: String,
@@ -39,7 +39,7 @@ pub struct SetSubsystemEnabled {
     pub on: bool,
 }
 
-#[crate::on_command(SetSubsystemEnabled)]
+#[lunco_core::on_command(SetSubsystemEnabled)]
 fn on_set_subsystem_enabled(
     trigger: On<SetSubsystemEnabled>,
     mut toggles: ResMut<SubsystemToggles>,
@@ -62,13 +62,13 @@ fn on_set_subsystem_enabled(
         return;
     }
     info!("[subsystem] {} = {}", ev.name, ev.on);
-    commands.trigger(crate::SubsystemStateChanged {
+    commands.trigger(lunco_core::SubsystemStateChanged {
         name: ev.name.clone(),
         on: ev.on,
     });
 }
 
-crate::register_commands!(on_set_subsystem_enabled);
+lunco_core::register_commands!(on_set_subsystem_enabled);
 
 impl SubsystemToggles {
     /// Register the toggle owned by a subsystem plugin.
@@ -111,7 +111,7 @@ impl SubsystemToggles {
     }
 }
 
-/// Init [`SubsystemToggles`]. Called from [`LunCoCorePlugin`](crate::LunCoCorePlugin)
+/// Init [`SubsystemToggles`]. Called from [`LunCoCoreRuntimePlugin`](crate::LunCoCoreRuntimePlugin)
 /// so every build has the substrate and its generic toggle command.
 pub(crate) fn build_subsystems(app: &mut App) {
     app.init_resource::<SubsystemToggles>();

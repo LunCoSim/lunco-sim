@@ -32,7 +32,7 @@ fn assets_dir() -> PathBuf {
 }
 
 fn usda_files(dir: &Path) -> Vec<(String, PathBuf)> {
-    let mut out = lunco_assets_core::discovery::scan_library(dir)
+    let mut out = lunco_assets_runtime::discovery::scan_library(dir)
         .into_iter()
         .filter(|relative| !relative.contains('/') && relative.ends_with(".usda"))
         .map(|relative| {

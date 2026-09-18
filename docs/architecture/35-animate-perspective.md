@@ -49,8 +49,8 @@ the timeline as data.
 | Per-object independent clocks | `TimeDomain` / `TimeBinding` / `ResolvedDomains` (`domain.rs:50,118,126`) | |
 | Preview domain auto-bind + range | `AnimationPreview` (`domain.rs:294`); `bind_animated_to_preview` grows `Playback.start/end` from clip spans (`lunco-usd-bevy-animation/src/lib.rs`) | |
 | USD animation sampling | `sample_usd_animation` (`lunco-usd-bevy-animation/src/lib.rs`) reads domain time → evaluates `xformOp:*` / visibility / displayColor `timeSamples` → `Transform` | |
-| Clip span per prim | `animated_time_range(reader, path) -> (f64,f64)` (`lunco-usd-bevy-core/src/animation.rs`) | |
-| Seconds ↔ timecode | `stage_time_codes_per_second` (`lunco-usd-bevy-core/src/read.rs`) | |
+| Clip span per prim | `animated_time_range(reader, path) -> (f64,f64)` (`lunco-usd-bevy-core/src/animation.rs`) | Runtime animation mechanism; stage readers come from `lunco-usd-bevy-stage`. |
+| Seconds ↔ timecode | `stage_time_codes_per_second` (`lunco-usd-bevy-stage/src/read.rs`) | |
 | **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd-document/src/document.rs`) — each the other's inverse, with first-xform `xformOpOrder` authoring | Editor Inspector and `assembly_edit` use the existing operations; the full timeline remains future work |
 | Journaled/undoable apply | `ApplyUsdOp { doc_id, parent_gen, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair | shared undo (UI+CLI+agent) |
 | Attribute literal → typed value | `parse_attribute_value` (`usd-core/src/author.rs:186`) | UI only supplies a string |

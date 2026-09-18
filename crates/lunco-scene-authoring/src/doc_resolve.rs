@@ -14,8 +14,8 @@ use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::ParamValue;
-use lunco_usd_bevy_core::{resolve_bound_shader, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::{resolve_bound_shader, UsdRead, UsdStageAsset};
 use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::Path as SdfPath;
 
@@ -57,7 +57,7 @@ pub fn resolve_shader_parameter_usd_target(
         format!("inputs:{name}")
     };
     let declared_type = world
-        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
         .and_then(|stages| stages.get(prim.stage_handle.id()))
         .and_then(|stage| stage.view().attr_type_name(&shader_sdf, &attribute_name));
     let type_name =
@@ -149,7 +149,7 @@ pub fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option<String
         .and_then(|stages| stages.get(&prim.stage_handle))
         .and_then(|a| a.recipe.clone());
     if let Some(mut canonical) =
-        world.get_non_send_mut::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+        world.get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
     {
         if canonical.get(id).is_none() {
             if let Some(r) = recipe.as_ref() {
@@ -157,7 +157,7 @@ pub fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option<String
             }
         }
     }
-    let canonical = world.get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()?;
+    let canonical = world.get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()?;
     let view = canonical.get(id)?.view();
     resolve_bound_shader(&view, &mesh_sdf).map(|p| p.to_string())
 }
@@ -176,7 +176,7 @@ pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
         .and_then(|stages| stages.get(&prim.stage_handle))
         .and_then(|a| a.recipe.clone());
     if let Some(mut canonical) =
-        world.get_non_send_mut::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+        world.get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
     {
         if canonical.get(id).is_none() {
             if let Some(r) = recipe.as_ref() {
@@ -184,7 +184,7 @@ pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
             }
         }
     }
-    let Some(canonical) = world.get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+    let Some(canonical) = world.get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
     else {
         return Vec::new();
     };

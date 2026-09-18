@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use bevy::asset::{AssetId, AssetServer};
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use lunco_usd_bevy_core::{
+use lunco_usd_bevy_stage::{
     canonical::{CanonicalStage, CanonicalStages},
     UsdStageAsset,
 };

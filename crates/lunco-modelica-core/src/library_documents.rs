@@ -25,7 +25,7 @@ pub fn load_library_class(
     #[cfg(target_arch = "wasm32")]
     lunco_modelica_library::source_library::ensure_library_source_unpacked();
 
-    let full_source = if let Some(bytes) = lunco_assets_core::library::library_read(path) {
+    let full_source = if let Some(bytes) = lunco_assets_runtime::library::library_read(path) {
         String::from_utf8(bytes)
             .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
     } else {

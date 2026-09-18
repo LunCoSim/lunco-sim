@@ -8,7 +8,9 @@ rather than scenes.
 
 The implementation is split by change and dependency cost. `lunco-assets-path`
 owns the dependency-free URI and relative-path algebra. `lunco-assets-core`
-owns roots, storage-facing readers, runtime sources, and discovery.
+owns cache/Twin roots and storage-facing identity/resolution contracts;
+`lunco-assets-runtime` owns registered source readers, runtime sources, and
+discovery.
 `lunco-assets-datasets` owns the lightweight manifest and lifecycle contract.
 Native provisioning is layered on top: `lunco-assets-transport` owns
 HTTP byte policy, `lunco-assets-download` owns manifest-aware verification and
@@ -106,7 +108,7 @@ including outside the engine repo entirely. What matters is not where the scene 
 | ❌ A relative escape | ~~`@../../vessels/…@`~~ |
 
 `lunco://` exists for exactly this case — so a scene living **outside** the project can
-still reference shared parts (`lunco-assets-core/src/asset_sources.rs`). This is what removes any
+still reference shared parts (`lunco-assets-runtime/src/asset_sources.rs`). This is what removes any
 need to symlink external content into the engine tree.
 
 > [!WARNING]
@@ -137,23 +139,23 @@ reads only the sources published by those dependency handles. Non-literal import
 are rejected while loading because an async asset graph cannot make an unknown
 runtime path safe or deterministic.
 
-## `lunco-assets-path` owns URI/path algebra; `lunco-assets-core` owns resolution
+## `lunco-assets-path` owns URI/path algebra; assets core/runtime own resolution
 
 `lunco-assets-path` contains the platform-neutral rules that must be shared by
 headless document crates, USD composition, and runtime asset sources. It has no
 Bevy or filesystem dependency, so importing the rules does not pull the runtime
 asset graph into a document-only package.
 
-`lunco-assets-core` owns the registered roots, source readers, and the mapping
-from logical identities to available storage. No other crate re-derives that
-runtime mapping:
+`lunco-assets-core` owns roots and logical identity mapping; the runtime package
+registers Bevy sources and readers against those contracts. No other crate
+re-derives that mapping:
 
 | Concern | Entry point |
 |---|---|
 | Scheme parsing and URI construction | `lunco-assets-path::{split_scheme, uri}` |
 | Canonicalize against a document or root | `lunco-assets-path::{canonicalize, canonicalize_root}` |
 | Validate a relative asset path | `lunco-assets-path::{is_safe_relative_path, relative_path}` |
-| Register the sources | `lunco-assets-core::asset_sources::register_lunco_asset_sources` |
+| Register the sources | `lunco-assets-runtime::asset_sources::register_lunco_asset_sources` |
 | Build a Twin URI | `twin_uri(name, rel)` |
 | Parse a Twin URI | `parse_twin_uri` |
 | "already addressable?" | `lunco-assets-path::has_scheme` / `is_anchored` |
@@ -270,7 +272,8 @@ grows a "just fetch it at startup" line — the ephemeris crate had exactly that
 | Concern | Owner |
 |---|---|
 | URI/path algebra and traversal rules | `lunco-assets-path` |
-| identity, roots, and source readers | `lunco-assets-core` |
+| identity and roots | `lunco-assets-core` |
+| registered sources and source readers | `lunco-assets-runtime` |
 | manifest, URL, cache path, and lifecycle state | `lunco-assets-datasets` |
 | retry policy and resumable HTTP bytes | `lunco-assets-transport` |
 | manifest verification, extraction, and atomic source installation | `lunco-assets-download` |

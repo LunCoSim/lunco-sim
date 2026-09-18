@@ -6,10 +6,10 @@ license.workspace = true
 description = "Parametric USD NURBS surfaces and their Bevy mesh projection"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh"] }
 bevy_mesh = { workspace = true }
 lunco-render = { path = "../lunco-render" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 openusd = { workspace = true }
 

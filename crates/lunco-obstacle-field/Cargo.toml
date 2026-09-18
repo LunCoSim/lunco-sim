@@ -6,6 +6,7 @@ license.workspace = true
 description = "Procedural crater + rock field generation for rover testing in LunCoSim"
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 # RENDER-FREE, and now also PHYSICS-FREE. `bevy_mesh` gives `Mesh`; nothing here
 # depends on `bevy_render`, so this crate does not drag wgpu/naga into the
 # `--no-ui` server or the wasm worker.

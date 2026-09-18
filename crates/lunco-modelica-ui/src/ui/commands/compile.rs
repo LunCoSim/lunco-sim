@@ -658,7 +658,7 @@ pub(crate) fn render_compile_class_picker(
 fn is_library_document(document: &lunco_modelica_document::ModelicaDocument) -> bool {
     match document.origin() {
         lunco_doc::DocumentOrigin::File { path, writable } => {
-            !writable || lunco_assets_core::library::owns_filesystem_path(path)
+            !writable || lunco_assets_runtime::library::owns_filesystem_path(path)
         }
         _ => false,
     }

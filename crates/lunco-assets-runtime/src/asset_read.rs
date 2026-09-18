@@ -10,7 +10,7 @@
 //!   Not `std::fs`: this crate is on the `disallowed_methods` allow-list, but
 //!   being allowed to reach past the storage layer is not a reason to.
 //! - **Web** — a same-origin `fetch` of `assets/<rel>`, cached in the browser's
-//!   Cache Storage via [`web_fetch`](crate::web_fetch). **That is the exact URL
+//!   Cache Storage via [`web_fetch`](lunco_assets_core::web_fetch). **That is the exact URL
 //!   Bevy's `AssetServer` uses to load the same file when it is spawned** — the
 //!   bytes were always served and always reachable. What was missing was a
 //!   caller willing to be async.
@@ -60,8 +60,8 @@ pub async fn read_asset_bytes(
     asset: &AssetFile,
     settings: &lunco_settings::DownloadSettings,
 ) -> Result<Vec<u8>, String> {
-    let url = crate::asset_path::web_url(&asset.rel);
-    crate::web_fetch::fetch_bytes_cached(ASSET_CACHE_BUCKET, &url, settings).await
+    let url = lunco_assets_core::asset_path::web_url(&asset.rel);
+    lunco_assets_core::web_fetch::fetch_bytes_cached(ASSET_CACHE_BUCKET, &url, settings).await
 }
 
 /// Read a discovered asset's bytes as UTF-8 text (`*.usda`, `*.wgsl`).

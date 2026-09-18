@@ -128,7 +128,7 @@ with the last one each frame silently winning:
 system has run.
 
 > [!IMPORTANT]
-> **To keep the app awake, hold a `lunco_core::KeepAwake` token — never write
+> **To keep the app awake, hold a `lunco_core_runtime::KeepAwake` token — never write
 > `WinitSettings` directly.** `sim_focus_pace` rewrites it every frame and is the last
 > writer, so any direct write is reverted on the next frame. An unattended capture has no
 > focused window, and under the `reactive_low_power` throttle the app sleeps between

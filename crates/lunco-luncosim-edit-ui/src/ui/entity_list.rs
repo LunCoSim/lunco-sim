@@ -646,7 +646,7 @@ pub(crate) fn populate_entity_tree_view(
 /// to unnamed internal wrappers as well as system-owned entities (unless shown):
 /// terrain streaming and render extraction create both continuously, and neither
 /// can change the visible tree by itself.
-/// Tracked automatically by `add_view_model` — see [`lunco_core::gate::tracked`].
+/// Tracked automatically by `add_view_model` — see [`lunco_core_runtime::gate::tracked`].
 pub(crate) fn scene_topology_changed(
     mut first: Local<bool>,
     settings: Res<EntityListSettings>,

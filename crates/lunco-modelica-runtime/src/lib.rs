@@ -20,7 +20,7 @@ pub mod source_asset;
 pub use source_asset::{ModelicaSource, ModelicaSourceAssetPlugin, ModelicaSourceLoader};
 
 /// Maximum interval one live worker transaction may integrate.
-pub const MAX_MACRO_STEP_DT: f64 = lunco_core::SECS_PER_TICK / 3.0 * 32.0;
+pub const MAX_MACRO_STEP_DT: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0 * 32.0;
 
 /// Default communication period for a live Modelica participant.
 pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = 0.1;
@@ -29,18 +29,20 @@ const COMMUNICATION_EPS: f64 = 1e-9;
 
 /// Validate a Modelica communication period against the fixed-step master.
 pub fn validate_communication_period_secs(value: f64) -> Result<f64, String> {
-    if !value.is_finite() || !(lunco_core::SECS_PER_TICK..=MAX_MACRO_STEP_DT).contains(&value) {
+    if !value.is_finite()
+        || !(lunco_core_runtime::SECS_PER_TICK..=MAX_MACRO_STEP_DT).contains(&value)
+    {
         return Err(format!(
             "invalid Modelica communication period {value:?}; expected a finite value in [{:.9}, {MAX_MACRO_STEP_DT:.9}]s",
-            lunco_core::SECS_PER_TICK
+            lunco_core_runtime::SECS_PER_TICK
         ));
     }
-    let fixed_ticks = (value / lunco_core::SECS_PER_TICK).round();
-    let represented = fixed_ticks * lunco_core::SECS_PER_TICK;
+    let fixed_ticks = (value / lunco_core_runtime::SECS_PER_TICK).round();
+    let represented = fixed_ticks * lunco_core_runtime::SECS_PER_TICK;
     if fixed_ticks < 1.0 || (represented - value).abs() > COMMUNICATION_EPS {
         return Err(format!(
             "invalid Modelica communication period {value:?}; it must be an integer multiple of the master fixed tick {:.9}s",
-            lunco_core::SECS_PER_TICK
+            lunco_core_runtime::SECS_PER_TICK
         ));
     }
     Ok(value)

@@ -12,8 +12,8 @@ use bevy::prelude::*;
 use lunco_cosim_core::{SimComponent, SimStatus, UsdSourcedCosim};
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_scripting::doc::ScriptedModel;
-use lunco_usd_bevy_core::{UsdInstanceProjection, UsdInstanceRoot};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdInstanceRoot};
 use std::collections::HashMap;
 
 /// The status a `ModelicaModel` projects onto its `SimComponent`.

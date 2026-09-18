@@ -44,8 +44,8 @@ use avian3d::{
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use lunco_usd_bevy_core::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
 use lunco_usd_bevy_scene::{instance_key, UsdPrimPath};
+use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 /// Authored `physics:filteredPairs` targets, waiting for their prims to spawn.
@@ -201,7 +201,7 @@ const PAIR_RESOLVE_RETRY_INTERVAL: u32 = 60;
 /// Returns `None` when the schema is absent, so the caller can skip the insert
 /// entirely rather than stamping an empty carrier on every prim in the scene.
 pub fn read_filtered_pairs(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Option<PendingFilteredPairs> {
     if !reader.has_api_schema(sdf_path, ptok::API_FILTERED_PAIRS) {

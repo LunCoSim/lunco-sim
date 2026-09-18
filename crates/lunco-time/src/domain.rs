@@ -157,7 +157,7 @@ pub struct TimeBinding {
 /// The two roots are not interchangeable, and the difference is the whole point:
 ///
 /// * [`Tick`](ClockRoot::Tick) — the deterministic master. `t = WorldTime.sim_secs`,
-///   derived from the integer [`SimTick`](lunco_core::SimTick) and gated by
+///   derived from the integer [`SimTick`](lunco_core_runtime::SimTick) and gated by
 ///   [`TimeTransport`](crate::TimeTransport). Replicated, seekable, replayable.
 ///   **Freezes on pause** — and so does everything hanging under it.
 /// * [`Wall`](ClockRoot::Wall) — `t = Time<Real>`. Free-running, never pauses,
@@ -1007,7 +1007,7 @@ fn on_reset_time(
     mut q_domain: Query<&mut TimeDomain>,
     mut q_playback: Query<&mut Playback>,
     preview: Option<Res<AnimationPreview>>,
-    tick: Option<ResMut<lunco_core::SimTick>>,
+    tick: Option<ResMut<lunco_core_runtime::SimTick>>,
     mut transport: ResMut<crate::TimeTransport>,
     virtual_time: Option<ResMut<Time<Virtual>>>,
     fixed_time: Option<ResMut<Time<Fixed>>>,
@@ -1397,7 +1397,7 @@ mod tests {
     fn reset_time_restores_clock_projection_and_fixed_admission_state() {
         let mut app = App::new();
         app.insert_resource(crate::MissionClock::default())
-            .insert_resource(lunco_core::SimTick(11))
+            .insert_resource(lunco_core_runtime::SimTick(11))
             .insert_resource(crate::TimeTransport {
                 mode: TransportMode::Paused,
                 rate: 4.0,
@@ -1417,7 +1417,7 @@ mod tests {
         let transport = app.world().resource::<crate::TimeTransport>();
         assert_eq!(transport.mode, TransportMode::Playing);
         assert_eq!(transport.rate, 1.0);
-        assert_eq!(app.world().resource::<lunco_core::SimTick>().0, 0);
+        assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 0);
         assert!(!app.world().resource::<Time<Virtual>>().is_paused());
         assert_eq!(
             app.world().resource::<Time<Fixed>>().overstep(),

@@ -202,7 +202,7 @@ gate; do not duplicate these observable assertions in Rust unit tests.
 
 ### Shared asset catalog discovery
 
-Asset enumeration belongs to `lunco_assets_core::discovery` and runs through the
+Asset enumeration belongs to `lunco_assets_runtime::discovery` and runs through the
 shared asynchronous catalog listing owned by `lunco-scene-catalog`. USD,
 WGSL, Modelica, and Python projections are published from one root snapshot;
 they must not add a second filesystem walk or a UI-thread scan. A new

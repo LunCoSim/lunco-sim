@@ -42,8 +42,8 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, Command};
 use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, TransportMode};
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_geometry::curve::{eval_curve, eval_curve_tangent, CurveBasis};
 use openusd::schemas::geom::tokens;
 use openusd::sdf::Path as SdfPath;
@@ -460,7 +460,7 @@ pub fn resolve_camera_paths(
         // Absent arrays use the authored whole-path relation, otherwise the
         // semantic tangent default. Authored arrays are read strictly so a type
         // mismatch cannot become an omitted track.
-        let times = match lunco_usd_bevy_core::read::read_curve_real_array(
+        let times = match lunco_usd_bevy_stage::read::read_curve_real_array(
             reader,
             &path,
             "lunco:path:aim:times",
@@ -475,7 +475,7 @@ pub fn resolve_camera_paths(
                 continue;
             }
         };
-        let modes = match lunco_usd_bevy_core::read::read_curve_token_array(
+        let modes = match lunco_usd_bevy_stage::read::read_curve_token_array(
             reader,
             &path,
             "lunco:path:aim:modes",
@@ -626,7 +626,7 @@ pub fn resolve_camera_paths(
             .attr_value(&path, openusd::schemas::geom::tokens::A_CURVE_VERTEX_COUNTS)
             .is_some()
         {
-            let counts = match lunco_usd_bevy_core::read::read_curve_int_array(
+            let counts = match lunco_usd_bevy_stage::read::read_curve_int_array(
                 reader,
                 &path,
                 openusd::schemas::geom::tokens::A_CURVE_VERTEX_COUNTS,
@@ -689,7 +689,7 @@ pub fn resolve_camera_paths(
         // Capture before `points` moves into the component below for diagnostics.
         let n_points = points.len();
 
-        let curve_type = match lunco_usd_bevy_core::read::read_curve_token(
+        let curve_type = match lunco_usd_bevy_stage::read::read_curve_token(
             reader,
             &path,
             openusd::schemas::geom::tokens::A_TYPE,
@@ -702,7 +702,7 @@ pub fn resolve_camera_paths(
         let basis = if curve_type == "linear" {
             CurveBasis::Linear
         } else {
-            match lunco_usd_bevy_core::read::read_curve_token(
+            match lunco_usd_bevy_stage::read::read_curve_token(
                 reader,
                 &path,
                 openusd::schemas::geom::tokens::A_BASIS,
@@ -714,7 +714,7 @@ pub fn resolve_camera_paths(
                 Err(_) => continue,
             }
         };
-        let wrap = match lunco_usd_bevy_core::read::read_curve_token(
+        let wrap = match lunco_usd_bevy_stage::read::read_curve_token(
             reader,
             &path,
             openusd::schemas::geom::tokens::A_WRAP,
@@ -785,7 +785,7 @@ pub fn resolve_camera_paths(
         // Pause is WHERE THE CLOCK HANGS, not a flag: "real" keeps the shot
         // running while the sim is paused, "sim" freezes with it (the default —
         // authored motion is part of the scene, doc 19 §11b).
-        let on_wall = match lunco_usd_bevy_core::read::read_curve_token(
+        let on_wall = match lunco_usd_bevy_stage::read::read_curve_token(
             reader,
             &path,
             "lunco:path:clock",

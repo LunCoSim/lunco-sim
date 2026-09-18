@@ -2,10 +2,10 @@ use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_usd_bevy_core::{Purpose, TransformReadError, effective_purpose, local_transform_at};
 use lunco_usd_bevy_scene::{
     ShapeDims, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat,
 };
+use lunco_usd_bevy_stage::{Purpose, TransformReadError, effective_purpose, local_transform_at};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 
@@ -41,7 +41,7 @@ impl std::error::Error for ColliderProjectionError {}
 /// never derives a collider from a domain parameter such as wheel radius or
 /// width. Missing or unsupported authored geometry is an error at the owner.
 pub fn authored_collider_from_usd(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<Collider, ColliderProjectionError> {
     if !reader.has_api_schema(sdf_path, ptok::API_COLLISION) {
@@ -86,11 +86,11 @@ pub fn authored_collider_from_usd(
 }
 
 pub fn collect_child_colliders_from_usd(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     parent_path: &SdfPath,
 ) -> Result<Vec<(Position, Rotation, Collider)>, ColliderProjectionError> {
     let mut shapes = Vec::new();
-    let convention = lunco_usd_bevy_core::stage_convention(reader).map_err(|_| {
+    let convention = lunco_usd_bevy_stage::stage_convention(reader).map_err(|_| {
         ColliderProjectionError::Transform(TransformReadError {
             prim: parent_path.as_str().to_owned(),
         })
@@ -271,7 +271,7 @@ pub fn collect_child_colliders_from_usd(
 ///   collider piece of the chassis compound — matches the same skip in
 ///   `process_usd_avian_prims`.
 fn gather_compound_candidates(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
     acc: Transform,
     out: &mut Vec<(SdfPath, Transform)>,
@@ -328,7 +328,7 @@ fn gather_compound_candidates(
 /// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
 /// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.
 pub fn build_collider_from_usd(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<Option<Collider>, ColliderProjectionError> {
     let scale = local_transform_at(reader, sdf_path, 0.0)
@@ -348,7 +348,7 @@ pub fn build_collider_from_usd(
 /// transform; compound children obtain it from [`gather_compound_candidates`],
 /// because intermediate USD Xforms have no corresponding Avian collider entity.
 pub fn build_collider_from_usd_at_scale(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
     scale: Vec3,
 ) -> Option<Collider> {

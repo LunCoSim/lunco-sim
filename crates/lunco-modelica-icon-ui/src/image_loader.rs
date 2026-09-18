@@ -19,7 +19,7 @@
 //!
 //! # One path, both targets
 //!
-//! Bytes are fetched through [`lunco_assets_core::library::library_read`] — the source library
+//! Bytes are fetched through [`lunco_assets_runtime::library::library_read`] — the source library
 //! *virtual* filesystem — not `std::fs`. `library_read` resolves a
 //! bundle-relative path (`Modelica/Resources/Images/…`) against whichever source library
 //! root is installed: the on-disk tree on native, the in-memory bundle the web
@@ -119,7 +119,7 @@ impl ModelicaImageLoader {
                     let Some(path) = Self::resolve_uri(uri) else {
                         continue;
                     };
-                    match lunco_assets_core::library::library_read(&path) {
+                    match lunco_assets_runtime::library::library_read(&path) {
                         Some(bytes) => {
                             let arc: Arc<[u8]> = Arc::from(bytes);
                             total_bytes += arc.len();
@@ -147,7 +147,7 @@ impl ModelicaImageLoader {
 
     /// Resolve `modelica://Modelica/Resources/…` → an **source library-root-relative**
     /// path (`Modelica/Resources/…`), the key
-    /// [`lunco_assets_core::library::library_read`] takes. The root itself (a directory on
+    /// [`lunco_assets_runtime::library::library_read`] takes. The root itself (a directory on
     /// native, the in-memory bundle on wasm) is the storage layer's business,
     /// not ours — which is what makes this one function correct on both
     /// targets.
@@ -255,7 +255,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
             .spawn(async move {
                 // source library virtual FS: on-disk tree (native) or in-memory bundle (web).
                 let read_result: Result<Arc<[u8]>, String> =
-                    match lunco_assets_core::library::library_read(&path) {
+                    match lunco_assets_runtime::library::library_read(&path) {
                         Some(bytes) => {
                             bevy::log::info!(
                                 "[ModelicaImageLoader] loaded {} → {} ({} bytes)",

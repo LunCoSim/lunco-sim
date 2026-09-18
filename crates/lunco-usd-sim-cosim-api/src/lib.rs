@@ -7,16 +7,16 @@
 use avian3d::schedule::PhysicsTime;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
-use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_cosim_core::{
     BindingEpochDirty, BoundConnection, ConnectionBinding, SimComponent, SimConnection, SimStatus,
     UsdSourcedCosim,
 };
+use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_render::SceneCamera;
 use lunco_usd_bevy_camera::camera_mount::MountedCamera;
-use lunco_usd_bevy_core::UsdInstanceRoot;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
+use lunco_usd_bevy_stage::UsdInstanceRoot;
 use lunco_usd_sim_core::PendingDifferential;
 use lunco_usd_sim_cosim::{modelica_models_terminal, BindingEpochWait};
 
@@ -580,15 +580,15 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
             })
             .collect();
         let barrier = world
-            .get_resource::<lunco_core::SimulationBarrier>()
+            .get_resource::<lunco_core_runtime::SimulationBarrier>()
             .copied()
             .unwrap_or_default();
         let (topology_ready, causal_participant_count) = world
-            .get_resource::<lunco_core::SimulationBarrierParticipants>()
+            .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
             .map(|participants| (participants.topology_ready, participants.entities.len()))
             .unwrap_or((false, 0));
         let causal_participants = world
-            .get_resource::<lunco_core::SimulationBarrierParticipants>()
+            .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
             .map(|participants| {
                 participants
                     .entities

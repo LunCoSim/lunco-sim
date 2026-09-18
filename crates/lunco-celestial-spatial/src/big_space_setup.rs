@@ -227,7 +227,7 @@ pub fn setup_big_space_hierarchy(
     // The single world-shell grid (WorldShellPlugin) to nest under.
     q_world_grid: Query<Entity, (With<lunco_spatial::WorldGrid>, With<Grid>)>,
     body_looks: Query<(&crate::CelestialBodyDecl, &ShaderLook)>,
-    subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
+    subsystems: Option<ResMut<lunco_core_runtime::subsystems::SubsystemToggles>>,
     bindings: Res<lunco_input_core::InputBindingsSettings>,
     mut missing_look_reported: Local<bool>,
 ) {

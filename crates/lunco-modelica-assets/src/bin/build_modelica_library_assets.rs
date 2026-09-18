@@ -64,11 +64,11 @@ mod native {
     use sha2::{Digest, Sha256};
 
     /// Tag stamped into the manifest's `rumoca_artifact_tag` field. Shared with the
-    /// runtime via [`lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG`] so producer
+    /// runtime via [`lunco_assets_runtime::library::EXPECTED_RUMOCA_ARTIFACT_TAG`] so producer
     /// and consumer can't drift; the runtime refuses a parsed bundle whose tag
     /// doesn't match (the bincode'd `StoredDefinition` layout is rumoca-version
     /// sensitive). Bump the shared const when the rumoca AST shape changes.
-    use lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
+    use lunco_assets_runtime::library::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
     use lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME;
 
     pub(super) fn run() {
@@ -111,7 +111,8 @@ mod native {
         };
 
         if source_roots.is_empty() {
-            let Some(root) = lunco_modelica_library::source_library::source_library_root_path() else {
+            let Some(root) = lunco_modelica_library::source_library::source_library_root_path()
+            else {
                 eprintln!(
                     "error: no source root on disk (run `lunco-assets -- download` first \
                  or pass --source-root)"
@@ -237,9 +238,8 @@ mod native {
             // requested exclusion policy with a cached artifact.
             "excluded_packages": exclude,
         });
-        let manifest_path = out_dir.join(
-            lunco_modelica_library::source_library::SOURCE_LIBRARY_MANIFEST_FILE_NAME,
-        );
+        let manifest_path =
+            out_dir.join(lunco_modelica_library::source_library::SOURCE_LIBRARY_MANIFEST_FILE_NAME);
         let manifest_bytes = serde_json::to_vec_pretty(&manifest).expect("serialise manifest");
         fs::write(&manifest_path, &manifest_bytes).expect("write manifest");
 
@@ -405,9 +405,7 @@ mod native {
     /// forward slashes. This is the tar entry name AND the rumoca URI, and is
     /// what the web resolver matches against (`InMemoryLibrary.files` keys).
     fn rel_key(root: &Path, path: &Path) -> String {
-        lunco_assets_path::slashed(
-            path.strip_prefix(root).expect("entry under its root"),
-        )
+        lunco_assets_path::slashed(path.strip_prefix(root).expect("entry under its root"))
     }
 
     fn file_sha256(path: &Path) -> String {

@@ -86,12 +86,12 @@ impl Plugin for UsdCameraPlugin {
                     camera_track::bind_camera_tracks_to_preview,
                     camera_track::clear_camera_track_plans_on_stage_reload.run_if(
                         bevy::ecs::schedule::common_conditions::on_message::<
-                            bevy::asset::AssetEvent<lunco_usd_bevy_core::UsdStageAsset>,
+                            bevy::asset::AssetEvent<lunco_usd_bevy_stage::UsdStageAsset>,
                         >,
                     ),
                     camera_track::plan_camera_tracks,
                     camera_switch::validate_authored_camera_contract.run_if(
-                        lunco_core::gate::tracked(
+                        lunco_core_runtime::gate::tracked(
                             "usd::camera_contract",
                             camera_switch::camera_contract_inputs_changed,
                         ),

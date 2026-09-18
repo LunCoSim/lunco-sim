@@ -34,10 +34,10 @@ use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use crate::worker_bridge::ModelicaWorkerBridge;
 #[cfg(target_arch = "wasm32")]
-use lunco_assets_core::library::InMemoryLibrary as LibraryInMemory;
+use lunco_assets_runtime::library::InMemoryLibrary as LibraryInMemory;
 #[cfg(target_arch = "wasm32")]
-use lunco_assets_core::library::LibraryLoadPhase;
-use lunco_assets_core::library::{LibraryLoadState, LibrarySource as LibraryAssetSource};
+use lunco_assets_runtime::library::LibraryLoadPhase;
+use lunco_assets_runtime::library::{LibraryLoadState, LibrarySource as LibraryAssetSource};
 
 /// Asset-library prefix for the Modelica source-library bundle.
 pub const SOURCE_LIBRARY_ASSET_ROOT: &str = "library";
@@ -180,11 +180,9 @@ pub fn parsed_source_bundle()
 #[cfg(not(target_arch = "wasm32"))]
 fn read_parsed_bundle_file()
 -> Result<Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>, String> {
-    let Some((_, file)) =
-        lunco_assets_core::library::library_open(std::path::Path::new(
-            PARSED_LIBRARY_BUNDLE_FILE_NAME,
-        ))
-    else {
+    let Some((_, file)) = lunco_assets_runtime::library::library_open(std::path::Path::new(
+        PARSED_LIBRARY_BUNDLE_FILE_NAME,
+    )) else {
         return Ok(None);
     };
     if file.metadata().map(|m| m.len() == 0).unwrap_or(false) {
@@ -240,7 +238,7 @@ pub fn deserialize_parsed_bundle(
 pub fn load_library_index_from_source_bundle(
     compressed: &[u8],
 ) -> Result<lunco_modelica_index::visual_diagram::LibraryIndex, String> {
-    let files = lunco_assets_core::web_fetch::unpack_tar_zst(compressed, 1)?;
+    let files = lunco_assets_runtime::web_fetch::unpack_tar_zst(compressed, 1)?;
     let bytes = files
         .get(std::path::Path::new(
             lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME,
@@ -422,11 +420,14 @@ fn drive_library_main_decode(mut state: ResMut<LibraryLoadState>) {
 #[cfg(target_arch = "wasm32")]
 static LIBRARY_SOURCE_COMPRESSED: OnceLock<(
     Vec<u8>,
-    lunco_assets_core::library::LibraryBundleEntry,
+    lunco_assets_runtime::library::LibraryBundleEntry,
 )> = OnceLock::new();
 
 #[cfg(target_arch = "wasm32")]
-fn stash_compressed_source(bytes: Vec<u8>, meta: lunco_assets_core::library::LibraryBundleEntry) {
+fn stash_compressed_source(
+    bytes: Vec<u8>,
+    meta: lunco_assets_runtime::library::LibraryBundleEntry,
+) {
     let _ = LIBRARY_SOURCE_COMPRESSED.set((bytes, meta));
 }
 
@@ -436,16 +437,16 @@ fn stash_compressed_source(bytes: Vec<u8>, meta: lunco_assets_core::library::Lib
 /// unpacked or if no compressed source was stashed.
 #[cfg(target_arch = "wasm32")]
 pub fn ensure_library_source_unpacked() {
-    if lunco_assets_core::library::has_library_source() {
+    if lunco_assets_runtime::library::has_library_source() {
         return;
     }
     let Some((bytes, meta)) = LIBRARY_SOURCE_COMPRESSED.get() else {
         return;
     };
-    match lunco_assets_core::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
+    match lunco_assets_runtime::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
         Ok(files) => {
             let n = files.len();
-            lunco_assets_core::library::install_global_library_sources(vec![
+            lunco_assets_runtime::library::install_global_library_sources(vec![
                 LibraryAssetSource::InMemory(Arc::new(LibraryInMemory { files })),
             ]);
             info!("[source library] source bundle unpacked lazily ({n} files) for drill-in");
@@ -618,11 +619,11 @@ impl Plugin for SourceLibraryPlugin {
 
             if let Some(root) = resolved_root {
                 info!("[source library] using on-disk root {}", root.display());
-                lunco_assets_core::library::install_global_library_sources(vec![
+                lunco_assets_runtime::library::install_global_library_sources(vec![
                     LibraryAssetSource::Filesystem(root.clone()),
                 ]);
                 app.insert_resource(LibraryLoadState::Ready {
-                    file_count: lunco_assets_core::library::filesystem_library_file_count(),
+                    file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
                     compressed_bytes: 0,
                     uncompressed_bytes: 0,
                 });
@@ -703,7 +704,7 @@ struct SlotInner {
     pending_parsed_compressed: Option<Vec<u8>>,
     /// Raw **compressed** `sources-*.tar.zst` bytes + their manifest entry,
     /// stashed for lazy unpack on first editor drill-in.
-    pending_source_compressed: Option<(Vec<u8>, lunco_assets_core::library::LibraryBundleEntry)>,
+    pending_source_compressed: Option<(Vec<u8>, lunco_assets_runtime::library::LibraryBundleEntry)>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -808,8 +809,8 @@ mod web {
     use super::*;
     use std::collections::HashSet;
 
-    use lunco_assets_core::library::LibraryManifest;
     use lunco_assets_core::web_fetch;
+    use lunco_assets_runtime::library::LibraryManifest;
     use wasm_bindgen::prelude::*;
 
     pub(super) async fn run_fetcher(
@@ -898,12 +899,13 @@ mod web {
             ));
         }
 
-        if manifest.rumoca_artifact_tag != lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG
+        if manifest.rumoca_artifact_tag
+            != lunco_assets_runtime::library::EXPECTED_RUMOCA_ARTIFACT_TAG
         {
             return Err(format!(
                 "source library parsed artifact tag `{}` does not match runtime `{}`; rebuild the source library bundle",
                 manifest.rumoca_artifact_tag,
-                lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG,
+                lunco_assets_runtime::library::EXPECTED_RUMOCA_ARTIFACT_TAG,
             ));
         }
         let parsed_meta = &manifest.parsed;

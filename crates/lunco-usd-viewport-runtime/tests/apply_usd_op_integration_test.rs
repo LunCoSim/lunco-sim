@@ -7,9 +7,9 @@
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_bevy::UsdVisualPlugin;
-use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime_core::UsdSceneRuntimePlugin;
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_usd_commands::UsdCommandsPlugin;
 use lunco_usd_core::commands::ApplyUsdOp;
 use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
@@ -29,7 +29,7 @@ fn test_apply_usd_op_integration() {
     // the `twin://` source, so register the lunco asset sources (which insert
     // `TwinRoots`) BEFORE `AssetPlugin` snapshots them.
     app.add_plugins(MinimalPlugins);
-    lunco_assets_core::register_lunco_asset_sources(&mut app);
+    lunco_assets_runtime::register_lunco_asset_sources(&mut app);
     app.add_plugins(AssetPlugin::default());
 
     app.init_asset::<UsdStageAsset>();

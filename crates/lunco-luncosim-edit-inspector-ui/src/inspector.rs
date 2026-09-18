@@ -25,8 +25,8 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SceneCamera};
 
-use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
-use lunco_physics::joint::{joint_angle_holder, JOINT_ANGLE_PORT};
+use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
+use lunco_physics::joint::{JOINT_ANGLE_PORT, joint_angle_holder};
 
 use lunco_scene_selection::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
@@ -782,8 +782,8 @@ pub struct InspectorView {
 /// a quiescent scene. All reads are bounded single-entity lookups or small
 /// scans the panel used to do in-paint.
 pub fn populate_inspector_view(world: &mut World) {
-    use bevy::camera::visibility::RenderLayers;
     use bevy::camera::Exposure;
+    use bevy::camera::visibility::RenderLayers;
     use bevy::light::{CascadeShadowConfig, DirectionalLight, GlobalAmbientLight};
     use bevy::post_process::bloom::Bloom;
 

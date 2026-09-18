@@ -18,8 +18,8 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState, selected_entity_in_preview};
 use openusd::sdf::Path as SdfPath;
 

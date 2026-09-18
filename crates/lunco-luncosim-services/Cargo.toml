@@ -10,6 +10,7 @@ name = "lunco_luncosim_services"
 path = "src/lib.rs"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_shader"] }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
@@ -31,7 +32,6 @@ lunco-storage = { path = "../lunco-storage", optional = true }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core", optional = true }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-document = { path = "../lunco-usd-document", optional = true }

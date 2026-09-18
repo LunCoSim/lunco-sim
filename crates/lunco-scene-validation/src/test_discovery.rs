@@ -20,7 +20,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use lunco_usd_bevy_core::{program, StageView, UsdRead};
+use lunco_usd_bevy_core::program;
+use lunco_usd_bevy_stage::{StageView, UsdRead};
 
 /// The Rhai constant read by the test discovery pass.
 pub const TEST_KIND_CONST: &str = "TEST_KIND";
@@ -145,7 +146,7 @@ fn scene_paths(scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
             ));
         }
     }
-    Ok(lunco_assets_core::discovery::scan_library(scenes_dir)
+    Ok(lunco_assets_runtime::discovery::scan_library(scenes_dir)
         .into_iter()
         // Preserve the public contract of this function: discover the scene
         // files directly under the supplied test directory, not nested asset
@@ -161,7 +162,7 @@ fn scene_paths(_scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
-    let stage = lunco_usd_bevy_core::compose::compose_file_to_stage(scene_path)
+    let stage = lunco_usd_bevy_stage::compose::compose_file_to_stage(scene_path)
         .map_err(|error| format!("{}: cannot compose scene: {error}", scene_path.display()))?;
     let view = StageView::new(&stage);
     let mut kinds = BTreeSet::new();
@@ -191,7 +192,7 @@ fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
             continue;
         };
         let source_rel = lunco_assets_core::engine_asset_rel(&source_asset);
-        if !lunco_assets_core::discovery::is_test_asset(source_rel)
+        if !lunco_assets_runtime::discovery::is_test_asset(source_rel)
             || !source_rel.ends_with(".rhai")
         {
             continue;

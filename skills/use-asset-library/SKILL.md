@@ -68,7 +68,7 @@ consumer declare `gravity_accel`, `sun_mount_*`, or `earth_mount_*` as its own
 output and connect that output back to itself.
 
 The engine-recognized **source** extensions are walked into the discovery manifest
-(`crates/lunco-assets-core/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,
+(`crates/lunco-assets-runtime/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,
 `.py`, `.sysml`, `.kerml`**. `.mo` (Modelica), `.py` (optional Python), and
 SysML/KerML sources are catalogued both because a `.usda`/Twin names them and
 so they can be browsed directly. Python is not the standard scenario backend;
@@ -87,11 +87,12 @@ the current-directory ancestry; the complete order is built by
 root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a
 global downloaded product without putting a machine path into USD.
 Authored bytes always win over materialised ones. Schemes are registered in
-`crates/lunco-assets-core/src/asset_sources.rs`; `twin://` is stateful, it is not a
+`crates/lunco-assets-runtime/src/asset_sources.rs`; `twin://` is stateful, it is not a
 second texture scheme. Use the existing logical `lunco://` or `twin://` identity
 for every delivered artifact. Canonical URI construction, separator normalization,
 and traversal validation come from the dependency-free `lunco-assets-path` crate;
-source roots and bytes remain owned by `lunco-assets-core`.
+source roots and bytes are admitted by `lunco-assets-runtime` using the identity
+and cache contracts from `lunco-assets-core`.
 
 Anything the cache fallback can serve is DECLARED in an `Assets.toml` and
 downloaded only on request (Settings ▸ Downloadable data, the Twin Browser
@@ -282,7 +283,7 @@ progression in task/events.
 
 Native runtime walks the filesystem, so **adding a file needs no step at all**.
 The **web** build has no filesystem: it fetches `assets/manifest.json`
-(`crates/lunco-assets-core/src/discovery.rs`). After adding or removing any catalogued source
+(`crates/lunco-assets-runtime/src/discovery.rs`). After adding or removing any catalogued source
 (`.usda`/`.wgsl`/`.rhai`/`.mo`):
 
 ```bash
@@ -317,7 +318,8 @@ strict wheel reader. See [`validate-assets`](../validate-assets/SKILL.md).
 ## Anti-patterns
 
 USD composition is owned by `lunco-usd-compose`: `lunco-assets-core` supplies
-canonical IDs, traversal, and bytes; composition interprets USD arcs into an
+canonical IDs and traversal-safe roots, while `lunco-assets-runtime` supplies
+source bytes; composition interprets USD arcs into an
 inert stage. Modelica, Rhai, behavior trees, physics, and rendering bind later
 in their own layers. A tutorial only projects metadata from that stage.
 

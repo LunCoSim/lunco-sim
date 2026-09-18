@@ -27,7 +27,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
-use lunco_assets_core::script_source::ScriptSources;
+use lunco_assets_runtime::script_source::ScriptSources;
 use rhai::{Engine, EvalAltResult, Module, ModuleResolver, Position, Scope, Shared};
 
 /// Default extension applied to an extension-less import, so `import "lib"` and

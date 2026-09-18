@@ -39,7 +39,7 @@ struct TutorialMenuFile {
 
 struct PendingBundledCatalog {
     asset_path: String,
-    handle: Handle<lunco_assets_core::TextAsset>,
+    handle: Handle<lunco_assets_runtime::TextAsset>,
 }
 
 struct PendingTwinCatalog {
@@ -78,9 +78,9 @@ impl Plugin for TutorialMenuPlugin {
 /// relocating the file therefore does not require a core rebuild.
 fn sync_bundled_tutorial_catalog(
     mut catalog: ResMut<TutorialMenuCatalog>,
-    text_assets: Option<Res<lunco_assets_core::TextAssetCatalog>>,
+    text_assets: Option<Res<lunco_assets_runtime::TextAssetCatalog>>,
     asset_server: Option<Res<AssetServer>>,
-    assets: Option<Res<Assets<lunco_assets_core::TextAsset>>>,
+    assets: Option<Res<Assets<lunco_assets_runtime::TextAsset>>>,
 ) {
     let Some(text_assets) = text_assets else {
         return;
@@ -314,7 +314,7 @@ fn twin_asset_uri(twin: &str, reference: &str) -> String {
 fn sync_twin_tutorial_catalogs(
     mut catalog: ResMut<TutorialMenuCatalog>,
     roots: Res<lunco_assets_core::TwinRoots>,
-    manifest: Res<lunco_assets_core::discovery::AssetManifest>,
+    manifest: Res<lunco_assets_runtime::discovery::AssetManifest>,
     settings: Option<Res<lunco_settings::DownloadSettings>>,
 ) {
     let Ok(names) = roots.names() else {
@@ -357,7 +357,7 @@ fn sync_twin_tutorial_catalogs(
         let twin_json_assets = if names_to_load.is_empty() {
             Vec::new()
         } else {
-            match lunco_assets_core::discovery::list_assets(&manifest, &roots, "json") {
+            match lunco_assets_runtime::discovery::list_assets(&manifest, &roots, "json") {
                 Ok(assets) => assets
                     .into_iter()
                     .filter(|asset| asset.twin.is_some())
@@ -395,7 +395,7 @@ fn sync_twin_tutorial_catalogs(
             let task = AsyncComputeTaskPool::get().spawn(async move {
                 let mut found = None;
                 for asset in candidates {
-                    let text = lunco_assets_core::asset_read::read_asset_text(&asset, &settings).await?;
+                    let text = lunco_assets_runtime::asset_read::read_asset_text(&asset, &settings).await?;
                     let value = serde_json::from_str::<serde_json::Value>(&text)
                         .map_err(|error| format!("{}: invalid JSON: {error}", asset.rel))?;
                     if value.get("kind").and_then(serde_json::Value::as_str)

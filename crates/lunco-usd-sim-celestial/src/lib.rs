@@ -70,7 +70,7 @@ impl Plugin for CelestialProjectionPlugin {
     }
 }
 
-type ComposedReader<'a> = dyn lunco_usd_bevy_core::read::UsdReadObject + 'a;
+type ComposedReader<'a> = dyn lunco_usd_bevy_stage::read::UsdReadObject + 'a;
 
 /// NAIF id of the default anchor body (the Moon).
 const DEFAULT_ANCHOR_BODY: i32 = 301;
@@ -992,8 +992,8 @@ fn any_unprojected_celestial(
 fn project_celestial_comms_prims(
     mut commands: Commands,
     query: Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath), Without<CelestialProjected>>,
-    stages: Res<Assets<lunco_usd_bevy_core::UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
+    stages: Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>,
+    canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
 ) {
     for (entity, prim_path) in query.iter() {
         // A scene mounted without an explicit root uses the empty path as the
@@ -1010,7 +1010,7 @@ fn project_celestial_comms_prims(
         };
         let (reader, _generation) = canonical.reader_for(id, stage_asset);
         let Some(resolved_path) =
-            lunco_usd_bevy_core::resolve_stage_prim_path(&reader, &prim_path.path)
+            lunco_usd_bevy_stage::resolve_stage_prim_path(&reader, &prim_path.path)
         else {
             warn!(
                 stage = ?id,
@@ -1073,7 +1073,7 @@ fn any_nested_link_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
 
     fn view(source: &str) -> (CanonicalStage, SdfPath) {

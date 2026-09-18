@@ -15,7 +15,7 @@ mod geometry;
 use bevy::asset::{AssetEvent, AssetId, AssetLoadFailedEvent};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::prelude::*;
-use lunco_usd_bevy_core::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
 
 pub use geometry::{
     read_primitive_axis, read_shape_dims, read_usd_mesh_indexed, read_usd_mesh_points,

@@ -110,11 +110,11 @@ fn main() {
     let headless = false;
 
     let mut app = App::new();
-    lunco_assets_core::register_lunco_asset_sources(&mut app);
+    lunco_assets_runtime::register_lunco_asset_sources(&mut app);
 
-    // Physics fixed timestep (lunco_core::FIXED_HZ). Modelica stepping runs in
+    // Physics fixed timestep (lunco_core_runtime::FIXED_HZ). Modelica stepping runs in
     // FixedUpdate so the worker receives a predictable per-tick dt.
-    app.insert_resource(Time::<Fixed>::from_hz(lunco_core::FIXED_HZ));
+    app.insert_resource(Time::<Fixed>::from_hz(lunco_core_runtime::FIXED_HZ));
 
     // wasm: match the index.html backdrop so the first wgpu clear paints
     // the same dark colour the canvas already has — kills the gray flash
@@ -131,7 +131,7 @@ fn main() {
     // `ModelicaCorePlugin` plus `ModelicaExecutionPlugin`. Mirrors
     // `lunco_luncosim`'s Core/Ui/Headless split.
     app.add_plugins(default_plugins(headless));
-    lunco_assets_core::register_lunco_asset_types(&mut app);
+    lunco_assets_runtime::register_lunco_asset_types(&mut app);
 
     // GUI (native windowed, or wasm — always windowed). The whole workbench:
     // WorkbenchPlugin + ModelicaPlugin + clipboard, autosave, worker. Same
@@ -171,7 +171,7 @@ fn main() {
             app.add_plugins(lunco_modelica_api::ModelicaApiQueriesPlugin);
         }
         app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
-            std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ),
+            std::time::Duration::from_secs_f64(1.0 / lunco_core_runtime::FIXED_HZ),
         ));
         info!("[lunica] running HEADLESS: Modelica compile core + API, no window/egui");
     }
@@ -375,7 +375,7 @@ struct WebWorkbench;
 fn request_web_workbench(
     mut commands: Commands,
     server: Res<AssetServer>,
-    manifest: Res<lunco_assets_core::discovery::AssetManifest>,
+    manifest: Res<lunco_assets_runtime::discovery::AssetManifest>,
     mut request: ResMut<WebWorkbenchRequest>,
     started: Option<Res<WebWorkbenchStarted>>,
 ) {

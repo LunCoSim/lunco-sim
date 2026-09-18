@@ -31,18 +31,19 @@ use bevy::ecs::reflect::ReflectEvent;
 use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
 use bevy::reflect::TypePath;
+use bevy::reflect::serde::{TypedReflectDeserializer, TypedReflectSerializer};
 use big_space::prelude::{CellCoord, Grid};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use leafwing_input_manager::prelude::ActionState;
 use lunco_command_contracts::{Mutation, OpId, SessionId, SyncChannel};
-use lunco_core::{GlobalEntityId, SimTick};
+use lunco_core::GlobalEntityId;
+use lunco_core_runtime::SimTick;
 use lunco_core_session::{
-    authorize, AppliedInputSeq, LocalSession, NetReplicate, NetSpawn, NetworkRole,
-    PendingReplicatedSpawns, ReplicatedSpawn, SessionProfiles, SessionRegistry, SyncApplyGuard,
+    AppliedInputSeq, LocalSession, NetReplicate, NetSpawn, NetworkRole, PendingReplicatedSpawns,
+    ReplicatedSpawn, SessionProfiles, SessionRegistry, SyncApplyGuard, authorize,
 };
 use lunco_doc::DocumentId;
 use lunco_embodiment_core::roles::{EmbodimentCorePlugin, LocalEmbodiment};
@@ -792,7 +793,7 @@ pub struct SyncCommandEvent {
 /// `CommandBus`). No-op-on-the-wire commands need not be declared.
 pub trait DeclareChannelExt {
     fn declare_channel<C: Event + Reflect + TypePath>(&mut self, channel: SyncChannel)
-        -> &mut Self;
+    -> &mut Self;
 }
 
 impl DeclareChannelExt for App {
@@ -1370,7 +1371,7 @@ pub fn drain_sync_inbox(
                 }
 
                 // Allow anyone (including host) to follow the teacher, except the teacher themselves
-                if msg.tutor_session != local.0 .0 {
+                if msg.tutor_session != local.0.0 {
                     tutor_status.active_doc = msg.active_doc;
                     tutor_status.active_perspective = msg.active_perspective.clone();
                     tutor_status.target_client = msg.target_client;
@@ -1390,7 +1391,7 @@ pub fn drain_sync_inbox(
                     // A non-consenting peer's `follow_mode` is left untouched (its own
                     // manual choice stands), so one broadcast can no longer freeze every
                     // peer in the session — the residual half of review H2.
-                    let is_explicitly_targeted = msg.target_client == Some(local.0 .0);
+                    let is_explicitly_targeted = msg.target_client == Some(local.0.0);
                     let is_broadcast = msg.target_client.is_none();
                     let consented =
                         is_explicitly_targeted || (is_broadcast && tutorial_settings.follow_opt_in);
@@ -1475,7 +1476,7 @@ pub fn drain_sync_inbox(
                     ));
                 }
 
-                if msg.tutor_session != local.0 .0 {
+                if msg.tutor_session != local.0.0 {
                     tutor_status.one_shot_snap_request = Some(msg);
                 }
             }
@@ -2193,7 +2194,7 @@ fn seed_local_cursor_color(
     }
     *done = true;
     if settings.color == CursorSettings::default().color {
-        settings.color = generate_user_color(local.0 .0);
+        settings.color = generate_user_color(local.0.0);
     }
 }
 
@@ -2226,13 +2227,13 @@ pub fn send_local_cursor_updates(
             outbox.0.push((
                 SyncChannel::CommandBus,
                 SyncEnvelope::Cursor(CursorUpdateMsg {
-                    session: local.0 .0,
+                    session: local.0.0,
                     cursor: None,
                     color: Some(settings.color),
                 }),
             ));
             if role.is_host() {
-                let uid = UserId(local.0 .0);
+                let uid = UserId(local.0.0);
                 if let Some(info) = presence.users.get_mut(&uid) {
                     info.cursor = None;
                 }
@@ -2289,7 +2290,7 @@ pub fn send_local_cursor_updates(
         outbox.0.push((
             SyncChannel::ControlStream, // Unreliable fast datagram channel
             SyncEnvelope::Cursor(CursorUpdateMsg {
-                session: local.0 .0,
+                session: local.0.0,
                 cursor: current_pos,
                 color: Some(settings.color),
             }),
@@ -2297,7 +2298,7 @@ pub fn send_local_cursor_updates(
 
         // If we are host, we also update our own cursor in our local Presence registry
         if role.is_host() {
-            let uid = UserId(local.0 .0);
+            let uid = UserId(local.0.0);
             if let Some(info) = presence.users.get_mut(&uid) {
                 info.cursor = current_pos;
             }
@@ -2402,7 +2403,7 @@ pub fn send_tutor_status_updates(
     outbox.0.push((
         SyncChannel::ControlStream,
         SyncEnvelope::TutorStatus(TutorStatusMsg {
-            tutor_session: local.0 .0,
+            tutor_session: local.0.0,
             active_doc,
             active_perspective,
             avatar_state,
@@ -2431,7 +2432,7 @@ pub fn send_student_status_updates(
     }
 
     // Only send if we are the target student and tutor is observing us
-    if tutor_status.target_client != Some(local.0 .0) || !tutor_status.observe_mode {
+    if tutor_status.target_client != Some(local.0.0) || !tutor_status.observe_mode {
         return;
     }
 
@@ -2460,7 +2461,7 @@ pub fn send_student_status_updates(
     outbox.0.push((
         SyncChannel::ControlStream,
         SyncEnvelope::StudentStatus(StudentStatusMsg {
-            student_session: local.0 .0,
+            student_session: local.0.0,
             active_doc,
             active_perspective,
             avatar_state,
@@ -2813,13 +2814,13 @@ fn perspective_inputs_blocked(
         return false;
     }
     let is_targeted = tutor_status.target_client.is_none()
-        || local.is_some_and(|loc| tutor_status.target_client == Some(loc.0 .0));
+        || local.is_some_and(|loc| tutor_status.target_client == Some(loc.0.0));
     if !is_targeted {
         return false;
     }
     // If we are the observed student, don't block — we move freely, tutor watches.
     if let Some(loc) = local {
-        if tutor_status.target_client == Some(loc.0 .0) && tutor_status.observe_mode {
+        if tutor_status.target_client == Some(loc.0.0) && tutor_status.observe_mode {
             return false;
         }
     }
@@ -2855,7 +2856,7 @@ pub fn apply_tutorial_mirroring(
     if settings.follow_mode {
         // If we are being observed, don't mirror (since the tutor mirrors us, mirroring back creates a loop)
         if let Some(loc) = &local {
-            if tutor_status.target_client == Some(loc.0 .0) && tutor_status.observe_mode {
+            if tutor_status.target_client == Some(loc.0.0) && tutor_status.observe_mode {
                 return;
             }
         }
@@ -2864,7 +2865,7 @@ pub fn apply_tutorial_mirroring(
         let is_targeted = tutor_status.target_client.is_none()
             || local
                 .as_ref()
-                .is_some_and(|loc| tutor_status.target_client == Some(loc.0 .0));
+                .is_some_and(|loc| tutor_status.target_client == Some(loc.0.0));
 
         if is_targeted {
             // Mirror active document (no-op on a headless host with no workspace)
@@ -3038,7 +3039,7 @@ pub struct SyncPlugin;
 /// Startup system to register the host session in SessionRbac (Owner role, authenticated).
 fn setup_host_rbac(local: Res<LocalSession>, mut rbac: ResMut<lunco_core_session::SessionRbac>) {
     rbac.sessions.insert(
-        local.0 .0,
+        local.0.0,
         lunco_core_session::UserSession {
             session_id: local.0,
             username: "Host".to_string(),
@@ -3264,7 +3265,7 @@ fn on_share_perspective(
     outbox.0.push((
         SyncChannel::CommandBus, // reliable
         SyncEnvelope::SharePerspective(SharePerspectiveMsg {
-            tutor_session: local.0 .0,
+            tutor_session: local.0.0,
             active_doc,
             active_perspective,
             avatar_state,
@@ -3922,7 +3923,7 @@ mod codec_roundtrip {
     #[test]
     fn scenario_manifest_envelope_roundtrips() {
         use lunco_networking_scenario::{
-            cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg,
+            ScenarioAsset, ScenarioManifestMsg, cid_for_content, scenario_revision,
         };
         // A realistic manifest: two assets with real CIDs + a computed revision.
         let assets = vec![

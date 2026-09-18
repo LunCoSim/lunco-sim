@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use bevy::asset::{AssetEvent, AssetLoadFailedEvent, AssetServer, Assets, Handle};
 use bevy::prelude::*;
 
-use lunco_assets_core::{twin_uri, TwinAssetMounted};
+use lunco_assets_core::twin_uri;
+use lunco_assets_runtime::TwinAssetMounted;
 use lunco_doc::{DocumentId, FileBacked, OpenOutcome};
 use lunco_doc_bevy::{
     DocumentChanged, DocumentClosed, DocumentOpened, DocumentRegistry, DocumentSaved,

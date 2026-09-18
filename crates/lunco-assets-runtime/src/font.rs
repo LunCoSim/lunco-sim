@@ -1,7 +1,7 @@
 //! Cross-platform font-byte loading.
 //!
 //! The workspace ships **DejaVu Sans** as its proportional fallback (math /
-//! Greek / arrow coverage — see [`crate::dejavu_sans_path`]). Different crates
+//! Greek / arrow coverage — see [`lunco_assets_core::dejavu_sans_path`]). Different crates
 //! need its raw `.ttf` bytes at runtime: `lunco-theme` installs them into egui,
 //! `lunco-usd-bevy` rasterises diagnostic labels from them, etc. The *loading
 //! procedure* differs by platform — native reads the cache file synchronously,
@@ -18,7 +18,7 @@ pub const DEJAVU_WEB_URL: &str = "/fonts/DejaVuSans.ttf";
 /// Start loading the DejaVu Sans TTF bytes, returning a receiver that yields
 /// them exactly once.
 ///
-/// * **Native** — reads [`crate::dejavu_sans_path`] synchronously; the bytes
+/// * **Native** — reads [`lunco_assets_core::dejavu_sans_path`] synchronously; the bytes
 ///   are already queued on the channel when this returns, so the first poll
 ///   succeeds.
 /// * **Web** — spawns an async `fetch` of [`DEJAVU_WEB_URL`]; the bytes arrive
@@ -38,7 +38,7 @@ pub fn load_dejavu_sans_bytes(settings: &lunco_settings::DownloadSettings) -> Re
 fn load_into(tx: Sender<Vec<u8>>, _settings: &lunco_settings::DownloadSettings) {
     // One-shot startup font read — a direct `std::fs::read` is correct here
     // (this crate is the I/O boundary; the wasm path below replaces it).
-    let path = crate::dejavu_sans_path();
+    let path = lunco_assets_core::dejavu_sans_path();
     match std::fs::read(&path) {
         Ok(bytes) => {
             let _ = tx.send(bytes);
@@ -55,7 +55,8 @@ fn load_into(tx: Sender<Vec<u8>>, _settings: &lunco_settings::DownloadSettings) 
 fn load_into(tx: Sender<Vec<u8>>, settings: &lunco_settings::DownloadSettings) {
     let settings = settings.clone();
     wasm_bindgen_futures::spawn_local(async move {
-        match crate::web_fetch::network_fetch_uncached(DEJAVU_WEB_URL, &settings).await {
+        match lunco_assets_core::web_fetch::network_fetch_uncached(DEJAVU_WEB_URL, &settings).await
+        {
             Ok(bytes) => {
                 let _ = tx.send(bytes);
             }

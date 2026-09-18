@@ -6,6 +6,7 @@ license.workspace = true
 description = "Transport-agnostic command, query, discovery, and response contracts for LunCoSim"
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-core = { path = "../lunco-core" }

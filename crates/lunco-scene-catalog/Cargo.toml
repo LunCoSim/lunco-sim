@@ -6,6 +6,8 @@ license.workspace = true
 description = "USD-backed scene and asset catalogs for LunCoSim"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 # Catalog discovery and runtime USD spawns are render-free. Keep this package
 # independent from the scene command handlers so catalog changes do not rebuild
 # the much larger command crate.
@@ -20,7 +22,6 @@ lunco-core-session = { path = "../lunco-core-session" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
 lunco-settings = { path = "../lunco-settings" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 serde_json = { workspace = true }
 crossbeam-channel = { workspace = true }

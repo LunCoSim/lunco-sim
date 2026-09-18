@@ -95,7 +95,7 @@ impl Plugin for ScreenshotPlugin {
             .add_observer(deliver_screenshot);
 
         // Offline Frame-by-Frame Recording Mode
-        app.init_resource::<lunco_core::KeepAwake>()
+        app.init_resource::<lunco_core_runtime::KeepAwake>()
             .init_resource::<OfflineRenderReadiness>()
             .init_resource::<OfflineRecordingState>()
             .init_resource::<OfflineVideoSettings>()
@@ -787,7 +787,7 @@ use bevy::time::TimeUpdateStrategy;
 //   locked to `fps` no matter how fast or slow the machine renders.
 // * **Whether the app may sleep** — `WinitSettings`, written only by the pacer
 //   (`lunco-modelica-core`'s `sim_focus_pace`). Recording states intent by holding a
-//   `lunco_core::KeepAwake` token; it never writes the setting itself.
+//   `lunco_core_runtime::KeepAwake` token; it never writes the setting itself.
 // * **How fast frames present** — `Window::present_mode`, written only here.
 //   Uncapped while recording so rendering runs at max speed.
 //
@@ -1157,7 +1157,7 @@ fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: 
 fn activate_recording(
     pending: &PendingShotStart,
     state: &mut OfflineRecordingState,
-    keep_awake: &mut lunco_core::KeepAwake,
+    keep_awake: &mut lunco_core_runtime::KeepAwake,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     commands: &mut Commands,
     offscreen: bool,
@@ -1258,7 +1258,7 @@ fn activate_recording(
 /// replace it, freezing virtual time until the process restarts.
 fn teardown_recording(
     state: &mut OfflineRecordingState,
-    keep_awake: &mut lunco_core::KeepAwake,
+    keep_awake: &mut lunco_core_runtime::KeepAwake,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     virtual_time: &mut bevy::time::Time<bevy::time::Virtual>,
     video_sink: &mut OfflineVideoSink,
@@ -1290,7 +1290,7 @@ fn teardown_recording(
 fn on_stop_offline_recording(
     _trigger: On<StopOfflineRecording>,
     mut state: ResMut<OfflineRecordingState>,
-    mut keep_awake: ResMut<lunco_core::KeepAwake>,
+    mut keep_awake: ResMut<lunco_core_runtime::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut video_sink: ResMut<OfflineVideoSink>,
@@ -1507,7 +1507,7 @@ fn scene_visuals_ready(
 fn start_recording_when_scene_ready(
     pending: Option<ResMut<PendingShotStart>>,
     mut state: ResMut<OfflineRecordingState>,
-    mut keep_awake: ResMut<lunco_core::KeepAwake>,
+    mut keep_awake: ResMut<lunco_core_runtime::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     meshes: Query<&bevy::mesh::Mesh3d>,
     asset_server: Res<AssetServer>,
@@ -1593,7 +1593,7 @@ fn drive_offline_clock(
     // frozen after a capture until the worker releases the next physics step;
     // otherwise a slow worker produces duplicate frames at the same simulation
     // time and the captured sequence outruns its force state.
-    coupling: Option<Res<lunco_core::SimulationBarrier>>,
+    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut commands: Commands,
 ) {
@@ -1706,7 +1706,7 @@ fn deliver_offline_frame(
     trigger: On<ScreenshotCaptured>,
     requests: Query<&PendingCapture>,
     mut state: ResMut<OfflineRecordingState>,
-    mut keep_awake: ResMut<lunco_core::KeepAwake>,
+    mut keep_awake: ResMut<lunco_core_runtime::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut video_sink: ResMut<OfflineVideoSink>,

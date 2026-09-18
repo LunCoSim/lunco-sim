@@ -6,8 +6,8 @@ license.workspace = true
 description = "Reusable Modelica source index, diagram metadata, and package-tree contracts"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy.workspace = true
-lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rumoca-compile = { workspace = true }

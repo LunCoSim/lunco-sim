@@ -44,14 +44,14 @@ use lunco_scripting::source_asset::PythonSource;
 #[cfg(feature = "python")]
 use lunco_scripting::{doc::ScriptedModel, SceneOwnedScript, ScriptRegistry};
 use lunco_telemetry_core::{ChannelSource, Parameter};
-use lunco_usd_bevy_core::read::read_authored_bool_strict;
-use lunco_usd_bevy_core::read::UsdReadObject;
-use lunco_usd_bevy_core::{
+use lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight;
+use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::read::read_authored_bool_strict;
+use lunco_usd_bevy_stage::read::UsdReadObject;
+use lunco_usd_bevy_stage::{
     canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
     UsdWiringDirty,
 };
-use lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight;
-use lunco_usd_bevy_scene::UsdPrimPath;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
@@ -874,7 +874,7 @@ fn project_usd_telemetry(
 }
 
 /// Reads one cosim prim's attributes and dispatches its model + wires + events
-/// from the live composed [`lunco_usd_bevy_core::UsdRead`] surface.
+/// from the live composed [`lunco_usd_bevy_stage::UsdRead`] surface.
 fn process_usd_cosim_prim_read(
     reader: &dyn UsdReadObject,
     entity: Entity,
@@ -2050,7 +2050,7 @@ impl Plugin for UsdSimCosimPlugin {
         app.init_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
             .init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .init_resource::<lunco_cosim_core::BindingRevision>()
-            .init_resource::<lunco_core::SimulationBarrierParticipants>()
+            .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
             .init_resource::<lunco_scripting::ScriptRegistry>()
             .init_resource::<UsdWiringDirty>()
             .init_resource::<BindingEpochDirty>()
@@ -2418,7 +2418,7 @@ mod tests {
     #[test]
     fn causal_barrier_is_the_reverse_closure_of_stateful_sinks() {
         let mut world = World::new();
-        world.init_resource::<lunco_core::SimulationBarrierParticipants>();
+        world.init_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
         let mut revision = lunco_cosim_core::BindingRevision::default();
         revision.sealed = true;
         world.insert_resource(revision);
@@ -2454,7 +2454,7 @@ mod tests {
 
         derive_causal_barrier_participants(&mut world);
 
-        let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
+        let participants = world.resource::<lunco_core_runtime::SimulationBarrierParticipants>();
         assert!(participants.topology_ready);
         assert!(participants.entities.contains(&coupled));
         assert!(!participants.entities.contains(&telemetry_only));
@@ -2465,7 +2465,7 @@ mod tests {
     #[test]
     fn unresolved_topology_keeps_the_barrier_fail_closed() {
         let mut world = World::new();
-        world.init_resource::<lunco_core::SimulationBarrierParticipants>();
+        world.init_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
         let mut revision = lunco_cosim_core::BindingRevision::default();
         revision.sealed = true;
         world.insert_resource(revision);
@@ -2486,7 +2486,7 @@ mod tests {
 
         derive_causal_barrier_participants(&mut world);
 
-        let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
+        let participants = world.resource::<lunco_core_runtime::SimulationBarrierParticipants>();
         assert!(!participants.topology_ready);
         assert!(participants.requires_barrier(model));
     }
@@ -2494,7 +2494,7 @@ mod tests {
     #[test]
     fn failed_edge_does_not_make_model_a_shared_clock_participant() {
         let mut world = World::new();
-        world.init_resource::<lunco_core::SimulationBarrierParticipants>();
+        world.init_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
         let mut revision = lunco_cosim_core::BindingRevision::default();
         revision.sealed = true;
         world.insert_resource(revision);
@@ -2518,7 +2518,7 @@ mod tests {
 
         derive_causal_barrier_participants(&mut world);
 
-        let participants = world.resource::<lunco_core::SimulationBarrierParticipants>();
+        let participants = world.resource::<lunco_core_runtime::SimulationBarrierParticipants>();
         assert!(participants.topology_ready);
         assert!(!participants.entities.contains(&model));
         assert!(!participants.requires_barrier(model));
@@ -2632,7 +2632,7 @@ mod tests {
         let mut model = dispatched_but_unsolved();
         assert_eq!(modelica_status(&model), SimStatus::Compiling);
         model.is_compiled = true;
-        model.current_time = lunco_core::SECS_PER_TICK;
+        model.current_time = lunco_core_runtime::SECS_PER_TICK;
         assert_eq!(modelica_status(&model), SimStatus::Running);
         model.paused = true;
         assert_eq!(modelica_status(&model), SimStatus::Paused);

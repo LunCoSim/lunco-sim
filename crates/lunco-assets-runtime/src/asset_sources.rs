@@ -9,8 +9,8 @@
 
 use bevy::prelude::*;
 
-use crate::lunco_source::lunco_asset_source;
-use crate::twin_source::{twin_asset_source, TwinRoots};
+use lunco_assets_core::lunco_source::lunco_asset_source;
+use lunco_assets_core::twin_source::{TwinRoots, twin_asset_source};
 
 const TWIN_ASSET_MOUNT_FAILED: &str = "twin-asset-mount-failed";
 const TWIN_ASSET_UNMOUNT_FAILED: &str = "twin-asset-unmount-failed";
@@ -120,7 +120,7 @@ fn unregister_twin_root(
 /// Returns the [`TwinRoots`] handle (already inserted as a resource) for callers
 /// that want to pre-register a root before the first scene load.
 pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
-    let assets_dir = crate::assets_dir_abs();
+    let assets_dir = lunco_assets_core::assets_dir_abs();
 
     // Engine asset *library* under a NAMED, location-independent scheme so a
     // scene living OUTSIDE the project (an external Twin) can still reference
@@ -129,13 +129,19 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     // Resolves `assets/` FIRST, then the download cache — so a large binary
     // pulled by `cargo run -p lunco-assets -- download` is reachable at its
     // logical `lunco://` address without any authored file naming the cache.
-    app.register_asset_source(crate::LUNCO_SCHEME, lunco_asset_source(&assets_dir));
+    app.register_asset_source(
+        lunco_assets_core::LUNCO_SCHEME,
+        lunco_asset_source(&assets_dir),
+    );
 
     // `twin://` — a named root, keyed by Twin name: an open Twin's directory, or a
     // downloaded scenario's cache dir. Registered on EVERY platform; the reader
     // goes through `lunco_storage`, so on web it reads the OPFS tree.
     let twin_roots = TwinRoots::default();
-    app.register_asset_source(crate::TWIN_SCHEME, twin_asset_source(&twin_roots));
+    app.register_asset_source(
+        lunco_assets_core::TWIN_SCHEME,
+        twin_asset_source(&twin_roots),
+    );
     app.insert_resource(twin_roots.clone());
     app.add_plugins(TwinRootsPlugin);
 
@@ -143,19 +149,22 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     // `AssetSource` above also declares where its bytes live locally, so callers
     // that must reach them without the `AssetServer` (scenario sync, shader
     // pre-validation, file dialogs) cannot disagree with the readers.
-    let schemes = crate::scheme_registry::SchemeRegistry::default();
+    let schemes = lunco_assets_core::scheme_registry::SchemeRegistry::default();
     schemes
-        .register(crate::LUNCO_SCHEME, move |rel| {
-            crate::engine_asset_local_path(&crate::asset_path::uri(crate::LUNCO_SCHEME, rel))
+        .register(lunco_assets_core::LUNCO_SCHEME, move |rel| {
+            lunco_assets_core::engine_asset_local_path(&lunco_assets_path::uri(
+                lunco_assets_core::LUNCO_SCHEME,
+                rel,
+            ))
         })
         .expect("register the canonical lunco asset scheme");
     let roots = twin_roots.clone();
     schemes
-        .register(crate::TWIN_SCHEME, move |rest| {
+        .register(lunco_assets_core::TWIN_SCHEME, move |rest| {
             // `twin://<name>/<rel>` — the name selects the root, so this handler is
             // stateful where `lunco://`'s is constant.
-            let (name, rel) = crate::split_twin_rel(rest)?;
-            let rel = crate::asset_path::relative_path(rel)?;
+            let (name, rel) = lunco_assets_core::split_twin_rel(rest)?;
+            let rel = lunco_assets_path::relative_path(rel)?;
             match roots.resolve_file(name, &rel) {
                 Ok(path) => path,
                 Err(error) => {
@@ -241,11 +250,12 @@ mod tests {
             root,
             was_active,
         });
-        assert!(app
-            .world()
-            .resource::<TwinRoots>()
-            .names()
-            .expect("read Twin registry")
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<TwinRoots>()
+                .names()
+                .expect("read Twin registry")
+                .is_empty()
+        );
     }
 }

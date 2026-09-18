@@ -6,8 +6,8 @@
 //! `usda`, the shader catalog for `wgsl`, pickers, the API) call [`list_assets`]
 //! instead of each re-walking the disk with their own scan.
 //!
-//! Lives in `lunco-assets-core` because this crate already owns *where assets live* —
-//! the [`TwinRoots`](crate::twin_source::TwinRoots) registry and the `twin://` /
+//! Lives in `lunco-assets-runtime` because this crate owns catalog enumeration —
+//! the [`TwinRoots`](lunco_assets_core::twin_source::TwinRoots) registry and the `twin://` /
 //! `lunco://` schemes. What a file *says* is a separate question, answered by
 //! reading it ([`crate::asset_read`]).
 //!
@@ -32,7 +32,7 @@ use std::path::Path;
 
 use bevy::prelude::*;
 
-use crate::twin_source::TwinRoots;
+use lunco_assets_core::twin_source::TwinRoots;
 
 /// A file discovered somewhere in the project.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,7 +105,7 @@ impl AssetManifest {
 /// source files the shipped library itself exposes.
 pub fn list_library_assets(manifest: &AssetManifest) -> Vec<AssetFile> {
     #[cfg(not(target_arch = "wasm32"))]
-    let assets_dir = crate::assets_dir_abs();
+    let assets_dir = lunco_assets_core::assets_dir_abs();
 
     manifest
         .rels()
@@ -133,7 +133,7 @@ pub fn resolve_asset(
     manifest: &AssetManifest,
     roots: &TwinRoots,
     asset_path: &str,
-) -> Result<Option<AssetFile>, crate::TwinRootsError> {
+) -> Result<Option<AssetFile>, lunco_assets_core::TwinRootsError> {
     if let Some(asset) = list_library_assets(manifest)
         .into_iter()
         .find(|asset| asset.asset_path == asset_path)
@@ -143,10 +143,10 @@ pub fn resolve_asset(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let Some((name, rel)) = crate::twin_source::parse_twin_uri(asset_path) else {
+        let Some((name, rel)) = lunco_assets_core::twin_source::parse_twin_uri(asset_path) else {
             return Ok(None);
         };
-        let Some(rel_path) = crate::asset_path::relative_path(rel) else {
+        let Some(rel_path) = lunco_assets_path::relative_path(rel) else {
             return Ok(None);
         };
         let Some(abs_path) = roots.resolve_file(name, &rel_path)? else {
@@ -204,7 +204,7 @@ pub enum SchemaAssetOwner {
 /// manifest discovery prevents runtime packages from embedding the directory
 /// names used by the shipped schema bundle.
 pub fn schema_asset_owner(rel: &str) -> Option<SchemaAssetOwner> {
-    let rel = crate::asset_path::slashed(rel);
+    let rel = lunco_assets_path::slashed(rel);
     let mut segments = rel.split('/');
     if segments.next() != Some("schemas") {
         return None;
@@ -240,7 +240,7 @@ impl Plugin for AssetDiscoveryPlugin {
 /// is no artifact to go stale against.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_manifest_native(mut manifest: ResMut<AssetManifest>) {
-    let dir = crate::assets_dir_abs();
+    let dir = lunco_assets_core::assets_dir_abs();
     let rels = scan_library(&dir);
     info!(
         "ASSET_MANIFEST: {} file(s) under {}",
@@ -309,7 +309,7 @@ pub fn read_files_with_extension(
                 .and_then(|value| value.to_str())
                 .is_some_and(|value| value.eq_ignore_ascii_case(extension))
             {
-                match crate::read_asset_file_string(&path) {
+                match lunco_assets_core::read_asset_file_string(&path) {
                     Ok(source) => files.push((path.display().to_string(), source)),
                     Err(error) => {
                         diagnostics.push(format!("cannot read {}: {error}", path.display()));
@@ -370,13 +370,14 @@ mod wasm_manifest {
             // describes the current bundle, and a stale copy would hide a
             // freshly-deployed asset. The files it names are immutable per
             // deployment and are cached individually (see `asset_read`).
-            let manifest_url = crate::asset_manifest_url();
-            let result = crate::web_fetch::network_fetch_uncached(&manifest_url, &settings)
-                .await
-                .and_then(|bytes| {
-                    serde_json::from_slice::<Vec<String>>(&bytes)
-                        .map_err(|e| format!("{manifest_url}: not a JSON string array: {e}"))
-                });
+            let manifest_url = lunco_assets_core::asset_manifest_url();
+            let result =
+                lunco_assets_core::web_fetch::network_fetch_uncached(&manifest_url, &settings)
+                    .await
+                    .and_then(|bytes| {
+                        serde_json::from_slice::<Vec<String>>(&bytes)
+                            .map_err(|e| format!("{manifest_url}: not a JSON string array: {e}"))
+                    });
             let _ = tx.send(result);
         });
     }
@@ -387,7 +388,7 @@ mod wasm_manifest {
         };
         match result {
             Ok(rels) => {
-                let manifest_url = crate::asset_manifest_url();
+                let manifest_url = lunco_assets_core::asset_manifest_url();
                 info!("ASSET_MANIFEST: {} file(s) from {manifest_url}", rels.len());
                 manifest.set(rels);
             }
@@ -395,7 +396,7 @@ mod wasm_manifest {
                 // Loud. With no manifest the browser cannot enumerate anything —
                 // the spawn palette and the shader catalog come up empty — and a
                 // silent empty catalog reads as "this project has no assets".
-                let manifest_url = crate::asset_manifest_url();
+                let manifest_url = lunco_assets_core::asset_manifest_url();
                 error!(
                     "ASSET_MANIFEST: could not load {manifest_url} ({e}). \
                      The spawn/shader catalogs will be EMPTY. Is the bundle built \
@@ -418,7 +419,7 @@ pub fn list_assets(
     manifest: &AssetManifest,
     roots: &TwinRoots,
     ext: &str,
-) -> Result<Vec<AssetFile>, crate::TwinRootsError> {
+) -> Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError> {
     list_assets_with_extensions(manifest, roots, &[ext])
 }
 
@@ -430,13 +431,13 @@ pub fn list_assets_with_extensions(
     manifest: &AssetManifest,
     roots: &TwinRoots,
     extensions: &[&str],
-) -> Result<Vec<AssetFile>, crate::TwinRootsError> {
+) -> Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError> {
     let mut out = Vec::new();
     let suffixes: Vec<String> = extensions.iter().map(|ext| format!(".{ext}")).collect();
 
     // Engine library, addressed by the default source (plain relative paths).
     #[cfg(not(target_arch = "wasm32"))]
-    let assets_dir = crate::assets_dir_abs();
+    let assets_dir = lunco_assets_core::assets_dir_abs();
     for rel in manifest
         .rels()
         .iter()
@@ -461,7 +462,7 @@ pub fn list_assets_with_extensions(
         if let Some(root) = roots.root_of(&name)? {
             walk_matching(&root, &root, extensions, &mut |rel| {
                 out.push(AssetFile {
-                    asset_path: crate::twin_uri(&name, &rel),
+                    asset_path: lunco_assets_core::twin_uri(&name, &rel),
                     stem: stem_of(&rel),
                     abs_path: root.join(&rel),
                     twin: Some(name.clone()),
@@ -480,7 +481,7 @@ pub fn list_assets_with_extensions(
 pub fn list_usd_assets(
     manifest: &AssetManifest,
     roots: &TwinRoots,
-) -> Result<Vec<AssetFile>, crate::TwinRootsError> {
+) -> Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError> {
     list_assets(manifest, roots, "usda")
 }
 
@@ -501,7 +502,7 @@ pub fn list_usd_assets(
 pub fn list_scene_assets(
     manifest: &AssetManifest,
     roots: &TwinRoots,
-) -> Result<Vec<AssetFile>, crate::TwinRootsError> {
+) -> Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError> {
     let mut out = list_assets(manifest, roots, "usda")?;
     // One manifest read per Twin, not per asset.
     let globs: std::collections::HashMap<String, Vec<String>> = roots
@@ -514,7 +515,7 @@ pub fn list_scene_assets(
             };
             Ok((name, g))
         })
-        .collect::<Result<_, crate::TwinRootsError>>()?;
+        .collect::<Result<_, lunco_assets_core::TwinRootsError>>()?;
 
     out.retain(|asset| match &asset.twin {
         Some(name) => globs
@@ -526,7 +527,7 @@ pub fn list_scene_assets(
             .unwrap_or(false),
         // The engine library's own layout, which it is entitled to assert about
         // itself — it ships the folder.
-        None => crate::is_engine_scene_asset(&asset.rel),
+        None => lunco_assets_core::is_engine_scene_asset(&asset.rel),
     });
     Ok(out)
 }
@@ -543,7 +544,7 @@ fn default_scene_globs() -> Vec<String> {
 /// discovery boundary and is returned to the caller instead of being treated
 /// as an undeclared Twin.
 #[cfg(not(target_arch = "wasm32"))]
-fn scene_globs_of_twin(root: &Path) -> Result<Vec<String>, crate::TwinRootsError> {
+fn scene_globs_of_twin(root: &Path) -> Result<Vec<String>, lunco_assets_core::TwinRootsError> {
     let manifest = root.join(lunco_twin::MANIFEST_FILENAME);
     match lunco_twin::TwinManifest::read(&manifest) {
         Ok(manifest) => Ok(manifest
@@ -555,7 +556,7 @@ fn scene_globs_of_twin(root: &Path) -> Result<Vec<String>, crate::TwinRootsError
         {
             Ok(default_scene_globs())
         }
-        Err(error) => Err(crate::TwinRootsError::AssetResolution(
+        Err(error) => Err(lunco_assets_core::TwinRootsError::AssetResolution(
             std::io::ErrorKind::InvalidData,
             format!("cannot read {}: {error}", manifest.display()),
         )),
@@ -565,7 +566,7 @@ fn scene_globs_of_twin(root: &Path) -> Result<Vec<String>, crate::TwinRootsError
 /// Web has no Twin folders to read a manifest from — Twin roots are a native
 /// concept (see [`list_assets`]), so this is unreachable there.
 #[cfg(target_arch = "wasm32")]
-fn scene_globs_of_twin(_root: &Path) -> Result<Vec<String>, crate::TwinRootsError> {
+fn scene_globs_of_twin(_root: &Path) -> Result<Vec<String>, lunco_assets_core::TwinRootsError> {
     Ok(default_scene_globs())
 }
 
@@ -598,7 +599,7 @@ fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {
         {
             if let Ok(rel) = p.strip_prefix(base) {
                 if let Some(rel_s) = rel.to_str() {
-                    f(crate::asset_path::slashed(rel_s));
+                    f(lunco_assets_path::slashed(rel_s));
                 }
             }
         }
@@ -624,7 +625,7 @@ fn walk_matching(base: &Path, dir: &Path, extensions: &[&str], f: &mut impl FnMu
         {
             if let Ok(rel) = p.strip_prefix(base) {
                 if let Some(rel_s) = rel.to_str() {
-                    f(crate::asset_path::slashed(rel_s));
+                    f(lunco_assets_path::slashed(rel_s));
                 }
             }
         }

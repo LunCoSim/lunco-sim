@@ -6,7 +6,7 @@
 //! source asset in the headless USD substrate lets both paths use the same
 //! `twin://` and storage-aware resolver without depending on visual projection.
 
-use bevy::asset::{io::Reader, AssetLoader, LoadContext};
+use bevy::asset::{AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::{Asset, TypePath};
 
 /// A USD layer's raw source text, without composition.

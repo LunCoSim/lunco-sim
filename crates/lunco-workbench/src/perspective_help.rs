@@ -11,10 +11,10 @@
 //! visibility, so Help cannot drift from the top-right navigation. Closed
 //! with Esc or by clicking the dimmed backdrop.
 
-use crate::layout::WorkbenchLayout;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_workbench_core::{PerspectiveId, WorkbenchMenuRegistry};
+use lunco_workbench_layout::WorkbenchLayout;
 use lunco_workbench_widgets::{icon_button, paint_icon, UiIcon};
 use std::collections::HashMap;
 

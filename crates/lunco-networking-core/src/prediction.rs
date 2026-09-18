@@ -4,7 +4,7 @@
 //! The scene/document command layer supplies replicated-spawn instantiation;
 //! this module owns the client half of the wire. `sync.rs` produces the
 //! `IncomingSnapshots` this module consumes, and the shared
-//! [`lunco_core::NetcodeSet`] preserves ordering between the two systems.
+//! [`lunco_core_runtime::NetcodeSet`] preserves ordering between the two systems.
 //!
 //! Compiled unconditionally (no `networking` feature gate): every dependency it
 //! names is a non-optional dependency of this crate, and all of its systems are
@@ -131,9 +131,9 @@ pub struct InterpBuffers(HashMap<u64, VecDeque<InterpSample>>);
 /// of extrapolate-then-snapping (~1 m jumps under the old 0.12).
 const INTERP_DELAY: f64 = 0.18;
 // Seconds per host `SimTick` — the shared fixed-step period (every app's
-// `Time::<Fixed>` is built from `lunco_core::FIXED_HZ`). Snapshot ticks are
+// `Time::<Fixed>` is built from `lunco_core_runtime::FIXED_HZ`). Snapshot ticks are
 // multiplied by this to place each sample on the interpolation timebase.
-use lunco_core::SECS_PER_TICK;
+use lunco_core_runtime::SECS_PER_TICK;
 /// Per-frame easing of the playback clock toward its target (`newest_gen −
 /// INTERP_DELAY`). The clock advances at real time between snapshots and is gently
 /// nudged so it tracks the host's tick stream without stepping. ~0.1 ⇒ smooth
@@ -761,7 +761,7 @@ pub fn maintain_owned_locally(
     // forces (another rover pushing it, cosim) the client can't reproduce, so it
     // must interpolate as a normal proxy — else it free-runs local physics with no
     // working correction ("pushed without contact").
-    tick: Res<lunco_core::SimTick>,
+    tick: Res<lunco_core_runtime::SimTick>,
     input_log: Res<lunco_core_session::OwnedInputLog>,
     // Freshest authoritative snapshot per gid — the seed for a newly-promoted
     // predicted body (see the promote arm). The deterministic replay contract means
@@ -1338,7 +1338,7 @@ fn replay_one_tick(
 
     // Actuation runs on the FIXED clock, as it does live.
     *world.resource_mut::<Time>() = world.resource::<Time<Fixed>>().as_generic();
-    world.run_schedule(lunco_core::RollbackReplay);
+    world.run_schedule(lunco_core_runtime::RollbackReplay);
 
     // Solve. Advance the physics + substep clocks exactly as avian's driver does,
     // then run the schedule (which includes the big_space bridge's Prepare/Writeback).
@@ -1517,7 +1517,9 @@ pub fn rollback_owned_prediction(world: &mut World) {
                 .clone();
             let saved_time = *world.resource::<Time>();
 
-            world.resource_mut::<lunco_core::RollbackInProgress>().0 = true;
+            world
+                .resource_mut::<lunco_core_runtime::RollbackInProgress>()
+                .0 = true;
             apply_states(world, &restore);
             for input in unacked.iter().take(steps) {
                 replay_one_tick(world, &ports, chassis, input);
@@ -1525,7 +1527,9 @@ pub fn rollback_owned_prediction(world: &mut World) {
             // Put the frozen world back exactly as it was (they moved under gravity /
             // their own velocity during the replay steps).
             apply_states(world, &frozen);
-            world.resource_mut::<lunco_core::RollbackInProgress>().0 = false;
+            world
+                .resource_mut::<lunco_core_runtime::RollbackInProgress>()
+                .0 = false;
             *world.resource_mut::<Time>() = saved_time;
 
             debug!(
@@ -2337,7 +2341,7 @@ pub fn apply_net_replication(
 /// `SpawnCommandPlugin` in `lunco-scene-commands` owns `apply_replicated_spawns`,
 /// the first system of the netcode pipeline, because it instantiates from the
 /// shared spawn catalog. The relative order is expressed via
-/// [`lunco_core::NetcodeSet`]: scene-edit puts its system in
+/// [`lunco_core_runtime::NetcodeSet`]: scene-edit puts its system in
 /// `NetcodeSet::InstantiateSpawns`, and everything here runs in `NetcodeSet::Predict`,
 /// configured `.after()` it below. The internal order of the rest of the chain is
 /// unchanged.
@@ -2369,7 +2373,8 @@ impl Plugin for NetcodePredictionPlugin {
         // this package runs prediction through the shared set relation.
         app.configure_sets(
             Update,
-            lunco_core::NetcodeSet::Predict.after(lunco_core::NetcodeSet::InstantiateSpawns),
+            lunco_core_runtime::NetcodeSet::Predict
+                .after(lunco_core_runtime::NetcodeSet::InstantiateSpawns),
         );
         // Networking: instantiate host-replicated spawns, buffer + interpolate
         // proxies from snapshots, and keep proxies kinematic. All no-op in
@@ -2417,7 +2422,7 @@ impl Plugin for NetcodePredictionPlugin {
                 prune_interp_buffers_on_despawn,
             )
                 .chain()
-                .in_set(lunco_core::NetcodeSet::Predict),
+                .in_set(lunco_core_runtime::NetcodeSet::Predict),
         );
         // Step 1: velocity-drive kinematic RigidBody proxies toward the snapshot
         // curve in `FixedUpdate`, so it runs BEFORE avian's solver step
@@ -2428,7 +2433,7 @@ impl Plugin for NetcodePredictionPlugin {
         // host/standalone (guards on `NetworkRole::Client`).
         app.add_systems(
             FixedUpdate,
-            drive_kinematic_proxies.run_if(lunco_core::not_rolling_back),
+            drive_kinematic_proxies.run_if(lunco_core_runtime::not_rolling_back),
         );
         // HOST: apply one buffered client input per fixed tick BEFORE the drive
         // reads the ports, so the host steps the client's input sequence in lockstep
@@ -2460,7 +2465,7 @@ impl Plugin for NetcodePredictionPlugin {
             )
                 .chain()
                 .after(PhysicsSystems::Writeback)
-                .run_if(lunco_core::not_rolling_back),
+                .run_if(lunco_core_runtime::not_rolling_back),
         );
         // Phase B: state-based reconcile for free predicted props (no input seq),
         // likewise after avian writeback. Independent of the owned-rover chain
@@ -2469,7 +2474,7 @@ impl Plugin for NetcodePredictionPlugin {
             FixedPostUpdate,
             reconcile_predicted_dynamic
                 .after(PhysicsSystems::Writeback)
-                .run_if(lunco_core::not_rolling_back),
+                .run_if(lunco_core_runtime::not_rolling_back),
         );
         // Deterministic rollback. `Update`, after `ingest_snapshots` has landed the
         // freshest ack — and necessarily OUTSIDE the fixed loop, since it runs
@@ -2485,7 +2490,7 @@ impl Plugin for NetcodePredictionPlugin {
         // cause of the hold-the-key client jitter).
         app.add_systems(
             FixedUpdate,
-            drain_pending_corrections.run_if(lunco_core::not_rolling_back),
+            drain_pending_corrections.run_if(lunco_core_runtime::not_rolling_back),
         );
     }
 }

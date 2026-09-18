@@ -45,8 +45,8 @@ use lunco_doc_bevy::{
 };
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use lunco_usd_core::commands::{
     is_usd_path, ApplyUsdOp, ApplyUsdOps, ApplyUsdTransientOps, AttachComponent, AttachProgram,
     CommitUsdProposal, CreateUsdProposal, DetachComponent, ReviewUsdProposal, UsdDocumentReady,
@@ -228,8 +228,8 @@ impl Plugin for UsdCommandsPlugin {
         // Twin authority registration belongs to the asset boundary and is
         // shared by lunica and luncosim. Install it here only for minimal USD
         // hosts/tests that do not compose the normal asset-source root.
-        if !app.is_plugin_added::<lunco_assets_core::TwinRootsPlugin>() {
-            app.add_plugins(lunco_assets_core::TwinRootsPlugin);
+        if !app.is_plugin_added::<lunco_assets_runtime::TwinRootsPlugin>() {
+            app.add_plugins(lunco_assets_runtime::TwinRootsPlugin);
         }
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<UsdEditSessions>();
@@ -1751,7 +1751,7 @@ fn validate_live_attribute_types(
                 ));
             }
             let Some(source_type) = source_type else {
-                if lunco_usd_bevy_core::read::has_runtime_port_surface(&view, &source_prim)
+                if lunco_usd_bevy_stage::read::has_runtime_port_surface(&view, &source_prim)
                     && stage_id.is_some_and(|stage_id| {
                         live_runtime_port_exists(world, stage_id, &source_prim, source_name)
                     })
@@ -2000,7 +2000,7 @@ fn validate_detach_component(
         return Err("detach paths must name prims, not properties".into());
     }
     if component == joint
-        || lunco_usd_bevy_core::is_descendant_or_self(&joint, &spec.component_path)
+        || lunco_usd_bevy_stage::is_descendant_or_self(&joint, &spec.component_path)
     {
         return Err(format!(
             "joint {} must be separate from component subtree {}",
@@ -2155,18 +2155,19 @@ fn validate_detach_component(
                 .map_err(|error| format!("invalid {property_kind} target {target_raw}: {error}"))?;
             let target_prim = target.prim_path();
             let targets_removed = target_prim == joint
-                || lunco_usd_bevy_core::is_descendant_or_self(&target_prim, &spec.component_path);
+                || lunco_usd_bevy_stage::is_descendant_or_self(&target_prim, &spec.component_path);
             if !targets_removed {
                 continue;
             }
-            let internal = lunco_usd_bevy_core::is_descendant_or_self(&owner, &spec.component_path)
-                || (owner == joint && property_name == "physics:body1" && target == component)
-                || (owner == component
-                    && property_name == "lunco:mount:attachmentJoint"
-                    && target == joint)
-                || (spec.socket_path.as_deref() == Some(owner.as_str())
-                    && property_name == "lunco:mount:part"
-                    && target == component);
+            let internal =
+                lunco_usd_bevy_stage::is_descendant_or_self(&owner, &spec.component_path)
+                    || (owner == joint && property_name == "physics:body1" && target == component)
+                    || (owner == component
+                        && property_name == "lunco:mount:attachmentJoint"
+                        && target == joint)
+                    || (spec.socket_path.as_deref() == Some(owner.as_str())
+                        && property_name == "lunco:mount:part"
+                        && target == component);
             if !internal {
                 return Err(format!(
                     "{property_kind} {property_path} points into detached component {}; remove that link first",
@@ -2322,7 +2323,7 @@ fn validate_attach_component(
         let existing_path = openusd::sdf::Path::new(&existing).map_err(|error| {
             format!("socket {socket_path} has invalid lunco:mount:part target {existing}: {error}")
         })?;
-        if !lunco_usd_bevy_core::is_descendant_or_self(&existing_path, host_root) {
+        if !lunco_usd_bevy_stage::is_descendant_or_self(&existing_path, host_root) {
             return Err(format!(
                 "socket {socket_path} points outside host body {host_root}"
             ));

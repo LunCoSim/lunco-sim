@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
-use crate::lunco_source::ASSETS_DIR_NAME;
+use lunco_assets_core::lunco_source::ASSETS_DIR_NAME;
 
 /// Marker that distinguishes a scripting policy manifest from other authored
 /// TOML files in the runtime asset library.
@@ -51,11 +51,16 @@ fn collect_rhai_sources(
     files: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
     for path in lunco_storage::read_directory_sync(current).map_err(|error| {
-        format!("cannot read Rhai asset directory {}: {error}", current.display())
+        format!(
+            "cannot read Rhai asset directory {}: {error}",
+            current.display()
+        )
     })? {
-        if path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
-            name.starts_with('.') || name == "target"
-        }) {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with('.') || name == "target")
+        {
             continue;
         }
         match lunco_storage::entry_kind_file_sync(&path) {
@@ -90,7 +95,7 @@ fn collect_rhai_sources(
 /// or unrelated scenario content. This keeps the asset layer reusable and
 /// prevents a directory convention from becoming a second policy engine.
 pub fn rhai_sources() -> Result<Vec<(String, String)>, String> {
-    let root = crate::assets_dir_abs();
+    let root = lunco_assets_core::assets_dir_abs();
     let mut files = Vec::new();
     collect_rhai_sources(&root, &root, &mut files)?;
     files.sort_by(|left, right| left.0.cmp(&right.0));
@@ -336,16 +341,15 @@ fn require_application_startup(
     Ok(bundle)
 }
 
-fn collect_toml_sources(
-    current: &Path,
-    files: &mut Vec<(PathBuf, String)>,
-) -> Result<(), String> {
-    for path in lunco_storage::read_directory_sync(current).map_err(|error| {
-        format!("cannot read asset directory {}: {error}", current.display())
-    })? {
-        if path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
-            name.starts_with('.') || name == "target"
-        }) {
+fn collect_toml_sources(current: &Path, files: &mut Vec<(PathBuf, String)>) -> Result<(), String> {
+    for path in lunco_storage::read_directory_sync(current)
+        .map_err(|error| format!("cannot read asset directory {}: {error}", current.display()))?
+    {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with('.') || name == "target")
+        {
             continue;
         }
         match lunco_storage::entry_kind_file_sync(&path) {
@@ -355,17 +359,13 @@ fn collect_toml_sources(
             Ok(lunco_storage::StorageEntryKind::File)
                 if path.extension().and_then(|x| x.to_str()) == Some("toml") =>
             {
-                let source = lunco_storage::read_text_file_sync(&path).map_err(|error| {
-                    format!("cannot read asset {}: {error}", path.display())
-                })?;
+                let source = lunco_storage::read_text_file_sync(&path)
+                    .map_err(|error| format!("cannot read asset {}: {error}", path.display()))?;
                 files.push((path, source));
             }
             Ok(lunco_storage::StorageEntryKind::File) => {}
             Err(error) => {
-                return Err(format!(
-                    "cannot inspect asset {}: {error}",
-                    path.display()
-                ));
+                return Err(format!("cannot inspect asset {}: {error}", path.display()));
             }
         }
     }
@@ -373,9 +373,13 @@ fn collect_toml_sources(
 }
 
 fn relative_asset_prefix(root: &Path, path: &Path) -> Result<String, String> {
-    let relative = path
-        .strip_prefix(root)
-        .map_err(|error| format!("asset {} is outside {}: {error}", path.display(), root.display()))?;
+    let relative = path.strip_prefix(root).map_err(|error| {
+        format!(
+            "asset {} is outside {}: {error}",
+            path.display(),
+            root.display()
+        )
+    })?;
     let parent = relative.parent().unwrap_or_else(|| Path::new("."));
     let parent = parent
         .components()
@@ -406,7 +410,7 @@ pub fn active_policy_set() -> Result<Vec<LoadedPolicy>, String> {
 /// Load the application startup function and its manifest-selected policies.
 pub fn active_policy_bundle() -> Result<LoadedPolicyBundle, String> {
     #[cfg(not(target_arch = "wasm32"))]
-    let assets_root = crate::assets_dir_abs();
+    let assets_root = lunco_assets_core::assets_dir_abs();
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut files = Vec::new();
@@ -415,7 +419,12 @@ pub fn active_policy_bundle() -> Result<LoadedPolicyBundle, String> {
         for (path, text) in files {
             let is_policy = toml::from_str::<toml::Value>(&text)
                 .ok()
-                .and_then(|value| value.get("kind").and_then(toml::Value::as_str).map(str::to_owned))
+                .and_then(|value| {
+                    value
+                        .get("kind")
+                        .and_then(toml::Value::as_str)
+                        .map(str::to_owned)
+                })
                 .is_some_and(|kind| kind == POLICY_MANIFEST_KIND);
             if is_policy {
                 candidates.push((path, text));

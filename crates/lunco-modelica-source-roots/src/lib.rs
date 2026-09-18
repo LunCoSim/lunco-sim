@@ -9,7 +9,7 @@
 //!   path; no cache-wide discovery is performed.
 //! - **Bundled examples**: top-level `.mo` files supplied by the asset
 //!   library. Loaded via
-//!   [`lunco_assets_core::models::model_source`].
+//!   [`lunco_assets_runtime::models::model_source`].
 //! - **Workspace files**: user-authored `.mo` files in the active
 //!   workspace tree.
 //!
@@ -61,7 +61,7 @@ pub enum SourceRootKind {
         root_dir: PathBuf,
     },
     /// Bundled example shipped inside the binary. Source bytes come
-    /// from [`lunco_assets_core::models::model_source`]; install path is the same
+    /// from [`lunco_assets_runtime::models::model_source`]; install path is the same
     /// document-registry pipeline used when the user opens a bundled
     /// model from the package browser, but driven by the compile
     /// gate instead of a UI gesture.
@@ -109,8 +109,8 @@ pub struct SourceRoot {
 
 /// Process-wide registry of every named source root. Owned by the
 /// Modelica host/application; populated at host start by inventorying:
-///  - Bundled examples via [`lunco_assets_core::models::model_files`].
-///  - Structured packages via [`lunco_assets_core::models::package_roots_live`].
+///  - Bundled examples via [`lunco_assets_runtime::models::model_files`].
+///  - Structured packages via [`lunco_assets_runtime::models::package_roots_live`].
 ///
 /// Loading remains demand-driven: inventory is cheap, and a root is installed
 /// only when a compile or class lookup actually references it.
@@ -133,7 +133,7 @@ impl SourceRootRegistry {
         // every bundled `.mo` follows: `<Root>.mo` contains `package <Root>`
         // or `model <Root>`). The dep-scanner extracts the root from a
         // `Foo.X` reference and looks it up here.
-        let bundled_models = match lunco_assets_core::models::model_files() {
+        let bundled_models = match lunco_assets_runtime::models::model_files() {
             Ok(models) => models,
             Err(error) => {
                 bevy::log::error!("[source-roots] Modelica example inventory failed: {error}");
@@ -163,7 +163,7 @@ impl SourceRootRegistry {
         // visible without rebuilding; browser consumers use the Bevy asset path.
         // This is the standard root-segment search-path inventory, not a
         // library-specific registration.
-        let package_roots = match lunco_assets_core::models::package_roots_live() {
+        let package_roots = match lunco_assets_runtime::models::package_roots_live() {
             Ok(roots) => roots,
             Err(error) => {
                 bevy::log::error!("[source-roots] Modelica package inventory failed: {error}");
@@ -572,7 +572,7 @@ pub fn ensure_loaded(
             )
         }
         SourceRootKind::Bundled { filename } => {
-            let source = match lunco_assets_core::models::model_source(filename) {
+            let source = match lunco_assets_runtime::models::model_source(filename) {
                 Ok(Some(source)) => source,
                 Ok(None) => {
                     let error = format!("Modelica asset `{filename}` was not found");
@@ -596,7 +596,7 @@ pub fn ensure_loaded(
             )
         }
         SourceRootKind::BundledPackage { root } => {
-            let files = match lunco_assets_core::models::package_files_live(root) {
+            let files = match lunco_assets_runtime::models::package_files_live(root) {
                 Ok(files) if !files.is_empty() => files,
                 Ok(_) => {
                     let error = format!("Modelica package `{root}` has no source files");

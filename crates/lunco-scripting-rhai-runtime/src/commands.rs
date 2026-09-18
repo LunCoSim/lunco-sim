@@ -915,7 +915,7 @@ fn on_register_tool_library(
     ws: Option<Res<lunco_workspace::WorkspaceResource>>,
     // The same asset-backed import registry used by the persistent world
     // engine. Validation below builds that production engine before publish.
-    sources: Option<Res<lunco_assets_core::script_source::ScriptSources>>,
+    sources: Option<Res<lunco_assets_runtime::script_source::ScriptSources>>,
     // Journal handle (present once wired). Records the registration as a
     // `DomainKind::ToolLibrary` op so it syncs to peers + persists cross-platform.
     // The command isn't on the command bus, so this only fires for LOCAL

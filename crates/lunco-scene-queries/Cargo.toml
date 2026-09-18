@@ -6,6 +6,7 @@ license.workspace = true
 description = "Shared read-only scene and composed-USD query providers"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 # Queries are a production API surface shared by Rhai, HTTP, MCP, and headless
 # hosts. Keep them independent from the much larger scene command handlers so
 # read-side changes do not rebuild the mutation layer.
@@ -19,7 +20,6 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-physics = { path = "../lunco-physics" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }

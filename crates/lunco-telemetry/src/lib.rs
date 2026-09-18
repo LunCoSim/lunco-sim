@@ -840,15 +840,15 @@ fn effective_rate(param: &Parameter, settings: &TelemetrySettings) -> Option<f64
         }
         return None;
     }
-    if requested > lunco_core::FIXED_HZ {
+    if requested > lunco_core_runtime::FIXED_HZ {
         warn_once!(
             "telemetry: channel '{}' requested {} Hz but the fixed step is {} Hz — \
              clamping. A faster rate would alias, not oversample.",
             param.name,
             requested,
-            lunco_core::FIXED_HZ
+            lunco_core_runtime::FIXED_HZ
         );
-        return Some(lunco_core::FIXED_HZ);
+        return Some(lunco_core_runtime::FIXED_HZ);
     }
     Some(requested)
 }
@@ -863,13 +863,13 @@ fn accepted_command_rate(rate: f64, subject: &str) -> Option<f64> {
         warn!("telemetry: rejecting {subject} rate {rate} Hz; it must be finite and positive");
         return None;
     }
-    if rate > lunco_core::FIXED_HZ {
+    if rate > lunco_core_runtime::FIXED_HZ {
         warn!(
             "telemetry: {subject} rate {rate} Hz exceeds the fixed-step ceiling of {} Hz; \
              storing the ceiling",
-            lunco_core::FIXED_HZ
+            lunco_core_runtime::FIXED_HZ
         );
-        return Some(lunco_core::FIXED_HZ);
+        return Some(lunco_core_runtime::FIXED_HZ);
     }
     Some(rate)
 }
@@ -1142,7 +1142,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
-            lunco_core::LunCoCorePlugin,
+            lunco_core_runtime::LunCoCoreRuntimePlugin,
             lunco_telemetry_core::LunCoTelemetryCorePlugin,
             LunCoTelemetryPlugin,
         ));
@@ -1202,7 +1202,7 @@ mod tests {
             .spawn((
                 Port { value: 42.0 },
                 Parameter {
-                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                     ..reflect_channel("motor_current")
                 },
             ))
@@ -1298,7 +1298,7 @@ mod tests {
                     name: "fuel".to_string(),
                     source: ChannelSource::Port("value".to_string()),
                     target: None,
-                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                     ..Default::default()
                 },
             ))
@@ -1409,7 +1409,7 @@ mod tests {
         let channel = app
             .world_mut()
             .spawn(Parameter {
-                rate_hz: Some(lunco_core::FIXED_HZ),
+                rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                 target: Some(rover),
                 ..reflect_channel("direct")
             })
@@ -1466,7 +1466,7 @@ mod tests {
             Port { value: 1.0 },
             AdvancesPerFixedStep,
             Parameter {
-                rate_hz: Some(lunco_core::FIXED_HZ),
+                rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                 ..reflect_channel("fast")
             },
         ));
@@ -1508,7 +1508,7 @@ mod tests {
             ..reflect_channel("greedy")
         };
         let rate = effective_rate(&p, &TelemetrySettings::default());
-        assert_eq!(rate, Some(lunco_core::FIXED_HZ));
+        assert_eq!(rate, Some(lunco_core_runtime::FIXED_HZ));
     }
 
     /// A non-positive or non-finite explicit rate is rejected rather than silently
@@ -1635,7 +1635,7 @@ mod tests {
             .spawn((
                 Port { value: 1.0 },
                 Parameter {
-                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                     deadband: Some(0.5),
                     ..reflect_channel("steady")
                 },
@@ -1673,7 +1673,7 @@ mod tests {
             .spawn((
                 Port { value: 1.0 },
                 Parameter {
-                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                     deadband: Some(1.0),
                     ..reflect_channel("jitter")
                 },
@@ -1705,7 +1705,7 @@ mod tests {
             .spawn((
                 Port { value: 100.0 },
                 Parameter {
-                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                     ..reflect_channel("acceleration")
                 },
             ))
@@ -1750,7 +1750,7 @@ mod tests {
                 Port { value: 3.0 },
                 AdvancesPerFixedStep,
                 Parameter {
-                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                     ..reflect_channel("retained")
                 },
             ))
@@ -1786,7 +1786,7 @@ mod tests {
                 Port { value: 1.0 },
                 AdvancesPerFixedStep,
                 Parameter {
-                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                     retention: Some(3),
                     ..reflect_channel("capped")
                 },
@@ -1814,7 +1814,7 @@ mod tests {
             .spawn((
                 Port { value: 1.0 },
                 Parameter {
-                    rate_hz: Some(lunco_core::FIXED_HZ),
+                    rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                     ..reflect_channel("doomed")
                 },
             ))
@@ -1916,7 +1916,7 @@ mod tests {
         app.world_mut().spawn((
             Port { value: 1.0 },
             Parameter {
-                rate_hz: Some(lunco_core::FIXED_HZ),
+                rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                 ..reflect_channel("live")
             },
         ));
@@ -1946,7 +1946,7 @@ mod tests {
             entity: Some(e),
             reflect: Some("Port.value".to_string()),
             unit: Some("A".to_string()),
-            rate_hz: Some(lunco_core::FIXED_HZ),
+            rate_hz: Some(lunco_core_runtime::FIXED_HZ),
             ..Default::default()
         });
         step_fixed(&mut app, 2);
@@ -1983,7 +1983,7 @@ mod tests {
             channel: Some("c".to_string()),
             entity: Some(e),
             reflect: Some("Port.value".to_string()),
-            rate_hz: Some(lunco_core::FIXED_HZ),
+            rate_hz: Some(lunco_core_runtime::FIXED_HZ),
             ..Default::default()
         });
         step_fixed(&mut app, 3);
@@ -2092,7 +2092,7 @@ mod tests {
                 channel: Some(name.to_string()),
                 entity: Some(rover),
                 reflect: Some("Port.value".to_string()),
-                rate_hz: Some(lunco_core::FIXED_HZ),
+                rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                 ..Default::default()
             });
         }
@@ -2134,7 +2134,7 @@ mod tests {
                 channel: Some(name.to_string()),
                 entity: Some(rover),
                 reflect: Some("Port.value".to_string()),
-                rate_hz: Some(lunco_core::FIXED_HZ),
+                rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                 ..Default::default()
             });
         }
@@ -2192,7 +2192,7 @@ mod tests {
             name: "engine.fps".to_string(),
             unit: "1/s".to_string(),
             source: ChannelSource::Diagnostic("fps".to_string()),
-            rate_hz: Some(lunco_core::FIXED_HZ),
+            rate_hz: Some(lunco_core_runtime::FIXED_HZ),
             ..Default::default()
         });
 
@@ -2216,7 +2216,7 @@ mod tests {
         app.world_mut().spawn(Parameter {
             name: "engine.fps".to_string(),
             source: ChannelSource::Diagnostic("fps".to_string()),
-            rate_hz: Some(lunco_core::FIXED_HZ),
+            rate_hz: Some(lunco_core_runtime::FIXED_HZ),
             ..Default::default()
         });
         step_fixed(&mut app, 4);
@@ -2243,7 +2243,7 @@ mod tests {
             Port { value: 1.0 },
             AdvancesPerFixedStep,
             Parameter {
-                rate_hz: Some(lunco_core::FIXED_HZ),
+                rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                 ..reflect_channel("t")
             },
         ));

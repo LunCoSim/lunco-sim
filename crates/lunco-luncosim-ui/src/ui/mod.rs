@@ -171,9 +171,9 @@ impl Plugin for LunCoSimUiPlugin {
             // `WinitSettings::unfocused_mode`. Keep the CLI's continuous-rate
             // contract in the shared pacing plane so that pacer cannot restore
             // reactive-low-power after the scene becomes idle.
-            app.init_resource::<lunco_core::KeepAwake>();
+            app.init_resource::<lunco_core_runtime::KeepAwake>();
             app.world_mut()
-                .resource_mut::<lunco_core::KeepAwake>()
+                .resource_mut::<lunco_core_runtime::KeepAwake>()
                 .acquire();
         }
         {
@@ -883,7 +883,7 @@ struct LunCoSimBootState {
 #[cfg(target_arch = "wasm32")]
 fn luncosim_boot_from_url(
     mut commands: bevy::prelude::Commands,
-    library: Option<bevy::prelude::Res<lunco_assets_core::library::LibraryLoadState>>,
+    library: Option<bevy::prelude::Res<lunco_assets_runtime::library::LibraryLoadState>>,
     mut state: bevy::prelude::Local<LunCoSimBootState>,
 ) {
     if state.done {
@@ -921,7 +921,7 @@ fn luncosim_boot_from_url(
     if let Some(qual) = state.open_class.clone() {
         let ready = matches!(
             library.as_deref(),
-            Some(lunco_assets_core::library::LibraryLoadState::Ready { .. })
+            Some(lunco_assets_runtime::library::LibraryLoadState::Ready { .. })
         );
         if !ready {
             return;
@@ -1430,7 +1430,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         }
 
-        let Some(manifest) = ctx.resource::<lunco_assets_core::discovery::AssetManifest>() else {
+        let Some(manifest) = ctx.resource::<lunco_assets_runtime::discovery::AssetManifest>() else {
             render_scenario_registry_unavailable(ui);
             return;
         };
@@ -1449,7 +1449,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // project's answer, not this menu's: each Twin declares `[usd] scenes`
         // in its `twin.toml`, the engine library uses its own `scenes/` layout.
         // See `discovery::list_scene_assets` for why the menu stopped deciding.
-        let mut assets = match lunco_assets_core::discovery::list_scene_assets(manifest, &roots) {
+        let mut assets = match lunco_assets_runtime::discovery::list_scene_assets(manifest, &roots) {
             Ok(assets) => assets,
             Err(error) => {
                 report_scenario_registry_error(ctx, error.to_string());
@@ -1477,7 +1477,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .resource::<lunco_luncosim_edit_ui::ui::asset_visibility::AssetVisibilitySettings>()
             .is_some_and(|s| s.show_test_assets);
         if !show_tests {
-            assets.retain(|asset| !lunco_assets_core::discovery::is_test_asset(&asset.rel));
+            assets.retain(|asset| !lunco_assets_runtime::discovery::is_test_asset(&asset.rel));
         }
         assets.sort_by(|a, b| a.stem.cmp(&b.stem));
 
@@ -1511,7 +1511,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         let render =
             |ui: &mut bevy_egui::egui::Ui,
              ctx: &mut MenuCtx,
-             items: &[(&lunco_assets_core::discovery::AssetFile, &Option<String>)]| {
+             items: &[(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)]| {
                 ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
                 ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
                 bevy_egui::egui::ScrollArea::vertical()
@@ -1541,17 +1541,17 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     });
             };
 
-        let paired: Vec<(&lunco_assets_core::discovery::AssetFile, &Option<String>)> =
+        let paired: Vec<(&lunco_assets_runtime::discovery::AssetFile, &Option<String>)> =
             assets.iter().zip(descs.iter()).collect();
         let regular: Vec<_> = paired
             .iter()
             .copied()
-            .filter(|(asset, _)| !lunco_assets_core::discovery::is_test_asset(&asset.rel))
+            .filter(|(asset, _)| !lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
             .collect();
         let tests: Vec<_> = paired
             .iter()
             .copied()
-            .filter(|(asset, _)| lunco_assets_core::discovery::is_test_asset(&asset.rel))
+            .filter(|(asset, _)| lunco_assets_runtime::discovery::is_test_asset(&asset.rel))
             .collect();
 
         // Open Twins FIRST as submenus: the twin you have open is

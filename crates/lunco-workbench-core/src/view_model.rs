@@ -30,7 +30,10 @@ impl ViewModelAppExt for App {
             Update,
             producer
                 .in_set(ViewModelSet)
-                .run_if(lunco_core::gate::tracked(std::any::type_name::<P>(), gate)),
+                .run_if(lunco_core_runtime::gate::tracked(
+                    std::any::type_name::<P>(),
+                    gate,
+                )),
         )
     }
 

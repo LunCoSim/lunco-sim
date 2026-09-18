@@ -37,13 +37,13 @@ use lunco_materials::{
     to_snake_case, AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer,
 };
 use lunco_render::{PbrLook, ProceduralSkybox, SurfaceAlpha};
-use lunco_usd_bevy_core::read::get_attribute_as_vec3;
-use lunco_usd_bevy_core::read::{
-    read_authored_bool_strict, read_primvar_f32_strict, read_primvar_vec3_strict, UsdReadObject,
-};
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
 use lunco_usd_bevy_scene::{UsdSceneProjectionReset, UsdVisualProjectionSet};
+use lunco_usd_bevy_stage::read::get_attribute_as_vec3;
+use lunco_usd_bevy_stage::read::{
+    read_authored_bool_strict, read_primvar_f32_strict, read_primvar_vec3_strict, UsdReadObject,
+};
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_sim_core::UsdSimSet;
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
@@ -191,7 +191,7 @@ fn apply_usd_shader_material_read(
     // `info:mdl:sourceAsset`. So usdview, Blender and Omniverse all see a material
     // where a material is, and a prim bound to a `UsdPreviewSurface` instead keeps its
     // `PbrLook` — it has no `wgsl` source, and that is the whole test.
-    let Some(shader_prim) = lunco_usd_bevy_core::resolve_bound_shader(reader, sdf_path) else {
+    let Some(shader_prim) = lunco_usd_bevy_stage::resolve_bound_shader(reader, sdf_path) else {
         return None;
     };
     let Some(raw_shader_path) = reader.asset(&shader_prim, "info:wgsl:sourceAsset") else {
@@ -651,7 +651,7 @@ fn scene_asset_uri(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
     use lunco_usd_compose::recipe::StageRecipe;
 
     /// A gprim that binds a WGSL material AND carries simulation wires — the shape

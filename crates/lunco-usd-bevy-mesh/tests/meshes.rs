@@ -1,12 +1,12 @@
 //! Low-level USD-to-Bevy mesh projection tests.
 
 use bevy::prelude::Mesh;
-use lunco_usd_bevy_core::canonical::CanonicalStage;
 use lunco_usd_bevy_mesh::{
     build_primitive_mesh, build_usd_curve_mesh, build_usd_mesh, build_usd_nurbs_patch_mesh,
     read_nurbs_patch_surface,
 };
 use lunco_usd_bevy_scene::ShapeDims;
+use lunco_usd_bevy_stage::canonical::CanonicalStage;
 use openusd::sdf::Path as SdfPath;
 
 mod curve_mesh_quality_tests {

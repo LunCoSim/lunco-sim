@@ -6,8 +6,8 @@ use bevy::window::PrimaryWindow;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::GridPos;
-use lunco_usd_bevy_core::UsdStageAsset;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, stage_default_prim};
+use lunco_usd_bevy_stage::UsdStageAsset;
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, stage_default_prim};
 use lunco_viewport_core::SceneViewport;
 use std::collections::HashMap;
 

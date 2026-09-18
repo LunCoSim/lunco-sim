@@ -19,8 +19,8 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use lunco_usd_bevy_core::mount::{MountDiagnostic, read_attachment_joint, read_plug, read_sockets};
-use lunco_usd_bevy_core::{UsdStageAsset, canonical::CanonicalStages, local_transform_at};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages, local_transform_at};
 use lunco_usd_core::attach::resolve_mount_placement;
 use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState, selected_entity_in_preview};
 use openusd::sdf::Path as SdfPath;
@@ -204,7 +204,7 @@ pub fn produce_usd_mount_view(
                                             - Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32))
                                         .length();
                                         let expected_rotation =
-                                            lunco_usd_bevy_core::euler_xyz_deg_to_quat(Vec3::new(
+                                            lunco_usd_bevy_stage::euler_xyz_deg_to_quat(Vec3::new(
                                                 r[0] as f32,
                                                 r[1] as f32,
                                                 r[2] as f32,

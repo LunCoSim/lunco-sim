@@ -6,6 +6,7 @@ license.workspace = true
 description = "USD-backed scene property and shader authoring commands"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 # This is the authoring tier for property/shader edits and document ownership
 # resolution. It deliberately does not depend on the scene mutation crate;
@@ -22,7 +23,6 @@ lunco-mobility = { path = "../lunco-mobility" }
 lunco-render = { path = "../lunco-render" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }

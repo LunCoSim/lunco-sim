@@ -199,7 +199,7 @@ impl Action {
 
     /// How long any single item may remain pending before the engine raises a
     /// terminal readiness fault, **in fixed ticks**: 3600 ticks ≈ 60 s at the
-    /// default 60 Hz fixed rate (`lunco_core::FIXED_HZ`).
+    /// default 60 Hz fixed rate (`lunco_core_runtime::FIXED_HZ`).
     ///
     /// Counted in ticks rather than wall-clock seconds so the terminal verdict is
     /// *reproducible*: a slow machine and a fast one both fault at the same tick,
@@ -209,7 +209,7 @@ impl Action {
     /// [`Self::DEADLINE_TICKS`] expressed in seconds of fixed-clock time, for
     /// policy and for reporting. Equal to wall-clock seconds only when the fixed
     /// clock is keeping up; the tick count is the authority.
-    pub const DEADLINE_S: f64 = Self::DEADLINE_TICKS as f64 / lunco_core::FIXED_HZ;
+    pub const DEADLINE_S: f64 = Self::DEADLINE_TICKS as f64 / lunco_core_runtime::FIXED_HZ;
 }
 
 /// Handle to one declared wait. Returned by [`ReadinessRegistry::begin`] and
@@ -421,7 +421,7 @@ fn decide(
 /// Age every pending item, re-run policy over it, and publish [`ReadinessState`].
 ///
 /// Ages on the **fixed** clock (`Time<Fixed>`), counting whole fixed ticks — the
-/// same steps `lunco_core::SimTick` counts. Wall-clock (`Time<Real>`) was the
+/// same steps `lunco_core_runtime::SimTick` counts. Wall-clock (`Time<Real>`) was the
 /// obvious choice and the wrong one: a compile does take as long as it takes, but
 /// measuring the terminal verdict in wall-clock seconds makes the tick at which
 /// physics faults a function of how fast the machine is, so a slow box stops at a
@@ -599,7 +599,8 @@ mod tests {
     fn the_deadline_states_one_bound_in_two_units() {
         assert_eq!(Action::DEADLINE_TICKS, 3_600);
         assert!(
-            (Action::DEADLINE_S - Action::DEADLINE_TICKS as f64 / lunco_core::FIXED_HZ).abs()
+            (Action::DEADLINE_S - Action::DEADLINE_TICKS as f64 / lunco_core_runtime::FIXED_HZ)
+                .abs()
                 < 1e-9
         );
     }

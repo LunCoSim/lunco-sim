@@ -108,7 +108,7 @@ pub struct CollisionGroupTable {
 impl CollisionGroupTable {
     /// Read every `PhysicsCollisionGroup` on the stage and resolve merges,
     /// membership and the blocked-pair table.
-    pub fn read(reader: &dyn lunco_usd_bevy_core::read::UsdReadObject) -> Self {
+    pub fn read(reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject) -> Self {
         let mut by_key: HashMap<String, Group> = HashMap::new();
         let mut order: Vec<String> = Vec::new();
 
@@ -321,7 +321,7 @@ impl Group {
 }
 
 fn rel_paths(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
     rel: &str,
 ) -> Vec<String> {
@@ -340,18 +340,18 @@ fn rel_paths(
 /// layers nothing in it defines.
 #[derive(Resource, Default)]
 pub struct CollisionGroupTables {
-    by_stage: HashMap<AssetId<lunco_usd_bevy_core::UsdStageAsset>, CollisionGroupTable>,
+    by_stage: HashMap<AssetId<lunco_usd_bevy_stage::UsdStageAsset>, CollisionGroupTable>,
     /// Stages already reported as having groups, so the summary is logged once
     /// rather than per prim.
-    announced: HashSet<AssetId<lunco_usd_bevy_core::UsdStageAsset>>,
+    announced: HashSet<AssetId<lunco_usd_bevy_stage::UsdStageAsset>>,
 }
 
 impl CollisionGroupTables {
     /// The table for `stage`, reading it on first ask.
     pub fn get_or_read(
         &mut self,
-        stage: AssetId<lunco_usd_bevy_core::UsdStageAsset>,
-        reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+        stage: AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
+        reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     ) -> &CollisionGroupTable {
         let table = self
             .by_stage

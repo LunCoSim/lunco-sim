@@ -11,10 +11,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_camera_core::{OrbitCamera, SpringArmCamera};
 use lunco_control_core::ControlLink;
-use lunco_core::{
-    entity_display_name, CatalogEntryId, GlobalEntityId, RuntimeDiagnostics, RuntimeFaults,
-    SceneMountState,
-};
+use lunco_core::{entity_display_name, CatalogEntryId, GlobalEntityId};
+use lunco_core::{RuntimeDiagnostics, RuntimeFaults, SceneMountState};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_render::SceneCamera;
 use lunco_scene_selection::SelectedEntities;

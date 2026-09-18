@@ -25,6 +25,7 @@ server = ["api"]
 tracy = ["bevy/trace_tracy"]
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy.workspace = true
 # The solver worker and Fast Run stack live in `lunco-modelica-execution`.

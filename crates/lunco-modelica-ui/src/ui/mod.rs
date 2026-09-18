@@ -1037,7 +1037,7 @@ fn register_settings_submenu(world: &mut World) {
 /// Native dataset download actions live in the generic Data & libraries panel.
 fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     use bevy_egui::egui;
-    use lunco_assets_core::library::{LibraryLoadPhase, LibraryLoadState};
+    use lunco_assets_runtime::library::{LibraryLoadPhase, LibraryLoadState};
 
     // Current state line.
     let state = ctx.resource::<LibraryLoadState>().cloned();
@@ -1179,19 +1179,19 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
         // Web source library is a host-served bundle rather than a native dataset, so its
         // platform-specific fetch controls remain here.
         let load_state = ctx
-            .resource::<lunco_assets_core::library::LibraryLoadState>()
+            .resource::<lunco_assets_runtime::library::LibraryLoadState>()
             .cloned();
         let install_running = matches!(
             load_state,
-            Some(lunco_assets_core::library::LibraryLoadState::Loading { .. })
+            Some(lunco_assets_runtime::library::LibraryLoadState::Loading { .. })
         );
         let install_failed = matches!(
             load_state,
-            Some(lunco_assets_core::library::LibraryLoadState::Failed(_))
+            Some(lunco_assets_runtime::library::LibraryLoadState::Failed(_))
         );
         let install_ready = matches!(
             load_state,
-            Some(lunco_assets_core::library::LibraryLoadState::Ready { .. })
+            Some(lunco_assets_runtime::library::LibraryLoadState::Ready { .. })
         );
         ui.horizontal(|ui| {
             // While an install is in flight, show Cancel. Before the first
@@ -1200,7 +1200,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                 ui.label("source library bundle loading…");
             } else if matches!(
                 load_state,
-                Some(lunco_assets_core::library::LibraryLoadState::NotStarted) | None
+                Some(lunco_assets_runtime::library::LibraryLoadState::NotStarted) | None
             ) {
                 if ui
                     .button("Install source library")

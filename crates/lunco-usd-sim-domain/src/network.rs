@@ -32,7 +32,7 @@ where
                 continue;
             }
         };
-        let ticks = (period / lunco_core::SECS_PER_TICK).round() as u64;
+        let ticks = (period / lunco_core_runtime::SECS_PER_TICK).round() as u64;
         if let Some((selected_path, selected_ticks, selected_period)) = &selected {
             if *selected_ticks != ticks {
                 errors.push(DomainProjectionError {

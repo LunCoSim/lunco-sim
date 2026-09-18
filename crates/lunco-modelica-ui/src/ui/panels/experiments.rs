@@ -828,7 +828,7 @@ impl ExperimentsPanel {
         // notice on `LibraryLoadState::is_pending()` (false at boot on native,
         // false post-decode on web) so the run doesn't look stuck.
         let library_pending = ctx
-            .resource::<lunco_assets_core::library::LibraryLoadState>()
+            .resource::<lunco_assets_runtime::library::LibraryLoadState>()
             .map(|s| s.is_pending())
             .unwrap_or(true);
         // If the source library load *failed*, a run that depends on the standard
@@ -836,8 +836,9 @@ impl ExperimentsPanel {
         // the queued command is never flushed). `library_pending` is false in
         // that state, so without this the panel would just show a normal
         // "▶ running" chip on a permanently-stuck run with no explanation.
-        let library_error = match ctx.resource::<lunco_assets_core::library::LibraryLoadState>() {
-            Some(lunco_assets_core::library::LibraryLoadState::Failed(msg)) => Some(msg.clone()),
+        let library_error = match ctx.resource::<lunco_assets_runtime::library::LibraryLoadState>()
+        {
+            Some(lunco_assets_runtime::library::LibraryLoadState::Failed(msg)) => Some(msg.clone()),
             _ => None,
         };
 

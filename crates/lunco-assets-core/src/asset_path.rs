@@ -3,8 +3,8 @@
 use bevy::asset::{io::AssetSourceId, AssetPath};
 
 pub(crate) use lunco_assets_path::{
-    canonicalize, canonicalize_root, has_scheme, is_anchored, is_safe_relative_components,
-    is_safe_relative_path, normalize, relative_path, slashed, split_scheme, uri,
+    has_scheme, is_anchored, is_safe_relative_components, is_safe_relative_path, normalize,
+    relative_path, slashed, split_scheme, uri,
 };
 
 /// Rebuild the canonical `scheme://path` spelling represented by a Bevy asset

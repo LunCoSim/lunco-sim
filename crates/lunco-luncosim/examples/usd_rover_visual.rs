@@ -25,7 +25,7 @@ fn main() {
                 ..default()
             }),
             PhysicsPlugins::default(),
-            lunco_core::LunCoCorePlugin,
+            lunco_core_runtime::LunCoCoreRuntimePlugin,
             lunco_telemetry_core::LunCoTelemetryCorePlugin,
             lunco_mobility::LunCoMobilityPlugin,
             UsdPlugins,

@@ -10,6 +10,7 @@ name = "lunco_scripting_rhai_world"
 path = "src/lib.rs"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 anyhow = { workspace = true }
 bevy = { workspace = true }
 rhai = { workspace = true }

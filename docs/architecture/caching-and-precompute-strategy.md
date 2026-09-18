@@ -65,7 +65,7 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | Structural change-detection | `Added<SimConnection>` (`lunco-cosim/src/lib.rs:252`), USD `Without<Marker>` gates | Recompute-only-on-change is already idiomatic here. |
 | **Real CIDv1 content-address** | `lunco-hash/src/lib.rs:118-140`, used by `lunco-networking-scenario/src/lib.rs` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`lunco-networking-sync/src/scenario_sync.rs:88-94`). The hash substrate owns the algorithm; scenario owns the manifest/wire contract and sync owns only transfer. |
 | **OPFS web blob backend** | `lunco-storage/src/opfs_storage.rs` | Working async `read`/`write`/`exists` on wasm via `createWritable` (main-thread-legal). Path-keyed on `StorageHandle::File`. |
-| **Single asset-resolution owner** | `lunco-assets-path` for URI/path algebra; `lunco-assets-core/src/asset_sources.rs` `register_lunco_asset_sources` for sources | The `lunco://` and `twin://` schemes are registered in ONE place before `AssetPlugin`; platform-neutral canonicalization and traversal checks come from `lunco-assets-path`, while source-to-location mapping stays in `lunco-assets-core`. |
+| **Single asset-resolution owner** | `lunco-assets-path` for URI/path algebra; `lunco-assets-runtime/src/asset_sources.rs` `register_lunco_asset_sources` for sources | The `lunco://` and `twin://` schemes are registered in ONE place before `AssetPlugin`; platform-neutral canonicalization and traversal checks come from `lunco-assets-path`, while source-to-location mapping consumes identity/root contracts from `lunco-assets-core`. |
 | **Shared material cache** | `lunco-render-bevy/src/look_cache.rs` `LookCache<L: CachedLook>` | Content-key → one `Handle<Material>` (the batching property), an `unshared` bypass for animated looks, and ONE `sweep_look_cache` for eviction. Serves both `PbrLook` and `ShaderLook` — they were the same code twice, and had already drifted (the shader cache swept at 1024; the PBR cache never swept and grew unbounded). |
 | **One invalidation signal for source-derived memos** | `lunco-modelica-ast/src/source_memo.rs` `SourceMemo<V>` + `invalidate_source_memos()` | A `name → Option<V>` memo, **negatives included**, that self-drops on a source/library change. One atomic bump reaches every memo — including ones added later, which the invalidation site never has to name. |
 
@@ -310,7 +310,7 @@ Deterministic-given-inputs, currently recomputed **every load**. Rank by payoff:
    (DEM hash, quadtree node) → instant terrain on revisit.
 3. **DEM crop/upscale working grid** — `bake.rs:28/53` `crop_centered`/`resample`,
    deterministic transform, recomputed each load.
-4. **Composed USD stages** — `lunco-usd-bevy-core/src/compose.rs` resolver-backed stage preparation
+4. **Composed USD stages** — `lunco-usd-bevy-stage/src/compose.rs` resolver-backed stage preparation
    runs full PCP compose + `flatten_stage` inside the AssetLoader on every load.
    Cache the flattened `HashMap<SdfPath,SpecData>` keyed by transitive-closure
    content hash. (In-session reuse exists via `loaded_stages.rs`; disk does not.)

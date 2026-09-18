@@ -214,8 +214,8 @@ pub(crate) fn drain_program_catalog(
 /// remains a valid generic effects-only program; a malformed contract is
 /// reported without preventing unrelated sources from being listed.
 pub(crate) fn sync_program_contracts(
-    text_catalog: Option<Res<lunco_assets_core::TextAssetCatalog>>,
-    text_assets: Option<Res<Assets<lunco_assets_core::TextAsset>>>,
+    text_catalog: Option<Res<lunco_assets_runtime::TextAssetCatalog>>,
+    text_assets: Option<Res<Assets<lunco_assets_runtime::TextAsset>>>,
     asset_server: Option<Res<AssetServer>>,
     mut catalog: ResMut<ProgramCatalog>,
 ) {

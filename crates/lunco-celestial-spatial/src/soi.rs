@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_spatial::attach::migrate_to_grid;
 
-use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame, inherited_reference_frame};
+use lunco_celestial::{inherited_reference_frame, CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::ReferenceFrameIndex;
 
 /// Marks a moving object whose concrete BigSpace frame follows the catalog's

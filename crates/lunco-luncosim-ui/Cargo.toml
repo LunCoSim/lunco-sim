@@ -54,6 +54,9 @@ package-icons = [
 tracy = ["bevy/trace_tracy"]
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true, features = [
     "bevy_asset",
@@ -138,7 +141,6 @@ lunco-time = { path = "../lunco-time" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-ui = { path = "../lunco-ui" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }

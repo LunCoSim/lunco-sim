@@ -1773,7 +1773,7 @@ pub fn persist_environment_light_to_runtime_layer(
     }
     // Direction changes when yaw or pitch is specified.
     let direction_changed = cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some();
-    let parent_path = lunco_usd_bevy_core::layer_default_prim(host.document().data())
+    let parent_path = lunco_usd_bevy_stage::layer_default_prim(host.document().data())
         .map(|p| format!("/{p}"))
         .unwrap_or_else(|| "/".to_string());
     let env_path = if parent_path == "/" {
@@ -2193,7 +2193,7 @@ impl Plugin for SpawnCommandPlugin {
         // Resources this plugin's OWN systems read, so it stands alone without the
         // UI-layer `SceneEditPlugin` / the render-layer `ShaderMaterialPlugin`
         // (e.g. a headless `--no-ui` server that adds only `SpawnCommandPlugin`).
-        // The host must install `lunco_assets_core::register_lunco_asset_sources`
+        // The host must install `lunco_assets_runtime::register_lunco_asset_sources`
         // before Bevy's asset plugin; that shared asset boundary owns the
         // `AssetManifest` and `TwinRoots` resources consumed here.
         // `init_resource` is idempotent, so when those plugins also init these it's
@@ -2202,12 +2202,12 @@ impl Plugin for SpawnCommandPlugin {
         //   - `ShaderCatalog`  — owned and populated by `SceneCatalogPlugin`;
         //     shader command observers consume it but do not scan it themselves.
         // Client: instantiate host-replicated spawns before prediction consumes
-        // the resulting entities. The shared `lunco_core::NetcodeSet` preserves
+        // the resulting entities. The shared `lunco_core_runtime::NetcodeSet` preserves
         // this ordering across the crate boundary.
         // No-op in single-player (the queue stays empty).
         app.add_systems(
             Update,
-            apply_replicated_spawns.in_set(lunco_core::NetcodeSet::InstantiateSpawns),
+            apply_replicated_spawns.in_set(lunco_core_runtime::NetcodeSet::InstantiateSpawns),
         );
     }
 }

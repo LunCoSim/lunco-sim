@@ -106,7 +106,7 @@ impl Plugin for UsdSceneRuntimePlugin {
                 )
                 .run_if(
                     bevy::ecs::schedule::common_conditions::resource_exists::<
-                        bevy::asset::Assets<lunco_usd_bevy_core::source::UsdSourceText>,
+                        bevy::asset::Assets<lunco_usd_bevy_stage::source::UsdSourceText>,
                     >,
                 ),
         );

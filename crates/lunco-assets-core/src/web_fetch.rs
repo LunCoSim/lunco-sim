@@ -9,7 +9,7 @@
 //!   `twins/` directory over HTTP (staged under `assets/twins/…` next to the
 //!   wasm) and the browser client fetches the DEM heightmap/metadata from it —
 //!   the static sibling of the live `scenario_sync` transport.
-//! - **Bundled fonts** (`lunco-assets-core::font`) — the page-served DejaVu fallback
+//! - **Bundled fonts** (`lunco-assets-runtime::font`) — the page-served DejaVu fallback
 //!   uses the same retry and body-resume path as every other browser asset.
 //!
 //! Everything here is **content-agnostic**: the caller passes the Cache-Storage

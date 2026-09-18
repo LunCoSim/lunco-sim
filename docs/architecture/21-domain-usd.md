@@ -6,7 +6,7 @@
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-document/`](../../crates/lunco-usd-document), [`../../crates/lunco-usd-data/`](../../crates/lunco-usd-data), [`../../crates/lunco-usd-authoring/`](../../crates/lunco-usd-authoring), [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core), [`../../crates/lunco-usd-commands/`](../../crates/lunco-usd-commands/) and companion crates
-> `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian-joints`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
+> `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian-joints`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-stage`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime-core`, `lunco-usd-bevy-authored-runtime`, `lunco-usd-bevy-runtime-persistence`, `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
 > `lunco-usd-sim-authoring`, `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
@@ -39,7 +39,8 @@ participant projection and implies `simulation`;
 `lunco-usd-geometry`
 owns the reusable render-free BasisCurves evaluator, NURBS, trim, and
 curve-sweep substrate;
-`lunco-usd-bevy-core` owns prepared/composed stage data and the generic
+`lunco-usd-bevy-stage` owns prepared/composed stage data and canonical readers;
+`lunco-usd-bevy-core` owns the generic runtime projection mechanisms and
 domain-owned live-edit registry;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
 projection ordering boundaries, the generic projection-reset and authored
@@ -53,8 +54,9 @@ owning a second curve implementation;
 `lunco-usd-bevy-twin` owns the render-free document-to-`twin://` identity map,
 workspace and preview leases, projection cursors, user-ownership events, and
 the event-driven wake signal and document-to-mounted-stage lookup;
-`lunco-usd-bevy-core` owns canonical-stage storage and the generic live-edit
-owner registry, while
+`lunco-usd-bevy-stage` owns canonical-stage storage and stage readers, while
+`lunco-usd-bevy-core` owns the generic live-edit owner registry and runtime
+projection mechanisms;
 `lunco-usd-bevy-runtime-core` owns scene admission, stage loading, and the live
 ECS projection systems that consume that state; `lunco-usd-bevy-runtime-persistence`
 owns the independent runtime-overlay persistence boundary; `lunco-usd-bevy-runtime` owns
@@ -114,7 +116,7 @@ The public query contracts live beside their owning package in
 runtime-orchestration package to compile.
 
 The public composed-stage reader, StageView, and prepared-reader contracts live
-in `crates/lunco-usd-bevy-core/tests/stage_reads.rs`. They use in-memory
+in `crates/lunco-usd-bevy-stage/tests/stage_reads.rs`. They use in-memory
 `StageRecipe` closures, so fixture edits do not touch the asset filesystem and
 do not rebuild the core library's inline test modules. Shipped-asset behavior is
 asserted through the production scene/Rhai tests under `assets/scenes/tests/`
@@ -210,7 +212,7 @@ USD's own `SdfLayer` (authored opinions you save) vs `UsdStage` (the composition
   spawns, moves, obstacle fields — *not* saved). `LayerId::root()` vs `LayerId::runtime()`
   route each op. Plain, `Send`, serializable: this is what Save writes, the journal
   records, and the network ships. Reads are cheap and off-main-thread.
-- **`CanonicalStage`** (`lunco-usd-bevy-core/src/canonical.rs`) — the live, *composed* openusd
+- **`CanonicalStage`** (`lunco-usd-bevy-stage/src/canonical.rs`) — the live, *composed* openusd
   `Stage` with references / sublayers / variants resolved. `Rc`-backed, therefore `!Send`:
   a main-thread `NonSend` resource (`CanonicalStages`). It is the projection engine —
   authoring onto it fires openusd's change sink, which reconciles the ECS.
@@ -255,11 +257,11 @@ from the composed stage. Object/reference-level reload is intentionally still a
 TODO: do not approximate it by respawning only a visual subtree, because that
 would leave physics, connections, or Modelica worker state stale.
 
-The **read** surface is the `UsdRead` trait (`lunco-usd-bevy-core/src/read.rs`): `children`,
+The **read** surface is the `UsdRead` trait (`lunco-usd-bevy-stage/src/read.rs`): `children`,
 `scalar::<T>`, `attr_value`, `rel_target`, `scalar_at` (time-sampled), etc. The
 same module owns the shared precision-tolerant value readers such as
 `read_vec3_f64`, strict primvar/boolean decoding, and their time-sampled
-variants. Consumers import those functions from `lunco_usd_bevy_core::read`
+variants. Consumers import those functions from `lunco_usd_bevy_stage::read`
 directly; the visual adapter does not act as a generic USD facade, and
 OpenUSD types such as `sdf::Path` remain direct OpenUSD dependencies. It is
 implemented for both `StageView` (the live composed stage, `view.rs`) and `sdf::Data`
@@ -275,8 +277,8 @@ recipe, and there is no stored `reader` object.
 ```
 Twin (workspace folder, owns documents)         spec 14
   └─ active USD stage = a UsdDocument            spec 10 / 21
-        └─ composed (resolver-backed stage)      lunco-usd-bevy-core/compose.rs
-              └─ UsdStageAsset (prepared plan)    lunco-usd-bevy-core/asset.rs
+        └─ composed (resolver-backed stage)      lunco-usd-bevy-stage/compose.rs
+              └─ UsdStageAsset (prepared plan)    lunco-usd-bevy-stage/asset.rs
                     └─ UsdPrimPath root under Grid  → lunco-usd-bevy-scene contract
                                                        → sync_usd_visuals spawns entities
                           └─ the live 3D world      (avian + cosim translators key off prims)
@@ -673,7 +675,7 @@ at them. The `@terrain.glb@` payload then composes natively as `Mesh` geometry �
 config only, no conversion, no engine code. This is the proper interop path.
 
 *Future Enhancement (Proper Internal Handling):* A small glTF→USD-layer adapter
-in `lunco-usd-bevy-core/compose.rs` can emit `Mesh` specs instead of stubbing. That is
+in `lunco-usd-bevy-stage/compose.rs` can emit `Mesh` specs instead of stubbing. That is
 an interop improvement; it must continue to use the authored USD payload as the
 asset identity.
 
@@ -789,7 +791,7 @@ even though the replacement's change sink is empty. Generation zero identifies
 the initial asset snapshot; an edited replacement must remain on the live
 composed reader path.
 
-One shared stack (`lunco-usd-bevy-core`, `local_transform_at`) decodes a prim's local
+One shared stage stack (`lunco-usd-bevy-stage`, `local_transform_at`) decodes a prim's local
 `Transform`, used by **both** the static load decoder (`read_transform_from_usd` + the
 instantiate path) and the per-frame animation sampler, so a static pose and its animated
 pose always agree. Precedence:
@@ -843,8 +845,8 @@ Production runtime acceptance tests load **real USD files** through the same
 pipeline as runtime. Low-level projection tests use synthetic USDA composed
 in-memory so they isolate the reader/mechanism without coupling Rust tests to
 the shipped asset corpus. Ownership follows the narrowest production boundary:
-- `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
-- `crates/lunco-usd-bevy-core/tests/stage_reads.rs` — public composed-stage, `StageView`, and prepared-reader integration contracts
+- `crates/lunco-usd-bevy-stage/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
+- `crates/lunco-usd-bevy-stage/tests/stage_reads.rs` — public composed-stage, `StageView`, and prepared-reader integration contracts
 - `crates/lunco-usd-bevy-scene/src/{lib,geometry,collision}.rs` — render-free ECS scene identity, lifecycle, ancestry, shared USD geometry readers, and composed collision/placement envelopes
 - `crates/lunco-usd-bevy-twin/src/lib.rs` — render-free Twin/document leases, document-to-mounted-stage lookup, ownership events, and projection wake state
 - `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms; curve math is in `lunco-usd-geometry/src/curve.rs`

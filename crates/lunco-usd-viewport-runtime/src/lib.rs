@@ -55,27 +55,27 @@ use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::image::Image;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
-use lunco_api::executor::{finish_command_result, PendingApiRequest};
+use lunco_api::executor::{PendingApiRequest, finish_command_result};
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_assets_core::twin_source::TwinRoots;
 use lunco_command_contracts::{Ack, OpId};
-use lunco_core::{on_command, register_commands, ActiveCommandId};
+use lunco_core::{ActiveCommandId, on_command, register_commands};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed};
 use lunco_render::{
-    scene_camera_look_with_profile, GraphicsCameraDefaults, LightGraphicsDefaults,
-    RenderQualityProfile, RenderingQualitySettings,
+    GraphicsCameraDefaults, LightGraphicsDefaults, RenderQualityProfile, RenderingQualitySettings,
+    scene_camera_look_with_profile,
 };
 use lunco_settings::AppSettingsExt;
-use lunco_usd_bevy_core::{is_descendant_or_self, UsdStageAsset};
 use lunco_usd_bevy_scene::{
-    is_preview_entity, UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending,
-    UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision,
+    UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
+    UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision, is_preview_entity,
 };
+use lunco_usd_bevy_stage::{UsdStageAsset, is_descendant_or_self};
 use lunco_usd_viewport_core::{
     ApplyUsdInspectionPreset, CloseUsdPreview, CloseUsdPreviewView, DeleteUsdInspectionPreset,
     ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView, FrameUsdPreviewSelection,
@@ -91,12 +91,12 @@ use lunco_viewport_core::PanelRect;
 use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::PanelRects;
 use lunco_workbench_core::{
+    PanelId, TabId,
     commands::{CloseTab, OpenTab},
     source::OpenTwinSource,
     tabs::PendingTabCloses,
-    PanelId, TabId,
 };
-use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
+use lunco_workspace::{TwinClosed, WorkspaceResource, document_belongs_to_twin_root};
 use openusd::sdf::Path as SdfPath;
 
 use lunco_doc_bevy::DocumentRegistry;
@@ -3246,10 +3246,11 @@ mod tests {
         let state = app.world().resource::<UsdViewportState>();
         assert_eq!(state.session_count(), 0);
         assert_eq!(state.focused_doc(), None);
-        assert!(app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .contains(doc));
+        assert!(
+            app.world()
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .contains(doc)
+        );
     }
 
     fn explode_fixture() -> (App, UsdPreviewId, DocumentId, Entity, Entity) {
@@ -3429,13 +3430,14 @@ mod tests {
         .expect("valid assembly explode resets");
         assert_eq!(app.world().get::<Transform>(part_a).unwrap(), &baseline_a);
         assert_eq!(app.world().get::<Transform>(part_b).unwrap(), &baseline_b);
-        assert!(app
-            .world()
-            .resource::<UsdViewportState>()
-            .session(preview)
-            .unwrap()
-            .explode
-            .is_none());
+        assert!(
+            app.world()
+                .resource::<UsdViewportState>()
+                .session(preview)
+                .unwrap()
+                .explode
+                .is_none()
+        );
     }
 
     #[test]
@@ -3696,18 +3698,22 @@ mod tests {
             .session(preview)
             .unwrap();
         assert!(session.text_ready());
-        assert!(session
-            .text
-            .authored
-            .as_deref()
-            .unwrap()
-            .contains("Initial"));
-        assert!(session
-            .text
-            .composed
-            .as_deref()
-            .unwrap()
-            .contains("Initial"));
+        assert!(
+            session
+                .text
+                .authored
+                .as_deref()
+                .unwrap()
+                .contains("Initial")
+        );
+        assert!(
+            session
+                .text
+                .composed
+                .as_deref()
+                .unwrap()
+                .contains("Initial")
+        );
 
         let updated = "#usda 1.0\ndef Xform \"Second\" {}\n";
         let latest = "#usda 1.0\ndef Xform \"Latest\" {}\n";
@@ -4000,15 +4006,17 @@ mod tests {
         assert!(target.x <= budget.max_view_dimension);
         assert!(target.y <= budget.max_view_dimension);
         assert!(u64::from(target.x) * u64::from(target.y) <= budget.max_view_pixels);
-        assert!(bounded_view_size(
-            UVec2::new(800, 600),
-            &UsdPreviewRenderBudget {
-                max_view_dimension: 0,
-                max_view_pixels: 1,
-                max_total_pixels: 1,
-            },
-        )
-        .is_none());
+        assert!(
+            bounded_view_size(
+                UVec2::new(800, 600),
+                &UsdPreviewRenderBudget {
+                    max_view_dimension: 0,
+                    max_view_pixels: 1,
+                    max_total_pixels: 1,
+                },
+            )
+            .is_none()
+        );
     }
 
     #[test]

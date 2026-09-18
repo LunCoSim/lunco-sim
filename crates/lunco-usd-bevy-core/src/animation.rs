@@ -7,8 +7,10 @@
 use bevy::prelude::{EulerRot, Mat4, Quat, Transform, Vec3};
 use openusd::sdf::{Path as SdfPath, Value};
 
-use crate::read::{attr_has_time_samples, read_vec3_f64_at, stage_time_codes_per_second};
-use crate::{resolve_bound_shader, UsdRead, UsdReadObject};
+use lunco_usd_bevy_stage::read::{
+    attr_has_time_samples, read_vec3_f64_at, stage_time_codes_per_second,
+};
+use lunco_usd_bevy_stage::{resolve_bound_shader, UsdRead, UsdReadObject};
 
 /// The USD rotation xform ops, in sampler precedence: quaternion `orient`, the
 /// six Euler-order triples, then the single-axis scalars.
@@ -210,12 +212,14 @@ mod animation_tests {
         animated_time_range, local_rotation_at, prim_has_xform_time_samples, prim_is_animated,
         read_matrix_transform_at, sample_animated_vec3,
     };
-    use crate::canonical::CanonicalStage;
-    use crate::read::{
+    use bevy::prelude::{Quat, Vec3};
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::read::{
         attr_has_time_samples, read_token_at, read_vec3_f64_at, stage_time_codes_per_second,
     };
-    use crate::{compose_xform_order_at, local_transform_at, read_transform_from_usd};
-    use bevy::prelude::{Quat, Vec3};
+    use lunco_usd_bevy_stage::{
+        compose_xform_order_at, local_transform_at, read_transform_from_usd,
+    };
     use openusd::sdf::Path as SdfPath;
 
     /// Build a real composed stage. The extractors read through `StageView` — the

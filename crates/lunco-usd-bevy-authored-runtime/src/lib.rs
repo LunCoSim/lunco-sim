@@ -28,7 +28,7 @@ impl Plugin for UsdAuthoredRuntimePlugin {
 /// structural or source change.
 pub fn refresh_program_owner(
     world: &mut bevy::prelude::World,
-    stage_id: bevy::asset::AssetId<lunco_usd_bevy_core::UsdStageAsset>,
+    stage_id: bevy::asset::AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
     owner: bevy::prelude::Entity,
 ) {
     program_runtime::refresh_program_owner(world, stage_id, owner);

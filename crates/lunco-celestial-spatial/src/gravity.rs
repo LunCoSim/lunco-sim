@@ -299,11 +299,9 @@ mod tests {
 
         let field = app.world().resource::<LocalGravityField>();
         assert_eq!(field.body_entity, Some(body));
-        assert!(
-            field
-                .body_relative_position
-                .abs_diff_eq(DVec3::X * 10.0, 1e-9)
-        );
+        assert!(field
+            .body_relative_position
+            .abs_diff_eq(DVec3::X * 10.0, 1e-9));
         assert!(field.local_up.abs_diff_eq(DVec3::X, 1e-9));
 
         // Removing the authoritative association must clear it immediately;

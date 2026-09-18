@@ -134,7 +134,7 @@ struct StartupInstallState {
     attempted: HashSet<String>,
 }
 
-fn policy_value(loaded: &lunco_assets_core::scripting::LoadedPolicy) -> HookValue {
+fn policy_value(loaded: &lunco_assets_runtime::scripting::LoadedPolicy) -> HookValue {
     HookValue::map([
         ("hook", HookValue::str(loaded.spec.hook.clone())),
         ("entry", HookValue::str(loaded.spec.entry.clone())),
@@ -170,7 +170,7 @@ fn cleanup_startup_installations(state: &StartupInstallState, journal: Option<&J
 
 fn validate_startup_results(
     results: &[HookValue],
-    loaded: &[lunco_assets_core::scripting::LoadedPolicy],
+    loaded: &[lunco_assets_runtime::scripting::LoadedPolicy],
     state: &StartupInstallState,
 ) -> Result<(), String> {
     let expected = loaded
@@ -422,8 +422,8 @@ fn wind_down_twin_policies(
 }
 
 fn run_startup_policy(
-    startup: lunco_assets_core::scripting::LoadedStartup,
-    loaded: &[lunco_assets_core::scripting::LoadedPolicy],
+    startup: lunco_assets_runtime::scripting::LoadedStartup,
+    loaded: &[lunco_assets_runtime::scripting::LoadedPolicy],
     journal: Option<&JournalResource>,
 ) -> Result<StartupInstallState, String> {
     let state = Arc::new(Mutex::new(StartupInstallState::default()));
@@ -614,8 +614,8 @@ pub fn project_policies(
 }
 
 fn coalesce_loaded_policies(
-    loaded: impl IntoIterator<Item = lunco_assets_core::scripting::LoadedPolicy>,
-) -> Vec<lunco_assets_core::scripting::LoadedPolicy> {
+    loaded: impl IntoIterator<Item = lunco_assets_runtime::scripting::LoadedPolicy>,
+) -> Vec<lunco_assets_runtime::scripting::LoadedPolicy> {
     loaded
         .into_iter()
         .fold(BTreeMap::new(), |mut policies, policy| {
@@ -650,7 +650,7 @@ fn clear_active_policies(registry: &mut ScriptedPolicyRegistry, journal: Option<
 
 fn report_for_application_policies(
     scope: impl Into<String>,
-    application: lunco_assets_core::scripting::LoadedPolicyBundle,
+    application: lunco_assets_runtime::scripting::LoadedPolicyBundle,
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> PolicyLoadReport {
@@ -743,7 +743,7 @@ fn report_for_application_policies(
 
 fn report_for_twin_policies(
     scope: impl Into<String>,
-    twin: Option<lunco_assets_core::scripting::LoadedPolicyBundle>,
+    twin: Option<lunco_assets_runtime::scripting::LoadedPolicyBundle>,
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> PolicyLoadReport {
@@ -891,7 +891,7 @@ pub fn load_application_policies(
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> PolicyLoadReport {
-    let bundle = match lunco_assets_core::scripting::active_policy_bundle() {
+    let bundle = match lunco_assets_runtime::scripting::active_policy_bundle() {
         Ok(bundle) => bundle,
         Err(error) => return report_load_error("application", error, registry, journal),
     };
@@ -904,7 +904,7 @@ pub fn load_twin_policies(
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> PolicyLoadReport {
-    let twin = match lunco_assets_core::scripting::twin_policy_set(root) {
+    let twin = match lunco_assets_runtime::scripting::twin_policy_set(root) {
         Ok(twin) => twin,
         Err(error) => return report_load_error("Twin", error, registry, journal),
     };

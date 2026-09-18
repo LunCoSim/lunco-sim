@@ -33,7 +33,7 @@
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -44,7 +44,7 @@ use lunco_storage::StorageHandle;
 
 use crate::sync::{SyncEnvelope, SyncOutbox};
 use lunco_networking_scenario::{
-    cid_from_bytes, AssetChunkMsg, AssetRequestMsg, ScenarioJournalHead, ScenarioManifestMsg,
+    AssetChunkMsg, AssetRequestMsg, ScenarioJournalHead, ScenarioManifestMsg, cid_from_bytes,
 };
 
 /// Convert the journal runtime's identity into the scenario wire contract at

@@ -151,7 +151,7 @@ fn sim_focus_pace(
     settings: Option<ResMut<bevy::winit::WinitSettings>>,
     pending: Option<Res<lunco_modelica_runner::PendingHandles>>,
     models: Query<&lunco_modelica_runtime::ModelicaModel>,
-    keep_awake: Option<Res<lunco_core::KeepAwake>>,
+    keep_awake: Option<Res<lunco_core_runtime::KeepAwake>>,
     mut idle: Local<Option<bevy::winit::UpdateMode>>,
 ) {
     let Some(mut settings) = settings else { return };

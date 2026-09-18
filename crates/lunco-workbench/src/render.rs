@@ -142,18 +142,6 @@ pub(crate) fn render_workbench(world: &mut World) {
     // and egui occlusion is handled by bevy_egui's picking backend.
 }
 
-/// First leaf node (in walk order) in a `Surface`'s tree, if any.
-/// Used as a last-resort fallback when no more specific target leaf
-/// can be identified.
-pub(crate) fn first_leaf(surface: &mut egui_dock::Tree<TabId>) -> Option<NodeIndex> {
-    for (index, node) in surface.iter_mut().enumerate() {
-        if node.is_leaf() {
-            return Some(NodeIndex(index));
-        }
-    }
-    None
-}
-
 /// Return the screen rect occupied by the dock leaves containing any panel in
 /// each requested group. Generic guided anchors describe authored
 /// workbench slots, not particular tabs, so a stacked slot is represented by
@@ -197,28 +185,6 @@ pub(crate) fn dock_group_rects(
         }
     }
     (side_rect, right_rect, bottom_rect)
-}
-
-/// First leaf containing any tab for which `pred` returns `true`.
-/// Used by [`WorkbenchLayout::open_instance`] to find the center
-/// tabset after perspective splits have moved it around.
-pub(crate) fn find_leaf_matching<F>(
-    surface: &mut egui_dock::Tree<TabId>,
-    pred: F,
-) -> Option<NodeIndex>
-where
-    F: Fn(&TabId) -> bool,
-{
-    for (index, node) in surface.iter_mut().enumerate() {
-        if node.is_leaf() {
-            if let Some(tabs) = node.tabs() {
-                if tabs.iter().any(&pred) {
-                    return Some(NodeIndex(index));
-                }
-            }
-        }
-    }
-    None
 }
 
 /// Record a docked panel's blocked region into the scene-pick gate.
@@ -2848,8 +2814,10 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_dock::DockState;
     use lunco_workbench_core::PerspectiveLayoutPlan;
     use lunco_workbench_core::PerspectiveSlotPlan;
+    use lunco_workbench_layout::heal_non_finite_nulls;
 
     #[test]
     fn tab_content_setting_uses_translucent_default_for_panel_chrome() {

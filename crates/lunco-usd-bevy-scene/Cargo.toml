@@ -6,9 +6,9 @@ license.workspace = true
 description = "Render-free USD scene identity, lifecycle, and geometry contracts for Bevy"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-core = { path = "../lunco-core" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 openusd = { workspace = true }
 
 [dev-dependencies]

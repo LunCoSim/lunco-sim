@@ -6,12 +6,12 @@ license.workspace = true
 description = "Render-independent USD preview sessions, camera state, commands, and settings"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 serde = { workspace = true }

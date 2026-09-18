@@ -306,7 +306,7 @@ the right behaviour is for it to visibly do nothing.
 ## Adding support for a new prim type or attribute
 
 1. **Read it.** Extractors use the `UsdRead` trait
-   (`lunco-usd-bevy-core/src/read.rs`), implemented by both `StageView` (the live
+   (`lunco-usd-bevy-stage/src/read.rs`), implemented by both `StageView` (the live
    composed stage) and `UsdStageProjectionPlan` (the worker-produced initial
    snapshot). Authoring-layer reads use `UsdDataExt` separately; runtime
    extractors never switch to that source.

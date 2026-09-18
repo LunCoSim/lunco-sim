@@ -1081,7 +1081,7 @@ fn load_bitmap_bytes(filename: &str) -> Option<Vec<u8>> {
     // same asset boundary as documentation images and works for both the native
     // filesystem source and the browser's in-memory bundle.
     let path = lunco_assets_path::relative_path(rel)?;
-    lunco_assets_core::library::library_read(&path)
+    lunco_assets_runtime::library::library_read(&path)
 }
 
 // ---------------------------------------------------------------------------

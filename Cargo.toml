@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/lunco-core",
+    "crates/lunco-core-runtime",
     "crates/lunco-id",
     "crates/lunco-command-contracts",
     "crates/lunco-port-core",
@@ -81,6 +82,7 @@ members = [
     "crates/lunco-usd-bevy-light",
     "crates/lunco-usd-bevy-camera",
     "crates/lunco-usd-bevy-core",
+    "crates/lunco-usd-bevy-stage",
     "crates/lunco-usd-bevy-diagnostics",
     "crates/lunco-usd-bevy-scene",
     "crates/lunco-usd-bevy-scene-ports",
@@ -119,6 +121,7 @@ members = [
     "crates/lunco-scene-validation",
     "crates/lunco-ui",
     "crates/lunco-assets-core",
+    "crates/lunco-assets-runtime",
     "crates/lunco-assets-path",
     "crates/lunco-telemetry-core",
     "crates/lunco-assets-datasets",
@@ -158,6 +161,7 @@ members = [
     "crates/lunco-hooks-plugin-api",
     "crates/lunco-hooks-native",
     "crates/lunco-workbench",
+    "crates/lunco-workbench-layout",
     "crates/lunco-workbench-browser",
     "crates/lunco-workbench-datasets-ui",
     "crates/lunco-workbench-core",

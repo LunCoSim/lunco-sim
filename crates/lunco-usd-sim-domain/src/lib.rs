@@ -25,9 +25,9 @@ use lunco_usd_bevy_core::program::{
     select_synthesizer_name, ProgramGraph, ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER,
     DEFAULT_DOMAIN_SYNTHESIZER,
 };
-use lunco_usd_bevy_core::read::UsdReadObject as ComposedReader;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::read::UsdReadObject as ComposedReader;
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 
 pub mod network;
@@ -52,7 +52,7 @@ pub use lunco_usd_bevy_core::program::is_domain_network_root;
 /// execution policy at the projection boundary prevents malformed authoring
 /// fixtures from entering Modelica while preserving one reader for lint facts.
 pub fn is_runtime_domain_network_root(
-    view: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    view: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
 ) -> bool {
     is_domain_network_root(view, prim)
@@ -242,7 +242,7 @@ struct PendingDomainProjection {
     root_path: String,
     model_name: String,
     requested: String,
-    plan: Arc<lunco_usd_bevy_core::UsdStageProjectionPlan>,
+    plan: Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
     task: Task<Result<SynthOutcome, Vec<DomainProjectionError>>>,
 }
 
@@ -265,7 +265,7 @@ fn queue_domain_projection(
     model_name: String,
     requested: String,
     synthesizer: Arc<dyn DomainSynthesizer>,
-    plan: Arc<lunco_usd_bevy_core::UsdStageProjectionPlan>,
+    plan: Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
     instance_plan: bool,
     classes: MemberClasses,
 ) {
@@ -557,15 +557,15 @@ pub fn project_domain_islands(
     )>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
-    q_instance_root: Query<(), With<lunco_usd_bevy_core::UsdInstanceRoot>>,
+    q_instance_root: Query<(), With<lunco_usd_bevy_stage::UsdInstanceRoot>>,
     // A runtime-instanced descendant stays out of Modelica synthesis while its
     // root identity is pending. Once the root GID is available, the durable
     // instance projection scopes the generated session even after the transient
     // membership marker is consumed.
-    q_instance_member: Query<(), With<lunco_usd_bevy_core::UsdInstanceMember>>,
+    q_instance_member: Query<(), With<lunco_usd_bevy_stage::UsdInstanceMember>>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
-    dirty: Res<lunco_usd_bevy_core::UsdWiringDirty>,
+    dirty: Res<lunco_usd_bevy_stage::UsdWiringDirty>,
     // A member class landing is the projector's third trigger: the networks that
     // returned `Pending` have to be re-asked, and no prim spawned or changed.
     mut projection: ParamSet<(ResMut<ProjectionDirty>, ResMut<PendingDomainProjections>)>,
@@ -1405,7 +1405,7 @@ fn projection_is_due_from_flags(
 pub fn domain_projection_due(
     added: Query<(), Added<UsdPrimPath>>,
     identity_added: Query<(), Added<lunco_core::GlobalEntityId>>,
-    dirty: Res<lunco_usd_bevy_core::UsdWiringDirty>,
+    dirty: Res<lunco_usd_bevy_stage::UsdWiringDirty>,
     projection_dirty: Res<ProjectionDirty>,
 ) -> bool {
     projection_is_due_from_flags(
@@ -1438,7 +1438,7 @@ pub fn resolve_member_classes(
     added: Query<(), Added<UsdPrimPath>>,
     mut classes: ResMut<MemberClasses>,
     mut projection_dirty: ResMut<ProjectionDirty>,
-    dirty: Res<lunco_usd_bevy_core::UsdWiringDirty>,
+    dirty: Res<lunco_usd_bevy_stage::UsdWiringDirty>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
@@ -1598,7 +1598,7 @@ pub fn resolve_member_classes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
 
     #[test]
     fn domain_projection_schedule_requires_an_authoring_trigger() {
@@ -1781,7 +1781,7 @@ mod tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/electrical_network.usda");
         let composed =
-            lunco_usd_bevy_core::compose::compose_file_to_stage(&path).expect("compose fixture");
+            lunco_usd_bevy_stage::compose::compose_file_to_stage(&path).expect("compose fixture");
         let stage = CanonicalStage::from_stage(composed, path.to_string_lossy().to_string());
         let view = stage.view();
         let root_path = SdfPath::new("/Rig").unwrap();
@@ -1811,7 +1811,7 @@ mod tests {
         lunco_hooks_rhai::register_rhai_hook(
             "synth.acausal-network",
             "synthesize",
-            lunco_assets_core::scripting::policy("synth_acausal_network")
+            lunco_assets_runtime::scripting::policy("synth_acausal_network")
                 .expect("shipped synthesis policy")
                 .expect("synthesis policy source exists")
                 .as_str(),
@@ -2022,7 +2022,7 @@ def Scope "Rig"
             network::aggregate_communication_periods(std::iter::empty()).unwrap(),
             lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
         );
-        let six_ticks = 6.0 * lunco_core::SECS_PER_TICK;
+        let six_ticks = 6.0 * lunco_core_runtime::SECS_PER_TICK;
         assert_eq!(
             network::aggregate_communication_periods([
                 Ok(("/Rig/A".into(), six_ticks)),
@@ -2033,7 +2033,7 @@ def Scope "Rig"
         );
         let errors = network::aggregate_communication_periods([
             Ok(("/Rig/A".into(), six_ticks)),
-            Ok(("/Rig/B".into(), 12.0 * lunco_core::SECS_PER_TICK)),
+            Ok(("/Rig/B".into(), 12.0 * lunco_core_runtime::SECS_PER_TICK)),
         ])
         .unwrap_err();
         assert_eq!(errors.len(), 1);
@@ -2318,7 +2318,7 @@ def Scope "Rig"
         lunco_hooks_rhai::register_rhai_hook(
             "synth.actuator-wrench",
             "synthesize",
-            lunco_assets_core::scripting::policy("synth_actuator_wrench")
+            lunco_assets_runtime::scripting::policy("synth_actuator_wrench")
                 .expect("shipped actuator policy")
                 .expect("actuator policy source exists")
                 .as_str(),

@@ -65,7 +65,7 @@ pub fn class_availability(qualified: &str) -> ClassAvailability {
         return ClassAvailability::Loading;
     };
     let root = qualified.split('.').next().unwrap_or(qualified);
-    let is_bundled_root = lunco_assets_core::models::package_roots_live()
+    let is_bundled_root = lunco_assets_runtime::models::package_roots_live()
         .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root));
     let (has_class, has_root, root_failed) = {
         let Some(mut engine) = handle.try_lock() else {
@@ -130,12 +130,12 @@ impl ClassLookupMode {
 }
 
 /// Read library source bytes for a relative path, going through the
-/// process-wide [`lunco_assets_core::library::LibraryAssetSource`]. Returns
+/// process-wide [`lunco_assets_runtime::library::LibraryAssetSource`]. Returns
 /// `None` if the source hasn't been installed yet (web boot before
 /// fetch completes) or the path isn't present.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_source_bytes(path: &std::path::Path) -> Option<String> {
-    let bytes = lunco_assets_core::library::library_read(path)?;
+    let bytes = lunco_assets_runtime::library::library_read(path)?;
     String::from_utf8(bytes).ok()
 }
 
@@ -167,7 +167,7 @@ pub fn peek_or_load_class_blocking(
     // source-aware package loader. They are installed as one root so
     // cross-file `within` and `extends` resolution remains canonical.
     if let Some(root) = qualified.split('.').next() {
-        if lunco_assets_core::models::package_roots_live()
+        if lunco_assets_runtime::models::package_roots_live()
             .is_ok_and(|roots| roots.iter().any(|candidate| candidate == root))
         {
             let mut engine = handle.lock();

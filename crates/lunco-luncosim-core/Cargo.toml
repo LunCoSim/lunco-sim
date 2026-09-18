@@ -10,6 +10,9 @@ name = "lunco_luncosim_core"
 path = "src/lib.rs"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # Core owns the CPU/ECS simulation composition. Asset/image/shader stores are
 # retained because USD document projection uses them as data, but renderer,
@@ -44,7 +47,6 @@ lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime", features = ["cosim"] }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }

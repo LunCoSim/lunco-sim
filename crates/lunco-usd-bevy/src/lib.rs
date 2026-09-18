@@ -52,19 +52,6 @@ use openusd::sdf::Value;
 
 use lunco_usd_bevy_core::animation::{prim_is_animated, ANIMATED_SHADER_INPUTS};
 use lunco_usd_bevy_core::point_instancer::read_point_instancer;
-use lunco_usd_bevy_core::read::{
-    attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
-    read_primvar_vec3_strict,
-};
-use lunco_usd_bevy_core::source::{UsdSourceText, UsdSourceTextLoader};
-use lunco_usd_bevy_core::{
-    canonical, read, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader,
-    UsdStageAsset,
-};
-use lunco_usd_bevy_core::{
-    canonical::CanonicalStages, local_transform_at, parent_prim_path, read_transform_from_usd,
-    resolve_bound_shader, resolve_stage_prim_path, stage_convention, UsdRead, UsdReadObject,
-};
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_light::light;
 use lunco_usd_bevy_mesh::{
@@ -79,6 +66,19 @@ use lunco_usd_bevy_scene::{
     UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdScenePlugin,
     UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot,
     UsdSceneSyncSet, UsdVisualMeshTarget, UsdVisualProjectionSet,
+};
+use lunco_usd_bevy_stage::read::{
+    attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
+    read_primvar_vec3_strict,
+};
+use lunco_usd_bevy_stage::source::{UsdSourceText, UsdSourceTextLoader};
+use lunco_usd_bevy_stage::{
+    canonical, read, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader,
+    UsdStageAsset,
+};
+use lunco_usd_bevy_stage::{
+    canonical::CanonicalStages, local_transform_at, parent_prim_path, read_transform_from_usd,
+    resolve_bound_shader, resolve_stage_prim_path, stage_convention, UsdRead, UsdReadObject,
 };
 /// Bevy plugin for USD visual synchronization.
 ///
@@ -2404,7 +2404,7 @@ fn read_standard_material(
                 let asset_path = reader
                     .asset(&texture_path, "inputs:file")
                     .ok_or_else(|| MaterialReadError::new(input))?;
-                let resolved = lunco_usd_bevy_core::asset::resolve_stage_asset_path(
+                let resolved = lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
                     asset_server,
                     stage_id,
                     &asset_path,
@@ -2698,13 +2698,13 @@ struct ResetXformStackApplied;
 ///
 /// Position matters: UsdGeomXformable gives the sentinel meaning only as the
 /// first entry — anywhere else it is a malformed stack, which
-/// [`lunco_usd_bevy_core::compose_xform_order_at`] already rejects with
+/// [`lunco_usd_bevy_stage::compose_xform_order_at`] already rejects with
 /// [`TransformReadError`].
 fn prim_resets_xform_stack<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
-    lunco_usd_bevy_core::read_xform_op_order(reader, path).is_some_and(|order| {
+    lunco_usd_bevy_stage::read_xform_op_order(reader, path).is_some_and(|order| {
         order
             .first()
-            .is_some_and(|op| op == lunco_usd_bevy_core::RESET_XFORM_STACK)
+            .is_some_and(|op| op == lunco_usd_bevy_stage::RESET_XFORM_STACK)
     })
 }
 
@@ -2779,7 +2779,7 @@ fn detach_reset_xform_stack_prims(
             "[usd-bevy] {} opens with {} — detaching from its USD ancestry \
              onto the stage world frame ({anchor:?})",
             prim.path,
-            lunco_usd_bevy_core::RESET_XFORM_STACK,
+            lunco_usd_bevy_stage::RESET_XFORM_STACK,
         );
         let mut entity_commands = commands.entity(entity);
         if let Ok(grid) = q_grids.get(anchor) {

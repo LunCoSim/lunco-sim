@@ -72,15 +72,15 @@ use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_authoring::author::open_doc_stage;
-use lunco_usd_bevy_core::read::UsdRead;
-use lunco_usd_bevy_core::view::StageView;
-use lunco_usd_bevy_core::{
-    canonical::CanonicalStages, effective_purpose, is_descendant_or_self, resolve_bound_shader,
-    MaterialPurpose, UsdStageAsset,
-};
 use lunco_usd_bevy_scene::collision::{collision_aabb, prim_geometry_aabb, ObjectAabb};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
+use lunco_usd_bevy_stage::read::UsdRead;
+use lunco_usd_bevy_stage::view::StageView;
+use lunco_usd_bevy_stage::{
+    canonical::CanonicalStages, effective_purpose, is_descendant_or_self, resolve_bound_shader,
+    MaterialPurpose, UsdStageAsset,
+};
 use lunco_usd_bevy_twin::{canonical_stage_for_document, scene_document_for, DocBackedTwinScenes};
 use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
@@ -159,12 +159,12 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
     }
 }
 
-fn purpose_name(purpose: lunco_usd_bevy_core::Purpose) -> &'static str {
+fn purpose_name(purpose: lunco_usd_bevy_stage::Purpose) -> &'static str {
     match purpose {
-        lunco_usd_bevy_core::Purpose::Default => "default",
-        lunco_usd_bevy_core::Purpose::Render => "render",
-        lunco_usd_bevy_core::Purpose::Proxy => "proxy",
-        lunco_usd_bevy_core::Purpose::Guide => "guide",
+        lunco_usd_bevy_stage::Purpose::Default => "default",
+        lunco_usd_bevy_stage::Purpose::Render => "render",
+        lunco_usd_bevy_stage::Purpose::Proxy => "proxy",
+        lunco_usd_bevy_stage::Purpose::Guide => "guide",
     }
 }
 
@@ -302,7 +302,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
                 serde_json::Value::Null
             }
         };
-        let world = match lunco_usd_bevy_core::world_transform(view, candidate) {
+        let world = match lunco_usd_bevy_stage::world_transform(view, candidate) {
             Ok(value) => transform_json(Some(value)),
             Err(error) => {
                 diagnostics.push(format!("{candidate}: world transform failed: {error}"));
@@ -870,7 +870,7 @@ fn read_prim_from_view(
 
     let authored_position = if doc.is_some() {
         Some(
-            lunco_usd_bevy_core::world_transform(view, prim)
+            lunco_usd_bevy_stage::world_transform(view, prim)
                 .map_err(|error| format!("QueryUsdPrim: invalid authored transform: {error}"))?
                 .translation,
         )

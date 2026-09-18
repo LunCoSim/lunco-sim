@@ -35,7 +35,7 @@
 
 use bevy::prelude::*;
 use lunco_camera_core::CameraPoseMode;
-use lunco_usd_bevy_core::read::read_vec3_f64;
+use lunco_usd_bevy_stage::read::read_vec3_f64;
 use openusd::schemas::geom::{self, tokens};
 use openusd::sdf::{Path as SdfPath, Value};
 
@@ -96,7 +96,7 @@ pub enum CameraExposureError {
 }
 
 pub fn read_camera_exposure_ev100(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<Option<f32>, CameraExposureError> {
     let authored = [
@@ -130,7 +130,7 @@ pub fn read_camera_exposure_ev100(
 }
 
 fn read_camera_exposure_real(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
     name: &str,
     schema_default: f32,
@@ -161,7 +161,7 @@ fn read_camera_exposure_real(
 /// complete render graph. Called from `instantiate_usd_prim`; the prim's
 /// transform and visibility are applied by the shared path there.
 pub fn instantiate_camera_prim(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     commands: &mut Commands,
@@ -433,7 +433,7 @@ pub fn instantiate_camera_prim(
 /// validated stage convention and retains ownership of the complete Bevy
 /// transform; this adapter only supplies the camera-specific orientation.
 pub fn apply_camera_look_at(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     convention: &ConventionTransform,
@@ -469,7 +469,7 @@ pub fn apply_camera_look_at(
 /// Read the optional camera aim while preserving the distinction between an
 /// omitted USD opinion and malformed authored data.
 fn read_camera_look_at(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<Option<[f64; 3]>, ()> {
     let value = read_vec3_f64(reader, path, "lunco:cameraLookAt");
@@ -498,7 +498,7 @@ fn read_camera_look_at(
 /// genuinely unauthored; an invalid authored opinion is never converted into a
 /// guessed projection.
 fn read_projection(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<(Projection, Option<f32>)> {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
@@ -604,7 +604,7 @@ fn read_projection(
 /// OpenUSD owns the token spelling and legal values; the Bevy adapter only
 /// maps the resulting schema value to Bevy's projection component.
 fn read_usd_camera_projection(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<geom::Projection> {
     match reader.attr_value(path, tokens::A_PROJECTION) {
@@ -642,7 +642,7 @@ fn read_usd_camera_projection(
 /// Read a positive USD camera scalar without mistaking an invalid authored
 /// opinion for an omitted schema default.
 fn read_positive_camera_real(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
     name: &str,
     schema_default: f32,
@@ -674,7 +674,7 @@ fn read_positive_camera_real(
 /// data. Custom camera-role tokens are control-plane data, so falling through to
 /// another role would create a second pose/viewport owner by accident.
 fn read_camera_token(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
     name: &str,
     schema_default: &str,
@@ -719,7 +719,7 @@ fn read_camera_token(
 /// `false`. The schema fallback remains available only when the attribute is
 /// genuinely omitted.
 fn read_camera_bool(
-    reader: &impl lunco_usd_bevy_core::UsdRead,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     name: &str,
     schema_default: bool,
@@ -785,7 +785,7 @@ mod tests {
     struct CameraEntity(Entity);
 
     fn project_invalid_camera(
-        stage: NonSend<lunco_usd_bevy_core::canonical::CanonicalStage>,
+        stage: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStage>,
         entity: Res<CameraEntity>,
         mut commands: Commands,
     ) {
@@ -835,7 +835,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (10, 1000)\n}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         let (projection, _) = read_projection(&stage.view(), &path).expect("valid camera");
@@ -852,7 +852,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         let (projection, _) = read_projection(&stage.view(), &path).expect("valid camera");
@@ -869,7 +869,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (0, 100)\n}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert!(read_projection(&stage.view(), &path).is_none());
@@ -881,7 +881,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float focalLength = 0\n}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert!(read_projection(&stage.view(), &path).is_none());
@@ -893,7 +893,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    string lunco:cameraLookAt = \"not-a-vec3\"\n}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert!(read_camera_look_at(&stage.view(), &path).is_err());
@@ -905,7 +905,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float focalLength = 0\n}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -940,7 +940,7 @@ mod tests {
             let source = format!("#usda 1.0\ndef Camera \"Camera\"\n{{\n    {projection}\n}}\n");
             let recipe =
                 lunco_usd_compose::recipe::StageRecipe::from_source("camera.usda", &source);
-            let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
                 .expect("build camera");
             let path = SdfPath::new("/Camera").unwrap();
             assert!(read_projection(&stage.view(), &path).is_none());
@@ -953,7 +953,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert_eq!(read_camera_exposure_ev100(&stage.view(), &path), Ok(None));
@@ -965,7 +965,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 200\n    float exposure = 1\n}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         let ev100 = read_camera_exposure_ev100(&stage.view(), &path)
@@ -980,7 +980,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 0\n}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert_eq!(
@@ -995,7 +995,7 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    string exposure:iso = \"film\"\n}\n",
         );
-        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+        let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert_eq!(

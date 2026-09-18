@@ -6,6 +6,7 @@ license.workspace = true
 description = "Per-entity environmental state (gravity, atmosphere, radiation, lighting) computed from celestial body providers. RENDER-FREE."
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 # RENDER-FREE. There is no `render` feature any more and there must not be one:
 # the gate is *which plugins you add*, not `#[cfg]`. `bevy_light` gives
 # `DirectionalLight` / `CascadeShadowConfig` / `GlobalAmbientLight`; `bevy_camera`

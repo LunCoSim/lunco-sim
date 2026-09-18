@@ -55,12 +55,12 @@ use lunco_usd_avian_contracts::{
 };
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
 use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
-use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
-use lunco_usd_bevy_core::{
-    canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
-};
 use lunco_usd_bevy_scene::{
     instance_key, is_preview_only, UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending,
+};
+use lunco_usd_bevy_stage::read::{read_authored_bool_strict, read_vec3_f64};
+use lunco_usd_bevy_stage::{
+    canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
 };
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -170,7 +170,7 @@ impl JointTopologyIndex {
         stage: bevy::asset::AssetId<UsdStageAsset>,
         generation: u64,
         projection_revision: u64,
-        reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+        reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     ) {
         let topology = self.by_stage.entry(stage).or_default();
         if topology.canonical_generation == Some(generation)
@@ -604,7 +604,7 @@ fn process_usd_sim_prims(
 /// relationship is a list-op, so taking `rel_target` here would silently turn
 /// malformed fan-out authoring into a first-target choice.
 fn collect_joint_scan_read(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     topology: &mut StageJointTopology,
 ) {
     for path in reader.prim_paths() {
@@ -701,7 +701,7 @@ fn collect_joint_scan_read(
 /// surface — maps one composed prim's authored `lunco:*` / PhysX-vehicle
 /// schemas to its sim/avatar/wheel components.
 fn read_raycast_observation(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<RaycastObservation, ()> {
     let axis = match reader.text(path, "lunco:raycast:axis").as_deref() {
@@ -749,7 +749,7 @@ fn push_usd_sim_diagnostic(
 #[cfg(test)]
 mod raycast_tests {
     use super::read_raycast_observation;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
@@ -805,7 +805,7 @@ def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
     }
 }
 fn process_usd_sim_prim_read(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     entity: Entity,
     prim_path: &UsdPrimPath,
     sdf_path: SdfPath,
@@ -1740,7 +1740,7 @@ fn usd_entity_for_path(
 /// raycast realization starts at its parent and walks the composed topology to
 /// the enclosing body.
 fn raycast_body_path(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     wheel_path: &SdfPath,
 ) -> Option<SdfPath> {
     let mut path = wheel_path.parent()?;
@@ -1756,7 +1756,7 @@ fn raycast_body_path(
 /// topology. A wheel may be nested under a non-body carrier, and a physical
 /// wheel's owner is the body named by its authored revolute `body0` relation.
 fn wheel_body_mount(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     wheel_path: &SdfPath,
     physical_body_path: Option<&str>,
     stage: bevy::asset::AssetId<UsdStageAsset>,
@@ -1768,7 +1768,7 @@ fn wheel_body_mount(
         raycast_body_path(reader, wheel_path)?
     };
     let body = usd_entity_for_path(all_prims, stage, body_path.as_str())?;
-    let local = lunco_usd_bevy_core::transform_in_body_frame(reader, &body_path, wheel_path)?;
+    let local = lunco_usd_bevy_stage::transform_in_body_frame(reader, &body_path, wheel_path)?;
     Some(lunco_mobility::WheelBodyMount { body, local })
 }
 
@@ -1777,14 +1777,14 @@ fn wheel_body_mount(
 /// wheel's carrier owns the prismatic DOF, while the authored heading program
 /// is evaluated in the vehicle context frame.
 fn vehicle_mount_transform(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     wheel_path: &SdfPath,
 ) -> Option<Transform> {
     let mut path = wheel_path.clone();
     loop {
         if reader.has_api_schema(&path, "PhysxVehicleContextAPI") {
-            let wheel = lunco_usd_bevy_core::world_transform(reader, wheel_path).ok()?;
-            let vehicle = lunco_usd_bevy_core::world_transform(reader, &path).ok()?;
+            let wheel = lunco_usd_bevy_stage::world_transform(reader, wheel_path).ok()?;
+            let vehicle = lunco_usd_bevy_stage::world_transform(reader, &path).ok()?;
             let inverse = vehicle.rotation.inverse();
             return Some(Transform {
                 translation: inverse * (wheel.translation - vehicle.translation),
@@ -1801,7 +1801,7 @@ fn vehicle_mount_transform(
 /// drivetrain string identifies a contribution. A full physical variant keeps
 /// the same prim as its own `PhysicsRigidBodyAPI` and therefore does not fold it.
 fn raycast_mass_contribution_from_usd(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
@@ -1826,7 +1826,7 @@ fn raycast_mass_contribution_from_usd(
             "invalid mass properties: mass={mass}, diagonalInertia={inertia:?}"
         ));
     }
-    let convention = lunco_usd_bevy_core::stage_convention(reader)
+    let convention = lunco_usd_bevy_stage::stage_convention(reader)
         .map_err(|reason| format!("invalid stage convention: {reason}"))?;
     let meters_per_unit = convention.length(1.0);
     let mut body_path = prim
@@ -1845,7 +1845,7 @@ fn raycast_mass_contribution_from_usd(
     }
     let owner = usd_entity_for_path(all_prims, stage_id, body_path.as_str())
         .ok_or_else(|| format!("owner entity {} is not projected", body_path.as_str()))?;
-    let local = lunco_usd_bevy_core::transform_in_body_frame(reader, &body_path, prim)
+    let local = lunco_usd_bevy_stage::transform_in_body_frame(reader, &body_path, prim)
         .ok_or_else(|| "cannot resolve local transform".to_owned())?;
     let principal = convention.dir_d(DVec3::new(inertia[0], inertia[1], inertia[2]))
         * (meters_per_unit * meters_per_unit);
@@ -2052,7 +2052,7 @@ fn setup_raycast_wheel(
 /// converted from wheel-local to carrier-local while preserving the authored
 /// composed stage hierarchy.
 fn physical_suspension_visuals(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     wheel_path: &UsdPrimPath,
     wheel_entity: Entity,
     wheel_tf: Transform,
@@ -2932,7 +2932,7 @@ fn activate_dynamic_bodies(
 #[cfg(test)]
 mod topology_index_tests {
     use super::*;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
 
     const WHEEL_STAGE: &str = r#"#usda 1.0

@@ -180,7 +180,7 @@ fn main() {
         TwinId::new("smoke"),
         AuthorId::local(),
     ));
-    app.add_plugins(lunco_core::LunCoCorePlugin);
+    app.add_plugins(lunco_core_runtime::LunCoCoreRuntimePlugin);
     app.add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin);
     app.add_plugins(lunco_core_session::LunCoCoreSessionPlugin);
     app.add_plugins(lunco_api_transport::LunCoApiPlugin::default());

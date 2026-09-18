@@ -140,7 +140,7 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
     #[cfg(feature = "net-diag")]
     app.add_plugins(crate::diagnostics::NetDiagnosticsPlugin);
 
-    let tick = Duration::from_secs_f64(lunco_core::SECS_PER_TICK);
+    let tick = Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK);
     match mode {
         Some(NetworkMode::Host { port }) => {
             #[cfg(not(target_family = "wasm"))]

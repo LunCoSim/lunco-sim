@@ -1187,9 +1187,8 @@ pub fn run_with_cancel(
         components: &'a [lunco_modelica_index::index::ClassEntry],
         bundled: &'a [lunco_modelica_index::package_tree::types::PackageNode],
     }
-    let output_path = library_root.join(
-        lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME,
-    );
+    let output_path =
+        library_root.join(lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME);
     let index = LocalLibraryIndex {
         components: &components,
         bundled: &bundled_nodes,
@@ -1213,9 +1212,8 @@ pub fn run_with_cancel(
     // package keeps a wasm-safe empty library surface.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let bundle_path = library_root.join(
-            lunco_modelica_library::source_library::PARSED_LIBRARY_BUNDLE_FILE_NAME,
-        );
+        let bundle_path = library_root
+            .join(lunco_modelica_library::source_library::PARSED_LIBRARY_BUNDLE_FILE_NAME);
         let t_bundle = Instant::now();
         match write_parsed_bundle(&bundle_path, &indexer.parsed_bundle) {
             Ok(()) => {

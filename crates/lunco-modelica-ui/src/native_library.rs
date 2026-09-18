@@ -8,8 +8,8 @@
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
-use lunco_assets_core::library::{LibraryLoadPhase, LibraryLoadState, LibrarySource};
 use lunco_assets_datasets::{DatasetRegistry, DatasetState};
+use lunco_assets_runtime::library::{LibraryLoadPhase, LibraryLoadState, LibrarySource};
 use lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME;
 
 const NATIVE_LIBRARY_DATASET_ID: &str = "engine/modelica/library";
@@ -139,7 +139,7 @@ fn spawn_native_index(
             set_install_state(
                 &slot,
                 LibraryLoadState::Ready {
-                    file_count: lunco_assets_core::library::filesystem_library_file_count(),
+                    file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
                     compressed_bytes: 0,
                     uncompressed_bytes: 0,
                 },
@@ -196,7 +196,7 @@ fn on_native_library_index_action(
             .cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    lunco_assets_core::library::install_global_library_sources(vec![LibrarySource::Filesystem(
+    lunco_assets_runtime::library::install_global_library_sources(vec![LibrarySource::Filesystem(
         root.clone(),
     )]);
     commands.insert_resource(LibraryLoadState::Loading {
@@ -260,18 +260,19 @@ fn drive_native_library_dataset(
         DatasetState::Cancelled => *state = LibraryLoadState::NotStarted,
         DatasetState::Failed(error) => *state = LibraryLoadState::Failed(error.clone()),
         DatasetState::Installed => {
-            let Some(root) = lunco_modelica_library::source_library::source_library_root_path() else {
+            let Some(root) = lunco_modelica_library::source_library::source_library_root_path()
+            else {
                 *state = LibraryLoadState::Failed(
                     "dataset is installed but no Modelica source tree exists in the cache".into(),
                 );
                 return;
             };
-            lunco_assets_core::library::install_global_library_sources(vec![
+            lunco_assets_runtime::library::install_global_library_sources(vec![
                 LibrarySource::Filesystem(root.clone()),
             ]);
             if root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
                 *state = LibraryLoadState::Ready {
-                    file_count: lunco_assets_core::library::filesystem_library_file_count(),
+                    file_count: lunco_assets_runtime::library::filesystem_library_file_count(),
                     compressed_bytes: 0,
                     uncompressed_bytes: 0,
                 };

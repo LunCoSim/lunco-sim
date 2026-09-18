@@ -6,8 +6,8 @@ license.workspace = true
 description = "Reusable Rhai backend mechanics for LunCoSim scripting"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true }
-lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-behavior = { path = "../lunco-behavior" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 rhai = { workspace = true }

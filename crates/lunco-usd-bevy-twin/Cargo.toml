@@ -6,10 +6,10 @@ license.workspace = true
 description = "Render-free Twin-backed USD document identity and projection lease state"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 
 [lints]
 workspace = true

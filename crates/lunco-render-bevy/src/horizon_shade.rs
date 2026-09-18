@@ -95,18 +95,12 @@ fn write_terrain_engine_inputs(material: &mut ShaderMaterial, inputs: &TerrainEn
         material.shadow_cache = inputs.shadow_cache.clone();
     }
     material.set_many([
-        (
-            "sun_dir",
-            ParamValue::Vec3(inputs.sun_dir.to_array()),
-        ),
+        ("sun_dir", ParamValue::Vec3(inputs.sun_dir.to_array())),
         (
             "sun_dir_world",
             ParamValue::Vec3(inputs.sun_dir_world.to_array()),
         ),
-        (
-            "sun_tan_radius",
-            ParamValue::F32(inputs.sun_tan_radius),
-        ),
+        ("sun_tan_radius", ParamValue::F32(inputs.sun_tan_radius)),
         (
             "hf_size",
             ParamValue::Vec2([inputs.hf_size.x, inputs.hf_size.y]),
@@ -117,10 +111,7 @@ fn write_terrain_engine_inputs(material: &mut ShaderMaterial, inputs: &TerrainEn
             ParamValue::F32(inputs.terrain_geometry_on),
         ),
         ("csm_far", ParamValue::F32(inputs.csm_far)),
-        (
-            "shadow_cache_on",
-            ParamValue::F32(inputs.shadow_cache_on),
-        ),
+        ("shadow_cache_on", ParamValue::F32(inputs.shadow_cache_on)),
         (
             "horizon_march_steps",
             ParamValue::F32(inputs.horizon_march_steps),
@@ -260,7 +251,10 @@ pub fn wire_terrain_materials(
         ),
     >,
     tile_materials: Query<
-        (&lunco_terrain_surface::LodTileOf, &MeshMaterial3d<ShaderMaterial>),
+        (
+            &lunco_terrain_surface::LodTileOf,
+            &MeshMaterial3d<ShaderMaterial>,
+        ),
         Without<RenderLayers>,
     >,
     // Hysteresis state for the cache↔march handoff, per terrain (see below).
@@ -275,10 +269,8 @@ pub fn wire_terrain_materials(
         cache_engaged.remove(&e);
         sun_projection_cache.remove(e);
     }
-    let mut streamed_materials: std::collections::HashMap<
-        Entity,
-        Vec<Handle<ShaderMaterial>>,
-    > = std::collections::HashMap::new();
+    let mut streamed_materials: std::collections::HashMap<Entity, Vec<Handle<ShaderMaterial>>> =
+        std::collections::HashMap::new();
     for (owner, material) in &tile_materials {
         streamed_materials
             .entry(owner.0)
@@ -295,10 +287,7 @@ pub fn wire_terrain_materials(
             }
             if let Some(materials) = streamed_materials.get(&entity) {
                 for material in materials {
-                    clear_sun_material(
-                        &mut shader_mats,
-                        &MeshMaterial3d(material.clone()),
-                    );
+                    clear_sun_material(&mut shader_mats, &MeshMaterial3d(material.clone()));
                 }
             }
         }
@@ -326,10 +315,7 @@ pub fn wire_terrain_materials(
             }
             if let Some(materials) = streamed_materials.get(&entity) {
                 for material in materials {
-                    clear_sun_material(
-                        &mut shader_mats,
-                        &MeshMaterial3d(material.clone()),
-                    );
+                    clear_sun_material(&mut shader_mats, &MeshMaterial3d(material.clone()));
                 }
             }
         }
@@ -387,15 +373,12 @@ pub fn wire_terrain_materials(
             cache_engaged.insert(entity, now);
             now
         };
-        let shadow_cache_on: f32 = if cache_quality_valid
-            && cfg.enabled
-            && engaged
-            && shadow_cache.is_some()
-        {
-            1.0
-        } else {
-            0.0
-        };
+        let shadow_cache_on: f32 =
+            if cache_quality_valid && cfg.enabled && engaged && shadow_cache.is_some() {
+                1.0
+            } else {
+                0.0
+            };
         let horizon_march_steps = cfg.march_steps as f32;
 
         // Named engine uniforms consumed by the terrain shaders (regolith /

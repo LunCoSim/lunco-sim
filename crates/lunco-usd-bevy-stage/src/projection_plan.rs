@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use bevy::prelude::Transform;
 use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::Stage;
@@ -597,10 +597,11 @@ def Xform "World"
         let authored = SdfPath::new("/World/Authored").unwrap();
         let unauthored = SdfPath::new("/World/Unauthored").unwrap();
 
-        assert!(plan
-            .local_transform_at(&authored, 0.0)
-            .expect("authored prim exists")
-            .is_some());
+        assert!(
+            plan.local_transform_at(&authored, 0.0)
+                .expect("authored prim exists")
+                .is_some()
+        );
         assert_eq!(
             plan.local_transform_at(&unauthored, 0.0)
                 .expect("unauthored prim exists"),

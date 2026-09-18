@@ -399,7 +399,7 @@ impl ApiQueryProvider for GetToolLibraryProvider {
         match lunco_tools::get(name) {
             Some(tool) => {
                 let sources = world
-                    .get_resource::<lunco_assets_core::script_source::ScriptSources>()
+                    .get_resource::<lunco_assets_runtime::script_source::ScriptSources>()
                     .cloned()
                     .unwrap_or_default();
                 let engine = match crate::world_bridge::build_world_engine(sources) {

@@ -21,8 +21,8 @@ use lunco_luncosim_edit_gizmo_ui::GizmoSelected;
 use lunco_scene_selection::{
     SelectEntityTarget, SelectedEntities, SelectionIntent, SelectionTarget,
 };
-use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState};
 
 /// Component marking an entity as currently selected.

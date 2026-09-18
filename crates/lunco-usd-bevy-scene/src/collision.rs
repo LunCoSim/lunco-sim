@@ -7,7 +7,7 @@
 //! importing the large visual adapter.
 
 use bevy::prelude::{Quat, Transform, Vec3};
-use lunco_usd_bevy_core::{
+use lunco_usd_bevy_stage::{
     effective_purpose, local_transform_at, Purpose, StageView, UsdReadObject,
 };
 use openusd::sdf::Path as SdfPath;

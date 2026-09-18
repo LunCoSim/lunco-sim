@@ -6,6 +6,7 @@ license.workspace = true
 description = "Core design tokens and theming system for LunCoSim"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true }
 # Theme installs the application fallback font against egui's built-in font
 # set; it does not own the workbench's picking, clipboard, or URL policy.

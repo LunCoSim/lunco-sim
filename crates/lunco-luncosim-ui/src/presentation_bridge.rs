@@ -6,7 +6,7 @@
 
 use crate::terrain_horizon;
 use bevy::prelude::*;
-use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 
 pub(crate) fn register(app: &mut App) {
     app.init_resource::<TerrainStatusMirrorState>().add_systems(
@@ -117,7 +117,7 @@ fn apply_authored_env(
 
 fn project_env_settings(
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
     roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     mut authored: ResMut<AuthoredEnv>,
     bloom_override: Option<ResMut<lunco_render::SceneBloomOverride>>,

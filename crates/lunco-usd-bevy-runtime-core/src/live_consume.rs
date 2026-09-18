@@ -14,8 +14,8 @@
 //! `twin_projection`; ordinary authored route edits use the incremental path.
 
 use bevy::prelude::*;
-use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneInfoChanged};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -312,7 +312,7 @@ pub(crate) fn reproject_physics_if_needed(
         return false;
     };
     let (has_rigid_body_api, has_vehicle_context_api) = world
-        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
         .and_then(|stages| stages.get(stage_id))
         .map(|stage| {
             let view = stage.view();
@@ -363,10 +363,10 @@ pub(crate) fn reproject_physics_if_needed(
 /// `on_usd_prim_added` observer, which finds it still present in
 /// [`CanonicalStages`] (we never remove it).
 ///
-/// [`CanonicalStage`]: lunco_usd_bevy_core::canonical::CanonicalStage
-/// [`CanonicalStages`]: lunco_usd_bevy_core::canonical::CanonicalStages
+/// [`CanonicalStage`]: lunco_usd_bevy_stage::canonical::CanonicalStage
+/// [`CanonicalStages`]: lunco_usd_bevy_stage::canonical::CanonicalStages
 pub(crate) fn project_stage_changes(world: &mut World) {
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
 
     if world.get_non_send::<CanonicalStages>().is_none() {
         return;
@@ -482,7 +482,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     // publish a backend-neutral `ModelStateRevision`; the owning model adapter
     // decides whether that state needs a rebuild, reset, or only a live update.
     if connection_paths_changed || input_defaults_changed {
-        if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_bevy_core::UsdWiringDirty>() {
+        if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_bevy_stage::UsdWiringDirty>() {
             dirty.0 = true;
         }
     }
@@ -504,13 +504,13 @@ pub(crate) fn project_stage_changes(world: &mut World) {
 /// reconciliation so every transform channel has one reader and one live
 /// projection owner.
 ///
-/// [`CanonicalStage`]: lunco_usd_bevy_core::canonical::CanonicalStage
+/// [`CanonicalStage`]: lunco_usd_bevy_stage::canonical::CanonicalStage
 pub(crate) fn apply_transform_edits_live(
     world: &mut World,
     id: AssetId<UsdStageAsset>,
     edits: &HashMap<String, TransformEditChannels>,
 ) {
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
     if edits.is_empty() {
         return;
     }
@@ -526,7 +526,7 @@ pub(crate) fn apply_transform_edits_live(
             .iter()
             .filter_map(|(path, channels)| {
                 let sp = SdfPath::new(path).ok()?;
-                match lunco_usd_bevy_core::local_transform_at(&view, &sp, 0.0) {
+                match lunco_usd_bevy_stage::local_transform_at(&view, &sp, 0.0) {
                     Ok(Some(transform)) => Some((path.clone(), *channels, transform)),
                     Ok(None) => None,
                     Err(error) => {
@@ -731,7 +731,7 @@ pub(crate) fn refresh_edited_prims_live(
     id: AssetId<UsdStageAsset>,
     info_only: &[String],
 ) {
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
     if info_only.is_empty() {
         return;
     }
@@ -912,7 +912,7 @@ fn curve_geometry_edit(
         return false;
     };
     world
-        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
         .and_then(|stages| stages.get(stage_id))
         .is_some_and(|stage| {
             matches!(
@@ -935,13 +935,13 @@ fn curve_geometry_edit(
 /// are the only admission gates; the child constructor receives its resolved
 /// parent and does not perform another duplicate lookup.
 ///
-/// [`CanonicalStage`]: lunco_usd_bevy_core::canonical::CanonicalStage
+/// [`CanonicalStage`]: lunco_usd_bevy_stage::canonical::CanonicalStage
 pub(crate) fn reconcile_structural_live(
     world: &mut World,
     id: AssetId<UsdStageAsset>,
     resync_paths: &[String],
 ) {
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::CanonicalStages;
     for path in resync_paths {
         let Ok(sp) = SdfPath::new(path) else { continue };
         // Program source is projected onto the existing owner, while the
@@ -981,9 +981,9 @@ pub(crate) fn reconcile_structural_live(
                 crate::scene::despawn_usd_subtree(world, entity);
             }
             (true, None) => {
-                let parent_path =
-                    path.rsplit_once('/')
-                        .map(|(prefix, _)| if prefix.is_empty() { "/" } else { prefix });
+                let parent_path = path
+                    .rsplit_once('/')
+                    .map(|(prefix, _)| if prefix.is_empty() { "/" } else { prefix });
                 let Some(parent_path) = parent_path else {
                     continue;
                 };
@@ -1000,7 +1000,7 @@ pub(crate) fn reconcile_structural_live(
                     let Some(cs) = stages.get(id) else {
                         continue;
                     };
-                    match lunco_usd_bevy_core::local_transform_at(&cs.view(), &sp, 0.0) {
+                    match lunco_usd_bevy_stage::local_transform_at(&cs.view(), &sp, 0.0) {
                         Ok(Some(transform)) => transform,
                         Ok(None) => Transform::IDENTITY,
                         Err(error) => {
@@ -1026,7 +1026,7 @@ pub(crate) fn reconcile_structural_live(
                         projection.root = Some(entity);
                         world
                             .entity_mut(entity)
-                            .insert((lunco_usd_bevy_core::UsdInstanceRoot, projection));
+                            .insert((lunco_usd_bevy_stage::UsdInstanceRoot, projection));
                     }
                     if let Some(catalog_id) = catalog_id {
                         world
@@ -1100,7 +1100,7 @@ mod tests {
     fn authoring_a_translate_moves_an_already_live_entity() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy_core::canonical::CanonicalStages;
+        use lunco_usd_bevy_stage::canonical::CanonicalStages;
         use lunco_usd_compose::recipe::StageRecipe;
 
         let mut app = App::new();
@@ -1177,8 +1177,8 @@ mod tests {
     fn authoring_a_scale_updates_an_already_live_preview_entity() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy_core::canonical::CanonicalStages;
         use lunco_usd_bevy_scene::UsdPreviewOnly;
+        use lunco_usd_bevy_stage::canonical::CanonicalStages;
         use lunco_usd_compose::recipe::StageRecipe;
 
         let mut app = App::new();
@@ -1252,7 +1252,7 @@ mod tests {
     fn unrelated_resync_preserves_an_already_live_pose() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy_core::canonical::CanonicalStages;
+        use lunco_usd_bevy_stage::canonical::CanonicalStages;
         use lunco_usd_compose::recipe::StageRecipe;
 
         const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1.0\n    upAxis = \"Y\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n        double3 xformOp:translate = (0, -1900, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
@@ -1315,7 +1315,7 @@ mod tests {
     fn descendant_resync_does_not_reproject_an_admitted_vehicle() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy_core::canonical::CanonicalStages;
+        use lunco_usd_bevy_stage::canonical::CanonicalStages;
         use lunco_usd_compose::recipe::StageRecipe;
 
         const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\" (\n        prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysxVehicleContextAPI\"]\n    )\n    {\n    }\n}\n";
@@ -1373,7 +1373,7 @@ mod tests {
     fn sink_drain_projects_spawn_and_despawn() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy_core::canonical::CanonicalStages;
+        use lunco_usd_bevy_stage::canonical::CanonicalStages;
         use lunco_usd_compose::recipe::StageRecipe;
 
         const SCENE: &str =
@@ -1466,7 +1466,7 @@ mod tests {
     fn info_only_reports_both_prim_and_property_paths() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy_core::canonical::CanonicalStages;
+        use lunco_usd_bevy_stage::canonical::CanonicalStages;
         use lunco_usd_compose::recipe::StageRecipe;
 
         let mut app = App::new();

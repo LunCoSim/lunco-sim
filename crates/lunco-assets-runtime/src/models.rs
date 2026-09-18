@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 fn models_root() -> PathBuf {
-    crate::engine_models_root()
+    lunco_assets_core::engine_models_root()
 }
 
 fn source_error(path: &Path, error: impl std::fmt::Display) -> String {
@@ -44,13 +44,16 @@ fn walk_package(
     package_root: &Path,
     out: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
-    let entries = lunco_storage::read_directory_sync(root)
-        .map_err(|error| source_error(root, error))?;
+    let entries =
+        lunco_storage::read_directory_sync(root).map_err(|error| source_error(root, error))?;
     for path in entries {
         if path.is_dir() {
             walk_package(&path, package_root, out)?;
         } else if modelica_file(&path) {
-            out.push((asset_relative_path(&path, package_root), read_source(&path)?));
+            out.push((
+                asset_relative_path(&path, package_root),
+                read_source(&path)?,
+            ));
         }
     }
     Ok(())
@@ -59,8 +62,8 @@ fn walk_package(
 /// Every top-level `*.mo` source, sorted by basename.
 pub fn model_files() -> Result<Vec<(String, String)>, String> {
     let root = models_root();
-    let entries = lunco_storage::read_directory_sync(&root)
-        .map_err(|error| source_error(&root, error))?;
+    let entries =
+        lunco_storage::read_directory_sync(&root).map_err(|error| source_error(&root, error))?;
     let mut files = entries
         .into_iter()
         .filter(|path| path.is_file() && modelica_file(path))
@@ -113,8 +116,8 @@ pub fn package_files(package: &str) -> Result<Vec<(String, String)>, String> {
 /// Top-level structured Modelica packages that contain `package.mo`.
 pub fn package_roots() -> Result<Vec<String>, String> {
     let root = models_root();
-    let entries = lunco_storage::read_directory_sync(&root)
-        .map_err(|error| source_error(&root, error))?;
+    let entries =
+        lunco_storage::read_directory_sync(&root).map_err(|error| source_error(&root, error))?;
     let mut roots = entries
         .into_iter()
         .filter(|path| path.is_dir() && path.join("package.mo").is_file())

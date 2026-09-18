@@ -15,8 +15,8 @@ use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::markers::Callsign;
 use lunco_core::{entity_display_name, CatalogEntryId};
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState};
 use openusd::sdf::Path as SdfPath;
 

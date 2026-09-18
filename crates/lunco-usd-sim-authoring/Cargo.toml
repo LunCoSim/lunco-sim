@@ -6,11 +6,11 @@ license.workspace = true
 description = "Render-free composed USD readers for vehicle simulation authoring"
 
 [dependencies]
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy_ecs = { workspace = true }
 bevy_math = { workspace = true }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-mobility = { path = "../lunco-mobility" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 openusd = { workspace = true }
 
 [lints]

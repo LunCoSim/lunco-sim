@@ -1,6 +1,6 @@
 //! Native worker command scheduling.
 
-use super::{cmd_entity, cmd_session, is_squashable, result_ok, CompileWork};
+use super::{CompileWork, cmd_entity, cmd_session, is_squashable, result_ok};
 use bevy::prelude::Entity;
 use crossbeam_channel::Sender;
 use lunco_modelica_runtime::{ModelicaCommand, ModelicaResult};

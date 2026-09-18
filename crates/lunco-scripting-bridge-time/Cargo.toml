@@ -6,6 +6,7 @@ license.workspace = true
 description = "Simulation clock projections for LunCoSim scripting backends"
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-physics = { path = "../lunco-physics" }

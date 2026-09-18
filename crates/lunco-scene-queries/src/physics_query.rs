@@ -16,8 +16,7 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::{GlobalEntityId, PhysicsStatePending, PhysicsStateReady};
 use lunco_physics::{
-    PhysicsSupportFootprint, PhysicsSupportState, PhysicsWheelContact,
-    PhysicsWheelRaycastFilter,
+    PhysicsSupportFootprint, PhysicsSupportState, PhysicsWheelContact, PhysicsWheelRaycastFilter,
 };
 use lunco_usd_avian_contracts::ShouldBeDynamic;
 use lunco_usd_bevy_scene::UsdPrimPath;

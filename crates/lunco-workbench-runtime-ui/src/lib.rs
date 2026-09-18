@@ -12,13 +12,13 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, PrimaryEguiContext};
+use bevy_egui::{PrimaryEguiContext, egui};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress, Tags,
     TemplateProperties, UiId,
 };
-use lunco_assets_core::{TextAsset, TextAssetCatalog};
+use lunco_assets_runtime::{TextAsset, TextAssetCatalog};
 use lunco_core::exposure::EngineExposures;
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
@@ -471,8 +471,8 @@ struct RuntimeUiManifestPlugin;
 
 impl Plugin for RuntimeUiManifestPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<lunco_assets_core::TextAssetPlugin>() {
-            app.add_plugins(lunco_assets_core::TextAssetPlugin);
+        if !app.is_plugin_added::<lunco_assets_runtime::TextAssetPlugin>() {
+            app.add_plugins(lunco_assets_runtime::TextAssetPlugin);
         }
         app.add_message::<RuntimeUiSurfaceDragged>()
             .add_message::<RuntimeUiSurfaceReset>()

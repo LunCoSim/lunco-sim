@@ -6,6 +6,7 @@ license.workspace = true
 description = "Headless Modelica source admission and Rumoca compiler host"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }

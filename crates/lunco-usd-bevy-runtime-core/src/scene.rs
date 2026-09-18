@@ -8,19 +8,19 @@ use bevy::asset::{AssetEvent, AssetLoadFailedEvent, AssetServer, Handle};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{
-    on_command, register_commands, Command, SceneTransition, SceneTransitionAdmission,
-    SceneTransitionAdmitted, SceneTransitionCompleted, SceneTransitionCoordinator,
-    SceneTransitionFailed, SceneTransitionIntent, SceneTransitionRequest,
+    Command, SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted,
+    SceneTransitionCompleted, SceneTransitionCoordinator, SceneTransitionFailed,
+    SceneTransitionIntent, SceneTransitionRequest, on_command, register_commands,
 };
 use lunco_cosim_core::SimConnection;
 use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_avian_contracts::ScenePhysicsOwned;
-use lunco_usd_bevy_core::{
-    UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
-};
 use lunco_usd_bevy_scene::{
     FailedSceneLoad, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending,
     UsdSceneProjectionQueued, UsdSceneRoot,
+};
+use lunco_usd_bevy_stage::{
+    UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
 };
 
 /// Scene transition transaction: set when a scene load is dispatched, cleared
@@ -947,11 +947,12 @@ mod tests {
             app.world().resource::<CompletedTransitions>().0,
             vec![transition]
         );
-        assert!(app
-            .world()
-            .resource::<SceneTransitionCoordinator>()
-            .active()
-            .is_none());
+        assert!(
+            app.world()
+                .resource::<SceneTransitionCoordinator>()
+                .active()
+                .is_none()
+        );
     }
 
     #[test]

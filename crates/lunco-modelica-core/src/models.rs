@@ -57,7 +57,7 @@ fn extract_tagline(source: &str) -> String {
 /// All bundled models, sorted by filename (stable across desktop/wasm). Builds
 /// the list fresh every call and layers on the Modelica tagline parse.
 pub fn bundled_models() -> Result<Vec<BundledModel>, String> {
-    Ok(lunco_assets_core::models::model_files()?
+    Ok(lunco_assets_runtime::models::model_files()?
         .into_iter()
         .map(|(filename, source)| BundledModel {
             filename,
@@ -68,9 +68,9 @@ pub fn bundled_models() -> Result<Vec<BundledModel>, String> {
 }
 
 /// Get a bundled model's source by filename. Case-sensitive match on the
-/// basename. Thin re-export of [`lunco_assets_core::models::model_source`].
+/// basename. Thin re-export of [`lunco_assets_runtime::models::model_source`].
 pub fn get_model(filename: &str) -> Result<Option<String>, String> {
-    lunco_assets_core::models::model_source(filename)
+    lunco_assets_runtime::models::model_source(filename)
 }
 
 #[cfg(test)]

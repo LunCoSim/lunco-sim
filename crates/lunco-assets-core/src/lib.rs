@@ -1,14 +1,13 @@
-//! Lightweight asset identity, resolution, storage, and source integration for LunCoSim.
+//! Lightweight asset identity, resolution, and storage contracts for LunCoSim.
 //!
 //! This crate is the single source of truth for:
 //! - Cache directory resolution (shared across all git worktrees)
-//! - Asset source registration (`lunco://` and `twin://`, alongside Bevy's
-//!   default asset source)
-//! - Unified asset loading that works across desktop and wasm32 targets
+//! - Canonical `lunco://`/`twin://` identity and cache/Twin-root resolution
+//! - Storage-facing path and byte-resolution contracts used by runtime loaders
 //!
-//! Downloading, dataset orchestration, and offline raster processing live in
-//! the separate `lunco-assets` package so consumers that only resolve assets do
-//! not inherit those heavy native dependencies.
+//! Bevy source registration, discovery, text/script/library loaders, downloading,
+//! dataset orchestration, and offline raster processing live in separate runtime
+//! packages so identity-only consumers do not inherit those dependencies.
 //!
 //! ## Cache Directory Strategy
 //!
@@ -48,34 +47,20 @@
 use std::path::{Path, PathBuf};
 
 pub mod asset_path;
-pub mod asset_read;
-pub mod asset_sources;
 pub mod closure;
-pub mod discovery;
-pub mod font;
-pub mod library;
 /// `lunco://` asset source — the engine asset *library*. Resolves `assets/`
 /// first, then the download cache, so a logical `lunco://` address covers both
 /// git-tracked content and externally-fetched binaries without any authored
 /// file naming the cache. See `docs/architecture/56-asset-resolution-and-cache.md`.
 pub mod lunco_source;
-pub mod models;
 /// Scheme → local filesystem root, as an open registry — the read-side mirror of
 /// [`register_lunco_asset_sources`].
 pub mod scheme_registry;
-pub mod script_source;
-pub mod scripting;
-pub mod text_asset;
 pub mod twin_source;
-/// Generic browser fetch + Cache-Storage + tar.zst-unpack primitives shared by
-/// every bundle distributor (source library, twin bundles). Web-only — native downloads go
-/// through [`download`].
+/// Browser fetch and Cache Storage primitives shared by all wasm asset clients.
 #[cfg(target_arch = "wasm32")]
 pub mod web_fetch;
 
-pub use asset_sources::{
-    register_lunco_asset_sources, register_lunco_asset_types, TwinAssetMounted, TwinRootsPlugin,
-};
 #[cfg(not(target_arch = "wasm32"))]
 pub use closure::{transitive_file_closure, transitive_file_closure_with};
 #[cfg(not(target_arch = "wasm32"))]
@@ -87,9 +72,6 @@ pub use lunco_source::{
     id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
 };
 pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
-pub use text_asset::{
-    TextAsset, TextAssetCatalog, TextAssetEntry, TextAssetLoader, TextAssetPlugin,
-};
 pub use twin_source::{
     parse_twin_uri, split_twin_rel, twin_uri, TwinRoots, TwinRootsError, TWIN_SCHEME,
 };

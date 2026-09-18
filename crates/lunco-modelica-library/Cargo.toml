@@ -6,6 +6,7 @@ license.workspace = true
 description = "Modelica source-library admission, artifacts, and worker bridge"
 
 [dependencies]
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy.workspace = true
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }

@@ -967,7 +967,7 @@ pub(super) fn derive_causal_barrier_participants(world: &mut World) {
         .is_some_and(|revision| revision.sealed)
         && bindings_terminal;
 
-    let mut projection = world.resource_mut::<lunco_core::SimulationBarrierParticipants>();
+    let mut projection = world.resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>();
     if topology_ready {
         projection.replace(participants);
     } else {

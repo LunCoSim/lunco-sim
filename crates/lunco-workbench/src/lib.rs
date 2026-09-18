@@ -51,9 +51,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-use egui_dock::{
-    widgets::tab_viewer::OnCloseResponse, DockArea, DockState, NodeIndex, Style, TabViewer,
-};
+use egui_dock::{widgets::tab_viewer::OnCloseResponse, DockArea, Style, TabViewer};
 use lunco_core::{on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
@@ -75,24 +73,23 @@ use lunco_workbench_widgets::{icon_button_sized, text_editor, UiIcon};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-mod layout;
 mod layout_render;
-mod perspective;
 mod perspective_help;
 mod render;
 mod session;
 mod twin_settings;
 mod viewport;
 
-use layout::{WorkbenchLayout, WorkbenchLayoutStateProvider};
+use lunco_workbench_layout::sanitize_dock_fractions;
+pub(crate) use lunco_workbench_layout::{WorkbenchLayout, WorkbenchLayoutStateProvider};
 pub use render::menu_popup_max_width;
 pub(crate) use render::{
-    dock_group_rects, find_leaf_matching, first_leaf, measured_menu_row_width,
-    measured_titlebar_right_width, menu_item, needs_full_backdrop, new_document_menu_label,
-    perspective_help_anchor, perspective_switcher_tabs, publish_panel_anchor, render_custom_menus,
-    render_edit_menu, render_help_menu, render_network_menu, render_panel_solo,
-    render_settings_menu, render_status_bar_inner, render_time_menu, run_menu_callback,
-    scene_camera_is_rendering, top_menu_mode, truncate_title_to_width, PanelTabViewer, TopMenuMode,
+    dock_group_rects, measured_menu_row_width, measured_titlebar_right_width, menu_item,
+    needs_full_backdrop, new_document_menu_label, perspective_help_anchor,
+    perspective_switcher_tabs, publish_panel_anchor, render_custom_menus, render_edit_menu,
+    render_help_menu, render_network_menu, render_panel_solo, render_settings_menu,
+    render_status_bar_inner, render_time_menu, run_menu_callback, scene_camera_is_rendering,
+    top_menu_mode, truncate_title_to_width, PanelTabViewer, TopMenuMode,
 };
 use render::{
     register_graphics_settings_menu, register_workbench_appearance_settings_menu, render_workbench,
@@ -835,7 +832,7 @@ impl Plugin for WorkbenchPlugin {
                 )
                     .chain(),
             )
-            .add_systems(First, perspective::sync_scene_interaction_mode);
+            .add_systems(First, lunco_workbench_layout::sync_scene_interaction_mode);
         register_all_commands(app);
         app.register_panel(twin_settings::TwinSettingsPanel::default());
         drain_registered_panels(app.world_mut());
@@ -977,67 +974,4 @@ fn maintain_dock_widths(
     };
     layout.enforce_widths(w, sizes.side_browser_px, sizes.right_inspector_px);
     *applied_once = true;
-}
-
-/// Clamp every split fraction in `dock` (across **all** surfaces) to a finite
-/// value in `(0, 1)`, replacing any non-finite fraction with `0.5`.
-///
-/// egui's layout asserts on NaN: a pane rect is `min + dim_size * fraction`,
-/// so a single non-finite `fraction` anywhere in the tree produces a NaN
-/// separator rect and aborts the process in `advance_cursor_after_rect`
-/// ("rect is nan", seen on Windows).
-///
-/// TODO(egui_dock 0.18 — remove the per-frame call in `render_layout` when
-/// this is fixed/updated upstream): egui_dock self-poisons the tree from
-/// inside `show()`. In `egui_dock-0.18.0/src/widgets/dock_area/show/mod.rs`
-/// the separator update runs *every* frame (not just on drag) and computes
-/// `split.fraction = (split.fraction + delta / range).clamp(min, max)`. When a
-/// pane is squeezed to zero width `range == 0`, so with no drag (`delta == 0`)
-/// `delta / range` is `0.0 / 0.0 = NaN`, and `f32::clamp` passes NaN straight
-/// through — writing NaN back into the tree. The fix belongs upstream
-/// (guard `range > 0`); until then we re-assert this invariant around every
-/// `show`. The load-time call in `set_dock_from_json` is independent and stays
-/// regardless — it heals a NaN already serialized to disk.
-/// Replace the `null`s a serialized dock tree uses for non-finite `f32`s.
-///
-/// JSON has no NaN/Inf, so `serde_json` writes any non-finite `f32` as `null`
-/// — which then refuses to deserialize back into `f32`, failing the *entire*
-/// layout parse. Two independent sources produce them:
-///
-/// - `"fraction": null` — a split poisoned by the egui_dock `0.0 / 0.0` bug
-///   (see [`sanitize_dock_fractions`]). Healed to `0.5`.
-/// - `rect` / `viewport` coordinates — `egui::Rect::NOTHING` is `±infinity`,
-///   so any node egui hasn't laid out yet serializes as `null`. Healed to
-///   `0.0`; egui recomputes every rect on the next `show`, so the value is
-///   irrelevant as long as it parses.
-///
-/// Without this pre-pass the user silently loses their dock on every launch,
-/// and `sanitize_dock_fractions` never gets to run — there is no `DockState`
-/// to sanitize yet.
-pub(crate) fn heal_non_finite_nulls(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, v) in map.iter_mut() {
-                match (key.as_str(), v.is_null()) {
-                    ("fraction", true) => *v = serde_json::json!(0.5),
-                    ("x" | "y", true) => *v = serde_json::json!(0.0),
-                    _ => heal_non_finite_nulls(v),
-                }
-            }
-        }
-        serde_json::Value::Array(items) => items.iter_mut().for_each(heal_non_finite_nulls),
-        _ => {}
-    }
-}
-
-pub(crate) fn sanitize_dock_fractions(dock: &mut DockState<TabId>) {
-    for (_surface, node) in dock.iter_all_nodes_mut() {
-        if let egui_dock::Node::Horizontal(s) | egui_dock::Node::Vertical(s) = node {
-            s.fraction = if s.fraction.is_finite() {
-                s.fraction.clamp(0.01, 0.99)
-            } else {
-                0.5
-            };
-        }
-    }
 }

@@ -71,7 +71,7 @@ pub(crate) fn register_client_systems(app: &mut App) {
             // matters: the inbox check comes FIRST so `run_once` only latches
             // when the scan actually runs (IPC-wired builds skip it forever —
             // the IPC path already carries the launch arg).
-            seed_pending_from_deep_link_arg.run_if(lunco_core::gate::tracked(
+            seed_pending_from_deep_link_arg.run_if(lunco_core_runtime::gate::tracked(
                 "net: deep-link argv scan",
                 not(resource_exists::<crate::single_instance::DeepLinkInbox>).and_then(run_once),
             )),

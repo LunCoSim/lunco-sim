@@ -4,7 +4,7 @@
 //! scenario or a policy synced from a peer and mounted as a Twin root over its
 //! cache dir (`twin://<id>/`) — is
 //! reached the same way every other asset is: through an [`AssetSource`] scheme,
-//! resolved by [`crate::asset_path::canonicalize`]. This registry is where the
+//! resolved by [`lunco_assets_path::canonicalize`]. This registry is where the
 //! loaded TEXT of those scripts lands, keyed by that canonical id.
 //!
 //! # Why a registry exists at all
@@ -34,7 +34,7 @@ use bevy::prelude::*;
 
 /// Loaded script text, keyed by canonical asset id (`twin://ep1/lib.rhai`).
 ///
-/// `Arc<RwLock<…>>` mirrors [`crate::twin_source::TwinRoots`]: the map is filled
+/// `Arc<RwLock<…>>` mirrors [`lunco_assets_core::twin_source::TwinRoots`]: the map is filled
 /// by Bevy systems on the main thread and read from a language resolver that must
 /// be `Send + Sync`. Cloning the resource clones the handle, not the contents, so
 /// a resolver can hold one for its lifetime and see later insertions.
@@ -46,7 +46,7 @@ pub struct ScriptSources {
 impl ScriptSources {
     /// Canonical id for a script referenced as `path` from inside `importer`.
     ///
-    /// Delegates entirely to [`crate::asset_path::canonicalize`] — the SAME rule
+    /// Delegates entirely to [`lunco_assets_path::canonicalize`] — the SAME rule
     /// USD references use — then applies `default_ext` if the reference carries no
     /// extension, so `import "lib"` and `import "lib.rhai"` land on one key.
     ///
@@ -58,8 +58,8 @@ impl ScriptSources {
         // top-level script), so absence maps onto the explicit root case rather
         // than an empty anchor that would silently resolve against another root.
         let id = match importer {
-            Some(anchor) => crate::asset_path::canonicalize(path, anchor),
-            None => crate::asset_path::canonicalize_root(path),
+            Some(anchor) => lunco_assets_path::canonicalize(path, anchor),
+            None => lunco_assets_path::canonicalize_root(path),
         };
         // Only the final segment can carry the extension; a dot earlier in the
         // path (a versioned directory, say) must not suppress it.

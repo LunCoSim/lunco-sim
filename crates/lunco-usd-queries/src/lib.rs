@@ -10,7 +10,7 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
-use lunco_usd_bevy_core::UsdRead;
+use lunco_usd_bevy_stage::UsdRead;
 use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 

@@ -104,14 +104,14 @@ pub enum ExamplePathCatalogState {
 /// Candidate external JSON assets from which the example-path catalog is
 /// discovered by its authored kind.
 #[derive(Resource, Clone, Debug)]
-pub struct ExamplePathCatalogAssets(pub Vec<(String, Handle<lunco_assets_core::TextAsset>)>);
+pub struct ExamplePathCatalogAssets(pub Vec<(String, Handle<lunco_assets_runtime::TextAsset>)>);
 
 /// Begin loading the example catalog through Bevy's platform-neutral asset
 /// path. The file is selected from the runtime manifest by its authored kind,
 /// so its location is not a Rust contract.
 pub fn load_example_path_catalog(
     mut commands: Commands,
-    text_assets: Option<Res<lunco_assets_core::TextAssetCatalog>>,
+    text_assets: Option<Res<lunco_assets_runtime::TextAssetCatalog>>,
     existing: Option<Res<ExamplePathCatalogAssets>>,
 ) {
     let Some(text_assets) = text_assets else {
@@ -133,7 +133,7 @@ pub fn load_example_path_catalog(
 /// Publish the catalog only after the external text asset is ready.
 pub fn update_example_path_catalog(
     server: Option<Res<AssetServer>>,
-    assets: Option<Res<Assets<lunco_assets_core::TextAsset>>>,
+    assets: Option<Res<Assets<lunco_assets_runtime::TextAsset>>>,
     candidates: Option<Res<ExamplePathCatalogAssets>>,
     mut registry: ResMut<ExamplePathRegistry>,
     mut state: ResMut<ExamplePathCatalogState>,
@@ -147,7 +147,10 @@ pub fn update_example_path_catalog(
         );
         return;
     };
-    if matches!(*state, ExamplePathCatalogState::Ready | ExamplePathCatalogState::Failed(_)) {
+    if matches!(
+        *state,
+        ExamplePathCatalogState::Ready | ExamplePathCatalogState::Failed(_)
+    ) {
         return;
     }
     let mut pending = false;
@@ -155,7 +158,10 @@ pub fn update_example_path_catalog(
     let mut error = None;
     for (path, handle) in &candidates.0 {
         let Some(asset) = assets.get(handle) else {
-            if !server.get_load_state(handle.id()).is_some_and(|state| state.is_failed()) {
+            if !server
+                .get_load_state(handle.id())
+                .is_some_and(|state| state.is_failed())
+            {
                 pending = true;
             }
             continue;
@@ -168,9 +174,15 @@ pub fn update_example_path_catalog(
         }
         match serde_json::from_value::<ExamplePathRegistry>(value) {
             Ok(loaded) if found.is_none() => found = Some(loaded),
-            Ok(_) => error = Some(format!("more than one asset is marked {EXAMPLE_PATHS_KIND}")),
+            Ok(_) => {
+                error = Some(format!(
+                    "more than one asset is marked {EXAMPLE_PATHS_KIND}"
+                ))
+            }
             Err(parse_error) => {
-                error = Some(format!("{path}: invalid example-path catalog: {parse_error}"))
+                error = Some(format!(
+                    "{path}: invalid example-path catalog: {parse_error}"
+                ))
             }
         }
     }
@@ -1016,5 +1028,4 @@ impl Panel for WelcomePanel {
 #[cfg(test)]
 mod example_path_tests {
     use super::*;
-
 }

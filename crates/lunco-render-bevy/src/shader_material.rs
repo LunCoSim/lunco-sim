@@ -456,7 +456,7 @@ struct ShaderImportCatalog {
 
 fn discover_shader_import_modules(
     mut catalog: ResMut<ShaderImportCatalog>,
-    manifest: Option<Res<lunco_assets_core::discovery::AssetManifest>>,
+    manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
     server: Option<Res<AssetServer>>,
     shaders: Option<Res<Assets<Shader>>>,
 ) {

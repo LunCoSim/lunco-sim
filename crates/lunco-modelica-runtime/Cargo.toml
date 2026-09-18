@@ -6,10 +6,10 @@ license.workspace = true
 description = "Render-free Modelica runtime components, worker protocol, and source assets"
 
 [dependencies]
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 anyhow = { workspace = true }
 bevy.workspace = true
 crossbeam-channel = { workspace = true }
-lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-signal = { path = "../lunco-signal" }

@@ -11,15 +11,15 @@ use openusd::sdf::Value;
 
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy_core::animation::animated_time_range;
-use lunco_usd_bevy_core::canonical::CanonicalStages;
-use lunco_usd_bevy_core::read::{
+use lunco_usd_bevy_scene::{UsdAnimated, UsdPrimPath};
+use lunco_usd_bevy_stage::canonical::CanonicalStages;
+use lunco_usd_bevy_stage::read::{
     attr_has_time_samples, read_primvar_vec3_at, read_token_at, read_vec3_f64_at,
     stage_time_codes_per_second,
 };
-use lunco_usd_bevy_core::{
+use lunco_usd_bevy_stage::{
     compose_xform_order_at, resolve_bound_shader, stage_convention, UsdReadObject, UsdStageAsset,
 };
-use lunco_usd_bevy_scene::{UsdAnimated, UsdPrimPath};
 
 /// Install the USD animation planner and samplers.
 ///
@@ -119,7 +119,7 @@ pub fn plan_usd_animation(
             continue;
         };
 
-        let xform = if lunco_usd_bevy_core::read_xform_op_order(reader, &path).is_some() {
+        let xform = if lunco_usd_bevy_stage::read_xform_op_order(reader, &path).is_some() {
             XformDrive::OpOrder
         } else {
             XformDrive::None

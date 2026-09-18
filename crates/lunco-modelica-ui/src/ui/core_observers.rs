@@ -13,7 +13,7 @@ use lunco_telemetry::TelemetrySettings;
 use lunco_ui::log::LogBuffer;
 use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
 
-use lunco_assets_core::library::{LibraryLoadPhase, LibraryLoadState};
+use lunco_assets_runtime::library::{LibraryLoadPhase, LibraryLoadState};
 
 const SOURCE_LIBRARY_STATUS: &str = "source-library";
 
