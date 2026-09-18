@@ -34,7 +34,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 
-use bevy_egui::egui;
+use egui;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 

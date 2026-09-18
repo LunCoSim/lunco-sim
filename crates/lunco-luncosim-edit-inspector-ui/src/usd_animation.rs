@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use bevy::math::EulerRot;
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 use lunco_doc::DocumentId;
 use lunco_time::{AnimationPreview, Playback};
 use lunco_usd_authoring::author::normalize_value_literal;
@@ -276,7 +276,7 @@ fn animation_time_label(time: f64, tcps: f64) -> String {
 /// Paint key creation/removal for the selected USD prim. Playback controls stay
 /// in Environment and continue to use the existing `ControlAnimation` command.
 pub fn authored_animation_section(
-    ui: &mut bevy_egui::egui::Ui,
+    ui: &mut egui::Ui,
     ctx: &mut lunco_workbench_core::PanelCtx,
     entity: Entity,
 ) {

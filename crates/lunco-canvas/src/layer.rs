@@ -31,7 +31,7 @@
 //! - Unit-testable in isolation — the grid layer doesn't need a
 //!   scene, just a viewport.
 
-use bevy_egui::egui;
+use egui;
 use lunco_theme::ColorAlpha;
 use smol_str::SmolStr;
 

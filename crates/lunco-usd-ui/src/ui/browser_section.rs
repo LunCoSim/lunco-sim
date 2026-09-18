@@ -8,7 +8,7 @@
 //! viewport intent through typed commands. No `&mut World`, no inline
 //! parse, no resource take-and-restore.
 
-use bevy_egui::egui;
+use egui;
 use lunco_doc::DocumentId;
 use lunco_workbench_browser::{
     BrowserAction, BrowserCtx, BrowserQuery, BrowserScope, BrowserSection,

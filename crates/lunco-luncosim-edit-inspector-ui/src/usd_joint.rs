@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 use lunco_doc::DocumentId;
 use lunco_usd_authoring::author::normalize_value_literal;
 use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages, stage_convention};

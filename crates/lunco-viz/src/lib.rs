@@ -13,7 +13,8 @@
 //!
 //! Everything that renders — viz kinds, `VizPanel`, the registry
 //! plumbing, [`LuncoVizPlugin`] — sits behind the `ui` feature (off by
-//! default), which is what links bevy_egui/egui_plot/workbench. A plain
+//! default), which is what links the Bevy presentation adapter,
+//! `egui_plot`, and the workbench contracts. A plain
 //! dependency gets only the [`signal`] re-export of `lunco-signal`, so
 //! it stays render-free.
 

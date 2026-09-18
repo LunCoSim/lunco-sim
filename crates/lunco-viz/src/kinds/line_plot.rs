@@ -17,7 +17,7 @@
 //! [`LinePlotStyle`] (serde JSON) so the choice survives save/reload.
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 use egui_plot::{Corner, Legend, Line, Plot, PlotPoints};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -560,7 +560,7 @@ impl LinePlot {
         let mut plot = Plot::new(("line_plot", config.id.raw()))
             .width(remaining.x)
             .height(remaining.y)
-            .auto_bounds(bevy_egui::egui::emath::Vec2b::new(true, true))
+            .auto_bounds(egui::emath::Vec2b::new(true, true))
             // Hover any line → name + time + de-logged value.
             .label_formatter(move |pos| {
                 // egui_plot 0.36 unified the (name, point) args into `HoverPosition`.

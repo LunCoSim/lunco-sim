@@ -9,7 +9,7 @@
 //! selected file; "Save & Update" then dispatches the standard `OpenFile`
 //! command so its owning domain can refresh it.
 
-use bevy_egui::egui;
+use egui;
 use lunco_doc_bevy::rename::RenameOpenDocument;
 use lunco_workbench_core::source::{is_source_only_text_path, OpenTwinSource};
 use lunco_workspace::rename::RenameTwinEntry;

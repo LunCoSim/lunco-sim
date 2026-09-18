@@ -8,12 +8,13 @@ description = "LunCoSim's generic canvas — stateful Scene + Viewport + pluggab
 [features]
 # A default (no-feature) dependency on this crate is egui-free: the data
 # model (Scene / Viewport / Selection / Tool / events) compiles on its own.
-# `ui` turns on the egui render stack — Canvas, layers, overlays, visuals.
+# `ui` turns on the egui presentation layer — Canvas, layers, overlays,
+# and visuals. The Bevy/egui host remains the responsibility of the consumer.
 default = []
-ui = ["dep:bevy_egui", "dep:lunco-theme"]
+ui = ["dep:egui", "dep:lunco-theme"]
 
 [dependencies]
-bevy_egui = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
 lunco-theme = { path = "../lunco-theme", optional = true }
 indexmap = { workspace = true }
 serde = { workspace = true }

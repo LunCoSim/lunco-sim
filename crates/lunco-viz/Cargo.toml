@@ -9,11 +9,12 @@ description = "LunCoSim's visualization framework — signals, viz kinds, and vi
 # A default (no-feature) dependency on this crate is egui-free: it exposes
 # only the `signal` re-export of `lunco-signal`. Everything that renders —
 # viz kinds, VizPanel, the registry plumbing, `LuncoVizPlugin` — sits
-# behind `ui`, which is what links bevy_egui/egui_plot/workbench.
+# behind `ui`, which is what links the Bevy presentation adapter,
+# `egui_plot`, and the workbench contracts.
 default = []
 ui = [
     "dep:bevy",
-    "dep:bevy_egui",
+    "dep:egui",
     "dep:egui_plot",
     "dep:lunco-workbench-core",
     "dep:lunco-workbench-widgets",
@@ -29,7 +30,7 @@ ui = [
 [dependencies]
 lunco-viz-core = { path = "../lunco-viz-core" }
 bevy = { workspace = true, optional = true }
-bevy_egui = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
 egui_plot = { workspace = true, optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets", optional = true }

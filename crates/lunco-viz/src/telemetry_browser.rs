@@ -53,7 +53,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::SettingsSection;

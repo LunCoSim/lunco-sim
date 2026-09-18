@@ -20,7 +20,7 @@
 //! every open document, saved + unsaved).
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 
 use crate::twin_browser::{
     render_search_bar, BrowserActions, BrowserCtx, BrowserScope, BrowserSectionRegistry,

@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
-use bevy_egui::egui;
+use egui;
 use lunco_core::{on_command, register_commands};
 use lunco_doc_bevy::OpenFile;
 use lunco_workbench_widgets::text_editor;

@@ -4,7 +4,7 @@
 //! module owns only egui plot policy: legends, line styles, log-Y rendering,
 //! hover text, fit requests, overlays, and the optional scrub cursor.
 
-use bevy_egui::egui;
+use egui;
 use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, VLine};
 
 /// Stroke style for a multi-series curve.

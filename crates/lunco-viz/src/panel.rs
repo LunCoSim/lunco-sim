@@ -13,7 +13,7 @@
 //! firing `OpenTab`.
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 use lunco_workbench_core::commands::CloseTab;
 use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 

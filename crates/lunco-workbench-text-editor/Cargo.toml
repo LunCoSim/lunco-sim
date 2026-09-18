@@ -7,7 +7,7 @@ description = "Reusable generic text source editor for LunCoSim workbench hosts"
 
 [dependencies]
 bevy = { workspace = true }
-bevy_egui = { workspace = true }
+egui = { workspace = true }
 crossbeam-channel = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }

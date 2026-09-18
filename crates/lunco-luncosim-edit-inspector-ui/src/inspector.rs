@@ -12,7 +12,7 @@
 //! the egui pass.
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 use lunco_control_core::{EguiFocus, IntentState, UserIntent};
 use lunco_core::OpId;
 use lunco_doc::Document;

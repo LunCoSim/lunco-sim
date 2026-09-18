@@ -19,7 +19,7 @@
 //! The Y axis is flipped: Modelica `+Y up` → egui `+Y down`. The
 //! [`coord_xform`] helper is the only place that flip happens.
 
-use bevy_egui::egui;
+use egui;
 
 use lunco_modelica_ast::annotations::{
     Arrow, Bitmap, Color, CoordinateSystem, Ellipse, EllipseClosure, Extent, FillPattern,

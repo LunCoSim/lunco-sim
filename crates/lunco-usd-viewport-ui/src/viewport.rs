@@ -1,7 +1,7 @@
 //! Workbench panels for the USD preview render runtime.
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_document::document::UsdDocument;

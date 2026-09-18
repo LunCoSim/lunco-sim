@@ -63,6 +63,6 @@ impl ViewTarget {
 /// structurally impossible. `ui` and `wb` are separate fields so reads
 /// (`wb`) and painting (`ui`) borrow disjointly.
 pub struct Panel2DCtx<'a, 'w> {
-    pub ui: &'a mut bevy_egui::egui::Ui,
+    pub ui: &'a mut egui::Ui,
     pub wb: &'a mut lunco_workbench_core::PanelCtx<'w>,
 }

@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::prelude::Entity;
-use bevy_egui::egui;
+use egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use lunco_canvas::scene::Node;
 use lunco_canvas::{visual::DrawCtx, NodeVisual};

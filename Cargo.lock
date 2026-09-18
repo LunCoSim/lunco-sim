@@ -7353,7 +7353,7 @@ dependencies = [
 name = "lunco-canvas"
 version = "0.1.0"
 dependencies = [
- "bevy_egui",
+ "egui",
  "indexmap",
  "lunco-theme",
  "serde",
@@ -7855,8 +7855,8 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
- "bevy_egui",
  "big_space",
+ "egui",
  "lunco-api",
  "lunco-assets-core",
  "lunco-celestial",
@@ -8233,7 +8233,7 @@ dependencies = [
 name = "lunco-modelica-docs-ui"
 version = "0.1.0"
 dependencies = [
- "bevy_egui",
+ "egui",
  "egui_commonmark",
  "htmd",
  "lunco-workbench-core",
@@ -8297,7 +8297,7 @@ name = "lunco-modelica-icon-ui"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bevy_egui",
+ "egui",
  "egui_extras",
  "image",
  "lunco-assets-core",
@@ -9733,7 +9733,7 @@ name = "lunco-usd-prim-tree-ui"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
- "bevy_egui",
+ "egui",
  "lunco-core",
  "lunco-render",
  "lunco-scene-selection",
@@ -9995,7 +9995,7 @@ name = "lunco-usd-ui"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bevy_egui",
+ "egui",
  "lunco-assets-core",
  "lunco-core-session",
  "lunco-doc",
@@ -10071,7 +10071,7 @@ name = "lunco-usd-viewport-ui"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
- "bevy_egui",
+ "egui",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-usd-document",
@@ -10094,7 +10094,7 @@ name = "lunco-viz"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bevy_egui",
+ "egui",
  "egui_plot",
  "lunco-canvas",
  "lunco-core",
@@ -10166,7 +10166,7 @@ name = "lunco-workbench-browser"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
- "bevy_egui",
+ "egui",
  "lunco-assets-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -10194,7 +10194,7 @@ name = "lunco-workbench-datasets-ui"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
- "bevy_egui",
+ "egui",
  "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-workbench-browser",
@@ -10285,8 +10285,8 @@ name = "lunco-workbench-text-editor"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
- "bevy_egui",
  "crossbeam-channel",
+ "egui",
  "lunco-assets-core",
  "lunco-core",
  "lunco-doc-bevy",
@@ -10303,7 +10303,7 @@ dependencies = [
 name = "lunco-workbench-widgets"
 version = "0.1.0-dev"
 dependencies = [
- "bevy_egui",
+ "egui",
 ]
 
 [[package]]

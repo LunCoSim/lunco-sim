@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bevy_egui::egui;
+use egui;
 
 use super::{
     path_tree::{build_path_tree, PathTree},

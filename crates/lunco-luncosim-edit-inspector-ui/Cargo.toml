@@ -15,7 +15,7 @@ bevy = { workspace = true, features = [
     "bevy_anti_alias",
     "bevy_gizmos",
 ] }
-bevy_egui = { workspace = true }
+egui = { workspace = true }
 openusd = { workspace = true }
 avian3d = { workspace = true }
 big_space.workspace = true

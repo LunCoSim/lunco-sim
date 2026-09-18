@@ -138,7 +138,7 @@ pub fn display_channel_label(
 }
 
 #[cfg(feature = "ui")]
-use bevy_egui::egui;
+use egui;
 
 /// Deterministic colour for a signal path, shared across every plot surface (panel
 /// `Graphs`, `VizPanel`, in-canvas `PlotNodeVisual`, the inspector). Same `path` ⇒ same

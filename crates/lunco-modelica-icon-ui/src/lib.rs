@@ -15,7 +15,7 @@ pub use image_loader::ModelicaImageLoader;
 ///
 /// The caller owns the one-time Bevy scheduling guard; this function only
 /// installs the egui loaders once its context is ready.
-pub fn install_image_loaders(ctx: &bevy_egui::egui::Context) {
+pub fn install_image_loaders(ctx: &egui::Context) {
     egui_extras::install_image_loaders(ctx);
     ctx.add_bytes_loader(std::sync::Arc::new(ModelicaImageLoader::new()));
 }

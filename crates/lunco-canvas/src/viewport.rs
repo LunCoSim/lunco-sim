@@ -144,7 +144,7 @@ impl Viewport {
     /// factor (rare), physical size is off by that factor. No cross-
     /// platform API exposes true physical DPI, so this is as good
     /// as any general-purpose UI toolkit gets.
-    pub fn physical_mm_zoom(ctx: &bevy_egui::egui::Context) -> f32 {
+    pub fn physical_mm_zoom(ctx: &egui::Context) -> f32 {
         // egui points correspond to physical pixels at 1x scaling.
         // Multiplying pixels_per_point * 25.4 gives "physical pixels
         // per inch" as the system sees it. Dividing by 25.4 gives

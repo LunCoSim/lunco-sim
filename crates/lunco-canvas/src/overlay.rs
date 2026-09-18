@@ -19,7 +19,7 @@
 //! ~100-200 LOC. Nothing in the canvas core changes to add any of
 //! them.
 
-use bevy_egui::egui;
+use egui;
 use lunco_theme::ColorAlpha;
 
 use crate::scene::{Rect, Scene};

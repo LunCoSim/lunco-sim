@@ -27,7 +27,7 @@
 
 use std::sync::Arc;
 
-use bevy_egui::egui::{self, PointerButton};
+use egui::{self, PointerButton};
 use smallvec::SmallVec;
 
 use crate::event::{InputEvent, Modifiers, MouseButton, SceneEvent};

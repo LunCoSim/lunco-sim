@@ -37,7 +37,7 @@
 //!   `lunco-modelica-core` as `ModelicaSection`, registered by its plugin.
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 

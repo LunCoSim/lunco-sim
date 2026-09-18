@@ -7,7 +7,7 @@ description = "Optional Twin dataset controls for the LunCoSim workbench browser
 
 [dependencies]
 bevy = { workspace = true }
-bevy_egui = { workspace = true }
+egui = { workspace = true }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }

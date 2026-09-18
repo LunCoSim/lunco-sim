@@ -25,7 +25,7 @@
 //!
 //! # Feature `ui`
 //!
-//! The egui render stack — [`canvas`], [`layer`], [`overlay`],
+//! The egui presentation layer — [`canvas`], [`layer`], [`overlay`],
 //! [`visual`] — sits behind the `ui` feature (off by default). A
 //! plain dependency gets the data model only (`scene` / `viewport` /
 //! `selection` / `tool` / `event`) and links no `bevy_egui`, so

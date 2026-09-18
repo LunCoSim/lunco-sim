@@ -10,7 +10,7 @@ description = "LunCoSim's interactive USD browser and preview UI"
 # runtime. It names Bevy asset resources directly; render, camera, lighting,
 # and post-process features belong to `lunco-usd-viewport-runtime`.
 bevy = { workspace = true, features = ["bevy_asset"] }
-bevy_egui = { workspace = true }
+egui = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc = { path = "../lunco-doc" }

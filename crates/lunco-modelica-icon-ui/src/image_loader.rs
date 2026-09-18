@@ -33,7 +33,7 @@
 //! back to their `alt` text, exactly as before. The fix is one step in the
 //! bundler, and this loader needs no change when it lands.
 
-use bevy_egui::egui;
+use egui;
 use std::sync::{Arc, Mutex};
 
 /// MIME type inferred from the URI's extension. Handed to egui's

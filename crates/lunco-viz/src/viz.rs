@@ -68,7 +68,7 @@ pub struct SignalBinding {
     /// User-chosen line/marker color, if any. `None` means
     /// "auto-assign from the palette".
     #[serde(default, with = "color_opt")]
-    pub color: Option<bevy_egui::egui::Color32>,
+    pub color: Option<egui::Color32>,
     /// Whether the binding currently contributes to the render.
     /// Click-to-toggle on the legend flips this without deleting the
     /// binding.
@@ -99,7 +99,7 @@ fn default_true() -> bool {
 // Small serde glue for `Option<Color32>` — keeps workspace files
 // human-readable (`[r, g, b]` / `null`).
 mod color_opt {
-    use bevy_egui::egui::Color32;
+    use egui::Color32;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub(super) fn serialize<S: Serializer>(c: &Option<Color32>, s: S) -> Result<S::Ok, S::Error> {

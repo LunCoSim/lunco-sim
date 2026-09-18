@@ -41,7 +41,7 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use egui;
 use lunco_assets_core::TwinRoots;
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};

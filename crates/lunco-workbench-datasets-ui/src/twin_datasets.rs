@@ -6,7 +6,7 @@
 //! individual Twin resource follows the exact same owned-operation and
 //! processing lifecycle.
 
-use bevy_egui::egui;
+use egui;
 use lunco_assets_datasets::{
     CancelDataset, DatasetEntry, DatasetRegistry, DatasetScope, DatasetState, RequestDataset,
 };
