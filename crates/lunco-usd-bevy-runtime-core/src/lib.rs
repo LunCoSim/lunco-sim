@@ -1,7 +1,8 @@
 //! Headless-safe USD scene admission and live projection runtime.
 //!
-//! This package owns the scene/Twin lifecycle, runtime-overlay persistence,
-//! live document-to-stage projection, and generic USD runtime consumption.
+//! This package owns the scene/Twin lifecycle, live document-to-stage
+//! projection, and generic USD runtime consumption. Twin-scoped runtime-overlay
+//! persistence is composed from `lunco-usd-bevy-runtime-persistence`.
 //! Authored controls and executable programs are installed here after visual
 //! scene admission, so the visual projector remains a reusable presentation
 //! adapter. The Bevy scene-property port backend is a separate package and is
@@ -18,7 +19,6 @@ use bevy::prelude::{App, IntoScheduleConfigs, Plugin};
 mod control_runtime;
 mod live_consume;
 mod program_runtime;
-mod runtime_persistence;
 pub mod scene;
 mod scene_runtime;
 mod schema_assets;
@@ -77,8 +77,7 @@ impl Plugin for UsdSceneRuntimePlugin {
                 ));
             },
         );
-        app.add_observer(runtime_persistence::on_doc_opened_load_runtime);
-        app.add_observer(runtime_persistence::on_doc_changed_save_runtime);
+        app.add_plugins(lunco_usd_bevy_runtime_persistence::UsdRuntimePersistencePlugin);
 
         app.init_resource::<twin_projection::PendingTwinDocs>();
         app.init_resource::<lunco_usd_bevy_twin::TwinProjectionWake>();

@@ -1,0 +1,24 @@
+[package]
+name = "lunco-usd-bevy-runtime-persistence"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Twin-scoped USD runtime overlay persistence for Bevy hosts"
+
+[dependencies]
+bevy = { workspace = true }
+openusd = { workspace = true }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-storage = { path = "../lunco-storage" }
+lunco-twin = { path = "../lunco-twin" }
+lunco-usd-authoring = { path = "../lunco-usd-authoring" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-workspace = { path = "../lunco-workspace" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

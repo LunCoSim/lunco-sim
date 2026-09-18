@@ -1,4 +1,4 @@
-//! Runtime-layer persistence (C5-A).
+//! Twin-scoped runtime-layer persistence (C5-A).
 //!
 //! A [`UsdDocument`](lunco_usd_document::document::UsdDocument) has two layers: the authored
 //! `base` (serialized to the scene `.usda` on Save) and a generated `runtime`
@@ -71,7 +71,7 @@ fn twin_for_path<'a>(
 /// Omitted means disabled. A malformed value is an authoring error and is
 /// returned to the caller so the owner can report it rather than silently
 /// interpreting a typo as permission to write project state.
-pub(crate) fn runtime_persistence_enabled(
+fn runtime_persistence_enabled(
     workspace: &WorkspaceResource,
     doc_path: &Path,
 ) -> Result<bool, String> {
@@ -128,15 +128,14 @@ fn runtime_has_content(runtime: &openusd::sdf::Data) -> bool {
 /// transforms) from `.lunco/runtime/…`, if one exists and the runtime layer is
 /// still empty. No-op for untitled / non-twin docs or when no overlay exists.
 ///
-/// Two callers share this: the twin drain ([`drain_pending_twin_docs`]
-/// (crate::twin_projection::drain_pending_twin_docs)), which restores BEFORE the
+/// Two callers share this: the Twin projection drain, which restores BEFORE the
 /// scene's first mount so the single stage build composes `base ⊕ runtime`, and
 /// the [`DocumentOpened`] observer (every other doc-open path — the observer
 /// fires on a later command flush, too late for the twin mount). The
 /// empty-runtime guard makes whichever runs second a no-op instead of a second
 /// generation bump — whose synthetic `ReplaceSource` marker would force a
 /// whole-scene rebuild (every prim despawned + respawned).
-pub(crate) fn restore_doc_runtime(
+pub fn restore_doc_runtime(
     workspace: &WorkspaceResource,
     registry: &mut DocumentRegistry<UsdDocument>,
     doc: DocumentId,
@@ -193,7 +192,7 @@ pub(crate) fn restore_doc_runtime(
 /// Load a freshly-opened USD document's persisted runtime overlay on
 /// [`DocumentOpened`], so session state survives reload — see
 /// [`restore_doc_runtime`] (a no-op when the twin drain already restored it).
-pub(crate) fn on_doc_opened_load_runtime(
+fn on_doc_opened_load_runtime(
     trigger: On<DocumentOpened>,
     workspace: Option<Res<WorkspaceResource>>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
@@ -219,7 +218,7 @@ pub(crate) fn on_doc_opened_load_runtime(
 /// changes. The runtime layer holds generated state (spawns / moves) excluded
 /// from the authored scene Save, so it has its own file. Skips docs with an
 /// empty runtime layer (nothing to persist) or no twin-rooted path.
-pub(crate) fn on_doc_changed_save_runtime(
+fn on_doc_changed_save_runtime(
     trigger: On<DocumentChanged>,
     workspace: Option<Res<WorkspaceResource>>,
     registry: Res<DocumentRegistry<UsdDocument>>,
@@ -256,6 +255,16 @@ pub(crate) fn on_doc_changed_save_runtime(
     };
     if let Err(e) = write_bytes(&path, text.as_bytes()) {
         warn!("[usd-runtime] save to {} failed: {e}", path.display());
+    }
+}
+
+/// Install Twin-scoped runtime overlay load/save observers.
+pub struct UsdRuntimePersistencePlugin;
+
+impl Plugin for UsdRuntimePersistencePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(on_doc_opened_load_runtime);
+        app.add_observer(on_doc_changed_save_runtime);
     }
 }
 

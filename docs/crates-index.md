@@ -100,7 +100,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
 | **`lunco-usd-commands`** | Headless USD document and authoring command boundary: document kind registration, open/new/save/undo/redo, document lifecycle, and typed USD authoring commands. It owns no scene admission or visual projection. |
-| **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, runtime persistence, live document-to-stage projection, generic authored control/program runtime surfaces, and generic projection-change boundaries consumed by domain adapters. |
+| **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, live document-to-stage projection, generic authored control/program runtime surfaces, and generic projection-change boundaries consumed by domain adapters. Runtime overlay persistence is composed from `lunco-usd-bevy-runtime-persistence`. |
+| **`lunco-usd-bevy-runtime-persistence`** | Twin-scoped persistence of the generated USD runtime overlay through the shared storage boundary. It owns the opt-in load/save observers and restore operation; it has no scene projection or UI policy. |
 | **`lunco-usd-bevy-scene-ports`** | Reusable Bevy adapter for USD-connected scene-property sinks: light intensity/radius/color channels and transform components. It owns the `PortBackend` and lifecycle markers; the aggregate USD runtime installs it explicitly. |
 | **`lunco-usd-bevy-runtime`** | Application-level composition of the USD runtime, visual, diagnostics, physics, simulation, and document-command plugins. The default `simulation` feature includes the standard vehicle/simulation projector; lean hosts can omit it, while the Modelica/Rhai co-simulation projection is opt-in through `cosim` (which implies `simulation`). |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
@@ -597,11 +598,17 @@ orchestration or UI presentation. Their public query contracts are tested in
 
 **`lunco-usd-bevy-runtime-core`**
 Headless-safe scene runtime boundary. Installs scene admission, Twin-backed
-stage loading, runtime persistence, live document-to-stage projection, generic
-authored info-change publication, authored control/program projection, scene
+stage loading, live document-to-stage projection, generic authored info-change
+publication, authored control/program projection, scene
 commands, and the stage terminal-outcome contract. It does not assemble the
 complete visual,
 diagnostics, physics, simulation, or document-command bundle.
+
+**`lunco-usd-bevy-runtime-persistence`**
+Twin-scoped runtime-overlay persistence boundary. It installs the opt-in
+document-open/document-change observers and restores or stores the generated
+USD runtime layer through `lunco-storage`; it does not own scene projection or
+UI policy.
 
 **`lunco-usd-bevy-scene-ports`**
 Reusable Bevy scene-property port backend. It exposes connected light channels

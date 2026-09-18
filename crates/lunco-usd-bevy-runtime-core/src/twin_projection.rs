@@ -509,7 +509,7 @@ pub(crate) fn drain_pending_twin_docs(
         // after the stage load has already read its bytes. Guarded: whichever
         // runs second is a no-op.
         if let Some(ws) = workspace.as_deref() {
-            crate::runtime_persistence::restore_doc_runtime(ws, &mut registry, doc);
+            lunco_usd_bevy_runtime_persistence::restore_doc_runtime(ws, &mut registry, doc);
         }
         // Publish the composed source as the twin overlay so the stage build
         // reads `base ⊕ runtime`, and mark both projection cursors at this generation —

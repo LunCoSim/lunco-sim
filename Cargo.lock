@@ -9604,12 +9604,30 @@ dependencies = [
  "lunco-usd-authoring",
  "lunco-usd-avian-contracts",
  "lunco-usd-bevy-core",
+ "lunco-usd-bevy-runtime-persistence",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-twin",
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-usd-document",
  "lunco-usd-sim-core",
+ "lunco-workspace",
+ "openusd",
+ "tempfile",
+]
+
+[[package]]
+name = "lunco-usd-bevy-runtime-persistence"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-storage",
+ "lunco-twin",
+ "lunco-usd-authoring",
+ "lunco-usd-core",
+ "lunco-usd-document",
  "lunco-workspace",
  "openusd",
  "tempfile",

@@ -6,7 +6,7 @@ license.workspace = true
 description = "Headless-safe USD scene admission and live projection runtime"
 
 [dependencies]
-bevy = { workspace = true }
+bevy = { workspace = true, features = ["bevy_light"] }
 big_space = { workspace = true }
 openusd = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
@@ -28,6 +28,7 @@ lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
+lunco-usd-bevy-runtime-persistence = { path = "../lunco-usd-bevy-runtime-persistence" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
