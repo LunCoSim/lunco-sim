@@ -92,7 +92,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-core-session`](#lunco-core-session) (3 commands)
 - [`lunco-cosim-core`](#lunco-cosim-core) (3 commands)
 - [`lunco-input-ui`](#lunco-input-ui) (1 command)
-- [`lunco-luncosim-core`](#lunco-luncosim-core) (1 command)
+- [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
 - [`lunco-luncosim-ui`](#lunco-luncosim-ui) (2 commands)
 - [`lunco-modelica-api`](#lunco-modelica-api) (7 commands)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
@@ -2145,7 +2145,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `enabled` | `bool` |  `true` to show the overlay, `false` to hide it. |
 
-### `lunco-luncosim-core` <a id="lunco-luncosim-core"></a>
+### `lunco-luncosim-runtime` <a id="lunco-luncosim-runtime"></a>
 
 #### `SetRhaiPolicy`
 
@@ -2166,7 +2166,7 @@ actually call, with the fields the deserializer actually accepts. See the
  raw `ApplyUsdOp` path still works. Single active scene doc for now (mirrors the
  journal drivers).
 
-- *defined in:* `crates/lunco-luncosim-core/src/lib.rs`
+- *defined in:* `crates/lunco-luncosim-runtime/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|

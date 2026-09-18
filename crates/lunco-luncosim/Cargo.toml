@@ -8,7 +8,7 @@ default-run = "luncosim"
 autobins = false
 
 # This package is the windowed application shell. The headless runtime is owned
-# by the sibling `lunco-luncosim-core` package and launched directly by the
+# by the sibling `lunco-luncosim-runtime` package and launched directly by the
 # `lunco-luncosim-server` package.
 [lib]
 name = "lunco_luncosim"
@@ -43,6 +43,7 @@ lunco-cosim-core = { path = "../lunco-cosim-core", optional = true }
 lunco-doc = { path = "../lunco-doc", optional = true }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false, optional = true }
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
+lunco-luncosim-runtime = { path = "../lunco-luncosim-runtime", default-features = false }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
 lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
 lunco-networking-core = { path = "../lunco-networking-core", optional = true }
@@ -99,13 +100,14 @@ luncosim = []
 # server comes from `lunco-api-transport/transport-http` (added to `default` above);
 # the wasm build gets the
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
-api-transport = ["lunco-luncosim-core/api-transport", "lunco-luncosim-ui?/api-transport"]
+api-transport = ["lunco-luncosim-core/api-transport", "lunco-luncosim-runtime/api-transport", "lunco-luncosim-ui?/api-transport"]
 # Native HTTP API transport (axum/TcpListener) — also the gate for the in-app
 # rhai REPL panel, which needs `lunco_api_transport::ApiBridge` (present under this feature
 # on native, and always on wasm). In `default` + `server`; the wasm build gets
 # the bridge automatically via `cfg(target_arch="wasm32")`.
 transport-http = [
     "lunco-luncosim-core/transport-http",
+    "lunco-luncosim-runtime/transport-http",
     "lunco-luncosim-ui?/transport-http",
 ]
 # Multiplayer over WebTransport (lightyear). Pulls in the real networking
@@ -120,6 +122,7 @@ networking = [
     "dep:lunco-doc",
     "dep:lunco-doc-bevy",
     "lunco-luncosim-core/networking",
+    "lunco-luncosim-runtime/networking",
     "lunco-luncosim-ui?/networking",
     "dep:lunco-networking",
     "dep:lunco-networking-core",
@@ -134,10 +137,11 @@ net-diag = ["networking", "lunco-luncosim-core/net-diag"]
 python = [
     "lunco-scripting/python",
     "lunco-luncosim-core/python",
+    "lunco-luncosim-runtime/python",
     "lunco-luncosim-ui?/python",
 ]
 native-plugins = [
-    "lunco-luncosim-core/native-plugins",
+    "lunco-luncosim-runtime/native-plugins",
     "lunco-scripting/native-plugins",
 ]
 # Optional HTTPS support for `luncosim rhai --api-url`; local loopback HTTP

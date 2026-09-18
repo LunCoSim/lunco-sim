@@ -68,7 +68,7 @@ pub(crate) fn register(app: &mut App) {
 /// would re-persist and loop. So a persisted render tweak round-trips on reload
 /// and syncs to peers (the prim rides the USD journal → each peer recomposes →
 /// each peer's projector applies) with no bespoke broadcast. Change-gated on
-/// total stage generation + count, like [`project_usd_policies`]. UI-gated: the
+/// total stage generation + count, like the runtime policy projector. UI-gated: the
 /// knobs are render/camera state; the headless server has no cameras to apply to.
 /// What the scene AUTHORED, held independently of what currently exists to
 /// apply it to.

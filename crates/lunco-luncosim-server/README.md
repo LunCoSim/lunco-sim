@@ -3,14 +3,15 @@
 Headless launcher for the LunCo luncosim.
 
 The same simulation runtime as the `luncosim` GUI, linked through the
-headless-safe `lunco-luncosim-core` package. The GUI shell is not a dependency:
+headless-safe `lunco-luncosim-runtime` and `lunco-luncosim-core` packages. The
+GUI shell is not a dependency:
 no winit, egui, workbench, or render/UI code is compiled for this binary.
 `src/main.rs` is a 3-line launcher that calls
-`lunco_luncosim_core::run_headless()`.
+`lunco_luncosim_runtime::run_headless()`.
 
 ```rust
-fn main() -> lunco_luncosim_core::AppExit {
-    lunco_luncosim_core::run_headless()
+fn main() -> lunco_luncosim_runtime::AppExit {
+    lunco_luncosim_runtime::run_headless()
 }
 ```
 
@@ -20,9 +21,9 @@ fn main() -> lunco_luncosim_core::AppExit {
 ## Why a separate crate
 
 This package is a deliberately thin launcher around the production
-`lunco-luncosim-core` runtime. Keeping the launcher separate makes the server
-binary select the core package's empty default feature set while the GUI shell
-retains its independent desktop feature set.
+`lunco-luncosim-runtime` package. Keeping the launcher separate makes the
+server binary select the runtime's empty default feature set while the GUI
+shell retains its independent desktop feature set.
 
 ```bash
 cargo run -p lunco-luncosim-server     # headless, NO flags needed

@@ -43,8 +43,10 @@ project USD data. Its `default_plugins()` is built from Bevy's
 chooses its execution mode. It adds only logging, diagnostics, input/state,
 `AssetPlugin`, and the USD data stores. It never constructs `DefaultPlugins`,
 `RenderPlugin`, `PbrPlugin`, `PostProcessPlugin`, a window backend, or a GPU
-resource. This remains true when a GUI package is built in the same Cargo
-feature-unified invocation.
+resource. The application-level Rhai/policy integration is supplied by
+`lunco-luncosim-runtime`, so scripting changes do not belong to the generic
+core's source or dependency closure. This remains true when a GUI package is
+built in the same Cargo feature-unified invocation.
 
 The windowed `lunco-luncosim-ui` boundary owns `DefaultPlugins`, Bevy
 light/window features, the `LunCoRenderPlugin`, workbench, and render recovery. The scripted

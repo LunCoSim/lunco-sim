@@ -48,18 +48,12 @@ lunco-cosim = { path = "../lunco-cosim" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-environment = { path = "../lunco-environment" }
-lunco-scripting = { path = "../lunco-scripting" }
-lunco-scripting-rhai = { path = "../lunco-scripting-rhai" }
-lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime", features = ["cosim"] }
 lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
-lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
-lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
-lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-scene-camera = { path = "../lunco-scene-camera" }
@@ -104,8 +98,7 @@ networking = [
     "dep:lunco-twin-journal",
 ]
 net-diag = ["networking", "lunco-networking/net-diag"]
-python = ["lunco-scripting/python", "lunco-usd-bevy-runtime/python"]
-native-plugins = ["lunco-scripting/native-plugins"]
+python = ["lunco-usd-bevy-runtime/python"]
 sysml = ["dep:lunco-sysml"]
 
 [lints]

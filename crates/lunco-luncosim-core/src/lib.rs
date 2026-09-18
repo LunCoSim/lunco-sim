@@ -25,10 +25,6 @@ use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
 use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
 use lunco_usd_avian_filters::filtered_pairs::UsdCollisionFilter;
-use lunco_usd_bevy_core::program::{
-    ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
-};
-use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime::UsdPlugins;
 #[cfg(feature = "networking")]
@@ -201,47 +197,6 @@ pub fn log_build_identity(mode: &str) {
 /// Collapse repeated WARN/ERROR lines into one line plus a count.
 pub mod log_dedup;
 
-/// Read the one explicit startup-scene argument, if present.
-pub fn startup_scene_arg(args: &[String]) -> Option<String> {
-    args.windows(2)
-        .find(|pair| pair[0] == "--scene")
-        .map(|pair| pair[1].clone())
-}
-
-#[cfg(test)]
-mod startup_scene_tests {
-    use super::startup_scene_arg;
-
-    #[test]
-    fn no_scene_argument_keeps_startup_empty() {
-        let args = [
-            "luncosim".to_string(),
-            "--api".to_string(),
-            "5544".to_string(),
-        ];
-        assert_eq!(startup_scene_arg(&args), None);
-    }
-
-    #[test]
-    fn explicit_scene_argument_is_preserved_verbatim() {
-        let args = [
-            "luncosim".to_string(),
-            "--scene".to_string(),
-            "/tmp/mission.usda".to_string(),
-        ];
-        assert_eq!(
-            startup_scene_arg(&args),
-            Some("/tmp/mission.usda".to_string())
-        );
-    }
-
-    #[test]
-    fn missing_scene_value_does_not_create_a_default() {
-        let args = ["luncosim".to_string(), "--scene".to_string()];
-        assert_eq!(startup_scene_arg(&args), None);
-    }
-}
-
 #[cfg(test)]
 mod headless_composition_tests {
     use super::*;
@@ -329,16 +284,13 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
     group.build()
 }
 
-/// Build the production headless simulation app with an optional fixed
+/// Build the generic headless simulation substrate with an optional fixed
 /// compute-pool size and an explicit startup scene.
 ///
-/// The scene parameter is intentionally part of the constructor boundary. A
-/// caller that resolves a scene from a Twin manifest (for example the
-/// component-test runner) must not rely on the core plugin reparsing the
-/// process command line; doing so loses the resolved scene when the command
-/// uses a manifest-selected fixture. `None` preserves the normal raw
-/// `--scene` lookup used by the server and ordinary headless launches.
-pub fn build_headless_app_with_scene(
+/// This function installs only the core simulation plugin. Application
+/// integrations such as Rhai policies and the production schedule runner are
+/// owned by `lunco-luncosim-runtime`.
+pub fn build_core_app_with_scene(
     compute_threads: Option<usize>,
     startup_scene: Option<String>,
 ) -> App {
@@ -383,74 +335,6 @@ pub fn build_headless_app_with_scene(
     app
 }
 
-/// Build the production headless simulation app with an optional fixed
-/// compute-pool size. The returned app has the core plugin but not the
-/// schedule runner, allowing deterministic scene tests to install their own
-/// clock and loop.
-///
-/// This compatibility constructor preserves the historical process-argument
-/// behavior. Code that has already resolved a scene should call
-/// [`build_headless_app_with_scene`] instead.
-pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
-    let args: Vec<String> = std::env::args().collect();
-    build_headless_app_with_scene(compute_threads, startup_scene_arg(&args))
-}
-
-/// Build the normal headless app with the production schedule runner.
-pub fn build_headless_app() -> App {
-    // Production headless physics is an acceptance/replay surface. Keep its
-    // compute order explicit; callers that need the multi-threaded diagnostic
-    // matrix must use `build_headless_app_with_threads(None)` deliberately.
-    let mut app = build_headless_app_with_threads(Some(1));
-    app.add_plugins(LunCoSimHeadlessPlugin::default());
-    app
-}
-
-/// Run the production headless server.
-pub fn run_headless() -> AppExit {
-    let args: Vec<String> = std::env::args().collect();
-    let mode = if args.iter().any(|arg| arg == "--headless-max-speed") {
-        "headless-max-speed"
-    } else {
-        "headless"
-    };
-    log_build_identity(mode);
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!(
-            "luncosim-server — headless LunCoSim runtime\n\nUsage: luncosim-server [--api PORT] [--scene PATH] [--headless-max-speed]"
-        );
-        return AppExit::Success;
-    }
-    let execution_mode = if args.iter().any(|arg| arg == "--headless-max-speed") {
-        lunco_core::SimulationExecutionMode::MaxSpeed
-    } else {
-        lunco_core::SimulationExecutionMode::Realtime
-    };
-    // The server is also a deterministic simulation authority by default.
-    // Multi-threaded order studies remain an explicit scene-test override.
-    let mut app = build_headless_app_with_threads(Some(1));
-
-    #[cfg(all(
-        feature = "api-transport",
-        feature = "transport-http",
-        not(target_arch = "wasm32")
-    ))]
-    if let Some(error) = app
-        .world_mut()
-        .remove_resource::<lunco_api_transport::transports::HttpServerStartupError>()
-    {
-        eprintln!(
-            "luncosim-server: cannot start HTTP API on {}:{}: {}",
-            std::net::Ipv4Addr::LOCALHOST,
-            error.port,
-            error.message
-        );
-        return AppExit::error();
-    }
-
-    app.add_plugins(LunCoSimHeadlessPlugin { execution_mode });
-    app.run()
-}
 #[cfg(feature = "networking")]
 fn load_ready_scenario(
     role: Res<lunco_core_session::NetworkRole>,
@@ -672,58 +556,6 @@ fn replay_scenario_journal_modelica(
     }
 }
 
-/// Per-domain journal consume leg for `DomainKind::Script` — the script twin of
-/// [`replay_scenario_journal_modelica`]. Selects the merged, not-yet-applied
-/// `Script` op entries via [`domain_ops_after`](lunco_networking_sync::journal_plane::domain_ops_after)
-/// (so a scripted merge policy reorders script replay identically to USD/Modelica)
-/// and applies each through `ScriptRegistry::replay_op` (no re-recording), so a
-/// live rover-behaviour edit (`ScriptOp::SetSource`) recorded on one peer projects
-/// onto another's `ScriptDocument`.
-///
-/// Same single-active-doc limitation as the Modelica leg: `ScriptOp` carries no
-/// `DocumentId`, and scenario doc ids are minted locally (not stable cross-peer),
-/// so this routes only when exactly one script doc is live; otherwise it defers
-/// rather than misroute. Full multi-doc cross-peer replay lands with stable
-/// cross-peer document identity. No-ops when the registry / journal is absent.
-#[cfg(feature = "networking")]
-fn replay_scenario_journal_script(
-    role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
-    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    registry: Option<ResMut<lunco_scripting::ScriptRegistry>>,
-    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
-) {
-    let (Some(journal), Some(mut registry)) = (journal, registry) else {
-        return;
-    };
-    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
-        None
-    } else {
-        let Some(manifest) = remote.manifest.as_ref() else {
-            return;
-        };
-        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
-    };
-    // Single active script doc (see doc note); 0 or >1 → defer.
-    let docs: Vec<_> = registry.documents.keys().copied().collect();
-    let [doc] = docs.as_slice() else {
-        return;
-    };
-    let doc = *doc;
-    let me = journal.local_author();
-    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
-        &journal,
-        base.as_ref(),
-        &me,
-        &applied,
-        lunco_twin_journal::DomainKind::Script,
-    );
-    for (id, op) in pending {
-        registry.replay_op(doc, &op);
-        applied.insert(id);
-    }
-}
-
 /// Per-domain journal consume leg for `DomainKind::Experiment` — projects a
 /// peer's journaled experiment *definitions* (create / rename / bounds / params
 /// / delete) onto the local `ExperimentRegistry`. Unlike the script/modelica
@@ -870,111 +702,6 @@ fn replay_scenario_journal_obstacle(
         // Install the peer's spec. Sets the resource directly (NOT the
         // `UpdateObstacleFieldSpec` command), so no re-record.
         *spec = new_spec;
-    }
-}
-
-/// Per-domain journal consume leg for `DomainKind::ToolLibrary` — re-registers a
-/// peer's journaled rhai tool library into the process-global tool registry
-/// (hot-replacing any prior one; the runtime picks it up on its next refresh).
-/// Tool libraries are process-global (reachable from the rhai engine outside the
-/// ECS), so this needs no ECS resource beyond the journal. No-ops when absent.
-#[cfg(feature = "networking")]
-fn replay_scenario_journal_tools(
-    role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
-    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    scoped: Option<ResMut<lunco_scripting::tool_libs::TwinToolLibraries>>,
-    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
-) {
-    let Some(journal) = journal else {
-        return;
-    };
-    let Some(workspace) = workspace.as_deref() else {
-        return;
-    };
-    let Some(active) = workspace.active_twin else {
-        return;
-    };
-    let Some(mut scoped) = scoped else {
-        return;
-    };
-    scoped.ensure_active(active);
-    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
-        None
-    } else {
-        let Some(manifest) = remote.manifest.as_ref() else {
-            return;
-        };
-        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
-    };
-    let me = journal.local_author();
-    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
-        &journal,
-        base.as_ref(),
-        &me,
-        &applied,
-        lunco_twin_journal::DomainKind::ToolLibrary,
-    );
-    for (id, op) in pending {
-        if let Some((name, source)) =
-            lunco_scripting::registration_journal::replay_tool_library(&op)
-        {
-            if let Err(error) = scoped.register(active, &name, &source) {
-                warn!("[tool_libs] ignored journal replay outside its active scope: {error}");
-            }
-        }
-        applied.insert(id);
-    }
-}
-
-/// Per-domain journal consume leg for `DomainKind::Timeline` — stores a peer's
-/// journaled mission timeline in the local `TimelineStore` (hot-replacing any
-/// prior one), so `RunStoredTimeline`/`ListTimelines` see it. No-ops when the
-/// store / journal are absent.
-#[cfg(feature = "networking")]
-fn replay_scenario_journal_timeline(
-    role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
-    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    store: Option<ResMut<lunco_scripting::timelines::TimelineStore>>,
-    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
-) {
-    let (Some(journal), Some(mut store)) = (journal, store) else {
-        return;
-    };
-    let Ok(owner) = lunco_scripting::timelines::active_owner(workspace.as_deref()) else {
-        return;
-    };
-    if !matches!(owner, lunco_scripting::timelines::TimelineOwner::Twin(_)) {
-        return;
-    }
-    store.ensure_scope(owner);
-    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
-        None
-    } else {
-        let Some(manifest) = remote.manifest.as_ref() else {
-            return;
-        };
-        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
-    };
-    let me = journal.local_author();
-    let pending = lunco_networking_sync::journal_plane::domain_ops_after(
-        &journal,
-        base.as_ref(),
-        &me,
-        &applied,
-        lunco_twin_journal::DomainKind::Timeline,
-    );
-    for (id, op) in pending {
-        if let Some((name, timeline)) = lunco_scripting::registration_journal::replay_timeline(&op)
-        {
-            if let Err(error) = store.insert_for(owner, name, timeline) {
-                warn!("[timeline] ignored journal replay outside its active scope: {error:?}");
-            }
-        }
-        applied.insert(id);
     }
 }
 
@@ -1212,429 +939,6 @@ fn apply_run_status(
     }
 }
 
-/// The USD type name of a policy prim, and the attribute names carrying its rhai
-/// hook definition — the projected form of `lunco_scripting::policy::PolicyDef`.
-const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
-
-/// One authored `LunCoPolicy` prim, BEFORE its rhai source is resolved. The source is
-/// authored EITHER inline (`info:sourceCode`, a `string` that rides the USD journal
-/// plane — live-editable, per-op synced) OR by file reference (`info:sourceAsset`,
-/// an `asset` `@…rhai@` that rides the whole-twin content plane, CID-verified).
-/// The policy reader has its own inline-over-file rule; it is not a
-/// `LunCoProgramAPI` and is therefore outside the program source resolver.
-struct AuthoredPolicy {
-    stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    seam: String,
-    entry: String,
-    deterministic: bool,
-    /// Inline rhai source (`info:sourceCode`), non-empty when authored.
-    inline_source: Option<String>,
-    /// Asset path to a `.rhai` file (`info:sourceAsset`), when authored.
-    source_path: Option<String>,
-}
-
-/// Append every composed `LunCoPolicy` prim from one reader to the authored policy
-/// set. Reads the composed stage, so an opinion authored at any layer
-/// (global/twin/scene) resolves to one effective policy per seam. A prim missing
-/// `seam`, or carrying neither an inline source nor a source path, is skipped as
-/// incompletely authored. File-reference resolution happens in
-/// [`project_usd_policies`], not here.
-fn append_usd_policies(
-    reader: &dyn UsdReadObject,
-    stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    out: &mut Vec<AuthoredPolicy>,
-) {
-    for prim in reader.prim_paths() {
-        if reader.type_name(&prim).as_deref() != Some(LUNCO_POLICY_TYPE) {
-            continue;
-        }
-        let seam = reader.text(&prim, "lunco:policy:seam").unwrap_or_default();
-        let inline_source = reader
-            .text(&prim, "info:sourceCode")
-            .filter(|source| !source.is_empty());
-        let source_path = reader
-            .asset(&prim, "info:sourceAsset")
-            .filter(|source| !source.is_empty());
-        if seam.is_empty() || (inline_source.is_none() && source_path.is_none()) {
-            continue;
-        }
-        out.push(AuthoredPolicy {
-            stage_id,
-            seam,
-            entry: reader.text(&prim, "lunco:policy:entry").unwrap_or_default(),
-            deterministic: reader
-                .boolean(&prim, "lunco:policy:deterministic")
-                .unwrap_or(true),
-            inline_source,
-            source_path,
-        });
-    }
-}
-
-/// Read policies from the active scene's prepared/live composed source. The
-/// active scene root is the ownership boundary; unrelated loaded asset plans
-/// must not register policy hooks in the running simulation.
-fn extract_active_usd_policies(
-    stages: &Assets<UsdStageAsset>,
-    canonical: &lunco_usd_bevy_core::canonical::CanonicalStages,
-    roots: impl IntoIterator<Item = AssetId<UsdStageAsset>>,
-) -> Vec<AuthoredPolicy> {
-    let mut out = Vec::new();
-    for stage_id in roots {
-        let Some(stage_asset) = stages.get(stage_id) else {
-            continue;
-        };
-        let (reader, _generation) = canonical.reader_for(stage_id, stage_asset);
-        append_usd_policies(&reader, stage_id, &mut out);
-    }
-    out
-}
-
-/// The three states of resolving a `info:sourceAsset` `.rhai` reference.
-enum PolicySource {
-    /// Loaded — the file's text.
-    Ready(String),
-    /// The asset server is still fetching it — re-run next frame.
-    Loading,
-    /// Load failed, or no loader present — drop this policy (do not spin).
-    Failed,
-}
-
-/// Resolve a `info:sourceAsset` `.rhai` reference to its text via the
-/// `AssetServer` (wasm-safe — no `std::fs`), caching the handle so the asset isn't
-/// dropped mid-load. The stage owns the reference's anchor, and the shared USD
-/// path resolver produces the exact same identity used by the Rhai dependency
-/// loader. Inline source is unaffected (rides the doc).
-fn resolve_policy_source_file(
-    path: &str,
-    stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    asset_server: &AssetServer,
-    sources: Option<&Assets<lunco_scripting::source_asset::RhaiSource>>,
-    pending: &mut std::collections::HashMap<
-        String,
-        Handle<lunco_scripting::source_asset::RhaiSource>,
-    >,
-) -> PolicySource {
-    let Some(sources) = sources else {
-        warn!("[policy] sourcePath '{path}' authored but the RhaiSource asset loader is absent");
-        return PolicySource::Failed;
-    };
-    let asset_id =
-        lunco_usd_bevy_core::asset::resolve_stage_asset_path(asset_server, stage_id, path);
-    let handle = pending.entry(asset_id.clone()).or_insert_with(|| {
-        asset_server.load(bevy::asset::AssetPath::parse(&asset_id).into_owned())
-    });
-    let root_failed = asset_server.load_state(&*handle).is_failed();
-    let dependencies_failed = asset_server
-        .recursive_dependency_load_state(&*handle)
-        .is_failed();
-    if root_failed || dependencies_failed {
-        warn!(
-            "[policy] failed to load sourcePath '{path}' as '{asset_id}' via AssetServer \
-             (root_failed={root_failed}, dependencies_failed={dependencies_failed})"
-        );
-        return PolicySource::Failed;
-    }
-    if !asset_server.is_loaded_with_dependencies(&*handle) {
-        return PolicySource::Loading;
-    }
-    match sources.get(&*handle) {
-        Some(src) => PolicySource::Ready(src.text.clone()),
-        None => PolicySource::Loading,
-    }
-}
-
-/// **Policy projection** — activation half of "policy is a USD prim". On any
-/// composed-stage change, read the `LunCoPolicy` prims and project the USD-owned
-/// policy layer into the live hook registry via
-/// [`lunco_scripting::policy::project_policies`]. USD policies have precedence
-/// over application and Twin manifest layers; a removed prim restores the
-/// lower layer without recompiling it. Because a policy prim rides the USD
-/// doc-op journal, cross-peer propagation is (journal sync → each peer
-/// recomposes → each peer's projector re-registers) — no bespoke policy
-/// broadcast.
-///
-/// A policy's rhai source may be authored inline (`info:sourceCode`, journal
-/// plane) or by an `@…rhai@` file reference (`info:sourceAsset`, content plane),
-/// inline winning — so this also drives the async asset load, keeping the file's text
-/// resolved. Change-gated on total stage generation + stage count, PLUS a re-run while
-/// any file-backed source is still loading.
-#[allow(clippy::type_complexity)]
-fn project_usd_policies(
-    stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
-    roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
-    mut registry: ResMut<lunco_scripting::policy::ScriptedPolicyRegistry>,
-    mut synthesizers: ResMut<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>,
-    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    asset_server: Res<AssetServer>,
-    sources: Option<Res<Assets<lunco_scripting::source_asset::RhaiSource>>>,
-    mut pending: Local<
-        std::collections::HashMap<String, Handle<lunco_scripting::source_asset::RhaiSource>>,
-    >,
-    mut source_events: MessageReader<AssetEvent<lunco_scripting::source_asset::RhaiSource>>,
-    mut last: Local<Option<(usize, usize, u64)>>,
-    mut awaiting: Local<bool>,
-) {
-    let source_changed = source_events.read().any(|event| {
-        matches!(
-            event,
-            AssetEvent::Added { .. }
-                | AssetEvent::Modified { .. }
-                | AssetEvent::Removed { .. }
-                | AssetEvent::Unused { .. }
-                | AssetEvent::LoadedWithDependencies { .. }
-        )
-    });
-    let root_ids: Vec<_> = roots.iter().map(|prim| prim.stage_handle.id()).collect();
-    let signal = (
-        root_ids.len(),
-        root_ids.iter().filter_map(|id| stages.get(*id)).count(),
-        root_ids
-            .iter()
-            .filter_map(|id| stages.get(*id).map(|_| canonical.generation_for(*id)))
-            .sum::<u64>(),
-    );
-    // Re-run when the stage moved OR a file-backed source is still loading.
-    if *last == Some(signal) && !*awaiting && !source_changed {
-        return;
-    }
-    *last = Some(signal);
-
-    let authored = extract_active_usd_policies(&stages, &canonical, root_ids);
-    // Drop cached handles for paths no longer authored, so a removed file-policy stops
-    // pinning its asset.
-    let live: std::collections::HashSet<String> = authored
-        .iter()
-        .filter_map(|a| {
-            a.source_path.as_deref().map(|path| {
-                lunco_usd_bevy_core::asset::resolve_stage_asset_path(
-                    &asset_server,
-                    a.stage_id,
-                    path,
-                )
-            })
-        })
-        .collect();
-    pending.retain(|p, _| live.contains(p.as_str()));
-
-    let mut desired = Vec::with_capacity(authored.len());
-    let mut unresolved = false;
-    for a in &authored {
-        // This is the policy projection's inline-over-file rule; it is separate
-        // from the strict `LunCoProgramAPI` source selector.
-        let source = if let Some(src) = &a.inline_source {
-            src.clone()
-        } else if let Some(path) = &a.source_path {
-            match resolve_policy_source_file(
-                path,
-                a.stage_id,
-                &asset_server,
-                sources.as_deref(),
-                &mut pending,
-            ) {
-                PolicySource::Ready(text) => text,
-                PolicySource::Loading => {
-                    unresolved = true;
-                    continue;
-                }
-                PolicySource::Failed => continue,
-            }
-        } else {
-            continue;
-        };
-        desired.push(lunco_scripting::policy::PolicyDef {
-            seam: a.seam.clone(),
-            entry: a.entry.clone(),
-            source,
-            deterministic: a.deterministic,
-        });
-    }
-    *awaiting = unresolved;
-    let previous_synthesizers: std::collections::HashSet<String> = registry
-        .policies
-        .iter()
-        .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
-        .collect();
-    lunco_scripting::policy::project_policies(desired, &mut registry, journal.as_deref());
-    // `desired` contains only the highest-precedence USD layer.  The policy
-    // projector then restores the active application/Twin layers, so using
-    // `desired` as the synthesizer set would unregister the shipped adapters
-    // whenever a Twin has no USD override.  Reconcile against the complete
-    // active registry instead; built-in adapters remain registered while a
-    // removed custom adapter is still retired.  If its hook is absent, the
-    // adapter now reports the explicit hook error at synthesis time rather
-    // than degrading into an "unknown synthesizer" path.
-    let active_synthesizers: std::collections::HashSet<String> = registry
-        .policies
-        .iter()
-        .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
-        .collect();
-    for name in previous_synthesizers.difference(&active_synthesizers) {
-        if name == DEFAULT_DOMAIN_SYNTHESIZER || name == ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER {
-            continue;
-        }
-        lunco_usd_sim_domain::synthesis::unregister_hook_synthesizer(&mut synthesizers, name);
-    }
-    for name in active_synthesizers {
-        lunco_usd_sim_domain::synthesis::register_hook_synthesizer(&mut synthesizers, name);
-    }
-}
-
-/// Convenience command: author (or hot-replace) a rhai policy as a `LunCoPolicy`
-/// USD prim under `<mounted-root>/Policies/<name>` in ONE call, instead of
-/// hand-issuing the underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
-/// syncs to every peer → the projector activates it** (registers the rhai hook; at
-/// `MERGE_SEAM` flips the merge strategy). Re-issuing with the same `name` (or later
-/// editing `info:sourceCode`) **hot-replaces the hook live** — dynamic rhai
-/// editing with no file system, converging across the network.
-///
-/// This command authors the INLINE source (`info:sourceCode`, journal plane) —
-/// the live-edit form. A file-backed policy is authored instead by pointing
-/// `info:sourceAsset` at an `@…rhai@` file (content plane, CID-synced); the
-/// projector resolves it via the asset server, and inline wins when both are set.
-///
-/// This is the ergonomic surface over the canonical form (a `LunCoPolicy` prim); the
-/// raw `ApplyUsdOp` path still works. Single active scene doc for now (mirrors the
-/// journal drivers).
-#[lunco_core::Command(default)]
-pub struct SetRhaiPolicy {
-    /// Prim name under the mounted scene's `Policies` scope (the identity for
-    /// hot-replace); defaults to a sanitized `seam` when empty.
-    pub name: String,
-    /// The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, or
-    /// `"synth.<name>"` for a generated Modelica source/unit/layout policy.
-    pub seam: String,
-    /// The rhai entry function name.
-    pub entry: String,
-    /// The rhai source defining `entry` (+ helpers).
-    pub source: String,
-    /// Deterministic (fresh rhai scope per invoke). Convergent seams (merge, drive)
-    /// must be `true`; the host-only authorize gate may be `false`.
-    pub deterministic: bool,
-}
-
-#[lunco_core::on_command(SetRhaiPolicy)]
-fn on_set_rhai_policy(
-    trigger: On<SetRhaiPolicy>,
-    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
-    roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
-    asset_server: Res<AssetServer>,
-    mut commands: Commands,
-) {
-    use lunco_usd_core::commands::ApplyUsdOp;
-    use lunco_usd_document::document::{LayerId, UsdOp};
-    let cmd = trigger.event();
-    let roots: Vec<_> = roots.iter().collect();
-    let [root] = roots.as_slice() else {
-        warn!(
-            "[policy] SetRhaiPolicy needs exactly one mounted USD scene (found {})",
-            roots.len()
-        );
-        return;
-    };
-    let Some(doc) =
-        lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, root.stage_handle.id())
-    else {
-        warn!(
-            "[policy] the mounted scene is not Twin document-backed; open it through a Twin to author a policy"
-        );
-        return;
-    };
-    let mounted_root = root.path.trim_end_matches('/');
-    let mounted_root = if mounted_root.is_empty() {
-        "/"
-    } else {
-        mounted_root
-    };
-
-    // USD prim names are identifier-like — sanitize the seam/name into one.
-    let base = if cmd.name.is_empty() {
-        &cmd.seam
-    } else {
-        &cmd.name
-    };
-    let mut name: String = base
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect();
-    if name.is_empty() {
-        name = "policy".to_string();
-    }
-    let policies_path = if mounted_root == "/" {
-        "/Policies".to_string()
-    } else {
-        format!("{mounted_root}/Policies")
-    };
-    let prim = format!("{policies_path}/{name}");
-    let root = LayerId::root();
-
-    // Idempotent: define_prim + attribute overwrite → re-issuing hot-replaces.
-    // String values are RAW — `SetAttribute` authors them verbatim and the writer
-    // escapes on serialize (see the op's string branch). No hand-escaping here: the
-    // old `format!("{:?}")` produced Rust-debug quoting, not USDA delimiting, and
-    // silently corrupted any multi-line rhai `source`.
-    let ops = vec![
-        UsdOp::AddPrim {
-            edit_target: root.clone(),
-            parent_path: mounted_root.into(),
-            name: "Policies".into(),
-            type_name: Some("Scope".into()),
-            reference: None,
-            reference_prim_path: None,
-        },
-        UsdOp::AddPrim {
-            edit_target: root.clone(),
-            parent_path: policies_path,
-            name,
-            type_name: Some("LunCoPolicy".into()),
-            reference: None,
-            reference_prim_path: None,
-        },
-        UsdOp::SetAttribute {
-            edit_target: root.clone(),
-            path: prim.clone(),
-            name: "lunco:policy:seam".into(),
-            type_name: "string".into(),
-            value: cmd.seam.clone(),
-        },
-        UsdOp::SetAttribute {
-            edit_target: root.clone(),
-            path: prim.clone(),
-            name: "lunco:policy:entry".into(),
-            type_name: "string".into(),
-            value: cmd.entry.clone(),
-        },
-        UsdOp::SetAttribute {
-            edit_target: root.clone(),
-            path: prim.clone(),
-            name: "info:sourceCode".into(),
-            type_name: "string".into(),
-            value: cmd.source.clone(),
-        },
-        UsdOp::SetAttribute {
-            edit_target: root,
-            path: prim.clone(),
-            name: "lunco:policy:deterministic".into(),
-            type_name: "bool".into(),
-            value: cmd.deterministic.to_string(),
-        },
-    ];
-    for op in ops {
-        commands.trigger(ApplyUsdOp {
-            doc_id: doc,
-            parent_gen: None,
-            op,
-        });
-    }
-    info!(
-        "[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects",
-        cmd.seam
-    );
-}
-
-lunco_core::register_commands!(on_set_rhai_policy);
-
 /// The shared, headless-safe core: the persistent world shell, physics, cosim,
 /// USD scene load, mobility/hardware/controller/avatar, environment, the HTTP
 /// API, and networking. Added by both the GUI shell and the server, so the two
@@ -1647,7 +951,7 @@ lunco_core::register_commands!(on_set_rhai_policy);
 pub struct LunCoSimCorePlugin {
     pub headless: bool,
     /// Explicit startup scene supplied by the application boundary. `None`
-    /// falls back to the process `--scene` argument for compatibility.
+    /// keeps the world shell empty until a caller requests a scene.
     pub startup_scene: Option<String>,
 }
 
@@ -1748,11 +1052,6 @@ impl Plugin for LunCoSimCorePlugin {
 
         app.add_plugins(lunco_core::gate::GatePlugin);
 
-        // Convenience command: `SetRhaiPolicy` authors a `LunCoPolicy` prim as USD
-        // doc ops (journals → syncs → projector activates). Authoring works with or
-        // without networking; the activation projector is networking-gated for now.
-        register_all_commands(app);
-
         #[cfg(feature = "api-transport")]
         {
             if !app.is_plugin_added::<lunco_workspace_api::WorkspaceApiQueriesPlugin>() {
@@ -1763,17 +1062,14 @@ impl Plugin for LunCoSimCorePlugin {
             }
         }
 
-        // `--scene <path>` is an explicit startup request. With no argument
-        // the process owns only the persistent world shell; it must not
+        // The application boundary supplies an explicit startup scene. With no
+        // scene the process owns only the persistent world shell; it must not
         // silently mount the safety-test sandbox and fault the session before
         // an API client has selected its scene. The resolver accepts the
         // shipped asset-root spelling, a workspace/cwd relative path, or an
         // absolute filesystem path. The latter two are required for running a
         // custom Twin without copying it into assets/.
-        let scene_path = self
-            .startup_scene
-            .clone()
-            .or_else(|| startup_scene_arg(&args));
+        let scene_path = self.startup_scene.clone();
 
         app.insert_resource(ScenePath(scene_path))
             // Match the workbench theme's backdrop so the window's first-frame
@@ -1913,8 +1209,6 @@ impl Plugin for LunCoSimCorePlugin {
             // observers + wire-type registrations the host needs stay live.
             .add_plugins(LunCoControllerPlugin)
             .add_plugins(LunCoAvatarPlugin)
-            .add_plugins(lunco_scripting::LunCoScriptingPlugin)
-            .add_plugins(lunco_scripting_rhai::LunCoScriptingRhaiPlugin)
             .add_systems(Startup, setup_luncosim)
             .add_systems(Startup, load_startup_scene_on_boot.after(setup_luncosim))
             // Fail loud if the requested `--scene` never loads (e.g. a wrong
@@ -2053,9 +1347,6 @@ impl Plugin for LunCoSimCorePlugin {
             // Same Layer B for Modelica models — the journal plane is domain-generic;
             // this is the parallel per-domain consume leg for `DomainKind::Modelica`.
             app.add_systems(Update, replay_scenario_journal_modelica);
-            // Same Layer B for scripts — a recorded `ScriptOp::SetSource` (live
-            // rover-behaviour edit) projects onto a peer's `ScriptDocument`.
-            app.add_systems(Update, replay_scenario_journal_script);
             // Same Layer B for experiment *definitions* (`DomainKind::Experiment`):
             // a peer's sweep setup projects onto the local ExperimentRegistry.
             #[cfg(feature = "experiments")]
@@ -2063,18 +1354,9 @@ impl Plugin for LunCoSimCorePlugin {
             // Same Layer B for shaders (`DomainKind::Shader`): a peer's WGSL edit
             // projects onto the local ShaderRegistry + hot-reloads Assets<Shader>.
             app.add_systems(Update, replay_scenario_journal_shader);
-            // Same Layer B for config/registration domains: obstacle-field spec
-            // (replaces the old bespoke broadcast — now bidirectional), rhai tool
-            // libraries, and mission timelines. Each installs a peer's journaled
-            // op onto the local resource/registry/store.
-            app.add_systems(
-                Update,
-                (
-                    replay_scenario_journal_obstacle,
-                    replay_scenario_journal_tools,
-                    replay_scenario_journal_timeline,
-                ),
-            );
+            // Same Layer B for config domains: the obstacle-field spec is
+            // consumed here because it is generic simulation state.
+            app.add_systems(Update, replay_scenario_journal_obstacle);
             // Presence/rebuild resources are consumed by the systems below for any
             // role; init here (idempotent with the host-side init) so a standalone
             // or client app never hits a missing resource.
@@ -2114,13 +1396,6 @@ impl Plugin for LunCoSimCorePlugin {
         app.add_systems(
             Update,
             track_ground_collider_pending.after(lunco_usd_terrain::UsdTerrainSet::Bridge),
-        );
-        // Policy projection is a core USD→Rhai path, not a networking feature.
-        // Network peers receive the same `LunCoPolicy` prim through the journal,
-        // while a standalone app can author and hot-replace the same policy locally.
-        app.add_systems(
-            Update,
-            project_usd_policies.after(lunco_scripting::source_asset::RhaiSourceAssetSet),
         );
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.
@@ -2257,21 +1532,6 @@ impl Default for LunCoSimHeadlessPlugin {
 impl Plugin for LunCoSimHeadlessPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.execution_mode);
-        // A scenario's presentation intents remain valid in a headless run, but
-        // there is deliberately no workbench/HUD to receive them. Acknowledge
-        // the explicit presentation surface as no-ops so one scenario works in
-        // interactive and acceptance modes; every other unknown command still
-        // fails loudly through the normal reflection dispatcher.
-        app.insert_resource(lunco_scripting_bridge_core::IgnoredScenarioCommands::new([
-            "SetHint",
-            "SetObjectives",
-            "Spotlight",
-            "ClearSpotlight",
-            "FocusPanel",
-            "SetTourStep",
-            "ClearTour",
-        ]));
-
         // Modelica compiler/document core plus the separate execution plugin —
         // NO egui/viz/workbench. The split keeps compiler-only consumers free
         // of solver workers while this runtime still installs the authoritative
@@ -2315,7 +1575,7 @@ impl Plugin for LunCoSimHeadlessPlugin {
 
 /// Resource that holds the optional asset-source-relative path of the scene to
 /// load on Startup. `None` means an intentionally empty world shell. It is
-/// initialised from the `--scene` CLI arg by [`LunCoSimCorePlugin`].
+/// supplied by the application boundary before [`LunCoSimCorePlugin`] starts.
 #[derive(Resource)]
 pub struct ScenePath(pub Option<String>);
 

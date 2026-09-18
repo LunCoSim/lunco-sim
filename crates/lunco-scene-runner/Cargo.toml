@@ -20,6 +20,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
+lunco-luncosim-runtime = { path = "../lunco-luncosim-runtime", default-features = false }
 lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui", optional = true }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-physics = { workspace = true }

@@ -29,6 +29,7 @@ members = [
     "crates/lunco-avatar-ui",
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-core",
+    "crates/lunco-luncosim-runtime",
     "crates/lunco-scene-runner",
     "crates/lunco-luncosim-ui",
     "crates/lunco-luncosim-exposures",
@@ -210,9 +211,10 @@ members = [
 # sweeps). `lunco-telemetry` is wired into `lunco-luncosim`, including the
 # `SubscribeTelemetry` command path.
 #
-# `lunco-luncosim-server` and `lunco-luncosim-core` are intentionally NOT here:
-# the server is a separately selected headless app and the core runtime is a
-# dependency of that app, not a default desktop member. `cargo run
+# `lunco-luncosim-server`, `lunco-luncosim-core`, and
+# `lunco-luncosim-runtime` are intentionally NOT here: the server is a
+# separately selected headless app and those packages are dependencies of that
+# app, not default desktop members. `cargo run
 # -p lunco-luncosim-server`.
 default-members = [
     "crates/lunco-luncosim",

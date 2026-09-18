@@ -1,18 +1,20 @@
 # lunco-luncosim
 
 The thin **luncosim** process shell for LunCoSim. It dispatches headless mode
-to `lunco-luncosim-core` and GUI mode to `lunco-luncosim-ui`. The headless
-server depends on the core package directly.
+to `lunco-luncosim-runtime` and GUI mode to `lunco-luncosim-ui`. The headless
+server uses the same runtime package without the GUI shell.
 
 ## What This Crate Does
 
 The app lives in `src/lib.rs` as the process entry point `pub fn run()`. Headless
-launching is owned by `lunco-luncosim-core`; this package only dispatches to it
+launching is owned by `lunco-luncosim-runtime`; this package only dispatches to it
 for `--no-ui` and `LUNCO_NO_UI`. Window/render composition and presentation
 live in `lunco-luncosim-ui`, which owns:
 
 - **`lunco_luncosim_core::LunCoSimCorePlugin`** — sim / physics / cosim / USD /
   networking / API. Headless-safe and shared with the server.
+- **`lunco_luncosim_runtime::LunCoSimRuntimePlugin`** — Rhai runtime, USD policy
+  projection, and dynamic scripting journal integration.
 - **`lunco_luncosim_ui::run_gui`** and **`LunCoSimUiPlugin`** — window/render
   setup, egui workbench, picking, the
   in-scene editor, materials, panels, and authored-camera presentation. Added
@@ -20,9 +22,10 @@ live in `lunco-luncosim-ui`, which owns:
   visibly camera-less with an owning diagnostic rather than receiving an
   engine-created camera. USD loading completion is independent of presentation.
 
-GUI = `lunco_luncosim_ui::run_gui` composing `LunCoSimCorePlugin + LunCoSimUiPlugin`. The server and
-`lunco-scene-runner` use `LunCoSimCorePlugin + LunCoSimHeadlessPlugin` from the
-core package.
+GUI = `lunco_luncosim_ui::run_gui` composing `LunCoSimCorePlugin +
+LunCoSimRuntimePlugin + LunCoSimUiPlugin`. The server and
+`lunco-scene-runner` use the runtime's headless builder plus
+`LunCoSimHeadlessPlugin` from the core package.
 
 ## Binaries
 
@@ -31,7 +34,7 @@ core package.
 `test-component` subcommands delegate to the production `lunco-scene-runner`
 package. The headless
 `luncosim-server` bin lives in the sibling `lunco-luncosim-server` crate and
-calls `lunco_luncosim_core::run_headless()`.
+calls `lunco_luncosim_runtime::run_headless()`.
 
 The `luncosim rhai` subcommand is a terminal adapter from
 `lunco-rhai-repl`. It never embeds a Rhai engine: the running simulator

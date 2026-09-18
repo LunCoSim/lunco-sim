@@ -2,12 +2,13 @@
 //!
 //! This module owns the GPU-backed application boundary: command-line render
 //! choices, Bevy's window/render plugins, offscreen capture, and presentation
-//! composition. The headless runtime remains in lunco-luncosim-core.
+//! composition. The headless runtime remains in `lunco-luncosim-runtime`.
 
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
 use lunco_luncosim_core::AppExit;
 use lunco_luncosim_core::{LunCoSimCorePlugin, ScenePath};
+use lunco_luncosim_runtime::LunCoSimRuntimePlugin;
 
 /// The luncosim's process-start render choice. The binary selects it while
 /// `lunco-render-bevy` owns how the policy is rendered.
@@ -595,6 +596,7 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         headless: false,
         startup_scene: None,
     });
+    app.add_plugins(LunCoSimRuntimePlugin::default());
     crate::camera::install_interactive_camera(&mut app);
     // The browser boot-screen handshake is an application-shell concern. Keep
     // it at the UI edge so headless/server compositions do not carry web glue.
@@ -679,7 +681,7 @@ mod window_tests {
 
 /// Build the Bevy plugin group for the windowed application shell.
 ///
-/// The headless application group belongs to `lunco-luncosim-core`; keeping
+/// The headless application group belongs to `lunco-luncosim-runtime`; keeping
 /// this group here means the GUI shell is the only owner of renderer/window
 /// configuration.
 fn default_plugins_with_profile(

@@ -18,7 +18,7 @@
 //! because there was no way to headlessly run a REAL authored scene.
 //!
 //! `luncosim test` composes the **same app the server composes**
-//! (`lunco-luncosim-core::build_headless_app_with_threads` plus
+//! (`lunco-luncosim-runtime::build_headless_app_with_threads` plus
 //! `LunCoSimHeadlessPlugin`), steps it by hand as fast as the CPU allows, watches the scenario's
 //! telemetry verdict, and exits with a status code.
 //!
@@ -1126,13 +1126,13 @@ pub fn run() -> u8 {
     let dt = Duration::from_secs_f64(1.0 / cli.tick_hz);
 
     // The app the GUI and the headless server run, assembled exactly as
-    // `lunco_luncosim_core::build_headless_app_with_threads` does it — asset sources first
+    // `lunco_luncosim_runtime::build_headless_app_with_threads` does it — asset sources first
     // (they MUST precede `AssetPlugin`, which snapshots the source registry), then
     // the engine plugin group, then `LunCoSimCorePlugin`.
     //
     // The core builder receives the compute-pool override at plugin-group build
     // time, keeping scene tests on the same production composition as the server.
-    let mut app = lunco_luncosim_core::build_headless_app_with_scene(
+    let mut app = lunco_luncosim_runtime::build_headless_app_with_scene(
         (cli.threads > 0).then_some(cli.threads),
         Some(cli.scene.clone()),
     );

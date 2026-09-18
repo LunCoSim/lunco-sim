@@ -253,10 +253,11 @@ Primary entry points and simulation assembly targets.
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
 | **`lunco-luncosim-exposures`** | — | Headless-safe runtime exposure projection plugin. Resolves authoritative ECS/domain state and authored telemetry into the shared `EngineExposures` registry for HTML, egui, API, telemetry, and remote consumers; it has no renderer or UI dependency. |
-| **`lunco-luncosim`** | `luncosim` | Thin process/CLI shell and production authored-scene test command. It dispatches headless mode to `lunco-luncosim-core`, GUI mode to `lunco-luncosim-ui`, and the `rhai` subcommand to `lunco-rhai-repl`. |
+| **`lunco-luncosim`** | `luncosim` | Thin process/CLI shell and production authored-scene test command. It dispatches headless mode to `lunco-luncosim-runtime`, GUI mode to `lunco-luncosim-ui`, and the `rhai` subcommand to `lunco-rhai-repl`. |
 | **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, readiness barriers, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
-| **`lunco-luncosim-core`** | — | Headless-safe simulation runtime shared by the GUI shell, `luncosim-server`, and scene-test runner. |
-| **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends directly on `lunco-luncosim-core` with API + networking enabled; the GUI shell is not linked. |
+| **`lunco-luncosim-core`** | — | Headless-safe generic simulation substrate shared by the GUI shell, `luncosim-server`, and scene-test runner. It does not own Rhai policy or scripting journal integration. |
+| **`lunco-luncosim-runtime`** | — | Production application integration: Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
+| **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends on `lunco-luncosim-runtime` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-rhai-repl`** | — | Terminal adapter for the reflected `RunRhai` command. It reads stdin/files and presents results while delegating evaluation to the running simulator and HTTP to `lunco-api-client`. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
 | **`lunco-modelica-icon-ui`** | — | Reusable egui Modelica icon/diagram graphics renderer used by the diagram canvas and model preview. |
@@ -1209,6 +1210,9 @@ Production headless runner for authored USD + Rhai scene and Twin verification c
 **`lunco-luncosim-core`**
 Headless-safe LunCoSim runtime substrate shared by the GUI shell, `luncosim-server`, and authored scene-test runner: persistent world shell, Avian physics, USD loading/projection, Modelica/cosim, networking/API, exposure projection, persistence, and the schedule runner. It has no renderer, egui, workbench, picking, concrete celestial/avatar camera realization, or tutorial policy; rendered application surfaces install those camera adapters at the UI edge.
 
+**`lunco-luncosim-runtime`**
+Production application integration above the generic simulation substrate. It installs the Rhai runtime, projects USD-authored policies, registers `SetRhaiPolicy`, consumes scripting/tool/timeline journal entries, and owns the public headless builders and launcher. Keeping this boundary above core prevents scripting and policy changes from invalidating the generic simulation composition.
+
 **`lunco-luncosim-ui`**
 Windowed LunCoSim application and presentation boundary: Bevy window/render plugin composition and CLI render choices, egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, and native desktop integration. Platform icon rasterization and live window-icon installation are isolated behind the packaging-only `package-icons` feature; `scripts/build_native.sh` enables it for packaged `luncosim` builds. Optional offscreen, networking, and updater edges are feature-scoped; native Velopack update handling is behind the opt-in `updates` feature, which the package script enables for installed desktop builds. The headless application core and ordinary UI builds do not compile the icon graphics toolchain or updater closure.
 
@@ -1216,4 +1220,4 @@ Windowed LunCoSim application and presentation boundary: Bevy window/render plug
 Production integration crate for the renderer-independent runtime exposure projection. `RuntimeExposuresPlugin` registers the single shared path from authoritative ECS/domain state and authored telemetry to `lunco_core::exposure::EngineExposures`; HTML, egui, API, telemetry, and remote clients consume that registry. It owns no UI, renderer, or tutorial policy, so changing exposure derivation does not recompile the application composition root.
 
 **`lunco-luncosim-server`**
-Headless launcher for the luncosim core — a three-line binary that depends directly on `lunco-luncosim-core`, with the API + networking host enabled. The GUI shell is not in its dependency closure.
+Headless launcher for the luncosim runtime — a three-line binary that depends directly on `lunco-luncosim-runtime`, with the API + networking host enabled. The GUI shell is not in its dependency closure.

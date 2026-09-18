@@ -1,5 +1,6 @@
 //! The LunCoSim process entry point. GUI composition is delegated to
-//! `lunco-luncosim-ui`; the headless `luncosim-server` uses the core directly.
+//! `lunco-luncosim-ui`; the headless `luncosim-server` uses the runtime
+//! package directly.
 
 #[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]

@@ -7744,6 +7744,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-luncosim-core",
+ "lunco-luncosim-runtime",
  "lunco-luncosim-ui",
  "lunco-mobility",
  "lunco-networking",
@@ -7804,9 +7805,6 @@ dependencies = [
  "lunco-scene-commands",
  "lunco-scene-selection",
  "lunco-scene-validation",
- "lunco-scripting",
- "lunco-scripting-bridge-core",
- "lunco-scripting-rhai",
  "lunco-spatial",
  "lunco-storage",
  "lunco-sysml",
@@ -7822,11 +7820,8 @@ dependencies = [
  "lunco-usd-bevy-runtime",
  "lunco-usd-bevy-runtime-core",
  "lunco-usd-bevy-scene",
- "lunco-usd-bevy-twin",
- "lunco-usd-core",
  "lunco-usd-document",
  "lunco-usd-sim-core",
- "lunco-usd-sim-domain",
  "lunco-usd-terrain",
  "lunco-workspace",
  "lunco-workspace-api",
@@ -8030,10 +8025,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-luncosim-runtime"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-api-transport",
+ "lunco-core",
+ "lunco-core-session",
+ "lunco-doc-bevy",
+ "lunco-luncosim-core",
+ "lunco-networking-sync",
+ "lunco-scripting",
+ "lunco-scripting-bridge-core",
+ "lunco-scripting-rhai",
+ "lunco-twin-journal",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-bevy-twin",
+ "lunco-usd-core",
+ "lunco-usd-document",
+ "lunco-usd-sim-domain",
+ "lunco-workspace",
+]
+
+[[package]]
 name = "lunco-luncosim-server"
 version = "0.6.0-dev"
 dependencies = [
  "lunco-luncosim-core",
+ "lunco-luncosim-runtime",
  "mimalloc",
 ]
 
@@ -8077,6 +8097,7 @@ dependencies = [
  "lunco-luncosim-edit-core",
  "lunco-luncosim-edit-inspector-ui",
  "lunco-luncosim-edit-ui",
+ "lunco-luncosim-runtime",
  "lunco-modelica-core",
  "lunco-modelica-document",
  "lunco-modelica-execution",
@@ -8960,6 +8981,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-luncosim-core",
  "lunco-luncosim-edit-ui",
+ "lunco-luncosim-runtime",
  "lunco-modelica-runtime",
  "lunco-physics",
  "lunco-readiness",

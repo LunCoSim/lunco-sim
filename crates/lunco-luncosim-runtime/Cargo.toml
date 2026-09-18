@@ -1,0 +1,47 @@
+[package]
+name = "lunco-luncosim-runtime"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Production LunCoSim application integration and headless runtime"
+
+[lib]
+name = "lunco_luncosim_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_shader"] }
+lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
+lunco-core = { path = "../lunco-core" }
+lunco-core-session = { path = "../lunco-core-session" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
+lunco-scripting = { path = "../lunco-scripting" }
+lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
+lunco-scripting-rhai = { path = "../lunco-scripting-rhai" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
+lunco-workspace = { path = "../lunco-workspace" }
+
+[features]
+default = []
+api-transport = ["dep:lunco-api-transport", "lunco-luncosim-core/api-transport"]
+transport-http = ["api-transport", "lunco-api-transport/transport-http"]
+networking = ["dep:lunco-networking-sync", "dep:lunco-twin-journal"]
+python = ["lunco-scripting/python", "lunco-luncosim-core/python"]
+native-plugins = ["lunco-scripting/native-plugins"]
+
+[dependencies.lunco-networking-sync]
+path = "../lunco-networking-sync"
+optional = true
+
+[dependencies.lunco-twin-journal]
+path = "../lunco-twin-journal"
+optional = true
+
+[lints]
+workspace = true
