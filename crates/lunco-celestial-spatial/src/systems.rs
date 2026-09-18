@@ -8,7 +8,71 @@ use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_spatial::coords::world_position_seeded;
-use lunco_time::WorldTime;
+use lunco_time::{CelestialTime, WorldTime};
+
+use crate::big_space_setup::CelestialPresentationGrid;
+
+/// Move visual globe frames from the detached presentation clock.
+///
+/// This is intentionally separate from [`ephemeris_update_system`] and
+/// [`body_rotation_system`]. A detached celestial clock is a presentation
+/// timeline: it may move the rendered Earth/Moon through the sky while the
+/// causal WorldTime branch continues to own physics, surface terrain, and
+/// picking. Keeping the marker out of `ReferenceFrame` makes that ownership
+/// boundary structural rather than dependent on a query filter convention.
+pub fn presentation_celestial_frame_system(
+    celestial: Res<CelestialTime>,
+    ephemeris: Option<Res<EphemerisResource>>,
+    registry: Res<CelestialBodyRegistry>,
+    mut q_frames: Query<(
+        &CelestialPresentationGrid,
+        &mut CellCoord,
+        &mut Transform,
+        &ChildOf,
+    )>,
+    q_grids: Query<&Grid>,
+) {
+    let Some(ephemeris) = ephemeris else {
+        return;
+    };
+
+    for (presentation, mut cell, mut tf, child_of) in &mut q_frames {
+        let Some(rel_pos_au) = ephemeris
+            .provider
+            .position(presentation.body, celestial.epoch_jd)
+        else {
+            // The causal branch follows the same data contract: no ephemeris
+            // means no new pose. Never substitute the parent's origin.
+            continue;
+        };
+        let Ok(parent_grid) = q_grids.get(child_of.parent()) else {
+            error_once!(
+                "[celestial] presentation frame {} is not directly parented to a Grid",
+                presentation.body
+            );
+            continue;
+        };
+
+        let pos_bevy_m = ecliptic_to_bevy(rel_pos_au).raw();
+        let (new_cell, new_translation) = parent_grid.translation_to_grid(pos_bevy_m);
+        if *cell != new_cell {
+            *cell = new_cell;
+        }
+        if tf.translation != new_translation {
+            tf.translation = new_translation;
+        }
+
+        let Some(desc) = registry.get(presentation.body) else {
+            continue;
+        };
+        if presentation.body_fixed && desc.spins() {
+            let next = lunco_celestial::geo::body_rotation(desc, celestial.epoch_jd).as_quat();
+            if tf.rotation != next {
+                tf.rotation = next;
+            }
+        }
+    }
+}
 
 /// Update body and frame positions based on ephemeris data.
 /// The caller applies the shared celestial solve gate. Translation and body
@@ -131,9 +195,9 @@ pub fn sun_emit_direction(
     Some(-to_sun)
 }
 
-/// Point the scene's primary `DirectionalLight` along the **ephemeris** Sun
-/// direction at the current epoch (architecture doc 19 — T2; replaces the old
-/// hardcoded `Vec3::NEG_Z`).
+/// Point the scene's primary `DirectionalLight` along the **causal ephemeris**
+/// Sun direction at the current world epoch (architecture doc 19 — T2;
+/// replaces the old hardcoded `Vec3::NEG_Z`).
 ///
 /// The Sun sits at the heliocentre, so the Moon→Sun direction is just
 /// `-ecliptic_to_bevy(global_position(Moon)).raw()` (mirrors the solar-panel pointing
@@ -143,10 +207,12 @@ pub fn sun_emit_direction(
 /// by excluding Earthshine and scoped preview lights; ambiguity is an authored
 /// contract error, never a brightness-based choice.
 ///
-/// Without an explicit ephemeris provider the system leaves authored lighting
-/// untouched. The ephemeris is authoritative only when the scene/application
-/// installs `lunco-celestial-ephemeris`; manual lighting remains a separate
-/// explicit operator command, never an implicit provider substitution.
+/// This is the physical-surface lighting provider. It deliberately reads
+/// [`WorldTime`], not [`CelestialTime`]: the latter is a detached presentation
+/// clock and may be fast-forwarded to move globe imagery while the active
+/// terrain, shadows, and physics remain at the causal world epoch. Without an
+/// explicit ephemeris provider the system leaves authored lighting untouched;
+/// manual lighting remains a separate explicit operator command.
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
     world: Res<WorldTime>,
@@ -336,7 +402,10 @@ pub fn update_sun_light_system(
 pub fn celestial_visuals_system(
     q_camera: Query<
         (Entity, &CellCoord, &Transform),
-        (With<Camera>, With<lunco_embodiment_core::roles::LocalEmbodiment>),
+        (
+            With<Camera>,
+            With<lunco_embodiment_core::roles::LocalEmbodiment>,
+        ),
     >,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody)>,
     mut q_tiles: Query<

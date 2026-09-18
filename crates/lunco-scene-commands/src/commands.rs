@@ -1773,10 +1773,6 @@ pub fn persist_environment_light_to_runtime_layer(
     }
     // Direction changes when yaw or pitch is specified.
     let direction_changed = cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some();
-    if attrs.is_empty() && !direction_changed {
-        return;
-    }
-
     let parent_path = lunco_usd_bevy_core::layer_default_prim(host.document().data())
         .map(|p| format!("/{p}"))
         .unwrap_or_else(|| "/".to_string());

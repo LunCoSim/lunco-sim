@@ -476,6 +476,10 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "focus_wanted": status.focus_wanted,
                 "focus_resident": status.focus_resident,
             },
+            "viewport_camera": world
+                .get_resource::<lunco_viewport_core::SceneViewport>()
+                .and_then(|viewport| viewport.active_camera)
+                .map(|entity| entity.to_bits()),
             "visual_foci": visual_foci,
         }))
     }

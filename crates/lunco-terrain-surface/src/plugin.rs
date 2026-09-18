@@ -57,6 +57,12 @@ impl Plugin for TerrainSurfacePlugin {
         app.init_resource::<crate::stream_viz::LodMeshCache>();
         app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
         app.init_resource::<crate::stream_viz::TerrainDetailDemands>();
+        // Terrain visual demand follows the same presentation binding as the
+        // renderer. The streamer must not infer an authority from raw
+        // Camera::is_active flags, because a stale/offscreen camera can carry
+        // a valid render component while not being the camera shown in the
+        // viewport.
+        app.init_resource::<lunco_viewport_core::SceneViewport>();
         // Off by default: interactive play wants real-time-paced streaming. Set by
         // `lunco-luncosim` for the duration of an offline recording so the captured
         // tile set is a function of the frame index rather than of thread

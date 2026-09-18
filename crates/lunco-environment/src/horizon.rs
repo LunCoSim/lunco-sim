@@ -370,8 +370,7 @@ pub struct HorizonBakeTask(Task<BakeResult>);
 #[reflect(Resource)]
 pub struct HorizonShadowCacheConfig {
     /// Master switch. `false` → the fragment shader keeps ray-marching per
-    /// pixel (the engine writes `shadow_cache_on = 0` and drops the cache
-    /// binding). `true` → the cache is baked and sampled instead.
+    /// pixel. `true` → committed cache images are baked and sampled instead.
     pub enabled: bool,
     /// Re-bake the cache when the sun's terrain-local direction has rotated
     /// more than this many degrees from the direction it was last baked at.
@@ -384,6 +383,11 @@ pub struct HorizonShadowCacheConfig {
     pub march_steps: usize,
     /// Cache bake supersamples per axis.
     pub samples_per_axis: usize,
+    /// Minimum wall-clock interval between replacement requests for one
+    /// terrain cache. A committed cache remains usable while the replacement
+    /// is pending, so a fast presentation clock cannot turn every completed
+    /// bake into another immediate CPU/GPU workload.
+    pub min_refresh_interval_secs: f32,
 }
 
 impl Default for HorizonShadowCacheConfig {
@@ -393,6 +397,7 @@ impl Default for HorizonShadowCacheConfig {
             sun_threshold_deg: 0.05,
             march_steps: 48,
             samples_per_axis: 2,
+            min_refresh_interval_secs: 0.25,
         }
     }
 }
@@ -405,6 +410,8 @@ impl HorizonShadowCacheConfig {
             && self.sun_threshold_deg < 180.0
             && self.march_steps > 0
             && self.samples_per_axis > 0
+            && self.min_refresh_interval_secs.is_finite()
+            && self.min_refresh_interval_secs >= 0.0
     }
 }
 
@@ -416,22 +423,27 @@ impl HorizonShadowCacheConfig {
 /// sun moves past the configured threshold.
 #[derive(Component)]
 pub struct HorizonShadowCache {
-    /// The GPU visibility texture (binding 10). Swapped atomically when a
-    /// re-bake finishes — the old handle is dropped, the new one takes over.
+    /// The GPU visibility texture (binding 10). Its asset contents are replaced
+    /// in place when a re-bake finishes, so every material keeps one stable
+    /// binding while the renderer uploads the new pixels.
     pub image: Handle<Image>,
     /// Terrain-local to-sun direction the cache was baked for. The cache is
     /// valid (visually lossless) while the sun stays within `sun_threshold_deg`
     /// of this; beyond it a re-bake is queued.
     last_sun_local: Vec3,
+    /// Wall-clock timestamp at which the current replacement was requested.
+    /// This is scheduling state, not a freshness claim; `last_sun_local` is
+    /// the authoritative angular sample represented by the image.
+    last_refresh_real_secs: f64,
 }
 
 impl HorizonShadowCache {
-    /// Whether this cache can be sampled for the current terrain-local sun.
+    /// Whether this cache is fresh enough to request a replacement bake.
     ///
-    /// The bake is an angular snapshot, not a generic terrain mask.  Consumers
-    /// must make the same freshness decision as [`start_shadow_cache_bake`]
-    /// before enabling the texture; keeping an old image bound while a fast
-    /// clock is rebaking makes a correctly lit terrain look fully shadowed.
+    /// The bake is an angular snapshot, not a generic terrain mask. The
+    /// committed image remains a valid presentation value while a replacement
+    /// is pending; this freshness decision belongs to the scheduler, not to
+    /// material binding.
     pub fn is_valid_for_sun(&self, sun_local: Vec3, threshold_deg: f32) -> bool {
         if !threshold_deg.is_finite() || threshold_deg <= 0.0 || threshold_deg >= 180.0 {
             return false;
@@ -517,6 +529,7 @@ struct ShadowCacheResult {
     bytes: Vec<u8>,
     resolution: u32,
     sun_local: Vec3,
+    requested_at_real_secs: f64,
     millis: u128,
 }
 
@@ -810,7 +823,7 @@ pub fn install_horizon_map_from_field(
 /// Linear filtering so the fragment shader's `textureSampleLevel` bilinearly
 /// interpolates the cache (the visibility is smooth across penumbra, so this
 /// is visually lossless and avoids per-texel march edges).
-fn make_shadow_cache_image(images: &mut Assets<Image>, bytes: Vec<u8>, res: u32) -> Handle<Image> {
+fn make_shadow_cache_image(bytes: Vec<u8>, res: u32) -> Image {
     let mut image = Image::new(
         Extent3d {
             width: res,
@@ -823,7 +836,7 @@ fn make_shadow_cache_image(images: &mut Assets<Image>, bytes: Vec<u8>, res: u32)
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
     image.sampler = ImageSampler::linear();
-    images.add(image)
+    image
 }
 
 /// Kicks off a visibility-cache (re)bake for every horizon terrain whose sun
@@ -832,18 +845,17 @@ fn make_shadow_cache_image(images: &mut Assets<Image>, bytes: Vec<u8>, res: u32)
 /// ~29.5 Earth days, so at 0.05° the cache re-bakes roughly every 6 minutes
 /// at 1×, and far less when the sun is static).
 ///
-/// Debounced by `Without<ShadowCacheBakeTask>`: while a bake is in flight the
-/// sun may keep moving, but no second bake starts — the stale cache stays
-/// bound (visually lossless within the threshold) and the next bake fires
-/// once the in-flight one lands and the sun is still past threshold. This
-/// naturally limits the re-bake rate to the bake duration, so a fast
-/// day-cycle animation doesn't queue an unbounded backlog.
+/// Debounced by `Without<ShadowCacheBakeTask>` and the configured wall-clock
+/// interval: while a bake is in flight the sun may keep moving, but no second
+/// bake starts. The committed cache stays bound as the presentation value and
+/// keeps its image identity; once the task lands, the completed pixels replace
+/// that asset in place. The next replacement is admitted only after the
+/// minimum refresh interval.
 ///
 /// Below-horizon sun is skipped: the march short-circuits to 0 there (its
 /// first branch), and the render-side `wire_terrain_materials` drops
-/// `shadow_cache_on` to 0 so the shader falls back to that cheap march instead
-/// of sampling a stale above-horizon cache. A fresh bake fires when the sun
-/// rises past the threshold again.
+/// `shadow_cache_on` to 0 so the shader does not sample an above-horizon cache.
+/// A fresh bake fires when the sun rises past the threshold again.
 // `Instant` is bevy's portable clock (see `bake_heightfield`) — the
 // `disallowed_methods` hit is the documented native-only false positive.
 #[allow(clippy::type_complexity, clippy::disallowed_methods)]
@@ -851,6 +863,7 @@ pub fn start_shadow_cache_bake(
     mut commands: Commands,
     #[cfg(target_arch = "wasm32")] mut images: ResMut<Assets<Image>>,
     cfg: Res<HorizonShadowCacheConfig>,
+    real: Option<Res<Time<Real>>>,
     sun: SunQuery,
     render_sun: Option<Res<SunRenderState>>,
     terrains: Query<
@@ -858,7 +871,7 @@ pub fn start_shadow_cache_bake(
             Entity,
             Ref<GlobalTransform>,
             &HorizonMap,
-            Option<&HorizonShadowCache>,
+            Option<&mut HorizonShadowCache>,
         ),
         (Without<RenderLayers>, Without<ShadowCacheBakeTask>),
     >,
@@ -890,8 +903,9 @@ pub fn start_shadow_cache_bake(
     let cos_thresh = cfg.sun_threshold_deg.to_radians().cos();
     let march_steps = cfg.march_steps;
     let samples_per_axis = cfg.samples_per_axis;
+    let now_real_secs = real.as_deref().map_or(0.0, Time::elapsed_secs_f64);
 
-    for (entity, terrain_gt, map, cache) in &terrains {
+    for (entity, terrain_gt, map, mut cache) in terrains {
         if map.field.resolution() < 2 {
             warn!(
                 "[horizon] terrain {entity:?} has an invalid heightfield resolution; skipping shadow-cache bake"
@@ -909,10 +923,17 @@ pub fn start_shadow_cache_bake(
             continue;
         }
         // Within the threshold of the last bake → cache still valid.
-        if let Some(c) = cache {
+        if let Some(c) = cache.as_deref() {
             if c.last_sun_local.dot(sun_local) >= cos_thresh {
                 continue;
             }
+            if now_real_secs - c.last_refresh_real_secs < f64::from(cfg.min_refresh_interval_secs) {
+                continue;
+            }
+        }
+
+        if let Some(c) = cache.as_deref_mut() {
+            c.last_refresh_real_secs = now_real_secs;
         }
 
         let target_res = map.field.resolution();
@@ -935,6 +956,7 @@ pub fn start_shadow_cache_bake(
                     bytes,
                     resolution: target_res,
                     sun_local,
+                    requested_at_real_secs: now_real_secs,
                     millis: start.elapsed().as_millis(),
                 }
             });
@@ -957,9 +979,11 @@ pub fn start_shadow_cache_bake(
                 &mut commands,
                 &mut images,
                 entity,
+                cache.as_deref().map(|cache| cache.image.clone()),
                 bytes,
                 target_res,
                 sun_local,
+                now_real_secs,
                 millis,
             );
         }
@@ -967,18 +991,23 @@ pub fn start_shadow_cache_bake(
 }
 
 /// Collects finished off-thread visibility-cache bakes and installs them
-/// (native). The cache handle swaps atomically: the old `HorizonShadowCache`
-/// image is dropped, the fresh one takes over, and the render-side
-/// `wire_terrain_materials` consumes it in the same frame's PostUpdate. While
-/// the bake ran the stale cache stayed bound (within the sun threshold →
-/// visually lossless).
+/// (native). The committed cache keeps one stable image handle for the
+/// terrain's lifetime; a finished bake replaces that image asset in place.
+/// That leaves every tile material binding and shadow-ownership decision
+/// unchanged while the renderer uploads the new pixels. While the bake ran the
+/// old cache stayed bound, so the renderer never enters the expensive live
+/// march merely because a replacement is pending.
 pub fn finish_shadow_cache_bake(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    mut q: Query<(Entity, &mut ShadowCacheBakeTask)>,
+    mut q: Query<(
+        Entity,
+        &mut ShadowCacheBakeTask,
+        Option<&HorizonShadowCache>,
+    )>,
 ) {
     use bevy::tasks::futures_lite::future;
-    for (entity, mut task) in &mut q {
+    for (entity, mut task, cache) in &mut q {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
@@ -986,36 +1015,53 @@ pub fn finish_shadow_cache_bake(
             &mut commands,
             &mut images,
             entity,
+            cache.map(|cache| cache.image.clone()),
             result.bytes,
             result.resolution,
             result.sun_local,
+            result.requested_at_real_secs,
             result.millis,
         );
     }
 }
 
 /// Installs a finished visibility-cache bake on the terrain entity: uploads
-/// the `R8Unorm` texture and inserts/replaces [`HorizonShadowCache`]. The
-/// previous cache image handle (if any) is dropped here — the material
-/// rebinding happens render-side next frame. Shared by the native async finish
-/// and the wasm inline bake so the two paths can't drift.
+/// the `R8Unorm` texture and inserts/replaces [`HorizonShadowCache`]. An
+/// existing cache keeps its image handle and publishes the new pixels through
+/// the same asset identity, so material bind groups and tile ownership do not
+/// churn when a replacement completes. Shared by the native async finish and
+/// the wasm inline bake so the two paths cannot drift.
 fn install_shadow_cache(
     commands: &mut Commands,
     images: &mut Assets<Image>,
     entity: Entity,
+    existing_image: Option<Handle<Image>>,
     bytes: Vec<u8>,
     resolution: u32,
     sun_local: Vec3,
+    requested_at_real_secs: f64,
     millis: u128,
 ) {
-    let image = make_shadow_cache_image(images, bytes, resolution);
+    let image = make_shadow_cache_image(bytes, resolution);
+    let image_handle = if let Some(existing_image) = existing_image {
+        // The cache handle is held strongly by the committed component. A
+        // missing generation is an internal lifecycle violation, not a state
+        // to hide by allocating an unrelated replacement image.
+        images
+            .insert(existing_image.id(), image)
+            .expect("committed horizon cache image handle must remain valid");
+        existing_image
+    } else {
+        images.add(image)
+    };
     debug!("[horizon] shadow cache baked for {entity:?}: {resolution}² in {millis} ms");
     commands
         .entity(entity)
         .remove::<ShadowCacheBakeTask>()
         .try_insert(HorizonShadowCache {
-            image,
+            image: image_handle,
             last_sun_local: sun_local,
+            last_refresh_real_secs: requested_at_real_secs,
         });
 }
 
@@ -1274,10 +1320,11 @@ mod tests {
     }
 
     #[test]
-    fn shadow_cache_is_disabled_until_its_sun_direction_is_current() {
+    fn shadow_cache_reports_angular_freshness_for_scheduling() {
         let cache = HorizonShadowCache {
             image: Handle::default(),
             last_sun_local: Vec3::Y,
+            last_refresh_real_secs: 0.0,
         };
 
         assert!(cache.is_valid_for_sun(Vec3::Y, 0.05));

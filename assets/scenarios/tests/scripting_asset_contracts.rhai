@@ -61,7 +61,27 @@ fn on_tick(me, ctx) {
     failures.push(t_true(catalog != (),
         "ScriptingCatalog did not publish the authored scripting surface"));
 
+    for sample in [
+        #{
+            document: "twin://moonbase/scenes/main.usda",
+            relative: "textures/albedo.png",
+            expected: "twin://moonbase/textures/albedo.png",
+        },
+        #{
+            document: "scenes/main.usda",
+            relative: "textures/albedo.png",
+            expected: "lunco://textures/albedo.png",
+        },
+    ] {
+        let resolved = asset_source_relative_uri(sample.document, sample.relative);
+        failures.push(t_true(resolved == sample.expected,
+            "asset URI resolution changed source authority: " + sample.document));
+    }
+
     if catalog != () {
+        failures.push(t_true(catalog.verbs != ()
+                && contains_name(catalog.verbs, "asset_source_relative_uri"),
+            "ScriptingCatalog is missing asset_source_relative_uri"));
         let prelude = catalog.prelude;
         failures.push(t_true(prelude != () && prelude.len() > 0,
             "the active Rhai prelude is empty or failed to compile"));

@@ -3,8 +3,9 @@
 //! One stored master — the [`SimTick`](lunco_core::SimTick) in `lunco-core` (the
 //! netcode/integrator substrate) — and **everything calendar/celestial is
 //! *derived*, never accumulated**. This crate owns the layer *above* the tick:
-//! the conversion anchor (tick ↔ epoch), the transport (play/pause/rate), and
-//! the derived [`WorldTime`] view that consumers read.
+//! the conversion anchor (tick ↔ epoch), the transport (play/pause/rate), the
+//! derived causal [`WorldTime`] view, and the separate [`CelestialTime`]
+//! presentation view.
 //!
 //! The load-bearing rule is invariant 1 — **derive, never accumulate**. The old
 //! `epoch += Δt` (the former celestial clock) drifted, was frame-rate
@@ -344,9 +345,10 @@ pub fn advance_clock(rate: f64, paused: bool) -> f64 {
     }
 }
 
-/// The derived, read-only time view every consumer reads. Written each frame by
-/// [`advance_world_clock`]. Nothing keys off the raw `MissionClock`/`SimTick`
-/// directly except the spine itself.
+/// The derived causal time view every simulation consumer reads. Written each
+/// frame by [`advance_world_clock`]. A detached presentation clock must never
+/// overwrite this resource: doing so lets a view command advance physics and
+/// other causal state.
 #[derive(Resource, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Resource)]
 pub struct WorldTime {
@@ -356,6 +358,23 @@ pub struct WorldTime {
     pub sim_secs: f64,
     /// Mission Elapsed Time, seconds.
     pub met_secs: f64,
+}
+
+/// The calendar time used by detached celestial presentation consumers.
+///
+/// Normally this is identical to [`WorldTime::epoch_jd`]. [`SetClock`](crate::SetClock)
+/// may deliberately re-parent the celestial clock onto wall time, however, so
+/// the sky can move while the causal simulation remains paused. This resource
+/// is the only place that presentation-only celestial epoch is published; it
+/// must not be used by physics, authored world state, or the active surface
+/// frame.
+#[derive(Resource, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Resource)]
+pub struct CelestialTime {
+    /// Derived celestial epoch (Julian Date, TDB).
+    pub epoch_jd: f64,
+    /// Change in celestial epoch seconds since the previous frame.
+    pub delta_secs: f64,
 }
 
 impl WorldTime {
@@ -482,9 +501,11 @@ impl Plugin for TimePlugin {
             .init_resource::<TimeTransport>()
             .init_resource::<PendingScenePause>()
             .init_resource::<WorldTime>()
+            .init_resource::<CelestialTime>()
             .register_type::<MissionClock>()
             .register_type::<TimeTransport>()
             .register_type::<WorldTime>()
+            .register_type::<CelestialTime>()
             .add_systems(
                 PreUpdate,
                 (

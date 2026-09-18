@@ -35,7 +35,7 @@ use bevy::prelude::*;
 
 use lunco_core::{on_command, register_commands, Command};
 
-use crate::{TransportMode, WorldTime};
+use crate::{CelestialTime, TransportMode, WorldTime};
 
 /// Coupling class of a domain (doc §5). Informational in v1 (the sampler is a pure
 /// Tier-1 consumer); a future co-sim layer keys causal domains on communication
@@ -1014,6 +1014,7 @@ fn on_reset_time(
     mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
     mut resolved: ResMut<ResolvedDomains>,
     mut last: ResMut<LastClockT>,
+    celestial_time: Option<ResMut<CelestialTime>>,
     mut commands: Commands,
 ) {
     if let Some(clocks) = clocks {
@@ -1079,6 +1080,9 @@ fn on_reset_time(
     // before resolving the replacement scene.
     *resolved = ResolvedDomains::default();
     *last = LastClockT::default();
+    if let Some(mut celestial_time) = celestial_time {
+        *celestial_time = CelestialTime::default();
+    }
 
     bevy::log::info!("[time] clock tree reset to defaults (scene load)");
 }
@@ -1117,7 +1121,7 @@ pub(crate) fn build_domain_tree(app: &mut App) {
             PreUpdate,
             (
                 advance_and_resolve_domains.in_set(DomainResolveSet),
-                write_epoch_from_celestial_clock,
+                write_celestial_time,
             )
                 .chain()
                 .in_set(crate::TimeSpineSet)
@@ -1130,7 +1134,7 @@ pub(crate) fn build_domain_tree(app: &mut App) {
     register_all_commands(app);
 }
 
-/// Write `WorldTime.epoch_jd` from the **celestial clock** (doc 19 §11d).
+/// Write [`CelestialTime`] from the **celestial clock** (doc 19 §11d).
 ///
 /// Write the epoch as a projection of the celestial clock tree node:
 ///
@@ -1142,13 +1146,14 @@ pub(crate) fn build_domain_tree(app: &mut App) {
 /// projection. Re-parenting or scaling that node changes presentation time
 /// without touching the simulation tick.
 ///
-/// `WorldTime.epoch_jd` stays the read interface, so the ~15 `epoch_jd` readers in
-/// `lunco-celestial` are untouched: the clock became the source, the view stayed put.
-pub fn write_epoch_from_celestial_clock(
+/// `WorldTime.epoch_jd` remains owned by [`crate::advance_world_clock`]. The
+/// detached clock is a presentation input and must not become a second writer
+/// for the causal world epoch.
+pub fn write_celestial_time(
     clocks: Option<Res<Clocks>>,
     resolved: Res<ResolvedDomains>,
     mission: Res<crate::MissionClock>,
-    mut world: ResMut<WorldTime>,
+    mut celestial_time: ResMut<CelestialTime>,
     q_domain: Query<&TimeDomain>,
     mut last_epoch: Local<f64>,
     mut last_mission_origin: Local<Option<(u64, u64)>>,
@@ -1184,8 +1189,13 @@ pub fn write_epoch_from_celestial_clock(
             *last_epoch, mission.mission_epoch0_jd, d,
         );
     }
+    celestial_time.delta_secs = if *last_epoch != 0.0 {
+        (next - *last_epoch) * crate::SECS_PER_DAY
+    } else {
+        0.0
+    };
+    celestial_time.epoch_jd = next;
     *last_epoch = next;
-    world.epoch_jd = next;
 }
 
 #[cfg(test)]
@@ -1244,6 +1254,44 @@ mod tests {
         mission.mission_epoch0_jd += 10.0;
         assert!(mission_origin_changed(&mut previous, &mission));
         assert!(!mission_origin_changed(&mut previous, &mission));
+    }
+
+    #[test]
+    fn detached_celestial_epoch_does_not_mutate_causal_world_time() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = bevy::prelude::World::new();
+        let celestial = world.spawn(TimeDomain::default()).id();
+        world.insert_resource(Clocks {
+            real: Entity::PLACEHOLDER,
+            sim: Entity::PLACEHOLDER,
+            interaction: Entity::PLACEHOLDER,
+            celestial,
+        });
+        world.insert_resource(ResolvedDomains(HashMap::from([(
+            celestial,
+            ClockSample {
+                t: crate::SECS_PER_DAY,
+                dt: crate::SECS_PER_DAY,
+            },
+        )])));
+        world.insert_resource(crate::MissionClock {
+            mission_epoch0_jd: 100.0,
+            ..Default::default()
+        });
+        world.insert_resource(WorldTime {
+            epoch_jd: 100.0,
+            ..Default::default()
+        });
+        world.insert_resource(CelestialTime {
+            epoch_jd: 100.0,
+            ..Default::default()
+        });
+
+        world.run_system_once(write_celestial_time).unwrap();
+
+        assert_eq!(world.resource::<WorldTime>().epoch_jd, 100.0);
+        assert_eq!(world.resource::<CelestialTime>().epoch_jd, 101.0);
     }
 
     /// Resolve `domain`'s `t` with no prior frame (so every `dt` starts from `t`).

@@ -16,20 +16,20 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::{
-    CAMERA_ZOOM_SENSITIVITY, CurrentRegionArrival, OrbitUserInput, OrbitViewReturn, RadialArrival,
+    CurrentRegionArrival, OrbitUserInput, OrbitViewReturn, RadialArrival, CAMERA_ZOOM_SENSITIVITY,
     SURFACE_ORBIT_HANDOFF_ALTITUDE_M,
 };
 use lunco_camera_core::{
+    math::{apply_scroll_zoom, camera_decay_alpha, surface_camera_angles, surface_camera_rotation},
     CameraDefaults, CameraPoseLock, CameraUpdateSet, CameraZoomInput, FreeFlightCamera,
     OrbitCamera, PendingFocus, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
-    math::{apply_scroll_zoom, camera_decay_alpha, surface_camera_angles, surface_camera_rotation},
 };
 use lunco_camera_core::{FocusTarget, ReturnFromOrbit};
-use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
+use lunco_celestial_spatial::{CelestialPresentationGrid, LeaveSurface, TeleportToSurface};
 use lunco_celestial_spatial_core::{
-    LocalGravityField, surface_axes_for_grid_position, surface_axes_in_grid,
+    surface_axes_for_grid_position, surface_axes_in_grid, LocalGravityField,
 };
-use lunco_core::{CelestialBody, Spacecraft, on_command, register_commands};
+use lunco_core::{on_command, register_commands, CelestialBody, Spacecraft};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_spatial::attach::{local_pose_to_grid_storage, migrate_to_grid_local_pose};
@@ -757,7 +757,10 @@ fn orbit_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<(Entity, &CelestialBody)>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
+    mut q_presentation_and_spatial: ParamSet<(
+        Query<(Entity, &CelestialPresentationGrid)>,
+        Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
+    )>,
     q_sc: Query<&Spacecraft>,
     q_dragging: Query<(), With<lunco_interaction_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
@@ -795,11 +798,22 @@ fn orbit_system(
             lunco_spatial::find_descendant_or_self(orbit.target, &q_children, &q_bodies)
                 .unwrap_or(orbit.target);
         let body = q_bodies.get(physical_target).ok().map(|(_, body)| body);
-        // Celestial bodies own an explicit star-fixed camera grid. This is the
-        // same nested-grid shape as big_space's planets example: body-fixed
-        // terrain/vehicles stay under the rotating frame while the camera
-        // lives in a co-located inertial sibling.
-        let orbit_grid = if let Some(body) = body {
+        // Orbit view is a presentation concern. When a scene detaches the
+        // celestial clock, the rendered globe follows that clock while the
+        // physical body remains on WorldTime. Resolve the camera into the
+        // co-located presentation inertial anchor so it follows the visible
+        // globe. The physical ReferenceFrame remains the fallback for scenes
+        // that do not provide presentation content.
+        let presentation_orbit_grid = body.and_then(|body| {
+            q_presentation_and_spatial
+                .p0()
+                .iter()
+                .find(|(_, frame)| frame.body == body.ephemeris_id && !frame.body_fixed)
+                .map(|(entity, _)| entity)
+        });
+        let orbit_grid = if let Some(entity) = presentation_orbit_grid {
+            entity
+        } else if let Some(body) = body {
             let Some(entity) =
                 frame_index.resolve(lunco_celestial::ReferenceFrame::EclipticJ2000 {
                     center: body.ephemeris_id,
@@ -818,15 +832,24 @@ fn orbit_system(
         let Ok(orbit_grid_ref) = q_grids.get(orbit_grid) else {
             continue;
         };
-        let centre_entity = body.map_or(orbit.target, |_| physical_target);
-        let Some((target_orbit, _)) = lunco_spatial::coords::pose_in_grid(
-            centre_entity,
-            orbit_grid,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            continue;
+        let q_spatial = q_presentation_and_spatial.p1();
+        let target_orbit = if presentation_orbit_grid.is_some() {
+            // The presentation inertial anchor is co-located with the visible
+            // globe and its origin is the body's centre. The causal body entity
+            // is intentionally not reparented into this render-only branch.
+            DVec3::ZERO
+        } else {
+            let centre_entity = body.map_or(orbit.target, |_| physical_target);
+            let Some((target_orbit, _)) = lunco_spatial::coords::pose_in_grid(
+                centre_entity,
+                orbit_grid,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) else {
+                continue;
+            };
+            target_orbit
         };
         let Some((cam_orbit, _)) = lunco_spatial::coords::pose_in_grid_seeded(
             avatar_ent,
