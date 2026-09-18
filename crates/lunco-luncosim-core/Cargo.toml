@@ -76,7 +76,10 @@ lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
 lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 
 [features]
-default = ["sysml"]
+# SysML is an explicit application capability. Keeping it opt-in prevents the
+# headless simulation substrate from compiling the document integration for
+# hosts that do not install a SysML surface.
+default = []
 experiments = ["dep:lunco-experiments", "dep:lunco-storage"]
 server = ["api-transport", "transport-http", "networking", "experiments"]
 api-transport = [
