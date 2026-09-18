@@ -42,7 +42,12 @@ updates = ["dep:lunco-assets-transport", "dep:velopack", "dep:ureq"]
 # Rasterize and embed the platform icon only for native package builds. Normal
 # UI development keeps the icon installer inactive, so the build script does
 # not compile the SVG/image toolchain.
-package-icons = ["dep:resvg", "dep:usvg", "dep:image", "dep:winresource"]
+package-icons = [
+    "dep:resvg",
+    "dep:usvg",
+    "dep:image",
+    "dep:winresource",
+]
 # Opt-in profiling for the complete GPU-backed application composition.
 tracy = ["bevy/trace_tracy"]
 
