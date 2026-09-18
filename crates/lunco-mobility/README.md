@@ -42,7 +42,7 @@ By using a single ray per wheel:
 
 Each moving quantity has one writer. Raycast wheels solve their tyre patch force
 in `lunco-mobility`; jointed wheels receive the solved scalar torque through the
-generic `lunco_cosim::JointTorqueActuator`; and a rocker-bogie differential
+generic `lunco_physics::joint::JointTorqueActuator`; and a rocker-bogie differential
 projects its gear relation inside Avian's substep solver. Co-simulation does not
 position-hold a wheel joint that has a solved torque boundary. Never add a second
 damping or drive-force path to "calm" a rover: use the high-speed

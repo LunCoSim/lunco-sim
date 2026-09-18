@@ -670,7 +670,7 @@ fn resolve_joint_drive_motor_model(
 
 /// Force (N) / torque (N·m) saturation a USD-driven joint motor gets when its
 /// `physics:maxForce` is left unauthored — generous enough to hold the target
-/// against gravity, matching `lunco_cosim::joint`'s wire-driven default.
+/// against gravity, matching `lunco_physics::joint`'s wire-driven default.
 const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 
 /// Adds a collider component to an entity based on USD prim type and dimensions.

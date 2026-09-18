@@ -12,7 +12,6 @@ lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-environment = { path = "../lunco-environment" }
 # `physics_is_live` — the run condition gating force application on the solver
 # actually stepping. The wheel systems write into avian's force accumulator, which

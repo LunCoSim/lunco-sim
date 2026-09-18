@@ -267,7 +267,7 @@ pub(crate) fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAss
             }
         }
         let Some(je) = joint_entity else { continue };
-        if let Some(mut actuator) = world.get_mut::<lunco_cosim::JointTorqueActuator>(je) {
+        if let Some(mut actuator) = world.get_mut::<lunco_physics::joint::JointTorqueActuator>(je) {
             actuator.brake_torque = u.params.brake_torque_max;
             actuator.rotational_inertia = u.params.axle_inertia();
         }

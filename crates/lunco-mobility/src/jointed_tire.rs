@@ -9,7 +9,7 @@
 use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use lunco_cosim::{bounded_brake_torque, revolute_hinge_axis_world, JointTorqueActuator};
+use lunco_physics::joint::{bounded_brake_torque, revolute_hinge_axis_world, JointTorqueActuator};
 use lunco_port_core::InputPorts;
 use lunco_port_core::Port;
 

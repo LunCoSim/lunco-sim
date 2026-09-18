@@ -99,8 +99,8 @@ fn mark_causal_state_sink<T: Component>(trigger: On<Add, T>, mut commands: Comma
 }
 
 fn mark_joint_torque_port(
-    trigger: On<Add, avian::JointTorqueActuator>,
-    query: Query<&avian::JointTorqueActuator>,
+    trigger: On<Add, lunco_physics::joint::JointTorqueActuator>,
+    query: Query<&lunco_physics::joint::JointTorqueActuator>,
     mut commands: Commands,
 ) {
     let Ok(actuator) = query.get(trigger.entity) else {
@@ -194,7 +194,7 @@ impl Plugin for CoSimPlugin {
             .register_type::<PendingForces>()
             .register_type::<ForceActuator>()
             .register_type::<TorqueActuator>()
-            .register_type::<avian::JointTorqueActuator>()
+            .register_type::<lunco_physics::joint::JointTorqueActuator>()
             .register_type::<PendingActuatorCommand>()
             .register_type::<SimConnection>()
             .register_type::<RealtimeSafe>()

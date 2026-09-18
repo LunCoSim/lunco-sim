@@ -62,8 +62,8 @@ lunco-usd-viewport-runtime = { path = "../lunco-usd-viewport-runtime" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
+lunco-physics = { path = "../lunco-physics" }
 lunco-render = { path = "../lunco-render" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }

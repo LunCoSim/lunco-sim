@@ -66,13 +66,13 @@ use lunco_usd_bevy_scene::{
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
 // See docs/architecture/render-decoupling.md.
-use lunco_cosim::JointTorqueActuator;
 use lunco_materials::ShaderLook;
 use lunco_mobility::wheel_kinematics::{body_point_velocity, wheel_hub_pose, wheel_roll_rate};
 use lunco_mobility::{
     DifferentialCoupling, JointedWheelTire, Suspension, SuspensionPiston, SuspensionSpring,
     WheelRaycast,
 };
+use lunco_physics::joint::JointTorqueActuator;
 use lunco_physics::raycast::RaycastObservation;
 use lunco_port_core::{Port, PortSurface};
 use lunco_render::{PbrLook, SceneCamera};

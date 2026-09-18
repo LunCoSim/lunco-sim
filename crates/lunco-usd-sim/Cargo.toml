@@ -41,7 +41,6 @@ lunco-environment = { path = "../lunco-environment" }
 # Typed avatar lifecycle and role handoff only. Camera behavior and all raw
 # input translation belong to `lunco-avatar` and the authored Rhai layer.
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 # Declares what a loading scene is still waiting on — see `src/readiness.rs`.
 lunco-physics = { path = "../lunco-physics" }

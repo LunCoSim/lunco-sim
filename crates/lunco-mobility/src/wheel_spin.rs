@@ -365,7 +365,7 @@ mod tests {
     /// real-clock advance and `Time::<Fixed>` is matched to it, so every step that
     /// runs is exactly `dt` — deterministic, and `dt` is explicit at every call
     /// site. This is how every other physics test in the workspace drives the
-    /// fixed schedule (see `lunco_cosim::joint` tests).
+    /// fixed schedule (see `lunco_physics::joint` tests).
     fn app_on_fixed_clock(dt: f64) -> App {
         let mut app = App::new();
         app.add_plugins(TimePlugin);
