@@ -6,17 +6,10 @@ license.workspace = true
 description = "LunCoSim's interactive USD preview viewport"
 
 [dependencies]
-bevy = { workspace = true, features = [
-    "bevy_asset",
-    "bevy_mesh",
-    "bevy_light",
-    "bevy_render",
-    "bevy_core_pipeline",
-    "bevy_window",
-    "bevy_ui_render",
-    "bevy_post_process",
-    "bevy_anti_alias",
-] }
+# The viewport UI paints an egui panel and consumes runtime view facts. The
+# sibling `lunco-usd-viewport-runtime` owns cameras, render targets, lights,
+# and GPU features; this package only needs Bevy's ECS/app facade directly.
+bevy = { workspace = true }
 bevy_egui = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
