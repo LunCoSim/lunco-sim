@@ -114,7 +114,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, and environment-camera binding. It is independent from the visual mesh projector. |
 | **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `lunco-usd-bevy-runtime`; kept separate from the visual projector. |
 | **`lunco-usd-avian-filters`** | Render-free USD/Avian collision-filter boundary: interprets standard `PhysicsFilteredPairsAPI` and `PhysicsCollisionGroup`, owns transient joint-pair suppression, and installs the single Avian collision/contact hook. |
-| **`lunco-usd-avian-contracts`** | Shared USD/Avian ECS carriers and normalized joint-drive contract used by physics projection, readiness, queries, and co-simulation; contains no stage traversal or projection systems. |
+| **`lunco-usd-avian-contracts`** | Shared USD/Avian ECS carriers, normalized joint-drive contract, and generic physics-projection lifecycle seam used by physics projection, runtime live edits, readiness, queries, and co-simulation; contains no stage traversal or projection systems. |
 | **`lunco-usd-avian-reader`** | Shared render-free composed OpenUSD physics readers for collider geometry, joint topology/limits/drives, and typed physics attributes. Reused by the runtime Avian projector and authored-stage lint without owning Bevy systems or lifecycle. |
 | **`lunco-usd-avian-joints`** | Reusable native Avian joint boundary: typed constructors, joint-pair filtering, seating, solver-island admission, and graph-safe detach. It consumes shared contracts and is usable by authored USD and synthesized mechanisms. |
 | **`lunco-usd-avian`** | USD physics projection (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to normalized Avian joint plans and body/collider components. Native joint lifecycle is owned by `lunco-usd-avian-joints`; its USD physics-material reader is isolated from the main projection module. It consumes the independent collision-filter package and `lunco-usd-avian-reader`; lint fact production is in `lunco-usd-avian-lint`. |
@@ -754,8 +754,11 @@ reader does not rebuild the bridge implementation.
 **`lunco-usd-avian-contracts`**
 Shared ECS carriers crossing the USD physics, vehicle, readiness, query, and
 co-simulation packages. It owns `PendingUsdJoint`, joint-drive data, scene
-ownership, dynamic-admission, and authored-velocity markers, while the runtime
-projector remains the owner of stage traversal and authored-fact translation.
+ownership, dynamic-admission, authored-velocity, and physics-projection
+lifecycle markers. Its generic invalidation seam lets the live runtime re-arm a
+newly composed rigid-body prim without depending on the full USD physics
+projector; that projector remains the owner of stage traversal and
+authored-fact translation.
 
 **`lunco-usd-avian-joints`**
 Reusable native Avian joint boundary. It owns typed joint construction,

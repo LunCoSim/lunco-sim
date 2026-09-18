@@ -25,7 +25,6 @@ lunco-time = { path = "../lunco-time" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }

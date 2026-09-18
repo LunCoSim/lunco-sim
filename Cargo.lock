@@ -9602,7 +9602,6 @@ dependencies = [
  "lunco-time",
  "lunco-twin",
  "lunco-usd-authoring",
- "lunco-usd-avian",
  "lunco-usd-avian-contracts",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-light",

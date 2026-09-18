@@ -67,6 +67,9 @@ bridge, including f64 pose synchronization, rootless collider propagation,
 frame transport/reset, and backend admission validation;
 `lunco-usd-avian-filters` owns standard USD collision filtering, transient joint
 pair suppression, and Avian's single collision/contact hook;
+`lunco-usd-avian-contracts` owns the shared physics ECS markers and the generic
+invalidation seam used by live runtime edits, so the runtime core does not
+depend on the full USD physics projector;
 `lunco-usd-avian-joints` owns native Avian joint construction, seating, solver
 admission, pair filtering, and graph-safe detach; `lunco-usd-avian` owns
 OpenUSD physics projection and translates authored joint facts into that generic

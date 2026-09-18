@@ -1,6 +1,7 @@
 //! Shared USD/Avian runtime contracts.
 //!
-//! This package contains only ECS carriers and their generic drive conversion.
+//! This package contains only ECS carriers, generic projection lifecycle seams,
+//! and drive conversion.
 //! It deliberately has no USD stage traversal, projection systems, or scene
 //! policy. Keeping these types outside the large projection crate lets query,
 //! readiness, and co-simulation packages observe the same components without
@@ -17,6 +18,31 @@ use bevy::prelude::*;
 /// the explicit ownership fact used by scene teardown and runtime queries.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ScenePhysicsOwned;
+
+/// Marker for a USD prim whose standard physics projection has completed.
+///
+/// The Avian projection owns insertion; the generic live-stage bridge owns
+/// invalidation when a composed rigid-body schema is added after the entity
+/// already exists. Keeping the marker in this contract package avoids making
+/// that bridge depend on the full USD-to-Avian projector.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct UsdPhysicsProjected;
+
+/// Re-arm standard USD physics projection for a newly composed rigid-body prim.
+///
+/// A live reference can add `PhysicsRigidBodyAPI` to an already-existing
+/// instance root. Existing Avian bodies are left untouched; only a typeless
+/// entity without a rigid body is re-armed for the projection observer.
+pub fn invalidate_usd_physics_projection(world: &mut World, entity: Entity) -> bool {
+    if world.get::<avian3d::prelude::RigidBody>(entity).is_some() {
+        return false;
+    }
+    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+        return false;
+    };
+    entity_mut.remove::<UsdPhysicsProjected>();
+    true
+}
 
 /// Marker for a USD prim awaiting joint creation.
 ///

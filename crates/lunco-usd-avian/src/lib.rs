@@ -68,6 +68,7 @@ use openusd::sdf::Path as SdfPath;
 // months: a typo in a `&str` compiles.
 use lunco_usd_avian_contracts::{
     AuthoredInitialVelocity, JointDrive, PendingUsdJoint, ScenePhysicsOwned, ShouldBeDynamic,
+    UsdPhysicsProjected,
 };
 use lunco_usd_avian_reader::{
     collider::{
@@ -166,26 +167,6 @@ pub fn runtime_joint_facts(
             .then(left.entity_bits.cmp(&right.entity_bits))
     });
     facts
-}
-
-/// Invalidate the one-shot USD physics projection for a prim whose composed
-/// schemas changed after its visual entity was created.
-///
-/// A live reference can add `PhysicsRigidBodyAPI` to an already-existing
-/// instance root. The USD visual projection is then refreshed from the live
-/// stage, and this owner-level invalidation lets the Avian observer read the
-/// newly composed body contract once more. Physics components are deliberately
-/// left intact; the caller only uses this for a prim that was previously
-/// typeless and therefore had no Avian body to replace.
-pub fn invalidate_usd_physics_projection(world: &mut World, entity: Entity) -> bool {
-    if world.get::<RigidBody>(entity).is_some() {
-        return false;
-    }
-    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
-        return false;
-    };
-    entity_mut.remove::<UsdAvianProcessed>();
-    true
 }
 
 /// Bevy plugin for USD physics mapping.
@@ -444,13 +425,6 @@ fn enforce_kinematic_on_animated(
         }
     }
 }
-
-/// Marker to indicate a prim has been processed by the Avian physics system.
-///
-/// Prevents the deferred processing system from re-processing the same entity on
-/// subsequent frames.
-#[derive(Component)]
-struct UsdAvianProcessed;
 
 /// Mass properties needed to turn a USD force drive into Avian's implicit
 /// spring-damper model. These are the live, composed properties after Avian has
@@ -726,7 +700,7 @@ fn reject_collider_projection(
 ) {
     log_collider_projection_error(sdf_path, &error);
     report_collider_projection_error(faults, holds, entity, sdf_path, &error);
-    commands.entity(entity).try_insert(UsdAvianProcessed);
+    commands.entity(entity).try_insert(UsdPhysicsProjected);
 }
 
 /// Terrain prims whose collider is built from a loaded `Mesh3d` — a glTF DEM
@@ -891,7 +865,7 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 /// Deferred system that maps USD physics attributes to Avian3D components.
 ///
 /// This system runs in the `Update` schedule and processes all `UsdPrimPath` entities
-/// that haven't been marked with `UsdAvianProcessed` yet.
+/// that haven't been marked with `UsdPhysicsProjected` yet.
 ///
 /// # USD Compound Rigid Body Standard
 ///
@@ -918,7 +892,7 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 /// visual and simulation projection is available for physics components.
 fn process_usd_avian_prims(
     trigger: On<Add, UsdSceneProjected>,
-    query: Query<(&UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdAvianProcessed>>,
+    query: Query<(&UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdPhysicsProjected>>,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
@@ -941,7 +915,7 @@ fn process_usd_avian_prims(
     // PhysicsRigidBodyAPI so Avian cannot admit a duplicate body or a duplicate
     // joint/collider graph into the simulation.
     if is_preview_only(entity, &q_child_of, &q_preview_only) {
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
     }
     if let Some(mount_state) = mount_state {
@@ -1182,7 +1156,7 @@ fn extract_avian_prim(
         faults.as_deref_mut(),
         holds.as_deref_mut(),
     ) {
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
     }
 
@@ -1192,7 +1166,7 @@ fn extract_avian_prim(
     // skipped entirely.
     if reader.type_name(sdf_path).as_deref() == Some(ptok::T_PHYSICS_SCENE) {
         apply_physics_scene_gravity(reader, sdf_path, commands);
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
     }
 
@@ -1200,7 +1174,7 @@ fn extract_avian_prim(
     // cone. It is never physical, whatever schemas happen to be on it, so it is
     // refused a body and a collider both rather than being quietly collided with.
     if effective_purpose(reader, sdf_path) == Purpose::Guide {
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
     }
 
@@ -1219,7 +1193,7 @@ fn extract_avian_prim(
         .real_f32(sdf_path, "physxVehicleWheel:radius")
         .is_some()
     {
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
     }
 
@@ -1232,7 +1206,7 @@ fn extract_avian_prim(
             error!(
                 "[usd-avian] {sdf_path} has malformed physics-material values — refusing terrain projection"
             );
-            commands.entity(entity).try_insert(UsdAvianProcessed);
+            commands.entity(entity).try_insert(UsdPhysicsProjected);
             return;
         }
         commands
@@ -1287,7 +1261,7 @@ fn extract_avian_prim(
                 }
             }
         }
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
     }
 
@@ -1324,7 +1298,7 @@ fn extract_avian_prim(
             );
             return;
         }
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
         return;
     }
 
@@ -1347,7 +1321,7 @@ fn extract_avian_prim(
                         "[usd-avian] {sdf_path} has malformed {} — refusing rigid-body projection",
                         ptok::A_RIGID_BODY_ENABLED
                     );
-                    commands.entity(entity).try_insert(UsdAvianProcessed);
+                    commands.entity(entity).try_insert(UsdPhysicsProjected);
                     return;
                 }
             };
@@ -1360,7 +1334,7 @@ fn extract_avian_prim(
                         "[usd-avian] {sdf_path} has malformed {} — refusing rigid-body projection",
                         ptok::A_KINEMATIC_ENABLED
                     );
-                    commands.entity(entity).try_insert(UsdAvianProcessed);
+                    commands.entity(entity).try_insert(UsdPhysicsProjected);
                     return;
                 }
             };
@@ -1368,7 +1342,7 @@ fn extract_avian_prim(
             error!(
                 "[usd-avian] {sdf_path} has malformed rigid-body mass properties — refusing projection"
             );
-            commands.entity(entity).try_insert(UsdAvianProcessed);
+            commands.entity(entity).try_insert(UsdPhysicsProjected);
             return;
         }
 
@@ -1435,7 +1409,7 @@ fn extract_avian_prim(
                 .try_insert(lunco_core::PhysicsStateReady);
         }
 
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
     } else if has_collision_api {
         // ── COLLIDER PRIM, no body of its own ──
         // Per the USD physics spec, a collider belongs to the nearest ancestor
@@ -1451,7 +1425,7 @@ fn extract_avian_prim(
                 error!(
                     "[usd-avian] {sdf_path} has malformed physics-material values — refusing static collider projection"
                 );
-                commands.entity(entity).try_insert(UsdAvianProcessed);
+                commands.entity(entity).try_insert(UsdPhysicsProjected);
                 return;
             }
             commands
@@ -1463,10 +1437,10 @@ fn extract_avian_prim(
             }
             apply_collision_groups(commands, entity, groups, sdf_path);
         }
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
     } else {
         // Neither a body nor a collider: no physics components, only the marker.
-        commands.entity(entity).try_insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdPhysicsProjected);
     }
 }
 

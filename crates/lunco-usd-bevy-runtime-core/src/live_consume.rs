@@ -331,8 +331,8 @@ pub(crate) fn reproject_physics_if_needed(
     // one-shot markers are therefore invalidated only when the corresponding
     // projection is actually missing: Avian owns the rigid-body admission,
     // while the sim owner identifies a vehicle context by MobilityRoot.
-    let physics_invalidated =
-        has_rigid_body_api && lunco_usd_avian::invalidate_usd_physics_projection(world, entity);
+    let physics_invalidated = has_rigid_body_api
+        && lunco_usd_avian_contracts::invalidate_usd_physics_projection(world, entity);
     let live_edit_owners = world
         .get_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
         .map(|registry| registry.snapshot())
