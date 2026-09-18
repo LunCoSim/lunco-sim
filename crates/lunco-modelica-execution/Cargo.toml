@@ -21,7 +21,7 @@ path = "src/bin/modelica_tester.rs"
 lunco-assets-core = { path = "../lunco-assets-core" }
 bevy.workspace = true
 crossbeam-channel.workspace = true
-lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-experiments = { path = "../lunco-experiments" }
 lunco-modelica-library = { path = "../lunco-modelica-library" }

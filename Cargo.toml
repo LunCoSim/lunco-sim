@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/lunco-core",
+    "crates/lunco-exposure-core",
     "crates/lunco-core-runtime",
     "crates/lunco-id",
     "crates/lunco-command-contracts",
@@ -30,6 +31,7 @@ members = [
     "crates/lunco-avatar-ui",
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-core",
+    "crates/lunco-luncosim-simulation",
     "crates/lunco-luncosim-runtime",
     "crates/lunco-luncosim-services",
     "crates/lunco-scene-runner",

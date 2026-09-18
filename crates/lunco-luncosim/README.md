@@ -11,8 +11,10 @@ launching is owned by `lunco-luncosim-runtime`; this package only dispatches to 
 for `--no-ui` and `LUNCO_NO_UI`. Window/render composition and presentation
 live in `lunco-luncosim-ui`, which owns:
 
-- **`lunco_luncosim_core::LunCoSimCorePlugin`** — sim / physics / cosim / USD /
-  networking / API. Headless-safe and shared with the server.
+- **`lunco_luncosim_simulation::LunCoSimSimulationPlugin`** — renderer-independent
+  sim / physics / cosim / USD / terrain / Modelica domain composition.
+- **`lunco_luncosim_core`** — host-neutral Bevy substrate, asset registration,
+  task-pool policy, and logging.
 - **`lunco_luncosim_runtime::LunCoSimRuntimePlugin`** — Rhai runtime, USD policy
   projection, and dynamic scripting journal integration.
 - **`lunco_luncosim_ui::run_gui`** and **`LunCoSimUiPlugin`** — window/render
@@ -22,10 +24,11 @@ live in `lunco-luncosim-ui`, which owns:
   visibly camera-less with an owning diagnostic rather than receiving an
   engine-created camera. USD loading completion is independent of presentation.
 
-GUI = `lunco_luncosim_ui::run_gui` composing `LunCoSimCorePlugin +
-LunCoSimRuntimePlugin + LunCoSimUiPlugin`. The server and
+GUI = `lunco_luncosim_ui::run_gui` composing the host-neutral substrate,
+`lunco_luncosim_simulation::LunCoSimSimulationPlugin`,
+`LunCoSimRuntimePlugin`, and `LunCoSimUiPlugin`. The server and
 `lunco-scene-runner` use the runtime's headless builder plus
-`LunCoSimHeadlessPlugin` from the core package.
+`LunCoSimHeadlessPlugin` from the simulation package.
 
 ## Binaries
 
@@ -75,7 +78,7 @@ does not duplicate component geometry or requirements.
 - **Level 2 (Domain Logic)**: `lunco-celestial`, `lunco-mobility`, `lunco-usd-commands`
 - **Level 3 (Software)**: `lunco-obc`, `lunco-controller`
 - **Level 4 (Workflow)**: `lunco-ui`, `lunco-workbench`
-- **Level 5 (Application)**: `lunco-luncosim-core`, `lunco-luncosim` (this crate),
+- **Level 5 (Application)**: `lunco-luncosim-core`, `lunco-luncosim-simulation`, `lunco-luncosim` (this crate),
   `luncosim`, `lunco-luncosim-server`
 
 ## Features
@@ -117,7 +120,7 @@ hooks, RNG, and the `?workspace=…&open=…` URL boot path.
 
 ## Notes
 
-- Native uses mimalloc as the global allocator in `lunco-luncosim-core` to avoid
+- Native uses mimalloc as the global allocator in the application runtime to avoid
   glibc's global-lock contention against avian's contact-graph rebuild.
 - The workspace bevy baseline is `default-features = false`, so
   `reflect_auto_register` is OFF (it overflowed clang's link command line).

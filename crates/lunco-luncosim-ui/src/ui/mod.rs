@@ -77,7 +77,8 @@ impl RuntimeUiDropdownState {
 /// explicit camera presentation controls.
 ///
 /// Added by the app shell only for a windowed run. A headless server runs the
-/// sim, physics, scene, cosim, and networking host (all in `LunCoSimCorePlugin`)
+/// sim, physics, scene, cosim, and networking host (installed by the
+/// simulation composition plugin)
 /// *without* any of this — headless mode omits the renderer and keeps only the
 /// simulation-facing asset/type plugins, so nothing here (GPU / window / pointer)
 /// is wired.
@@ -558,11 +559,11 @@ const CAMERA_RESUME_DIRECTOR: &str = "Resume authored director";
 
 fn runtime_ui_dropdown_options(
     ui: &mut egui::Ui,
-    exposure: &lunco_core::exposure::ExposureSurface,
+    exposure: &lunco_exposure_core::ExposureSurface,
     definition: &runtime_ui::RuntimeUiDropdownDefinition,
     selected_key: Option<&str>,
 ) -> Option<String> {
-    let Some(lunco_core::exposure::ExposureValue::Array(values)) =
+    let Some(lunco_exposure_core::ExposureValue::Array(values)) =
         exposure.properties.get(&definition.source)
     else {
         ui.label("No authored options are available.");
@@ -607,13 +608,13 @@ fn runtime_ui_dropdown_options(
 }
 
 fn runtime_ui_dimension(
-    exposure: &lunco_core::exposure::ExposureSurface,
+    exposure: &lunco_exposure_core::ExposureSurface,
     source: &str,
 ) -> Option<f32> {
     let value = exposure.properties.get(source)?;
     let pixels = match value {
-        lunco_core::exposure::ExposureValue::Number(value) => *value as f32,
-        lunco_core::exposure::ExposureValue::Text(value) => value
+        lunco_exposure_core::ExposureValue::Number(value) => *value as f32,
+        lunco_exposure_core::ExposureValue::Text(value) => value
             .trim()
             .strip_suffix("px")?
             .trim()
@@ -633,7 +634,7 @@ fn runtime_ui_dimension(
 fn draw_runtime_ui_dropdowns(
     mut egui_ctx: EguiContexts,
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
-    exposures: Res<lunco_core::exposure::EngineExposures>,
+    exposures: Res<lunco_exposure_core::EngineExposures>,
     roots: Query<(&runtime_ui::RuntimeUiSurface, &Visibility)>,
     manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
     layout: Option<Res<WorkbenchSnapshot>>,
@@ -684,7 +685,7 @@ fn draw_runtime_ui_dropdowns(
         .selected_source
         .as_deref()
         .and_then(|source| exposure.properties.get(source))
-        .and_then(lunco_core::exposure::ExposureValue::scalar_render);
+        .and_then(lunco_exposure_core::ExposureValue::scalar_render);
     let width = runtime_ui_dimension(exposure, &definition.width_source);
     let max_height = runtime_ui_dimension(exposure, &definition.max_height_source);
     let (Some(width), Some(max_height)) = (width, max_height) else {
@@ -803,14 +804,14 @@ fn register_camera_menu(world: &mut World) {
                         .and_then(|surface| surface.dropdowns.first())
                 });
             let exposure = ctx
-                .resource::<lunco_core::exposure::EngineExposures>()
+                .resource::<lunco_exposure_core::EngineExposures>()
                 .and_then(|exposures| exposures.surfaces.get("camera-status"));
             if let (Some(dropdown), Some(exposure)) = (dropdown, exposure) {
                 let selected_key = dropdown
                     .selected_source
                     .as_deref()
                     .and_then(|source| exposure.properties.get(source))
-                    .and_then(lunco_core::exposure::ExposureValue::scalar_render);
+                    .and_then(lunco_exposure_core::ExposureValue::scalar_render);
                 if let Some(action) =
                     runtime_ui_dropdown_options(ui, exposure, dropdown, selected_key.as_deref())
                 {
@@ -1613,7 +1614,7 @@ mod tests {
         runtime_ui_dimension, scenario_registry_diagnostic, scenario_registry_status_message,
         RuntimeUiDropdownState,
     };
-    use lunco_core::exposure::{ExposureSurface, ExposureValue};
+    use lunco_exposure_core::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;
 
     #[test]

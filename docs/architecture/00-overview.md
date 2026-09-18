@@ -105,7 +105,9 @@ Apps (luncosim, luncosim-server, lunica)
    │     lunco-storage    ← I/O backend (read/write only)
    │          │
    │          ▼
-   ├── lunco-core         ← dependency-light ECS engine substrate and command runtime
+   ├── lunco-core         ← stable ECS engine contracts and command runtime
+   ├── lunco-core-runtime ← schedules, pacing, gates, and synchronization helpers
+   ├── lunco-exposure-core← typed renderer-independent exposure storage
    ├── lunco-command-contracts ← pure Mutation<P>/ack/rejection/session contracts
    ├── lunco-spatial      ← BigSpace shell, f64 coordinate conversion, and spatial invariants
    └── lunco-core-session ← session, authority, and prediction layer above core

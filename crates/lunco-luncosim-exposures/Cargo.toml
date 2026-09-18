@@ -17,6 +17,7 @@ lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-exposure-core = { path = "../lunco-exposure-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }

@@ -10,6 +10,7 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-exposure-core = { path = "../lunco-exposure-core" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }

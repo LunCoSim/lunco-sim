@@ -979,7 +979,9 @@ fn project_relationships(
             if !model.kind(id).is_a(ElementKind::Relationship) {
                 continue;
             }
-            let Some(element) = elements.iter().find(|element| element.id == id.index() as u32)
+            let Some(element) = elements
+                .iter()
+                .find(|element| element.id == id.index() as u32)
             else {
                 continue;
             };
@@ -1029,7 +1031,9 @@ fn project_constraints(
             ) {
                 continue;
             }
-            let Some(element) = elements.iter().find(|element| element.id == id.index() as u32)
+            let Some(element) = elements
+                .iter()
+                .find(|element| element.id == id.index() as u32)
             else {
                 continue;
             };
@@ -1529,7 +1533,10 @@ mod tests {
             .expect("mass attribute");
         let mass_value = mass.value.as_ref().expect("mass value");
         assert_eq!(mass_value.literal_kind, SysmlLiteralKind::Quantity);
-        assert_eq!(mass_value.number_value.map(SysmlNumber::as_f64), Some(1200.0));
+        assert_eq!(
+            mass_value.number_value.map(SysmlNumber::as_f64),
+            Some(1200.0)
+        );
         assert_eq!(mass_value.unit.as_deref(), Some("kg"));
 
         let pose = attributes

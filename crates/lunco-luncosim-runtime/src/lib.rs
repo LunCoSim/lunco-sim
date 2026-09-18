@@ -1,10 +1,10 @@
 //! Production application integration for LunCoSim.
 //!
-//! [`lunco_luncosim_core`] owns the generic simulation substrate. This package
-//! owns the application-level scripting boundary: Rhai plugin installation,
-//! USD-authored policy projection, policy authoring, and scripting journal
-//! consumers. Keeping that boundary here prevents changes to Rhai or policy
-//! behavior from invalidating the generic simulation crate.
+//! [`lunco_luncosim_core`] owns the generic Bevy substrate and
+//! [`lunco_luncosim_simulation`] owns renderer-independent domain composition.
+//! This package owns the application-level scripting boundary: Rhai plugin
+//! installation, USD-authored policy projection, policy authoring, and
+//! scripting journal consumers.
 
 use bevy::asset::{AssetEvent, AssetServer};
 use bevy::prelude::*;
@@ -88,6 +88,7 @@ pub fn build_headless_app_with_scene(
     startup_scene: Option<String>,
 ) -> App {
     let mut app = lunco_luncosim_core::build_core_app(compute_threads);
+    app.add_plugins(lunco_luncosim_simulation::LunCoSimSimulationPlugin);
     app.add_plugins(LunCoSimRuntimePlugin {
         headless: true,
         startup_scene,
@@ -106,7 +107,7 @@ pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
 /// Build the normal headless app with the production schedule runner.
 pub fn build_headless_app() -> App {
     let mut app = build_headless_app_with_threads(Some(1));
-    app.add_plugins(lunco_luncosim_core::LunCoSimHeadlessPlugin::default());
+    app.add_plugins(lunco_luncosim_simulation::LunCoSimHeadlessPlugin::default());
     app
 }
 
@@ -150,7 +151,7 @@ pub fn run_headless() -> lunco_luncosim_core::AppExit {
         return lunco_luncosim_core::AppExit::error();
     }
 
-    app.add_plugins(lunco_luncosim_core::LunCoSimHeadlessPlugin { execution_mode });
+    app.add_plugins(lunco_luncosim_simulation::LunCoSimHeadlessPlugin { execution_mode });
     app.run()
 }
 

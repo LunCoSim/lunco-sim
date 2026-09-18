@@ -15,6 +15,7 @@ extern crate self as lunco_core;
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
 pub mod commands;
+pub mod derived;
 pub mod faults;
 /// M1 — deterministic identity from `Provenance`. The only place network
 /// ids are *derived*; the session identity-admission system is the only place they
@@ -26,20 +27,9 @@ pub mod labels;
 pub mod markers;
 pub mod physics_state;
 pub mod programs;
-/// M4 — pure predict-own reconciliation decision (input-replay, D2). The
-/// dependency-free geometry the spawn-domain `reconcile_owned_prediction` system
-/// applies; unit-tested without the avian/render build.
-pub mod reconcile;
 /// Typed requests and lifecycle edges for scene ownership and transitions.
 pub mod scene;
 pub mod scene_lifecycle;
-/// Recoverable locking for shared process state.
-pub mod sync;
-
-pub mod derived;
-
-/// Domain-free named engine exposure snapshots for UI, API, and diagnostics.
-pub mod exposure;
 
 pub mod events;
 
@@ -69,14 +59,12 @@ pub use markers::{
 pub use mobility::Mobility;
 pub use model_state::ModelStateRevision;
 pub use physics_state::*;
-pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{
     SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted, SceneTransitionCompleted,
     SceneTransitionCoordinator, SceneTransitionFailed, SceneTransitionIntent,
     SceneTransitionRequest, SceneTransitionStarted,
 };
 pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};
-pub use sync::LockExt;
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
 //

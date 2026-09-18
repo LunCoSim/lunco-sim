@@ -35,7 +35,7 @@ egui modal host.
 ## Data and actions
 
 Engine capabilities publish named snapshots through
-`lunco_core::exposure::EngineExposures`. The template never reads ECS state or
+`lunco_exposure_core::EngineExposures`. The template never reads ECS state or
 mutates simulation state. Ports, telemetry, physics, scripts, and derived
 capabilities use the same exposure boundary.
 

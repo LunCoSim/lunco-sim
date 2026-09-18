@@ -1276,7 +1276,7 @@ pub fn get_twin_setting<B: ValueBuilder>(b: &B, key: &str) -> Option<B::Value> {
 /// the producer's domain crate.
 pub fn get_exposure<B: ValueBuilder>(b: &B, namespace: &str, property: &str) -> Option<B::Value> {
     with_world(|world| {
-        let exposures = world.get_resource::<lunco_core::exposure::EngineExposures>()?;
+        let exposures = world.get_resource::<lunco_exposure_core::EngineExposures>()?;
         let value = exposures
             .surfaces
             .get(namespace)?
@@ -1289,19 +1289,19 @@ pub fn get_exposure<B: ValueBuilder>(b: &B, namespace: &str, property: &str) -> 
 
 fn exposure_value_to_native<B: ValueBuilder>(
     b: &B,
-    value: &lunco_core::exposure::ExposureValue,
+    value: &lunco_exposure_core::ExposureValue,
 ) -> B::Value {
     match value {
-        lunco_core::exposure::ExposureValue::Text(value) => b.string(value),
-        lunco_core::exposure::ExposureValue::Bool(value) => b.bool(*value),
-        lunco_core::exposure::ExposureValue::Number(value) => b.float(*value),
-        lunco_core::exposure::ExposureValue::Array(values) => b.array(
+        lunco_exposure_core::ExposureValue::Text(value) => b.string(value),
+        lunco_exposure_core::ExposureValue::Bool(value) => b.bool(*value),
+        lunco_exposure_core::ExposureValue::Number(value) => b.float(*value),
+        lunco_exposure_core::ExposureValue::Array(values) => b.array(
             values
                 .iter()
                 .map(|value| exposure_value_to_native(b, value))
                 .collect(),
         ),
-        lunco_core::exposure::ExposureValue::Map(values) => b.map(
+        lunco_exposure_core::ExposureValue::Map(values) => b.map(
             values
                 .iter()
                 .map(|(key, value)| (key.clone(), exposure_value_to_native(b, value)))

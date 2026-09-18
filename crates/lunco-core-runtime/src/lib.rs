@@ -10,10 +10,12 @@
 pub mod gate;
 pub mod pacing;
 pub mod subsystems;
+pub mod sync;
 
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };
+pub use sync::LockExt;
 
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
@@ -104,8 +106,6 @@ fn register_core_resources(app: &mut App) {
         .init_resource::<lunco_core::SceneMountState>()
         .init_resource::<lunco_core::CommandResults>()
         .init_resource::<lunco_core::ActiveCommandId>()
-        .init_resource::<lunco_core::exposure::EngineExposures>()
-        .init_resource::<lunco_core::exposure::ExposureRefresh>()
         .init_resource::<lunco_core::RuntimeFaults>()
         .init_resource::<lunco_core::RuntimeDiagnostics>()
         .init_resource::<SimulationBarrier>()

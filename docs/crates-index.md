@@ -9,8 +9,9 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Dependency-light ECS engine primitives, typed commands/reflection, stable scene-lifecycle contracts, structured runtime faults/diagnostics, and shared components. Pure mutation/session envelopes live in `lunco-command-contracts`; core carries no pacing, subsystem policy, viewport, camera, avatar-role, port-registry, BigSpace, session/authority, or vehicle-specific motion policy. |
-| **`lunco-core-runtime`** | Bevy runtime owner for the core contracts: fixed simulation ticks, rollback/netcode schedule anchors, pacing/barriers, gate instrumentation, subsystem toggles, and the runtime plugin that installs those mechanisms. It depends on `lunco-core`; contract-only consumers do not pull this package. |
+| **`lunco-core`** | Stable ECS engine facts: identity/provenance, shared markers, typed scene requests, runtime diagnostics/fault contracts, state markers, and small ECS utilities. Reconciliation, exposure storage, synchronization helpers, pacing, and domain composition have their own owners. |
+| **`lunco-core-runtime`** | Bevy runtime owner for core contracts: fixed simulation ticks, rollback/netcode schedule anchors, pacing/barriers, gate instrumentation, subsystem toggles, recoverable synchronization helpers, and the runtime plugin that installs those mechanisms. |
+| **`lunco-exposure-core`** | Renderer-independent typed exposure registry (`EngineExposures`, `ExposureValue`, and refresh state). It has no application projection or UI policy; `lunco-luncosim-exposures` supplies the production projection. |
 | **`lunco-command-contracts`** | Pure mutation, session, acknowledgement, rejection, and synchronization-channel contracts shared by document, transport, networking, and runtime adapters without ECS. |
 | **`lunco-id`** | Platform-neutral 53-bit operation/entity ID generation shared by document and runtime identity boundaries. |
 | **`lunco-viewport-core`** | Renderer-independent viewport contract: explicit active-camera binding, scene visibility and layout state, viewport scheduling boundary, and the shared camera-ray construction used by scene-click owners. |
@@ -266,7 +267,8 @@ Primary entry points and simulation assembly targets.
 | **`lunco-luncosim-presentation`** | — | Application-edge visual bridges: status/environment projection, terrain horizon, USD camera/light composition, capture integration, and scene presentation wiring. |
 | **`lunco-updater`** | — | Native desktop update capability and rendered update surface. It owns Velopack admission and update UI behind the application’s opt-in `updates` feature. |
 | **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, readiness barriers, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
-| **`lunco-luncosim-core`** | — | Headless-safe generic simulation substrate shared by the GUI shell, `luncosim-server`, and scene-test runner. It owns simulation composition and renderer-independent domain mechanisms, not application services. |
+| **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: asset source/type registration, task-pool policy, build identity, and log deduplication. It does not install domain plugins. |
+| **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, scene commands, and headless execution. |
 | **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, and persisted experiment artifacts. It is composed by the runtime boundary rather than embedded in the generic core. |
 | **`lunco-luncosim-runtime`** | — | Production application composition: services plus Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends on `lunco-luncosim-runtime` with API + networking enabled; the GUI shell is not linked. |
@@ -294,10 +296,21 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 ### Core Foundation
 
 **`lunco-core`**
-The bedrock of the simulation. It defines the dependency-light command machinery, typed scene-lifecycle contracts, structured runtime faults/diagnostics, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). Pure mutation envelopes are owned by `lunco-command-contracts`. It has no pacing, subsystem policy, port-registry, BigSpace, or celestial semantics.
+The stable ECS contract layer. It defines identity/provenance, shared markers,
+typed scene-lifecycle contracts, structured runtime faults/diagnostics, and
+generic state utilities. Pure mutation envelopes are owned by
+`lunco-command-contracts`; runtime command reflection remains available through
+the existing typed command API. It has no pacing, reconciliation, exposure
+registry, synchronization helper, port-registry, BigSpace, or celestial
+semantics.
 
 **`lunco-core-runtime`**
-The Bevy runtime owner for `lunco-core` contracts. It installs the fixed simulation tick, rollback/netcode schedule anchors, pacing/barriers, gate instrumentation, subsystem toggles, and the runtime plugin that wires those mechanisms together. Contract-only consumers can depend on `lunco-core` without compiling this package.
+The Bevy runtime owner for `lunco-core` contracts. It installs the fixed simulation tick, rollback/netcode schedule anchors, pacing/barriers, gate instrumentation, subsystem toggles, and recoverable synchronization helpers. Contract-only consumers can depend on `lunco-core` without compiling this package.
+
+**`lunco-exposure-core`**
+The dependency-light typed exposure store. `EngineExposures` and its value
+types are reusable by UI, API, scripting, telemetry, and recovery consumers;
+the domain projection remains in `lunco-luncosim-exposures`.
 
 **`lunco-port-core`**
 Owns the shared scalar port substrate (`Port`, endpoint/control-surface components, `PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction. It is independent of `lunco-core`, so changes to engine-only core types do not rebuild the port implementation.
@@ -1258,7 +1271,18 @@ The thin `luncosim` process/CLI shell: it selects headless versus GUI mode and d
 Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, asynchronous Modelica/physics readiness, telemetry verdict capture, diagnostics, and exit codes. Domain assertions and fixture knowledge remain in the authored scene/Rhai assets; the runner only owns the generic process and engine seams required to execute them. It is a production command dependency, not a Rust test-only crate.
 
 **`lunco-luncosim-core`**
-Headless-safe LunCoSim runtime substrate shared by the GUI shell, `luncosim-server`, and authored scene-test runner: persistent world shell, Avian physics, USD loading/projection, Modelica/cosim, networking/API, exposure projection, persistence, and the schedule runner. It has no renderer, egui, workbench, picking, concrete celestial/avatar camera realization, or tutorial policy; rendered application surfaces install those camera adapters at the UI edge.
+Dependency-light host substrate shared by GUI, server, and scene-test hosts. It
+owns the headless Bevy plugin group, asset source/type registration, task-pool
+policy, build identity, and log deduplication. It does not install physics,
+USD, terrain, Modelica, celestial, avatar, or scene-command plugins.
+
+**`lunco-luncosim-simulation`**
+Renderer-independent domain composition above the host substrate. It owns the
+persistent world shell, Avian physics, USD loading/projection, terrain,
+celestial, Modelica/cosimulation, mobility, avatar, controller, hardware,
+telemetry, scene commands, and the headless execution plugin. Application
+services remain in `lunco-luncosim-services` and Rhai integration remains in
+`lunco-luncosim-runtime`.
 
 **`lunco-luncosim-runtime`**
 Production application integration above the generic simulation substrate. It installs the Rhai runtime, projects USD-authored policies, registers `SetRhaiPolicy`, consumes scripting/tool/timeline journal entries, and owns the public headless builders and launcher. Keeping this boundary above core prevents scripting and policy changes from invalidating the generic simulation composition.
@@ -1279,7 +1303,11 @@ the rendered update panel, so the `updates` feature adds one explicit updater
 edge instead of putting updater dependencies into every UI build.
 
 **`lunco-luncosim-exposures`**
-Production integration crate for the renderer-independent runtime exposure projection. `RuntimeExposuresPlugin` registers the single shared path from authoritative ECS/domain state and authored telemetry to `lunco_core::exposure::EngineExposures`; HTML, egui, API, telemetry, and remote clients consume that registry. It owns no UI, renderer, or tutorial policy, so changing exposure derivation does not recompile the application composition root.
+Production integration crate for the renderer-independent runtime exposure
+projection. `RuntimeExposuresPlugin` registers the single shared path from
+authoritative ECS/domain state and authored telemetry to
+`lunco_exposure_core::EngineExposures`; HTML, egui, API, telemetry, and remote
+clients consume that registry. It owns no UI, renderer, or tutorial policy.
 
 **`lunco-luncosim-server`**
 Headless launcher for the luncosim runtime — a three-line binary that depends directly on `lunco-luncosim-runtime`, with the API + networking host enabled. The GUI shell is not in its dependency closure.

@@ -18,6 +18,7 @@ lunco-api = { path = "../lunco-api" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-exposure-core = { path = "../lunco-exposure-core" }
 lunco-time = { path = "../lunco-time" }
 lunco-workspace = { path = "../lunco-workspace", optional = true }
 serde_json = { workspace = true }

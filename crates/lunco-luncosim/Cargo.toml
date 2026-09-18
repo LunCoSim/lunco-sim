@@ -136,7 +136,6 @@ networking = [
 net-diag = ["networking", "lunco-luncosim-runtime/net-diag"]
 python = [
     "lunco-luncosim-runtime/python",
-    "lunco-luncosim-core/python",
     "lunco-luncosim-ui?/python",
 ]
 native-plugins = [
@@ -146,7 +145,6 @@ native-plugins = [
 # remains the default without compiling the TLS backend.
 rhai-tls = ["lunco-rhai-repl/tls"]
 sysml = [
-    "lunco-luncosim-core/sysml",
     "lunco-luncosim-runtime/sysml",
     "lunco-scene-runner/sysml",
     "lunco-scripting-rhai-world/sysml",

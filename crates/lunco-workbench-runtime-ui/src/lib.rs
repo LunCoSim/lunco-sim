@@ -19,7 +19,7 @@ use bevy_hui::prelude::{
     TemplateProperties, UiId,
 };
 use lunco_assets_runtime::{TextAsset, TextAssetCatalog};
-use lunco_core::exposure::EngineExposures;
+use lunco_exposure_core::EngineExposures;
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
 use lunco_viewport_core::SceneViewport;
@@ -1850,7 +1850,7 @@ fn reconcile_runtime_ui_collections(
             }
 
             let values = match exposure.properties.get(&collection.source) {
-                Some(lunco_core::exposure::ExposureValue::Array(values)) => values.as_slice(),
+                Some(lunco_exposure_core::ExposureValue::Array(values)) => values.as_slice(),
                 Some(value) => {
                     warn!(
                         surface = surface.namespace,
@@ -1993,10 +1993,10 @@ fn scroll_runtime_ui_collections(
 }
 
 pub fn collection_item_fields(
-    value: &lunco_core::exposure::ExposureValue,
+    value: &lunco_exposure_core::ExposureValue,
     key: &str,
 ) -> Option<Vec<(String, String)>> {
-    let lunco_core::exposure::ExposureValue::Map(fields) = value else {
+    let lunco_exposure_core::ExposureValue::Map(fields) = value else {
         return None;
     };
     let fields = fields

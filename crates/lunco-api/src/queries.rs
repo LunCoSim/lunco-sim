@@ -297,7 +297,7 @@ impl ApiQueryProvider for ReadExposuresProvider {
             }
         };
 
-        let Some(exposures) = world.get_resource::<lunco_core::exposure::EngineExposures>() else {
+        let Some(exposures) = world.get_resource::<lunco_exposure_core::EngineExposures>() else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
                 "ReadExposures: EngineExposures resource is not present",
@@ -331,17 +331,17 @@ impl ApiQueryProvider for ReadExposuresProvider {
     }
 }
 
-fn exposure_value_to_json(value: &lunco_core::exposure::ExposureValue) -> serde_json::Value {
+fn exposure_value_to_json(value: &lunco_exposure_core::ExposureValue) -> serde_json::Value {
     match value {
-        lunco_core::exposure::ExposureValue::Text(value) => serde_json::json!(value),
-        lunco_core::exposure::ExposureValue::Bool(value) => serde_json::json!(*value),
-        lunco_core::exposure::ExposureValue::Number(value) => serde_json::Number::from_f64(*value)
+        lunco_exposure_core::ExposureValue::Text(value) => serde_json::json!(value),
+        lunco_exposure_core::ExposureValue::Bool(value) => serde_json::json!(*value),
+        lunco_exposure_core::ExposureValue::Number(value) => serde_json::Number::from_f64(*value)
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
-        lunco_core::exposure::ExposureValue::Array(values) => {
+        lunco_exposure_core::ExposureValue::Array(values) => {
             serde_json::Value::Array(values.iter().map(exposure_value_to_json).collect())
         }
-        lunco_core::exposure::ExposureValue::Map(values) => serde_json::Value::Object(
+        lunco_exposure_core::ExposureValue::Map(values) => serde_json::Value::Object(
             values
                 .iter()
                 .map(|(key, value)| (key.clone(), exposure_value_to_json(value)))
@@ -438,7 +438,7 @@ impl Plugin for ApiVisibilityPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_core::exposure::EngineExposures;
+    use lunco_exposure_core::EngineExposures;
 
     #[test]
     fn read_exposures_returns_revision_and_typed_properties() {

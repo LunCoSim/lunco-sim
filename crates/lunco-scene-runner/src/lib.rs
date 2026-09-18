@@ -161,7 +161,7 @@ use bevy::time::TimeUpdateStrategy;
 
 use lunco_core_runtime::SimTick;
 use lunco_cosim_core::UsdSourcedCosim;
-use lunco_luncosim_core::LunCoSimHeadlessPlugin;
+use lunco_luncosim_simulation::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 use lunco_usd_document::document::UsdDocument;
@@ -378,9 +378,8 @@ fn parse_args() -> Result<Cli, String> {
                 println!("{}", usage());
                 std::process::exit(0);
             }
-            // Unknown args are IGNORED rather than rejected: `LunCoSimCorePlugin`
-            // and the domain plugins parse their own flags off `env::args()`
-            // (`--api`, `--host`, …), and this binary must not veto them.
+            // Unknown args are ignored here because domain plugins parse their
+            // own flags from `env::args()` (`--api`, `--host`, …).
             _ => i += 1,
         }
     }
@@ -1129,7 +1128,8 @@ pub fn run() -> u8 {
     // The app the GUI and the headless server run, assembled exactly as
     // `lunco_luncosim_runtime::build_headless_app_with_threads` does it — asset sources first
     // (they MUST precede `AssetPlugin`, which snapshots the source registry), then
-    // the engine plugin group, then `LunCoSimCorePlugin`.
+    // the engine plugin group, then `LunCoSimHeadlessPlugin` from the
+    // simulation composition package.
     //
     // The core builder receives the compute-pool override at plugin-group build
     // time, keeping scene tests on the same production composition as the server.
@@ -1147,7 +1147,7 @@ pub fn run() -> u8 {
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────
     //
-    // `LunCoSimCorePlugin` inserts a `Time<Virtual>` with `max_delta = 33 ms` —
+    // `LunCoSimHeadlessPlugin` inserts a `Time<Virtual>` with `max_delta = 33 ms` —
     // a JITTER cap for a realtime GUI (it stops one slow frame breeding catch-up
     // ticks). Under manual stepping there is no jitter to cap, and the cap would
     // silently swallow steps for any `--tick-hz` below ~30. Re-insert with a cap

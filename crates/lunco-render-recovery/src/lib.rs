@@ -1040,7 +1040,7 @@ fn shadow_hook_int(value: u64) -> lunco_hooks::HookValue {
 }
 
 fn publish_shadow_facts(
-    exposures: Option<&mut lunco_core::exposure::EngineExposures>,
+    exposures: Option<&mut lunco_exposure_core::EngineExposures>,
     profile: lunco_render::RenderQualityProfile,
     light_count: usize,
     directional_casters: usize,
@@ -1145,7 +1145,7 @@ fn apply_shadow_caster_policy(
     settings: Res<RenderingQualitySettings>,
     warning: Option<Res<RenderWarning>>,
     status_bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-    exposures: Option<ResMut<lunco_core::exposure::EngineExposures>>,
+    exposures: Option<ResMut<lunco_exposure_core::EngineExposures>>,
     health: Option<Res<RenderHealthHandle>>,
     directional_shadow_map: Res<bevy::light::DirectionalLightShadowMap>,
     point_shadow_map: Res<bevy::light::PointLightShadowMap>,
@@ -1930,7 +1930,7 @@ mod tests {
         };
         app.insert_resource(settings);
         app.insert_resource(lunco_status_core::status_bus::StatusBus::default());
-        app.insert_resource(lunco_core::exposure::EngineExposures::default());
+        app.insert_resource(lunco_exposure_core::EngineExposures::default());
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
         app.insert_resource(RenderHealthHandle(health.clone()));
@@ -1996,13 +1996,13 @@ mod tests {
 
         let exposures = app
             .world()
-            .resource::<lunco_core::exposure::EngineExposures>();
+            .resource::<lunco_exposure_core::EngineExposures>();
         assert_eq!(
             exposures
                 .surfaces
                 .get("render-shadow")
                 .and_then(|surface| surface.properties.get("point_casters")),
-            Some(&lunco_core::exposure::ExposureValue::Number(5.0))
+            Some(&lunco_exposure_core::ExposureValue::Number(5.0))
         );
 
         app.update();
@@ -2058,7 +2058,7 @@ mod tests {
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
         app.insert_resource(RenderHealthHandle(health.clone()));
-        app.insert_resource(lunco_core::exposure::EngineExposures::default());
+        app.insert_resource(lunco_exposure_core::EngineExposures::default());
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
         app.add_systems(PostUpdate, apply_shadow_caster_policy);
@@ -2094,13 +2094,13 @@ mod tests {
         );
         let exposures = app
             .world()
-            .resource::<lunco_core::exposure::EngineExposures>();
+            .resource::<lunco_exposure_core::EngineExposures>();
         assert_eq!(
             exposures
                 .surfaces
                 .get("render-shadow")
                 .and_then(|surface| surface.properties.get("directional_cascade_layers")),
-            Some(&lunco_core::exposure::ExposureValue::Number(128.0))
+            Some(&lunco_exposure_core::ExposureValue::Number(128.0))
         );
     }
 

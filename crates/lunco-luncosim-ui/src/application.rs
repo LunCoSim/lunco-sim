@@ -7,9 +7,9 @@
 use bevy::asset::{AssetMetaCheck, AssetPlugin};
 use bevy::prelude::*;
 use lunco_luncosim_core::AppExit;
-use lunco_luncosim_core::LunCoSimCorePlugin;
 use lunco_luncosim_runtime::LunCoSimRuntimePlugin;
 use lunco_luncosim_services::ScenePath;
+use lunco_luncosim_simulation::LunCoSimSimulationPlugin;
 
 /// The luncosim's process-start render choice. The binary selects it while
 /// `lunco-render-bevy` owns how the policy is rendered.
@@ -593,7 +593,7 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         }
         app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
     }
-    app.add_plugins(LunCoSimCorePlugin);
+    app.add_plugins(LunCoSimSimulationPlugin);
     app.add_plugins(LunCoSimRuntimePlugin::default());
     crate::camera::install_interactive_camera(&mut app);
     // The browser boot-screen handshake is an application-shell concern. Keep
@@ -769,7 +769,8 @@ fn default_plugins_with_profile(
 
     // Window/winit setup. Offscreen is windowless WITH a GPU; the default Bevy
     // render plugin renders surfaceless into the offscreen target image.
-    // Headless construction belongs to lunco-luncosim-core.
+    // Host-neutral asset/task construction belongs to lunco-luncosim-core;
+    // renderer-independent domain composition is installed by this host.
     let group = if offscreen {
         group
             .set(WindowPlugin {

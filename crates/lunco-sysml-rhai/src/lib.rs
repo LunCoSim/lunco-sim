@@ -192,7 +192,13 @@ pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     );
     report.insert(
         "constraints".into(),
-        Dynamic::from_array(analysis.constraints().iter().map(constraint_dynamic).collect()),
+        Dynamic::from_array(
+            analysis
+                .constraints()
+                .iter()
+                .map(constraint_dynamic)
+                .collect(),
+        ),
     );
     report.insert(
         "attributes".into(),
@@ -283,7 +289,13 @@ pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     );
     report.insert(
         "constraints".into(),
-        Dynamic::from_array(analysis.constraints().iter().map(constraint_dynamic).collect()),
+        Dynamic::from_array(
+            analysis
+                .constraints()
+                .iter()
+                .map(constraint_dynamic)
+                .collect(),
+        ),
     );
     report.insert(
         "requirements".into(),
@@ -379,9 +391,7 @@ pub fn register_sysml_types(engine: &mut Engine) {
             format!("{:?}", value.modelica_type())
         })
         .register_type_with_name::<SysmlMultiplicity>("Multiplicity")
-        .register_get("lower", |value: &mut SysmlMultiplicity| {
-            value.lower as i64
-        })
+        .register_get("lower", |value: &mut SysmlMultiplicity| value.lower as i64)
         .register_get("upper", |value: &mut SysmlMultiplicity| {
             value
                 .upper
@@ -424,9 +434,9 @@ pub fn typed_attribute_value_dynamic(attribute: &SysmlAttribute) -> Option<Dynam
 /// therefore returns a Rhai map; this adapter consumes the structured fields
 /// and restores the same native f64 values used by direct analysis snapshots.
 pub fn typed_report_attribute_value(record: &Map) -> Option<Dynamic> {
-    let declared = record.get("declared_type").and_then(|value| {
-        value.clone().try_cast::<Map>()
-    });
+    let declared = record
+        .get("declared_type")
+        .and_then(|value| value.clone().try_cast::<Map>());
     let literal = record
         .get("value")
         .and_then(|value| value.clone().try_cast::<Map>())?;
@@ -469,12 +479,8 @@ fn typed_report_literal_value(literal: &Map, declared: Option<&Map>) -> Option<D
                 .iter()
                 .map(|value| value.as_float().ok())
                 .collect::<Option<Vec<_>>>()?;
-            let quaternion = DQuat::from_xyzw(
-                components[0],
-                components[1],
-                components[2],
-                components[3],
-            );
+            let quaternion =
+                DQuat::from_xyzw(components[0], components[1], components[2], components[3]);
             return normalized_quat(quaternion);
         }
         return Some(Dynamic::from_array(values));
@@ -511,13 +517,20 @@ fn typed_report_literal_value(literal: &Map, declared: Option<&Map>) -> Option<D
         let literal = literal
             .get("string_value")
             .and_then(|value| value.clone().into_immutable_string().ok())
-            .or_else(|| literal.get("literal").and_then(|value| value.clone().into_immutable_string().ok()))?;
+            .or_else(|| {
+                literal
+                    .get("literal")
+                    .and_then(|value| value.clone().into_immutable_string().ok())
+            })?;
         return Some(Dynamic::from(SysmlEnumValue {
             type_name: type_name.to_string(),
             literal: literal.to_string(),
         }));
     }
-    if let Some(value) = literal.get("integer_value").and_then(|value| value.as_int().ok()) {
+    if let Some(value) = literal
+        .get("integer_value")
+        .and_then(|value| value.as_int().ok())
+    {
         return Some(Dynamic::from_int(value));
     }
     if let Some(value) = literal
@@ -550,9 +563,7 @@ fn typed_literal_dynamic(
             .iter()
             .map(|element| typed_literal_dynamic(element, None))
             .collect::<Option<_>>()?;
-        if matches!(base, "Vec3" | "Position" | "Direction" | "Dimensions")
-            && values.len() == 3
-        {
+        if matches!(base, "Vec3" | "Position" | "Direction" | "Dimensions") && values.len() == 3 {
             let coordinates = values
                 .iter()
                 .map(|value| value.as_float().ok())
@@ -575,9 +586,8 @@ fn typed_literal_dynamic(
     }
 
     if literal.unit.is_some()
-        || declared.is_some_and(|value| {
-            value.category == lunco_sysml_ast::SysmlTypeCategory::Quantity
-        })
+        || declared
+            .is_some_and(|value| value.category == lunco_sysml_ast::SysmlTypeCategory::Quantity)
     {
         return Some(Dynamic::from(SysmlQuantityValue {
             value: literal.number_value?,
@@ -590,9 +600,9 @@ fn typed_literal_dynamic(
         }));
     }
 
-    if declared.is_some_and(|value| {
-        value.category == lunco_sysml_ast::SysmlTypeCategory::Enumeration
-    }) {
+    if declared
+        .is_some_and(|value| value.category == lunco_sysml_ast::SysmlTypeCategory::Enumeration)
+    {
         return Some(Dynamic::from(SysmlEnumValue {
             type_name: declared?.base.clone(),
             literal: literal
@@ -753,10 +763,7 @@ fn attribute_dynamic(attribute: &SysmlAttribute) -> Dynamic {
         value.insert("type_name".into(), type_name);
     }
     if let Some(declared_type) = &attribute.declared_type {
-        value.insert(
-            "typed_type".into(),
-            Dynamic::from(declared_type.clone()),
-        );
+        value.insert("typed_type".into(), Dynamic::from(declared_type.clone()));
         let mut type_value = Map::new();
         type_value.insert("base".into(), Dynamic::from(declared_type.base.clone()));
         type_value.insert(
@@ -782,10 +789,7 @@ fn attribute_dynamic(attribute: &SysmlAttribute) -> Dynamic {
             Dynamic::from(declared_type.multiplicity),
         );
         if let Some(quantity_kind) = &declared_type.quantity_kind {
-            type_value.insert(
-                "quantity_kind".into(),
-                Dynamic::from(quantity_kind.clone()),
-            );
+            type_value.insert("quantity_kind".into(), Dynamic::from(quantity_kind.clone()));
         }
         value.insert("declared_type".into(), Dynamic::from_map(type_value));
     }

@@ -2,7 +2,7 @@
 //!
 //! This module has no HTML, egui, or Flair dependency. It resolves generic
 //! runtime state and authored telemetry, then publishes named capability
-//! snapshots through `lunco_core::exposure::EngineExposures`. Any consumer can
+//! snapshots through [`lunco_exposure_core::EngineExposures`]. Any consumer can
 //! read that snapshot: runtime HTML, egui, API, telemetry, or a remote client.
 //! Domain values and transformations remain in their authored owners.
 //!
@@ -18,13 +18,13 @@ use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial_core::LinkState;
 use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_control_core::ControlLink;
-use lunco_core::exposure::{
-    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
-};
 use lunco_core::GlobalEntityId;
 use lunco_core::SceneMountState;
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
+use lunco_exposure_core::{
+    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
+};
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
 use lunco_port_core::InputPorts;
@@ -41,7 +41,7 @@ use std::time::Duration;
 ///
 /// The application owns composition policy, while this crate owns the one
 /// production projection from authoritative ECS/domain state to the shared
-/// [`lunco_core::exposure::EngineExposures`] registry. Keeping that projection
+/// [`lunco_exposure_core::EngineExposures`] registry. Keeping that projection
 /// behind a plugin prevents the application composition root from recompiling
 /// when exposure logic changes and keeps the headless server on the same path.
 pub struct RuntimeExposuresPlugin;
@@ -51,7 +51,9 @@ impl Plugin for RuntimeExposuresPlugin {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
-        app.add_systems(Startup, publish_initial_camera_exposure)
+        app.init_resource::<EngineExposures>()
+            .init_resource::<ExposureRefresh>()
+            .add_systems(Startup, publish_initial_camera_exposure)
             .add_observer(on_camera_selection_status_changed)
             .add_systems(lunco_core::SceneTeardown, clear_scene_exposures)
             .add_systems(Update, mark_exposure_dirty)

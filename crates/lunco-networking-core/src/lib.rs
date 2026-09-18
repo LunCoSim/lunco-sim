@@ -13,4 +13,7 @@
 //! prediction systems.
 
 pub mod prediction;
+pub mod reconcile;
 pub mod session;
+
+pub use reconcile::{ReconcileParams, Reconciliation, reconcile_decision};

@@ -48,7 +48,7 @@ use lunco_worker_transport::{Callbacks, WorkerPool as WorkerTransport};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use lunco_core::LockExt;
+use lunco_core_runtime::LockExt;
 use lunco_modelica_library::worker_bridge::{WorkerParseDone, WorkerParseFailed};
 use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 

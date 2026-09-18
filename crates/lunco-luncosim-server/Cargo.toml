@@ -20,7 +20,7 @@ mimalloc = "0.1"
 
 [features]
 default = ["sysml"]
-sysml = ["lunco-luncosim-core/sysml"]
+sysml = ["lunco-luncosim-runtime/sysml"]
 
 [lints]
 workspace = true

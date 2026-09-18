@@ -1094,7 +1094,7 @@ fn predicts_locally(owns: bool, last_active: u64, now: u64, grace: u64) -> bool 
     owns && last_active != 0 && now.saturating_sub(last_active) <= grace
 }
 // The reconciliation thresholds (eps_pos / eps_rot / snap_pos / blend) and the
-// decision geometry live in `lunco_core::reconcile_decision` /
+// decision geometry live in `crate::reconcile_decision` /
 // `ReconcileParams::default()` — the single source of truth shared by this live
 // system and the `reconcile` unit tests (no avian/render build needed to test).
 
@@ -1684,14 +1684,14 @@ pub fn reconcile_owned_prediction(
         // Compare prediction-at-the-acked-seq vs authority-at-that-seq — the
         // apples-to-apples test that cancels the latency lead, so a correct
         // prediction is left alone (no rubber-band). Only divergence corrects.
-        let decision = lunco_core::reconcile_decision(
+        let decision = crate::reconcile_decision(
             hs.pos,
             hs.rot,
             tf.translation,
             tf.rotation,
             sample.pos,
             sample.rot,
-            lunco_core::ReconcileParams::default(),
+            crate::ReconcileParams::default(),
         );
         // DESYNC GAUGE (review N3). The error at the acked seq IS the prediction
         // error (the latency lead cancels), so this is the honest per-body
@@ -1708,18 +1708,18 @@ pub fn reconcile_owned_prediction(
             );
         }
         // COMMON CASE: prediction matched authority → leave the body alone.
-        if matches!(decision, lunco_core::Reconciliation::InSync) {
+        if matches!(decision, crate::Reconciliation::InSync) {
             continue;
         }
         match decision {
-            lunco_core::Reconciliation::InSync => unreachable!(),
+            crate::Reconciliation::InSync => unreachable!(),
             // Park the correction as a residual; `drain_pending_corrections`
             // applies it to physics `Position`/`Rotation` a few cm/degrees per
             // fixed tick, which avian writeback + transform-interpolation render
             // smoothly. Writing the pose (or `Transform`) here instead popped the
             // body AND reset `bevy_transform_interpolation`'s easing — the
             // hold-the-key jitter.
-            lunco_core::Reconciliation::Correct {
+            crate::Reconciliation::Correct {
                 pos: new_pos,
                 rot: new_rot,
             } => {
@@ -1741,7 +1741,7 @@ pub fn reconcile_owned_prediction(
             // Gross desync: teleport semantics — seat pose directly (Transform
             // included; the interpolation easing-reset on a real teleport is
             // exactly what we want) and drop any queued residual.
-            lunco_core::Reconciliation::Snap {
+            crate::Reconciliation::Snap {
                 pos: new_pos,
                 rot: new_rot,
             } => {

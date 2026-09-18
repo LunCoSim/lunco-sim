@@ -5,8 +5,8 @@
 //! deliberately has no renderer dependency and changes only when an exposed
 //! value changes.
 
-use crate::GlobalEntityId;
 use bevy::prelude::Resource;
+use lunco_core::GlobalEntityId;
 use std::collections::HashMap;
 
 /// Maximum presentation publication rate for reactive runtime consumers.

@@ -1,0 +1,17 @@
+[package]
+name = "lunco-exposure-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Renderer-independent typed runtime exposure registry"
+
+[lib]
+name = "lunco_exposure_core"
+path = "src/lib.rs"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+
+[lints]
+workspace = true

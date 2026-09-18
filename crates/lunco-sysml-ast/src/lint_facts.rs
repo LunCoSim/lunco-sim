@@ -134,7 +134,11 @@ fn attribute(value: &SysmlAttribute) -> H {
         ),
         (
             "declared_type",
-            value.declared_type.as_ref().map(type_facts).unwrap_or(H::Unit),
+            value
+                .declared_type
+                .as_ref()
+                .map(type_facts)
+                .unwrap_or(H::Unit),
         ),
         (
             "value",
@@ -364,19 +368,18 @@ mod tests {
         else {
             panic!("attributes must be an array");
         };
-        let station = attributes
-            .first()
-            .expect("station attribute");
+        let station = attributes.first().expect("station attribute");
         let declared = station.get("declared_type").expect("declared type");
         assert_eq!(declared.get("base").and_then(H::as_str), Some("Real"));
         assert_eq!(
-            declared
-                .get("modelica_type")
-                .and_then(H::as_str),
+            declared.get("modelica_type").and_then(H::as_str),
             Some("RealArray")
         );
         let value = station.get("value").expect("literal");
-        assert_eq!(value.get("literal_kind").and_then(H::as_str), Some("vector"));
+        assert_eq!(
+            value.get("literal_kind").and_then(H::as_str),
+            Some("vector")
+        );
         assert!(matches!(value.get("elements"), Some(H::Array(elements)) if elements.len() == 3));
     }
 }

@@ -85,14 +85,14 @@ group.
 
 ## Ownership map
 
-The existing package split is sufficient; do not add another umbrella runtime
-crate that duplicates plugin ownership. The language-specific Rhai application
-boundary is `lunco-scripting-rhai-runtime`; keep additions in the smallest package
+The host substrate and domain composition are separate production packages;
+keep additions in the smallest package
 whose dependency closure can express the contract:
 
 | Package | Owns | Must not own |
 | --- | --- | --- |
-| `lunco-luncosim-core` | simulation composition, physics, USD load/projection, and the headless execution plugin | windows, GPU resources, egui, or render policy |
+| `lunco-luncosim-core` | headless Bevy substrate, asset source/type registration, task-pool policy, build identity, and log deduplication | domain plugins, windows, GPU resources, egui, or render policy |
+| `lunco-luncosim-simulation` | renderer-independent simulation composition, physics, USD load/projection, terrain, Modelica/cosim, and headless execution | windows, GPU resources, egui, or render policy |
 | `lunco-luncosim` | process/CLI dispatch | simulation rules or renderer/window composition |
 | `lunco-luncosim-ui` | window/render composition and interactive shell assembly | headless simulation rules, application presentation bridges, or a second runtime loop |
 | `lunco-luncosim-presentation` | application-edge status, environment, camera/light, terrain-horizon, capture, and scene presentation bridges | headless simulation rules or reusable shell contracts |
@@ -334,4 +334,5 @@ existing in the same tick as the mesh, that was a latent ordering bug worth surf
 The GUI is **not** feature-gated into the domain. Renderer/window selection is
 owned by the `lunco-luncosim` application shell, while
 `lunco-luncosim-core` contains no UI feature or renderer dependency. The
-simulation crates contain no GUI conditionals.
+renderer-independent domain composition is installed by
+`lunco-luncosim-simulation`; the simulation crates contain no GUI conditionals.

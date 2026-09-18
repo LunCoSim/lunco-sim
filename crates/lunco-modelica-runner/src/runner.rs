@@ -26,7 +26,7 @@
 //! can't be applied at the DAE level (non-top-level param/input, or a
 //! non-scalar value) is a hard error, not a recompile with different source.
 
-use lunco_core::LockExt;
+use lunco_core_runtime::LockExt;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 #[cfg(not(target_arch = "wasm32"))]
 use std::hash::{Hash, Hasher};

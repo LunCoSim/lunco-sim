@@ -1031,8 +1031,9 @@ composition roots remain distinct:
 | `lunica` | Modelica workbench plus rumoca compile/simulation plugins | opens Modelica documents and uses the same Twin/document services |
 
 The `lunco-luncosim-ui` application boundary creates the window/render shell,
-consults the GUI boot policy, and composes it with the persistent world supplied
-by `lunco-luncosim-core` plus the application scripting/policy integration from
+consults the GUI boot policy, and composes it with the host-neutral substrate
+from `lunco-luncosim-core`, renderer-independent domain composition from
+`lunco-luncosim-simulation`, and application scripting/policy integration from
 `lunco-luncosim-runtime`. Browser startup loads the deployment Twin through its
 page autoload hook. The server does not use the GUI startup path.
 

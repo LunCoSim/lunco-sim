@@ -3,71 +3,19 @@ name = "lunco-luncosim-core"
 version = "0.6.0-dev"
 edition = "2021"
 license.workspace = true
-description = "Headless-safe LunCoSim application runtime and simulation composition"
+description = "Dependency-light LunCoSim Bevy substrate"
 
 [lib]
 name = "lunco_luncosim_core"
 path = "src/lib.rs"
 
 [dependencies]
-lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
-lunco-assets-runtime = { path = "../lunco-assets-runtime" }
-lunco-core-runtime = { path = "../lunco-core-runtime" }
-lunco-telemetry-core = { path = "../lunco-telemetry-core" }
-# Core owns the CPU/ECS simulation composition. Asset/image/shader stores are
-# retained because USD document projection uses them as data, but renderer,
-# window, glTF, mesh, and light plugins belong to the GUI edge.
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_shader"] }
-avian3d = { workspace = true }
-big_space = { workspace = true }
-lunco-physics = { workspace = true }
-lunco-core = { path = "../lunco-core" }
-lunco-spatial = { path = "../lunco-spatial" }
-lunco-core-session = { path = "../lunco-core-session" }
-lunco-hardware = { path = "../lunco-hardware" }
-lunco-telemetry = { path = "../lunco-telemetry" }
-lunco-mobility = { path = "../lunco-mobility" }
-lunco-controller = { path = "../lunco-controller" }
-lunco-cosim-core = { path = "../lunco-cosim-core" }
-lunco-input-core = { path = "../lunco-input-core" }
-lunco-avatar = { path = "../lunco-avatar", default-features = false }
-lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
-lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
-lunco-terrain-globe = { path = "../lunco-terrain-globe" }
-lunco-obstacle-field = { path = "../lunco-obstacle-field" }
-lunco-terrain-surface = { path = "../lunco-terrain-surface" }
-lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
-lunco-modelica-execution = { path = "../lunco-modelica-execution" }
-lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
-lunco-sysml = { path = "../lunco-sysml", optional = true }
-lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
-serde_json = { workspace = true }
-lunco-cosim = { path = "../lunco-cosim" }
-lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
-lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
-lunco-environment = { path = "../lunco-environment" }
-lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime", features = ["cosim"] }
-lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
-lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
-lunco-usd-terrain = { path = "../lunco-usd-terrain" }
-lunco-scene-commands = { path = "../lunco-scene-commands" }
-lunco-scene-camera = { path = "../lunco-scene-camera" }
-lunco-scene-selection = { path = "../lunco-scene-selection" }
-lunco-scene-validation = { path = "../lunco-scene-validation" }
-lunco-assets-datasets = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
-lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 
 [features]
 default = []
-# The renderer-independent exposure projection optionally observes the
-# networking snapshot resource. The transport and journal services themselves
-# live in `lunco-luncosim-services`.
-networking = ["lunco-luncosim-exposures/networking"]
-api-transport = ["lunco-usd-bevy-runtime/api"]
-net-diag = ["networking"]
-python = ["lunco-usd-bevy-runtime/python"]
-sysml = ["dep:lunco-sysml"]
 
 [lints]
 workspace = true

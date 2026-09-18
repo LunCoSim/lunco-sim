@@ -227,7 +227,7 @@ canonical summary of the shipped shape:
     its post-step pose each tick keyed by input `seq`; on a snapshot that acks a `seq` it
     compares *prediction-at-seq* vs *authority-at-seq* (apples-to-apples, so the latency lead
     cancels) and corrects **only on genuine divergence**. The pure decision is
-    `lunco_core::reconcile_decision` (unit-tested, no sync layer).
+    `lunco_networking_core::reconcile_decision` (unit-tested, no sync layer).
   - *Predicted props + all remote rovers* (`PredictedDynamic`): run local avian `Dynamic`,
     **state**-reconciled per snapshot. Remote rovers predict so they **yield** to a local
     push (mutual push), not just push.
