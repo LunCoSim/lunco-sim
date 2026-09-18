@@ -51,6 +51,7 @@ use std::time::Duration;
 
 pub mod avian_backend;
 pub mod escape;
+pub mod force_ports;
 pub mod pose;
 pub mod readiness;
 pub mod raycast;

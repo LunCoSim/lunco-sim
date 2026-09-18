@@ -53,8 +53,8 @@ pub use ports::*;
 
 use lunco_core_session::ControlAuthorityChanged;
 use lunco_cosim_core::{
-    BrokenConnection, ControlWriteFence, CosimDiagnostics, ForceActuator, PortHolds, RealtimeSafe,
-    SimComponent, SimConnection, SimStatus, TorqueActuator,
+    BindingRevision, BrokenConnection, ControlWriteFence, CosimDiagnostics, ForceActuator,
+    PortHolds, RealtimeSafe, SimComponent, SimConnection, SimStatus, TorqueActuator,
 };
 
 // Typed-command machinery (re-exported from `lunco-core`, which re-exports
@@ -348,7 +348,7 @@ impl Plugin for CoSimPlugin {
             FixedUpdate,
             (
                 systems::propagate::propagate_connections
-                .in_set(lunco_cosim_core::CosimSet::Propagate)
+                    .in_set(lunco_cosim_core::CosimSet::Propagate)
                     .run_if(lunco_time::simulation_is_running),
                 // The avian boundary consumers: apply solved joint torques and
                 // drain net force/torque ports plus USD-authored point-force

@@ -34,7 +34,7 @@ use lunco_cosim_core::{
     RealtimeSafe, SimComponent, SimConnection, SimStatus,
 };
 
-use crate::avian::is_physics_force_port;
+use lunco_physics::force_ports::is_physics_force_port;
 
 /// Does **this peer simulate** `target`, i.e. may propagation write into it?
 ///

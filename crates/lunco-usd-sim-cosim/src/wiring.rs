@@ -185,7 +185,7 @@ pub(super) fn settle_binding_epoch(
     models: Query<(Option<&ModelicaModel>, Option<&SimComponent>), With<UsdSourcedCosim>>,
     connections: Query<(), With<SimConnection>>,
     mut dirty: ResMut<BindingEpochDirty>,
-    mut revision: ResMut<lunco_cosim::BindingRevision>,
+    mut revision: ResMut<lunco_cosim_core::BindingRevision>,
     wait: Option<Res<BindingEpochWait>>,
     mut readiness: ResMut<lunco_readiness::ReadinessRegistry>,
     mut commands: Commands,
@@ -749,7 +749,7 @@ pub(super) fn rewire_usd_connections(
                 // runs late.
                 //
                 if client_predicts
-                    && lunco_cosim::avian::is_physics_force_port(sink_conn)
+                    && lunco_physics::force_ports::is_physics_force_port(sink_conn)
                     && matches!(
                         wiring.predicted_bodies.get(entity),
                         Ok(avian3d::prelude::RigidBody::Dynamic)
@@ -878,7 +878,7 @@ pub(super) fn causal_participants_changed(
     mut removed_bindings: RemovedComponents<ConnectionBinding>,
     mut removed_models: RemovedComponents<ModelicaModel>,
     mut removed_sinks: RemovedComponents<lunco_port_core::CausalStateSink>,
-    revision: Res<lunco_cosim::BindingRevision>,
+    revision: Res<lunco_cosim_core::BindingRevision>,
 ) -> bool {
     !arrivals.is_empty()
         || removed_connections.read().next().is_some()
@@ -963,7 +963,7 @@ pub(super) fn derive_causal_barrier_participants(world: &mut World) {
         )
     });
     let topology_ready = world
-        .get_resource::<lunco_cosim::BindingRevision>()
+        .get_resource::<lunco_cosim_core::BindingRevision>()
         .is_some_and(|revision| revision.sealed)
         && bindings_terminal;
 

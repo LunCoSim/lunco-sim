@@ -9848,7 +9848,6 @@ dependencies = [
  "lunco-celestial-spatial-core",
  "lunco-core",
  "lunco-core-session",
- "lunco-cosim",
  "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",

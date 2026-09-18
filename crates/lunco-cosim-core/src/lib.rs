@@ -15,7 +15,7 @@ pub mod diagnostics;
 pub mod schedule;
 
 pub use actuation::{ForceActuator, TorqueActuator};
-pub use binding::{BoundConnection, ConnectionBinding};
+pub use binding::{BindingRevision, BoundConnection, ConnectionBinding};
 pub use component::*;
 pub use connection::{
     ControlWriteFence, PortHolds, RealtimeSafe, SimConnection, clear_control_write_fence,

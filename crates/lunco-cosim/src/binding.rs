@@ -9,8 +9,8 @@ use bevy::prelude::*;
 use lunco_port_core::ports::PortRegistry;
 
 use lunco_cosim_core::{
-    BoundConnection, BrokenConnection, ConnectionBinding, CosimDiagnostics, SimComponent,
-    SimConnection, SimStatus,
+    BindingRevision, BoundConnection, BrokenConnection, ConnectionBinding, CosimDiagnostics,
+    SimComponent, SimConnection, SimStatus,
 };
 
 /// Runtime lifecycle of a port-owning endpoint.
@@ -28,50 +28,6 @@ pub enum EndpointLifecycle {
 /// handoff after the epoch settles.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 struct InitialSampledEpoch(u64);
-
-/// A monotonic, event-driven request to reconsider connection specifications.
-#[derive(Resource, Debug, Default)]
-pub struct BindingRevision {
-    revision: u64,
-    consumed: u64,
-    epoch: u64,
-    /// `true` only after the scene/instance projection epoch has settled.
-    pub sealed: bool,
-}
-
-impl BindingRevision {
-    pub fn request(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
-    }
-    pub fn pending(&self) -> bool {
-        self.consumed != self.revision
-    }
-    pub fn open_epoch(&mut self) {
-        if self.sealed {
-            self.epoch = self.epoch.wrapping_add(1);
-            self.sealed = false;
-        }
-        self.request();
-    }
-    pub fn seal_epoch(&mut self) {
-        if !self.sealed {
-            self.epoch = self.epoch.wrapping_add(1);
-        }
-        self.sealed = true;
-        self.request();
-    }
-
-    fn epoch(&self) -> u64 {
-        self.epoch
-    }
-    fn take_request(&mut self) -> bool {
-        if self.consumed == self.revision {
-            return false;
-        }
-        self.consumed = self.revision;
-        true
-    }
-}
 
 /// Cheap run condition for the end-of-frame binding transaction.
 pub fn binding_requested(revision: Res<BindingRevision>) -> bool {

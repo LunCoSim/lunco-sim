@@ -19,9 +19,9 @@
 
 use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties,
-    ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Forces,
-    LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
-    RevoluteJoint, RigidBody, Rotation, Sleeping, WriteRigidBodyForces,
+    ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Forces, LinearVelocity, Mass,
+    NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position, RevoluteJoint,
+    RigidBody, Rotation, Sleeping, WriteRigidBodyForces,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -29,42 +29,6 @@ use bevy::prelude::*;
 use crate::ports::{AvianGroup, AvianPort};
 use lunco_cosim_core::{ForceActuator, TorqueActuator};
 use lunco_port_core::ports::PortDirection;
-
-/// The avian input ports that sink into [`PendingForces`] — i.e. **writing one
-/// pushes a rigid body around**. Declared here, beside the port table that
-/// implements them, because a port's meaning belongs to the backend that owns
-/// it. [`is_physics_force_port`] is the consumer.
-///
-/// ENUMERATED, never matched by spelling. A name test cannot tell a body torque
-/// (N·m about a world axis, applied to a rigid body) from a shaft torque (N·m
-/// through a gearbox, applied to nothing) — and it cannot see a body-force port
-/// that is not spelled `force*`/`torque*` at all. Add a port that writes
-/// `PendingForces`, add it here.
-pub const BODY_FORCE_PORTS: &[&str] = &[
-    // World-space linear force → `PendingForces::f`.
-    "force_x",
-    "force_y",
-    "force_z",
-    // Body-frame linear force → `PendingForces::f_local` (rotated into world at
-    // apply time). These are why an exact `force_{x,y,z}` list would be a hole.
-    "force_local_x",
-    "force_local_y",
-    "force_local_z",
-    // World-space torque → `PendingForces::torque`.
-    "torque_x",
-    "torque_y",
-    "torque_z",
-];
-
-/// Input ports that drive generic physical actuators. These are separate from
-/// [`BODY_FORCE_PORTS`]: an actuator is a child prim, while the accumulator and
-/// Avian rigid body live on its owning body.
-pub const ACTUATOR_FORCE_PORTS: &[&str] = &["force_command", "torque_command"];
-
-/// Returns whether a port writes the Avian force accumulator.
-pub fn is_physics_force_port(port: &str) -> bool {
-    BODY_FORCE_PORTS.contains(&port) || ACTUATOR_FORCE_PORTS.contains(&port)
-}
 
 /// Per-entity force accumulator written by `force_*` input ports and drained
 /// into avian each physics tick by [`apply_pending_forces`].
@@ -1363,18 +1327,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn force_ports_are_the_gated_ones() {
-        assert!(is_physics_force_port("force_y"));
-        assert!(is_physics_force_port("torque_z"));
-        assert!(is_physics_force_port("force_local_x"));
-        assert!(!is_physics_force_port("throttle"));
-        assert!(is_physics_force_port("force_command"));
-        assert!(is_physics_force_port("torque_command"));
-        assert!(!is_physics_force_port("angle"));
-        assert!(!is_physics_force_port("torque"));
-    }
-
-    #[test]
     fn conventionally_named_force_ports_are_all_declared() {
         for group in crate::ports::AVIAN {
             for p in group.ports {
@@ -1382,9 +1334,9 @@ mod tests {
                     p.name.starts_with("force_") || p.name.starts_with("torque_");
                 if looks_like_force {
                     assert!(
-                        is_physics_force_port(p.name),
+                        lunco_physics::force_ports::is_physics_force_port(p.name),
                         "avian port `{}` looks like a body-force port but is not in \
-                         BODY_FORCE_PORTS — it would bypass the RealtimeSafe gate",
+                         lunco_physics::force_ports::BODY_FORCE_PORTS — it would bypass the RealtimeSafe gate",
                         p.name
                     );
                 }

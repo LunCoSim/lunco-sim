@@ -15,7 +15,6 @@ lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-core-session = { path = "../lunco-core-session" }
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-doc = { path = "../lunco-doc", optional = true }
 lunco-environment = { path = "../lunco-environment" }

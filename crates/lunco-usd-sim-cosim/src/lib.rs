@@ -2049,7 +2049,7 @@ impl Plugin for UsdSimCosimPlugin {
         // plugin's system contract complete and idempotent.
         app.init_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
             .init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
-            .init_resource::<lunco_cosim::BindingRevision>()
+            .init_resource::<lunco_cosim_core::BindingRevision>()
             .init_resource::<lunco_core::SimulationBarrierParticipants>()
             .init_resource::<lunco_scripting::ScriptRegistry>()
             .init_resource::<UsdWiringDirty>()
@@ -2419,7 +2419,7 @@ mod tests {
     fn causal_barrier_is_the_reverse_closure_of_stateful_sinks() {
         let mut world = World::new();
         world.init_resource::<lunco_core::SimulationBarrierParticipants>();
-        let mut revision = lunco_cosim::BindingRevision::default();
+        let mut revision = lunco_cosim_core::BindingRevision::default();
         revision.sealed = true;
         world.insert_resource(revision);
 
@@ -2466,7 +2466,7 @@ mod tests {
     fn unresolved_topology_keeps_the_barrier_fail_closed() {
         let mut world = World::new();
         world.init_resource::<lunco_core::SimulationBarrierParticipants>();
-        let mut revision = lunco_cosim::BindingRevision::default();
+        let mut revision = lunco_cosim_core::BindingRevision::default();
         revision.sealed = true;
         world.insert_resource(revision);
 
@@ -2495,7 +2495,7 @@ mod tests {
     fn failed_edge_does_not_make_model_a_shared_clock_participant() {
         let mut world = World::new();
         world.init_resource::<lunco_core::SimulationBarrierParticipants>();
-        let mut revision = lunco_cosim::BindingRevision::default();
+        let mut revision = lunco_cosim_core::BindingRevision::default();
         revision.sealed = true;
         world.insert_resource(revision);
 
