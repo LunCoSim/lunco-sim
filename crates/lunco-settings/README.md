@@ -18,7 +18,8 @@ state, not user prefs.)
 ## Key types
 
 - `SettingsPlugin` — load-on-startup + persist-on-change wiring.
-- `SettingsSection` — trait a domain settings struct implements (`const KEY`).
+- `SettingsSection` — trait a domain settings struct implements (`const KEY` and
+  optional persisted-value migration).
 - `AppSettingsExt::register_settings_section::<S>()` — register a section.
 - `Settings` — the raw merged document (`raw(key)` / `iter()`).
 - `ProfileSettings` — built-in profile section.
@@ -49,3 +50,7 @@ app.add_plugins(lunco_settings::SettingsPlugin);
 app.register_settings_section::<PerfHudSettings>();
 // then mutate ResMut<PerfHudSettings> from any system; it persists next frame.
 ```
+
+Persisted sections may implement `SettingsSection::migrate_persisted` for a
+versioned, one-time migration. The hook runs only for an existing stored value;
+fresh installations use the section's `Default` unchanged.

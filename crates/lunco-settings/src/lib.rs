@@ -70,6 +70,14 @@ pub trait SettingsSection:
     fn validate_section(&self) -> Result<(), String> {
         Ok(())
     }
+
+    /// Migrate a valid value loaded from the persisted settings document.
+    ///
+    /// This hook runs only for an existing stored section, never for a fresh
+    /// `Default`. A section that changes itself must carry its own persisted
+    /// version or marker so the migration is one-time and later user edits are
+    /// preserved.
+    fn migrate_persisted(&mut self) {}
 }
 
 /// Resolves the user-level configuration directory for LunCoSim.
@@ -141,10 +149,20 @@ pub fn load_section_from_disk<S: SettingsSection>() -> S {
         Ok(v) => v,
         Err(_) => return S::default(),
     };
-    raw.get(S::KEY)
+    let Some(mut section) = raw
+        .get(S::KEY)
         .and_then(|v| serde_json::from_value::<S>(v.clone()).ok())
-        .filter(|section| section.validate_section().is_ok())
-        .unwrap_or_default()
+    else {
+        return S::default();
+    };
+    if section.validate_section().is_err() {
+        return S::default();
+    }
+    section.migrate_persisted();
+    if section.validate_section().is_err() {
+        return S::default();
+    }
+    section
 }
 
 /// In-memory mirror of `settings.json`. Sections deserialize out of
@@ -291,7 +309,30 @@ impl AppSettingsExt for App {
             match settings.raw.get(S::KEY).cloned() {
                 None => S::default(),
                 Some(v) => match serde_json::from_value::<S>(v) {
-                    Ok(s) if s.validate_section().is_ok() => s,
+                    Ok(mut s) if s.validate_section().is_ok() => {
+                        let before = s.clone();
+                        s.migrate_persisted();
+                        if s.validate_section().is_err() {
+                            settings.raw.remove(S::KEY);
+                            settings.dirty = true;
+                            S::default()
+                        } else {
+                            if s != before {
+                                match serde_json::to_value(&s) {
+                                    Ok(value) => {
+                                        settings.raw.insert(S::KEY.to_string(), value);
+                                        settings.dirty = true;
+                                    }
+                                    Err(_) => {
+                                        settings.raw.remove(S::KEY);
+                                        settings.dirty = true;
+                                        s = S::default();
+                                    }
+                                }
+                            }
+                            s
+                        }
+                    }
                     Err(_) => {
                         settings.raw.remove(S::KEY);
                         settings.dirty = true;
@@ -708,6 +749,32 @@ mod disk_guard_tests {
         }
     }
 
+    #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
+    struct MigratedTestSection {
+        schema_version: u8,
+        enabled: bool,
+    }
+
+    impl Default for MigratedTestSection {
+        fn default() -> Self {
+            Self {
+                schema_version: 1,
+                enabled: false,
+            }
+        }
+    }
+
+    impl SettingsSection for MigratedTestSection {
+        const KEY: &'static str = "migrated_test_section";
+
+        fn migrate_persisted(&mut self) {
+            if self.schema_version == 0 {
+                self.enabled = false;
+                self.schema_version = 1;
+            }
+        }
+    }
+
     #[test]
     fn invalid_section_is_removed_and_current_defaults_are_registered() {
         let mut app = App::new();
@@ -750,6 +817,34 @@ mod disk_guard_tests {
         );
         let settings = app.world().resource::<Settings>();
         assert!(settings.raw(ValidatedTestSection::KEY).is_none());
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn persisted_section_migration_is_written_back_before_registration() {
+        let mut app = App::new();
+        app.insert_resource(Settings {
+            raw: BTreeMap::from([(
+                MigratedTestSection::KEY.to_string(),
+                serde_json::json!({ "schema_version": 0, "enabled": true }),
+            )]),
+            dirty: false,
+        });
+
+        app.register_settings_section::<MigratedTestSection>();
+
+        assert_eq!(
+            app.world().resource::<MigratedTestSection>(),
+            &MigratedTestSection {
+                schema_version: 1,
+                enabled: false,
+            }
+        );
+        let settings = app.world().resource::<Settings>();
+        assert_eq!(
+            settings.raw(MigratedTestSection::KEY),
+            Some(&serde_json::json!({ "schema_version": 1, "enabled": false }))
+        );
         assert!(settings.dirty);
     }
 
