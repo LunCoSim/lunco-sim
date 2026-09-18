@@ -157,6 +157,12 @@ for an ordinary PNG, so this renderer-owned preparation is required to prevent
 real orthophoto detail from shimmering at distance. Height and ShadowCache keep
 their dedicated non-RGBA access contracts.
 
+The shared CPU chain follows the GPU texture extent rule: every axis becomes
+`max(1, floor(previous / 2))`. It must not use ceil-halving or merely clamp an
+oversized level count, because the concatenated byte layout would then disagree
+with the GPU subresources. Non-power-of-two authored and derived maps are valid
+inputs and must remain renderable.
+
 ### Sharing, and how to not destroy it
 
 Identical looks share **one** material and **one** bind group. The binder caches by

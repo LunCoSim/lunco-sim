@@ -31,17 +31,48 @@ use serde::{Deserialize, Serialize};
 /// it. Both fields are opt-IN, the same rule the celestial subsystem and the
 /// trajectory lines already follow — content and chrome appear because something
 /// asked for them, never because a default said yes.
-#[derive(Resource, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Debug)]
+#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub(crate) struct OverlaySettings {
+    /// Persisted schema marker. A missing marker represents settings written
+    /// before the HUD's opt-in default was made explicit and is migrated below.
+    #[serde(default = "overlay_settings_schema_version")]
+    schema_version: u8,
+    #[serde(default)]
     /// The sky-clock pill (top-left): celestial epoch, follow/independent, rate.
     pub sky_clock: bool,
+    #[serde(default)]
     /// The view-mode switcher pill (top-centre): Surface / Moon / Earth, which
     /// doubles as the readout of which body the camera is focused on.
     pub view_switcher: bool,
 }
 
+const OVERLAY_SETTINGS_SCHEMA_VERSION: u8 = 1;
+
+fn overlay_settings_schema_version() -> u8 {
+    // A missing marker identifies settings written before versioned overlay
+    // preferences existed. Fresh defaults set the current version explicitly.
+    0
+}
+
+impl Default for OverlaySettings {
+    fn default() -> Self {
+        Self {
+            schema_version: OVERLAY_SETTINGS_SCHEMA_VERSION,
+            sky_clock: false,
+            view_switcher: false,
+        }
+    }
+}
+
 impl SettingsSection for OverlaySettings {
     const KEY: &'static str = "overlays";
+
+    fn migrate_persisted(&mut self) {
+        if self.schema_version < OVERLAY_SETTINGS_SCHEMA_VERSION {
+            self.sky_clock = false;
+            self.schema_version = OVERLAY_SETTINGS_SCHEMA_VERSION;
+        }
+    }
 }
 
 /// `run_if` for the sky-clock overlay.
@@ -321,4 +352,37 @@ fn register_hud_settings_menu(world: &mut World) {
 pub(crate) fn plugin(app: &mut App) {
     app.register_settings_section::<OverlaySettings>();
     app.add_systems(Startup, (register_time_menu, register_hud_settings_menu));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_hides_the_sky_clock() {
+        assert!(!OverlaySettings::default().sky_clock);
+    }
+
+    #[test]
+    fn legacy_persisted_sky_clock_is_migrated_off_once() {
+        let mut settings: OverlaySettings = serde_json::from_value(serde_json::json!({
+            "sky_clock": true,
+            "view_switcher": false,
+        }))
+        .expect("legacy overlay settings");
+        settings.migrate_persisted();
+        assert!(!settings.sky_clock);
+        assert_eq!(settings.schema_version, OVERLAY_SETTINGS_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrated_opt_in_remains_persisted() {
+        let mut settings = OverlaySettings {
+            schema_version: OVERLAY_SETTINGS_SCHEMA_VERSION,
+            sky_clock: true,
+            view_switcher: false,
+        };
+        settings.migrate_persisted();
+        assert!(settings.sky_clock);
+    }
 }
