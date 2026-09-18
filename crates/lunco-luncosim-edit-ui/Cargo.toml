@@ -16,8 +16,6 @@ bevy = { workspace = true, features = [
     "bevy_mesh",
     "bevy_light",
     "bevy_shader",
-    "bevy_post_process",
-    "bevy_anti_alias",
     "mesh_picking",
     "bevy_gizmos",
 ] }
