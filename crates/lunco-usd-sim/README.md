@@ -17,7 +17,10 @@ This approach provides:
 The component-network/Modelica projection is owned by the render-free
 `lunco-usd-sim-domain` package. USD co-simulation and wiring are installed by
 the separate `lunco-usd-sim-cosim::UsdSimCosimPlugin`; this crate owns vehicle
-realization and its simulation-specific scene projection.
+realization and its simulation-specific scene projection. The complete runtime
+bundle installs vehicle, shader, celestial, and telemetry projectors as
+separate plugins; add `UsdSimPlugin` directly when a host needs only vehicle
+realization.
 
 ### 1. `UsdSimPlugin`
 The main plugin that observes USD prims and injects simulation-specific behaviors.
@@ -73,12 +76,15 @@ surface; static USD schema errors remain the responsibility of USD linting.
 *   [x] Intercepted vehicle wheels use the authored raycast realization instead
     of a second standard collider path.
 
-## Co-simulation translator (`cosim` module)
+## Co-simulation boundary
 
-USD-driven cosim wiring — translates declarative simulation metadata into
+USD-driven cosim wiring is installed by
+`lunco-usd-sim-cosim::UsdSimCosimPlugin`, which translates declarative
+simulation metadata into
 [`lunco-cosim`](../lunco-cosim/README.md) components without any Rust
 glue per scene. This is the authoritative path for USD-defined cosim
-entities; `lunco-cosim` itself stays engine-agnostic.
+entities; `lunco-cosim` itself stays engine-agnostic. It is not part of
+`UsdSimPlugin`.
 
 ### A program is a prim
 

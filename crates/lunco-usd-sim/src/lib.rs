@@ -61,7 +61,6 @@ use lunco_usd_bevy_core::{
 };
 use lunco_usd_bevy_scene::{
     instance_key, is_preview_only, UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending,
-    UsdSceneProjectionReset,
 };
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -364,15 +363,12 @@ impl Plugin for UsdSimPlugin {
         }
         app.init_resource::<lunco_core::RuntimeFaults>();
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
-        lunco_usd_sim_shader::ports::build(app);
-        app.add_plugins(lunco_usd_sim_celestial::CelestialProjectionPlugin);
         app.configure_sets(
             Update,
             (
+                UsdSimSet::ProjectionPrepare.before(UsdSimSet::Projection),
                 UsdSimSet::Projection.before(lunco_spatial::SceneSpatialHandoffSet),
                 UsdSimSet::ActivateDynamicBodies,
-                lunco_usd_sim_celestial::CelestialProjectionSet::Projection
-                    .before(UsdSimSet::Projection),
             ),
         )
         .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
@@ -388,29 +384,8 @@ impl Plugin for UsdSimPlugin {
                 .chain()
                 .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
         )
-        .add_systems(
-            FixedPostUpdate,
-            lunco_usd_sim_telemetry::retain_physics_telemetry.after(PhysicsSystems::StepSimulation),
-        )
         .add_observer(on_add_usd_sim_prim)
         .add_systems(PreUpdate, resolve_differential_coupling)
-        // USD → ShaderMaterial authoring. Ordered AFTER the bounded visual
-        // projection and BEFORE `process_usd_sim_prims` consumes the prims,
-        // so the material is present before a wheel is split onto its visual
-        // child. The completed projection boundary also prevents the visual
-        // projector from restoring a cylinder-axis rotation after the
-        // simulator has established the wheel's identity physics frame.
-        // See `lunco-usd-sim-shader`.
-        .add_systems(
-            Update,
-            (
-                reset_usd_shader_resolution,
-                lunco_usd_sim_shader::apply_usd_shader_materials,
-            )
-                .chain()
-                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
-                .before(process_usd_sim_prims),
-        )
         // `process_usd_sim_prims` does a per-stage joint scan + per-
         // entity dispatch — too coupled to fit cleanly into a single
         // `OnAdd<UsdSceneProjected>` observer. Gating with `run_if`
@@ -418,7 +393,6 @@ impl Plugin for UsdSimPlugin {
         // USD prim (archetype-level check, near-zero cost).
         .init_resource::<GroundColliderPending>()
         .init_resource::<JointTopologyIndex>()
-        .init_resource::<lunco_usd_sim_telemetry::PhysicsTelemetryState>()
         .add_systems(
             Update,
             (process_usd_sim_prims
@@ -451,25 +425,6 @@ impl Plugin for UsdSimPlugin {
         // admitted light and would publish a horizontal semantic sun on the
         // following frame.
         install_authored_sun_state_seed(app);
-    }
-}
-
-/// Clear shader projection state at the generic scene refresh boundary.
-///
-/// The runtime owns scene re-instantiation but must not depend on the shader
-/// implementation merely to clear this derived marker. The shader projection
-/// owns the marker and consumes the shared lifecycle message instead.
-fn reset_usd_shader_resolution(
-    mut resets: MessageReader<UsdSceneProjectionReset>,
-    resolved: Query<(), With<lunco_usd_sim_shader::UsdShaderResolved>>,
-    mut commands: Commands,
-) {
-    for reset in resets.read() {
-        if resolved.get(reset.entity).is_ok() {
-            commands
-                .entity(reset.entity)
-                .remove::<lunco_usd_sim_shader::UsdShaderResolved>();
-        }
     }
 }
 

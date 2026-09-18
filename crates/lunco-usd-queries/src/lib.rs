@@ -5,8 +5,8 @@
 //! projection. It does not maintain a second asset graph or infer an active
 //! document from UI state.
 
-use bevy::prelude::World;
-use lunco_api::queries::ApiQueryProvider;
+use bevy::prelude::{App, Plugin, World};
+use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
@@ -16,6 +16,24 @@ use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
 use lunco_usd_core::edit_session::UsdEditSessions;
 use lunco_usd_document::document::UsdDocument;
+
+/// Installs the public USD document query providers.
+///
+/// Query registration belongs beside the provider implementations, not in the
+/// USD command/lifecycle package. Runtime compositions can therefore update
+/// query code without rebuilding the command observers.
+pub struct UsdQueriesPlugin;
+
+impl Plugin for UsdQueriesPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ApiQueryRegistry>();
+        let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
+        registry.register(InspectUsdDocumentProvider);
+        registry.register(InspectUsdEditSessionProvider);
+        registry.register(ResolveUsdTargetProvider);
+        registry.register(SyncUsdDocumentProvider);
+    }
+}
 
 fn journal_position(world: &World, doc: DocumentId) -> serde_json::Value {
     world

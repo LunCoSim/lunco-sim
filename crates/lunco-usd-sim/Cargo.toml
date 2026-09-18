@@ -15,9 +15,6 @@ openusd = { workspace = true }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
-lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial" }
-lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
-lunco-usd-sim-telemetry = { path = "../lunco-usd-sim-telemetry" }
 lunco-usd-avian-joints = { path = "../lunco-usd-avian-joints" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }

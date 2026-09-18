@@ -234,15 +234,6 @@ impl Plugin for UsdCommandsPlugin {
         }
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<UsdEditSessions>();
-        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
-        let mut query_registry = app
-            .world_mut()
-            .resource_mut::<lunco_api::queries::ApiQueryRegistry>();
-        query_registry.register(lunco_usd_queries::InspectUsdDocumentProvider);
-        query_registry.register(lunco_usd_queries::InspectUsdEditSessionProvider);
-        query_registry.register(lunco_usd_queries::ResolveUsdTargetProvider);
-        query_registry.register(lunco_usd_queries::SyncUsdDocumentProvider);
-
         // Self-register with the workbench's plugin-driven document
         // kind registry. `init_resource` defends against the case where
         // the workbench plugin hasn't been added yet — we still own

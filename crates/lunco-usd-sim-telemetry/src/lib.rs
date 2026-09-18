@@ -8,7 +8,7 @@
 
 use avian3d::prelude::{
     AngularVelocity, Collider, ComputedAngularInertia, ComputedCenterOfMass, ComputedMass,
-    ContactGraph, LinearVelocity, Physics, Position, RigidBody, Rotation,
+    ContactGraph, LinearVelocity, Physics, PhysicsSystems, Position, RigidBody, Rotation,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -21,6 +21,22 @@ use lunco_time::MissionClock;
 use std::collections::HashMap;
 
 use lunco_usd_bevy_scene::UsdPrimPath;
+
+/// Installs the post-step physics telemetry recorder.
+///
+/// Telemetry is a complete projection consumer, not vehicle realization. The
+/// runtime composition installs it beside the vehicle and celestial projectors
+/// so telemetry changes do not rebuild the vehicle projector.
+pub struct PhysicsTelemetryPlugin;
+
+impl Plugin for PhysicsTelemetryPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<PhysicsTelemetryState>().add_systems(
+            FixedPostUpdate,
+            retain_physics_telemetry.after(PhysicsSystems::StepSimulation),
+        );
+    }
+}
 
 #[derive(Resource, Default)]
 pub struct PhysicsTelemetryState {

@@ -14,13 +14,24 @@ lunco-usd-bevy-animation = { path = "../lunco-usd-bevy-animation" }
 lunco-usd-bevy-diagnostics = { path = "../lunco-usd-bevy-diagnostics" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim", optional = true }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core", optional = true }
+lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader", optional = true }
+lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial", optional = true }
+lunco-usd-sim-telemetry = { path = "../lunco-usd-sim-telemetry", optional = true }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim", optional = true }
 lunco-usd-sim-cosim-api = { path = "../lunco-usd-sim-cosim-api", optional = true }
 lunco-usd-sim-domain-api = { path = "../lunco-usd-sim-domain-api", optional = true }
+lunco-usd-queries = { path = "../lunco-usd-queries" }
 
 [features]
 default = ["simulation"]
-simulation = ["dep:lunco-usd-sim"]
+simulation = [
+    "dep:lunco-usd-sim",
+    "dep:lunco-usd-sim-core",
+    "dep:lunco-usd-sim-shader",
+    "dep:lunco-usd-sim-celestial",
+    "dep:lunco-usd-sim-telemetry",
+]
 cosim = ["simulation", "dep:lunco-usd-sim-cosim"]
 python = ["cosim", "lunco-usd-sim-cosim/python"]
 api = [

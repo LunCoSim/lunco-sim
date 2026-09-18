@@ -582,14 +582,16 @@ document kind, owns file/open/save and document-lifecycle observers, and lowers
 typed USD document commands through the canonical journal path. Scene
 admission, Twin-backed stage loading, and live document projection belong to
 `lunco-usd-bevy-runtime-core`, so document-only hosts can use this package
-without the complete visual/simulation bundle.
+without the complete visual/simulation bundle. Public query-provider
+registration belongs to `lunco-usd-queries`.
 
 **`lunco-usd-queries`**
 UI-free public query providers for the USD document boundary. It owns
 `InspectUsdDocument`, `InspectUsdEditSession`, `ResolveUsdTarget`, and
-`SyncUsdDocument`, reading the authoritative document registry, edit-session
-state, journal, and mounted stage without depending on runtime orchestration
-or UI presentation. Its public query contracts are tested in
+`SyncUsdDocument`, and its `UsdQueriesPlugin` registers them beside their
+implementations. The providers read the authoritative document registry,
+edit-session state, journal, and mounted stage without depending on runtime
+orchestration or UI presentation. Their public query contracts are tested in
 `crates/lunco-usd-queries/tests/query_api.rs`.
 
 **`lunco-usd-bevy-runtime-core`**
@@ -796,7 +798,7 @@ policy. It reuses the authoritative geometry and joint readers from
 the runtime physics package.
 
 **`lunco-usd-sim`**
-Specialized vehicle metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels). Its `UsdSimPlugin` is independent from the USD cosim translator; direct USD physics lowering remains in `lunco-usd-avian`.
+Specialized vehicle metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels). Its `UsdSimPlugin` is independent from shader intent and the USD cosim translator; the application runtime installs those independent projectors explicitly. Direct USD physics lowering remains in `lunco-usd-avian`.
 
 **`lunco-usd-sim-authoring`**
 Render-free composed readers for the standard PhysX vehicle wheel-attachment
@@ -807,7 +809,8 @@ registered through the generic live-edit owner in `lunco-usd-bevy-core`.
 
 **`lunco-usd-sim-core`**
 Small production contract package shared by the vehicle and USD cosim
-projectors and scene readiness. It owns `UsdSimSet`, `UsdSimProcessed`,
+projectors and scene readiness. It owns `UsdSimSet` (including the shader
+projection-preparation boundary), `UsdSimProcessed`,
 `PendingDifferential`, and `GroundColliderPending`, keeping shared contracts
 out of either large implementation crate and allowing scene runners to avoid
 the full vehicle projector.
@@ -845,7 +848,11 @@ render-free domain projector's direct dependency set independent from
 Independent render-free projection of USD-authored celestial and connectivity facts. It converts anchors, orbits, link nodes, occluder extents, and reflected-light declarations to `lunco-celestial` components. Its separate package boundary prevents celestial authoring changes from rebuilding the vehicle and cosimulation projector.
 
 **`lunco-usd-sim-shader`**
-Independent render-free `UsdShade` material-intent projection. It reads authored WGSL shader networks and writes `ShaderLook`; `lunco-render-bevy` remains the only material binder. Shader authoring changes therefore rebuild this leaf without rebuilding the vehicle projector.
+Independent render-free `UsdShade` material-intent projection. Its
+`UsdShaderPlugin` owns shader resolution invalidation, shader-port registration,
+and the `ShaderLook` projection; `lunco-render-bevy` remains the only material
+binder. The application runtime installs it beside `UsdSimPlugin`, so shader
+authoring changes rebuild this leaf without rebuilding the vehicle projector.
 
 **`lunco-usd-sim-telemetry`**
 Independent render-free recorder for post-step Avian rigid-body and wheel state. It owns the transient telemetry cursor and publishes through the shared signal registry; telemetry implementation changes are isolated from USD schema projection.

@@ -15,6 +15,7 @@ lunco-materials = { path = "../lunco-materials" }
 lunco-render = { path = "../lunco-render" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 
 [dev-dependencies]
 lunco-usd-compose = { path = "../lunco-usd-compose" }

@@ -18,6 +18,7 @@ use lunco_usd_core::commands::{
 };
 use lunco_usd_core::edit_session::{UsdEditScope, UsdEditSessions, UsdProposalState};
 use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
+use lunco_usd_queries::UsdQueriesPlugin;
 
 fn install_command_result_resources(app: &mut App) {
     app.init_resource::<CommandResults>()
@@ -28,7 +29,7 @@ fn install_command_result_resources(app: &mut App) {
 fn plugin_boots_and_registers_kind() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    app.add_plugins(UsdCommandsPlugin);
+    app.add_plugins((UsdCommandsPlugin, UsdQueriesPlugin));
     app.update();
 
     assert!(app

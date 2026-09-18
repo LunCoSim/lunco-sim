@@ -22,8 +22,9 @@ recipes and dependency interpretation; `lunco-usd-core` contains pure operation
 lowerings, assembly, edit-session, and shared USD command/event contracts;
 `lunco-usd-commands` contains the UI-free document lifecycle and authoring
 observers that execute those contracts; `lunco-usd-queries` owns the
-UI-free public query providers for document inspection, edit sessions,
-document synchronization, and explicit assembly-target resolution;
+UI-free public query providers and their `UsdQueriesPlugin` registration for
+document inspection, edit sessions, document synchronization, and explicit
+assembly-target resolution;
 `lunco-usd-bevy-runtime-core` owns scene admission, Twin-backed stage loading,
 runtime persistence, live document projection, and generic authored runtime
 surfaces (control bindings, executable programs, and scene-property ports);
@@ -87,11 +88,13 @@ vehicle wheel attachments and gear drives, plus their authored lint facts;
 `lunco-usd-sim-domain` owns composed component-network and Modelica projection;
 `lunco-usd-sim-domain-api` owns optional generated-source API queries;
 `lunco-usd-sim` owns vehicle projection and registers its in-place wheel edit
-owner with the generic USD runtime; `lunco-usd-sim-cosim` owns participant
+owner with the generic USD runtime; `lunco-usd-sim-shader` owns shader intent
+projection and its port backend; `lunco-usd-sim-cosim` owns participant
 discovery, wiring, readiness, and Modelica/script exchange; and
 `lunco-usd-sim-cosim-api` owns optional API query serialization. The application
 bundle installs the implementation plugins explicitly, so vehicle changes do
-not make the vehicle package depend on the 6.5k-line cosim implementation.
+not make the vehicle package depend on shader implementation or the 6.5k-line
+cosim implementation.
 
 Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
@@ -403,7 +406,8 @@ section.
 2. **UsdAnimationPlugin** — Binds projected animated prims to the shared time domains and samples authored `timeSamples` into transform and material intent.
 3. **UsdDiagnosticsPlugin** — Handles visual glTF placeholder hiding and failure-stub diagnostics; render-free stage failure state belongs to the `UsdScenePlugin`.
 4. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). It translates authored joint facts to the reusable `lunco-usd-avian-joints` boundary, which owns native construction and lifecycle. The separate `lunco-usd-avian-core` plugin owns the USD-independent Avian/BigSpace frame bridge and is installed directly by application composition.
-5. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored vehicle topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `lunco_port_core::OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, and sensors. **UsdSimCosimPlugin** separately discovers programs, publishes model surfaces, and derives co-simulation wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
+5. **UsdShaderPlugin** — Projects authored `UsdShade` WGSL intent and registers the shader-parameter port backend in the shared preparation phase.
+6. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored vehicle topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `lunco_port_core::OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, and sensors. **UsdSimCosimPlugin** separately discovers programs, publishes model surfaces, and derives co-simulation wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Compound collision ownership
 

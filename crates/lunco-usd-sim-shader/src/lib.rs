@@ -43,6 +43,8 @@ use lunco_usd_bevy_core::read::{
 };
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
+use lunco_usd_bevy_scene::{UsdSceneProjectionReset, UsdVisualProjectionSet};
+use lunco_usd_sim_core::UsdSimSet;
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
 
@@ -56,6 +58,42 @@ pub mod ports;
 /// then we leave it unmarked and retry next frame.
 #[derive(Component)]
 pub struct UsdShaderResolved;
+
+/// Installs the USD shader-intent projection and its port backend.
+///
+/// Shader authoring is an independent projection phase. Its only ordering
+/// contract with simulation is the shared `ProjectionPrepare` boundary; the
+/// vehicle projector does not need to import this implementation crate.
+pub struct UsdShaderPlugin;
+
+impl Plugin for UsdShaderPlugin {
+    fn build(&self, app: &mut App) {
+        app.configure_sets(
+            Update,
+            UsdSimSet::ProjectionPrepare.before(UsdSimSet::Projection),
+        )
+        .add_systems(
+            Update,
+            (reset_usd_shader_resolution, apply_usd_shader_materials)
+                .chain()
+                .after(UsdVisualProjectionSet)
+                .in_set(UsdSimSet::ProjectionPrepare),
+        );
+        ports::build(app);
+    }
+}
+
+fn reset_usd_shader_resolution(
+    mut resets: MessageReader<UsdSceneProjectionReset>,
+    resolved: Query<(), With<UsdShaderResolved>>,
+    mut commands: Commands,
+) {
+    for reset in resets.read() {
+        if resolved.get(reset.entity).is_ok() {
+            commands.entity(reset.entity).remove::<UsdShaderResolved>();
+        }
+    }
+}
 
 /// Authors [`ShaderLook`] from the `UsdShade` material a prim is bound to — the
 /// `Shader` prim's `info:wgsl:sourceAsset` and its `inputs:`. Runs between

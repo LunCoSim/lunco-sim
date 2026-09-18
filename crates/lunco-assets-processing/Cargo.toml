@@ -15,7 +15,6 @@ image = { workspace = true }
 draco-gltf = { workspace = true }
 resvg = { workspace = true }
 tiff = { workspace = true }
-tiny-skia = { workspace = true }
 usvg = { workspace = true }
 
 [dev-dependencies]

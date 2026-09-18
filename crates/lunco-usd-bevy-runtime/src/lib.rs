@@ -9,7 +9,7 @@
 //! projection is opt-in through the `cosim` feature, which also enables
 //! `simulation`.
 
-use bevy::prelude::{App, Plugin};
+use bevy::prelude::{App, IntoScheduleConfigs, Plugin};
 
 /// Install the standard USD runtime projection stack.
 ///
@@ -23,6 +23,7 @@ impl Plugin for UsdPlugins {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             lunco_usd_commands::UsdCommandsPlugin,
+            lunco_usd_queries::UsdQueriesPlugin,
             lunco_usd_bevy_runtime_core::UsdSceneRuntimePlugin,
             lunco_usd_bevy::UsdVisualPlugin,
             lunco_usd_bevy_animation::UsdAnimationPlugin,
@@ -30,7 +31,18 @@ impl Plugin for UsdPlugins {
             lunco_usd_avian::UsdAvianPlugin,
         ));
         #[cfg(feature = "simulation")]
-        app.add_plugins(lunco_usd_sim::UsdSimPlugin);
+        app.add_plugins((
+            lunco_usd_sim_shader::UsdShaderPlugin,
+            lunco_usd_sim_celestial::CelestialProjectionPlugin,
+            lunco_usd_sim::UsdSimPlugin,
+            lunco_usd_sim_telemetry::PhysicsTelemetryPlugin,
+        ));
+        #[cfg(feature = "simulation")]
+        app.configure_sets(
+            bevy::prelude::Update,
+            lunco_usd_sim_celestial::CelestialProjectionSet::Projection
+                .before(lunco_usd_sim_core::UsdSimSet::Projection),
+        );
         #[cfg(feature = "cosim")]
         app.add_plugins(lunco_usd_sim_cosim::UsdSimCosimPlugin);
         #[cfg(feature = "api")]

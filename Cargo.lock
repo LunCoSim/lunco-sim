@@ -7182,7 +7182,6 @@ dependencies = [
  "resvg",
  "tempfile",
  "tiff",
- "tiny-skia 0.12.0",
  "toml 1.1.2+spec-1.1.0",
  "usvg",
 ]
@@ -9567,10 +9566,15 @@ dependencies = [
  "lunco-usd-bevy-diagnostics",
  "lunco-usd-bevy-runtime-core",
  "lunco-usd-commands",
+ "lunco-usd-queries",
  "lunco-usd-sim",
+ "lunco-usd-sim-celestial",
+ "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
  "lunco-usd-sim-cosim-api",
  "lunco-usd-sim-domain-api",
+ "lunco-usd-sim-shader",
+ "lunco-usd-sim-telemetry",
 ]
 
 [[package]]
@@ -9785,10 +9789,7 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
  "lunco-usd-sim-authoring",
- "lunco-usd-sim-celestial",
  "lunco-usd-sim-core",
- "lunco-usd-sim-shader",
- "lunco-usd-sim-telemetry",
  "openusd",
  "web-time",
 ]
@@ -9938,6 +9939,7 @@ dependencies = [
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
+ "lunco-usd-sim-core",
  "openusd",
 ]
 

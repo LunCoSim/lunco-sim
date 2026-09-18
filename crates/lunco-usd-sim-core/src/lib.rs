@@ -14,9 +14,15 @@ use bevy_math::{Quat, Vec3};
 /// The vehicle projector publishes generic physical intent in `Projection`;
 /// the co-simulation projector consumes it in its `Scene` phase. The
 /// application composition configures the complete ordering after installing
-/// both projection plugins.
+/// the independent USD simulation projection plugins.
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UsdSimSet {
+    /// Prepares render-free shader intent before domain simulation projection.
+    ///
+    /// The shader projector and vehicle projector are independent production
+    /// packages. This phase is their shared ordering boundary rather than a
+    /// dependency from one implementation onto the other.
+    ProjectionPrepare,
     /// Publishes the composed USD simulation and celestial components.
     Projection,
     /// Converts `ShouldBeDynamic` bodies only after their ground is known ready.

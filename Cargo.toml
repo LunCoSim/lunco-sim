@@ -347,7 +347,6 @@ transform-gizmo-bevy = { version = "0.9.0", default-features = false, features =
 chrono = "0.4.45"
 futures-lite = "2.6"
 resvg = "0.47"
-tiny-skia = "0.12"
 usvg = { version = "0.47", default-features = false }
 # default-features off keeps the Lunica wasm worker lean (image's defaults
 # pull ~a dozen codecs); we ship only what consumers declare — png (screenshot

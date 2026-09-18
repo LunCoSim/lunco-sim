@@ -24,11 +24,11 @@ lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-usd-document = { path = "../lunco-usd-document" }
-lunco-usd-queries = { path = "../lunco-usd-queries" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-workspace = { path = "../lunco-workspace" }
 
 [dev-dependencies]
+lunco-usd-queries = { path = "../lunco-usd-queries" }
 tempfile = { workspace = true }
 
 [lints]
