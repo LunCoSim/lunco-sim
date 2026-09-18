@@ -53,6 +53,7 @@ pub mod avian_backend;
 pub mod escape;
 pub mod pose;
 pub mod readiness;
+pub mod raycast;
 pub mod spatial;
 pub mod support;
 pub use avian_backend::{

@@ -1,6 +1,6 @@
 //! The `range_beam` program driver — the render half of a raw Avian ray query.
 //!
-//! `lunco-cosim` is a render-free simulation crate: it casts the ray and stores the
+//! `lunco-physics` is a render-free physics crate: it casts the ray and stores the
 //! result (`distance`, `hit`). It never names a mesh or a material — doing so pulled
 //! `bevy_render → wgpu + naga` into every build, including the `--no-ui` server and
 //! the wasm worker.
@@ -12,7 +12,7 @@
 //!
 //! That split is the point:
 //!
-//! * the raycast is simulation → `lunco-cosim`, headless;
+//! * the raycast is physics → `lunco-physics`, headless;
 //! * the geometry and the look are authored → USD;
 //! * the mapping from a live value to a transform is logic → here, in Rust.
 //!
@@ -24,7 +24,7 @@
 
 use bevy::prelude::*;
 use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
-use lunco_cosim::avian_queries::RaycastObservation;
+use lunco_physics::raycast::RaycastObservation;
 use lunco_render::PbrLook;
 
 /// The `info:id` the beam driver answers to.

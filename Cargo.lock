@@ -7521,7 +7521,6 @@ dependencies = [
  "lunco-cosim-core",
  "lunco-physics",
  "lunco-port-core",
- "lunco-spatial",
  "lunco-time",
 ]
 
@@ -8698,9 +8697,9 @@ dependencies = [
  "lunco-assets-core",
  "lunco-celestial-spatial-core",
  "lunco-core",
- "lunco-cosim",
  "lunco-environment",
  "lunco-materials",
+ "lunco-physics",
  "lunco-render",
  "lunco-spatial",
  "lunco-terrain-surface",

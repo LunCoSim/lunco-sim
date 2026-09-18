@@ -198,7 +198,7 @@ impl Plugin for CoSimPlugin {
             .register_type::<PendingActuatorCommand>()
             .register_type::<SimConnection>()
             .register_type::<RealtimeSafe>()
-            .register_type::<avian_queries::RaycastObservation>();
+            .register_type::<lunco_physics::raycast::RaycastObservation>();
 
         lunco_port_core::register_endpoint_types(app);
 
@@ -240,7 +240,7 @@ impl Plugin for CoSimPlugin {
             // connection derivation can admit their wires.
             .add_observer(endpoint_ready_on_add::<ForceActuator>)
             .add_observer(endpoint_ready_on_add::<TorqueActuator>)
-            .add_observer(endpoint_ready_on_add::<avian_queries::RaycastObservation>)
+            .add_observer(endpoint_ready_on_add::<lunco_physics::raycast::RaycastObservation>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::RevoluteJoint>)
             .add_observer(endpoint_ready_on_add::<avian3d::prelude::PrismaticJoint>)
             .add_observer(mark_causal_state_sink::<avian3d::prelude::RigidBody>)
@@ -417,7 +417,7 @@ impl Plugin for CoSimPlugin {
         app.add_systems(
             FixedPostUpdate,
             (
-                avian_queries::sample_raycast_observations,
+                lunco_physics::raycast::sample_raycast_observations,
                 avian::sample_solved_acceleration,
             )
                 .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)

@@ -1,0 +1,149 @@
+//! Generic observations made by Avian's physics query API.
+//!
+//! This module deliberately does not know the words *IMU*, *altimeter*, or
+//! *touchdown*. It owns one reusable primitive: an authored ray mounted in a
+//! USD hierarchy. Avian samples the ray after physics writeback and publishes
+//! the raw result. Modelica components decide whether that result is useful as
+//! a range measurement, terrain estimator, optical probe, or something else.
+
+use avian3d::prelude::{Physics, Position, RigidBody, Rotation, SpatialQueryFilter};
+use bevy::math::{DVec3, Dir3};
+use bevy::prelude::*;
+
+/// A raw, single-ray observation authored on a mounted USD prim.
+///
+/// Configuration (`offset`, `axis`, and `max_distance`) is structural input.
+/// The result contains only what Avian's query returned: validity, distance,
+/// hit point, hit normal, and the physics sample timestamp. A miss is invalid
+/// and has no invented distance or terrain altitude.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct RaycastObservation {
+    /// Additional offset in the ray prim's local frame, in metres.
+    pub offset: DVec3,
+    /// Ray direction in the ray prim's local frame.
+    pub axis: DVec3,
+    /// Maximum distance passed to Avian's query, in metres.
+    pub max_distance: f64,
+    /// Distance returned by Avian for the last valid hit, in metres.
+    pub distance: f64,
+    /// World-grid position returned by the query, in metres.
+    pub hit_position: DVec3,
+    /// World-grid surface normal returned by the query.
+    pub hit_normal: DVec3,
+    /// Whether the last query hit a physical collider.
+    pub hit_valid: bool,
+    /// Physics-clock timestamp associated with the result.
+    pub sample_time_s: f64,
+}
+
+impl Default for RaycastObservation {
+    fn default() -> Self {
+        Self {
+            offset: DVec3::ZERO,
+            axis: DVec3::NEG_Y,
+            max_distance: 100.0,
+            distance: 0.0,
+            hit_position: DVec3::ZERO,
+            hit_normal: DVec3::ZERO,
+            hit_valid: false,
+            sample_time_s: 0.0,
+        }
+    }
+}
+
+/// Sample every mounted ray after Avian has written back the completed physics
+/// state. The next co-simulation propagation consumes this observation; there
+/// is no same-tick feedback from a query that has not yet seen the solver.
+pub fn sample_raycast_observations(
+    grid: crate::GridSpatialQuery,
+    time: Res<Time<Physics>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
+    mount_state: Option<Res<lunco_core::SceneMountState>>,
+    parents: Query<&ChildOf>,
+    transforms: Query<&Transform>,
+    bodies: Query<(&Position, &Rotation), With<RigidBody>>,
+    mut observations: Query<(Entity, &mut RaycastObservation)>,
+) {
+    // A replacement clears the active root before deferred teardown. Do not
+    // sample entities from that outgoing hierarchy, and do not query after a
+    // terminal physics fault: both would turn the first owner-level failure
+    // into a downstream ray-query failure.
+    if faults.is_some_and(|faults| faults.active())
+        || mount_state.is_some_and(|mount| mount.active_root().is_none())
+    {
+        return;
+    }
+    for (entity, mut observation) in &mut observations {
+        let mut cursor = entity;
+        let mut mount = Transform::IDENTITY;
+        let Some((body_position, body_rotation, excluded_entities)) = (0..64).find_map(|_| {
+            if let Ok((position, rotation)) = bodies.get(cursor) {
+                let mut excluded = Vec::new();
+                let mut ancestor = entity;
+                while ancestor != cursor {
+                    excluded.push(ancestor);
+                    ancestor = parents.get(ancestor).ok()?.0;
+                }
+                excluded.push(cursor);
+                return Some((position, rotation, excluded));
+            }
+            if let Ok(local) = transforms.get(cursor) {
+                mount = local.mul_transform(mount);
+            }
+            cursor = parents.get(cursor).ok()?.0;
+            None
+        }) else {
+            continue;
+        };
+
+        let body_rotation = body_rotation.0;
+        let mount_offset =
+            mount.translation.as_dvec3() + mount.rotation.as_dquat() * observation.offset;
+        let origin = body_position.0 + body_rotation * mount_offset;
+        let direction = body_rotation * (mount.rotation.as_dquat() * observation.axis);
+        let Ok(direction) = Dir3::new(direction.as_vec3()) else {
+            continue;
+        };
+
+        let mut filter = SpatialQueryFilter::from_mask(avian3d::prelude::LayerMask(
+            !lunco_core::NON_PHYSICAL_QUERY_LAYERS,
+        ));
+        for excluded in excluded_entities {
+            filter.excluded_entities.insert(excluded);
+        }
+
+        let Some(hit) = grid.cast_ray_grid(
+            lunco_spatial::coords::GridPos(origin),
+            direction,
+            observation.max_distance,
+            true,
+            &filter,
+        ) else {
+            observation.distance = 0.0;
+            observation.hit_position = DVec3::ZERO;
+            observation.hit_normal = DVec3::ZERO;
+            observation.hit_valid = false;
+            observation.sample_time_s = time.elapsed_secs_f64();
+            continue;
+        };
+
+        observation.distance = hit.distance;
+        observation.hit_position = origin + direction.as_vec3().as_dvec3() * hit.distance;
+        observation.hit_normal = hit.normal;
+        observation.hit_valid = true;
+        observation.sample_time_s = time.elapsed_secs_f64();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RaycastObservation;
+
+    #[test]
+    fn a_miss_is_an_invalid_raw_observation_without_a_fallback_distance() {
+        let observation = RaycastObservation::default();
+        assert!(!observation.hit_valid);
+        assert_eq!(observation.distance, 0.0);
+    }
+}

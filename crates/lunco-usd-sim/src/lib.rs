@@ -66,13 +66,14 @@ use lunco_usd_bevy_scene::{
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
 // See docs/architecture/render-decoupling.md.
-use lunco_cosim::{avian_queries::RaycastObservation, JointTorqueActuator};
+use lunco_cosim::JointTorqueActuator;
 use lunco_materials::ShaderLook;
 use lunco_mobility::wheel_kinematics::{body_point_velocity, wheel_hub_pose, wheel_roll_rate};
 use lunco_mobility::{
     DifferentialCoupling, JointedWheelTire, Suspension, SuspensionPiston, SuspensionSpring,
     WheelRaycast,
 };
+use lunco_physics::raycast::RaycastObservation;
 use lunco_port_core::{Port, PortSurface};
 use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
@@ -773,7 +774,7 @@ mod raycast_tests {
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
-    fn read(source: &str) -> Result<lunco_cosim::avian_queries::RaycastObservation, ()> {
+    fn read(source: &str) -> Result<lunco_physics::raycast::RaycastObservation, ()> {
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("ray.usda", source))
             .expect("raycast fixture composes");
         let path = SdfPath::new("/Sensor").expect("raycast path");
