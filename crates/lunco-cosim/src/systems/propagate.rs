@@ -36,13 +36,6 @@ use lunco_cosim_core::{
 
 use crate::avian::is_physics_force_port;
 
-/// System sets for co-simulation propagation.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CosimSet {
-    /// Propagate connections: read outputs → write inputs.
-    Propagate,
-}
-
 /// Does **this peer simulate** `target`, i.e. may propagation write into it?
 ///
 /// The criterion is per-ENTITY, because that is what the rule actually is: a

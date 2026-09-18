@@ -2020,8 +2020,8 @@ fn tag_cosim_opaque(
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
 impl Plugin for UsdSimCosimPlugin {
     fn build(&self, app: &mut App) {
-        use lunco_cosim::systems::{
-            apply_forces::CosimSet as ApplyForcesCosimSet, propagate::CosimSet as PropagateCosimSet,
+        use lunco_cosim_core::schedule::{
+            CosimApplySet as ApplyForcesCosimSet, CosimSet as PropagateCosimSet,
         };
         use lunco_modelica_runtime::ModelicaSet;
 

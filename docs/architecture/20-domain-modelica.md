@@ -343,7 +343,7 @@ FixedUpdate:
   ModelicaSet::HandleResponses    — drain results from worker channel
   (sync_modelica_outputs)         — ModelicaModel.variables → SimComponent.outputs
   CosimSet::Propagate             — propagate_connections
-  CosimSet::ApplyForces           — apply_sim_forces
+  CosimApplySet::ApplyForces       — apply_sim_forces
   (sync_inputs_to_modelica)       — SimComponent.inputs → ModelicaModel.inputs
   ModelicaSet::SpawnRequests      — send next Step command with fixed dt
 ```

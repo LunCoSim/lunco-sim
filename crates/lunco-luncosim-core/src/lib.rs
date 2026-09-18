@@ -16,8 +16,9 @@ use big_space::prelude::*;
 
 use lunco_avatar::LunCoAvatarPlugin;
 use lunco_controller::LunCoControllerPlugin;
-use lunco_cosim::systems::apply_forces::CosimSet as ApplyForcesCosimSet;
-use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
+use lunco_cosim_core::schedule::{
+    CosimApplySet as ApplyForcesCosimSet, CosimSet as PropagateCosimSet,
+};
 use lunco_cosim::CoSimPlugin;
 use lunco_environment::EnvironmentPlugin;
 use lunco_hardware::LunCoHardwarePlugin;

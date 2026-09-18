@@ -59,8 +59,8 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | **`lunco-obstacle-field`** | Procedural crater + rock field generation (with LOD) for rover testing. |
 | **`lunco-experiments`** | Backend-agnostic experiment / batch-run registry: models a single Fast Run as a first-class artifact (params, bounds, trajectory) with `RunStatus` (`Pending`/`Queued`/`Running`/`Done`/`Failed`/`Cancelled`) and `RunBounds`; the sim backend plugs in via the `ExperimentRunner` trait, parallel runs schedule across a worker pool. |
 | **`lunco-experiments-ui`** | Render-independent experiment view state: per-plot variable/run selections, Twin-scoped plot-state preservation, active-plot selection, and the change-gated trajectory sample cache. It has no Modelica, document, egui, or workbench ownership. |
-| **`lunco-cosim-core`** | Backend-neutral co-simulation contracts: `SimComponent`/`SimStatus`, `SimConnection`, `ConnectionBinding`/`BoundConnection`, diagnostics, control holds, generic force/torque actuator metadata, realtime-safety marker, typed control commands (`SetPorts`, `ReleasePort`, `ReleaseControl`), and shared connector constants. |
-| **`lunco-cosim`** | Co-simulation orchestration for Modelica, FMU, GMAT, and Avian participants. Owns binding, port backends, joint/force application, fixed-step propagation, and the `ControlAuthorityChanged` adapter that safe-stops released live endpoints. |
+| **`lunco-cosim-core`** | Backend-neutral co-simulation contracts: `SimComponent`/`SimStatus`, `SimConnection`, `ConnectionBinding`/`BoundConnection`, diagnostics, control holds, generic force/torque actuator metadata, realtime-safety marker, typed control commands (`SetPorts`, `ReleasePort`, `ReleaseControl`), shared connector constants, and the `schedule::{CosimSet, CosimApplySet}` fixed-step schedule anchors. |
+| **`lunco-cosim`** | Co-simulation orchestration for Modelica, FMU, GMAT, and Avian participants. Owns binding, port backends, joint/force application, fixed-step propagation, and the `ControlAuthorityChanged` adapter that safe-stops released live endpoints. It consumes schedule anchors from `lunco-cosim-core`; backend-neutral participants do not depend on this Avian-backed package merely to order their systems. |
 
 ---
 
@@ -410,7 +410,8 @@ Multi-engine simulation orchestrator. Wires named outputs from one engine (e.g.,
 **`lunco-cosim-core`**
 Backend-neutral co-simulation contract package. It owns participant, connection,
 diagnostic, typed-port, control-hold, force/torque actuator, and realtime-safety
-contracts. The generic control relationship is owned by `lunco-control-core`, so
+contracts, shared connector constants, connection binding state, and generic
+fixed-step schedule anchors. The generic control relationship is owned by `lunco-control-core`, so
 co-simulation consumers can use it without making the control contract part of
 the co-simulation package.
 

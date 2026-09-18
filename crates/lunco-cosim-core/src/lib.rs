@@ -12,6 +12,7 @@ pub mod component;
 pub mod connection;
 pub mod contract;
 pub mod diagnostics;
+pub mod schedule;
 
 pub use actuation::{ForceActuator, TorqueActuator};
 pub use binding::{BoundConnection, ConnectionBinding};

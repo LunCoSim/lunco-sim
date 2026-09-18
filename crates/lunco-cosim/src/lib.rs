@@ -299,8 +299,8 @@ impl Plugin for CoSimPlugin {
         app.configure_sets(
             FixedUpdate,
             (
-                systems::propagate::CosimSet::Propagate,
-                systems::apply_forces::CosimSet::ApplyForces,
+                lunco_cosim_core::schedule::CosimSet::Propagate,
+                lunco_cosim_core::schedule::CosimApplySet::ApplyForces,
             )
                 .chain(),
         );
@@ -316,7 +316,7 @@ impl Plugin for CoSimPlugin {
         // under prediction.
         app.configure_sets(
             FixedUpdate,
-            systems::propagate::CosimSet::Propagate.in_set(lunco_core::ControlDacSet),
+            lunco_cosim_core::schedule::CosimSet::Propagate.in_set(lunco_core::ControlDacSet),
         );
 
         // Rollback replay re-simulates the owned rover's unacked inputs by running
@@ -329,12 +329,12 @@ impl Plugin for CoSimPlugin {
         // lunco-hardware / lunco-mobility keep their relative order.
         app.configure_sets(
             lunco_core::RollbackReplay,
-            systems::propagate::CosimSet::Propagate.in_set(lunco_core::ControlDacSet),
+            lunco_cosim_core::schedule::CosimSet::Propagate.in_set(lunco_core::ControlDacSet),
         );
         app.add_systems(
             lunco_core::RollbackReplay,
             systems::propagate::propagate_connections
-                .in_set(systems::propagate::CosimSet::Propagate)
+                .in_set(lunco_cosim_core::schedule::CosimSet::Propagate)
                 .run_if(lunco_time::simulation_is_running),
         );
         app.add_systems(
@@ -348,7 +348,7 @@ impl Plugin for CoSimPlugin {
             FixedUpdate,
             (
                 systems::propagate::propagate_connections
-                    .in_set(systems::propagate::CosimSet::Propagate)
+                .in_set(lunco_cosim_core::CosimSet::Propagate)
                     .run_if(lunco_time::simulation_is_running),
                 // The avian boundary consumers: apply solved joint torques and
                 // drain net force/torque ports plus USD-authored point-force
@@ -374,7 +374,7 @@ impl Plugin for CoSimPlugin {
                 // renders host snapshots for replicated bodies, and adding
                 // locally-derived forces to them fights the snapshot stream.
                 avian::apply_joint_torque_actuators
-                    .in_set(systems::apply_forces::CosimSet::ApplyForces)
+                    .in_set(lunco_cosim_core::schedule::CosimApplySet::ApplyForces)
                     .before(avian::apply_pending_forces)
                     .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)
                     .run_if(|role: Option<Res<lunco_core_session::NetworkRole>>| {
@@ -384,7 +384,7 @@ impl Plugin for CoSimPlugin {
                         )
                     }),
                 avian::apply_pending_forces
-                    .in_set(systems::apply_forces::CosimSet::ApplyForces)
+                    .in_set(lunco_cosim_core::schedule::CosimApplySet::ApplyForces)
                     // `resource_exists` FIRST, for the same reason the sensors
                     // below carry it: `physics_is_live` reads `Res<Time<Physics>>`
                     // unconditionally, so without avian the run condition itself

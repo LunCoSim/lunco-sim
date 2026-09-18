@@ -7571,7 +7571,6 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-core",
- "lunco-cosim",
  "lunco-cosim-core",
  "lunco-render",
  "lunco-spatial",

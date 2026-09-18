@@ -1187,7 +1187,8 @@ fn write_com_axis(w: &mut World, e: Entity, axis: usize, v: f64) -> bool {
 /// The single per-tick avian system: it bridges the `force_*` ports (which land
 /// in [`PendingForces`]) to avian's query-shaped `Forces` writer. Avian clears
 /// non-constant forces each step, so re-applying the freshly summed value every
-/// tick is correct. Runs in [`crate::systems::apply_forces::CosimSet::ApplyForces`]
+/// tick is correct. Runs in
+/// [`lunco_cosim_core::schedule::CosimApplySet::ApplyForces`]
 /// (after propagation).
 pub fn apply_pending_forces(
     physics_time: Res<Time<Physics>>,

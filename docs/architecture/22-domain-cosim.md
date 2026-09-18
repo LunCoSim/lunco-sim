@@ -15,7 +15,8 @@ The backend-neutral contract is in
 [`../../crates/lunco-cosim-core/`](../../crates/lunco-cosim-core/): it owns
 participants, connections, diagnostics, control holds, generic force/torque
 actuator metadata, shared connector contracts, and connection binding state
-without depending on Avian.
+without depending on Avian. It also owns the backend-neutral
+`schedule::{CosimSet, CosimApplySet}` schedule anchors.
 `lunco-cosim` owns the Avian port backends, binding transaction, and fixed-step
 propagation that realize those contracts.
 
@@ -98,7 +99,7 @@ FixedUpdate:
   1. sync_modelica_outputs          — completed Modelica results → SimComponent.outputs
   2. CosimSet::Propagate            — propagate_connections: source outputs → target inputs
                                        (force_* → PendingForces; joint angle/displacement → motor)
-  3. CosimSet::ApplyForces          — apply_pending_forces: drain PendingForces into Avian Forces
+  3. CosimApplySet::ApplyForces     — apply_pending_forces: drain PendingForces into Avian Forces
   4. sync_inputs_to_modelica        — SimComponent.inputs → ModelicaModel.inputs
   5. ModelicaSet::SpawnRequests     — send next step command with fixed dt
 

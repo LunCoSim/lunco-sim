@@ -769,7 +769,7 @@ impl Plugin for EnvironmentPlugin {
                 // local value the same tick.
                 inject_local_gravity_into_cosim
                     .in_set(EnvironmentSet::Apply)
-                    .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
+                    .before(lunco_cosim_core::schedule::CosimSet::Propagate),
             ),
         );
 
@@ -820,13 +820,13 @@ impl Plugin for EnvironmentPlugin {
                 compute_local_solar.in_set(EnvironmentSet::Compute),
                 inject_local_solar_into_cosim
                     .in_set(EnvironmentSet::Apply)
-                    .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
+                    .before(lunco_cosim_core::schedule::CosimSet::Propagate),
                 // Earth pointing rides the same three-phase ordering: an antenna
                 // model must read the angles the same tick they were computed.
                 compute_local_earth.in_set(EnvironmentSet::Compute),
                 inject_local_earth_into_cosim
                     .in_set(EnvironmentSet::Apply)
-                    .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
+                    .before(lunco_cosim_core::schedule::CosimSet::Propagate),
             ),
         );
 
