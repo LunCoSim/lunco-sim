@@ -9604,7 +9604,6 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-document",
  "lunco-usd-sim-core",
- "lunco-usd-sim-shader",
  "lunco-workspace",
  "openusd",
  "tempfile",

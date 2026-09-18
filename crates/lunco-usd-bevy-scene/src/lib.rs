@@ -138,6 +138,18 @@ pub fn bump_usd_stage_revision(
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdSceneProjected;
 
+/// Requests that domain projections discard derived state for an entity before
+/// its USD subtree is projected again.
+///
+/// The scene runtime publishes this lifecycle boundary without naming any
+/// domain implementation. Each projection owns its derived components and
+/// consumes the message when it needs to invalidate them.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct UsdSceneProjectionReset {
+    /// Entity whose derived projection state must be invalidated.
+    pub entity: Entity,
+}
+
 /// Boundary after the USD asset has been synchronized into the live ECS scene.
 ///
 /// The visual projector owns the producer system, while headless projections

@@ -38,7 +38,8 @@ curve-sweep substrate;
 `lunco-usd-bevy-core` owns prepared/composed stage data and the generic
 domain-owned live-edit registry;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
-projection ordering boundaries, visual-split markers, authored billboard
+projection ordering boundaries, the generic projection-reset message,
+visual-split markers, authored billboard
 contracts, shared geometry decoding, and composed collision/placement
 envelopes; `lunco-usd-bevy-camera` owns render-free camera
 projection intent, camera paths, mounts, selection, and viewport reconciliation;

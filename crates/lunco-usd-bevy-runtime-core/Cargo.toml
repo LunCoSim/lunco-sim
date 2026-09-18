@@ -33,7 +33,6 @@ lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
-lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
 lunco-workspace = { path = "../lunco-workspace" }
 
 [dev-dependencies]

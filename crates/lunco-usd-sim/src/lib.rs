@@ -61,6 +61,7 @@ use lunco_usd_bevy_core::{
 };
 use lunco_usd_bevy_scene::{
     instance_key, is_preview_only, UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending,
+    UsdSceneProjectionReset,
 };
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -402,7 +403,11 @@ impl Plugin for UsdSimPlugin {
         // See `lunco-usd-sim-shader`.
         .add_systems(
             Update,
-            lunco_usd_sim_shader::apply_usd_shader_materials
+            (
+                reset_usd_shader_resolution,
+                lunco_usd_sim_shader::apply_usd_shader_materials,
+            )
+                .chain()
                 .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
                 .before(process_usd_sim_prims),
         )
@@ -446,6 +451,25 @@ impl Plugin for UsdSimPlugin {
         // admitted light and would publish a horizontal semantic sun on the
         // following frame.
         install_authored_sun_state_seed(app);
+    }
+}
+
+/// Clear shader projection state at the generic scene refresh boundary.
+///
+/// The runtime owns scene re-instantiation but must not depend on the shader
+/// implementation merely to clear this derived marker. The shader projection
+/// owns the marker and consumes the shared lifecycle message instead.
+fn reset_usd_shader_resolution(
+    mut resets: MessageReader<UsdSceneProjectionReset>,
+    resolved: Query<(), With<lunco_usd_sim_shader::UsdShaderResolved>>,
+    mut commands: Commands,
+) {
+    for reset in resets.read() {
+        if resolved.get(reset.entity).is_ok() {
+            commands
+                .entity(reset.entity)
+                .remove::<lunco_usd_sim_shader::UsdShaderResolved>();
+        }
     }
 }
 

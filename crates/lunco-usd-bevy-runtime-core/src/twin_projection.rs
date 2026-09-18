@@ -59,7 +59,8 @@ use lunco_usd_bevy_core::{
     source::UsdSourceText, UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan,
 };
 use lunco_usd_bevy_scene::{
-    UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued, UsdSceneRoot,
+    UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued,
+    UsdSceneProjectionReset, UsdSceneRoot,
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake};
 
@@ -1848,9 +1849,10 @@ pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStag
     }
 }
 
-/// Drop `entity`'s [`UsdSceneProjected`] marker + children and re-insert its
-/// [`UsdPrimPath`], re-firing `on_usd_prim_added` so its subtree rebuilds from
-/// the (now-authored) live stage. The shared primitive under both the whole-scene
+/// Notify domain projections, then drop `entity`'s [`UsdSceneProjected`] marker
+/// and children and re-insert its [`UsdPrimPath`], re-firing
+/// `on_usd_prim_added` so its subtree rebuilds from the (now-authored) live
+/// stage. The shared primitive under both the whole-scene
 /// [`refresh_scene_visuals`] and the single-prim [`refresh_prim_subtree`].
 fn reinstantiate_entity(world: &mut World, entity: Entity) {
     let stage_ready = world
@@ -1860,9 +1862,9 @@ fn reinstantiate_entity(world: &mut World, entity: Entity) {
                 .get::<UsdPrimPath>(entity)
                 .is_some_and(|prim| assets.get(&prim.stage_handle).is_some())
         });
+    world.write_message(UsdSceneProjectionReset { entity });
     if let Ok(mut em) = world.get_entity_mut(entity) {
         em.remove::<UsdSceneProjected>();
-        em.remove::<lunco_usd_sim_shader::UsdShaderResolved>();
         em.despawn_related::<Children>();
         if let Some(pp) = em.take::<UsdPrimPath>() {
             em.insert((pp, UsdSceneAwaitingStage));
@@ -2409,6 +2411,7 @@ mod tests {
     #[test]
     fn full_refresh_does_not_reinstantiate_detached_stage_camera() {
         let mut world = World::new();
+        world.init_resource::<Messages<UsdSceneProjectionReset>>();
         let stage = Handle::<UsdStageAsset>::default();
         let root = world
             .spawn((
