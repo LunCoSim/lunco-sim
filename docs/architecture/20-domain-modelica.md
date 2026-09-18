@@ -47,7 +47,9 @@ It owns BOM-preserving normalization, strict/recovering Rumoca parse wrappers,
 AST interface projections, and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-document` owns the headless
  document and source-editing seams; `lunco-modelica-compiler` owns the
- headless Rumoca session and source admission; `lunco-modelica-core` owns
+ headless Rumoca session and compiler-side source admission;
+ `lunco-modelica-source-roots` owns Twin/workspace source-root inventory and
+ worker admission; `lunco-modelica-core` owns
  document/runtime synchronization; `lunco-modelica-worker` owns worker and
  simulation seams; `lunco-modelica-ui` owns workbench
  presentation and the `lunica` application facade. The reusable egui graphics

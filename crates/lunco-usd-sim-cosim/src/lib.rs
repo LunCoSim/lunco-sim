@@ -1537,7 +1537,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
         // The failure therefore has to live on the MODEL (`last_error`), not on
         // the component, or the next tick overwrites it. Closed-channel
         // detection is `send(..).is_err()`, the same test
-        // `source_roots::ensure_loaded` uses.
+        // `lunco_modelica_source_roots::ensure_loaded` uses.
         let Some(schedule) = schedule else {
             let error = format!(
                 "Modelica source `{}` has no projected co-simulation schedule",

@@ -8271,14 +8271,11 @@ dependencies = [
  "lunco-modelica-library",
  "lunco-modelica-runtime",
  "lunco-port-core",
- "lunco-storage",
- "lunco-twin",
  "lunco-twin-journal",
  "lunco-workspace",
  "rumoca-compile",
  "serde",
  "serde_json",
- "tempfile",
  "web-sys",
  "web-time",
 ]
@@ -8450,6 +8447,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-modelica-source-roots"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "log",
+ "lunco-assets-core",
+ "lunco-assets-path",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-modelica-document",
+ "lunco-modelica-index",
+ "lunco-modelica-runtime",
+ "lunco-storage",
+ "lunco-twin",
+ "lunco-workspace",
+ "rumoca-compile",
+ "tempfile",
+ "web-time",
+]
+
+[[package]]
 name = "lunco-modelica-telemetry"
 version = "0.1.0"
 dependencies = [
@@ -8498,6 +8516,7 @@ dependencies = [
  "lunco-modelica-library",
  "lunco-modelica-runner",
  "lunco-modelica-runtime",
+ "lunco-modelica-source-roots",
  "lunco-modelica-ui-core",
  "lunco-scripting",
  "lunco-scripting-rhai",
@@ -8561,11 +8580,11 @@ dependencies = [
  "lunco-experiments",
  "lunco-modelica-ast",
  "lunco-modelica-compiler",
- "lunco-modelica-core",
  "lunco-modelica-document",
  "lunco-modelica-runner",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
+ "lunco-modelica-source-roots",
  "lunco-signal",
  "lunco-storage",
  "lunco-time",

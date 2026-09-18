@@ -40,7 +40,6 @@ lunco-doc = { path = "../lunco-doc" }
 # Core document-lifecycle events; its egui systems come back via `ui` below.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
-lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 # base64url encode/decode for shareable model links (see `model_share.rs`).
 # Already resolved transitively (0.22.x) — no new download.
@@ -123,7 +122,3 @@ ignored = ["getrandom"]
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-lunco-storage = { path = "../lunco-storage" }
-tempfile = { workspace = true }

@@ -2,7 +2,7 @@
 //!
 //! This crate provides a bridge between Bevy's ECS and Modelica simulation models.
 //! It features:
-//! - document lifecycle, source-root state, and engine synchronization
+//! - document lifecycle and engine synchronization
 //! - Document, AST, diagram, and engine synchronization primitives
 //! - UI-agnostic Modelica runtime state and command contracts
 //!
@@ -118,8 +118,6 @@ pub mod text_diff;
 /// type references, then primes the engine's icon cache via a single
 /// off-thread task. Drill-in projection sees a populated cache.
 pub mod icon_warmer;
-pub mod source_roots;
-
 /// Bundled Modelica models for web deployment.
 /// Available on all targets, but primarily used for wasm builds.
 pub mod models;
@@ -163,7 +161,6 @@ fn sync_workspace_on_doc_opened(
     trigger: On<lunco_doc_bevy::DocumentOpened>,
     registry: Res<DocumentRegistry<ModelicaDocument>>,
     workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
-    mut source_roots: Option<ResMut<source_roots::SourceRootRegistry>>,
 ) {
     let Some(mut workspace) = workspace else {
         return;
@@ -174,17 +171,6 @@ fn sync_workspace_on_doc_opened(
     };
     let document = host.document();
     let origin = document.origin().clone();
-    if let Some(roots) = source_roots.as_deref_mut() {
-        let path = match &origin {
-            lunco_doc::DocumentOrigin::File { path, .. } => Some(path.clone()),
-            _ => None,
-        };
-        for class in document.index().classes.values() {
-            if !class.name.contains('.') {
-                roots.register_open_doc_root(class.name.clone(), path.clone());
-            }
-        }
-    }
     if workspace.document(id).is_some() {
         return;
     }

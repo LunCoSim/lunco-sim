@@ -1,6 +1,6 @@
 //! Native worker command scheduling.
 
-use super::{CompileWork, cmd_entity, cmd_session, is_squashable, result_ok};
+use super::{cmd_entity, cmd_session, is_squashable, result_ok, CompileWork};
 use bevy::prelude::Entity;
 use crossbeam_channel::Sender;
 use lunco_modelica_runtime::{ModelicaCommand, ModelicaResult};
@@ -28,7 +28,7 @@ use std::collections::{HashMap, VecDeque};
 /// has any command pending in the compile lane is appended to the compile lane
 /// instead (at its arrival position), so "Compile then Step sees the compiled
 /// model" (`source_roots.rs` relies on the compile lane's FIFO for
-/// LoadSourceRoot → Compile the same way) still holds command-by-command for
+/// source-root admission → Compile the same way) still holds command-by-command for
 /// each entity. Only OTHER entities' steps jump the queue.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn enqueue_command(

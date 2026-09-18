@@ -688,7 +688,7 @@ pub fn on_compile_model(
     channels: Option<Res<ModelicaChannels>>,
     mut q_models: Query<&mut ModelicaModel>,
     model_tabs: Res<crate::model_tabs::ModelTabs>,
-    mut world_source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
+    mut world_source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
     // Unassigned ⇒ the active document. Resolving here is what lets ONE compile
@@ -1185,10 +1185,10 @@ pub fn on_compile_model(
         // a warm session.
         if let Some(ast) = registry.host(doc).and_then(|h| h.document().strict_ast()) {
             if let Some(roots) = world_source_roots.as_deref_mut() {
-                crate::source_roots::log_compile_deps(roots, &model_name, &ast);
+                lunco_modelica_source_roots::log_compile_deps(roots, &model_name, &ast);
                 let deps = lunco_modelica_index::source_deps::scan_source_root_deps(&ast);
                 for root in &deps {
-                    crate::source_roots::ensure_loaded(roots, root, &channels);
+                    lunco_modelica_source_roots::ensure_loaded(roots, root, &channels);
                 }
             }
         }

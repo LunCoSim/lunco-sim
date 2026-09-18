@@ -219,7 +219,7 @@ no manual hunt.
 | `lunco-usd-sim-cosim/src/lib.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
 | `lunco-usd-ui/src/ui/browser_dispatch.rs` twin browser open | ✅ routed through the shared `OpenFile` USD document command |
 | `lunco-usd-commands/src/lib.rs` usd document load | ✅ reads through the storage abstraction |
-| Modelica source-root admission | ✅ `lunco-modelica-core` owns registry/lifecycle state; filesystem enumeration is delegated to `lunco-assets-core::discovery::read_files_with_extension`, and the compiler host parses and seats the returned source files |
+| Modelica source-root admission | ✅ `lunco-modelica-source-roots` owns registry/lifecycle state and manifest-aware Twin resolution; filesystem enumeration is delegated to `lunco-assets-core`, and the compiler host parses and seats the returned source files |
 | `lunco-modelica-library/source_library.rs` source-library fetch | ✅ owns source-library admission and browser fetch state; the wasm worker handoff is a typed bridge implemented by `lunco-modelica-execution`, so compiler-only consumers do not own the fetch implementation |
 | `lunco-assets-core::models` runtime inventory | ✅ reads the authored `assets/models/` tree through `lunco-storage`; no compiled snapshot or embedded fallback |
 

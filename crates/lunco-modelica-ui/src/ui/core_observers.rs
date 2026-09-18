@@ -264,15 +264,15 @@ pub fn drain_notices_to_console(
     }
 }
 
-/// Reactive UI: project core `SourceRootRegistry` load-state transitions into
-/// the status bar — progress while `Loading`, a completion entry on
-/// `Ready`/`Failed`. Core sets the registry state; it no longer touches the bus.
+/// Reactive UI: project source-root load-state transitions into the status bar
+/// — progress while `Loading`, a completion entry on `Ready`/`Failed`. The
+/// source-root host sets the registry state; this adapter only presents it.
 pub fn mirror_source_roots_to_status_bus(
-    registry: Option<Res<crate::source_roots::SourceRootRegistry>>,
+    registry: Option<Res<lunco_modelica_source_roots::SourceRootRegistry>>,
     bus: Option<ResMut<StatusBus>>,
     mut last: Local<std::collections::HashMap<String, u8>>,
 ) {
-    use crate::source_roots::{LoadState, STATUS_BUS_SOURCE};
+    use lunco_modelica_source_roots::{LoadState, STATUS_BUS_SOURCE};
     let (Some(registry), Some(mut bus)) = (registry, bus) else {
         return;
     };

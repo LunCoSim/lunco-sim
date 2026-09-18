@@ -76,8 +76,9 @@ impl Plugin for ModelicaPlugin {
             app.add_plugins(lunco_scripting_rhai::LunCoScriptingRhaiPlugin);
         }
 
-        app.insert_resource(source_roots::SourceRootRegistry::build());
-        app.add_systems(Update, source_roots::load_twin_source_roots);
+        app.insert_resource(lunco_modelica_source_roots::SourceRootRegistry::build());
+        app.add_observer(lunco_modelica_source_roots::register_open_document_source_root);
+        app.add_systems(Update, lunco_modelica_source_roots::load_twin_source_roots);
         app.add_plugins(ui::ModelicaUiPlugin);
         app.add_plugins(lunco_doc_bevy::ViewSyncPlugin);
 

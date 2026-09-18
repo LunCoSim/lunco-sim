@@ -7,23 +7,22 @@
 //! - **Disk source roots**: any library or package explicitly registered by
 //!   the application or an active Twin. They are loaded from their declared
 //!   path; no cache-wide discovery is performed.
-//! - **Bundled examples**: `.mo` files compiled into the binary
-//!   (`AnnotatedRocketStage`, `Balloon`, etc.). Loaded via
-//!   [`crate::models::get_model`].
+//! - **Bundled examples**: top-level `.mo` files supplied by the asset
+//!   library. Loaded via
+//!   [`lunco_assets_core::models::model_source`].
 //! - **Workspace files**: user-authored `.mo` files in the active
 //!   workspace tree.
 //!
 //! ## Design intent
 //!
-//! Generalises the source-bundle load path
-//! ([`lunco_modelica_library::SourceLibraryPlugin`]) so that every source the
-//! compiler needs goes through one registry with one state machine.
+//! Generalises the source-bundle load path so that every source the compiler
+//! needs goes through one registry with one state machine.
 //! Adding a fourth system library, a new bundled example, or a
 //! workspace folder becomes a data change, not new plumbing.
 
 use bevy::prelude::*;
 use lunco_modelica_runtime::{
-    source_asset::read_text_sync, LoadSourceRootPayload, ModelicaChannels, ModelicaCommand,
+    LoadSourceRootPayload, ModelicaChannels, ModelicaCommand, source_asset::read_text_sync,
 };
 use rumoca_compile::parsing::ast::StoredDefinition;
 use std::collections::{HashMap, HashSet};
@@ -62,7 +61,7 @@ pub enum SourceRootKind {
         root_dir: PathBuf,
     },
     /// Bundled example shipped inside the binary. Source bytes come
-    /// from [`crate::models::get_model`]; install path is the same
+    /// from [`lunco_assets_core::models::model_source`]; install path is the same
     /// document-registry pipeline used when the user opens a bundled
     /// model from the package browser, but driven by the compile
     /// gate instead of a UI gesture.
@@ -109,8 +108,8 @@ pub struct SourceRoot {
 }
 
 /// Process-wide registry of every named source root. Owned by the
-/// `ModelicaPlugin`; populated at plugin start by inventorying:
-///  - Bundled examples via [`crate::models::bundled_models`].
+/// Modelica host/application; populated at host start by inventorying:
+///  - Bundled examples via [`lunco_assets_core::models::model_files`].
 ///  - Structured packages via [`lunco_assets_core::models::package_roots_live`].
 ///
 /// Loading remains demand-driven: inventory is cheap, and a root is installed
@@ -131,18 +130,18 @@ impl SourceRootRegistry {
         let mut roots: HashMap<String, SourceRoot> = HashMap::new();
 
         // Bundled examples — keyed by filename stem (the convention
-        // every bundled `.mo` follows: `Foo.mo` contains `package Foo`
-        // or `model Foo`). The dep-scanner extracts `Foo` from a
+        // every bundled `.mo` follows: `<Root>.mo` contains `package <Root>`
+        // or `model <Root>`). The dep-scanner extracts the root from a
         // `Foo.X` reference and looks it up here.
-        let bundled_models = match crate::models::bundled_models() {
+        let bundled_models = match lunco_assets_core::models::model_files() {
             Ok(models) => models,
             Err(error) => {
                 bevy::log::error!("[source-roots] Modelica example inventory failed: {error}");
                 Vec::new()
             }
         };
-        for model in bundled_models {
-            let Some(id) = model.filename.strip_suffix(".mo") else {
+        for (filename, _) in bundled_models {
+            let Some(id) = filename.strip_suffix(".mo") else {
                 continue;
             };
             // Keep the first explicit registration authoritative.
@@ -153,9 +152,7 @@ impl SourceRootRegistry {
                 id.to_string(),
                 SourceRoot {
                     id: id.to_string(),
-                    kind: SourceRootKind::Bundled {
-                        filename: model.filename.to_string(),
-                    },
+                    kind: SourceRootKind::Bundled { filename },
                     state: LoadState::NotLoaded,
                 },
             );
@@ -272,6 +269,35 @@ impl SourceRootRegistry {
     /// Borrow an entry's load state.
     pub fn state(&self, id: &str) -> Option<&LoadState> {
         self.roots.get(id).map(|r| &r.state)
+    }
+}
+
+/// Register top-level source roots contributed by an opened Modelica document.
+///
+/// This observer belongs to the source-root host rather than the document core:
+/// opening a document is a generic lifecycle event, while deciding that its
+/// top-level classes are compiler source roots is a Modelica admission policy.
+pub fn register_open_document_source_root(
+    trigger: On<lunco_doc_bevy::DocumentOpened>,
+    registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
+    source_roots: Option<ResMut<SourceRootRegistry>>,
+) {
+    let Some(mut source_roots) = source_roots else {
+        return;
+    };
+    let id = trigger.event().doc;
+    let Some(host) = registry.host(id) else {
+        return;
+    };
+    let document = host.document();
+    let path = match document.origin() {
+        lunco_doc::DocumentOrigin::File { path, .. } => Some(path.clone()),
+        _ => None,
+    };
+    for class in document.index().classes.values() {
+        if !class.name.contains('.') {
+            source_roots.register_open_doc_root(class.name.clone(), path.clone());
+        }
     }
 }
 
@@ -546,7 +572,7 @@ pub fn ensure_loaded(
             )
         }
         SourceRootKind::Bundled { filename } => {
-            let source = match crate::models::get_model(filename) {
+            let source = match lunco_assets_core::models::model_source(filename) {
                 Ok(Some(source)) => source,
                 Ok(None) => {
                     let error = format!("Modelica asset `{filename}` was not found");

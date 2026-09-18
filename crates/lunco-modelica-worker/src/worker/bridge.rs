@@ -352,7 +352,7 @@ pub fn handle_modelica_responses(
     // drains it into `lunco_viz`. Core no longer references any viz/plot types.
     mut sample_stream: ResMut<SimSampleStream>,
     runner_res: Option<Res<lunco_modelica_runner::ModelicaRunnerResource>>,
-    source_roots: Option<ResMut<lunco_modelica_core::source_roots::SourceRootRegistry>>,
+    source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
     participants: Option<Res<lunco_core::SimulationBarrierParticipants>>,
     coupling: Option<ResMut<lunco_core::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -370,11 +370,10 @@ pub fn handle_modelica_responses(
                 if let Some(entry) = roots.roots.get_mut(root_id) {
                     if let Some(err) = result.error.as_ref() {
                         bevy::log::warn!("[source-roots] `{}` load failed: {}", root_id, err,);
-                        entry.state =
-                            lunco_modelica_core::source_roots::LoadState::Failed(err.clone());
+                        entry.state = lunco_modelica_source_roots::LoadState::Failed(err.clone());
                     } else {
                         bevy::log::info!("[source-roots] `{}` is now Ready", root_id,);
-                        entry.state = lunco_modelica_core::source_roots::LoadState::Ready;
+                        entry.state = lunco_modelica_source_roots::LoadState::Ready;
                     }
                 }
             }

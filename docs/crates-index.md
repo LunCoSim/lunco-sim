@@ -211,8 +211,9 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-modelica-telemetry`** | Render-free Modelica telemetry capability: retains landed solver variables in the shared signal registry, applies the shared rate/retention/channel policy, and publishes inspectable Modelica metadata. It is installed by the execution host and is separate from compiler/document ownership. |
 | **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
 | **`lunco-modelica-library`** | Shared source-library capability: persisted library-root settings, parsed-source bundle admission, browser fetch/decode, lazy source unpacking, editor-index handoff, and the typed Modelica worker bridge. It is a production runtime package, not a test harness; compiler and execution hosts consume its contracts without owning its transport implementation. |
+| **`lunco-modelica-source-roots`** | Twin/workspace Modelica source-root admission: root inventory, manifest-aware Twin path resolution, demand-driven worker loading, and source-root readiness state. It is the host lifecycle adapter; the document/runtime core consumes no Twin-specific admission policy. |
 | **`lunco-modelica-compiler`** | Headless Rumoca compiler and source-admission host: one production `ModelicaCompiler` session, source-root seating, strict reachable-DAE compilation, diagnostics, and library revision tracking. It is shared directly by workers, runners, asset tooling, and command-line hosts; tests exercise this same production package. |
-| **`lunco-modelica-core`** | Headless Modelica document/runtime host: document lifecycle, source-root state, compiler-engine resource synchronization, and UI-agnostic runtime contracts. It consumes the compiler and source-library capabilities but does not own Rumoca compilation, source-library transport, solver workers, Fast Run execution, browser fetch, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-core`** | Headless Modelica document/runtime host: document lifecycle, compiler-engine resource synchronization, and UI-agnostic runtime contracts. It consumes the compiler, source-library, and source-root capabilities but does not own Twin-specific source admission, Rumoca compilation, source-library transport, solver workers, Fast Run execution, browser fetch, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
 | **`lunco-modelica-runner`** | Modelica experiment backend: source snapshots, compile-once DAE caching, native scheduling, shared batch/interactive run paths, run-bound resolution, and experiment-side Bevy resources. It consumes compiler and solver contracts without owning worker transport. |
 | **`lunco-modelica-worker`** | Stateful Modelica worker engine: live steppers, command dispatch, worker-local artifact/prepared-solve caches, native worker loop, and the Bevy co-simulation bridge. It is a production runtime package, not a test harness. |
 | **`lunco-modelica-execution`** | Modelica execution host: plugin assembly, native worker launch, and wasm worker transport. It composes `lunco-modelica-worker` and `lunco-modelica-runner` through explicit contracts; compiler-only consumers do not inherit this host. |
@@ -262,6 +263,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-modelica-docs-ui`** | — | Reusable egui Modelica documentation renderer used by the model view. |
 | **`lunco-modelica-index`** | — | Reusable Modelica index, diagram metadata, package-browser values, and editor-index artifact contract. |
 | **`lunco-modelica-library`** | — | Source-library runtime admission, artifacts, browser handoff, and the shared Modelica worker bridge. |
+| **`lunco-modelica-source-roots`** | — | Twin/workspace source-root inventory and demand-driven `LoadSourceRoot` admission. |
 | **`lunco-modelica-runner`** | — | Modelica experiment scheduling and shared batch/interactive run backend. |
 | **`lunco-modelica-worker`** | — | Headless Modelica worker engine and Bevy co-simulation bridge. It owns worker lifecycle internals, command dispatch, live stepping, and execution caches. |
 | **`lunco-modelica-execution`** | `lunica_worker`, `modelica_run`, `modelica_tester` | Modelica execution host. It assembles the worker engine, owns native/wasm host transport, and keeps the shared command/result protocol in `lunco-modelica-runtime`; `lunco-modelica-runner` owns experiment scheduling and run orchestration. |
@@ -1102,9 +1104,16 @@ same package directly.
 Modelica document/runtime host. It consumes the headless `ModelicaDocument`
 contract from `lunco-modelica-document`, owns Bevy lifecycle synchronization and
 engine resources, and composes the compiler and source-library capabilities. It
-does not own Rumoca compilation, source-root seating, solver workers, Fast Runs,
+does not own Twin/workspace source-root admission, Rumoca compilation, solver workers, Fast Runs,
 prepared solve caches, or browser transport. API commands are opt-in, and API
 query providers are owned by `lunco-modelica-api`.
+
+**`lunco-modelica-source-roots`**
+Host-side source-root admission. It inventories authored Modelica assets, resolves
+Twin manifest paths, registers roots contributed by opened documents, and queues
+demand-driven `LoadSourceRoot` operations. This lifecycle policy is separate from
+the document/runtime core so changing Twin discovery does not rebuild its engine
+implementation.
 
 **`lunco-modelica-library`**
 Production source-library capability shared by compiler, execution, and UI
