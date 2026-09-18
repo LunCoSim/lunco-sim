@@ -33,6 +33,7 @@ use crate::ScriptRegistry;
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
 use lunco_api::executor::PendingApiRequest;
+#[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::register_commands;
 #[cfg(feature = "rhai")]

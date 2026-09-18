@@ -513,6 +513,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     /// Invalidate every attached program after a shared runtime contract, such
     /// as the authored Rhai prelude, has changed. The scene entities remain
     /// attached; their programs are rebuilt on the next enabled pass.
+    #[cfg(feature = "rhai")]
     pub(crate) fn invalidate(&mut self) {
         self.fsm.clear();
         self.runtime.invalidate();

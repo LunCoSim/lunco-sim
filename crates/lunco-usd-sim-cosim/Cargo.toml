@@ -25,7 +25,7 @@ lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-readiness = { workspace = true }
-lunco-scripting = { path = "../lunco-scripting" }
+lunco-scripting = { path = "../lunco-scripting", default-features = false }
 lunco-time = { path = "../lunco-time" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
