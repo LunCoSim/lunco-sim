@@ -13,6 +13,7 @@ lunco-port-core = { path = "../lunco-port-core" }
 lunco-render = { path = "../lunco-render" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-data = { path = "../lunco-usd-data" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
 wgpu-types = "29"
 

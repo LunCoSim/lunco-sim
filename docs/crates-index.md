@@ -100,18 +100,18 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
 | **`lunco-usd-commands`** | Headless USD document and authoring command boundary: document kind registration, open/new/save/undo/redo, document lifecycle, and typed USD authoring commands. It owns no scene admission or visual projection. |
-| **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, runtime persistence, live document-to-stage projection, and generic authored control/program/scene-property runtime surfaces. |
+| **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, runtime persistence, live document-to-stage projection, generic authored control/program/scene-property runtime surfaces, and generic projection-change boundaries consumed by domain adapters. |
 | **`lunco-usd-bevy-runtime`** | Application-level composition of the USD runtime, visual, diagnostics, physics, simulation, and document-command plugins. The default `simulation` feature includes the standard vehicle/simulation projector; lean hosts can omit it, while the Modelica/Rhai co-simulation projection is opt-in through `cosim` (which implies `simulation`). |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, domain-owned live-edit registration, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
-| **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, generic projection-reset message, visual-split markers, preview/ancestry ownership, authored billboard contracts, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
+| **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, generic projection-reset and authored info-change messages, visual-split markers, preview/ancestry ownership, authored billboard contracts, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, projection cursors, user-ownership events, and the live-projection wake signal. It owns no stage loading, composition, rendering, or UI. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection/look-at intent, camera roles/pose, mounted/cinematic camera pose, camera-track selection, the `camera.default_presentation` fact/decision boundary, and the single-authority viewport-camera reconciler. It contains no avatar behavior parser or raw input mapping and does not own geometry math or visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdVisualPlugin`): projects USD hierarchy, shapes, transforms, and material intent into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns async projection orchestration while consuming mesh geometry from `lunco-usd-bevy-mesh` and installing the independent camera and light adapters. |
 | **`lunco-usd-bevy-mesh`** | Render-free USD visual mesh projection for built-in primitives, native `UsdGeomMesh`, `BasisCurves`/`NurbsCurves`, and `NurbsPatch`, including quality invalidation and low-level geometry tests. |
 | **`lunco-usd-bevy-animation`** | Render-free animation adapter (`UsdAnimationPlugin`): binds projected USD prims to the shared time domains, plans authored `timeSamples` topology, and samples transform/visibility/material intent. It depends on the core reader and visual scene contract, not on mesh projection. |
-| **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, and environment-camera binding. It is independent from the visual mesh projector. |
+| **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, environment-camera binding, and light-owned live refresh from the generic scene info-change boundary. It is independent from the visual mesh projector. |
 | **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `lunco-usd-bevy-runtime`; kept separate from the visual projector. |
 | **`lunco-usd-avian-filters`** | Render-free USD/Avian collision-filter boundary: interprets standard `PhysicsFilteredPairsAPI` and `PhysicsCollisionGroup`, owns transient joint-pair suppression, and installs the single Avian collision/contact hook. |
 | **`lunco-usd-avian-contracts`** | Shared USD/Avian ECS carriers, normalized joint-drive contract, and generic physics-projection lifecycle seam used by physics projection, runtime live edits, readiness, queries, and co-simulation; contains no stage traversal or projection systems. |
@@ -594,9 +594,10 @@ or UI presentation. Its public query contracts are tested in
 
 **`lunco-usd-bevy-runtime-core`**
 Headless-safe scene runtime boundary. Installs scene admission, Twin-backed
-stage loading, runtime persistence, live document-to-stage projection, authored
-control/program projection, scene-property port surfaces, scene commands, and
-the stage terminal-outcome contract. It does not assemble the complete visual,
+stage loading, runtime persistence, live document-to-stage projection, generic
+authored info-change publication, authored control/program projection,
+scene-property port surfaces, scene commands, and the stage terminal-outcome
+contract. It does not assemble the complete visual,
 diagnostics, physics, simulation, or document-command bundle.
 
 **`lunco-usd-bevy-runtime`**
@@ -632,7 +633,8 @@ those adapters do not rebuild this reader/composition package.
 **`lunco-usd-bevy-scene`**
 Render-free ECS contract between USD projection domains. It owns `UsdPrimPath`,
 `UsdSceneProjected`, `UsdSceneRoot`, `UsdPreviewOnly`, `UsdAnimated`, the
-projection ordering boundaries, the generic `UsdSceneProjectionReset` message,
+projection ordering boundaries, the generic `UsdSceneProjectionReset` and
+`UsdSceneInfoChanged` messages,
 visual-split markers, and the
 stage revision/ancestry helpers, authored billboard contracts, plus the shared
 USD primitive and indexed-mesh readers and the composed collision/placement envelope readers in
@@ -718,8 +720,9 @@ consumers do not compile animation systems unless they need them.
 
 **`lunco-usd-bevy-light`**
 Production UsdLux adapter for `DistantLight`, `DomeLight`, `SphereLight`, and
-`RectLight`. It owns the authored-light marker, ambient-dome aggregation, and
-the CPU HDRI projection used by skybox/environment-map components. The package
+`RectLight`. It owns the authored-light marker, ambient-dome aggregation, the
+CPU HDRI projection used by skybox/environment-map components, and live dome
+refresh after consuming the generic scene info-change boundary. The package
 depends on the composed USD reader and render intent, but not on the visual
 hierarchy/mesh projector, so light-reader changes do not rebuild that package.
 

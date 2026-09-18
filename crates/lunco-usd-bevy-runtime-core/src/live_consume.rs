@@ -15,7 +15,7 @@
 
 use bevy::prelude::*;
 use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
-use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneInfoChanged};
 use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -423,19 +423,20 @@ pub(crate) fn project_stage_changes(world: &mut World) {
             transform_edits.entry(path).or_default().merge(channels);
         }
         apply_transform_edits_live(world, id, &transform_edits);
-        // A `DomeLight`'s attributes (its HDRI, intensity, skybox flag) are not
-        // transforms, so neither of the above sees them. Without this, a
-        // `SetDomeLight` on an already-live dome would journal and save but
-        // leave the rendered sky untouched. Runs before the general refresh
-        // below, which then skips domes — this path is the cheaper one (it keeps
-        // the projected cubemap when only the brightness moved).
+        // Publish all changed prim paths so domain projectors can apply their
+        // own cheap in-place updates before the generic subtree refresh below.
         let mut changed_prim_paths: Vec<String> = info_only
             .iter()
             .filter_map(|path| path.split_once('.').map(|(prim, _)| prim.to_string()))
             .collect();
         changed_prim_paths.sort();
         changed_prim_paths.dedup();
-        refresh_domes_live(world, id, &changed_prim_paths);
+        if !changed_prim_paths.is_empty() {
+            world.write_message(UsdSceneInfoChanged {
+                stage_id: id,
+                prim_paths: changed_prim_paths,
+            });
+        }
         // EVERYTHING ELSE. Any other authored attribute — a colour, a material
         // input, a light's intensity, a radius, `visibility` — re-projects here,
         // so a live edit shows up without reloading the scene.
@@ -702,94 +703,6 @@ mod translate_seat_tests {
     }
 }
 
-/// Re-read every changed `DomeLight` prim and push its authored state back onto
-/// the live entity (`lunco_usd_bevy_light::dome`). The HDRI, its tint/intensity and
-/// the skybox toggle are plain attributes, so only this sees them move.
-pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[String]) {
-    use lunco_usd_bevy_core::canonical::CanonicalStages;
-    use lunco_usd_bevy_light::dome;
-    if paths.is_empty() {
-        return;
-    }
-    // `AssetServer` is a cheap handle-clone; taking it now keeps the world free
-    // to be borrowed mutably below.
-    let Some(asset_server) = world.get_resource::<AssetServer>().cloned() else {
-        return;
-    };
-    let Some(settings) = world.get_resource::<lunco_render::RenderingQualitySettings>() else {
-        warn!("cannot refresh USD domes without graphics settings");
-        return;
-    };
-    let quality = match settings.validated_profile() {
-        Ok(quality) => quality,
-        Err(reason) => {
-            warn!("cannot refresh USD domes while Graphics settings are invalid: {reason}");
-            return;
-        }
-    };
-
-    // Re-read the intent under one short borrow of the `!Send` stage.
-    let domes: Vec<(
-        String,
-        Option<dome::UsdDomeEnvironment>,
-        Option<lunco_usd_bevy_light::light::DomeIntensity>,
-    )> = {
-        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-            return;
-        };
-        let Some(cs) = stages.get(id) else { return };
-        let view = cs.view();
-        paths
-            .iter()
-            .filter_map(|p| {
-                let sp = SdfPath::new(p).ok()?;
-                if view.type_name(&sp).as_deref() != Some(ltok::T_DOME_LIGHT) {
-                    return None;
-                }
-                let env = match dome::read_dome_environment(
-                    &view,
-                    &sp,
-                    &asset_server,
-                    id,
-                    quality,
-                ) {
-                    Ok(env) => env,
-                    Err(_) => {
-                        bevy::log::error!(
-                            "[usd-live] {} has malformed authored dome photometry; keeping the previous live state",
-                            sp.as_str()
-                        );
-                        return None;
-                    }
-                };
-                // The fallback if the author dropped the texture: a bare dome is
-                // a scalar ambient, read through the same photometry path as load.
-                let ambient = if env.is_none() {
-                    match lunco_usd_bevy_light::light::read_dome_intensity(&view, &sp, quality) {
-                        Ok(intensity) => Some(intensity),
-                        Err(_) => {
-                            bevy::log::error!(
-                                "[usd-live] {} has malformed authored dome photometry; keeping the previous live state",
-                                sp.as_str()
-                            );
-                            return None;
-                        }
-                    }
-                } else {
-                    None
-                };
-                Some((p.clone(), env, ambient))
-            })
-            .collect()
-    };
-
-    for (path, env, ambient) in domes {
-        if let Some(entity) = find_live_entity(world, id, &path) {
-            dome::refresh_dome_entity(world, entity, env, ambient);
-        }
-    }
-}
-
 /// Re-project every prim whose attributes were edited — the general live-edit
 /// path, so **an edit shows up without reloading the scene**.
 ///
@@ -809,9 +722,10 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
 ///   own subtree is not enough: refresh the scene's visuals.
 /// - **anything else** — re-instantiate just that prim's subtree.
 ///
-/// `DomeLight`s are excluded: [`refresh_domes_live`] already handled them, and it
-/// is strictly better (it keeps the projected cubemap when only the intensity or
-/// the skybox flag moved, instead of re-projecting a 1024² cubemap per edit).
+/// `DomeLight`s are excluded: the light projection consumes
+/// [`UsdSceneInfoChanged`] and handles them in place, which keeps the projected
+/// cubemap when only the intensity or skybox flag moved instead of re-projecting
+/// a 1024² cubemap per edit.
 pub(crate) fn refresh_edited_prims_live(
     world: &mut World,
     id: AssetId<UsdStageAsset>,
@@ -952,7 +866,7 @@ pub(crate) fn refresh_edited_prims_live(
                 continue;
             };
             match view.type_name(&sp).as_deref() {
-                // Already re-projected, better, by `refresh_domes_live`.
+                // Already handled in place by the light projection.
                 Some(ltok::T_DOME_LIGHT) => {}
                 // Material network edits fan out to every prim bound to them.
                 Some("Shader") | Some("Material") => scene_wide = true,

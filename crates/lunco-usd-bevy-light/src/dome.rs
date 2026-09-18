@@ -54,7 +54,11 @@ use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_render::{RenderQualityProfile, RenderingQualitySettings, SceneCamera};
+use lunco_usd_bevy_core::canonical::CanonicalStages;
+use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneInfoChanged};
 use openusd::schemas::lux::tokens as ltok;
+use openusd::sdf::Path as SdfPath;
 use wgpu_types::{
     Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
 };
@@ -158,15 +162,113 @@ pub struct DomePlugin;
 impl Plugin for DomePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RenderingQualitySettings>();
+        app.add_message::<UsdSceneInfoChanged>();
         app.add_systems(
             Update,
             (
+                refresh_domes_from_scene_info,
                 apply_graphics_dome_quality.run_if(resource_changed::<RenderingQualitySettings>),
                 project_dome_textures,
                 bind_dome_to_cameras,
             )
                 .chain(),
         );
+    }
+}
+
+/// Consume the generic live-stage info boundary and apply authored dome
+/// changes through the light-owned reader and entity state.
+fn refresh_domes_from_scene_info(
+    mut changes: MessageReader<UsdSceneInfoChanged>,
+    mut commands: Commands,
+) {
+    for change in changes.read() {
+        let stage_id = change.stage_id;
+        let paths = change.prim_paths.clone();
+        commands.queue(move |world: &mut World| refresh_domes_live(world, stage_id, &paths));
+    }
+}
+
+/// Re-read every changed `DomeLight` prim and push its authored state back onto
+/// the live entity. The HDRI, its tint/intensity, and the skybox toggle are
+/// plain attributes, so the light owner handles them without a generic subtree
+/// rebuild.
+fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[String]) {
+    if paths.is_empty() {
+        return;
+    }
+    let Some(asset_server) = world.get_resource::<AssetServer>().cloned() else {
+        return;
+    };
+    let Some(settings) = world.get_resource::<RenderingQualitySettings>() else {
+        warn!("cannot refresh USD domes without graphics settings");
+        return;
+    };
+    let quality = match settings.validated_profile() {
+        Ok(quality) => quality,
+        Err(reason) => {
+            warn!("cannot refresh USD domes while Graphics settings are invalid: {reason}");
+            return;
+        }
+    };
+
+    let domes: Vec<(
+        String,
+        Option<UsdDomeEnvironment>,
+        Option<crate::light::DomeIntensity>,
+    )> = {
+        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+            return;
+        };
+        let Some(cs) = stages.get(id) else { return };
+        let view = cs.view();
+        paths
+            .iter()
+            .filter_map(|p| {
+                let sp = SdfPath::new(p).ok()?;
+                if view.type_name(&sp).as_deref() != Some(ltok::T_DOME_LIGHT) {
+                    return None;
+                }
+                let env = match read_dome_environment(&view, &sp, &asset_server, id, quality) {
+                    Ok(env) => env,
+                    Err(_) => {
+                        bevy::log::error!(
+                            "[usd-live] {} has malformed authored dome photometry; keeping the previous live state",
+                            sp.as_str()
+                        );
+                        return None;
+                    }
+                };
+                let ambient = if env.is_none() {
+                    match crate::light::read_dome_intensity(&view, &sp, quality) {
+                        Ok(intensity) => Some(intensity),
+                        Err(_) => {
+                            bevy::log::error!(
+                                "[usd-live] {} has malformed authored dome photometry; keeping the previous live state",
+                                sp.as_str()
+                            );
+                            return None;
+                        }
+                    }
+                } else {
+                    None
+                };
+                Some((p.clone(), env, ambient))
+            })
+            .collect()
+    };
+
+    for (path, env, ambient) in domes {
+        let Some(entity) = ({
+            let mut query = world.query::<(Entity, &UsdPrimPath)>();
+            query
+                .iter(world)
+                .find(|(_, prim)| prim.stage_handle.id() == id && prim.path == path)
+                .map(|(entity, _)| entity)
+        }) else {
+            continue;
+        };
+        refresh_dome_entity(world, entity, env, ambient);
     }
 }
 

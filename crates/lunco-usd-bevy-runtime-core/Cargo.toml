@@ -18,7 +18,6 @@ lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-hooks = { path = "../lunco-hooks" }
-lunco-render = { path = "../lunco-render" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-time = { path = "../lunco-time" }
@@ -27,7 +26,6 @@ lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
-lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }

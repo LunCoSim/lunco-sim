@@ -150,6 +150,19 @@ pub struct UsdSceneProjectionReset {
     pub entity: Entity,
 }
 
+/// Publishes the prim paths whose authored, non-structural USD properties
+/// changed during one live-stage projection pass.
+///
+/// Domain projectors consume this boundary when an edit is cheaper to apply in
+/// place than to rebuild through the generic subtree refresh path.
+#[derive(Message, Debug, Clone)]
+pub struct UsdSceneInfoChanged {
+    /// Stage whose composed view contains the changed prims.
+    pub stage_id: AssetId<UsdStageAsset>,
+    /// Prim paths that received authored property changes.
+    pub prim_paths: Vec<String>,
+}
+
 /// Boundary after the USD asset has been synchronized into the live ECS scene.
 ///
 /// The visual projector owns the producer system, while headless projections
