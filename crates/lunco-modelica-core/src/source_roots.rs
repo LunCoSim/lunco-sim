@@ -323,7 +323,7 @@ fn normalize_twin_source_path(path: &Path) -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    Ok(lunco_assets_core::asset_path::normalize(path))
+    Ok(lunco_assets_path::normalize(path))
 }
 
 fn twin_for_root<'a>(

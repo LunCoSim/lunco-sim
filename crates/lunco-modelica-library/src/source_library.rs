@@ -62,7 +62,7 @@ pub fn source_library_root_path() -> Option<PathBuf> {
 /// and parent traversal here keeps a malformed remote manifest from escaping
 /// the source-library URL namespace.
 pub fn source_library_asset_path(file_name: &str) -> Result<String, String> {
-    let relative = lunco_assets_core::asset_path::relative_path(file_name)
+    let relative = lunco_assets_path::relative_path(file_name)
         .ok_or_else(|| format!("invalid source-library artifact filename {file_name}"))?;
     if relative.components().count() != 1 {
         return Err(format!(

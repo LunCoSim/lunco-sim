@@ -398,7 +398,7 @@ fn modelica_roots(twin: &lunco_workspace::Twin) -> Vec<PathBuf> {
     paths
         .into_iter()
         .filter(|path| lunco_twin::is_safe_relative_path(path))
-        .map(|path| lunco_assets_core::asset_path::normalize(&path))
+        .map(|path| lunco_assets_path::normalize(&path))
         .collect()
 }
 
@@ -420,7 +420,7 @@ fn has_extension(path: &Path, extension: &str) -> bool {
 }
 
 fn slashed(path: &Path) -> String {
-    lunco_assets_core::asset_path::slashed(path)
+    lunco_assets_path::slashed(path)
 }
 
 fn read_twin_text(twin: &lunco_workspace::Twin, rel: &Path) -> Result<String, String> {

@@ -186,7 +186,7 @@ pub fn peek_or_load_class_blocking(
     // (`drive_engine_sync`, icon lookups, inspector queries) would
     // block until the parse completed. Parse first, install second.
     let path = resolve_class_path_indexed(qualified).or_else(|| locate_library_file(qualified))?;
-    let uri = lunco_assets_core::asset_path::slashed(&path);
+    let uri = lunco_assets_path::slashed(&path);
 
     // A pre-parsed source library document is part of an immutable source set, not an
     // independent workspace document. Seat the complete bundle through the

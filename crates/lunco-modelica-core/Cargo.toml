@@ -31,6 +31,7 @@ bevy.workspace = true
 # `lunco-modelica-library`, so compiler-only consumers do not inherit their
 # browser transport implementation.
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-core-session = { path = "../lunco-core-session" }

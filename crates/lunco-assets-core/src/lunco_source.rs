@@ -572,7 +572,7 @@ mod windows_uri_tests {
 
         assert_eq!(
             read_asset_bytes_with_twin_root(
-                r"twin://SummerSpaceSchool\sim\scenes\traverse.usda",
+                r"twin://fixture\sim\scenes\traverse.usda",
                 None,
                 Some(root.path())
             )

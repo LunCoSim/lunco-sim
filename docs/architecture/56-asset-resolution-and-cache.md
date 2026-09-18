@@ -6,10 +6,11 @@ Companion to [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.
 — same principle (*identity is not location*), applied to referenced assets
 rather than scenes.
 
-The implementation is split by change and dependency cost. `lunco-assets-core`
-owns identity, resolution, storage-facing readers, runtime sources, and
-discovery. `lunco-assets-datasets` owns the lightweight manifest and lifecycle
-contract. Native provisioning is layered on top: `lunco-assets-transport` owns
+The implementation is split by change and dependency cost. `lunco-assets-path`
+owns the dependency-free URI and relative-path algebra. `lunco-assets-core`
+owns roots, storage-facing readers, runtime sources, and discovery.
+`lunco-assets-datasets` owns the lightweight manifest and lifecycle contract.
+Native provisioning is layered on top: `lunco-assets-transport` owns
 HTTP byte policy, `lunco-assets-download` owns manifest-aware verification and
 atomic installation, `lunco-assets-processing` owns native decode/raster/glTF
 baking, and `lunco-assets` composes those workers for the explicit application
@@ -121,7 +122,7 @@ need to symlink external content into the engine tree.
 declares it through Bevy's normal nested-asset dependency API. Dependencies may be
 top-level or inside a function; they are still loaded before the scenario becomes
 executable. The loader canonicalizes each path through
-`ScriptSources::canonical_id`, the same `lunco-assets-core` path algebra used by the
+`ScriptSources::canonical_id`, the same `lunco-assets-path` algebra used by the
 synchronous module resolver:
 
 ```rhai
@@ -136,17 +137,26 @@ reads only the sources published by those dependency handles. Non-literal import
 are rejected while loading because an async asset graph cannot make an unknown
 runtime path safe or deterministic.
 
-## `lunco-assets-core` owns resolution
+## `lunco-assets-path` owns URI/path algebra; `lunco-assets-core` owns resolution
 
-Every URI↔location mapping lives in `crates/lunco-assets-core`, and no other crate
-re-derives one:
+`lunco-assets-path` contains the platform-neutral rules that must be shared by
+headless document crates, USD composition, and runtime asset sources. It has no
+Bevy or filesystem dependency, so importing the rules does not pull the runtime
+asset graph into a document-only package.
+
+`lunco-assets-core` owns the registered roots, source readers, and the mapping
+from logical identities to available storage. No other crate re-derives that
+runtime mapping:
 
 | Concern | Entry point |
 |---|---|
+| Scheme parsing and URI construction | `lunco-assets-path::{split_scheme, uri}` |
+| Canonicalize against a document or root | `lunco-assets-path::{canonicalize, canonicalize_root}` |
+| Validate a relative asset path | `lunco-assets-path::{is_safe_relative_path, relative_path}` |
 | Register the sources | `lunco-assets-core::asset_sources::register_lunco_asset_sources` |
 | Build a Twin URI | `twin_uri(name, rel)` |
 | Parse a Twin URI | `parse_twin_uri` |
-| "already addressable?" | `has_scheme` |
+| "already addressable?" | `lunco-assets-path::has_scheme` / `is_anchored` |
 | Library URI ⇄ relative | `engine_asset_uri` / `engine_asset_rel` |
 | Document-root-relative asset URI | `asset_path::source_relative_uri` |
 | Any URI → local path | `local_path(reference, twins)` |
@@ -185,7 +195,7 @@ must sit next to the `Stage`, not asset-source knowledge.
 USD asset literals are logical identifiers. They use forward slashes and either
 the authored layer's relative namespace or an explicit `lunco://`/`twin://`
 source; they never contain a native cache path. Every prefetch and resolver
-lookup goes through the same `AssetPath`/`lunco-assets-core` path algebra, so a
+lookup goes through the same `AssetPath`/`lunco-assets-path` algebra, so a
 Windows path separator cannot turn a URI into a default-source filename.
 
 Opening the root layer is terminal when it cannot be read. A missing
@@ -253,7 +263,8 @@ grows a "just fetch it at startup" line — the ephemeris crate had exactly that
 
 | Concern | Owner |
 |---|---|
-| identity, roots, URI/path resolution, and source readers | `lunco-assets-core` |
+| URI/path algebra and traversal rules | `lunco-assets-path` |
+| identity, roots, and source readers | `lunco-assets-core` |
 | manifest, URL, cache path, and lifecycle state | `lunco-assets-datasets` |
 | retry policy and resumable HTTP bytes | `lunco-assets-transport` |
 | manifest verification, extraction, and atomic source installation | `lunco-assets-download` |

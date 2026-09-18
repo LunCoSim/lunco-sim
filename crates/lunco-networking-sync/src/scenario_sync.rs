@@ -416,11 +416,11 @@ pub fn scenario_cache_root(scenario_id: &[u8; 16]) -> PathBuf {
 /// comes from a remote host and must never escape a target root. `None` if unsafe
 /// or empty.
 pub fn safe_rel_path(rel: &str) -> Option<PathBuf> {
-    if !lunco_assets_core::asset_path::is_safe_relative_path(rel) {
+    if !lunco_assets_path::is_safe_relative_path(rel) {
         warn!("[net] rejecting unsafe scenario asset path: {rel:?}");
         return None;
     }
-    lunco_assets_core::asset_path::relative_path(rel)
+    lunco_assets_path::relative_path(rel)
 }
 
 /// Resolve a manifest asset's relative path to its on-disk cache location under

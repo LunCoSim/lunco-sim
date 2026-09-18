@@ -539,7 +539,7 @@ fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: 
     let root = lunco_twin::root_for_file(&abs);
     let rel = abs
         .strip_prefix(&root)
-        .map(lunco_assets_core::asset_path::slashed)
+        .map(lunco_assets_path::slashed)
         .unwrap_or_else(|_| {
             abs.file_name()
                 .unwrap_or_default()

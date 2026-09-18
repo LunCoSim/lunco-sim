@@ -162,7 +162,7 @@ impl ModelicaImageLoader {
         // package-root spelling, then the shared asset validator rejects
         // traversal, drives, and platform-specific separators.
         let rel = rest.strip_prefix('/').unwrap_or(rest);
-        lunco_assets_core::asset_path::relative_path(rel)
+        lunco_assets_path::relative_path(rel)
     }
 }
 

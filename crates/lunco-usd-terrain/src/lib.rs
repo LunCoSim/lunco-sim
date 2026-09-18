@@ -1873,9 +1873,9 @@ fn bridge_dem_prim_read(
                 return;
             }
         };
-        lunco_assets_core::asset_path::slashed(path)
+        lunco_assets_path::slashed(path)
     } else {
-        lunco_assets_core::asset_path::slashed(root.join(&rel))
+        lunco_assets_path::slashed(root.join(&rel))
     };
     let window_m = match dem_attrs
         .as_ref()

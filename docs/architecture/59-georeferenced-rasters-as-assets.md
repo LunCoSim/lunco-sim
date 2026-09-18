@@ -25,7 +25,7 @@ re-implementation.
 **A georeferenced raster is an asset. Give it a loader.**
 
 ```
-@twin://SummerSpaceSchool/analysis/slope.tif@
+@twin://example-twin/analysis/slope.tif@
         │
         └── AssetLoader ──> GeoRaster { pixels, georef, nodata }
                                  │

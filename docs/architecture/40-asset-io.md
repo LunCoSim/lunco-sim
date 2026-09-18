@@ -4,8 +4,9 @@
 
 **TL;DR.** Domain crates read shippable assets through
 `bevy::asset::AssetServer`; user-data bytes and mutations go through
-`lunco-storage`; lightweight asset identity, resolution, and cache policy belong
-to `lunco-assets-core`. Dataset declarations and lifecycle state belong to
+`lunco-storage`; platform-neutral URI and relative-path rules belong to
+`lunco-assets-path`, while roots, source readers, and cache policy belong to
+`lunco-assets-core`. Dataset declarations and lifecycle state belong to
 `lunco-assets-datasets`; native provisioning is composed by `lunco-assets`
 from the transport, download, and processing packages. The shared
 retry/backoff policy is owned by
@@ -91,7 +92,8 @@ backend owner separate:
 
 | Concern | Owner | Workbench role |
 |---|---|---|
-| Asset identity, URI resolution, and cache roots | `lunco-assets-core` | none |
+| URI/path algebra and traversal validation | `lunco-assets-path` | none |
+| Asset identity, source resolution, and cache roots | `lunco-assets-core` | none |
 | Dataset manifests, artifact identity, and installed status | `lunco-assets-datasets` | none |
 | Native HTTP retry/resume and byte transfer | `lunco-assets-transport` | none |
 | Manifest verification, extraction, and atomic installation | `lunco-assets-download` | none |

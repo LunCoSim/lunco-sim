@@ -957,11 +957,11 @@ pub fn drain_usd_scan(
     // catalog's existing unsuffixed stem IDs for shipped assets.
     scan.staged.sort_unstable_by(|a, b| {
         let a_key = (
-            lunco_assets_core::asset_path::split_scheme(&a.asset.asset_path).is_some(),
+            lunco_assets_path::split_scheme(&a.asset.asset_path).is_some(),
             &a.asset.asset_path,
         );
         let b_key = (
-            lunco_assets_core::asset_path::split_scheme(&b.asset.asset_path).is_some(),
+            lunco_assets_path::split_scheme(&b.asset.asset_path).is_some(),
             &b.asset.asset_path,
         );
         a_key.cmp(&b_key)

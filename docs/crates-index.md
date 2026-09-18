@@ -23,6 +23,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): process-wide live document handle allocation, the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo. |
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, document-identity command payloads such as `rename::RenameOpenDocument`, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
+| **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme parsing, canonicalization, separator normalization, and traversal checks. It has no Bevy, filesystem, storage, or application dependency. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, runtime source loading, discovery, and storage-facing readers. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, lifecycle state, and Bevy registry/command events. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
 | **`lunco-assets-transport`** | Small native HTTP transport boundary: shared timeout, retry/backoff, and resumable byte-transfer primitives. It has no manifest, archive, raster, or Bevy dependency. |
@@ -301,10 +302,18 @@ selection through handles.
 Supports native FS and memory (for tests), with the browser localStorage
 backend and architectural stubs for future OPFS/IndexedDB and remote backends.
 
+**`lunco-assets-path`**
+The dependency-free URI and relative-path algebra shared by USD composition,
+document authoring, Twin resolution, and script imports. It owns canonical
+scheme parsing, separator normalization, relative-path validation, and
+traversal-safe path operations without depending on Bevy, storage, or a
+filesystem.
+
 **`lunco-assets-core`**
-The lightweight runtime asset boundary. It owns canonical `lunco://` and
-`twin://` identities, cache and Twin-root resolution, Bevy source registration,
-runtime Modelica/mission/tutorial/Rhai sources, and project asset discovery.
+The lightweight runtime asset boundary. It owns cache and Twin-root
+resolution, Bevy source registration, runtime Modelica/mission/tutorial/Rhai
+sources, and project asset discovery; it uses `lunco-assets-path` for the
+platform-neutral identity rules.
 It intentionally excludes HTTP, archive, raster, SVG, GeoTIFF, and native
 process dependencies.
 

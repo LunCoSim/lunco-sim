@@ -13,6 +13,7 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 big_space.workspace = true
 lunco-api = { path = "../lunco-api" }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }

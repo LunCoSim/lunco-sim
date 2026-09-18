@@ -204,7 +204,7 @@ pub fn entry_dest_path(
 ) -> Result<PathBuf, std::io::Error> {
     if !entry.shared {
         if let Some(dest) = entry.dest.as_deref() {
-            if !lunco_assets_core::asset_path::is_safe_relative_path(dest) {
+            if !lunco_assets_path::is_safe_relative_path(dest) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     format!("asset destination {dest:?} must be a safe relative path"),
@@ -356,7 +356,7 @@ pub fn source_pool_path(root: &Path, url: &str) -> PathBuf {
         .next()
         .and_then(|url| url.rsplit('/').next())
         .filter(|name| {
-            !name.is_empty() && lunco_assets_core::asset_path::is_safe_relative_path(name)
+            !name.is_empty() && lunco_assets_path::is_safe_relative_path(name)
         })
         .unwrap_or("download.bin");
     root.join("sources").join(&hash[..16]).join(base)
@@ -372,7 +372,7 @@ pub fn process_output_path(
     cache_root: Option<&Path>,
     twin_root: Option<&Path>,
 ) -> Result<PathBuf, std::io::Error> {
-    if !lunco_assets_core::asset_path::is_safe_relative_path(&process.output) {
+    if !lunco_assets_path::is_safe_relative_path(&process.output) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(

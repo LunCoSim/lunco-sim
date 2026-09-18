@@ -29,6 +29,7 @@ networking = [
     "dep:lunco-doc-bevy",
     "dep:lunco-workspace",
     "dep:lunco-assets-core",
+    "dep:lunco-assets-path",
     "dep:lunco-storage",
     "dep:avian3d",
     "dep:aeronet_webtransport",
@@ -85,6 +86,7 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true, features
 # Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
 # `scenarios/<id>/` download target. Native + wasm-safe path helper.
 lunco-assets-core = { path = "../lunco-assets-core", optional = true }
+lunco-assets-path = { path = "../lunco-assets-path", optional = true }
 # Host-side scenario closure: `lunco-assets-core` owns canonical asset
 # traversal; this
 # leaf supplies only USD's document test and dependency extraction. A scene's

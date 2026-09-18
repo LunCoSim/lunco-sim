@@ -213,10 +213,8 @@ pub fn compose_file_to_stage_with_roots(
     twin_root: Option<&Path>,
 ) -> Result<Stage> {
     let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
-        Some(rel) => {
-            lunco_assets_core::engine_asset_uri(&lunco_assets_core::asset_path::slashed(rel))
-        }
-        None => lunco_assets_core::asset_path::canonicalize_root(&path.to_string_lossy()),
+        Some(rel) => lunco_assets_core::engine_asset_uri(&lunco_assets_path::slashed(rel)),
+        None => lunco_assets_path::canonicalize_root(&path.to_string_lossy()),
     };
     let root_bytes = lunco_assets_core::read_asset_file_bytes(path)
         .map_err(|e| anyhow!("cannot read {}: {e}", path.display()))?;
@@ -300,18 +298,15 @@ mod tests {
         let source = r#"#usda 1.0
 (
     subLayers = [
-        @twin://SummerSpaceSchool\sim\scenes\traverse.usda@
+        @twin://fixture\sim\scenes\traverse.usda@
     ]
 )
 "#;
 
         assert_eq!(
-            child_layer_ids(
-                "twin://SummerSpaceSchool/sim/scenes/entry.usda",
-                source.as_bytes()
-            )
-            .expect("valid scene layer"),
-            vec!["twin://SummerSpaceSchool/sim/scenes/traverse.usda"]
+            child_layer_ids("twin://fixture/sim/scenes/entry.usda", source.as_bytes())
+                .expect("valid scene layer"),
+            vec!["twin://fixture/sim/scenes/traverse.usda"]
         );
     }
 
@@ -330,7 +325,7 @@ mod tests {
             br#"#usda 1.0
 (
     subLayers = [
-        @twin://SummerSpaceSchool\sim\scenes\traverse.usda@
+        @twin://fixture\sim\scenes\traverse.usda@
     ]
 )
 "#,

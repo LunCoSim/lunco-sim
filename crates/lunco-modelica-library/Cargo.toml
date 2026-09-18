@@ -8,6 +8,7 @@ description = "Modelica source-library admission, artifacts, and worker bridge"
 [dependencies]
 bevy.workspace = true
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-settings = { path = "../lunco-settings" }

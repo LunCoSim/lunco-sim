@@ -75,7 +75,7 @@ pub fn download_asset(
 /// the physical cache path.
 /// When a `dest_root` is supplied, `entry.dest` is validated to be a
 /// strictly relative path with no `..` segments (see
-/// [`lunco_assets_core::asset_path::is_safe_relative_path`])
+/// [`lunco_assets_path::is_safe_relative_path`])
 /// so a manifest can never escape the Twin root.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_asset_with_control(
@@ -88,7 +88,7 @@ pub fn download_asset_with_control(
     // Twin-relative downloads must not let a manifest's `dest` walk outside
     // the Twin root. Cache-relative downloads are plain relative paths.
     if let (Some(_root), Some(d)) = (dest_root, entry.dest.as_deref()) {
-        if !lunco_assets_core::asset_path::is_safe_relative_path(d) {
+        if !lunco_assets_path::is_safe_relative_path(d) {
             return Err(DownloadError::ManifestFailed(format!(
                 "asset `{key}` has an unsafe `dest` for a twin download: {d:?} \
                  (must be relative, no `..`, no absolute, no backslash)"
@@ -971,13 +971,13 @@ mod tests {
 
     #[test]
     fn safe_rel_dest_accepts_plain_relative() {
-        assert!(lunco_assets_core::asset_path::is_safe_relative_path(
+        assert!(lunco_assets_path::is_safe_relative_path(
             "terrain/apollo15/.cache/dtm.tif"
         ));
-        assert!(lunco_assets_core::asset_path::is_safe_relative_path(
+        assert!(lunco_assets_path::is_safe_relative_path(
             "textures/moon.png"
         ));
-        assert!(lunco_assets_core::asset_path::is_safe_relative_path(
+        assert!(lunco_assets_path::is_safe_relative_path(
             "fonts/DejaVuSans.ttf"
         ));
     }
@@ -985,30 +985,30 @@ mod tests {
     #[test]
     fn safe_rel_dest_rejects_traversal_and_absolute() {
         // Parent escape — the whole point of the guard.
-        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+        assert!(!lunco_assets_path::is_safe_relative_path(
             "../escape.tif"
         ));
-        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+        assert!(!lunco_assets_path::is_safe_relative_path(
             "terrain/../../escape.tif"
         ));
-        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+        assert!(!lunco_assets_path::is_safe_relative_path(
             "a/../b/../../x"
         ));
         // Absolute (Unix + Windows drive).
-        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+        assert!(!lunco_assets_path::is_safe_relative_path(
             "/etc/passwd"
         ));
-        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+        assert!(!lunco_assets_path::is_safe_relative_path(
             "C:/Users/x"
         ));
         // Backslash is a traversal vector on Windows; reject everywhere.
-        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+        assert!(!lunco_assets_path::is_safe_relative_path(
             r"terrain\..\x"
         ));
         // Empty / leading-slash-adjacent.
-        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(""));
-        assert!(!lunco_assets_core::asset_path::is_safe_relative_path("."));
-        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(".."));
+        assert!(!lunco_assets_path::is_safe_relative_path(""));
+        assert!(!lunco_assets_path::is_safe_relative_path("."));
+        assert!(!lunco_assets_path::is_safe_relative_path(".."));
     }
 
     /// A `dest_root = Some(twin)` download that fails the traversal guard

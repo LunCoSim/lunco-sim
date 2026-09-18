@@ -1459,13 +1459,13 @@ fn parse_prim_path(path: &str) -> Result<SdfPath, DocumentError> {
 }
 
 fn validate_reference_asset_path(asset_path: &str) -> Result<String, DocumentError> {
-    let normalized = lunco_assets_core::asset_path::slashed(asset_path);
+    let normalized = lunco_assets_path::slashed(asset_path);
     if normalized.is_empty() || normalized.contains('@') || normalized.contains('\0') {
         return Err(DocumentError::ValidationFailed(format!(
             "SetReferenceArcs requires a non-empty asset identity without `@` or NUL: `{asset_path}`"
         )));
     }
-    if let Some((scheme, rest)) = lunco_assets_core::asset_path::split_scheme(&normalized) {
+    if let Some((scheme, rest)) = lunco_assets_path::split_scheme(&normalized) {
         if scheme.is_empty()
             || rest.is_empty()
             || rest
@@ -1478,7 +1478,7 @@ fn validate_reference_asset_path(asset_path: &str) -> Result<String, DocumentErr
         }
     } else {
         let relative = normalized.strip_prefix('/').unwrap_or(&normalized);
-        if !lunco_assets_core::asset_path::is_safe_relative_path(relative) {
+        if !lunco_assets_path::is_safe_relative_path(relative) {
             return Err(DocumentError::ValidationFailed(format!(
                 "SetReferenceArcs asset identity is not a safe asset path: `{asset_path}`"
             )));

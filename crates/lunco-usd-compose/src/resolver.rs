@@ -24,7 +24,7 @@ use std::time::SystemTime;
 use crate::validate_usda_nesting;
 use openusd::ar::{self, Asset, ResolvedPath};
 
-use lunco_assets_core::asset_path::{canonicalize, canonicalize_root};
+use lunco_assets_path::{canonicalize, canonicalize_root};
 
 /// The layer-byte map a [`LuncoUsdResolver`] resolves against, wrapped for
 /// **shared interior mutability**. openusd captures the resolver at stage-build

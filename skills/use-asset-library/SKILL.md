@@ -89,7 +89,9 @@ global downloaded product without putting a machine path into USD.
 Authored bytes always win over materialised ones. Schemes are registered in
 `crates/lunco-assets-core/src/asset_sources.rs`; `twin://` is stateful, it is not a
 second texture scheme. Use the existing logical `lunco://` or `twin://` identity
-for every delivered artifact.
+for every delivered artifact. Canonical URI construction, separator normalization,
+and traversal validation come from the dependency-free `lunco-assets-path` crate;
+source roots and bytes remain owned by `lunco-assets-core`.
 
 Anything the cache fallback can serve is DECLARED in an `Assets.toml` and
 downloaded only on request (Settings ▸ Downloadable data, the Twin Browser

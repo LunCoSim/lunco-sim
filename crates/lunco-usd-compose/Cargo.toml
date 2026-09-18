@@ -8,6 +8,7 @@ description = "Asset-backed OpenUSD stage composition for LunCoSim"
 [dependencies]
 openusd = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 anyhow = { workspace = true }
 
 [dev-dependencies]

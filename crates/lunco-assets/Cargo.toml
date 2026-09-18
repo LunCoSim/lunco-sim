@@ -12,6 +12,7 @@ description = "Dataset provisioning and native offline asset processing for LunC
 # source registration are owned by `lunco-assets-core`.
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-download = { path = "../lunco-assets-download" }
 lunco-assets-processing = { path = "../lunco-assets-processing" }

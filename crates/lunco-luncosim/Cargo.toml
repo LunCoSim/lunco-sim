@@ -153,6 +153,7 @@ workspace = true
 
 [dev-dependencies]
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 avian3d = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-mobility = { path = "../lunco-mobility" }

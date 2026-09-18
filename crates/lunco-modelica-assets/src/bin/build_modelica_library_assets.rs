@@ -405,7 +405,7 @@ mod native {
     /// forward slashes. This is the tar entry name AND the rumoca URI, and is
     /// what the web resolver matches against (`InMemoryLibrary.files` keys).
     fn rel_key(root: &Path, path: &Path) -> String {
-        lunco_assets_core::asset_path::slashed(
+        lunco_assets_path::slashed(
             path.strip_prefix(root).expect("entry under its root"),
         )
     }

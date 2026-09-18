@@ -115,6 +115,7 @@ members = [
     "crates/lunco-scene-validation",
     "crates/lunco-ui",
     "crates/lunco-assets-core",
+    "crates/lunco-assets-path",
     "crates/lunco-assets-datasets",
     "crates/lunco-assets-transport",
     "crates/lunco-assets-download",

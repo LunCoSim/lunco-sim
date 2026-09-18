@@ -11,7 +11,7 @@ fn main() {
         eprintln!("usage: usd_rover_visual <asset-path-relative-to-assets>");
         std::process::exit(2);
     });
-    let rover_asset = lunco_assets_core::asset_path::relative_path(&rover_asset)
+    let rover_asset = lunco_assets_path::relative_path(&rover_asset)
         .map(|path| lunco_assets_core::engine_asset_uri(&path.to_string_lossy()))
         .unwrap_or_else(|| {
             eprintln!("error: rover asset must be a safe path relative to the asset library");

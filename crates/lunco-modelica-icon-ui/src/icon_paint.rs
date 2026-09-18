@@ -1080,7 +1080,7 @@ fn load_bitmap_bytes(filename: &str) -> Option<Vec<u8>> {
     // Read through the source library virtual source. This keeps bitmap resolution on the
     // same asset boundary as documentation images and works for both the native
     // filesystem source and the browser's in-memory bundle.
-    let path = lunco_assets_core::asset_path::relative_path(rel)?;
+    let path = lunco_assets_path::relative_path(rel)?;
     lunco_assets_core::library::library_read(&path)
 }
 

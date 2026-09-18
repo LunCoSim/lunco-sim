@@ -65,7 +65,8 @@ pub fn resolve_stage_asset_path(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_path: &str,
 ) -> String {
-    use lunco_assets_core::asset_path::{anchor_of, canonicalize, canonicalize_root};
+    use lunco_assets_core::asset_path::anchor_of;
+    use lunco_assets_path::{canonicalize, canonicalize_root};
 
     match asset_server.get_path(stage_id) {
         Some(stage_path) => canonicalize(asset_path, &anchor_of(&stage_path)),

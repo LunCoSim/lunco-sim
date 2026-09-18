@@ -387,7 +387,7 @@ fn stage_engine_bundle(
                     cache_root.display()
                 )
             })?;
-            let relative = lunco_assets_core::asset_path::slashed(relative);
+            let relative = lunco_assets_path::slashed(relative);
             if !staged.insert(relative.clone()) {
                 return Err(format!(
                     "{group}/{key}: artifact path collides with another bundled dataset: {relative}"

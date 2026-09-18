@@ -2392,7 +2392,7 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
 
     let rel_scene_path = abs_path
         .strip_prefix(&twin_root)
-        .map(lunco_assets_core::asset_path::slashed)
+        .map(lunco_assets_path::slashed)
         .unwrap_or_else(|_| scene_file.clone());
     let Some(mut pending) = world.get_resource_mut::<lunco_workspace::open::PendingTwinOpens>()
     else {

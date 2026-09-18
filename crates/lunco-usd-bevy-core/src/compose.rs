@@ -33,7 +33,7 @@ use anyhow::{anyhow, Result};
 use bevy::asset::{io::AssetReaderError, AssetPath, LoadContext, ReadAssetBytesError};
 use openusd::usd::Stage;
 
-use lunco_assets_core::asset_path::canonicalize_root;
+use lunco_assets_path::canonicalize_root;
 
 use lunco_usd_compose::recipe::{StageClosureLimits, StageDependencyDiagnostic, StageRecipe};
 use lunco_usd_compose::{

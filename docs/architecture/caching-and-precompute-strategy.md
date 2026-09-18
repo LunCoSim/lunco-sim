@@ -65,7 +65,7 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | Structural change-detection | `Added<SimConnection>` (`lunco-cosim/src/lib.rs:252`), USD `Without<Marker>` gates | Recompute-only-on-change is already idiomatic here. |
 | **Real CIDv1 content-address** | `lunco-hash/src/lib.rs:118-140`, used by `lunco-networking-sync/src/scenario.rs` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`scenario_sync.rs:88-94`). The hash substrate owns the algorithm; sync owns only its manifest/wire adapter. |
 | **OPFS web blob backend** | `lunco-storage/src/opfs_storage.rs` | Working async `read`/`write`/`exists` on wasm via `createWritable` (main-thread-legal). Path-keyed on `StorageHandle::File`. |
-| **Single asset-resolution owner** | `lunco-assets-core/src/asset_sources.rs` `register_lunco_asset_sources` | The `lunco://` and `twin://` schemes are registered in ONE place before `AssetPlugin`, with every URI-to-location mapping exported from this crate so no consumer re-derives one. |
+| **Single asset-resolution owner** | `lunco-assets-path` for URI/path algebra; `lunco-assets-core/src/asset_sources.rs` `register_lunco_asset_sources` for sources | The `lunco://` and `twin://` schemes are registered in ONE place before `AssetPlugin`; platform-neutral canonicalization and traversal checks come from `lunco-assets-path`, while source-to-location mapping stays in `lunco-assets-core`. |
 | **Shared material cache** | `lunco-render-bevy/src/look_cache.rs` `LookCache<L: CachedLook>` | Content-key → one `Handle<Material>` (the batching property), an `unshared` bypass for animated looks, and ONE `sweep_look_cache` for eviction. Serves both `PbrLook` and `ShaderLook` — they were the same code twice, and had already drifted (the shader cache swept at 1024; the PBR cache never swept and grew unbounded). |
 | **One invalidation signal for source-derived memos** | `lunco-modelica-ast/src/source_memo.rs` `SourceMemo<V>` + `invalidate_source_memos()` | A `name → Option<V>` memo, **negatives included**, that self-drops on a source/library change. One atomic bump reaches every memo — including ones added later, which the invalidation site never has to name. |
 
@@ -399,7 +399,7 @@ Live sim feeds client prediction + replication; these constraints are hard:
 1. **`lunco-precompute` substrate** — generalize `derived_layers.rs`.
    *Reuses today's landings:* use the shared sha2-256 CID + fail-closed verify
   from `lunco-hash` and the separator-neutral path admission from
-  `lunco-assets-core`; keep the dependency one-way from precompute to the
+  `lunco-assets-path`; keep the dependency one-way from precompute to the
    existing `OpfsStorage` async backend behind one internal `#[cfg]` fork; keep a
    fast non-crypto hash for change-detection (§2 two-tier). *Net-new:*
    `CacheKey{domain,content,lod,variant}` (§2.1), an async `bake_or_load` fronted

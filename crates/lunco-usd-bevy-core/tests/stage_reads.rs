@@ -5,7 +5,7 @@
 //! read assertions do not rebuild the core library.
 
 use anyhow::Result;
-use lunco_assets_core::asset_path::{canonicalize, canonicalize_root};
+use lunco_assets_path::{canonicalize, canonicalize_root};
 use lunco_usd_bevy_core::compose::build_stage_with_resolver;
 use lunco_usd_bevy_core::read::runtime_port_provider;
 use lunco_usd_bevy_core::{StageView, UsdRead};
@@ -89,7 +89,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         // to the wrapper bytes and the `@model.glb@` payload is stubbed — the
         // storage-based compose path, not the removed native-fs path.
         let root_id = canonicalize_root("scene.usda");
-        let wrapper_id = lunco_assets_core::asset_path::canonicalize("wrapper.usda", &root_id);
+        let wrapper_id = lunco_assets_path::canonicalize("wrapper.usda", &root_id);
         let bytes = HashMap::from([
             (root_id.clone(), scene.as_bytes().to_vec()),
             (wrapper_id, wrapper.as_bytes().to_vec()),

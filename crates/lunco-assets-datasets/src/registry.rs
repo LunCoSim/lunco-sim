@@ -174,7 +174,7 @@ impl DatasetEntry {
     /// Resolve the consumer-facing asset URI.
     pub fn artifact_uri(&self) -> String {
         match &self.scope {
-            DatasetScope::Engine => lunco_assets_core::asset_path::uri(
+            DatasetScope::Engine => lunco_assets_path::uri(
                 lunco_assets_core::LUNCO_SCHEME,
                 &self.artifact_rel,
             ),
@@ -218,7 +218,7 @@ fn artifact_rel_of(
         }
         return absolute
             .strip_prefix(&cache_root)
-            .map(lunco_assets_core::asset_path::slashed)
+            .map(lunco_assets_path::slashed)
             .map_err(|_| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -232,7 +232,7 @@ fn artifact_rel_of(
     }
     destination
         .strip_prefix(scope.cache_root(entry.shared))
-        .map(lunco_assets_core::asset_path::slashed)
+        .map(lunco_assets_path::slashed)
         .map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -452,7 +452,7 @@ impl DatasetRegistry {
         scope: &DatasetScope,
         relative: &Path,
     ) -> Option<&DatasetEntry> {
-        let relative = lunco_assets_core::asset_path::slashed(relative)
+        let relative = lunco_assets_path::slashed(relative)
             .trim_start_matches('/')
             .to_owned();
         self.entries

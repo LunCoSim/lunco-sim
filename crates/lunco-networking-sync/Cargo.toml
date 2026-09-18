@@ -18,6 +18,7 @@ crossbeam-channel = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-assets-transport = { path = "../lunco-assets-transport" }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }

@@ -163,13 +163,13 @@ fn resolve_scheme(
     twins: Option<&TwinRoots>,
 ) -> Option<PathBuf> {
     if let Some(rel) = lunco_assets_core::parse_lunco_uri(reference) {
-        if !lunco_assets_core::asset_path::is_safe_relative_path(rel) {
+        if !lunco_assets_path::is_safe_relative_path(rel) {
             return None;
         }
         return Some(assets_root?.join(rel));
     }
     if let Some((name, rel)) = lunco_assets_core::parse_twin_uri(reference) {
-        let relative = lunco_assets_core::asset_path::relative_path(rel)?;
+        let relative = lunco_assets_path::relative_path(rel)?;
         return match twins?.resolve_file(name, &relative) {
             Ok(path) => path,
             Err(error) => {

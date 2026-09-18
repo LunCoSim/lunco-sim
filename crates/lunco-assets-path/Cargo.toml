@@ -1,0 +1,9 @@
+[package]
+name = "lunco-assets-path"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Platform-neutral asset URI and relative-path algebra for LunCoSim"
+
+[lints]
+workspace = true

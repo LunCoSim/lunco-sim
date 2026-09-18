@@ -9,6 +9,7 @@ description = "Lightweight LunCoSim asset identity, resolution, storage, and sou
 anyhow = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-core = { path = "../lunco-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin" }

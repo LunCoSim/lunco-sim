@@ -8,6 +8,7 @@ description = "Lightweight dataset declarations, lifecycle state, and registry c
 [dependencies]
 bevy = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-core = { path = "../lunco-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }

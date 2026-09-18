@@ -673,19 +673,16 @@ mod tests {
     #[test]
     fn twin_uri_normalizes_windows_relative_paths() {
         assert_eq!(
-            twin_uri(
-                "Summer Space School",
-                Path::new(r"sim\scenes\traverse.usda")
-            ),
-            "twin://Summer Space School/sim/scenes/traverse.usda"
+            twin_uri("Fixture Twin", Path::new(r"sim\scenes\traverse.usda")),
+            "twin://Fixture Twin/sim/scenes/traverse.usda"
         );
     }
 
     #[test]
     fn parses_a_windows_authored_twin_uri() {
         assert_eq!(
-            parse_twin_uri(r"twin://SummerSpaceSchool\sim\scenes\traverse.usda"),
-            Some(("SummerSpaceSchool", r"sim\scenes\traverse.usda"))
+            parse_twin_uri(r"twin://fixture\sim\scenes\traverse.usda"),
+            Some(("fixture", r"sim\scenes\traverse.usda"))
         );
     }
 
