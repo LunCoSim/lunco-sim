@@ -6,19 +6,10 @@ license.workspace = true
 description = "LunCoSim's interactive USD browser and preview UI"
 
 [dependencies]
-# The UI crate opts into the render-facing Bevy facade. The USD core and its
-# server consumers keep the workspace's render-free Bevy baseline.
-bevy = { workspace = true, features = [
-    "bevy_asset",
-    "bevy_mesh",
-    "bevy_light",
-    "bevy_render",
-    "bevy_core_pipeline",
-    "bevy_window",
-    "bevy_ui_render",
-    "bevy_post_process",
-    "bevy_anti_alias",
-] }
+# This package owns USD browser/lifecycle presentation, not the render
+# runtime. It names Bevy asset resources directly; render, camera, lighting,
+# and post-process features belong to `lunco-usd-viewport-runtime`.
+bevy = { workspace = true, features = ["bevy_asset"] }
 bevy_egui = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core-session = { path = "../lunco-core-session" }

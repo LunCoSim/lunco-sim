@@ -6,7 +6,9 @@ license.workspace = true
 description = "Renderer-independent measured viewport geometry"
 
 [dependencies]
-bevy = { workspace = true }
+# `Camera` and `Ray3d` are part of Bevy's camera facade; declare that feature
+# here instead of relying on a render/UI consumer to unify it transitively.
+bevy = { workspace = true, features = ["bevy_camera"] }
 
 [lints]
 workspace = true
