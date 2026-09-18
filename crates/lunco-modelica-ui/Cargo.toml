@@ -9,7 +9,11 @@ description = "Modelica workbench UI and lunica application facade for LunCoSim"
 # The API contracts and native transport are on by default so `cargo run --bin
 # lunica -- --api` Just Works for screenshot-driven debugging. Building without
 # them (`cargo build --no-default-features`) keeps the UI package optional.
-default = ["api", "transport-http", "ui", "scripting"]
+default = ["api", "transport-http", "ui", "scripting", "native-allocator"]
+# The allocator is an executable policy, not part of the reusable Modelica UI
+# library. Consumers such as luncosim embed the library without inheriting
+# mimalloc; the standalone lunica profiles opt in below.
+native-allocator = ["dep:mimalloc"]
 # The egui Modelica IDE: panels, diagram canvas, plots, docs viewer. OFF ⇒ the
 # compile core (ModelicaCorePlugin) builds headless — no egui/winit,
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
@@ -53,7 +57,7 @@ transport-http = ["api", "lunco-api-transport/transport-http"]
 # Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
 # bin with `--no-default-features --features server`. No rendered capture capability
 # (`lunco-capture/api`; the server captures no screenshots) and no winit/egui.
-server = ["api", "lunco-api-transport/transport-http"]
+server = ["api", "lunco-api-transport/transport-http", "native-allocator"]
 # In-app rhai scripting: run/hot-reload scenarios and drive the workbench from
 # scripts used by authored scenarios. INDEPENDENT of the API
 # feature — `lunco-scripting` self-supplies the transport-free command core, so
@@ -190,7 +194,7 @@ log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"
 # (missing `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs).
 # Enable with `cargo run --features tracy --bin lunica` when profiling.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-mimalloc = "0.1"
+mimalloc = { version = "0.1", optional = true }
 lunco-modelica-assets = { path = "../lunco-modelica-assets", optional = true }
 lunco-assets-datasets = { path = "../lunco-assets-datasets", optional = true }
 # OS clipboard for the code editor's menu / toolbar / right-click Paste

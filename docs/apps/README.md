@@ -46,7 +46,7 @@ Modelica application, use the `lunica` target in the table below.
 |---|---|---|---|
 | `luncosim` | `lunco-luncosim` | `cargo build -p lunco-luncosim --bin luncosim`, then `target/debug/luncosim` | **Ground-physics simulator.** USD scenes, Avian physics, rover/mobility tools, and the embedded Modelica workbench. Windowed or headless (`--no-ui`). See [luncosim](luncosim/README.md). |
 | `luncosim-server` | `lunco-luncosim-server` | `cargo build -p lunco-luncosim-server --bin luncosim-server`, then `target/debug/luncosim-server` | **Headless server.** Runs `lunco-luncosim-core::run_headless()` directly, so the GUI stack (winit/egui) is never linked — for multiplayer hosting and automation. Deploy guide: [luncosim/OPS.md](luncosim/OPS.md). |
-| `lunica` | `lunco-modelica-ui` | `cargo build -p lunco-modelica-ui --bin lunica`, then `target/debug/lunica` | **Modelica engineering workbench.** Author, compile (rumoca), and simulate Modelica models; source-library browser. Windowed, headless (`--no-ui`), or web. See [lunica](lunica/README.md). |
+| `lunica` | `lunco-modelica-ui` | `cargo build -p lunco-modelica-ui --bin lunica`, then `target/debug/lunica` | **Modelica engineering workbench.** Author, compile (rumoca), and simulate Modelica models; source-library browser. Windowed, headless (`--no-ui`), or web. Native builds enable the package's `native-allocator` profile; library consumers do not inherit it. See [lunica](lunica/README.md). |
 | `lunco-assets` | `lunco-assets` | `cargo run -p lunco-assets --bin lunco-assets -- <download\|list\|process>` | **Assets Manager.** Download / verify (SHA-256) / process external assets (textures, source libraries, models). See [assets-manager](assets-manager/README.md). |
 
 ## Utility & dev binaries
