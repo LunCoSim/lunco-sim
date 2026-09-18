@@ -3274,7 +3274,7 @@ pub(crate) fn bind_terrain_maps_to_materials(
         // no second USD reader is needed. The temporary is also used immediately,
         // so the owner does not render one frame with the derived source before the
         // deferred component insertion becomes visible.
-        let inferred = TerrainAuthoredMaps::from_shader_look(&look, maps);
+        let inferred = TerrainAuthoredMaps::from_shader_look(&look);
         let source_changed = authored != Some(&inferred);
         if source_changed {
             commands.entity(terrain).try_insert(inferred.clone());

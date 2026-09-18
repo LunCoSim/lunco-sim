@@ -82,7 +82,7 @@ pub use oracle::{
 pub use plugin::{TerrainSurfacePlugin, TerrainSurfaceSet};
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use stream_viz::{
-    LodFrozen, LodTiles, SetTerrainRenderingQuality, TerrainLodViz, TerrainNodeErrors,
+    LodFrozen, LodTileOf, LodTiles, SetTerrainRenderingQuality, TerrainLodViz, TerrainNodeErrors,
     TerrainStreamLockstep, TerrainStreamStatus, TerrainVisualFocus, TileShadowCache,
 };
 pub use surface_query::report_unreachable_dem_frame;

@@ -72,6 +72,7 @@ impl Plugin for ModelicaPlugin {
         if !app.is_plugin_added::<lunco_scripting::LunCoScriptingPlugin>() {
             app.add_plugins(lunco_scripting::LunCoScriptingPlugin);
         }
+        #[cfg(feature = "scripting")]
         if !app.is_plugin_added::<lunco_scripting_rhai::LunCoScriptingRhaiPlugin>() {
             app.add_plugins(lunco_scripting_rhai::LunCoScriptingRhaiPlugin);
         }
