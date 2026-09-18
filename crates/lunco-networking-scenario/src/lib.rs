@@ -40,7 +40,6 @@
 //! `[scenarios.*]` section) and `SYNC_ARCHITECTURE.md` §3 (the "Asset files →
 //! content-addressed → fetch by hash → M1" row) for the design lineage.
 
-use bevy::prelude::*;
 use lunco_hash::content::Cid;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -170,9 +169,10 @@ pub struct ScenarioManifestMsg {
     /// files at this state, then the journal plane replays only entries AFTER
     /// this head onto the scene (Layer B), so host edits made *after* the build
     /// appear without double-applying the history already baked into the files.
-    /// `None` if the host has no journal / an empty history. (bincode-safe:
-    /// `EntryId` is `{author: String, lamport: u64}`, no `serde_json::Value`.)
-    pub journal_head: Option<lunco_twin_journal::EntryId>,
+    /// `None` if the host has no journal / an empty history. The manifest owns
+    /// this wire value so the contract does not pull the journal runtime (or
+    /// its document/Bevy dependency chain) into a transport-only build.
+    pub journal_head: Option<ScenarioJournalHead>,
     /// Where to fetch asset bytes over **HTTP**, e.g.
     /// `http://10.0.0.5:5889/scenario-assets/` or (behind an nginx proxy,
     /// same-origin for a wasm client) `/scenario-assets/`. A CID is appended
@@ -207,6 +207,20 @@ pub struct ScenarioManifestMsg {
     ///
     /// Appended last (bincode positional). `None` mirrors `default_scene`.
     pub twin_scene: Option<String>,
+}
+
+/// Journal position serialized in a scenario manifest.
+///
+/// This is deliberately a wire contract, not the journal runtime's `EntryId`:
+/// protocol packages must not depend on the document/ECS implementation merely
+/// to carry the author's stable string and Lamport counter. The synchronization
+/// and journal owners convert it at their boundary before comparing entries.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScenarioJournalHead {
+    /// Stable journal author identity.
+    pub author: String,
+    /// Monotonic Lamport position for `author`.
+    pub lamport: u64,
 }
 
 /// Client → host: "I'm missing these assets — send me their bytes." Each entry
@@ -269,37 +283,6 @@ pub struct AssetOfferMsg {
     pub cid: Vec<u8>,
     /// The asset bytes.
     pub data: Vec<u8>,
-}
-
-// ── Resources ─────────────────────────────────────────────────────────────────
-
-/// Host-side: the scenario this server is currently running. Built by the app
-/// (`lunco-luncosim`'s `setup_luncosim`) after the Twin is opened — it walks the
-/// Twin's files, hashes each, and fills [`Self::manifest`]. The
-/// networking adapter's `on_server_connected` observer sends it to each new client
-/// and [`broadcast_scenario_manifest`] pushes it to all clients when the
-/// `revision` changes (the host re-loaded the scenario).
-///
-/// `None`-defaulted: a host that hasn't loaded a scenario (bare server) sends
-/// no manifest; clients stay on their local scene. The host's
-/// `on_server_connected` arm reads `Option<Res<ScenarioManifestResource>>` so
-/// the system registers even before a scenario is loaded.
-#[derive(Resource, Default, Clone, Debug)]
-pub struct ScenarioManifestResource {
-    /// The current scenario manifest. `None` until the host opens a Twin/scene.
-    pub manifest: Option<ScenarioManifestMsg>,
-}
-
-/// Client-side: the latest scenario manifest received from the host. Stashed by
-/// the `ScenarioManifest` arm of `drain_sync_inbox`. Phase 3 reads this to emit
-/// `AssetRequestMsg` for the CIDs missing from the local cache; Phase 4 loads
-/// the scene once all assets are present. `None` until the host sends one.
-#[derive(Resource, Default, Clone, Debug)]
-pub struct RemoteScenarioManifest {
-    /// The most recent manifest the host pushed. Replaced on each
-    /// `ScenarioManifest` envelope (the host's revision is monotonic per
-    /// scenario; a different `scenario_id` is a full scenario swap).
-    pub manifest: Option<ScenarioManifestMsg>,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

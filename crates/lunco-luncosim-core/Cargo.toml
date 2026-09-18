@@ -75,7 +75,6 @@ lunco-storage = { path = "../lunco-storage", optional = true }
 lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
 lunco-networking = { path = "../lunco-networking", optional = true, default-features = false }
 lunco-networking-core = { path = "../lunco-networking-core", optional = true }
-lunco-networking-scenario = { path = "../lunco-networking-scenario", optional = true }
 lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
 lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 
@@ -97,7 +96,6 @@ transport-http = ["lunco-api-transport/transport-http", "lunco-networking?/trans
 networking = [
     "dep:lunco-networking",
     "dep:lunco-networking-core",
-    "dep:lunco-networking-scenario",
     "dep:lunco-networking-sync",
     "lunco-networking/networking",
     "lunco-luncosim-exposures/networking",

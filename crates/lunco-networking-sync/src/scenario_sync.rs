@@ -44,8 +44,57 @@ use lunco_storage::StorageHandle;
 
 use crate::sync::{SyncEnvelope, SyncOutbox};
 use lunco_networking_scenario::{
-    AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest, ScenarioManifestMsg, cid_from_bytes,
+    AssetChunkMsg, AssetRequestMsg, ScenarioJournalHead, ScenarioManifestMsg, cid_from_bytes,
 };
+
+/// Convert the journal runtime's identity into the scenario wire contract at
+/// the sync boundary. The protocol package does not depend on the journal.
+pub fn scenario_journal_head(entry: &lunco_twin_journal::EntryId) -> ScenarioJournalHead {
+    ScenarioJournalHead {
+        author: entry.author.0.clone(),
+        lamport: entry.lamport,
+    }
+}
+
+/// Convert a received scenario wire position into the journal identity used by
+/// replay and ordering code. Callers use it only at the journal edge.
+pub fn journal_entry_id(head: &ScenarioJournalHead) -> lunco_twin_journal::EntryId {
+    lunco_twin_journal::EntryId {
+        author: lunco_twin_journal::AuthorId::new(head.author.clone()),
+        lamport: head.lamport,
+    }
+}
+
+/// Convert the optional journal position carried by a manifest at the sync
+/// boundary. `None` means the snapshot has no journal base.
+pub fn manifest_journal_head(
+    manifest: Option<&ScenarioManifestMsg>,
+) -> Option<lunco_twin_journal::EntryId> {
+    manifest
+        .and_then(|manifest| manifest.journal_head.as_ref())
+        .map(journal_entry_id)
+}
+
+/// Host-side scenario state shared by the manifest builder and transport adapter.
+///
+/// The manifest wire shape lives in [`lunco_networking_scenario`]. This resource
+/// stays in the Bevy synchronization runtime because it is ECS state, not a
+/// transport-neutral message contract.
+#[derive(Resource, Default, Clone, Debug)]
+pub struct ScenarioManifestResource {
+    /// The current scenario manifest. `None` until the host opens a Twin/scene.
+    pub manifest: Option<ScenarioManifestMsg>,
+}
+
+/// Client-side scenario state populated by the synchronization inbox.
+///
+/// The manifest wire shape lives in [`lunco_networking_scenario`]. Keeping this
+/// resource here prevents the contract crate from depending on Bevy.
+#[derive(Resource, Default, Clone, Debug)]
+pub struct RemoteScenarioManifest {
+    /// The most recent manifest the host pushed.
+    pub manifest: Option<ScenarioManifestMsg>,
+}
 
 // ── In-session chunk transfer: the FALLBACK bytes path ───────────────────────
 //

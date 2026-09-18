@@ -280,7 +280,7 @@ pub struct InboundClientCtx<'w, 's> {
     // Client-side stash of the host's scenario manifest (filled by the
     // `ScenarioManifest` arm). Bundled here for the same 16-arg-limit reason;
     // host-side arms are no-ops.
-    remote_scenario: ResMut<'w, lunco_networking_scenario::RemoteScenarioManifest>,
+    remote_scenario: ResMut<'w, crate::scenario_sync::RemoteScenarioManifest>,
     // Phase-3 asset transfer queues (bundled for the same 16-arg reason). The
     // arms only enqueue; the actual work runs in `crate::scenario_sync` systems.
     // Client fills `incoming_chunks` (host arm is a no-op); host fills
@@ -3319,10 +3319,10 @@ impl Plugin for SyncPlugin {
             .init_resource::<ViewCenters>()
             // Scenario distribution: the client-side stash of the host's
             // manifest (filled by the `ScenarioManifest` arm of
-            // `drain_sync_inbox`). Host-side publisher resource
+            // `drain_sync_inbox`). The host-side publisher resource
             // (`ScenarioManifestResource`) is initialized in `setup_host` —
             // it's host-only and must not exist in single-player/client builds.
-            .init_resource::<lunco_networking_scenario::RemoteScenarioManifest>()
+            .init_resource::<crate::scenario_sync::RemoteScenarioManifest>()
             // Phase-3 asset transfer: the client-side download bookkeeping +
             // inbound chunk queue, and the host-side request queue. All three are
             // touched by the shared `drain_sync_inbox` (via `InboundClientCtx`) /
@@ -3939,10 +3939,10 @@ mod codec_roundtrip {
             name: "lunar_base".into(),
             default_scene: Some("scenes/main.usda".into()),
             assets,
-            journal_head: Some(lunco_twin_journal::EntryId {
-                author: lunco_twin_journal::AuthorId::new("host"),
-                lamport: 7,
-            }),
+                journal_head: Some(lunco_networking_scenario::ScenarioJournalHead {
+                    author: "host".into(),
+                    lamport: 7,
+                }),
             asset_base_url: Some("http://10.0.0.5:5889/assets/".into()),
             twin_scene: Some("sandbox_scene.usda".into()),
         });

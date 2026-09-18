@@ -454,7 +454,7 @@ pub fn run_headless() -> AppExit {
 #[cfg(feature = "networking")]
 fn load_ready_scenario(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     downloads: Res<lunco_networking_sync::scenario_sync::AssetDownloads>,
     // Twin roots: a downloaded scenario is mounted here as a root over its cache
     // dir, so it loads under the SAME `twin://<name>/<rel>` the host uses.
@@ -558,9 +558,9 @@ fn load_ready_scenario(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
-    local_scenario: Option<Res<lunco_networking_scenario::ScenarioManifestResource>>,
+    local_scenario: Option<Res<lunco_networking_sync::scenario_sync::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     mut registry: ResMut<
         lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
@@ -576,7 +576,7 @@ fn replay_scenario_journal(
     // Base head: the state the on-disk files already reflect. The host reads it
     // off the manifest it built (deferring until that build lands); a client
     // bases on the downloaded snapshot's head, or waits if no scenario is loaded.
-    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         if host_base.is_none() {
             let Some(scenario) = local_scenario.as_ref() else {
                 return; // no host manifest resource → nothing to base on yet
@@ -584,14 +584,16 @@ fn replay_scenario_journal(
             let Some(manifest) = scenario.manifest.as_ref() else {
                 return; // manifest build still in flight → defer, don't replay history
             };
-            *host_base = Some(manifest.journal_head.clone());
+            *host_base = Some(lunco_networking_sync::scenario_sync::manifest_journal_head(
+                Some(manifest),
+            ));
         }
-        host_base.as_ref().and_then(|h| h.as_ref())
+        host_base.as_ref().and_then(Clone::clone)
     } else {
         let Some(manifest) = remote.manifest.as_ref() else {
             return;
         };
-        manifest.journal_head.as_ref()
+        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
     };
     // Single active scene doc (scenario consume is single-scene for now).
     let docs: Vec<_> = registry.ids().collect();
@@ -600,8 +602,12 @@ fn replay_scenario_journal(
     };
     let doc = *doc;
     let me = journal.local_author();
-    let pending =
-        lunco_networking_sync::journal_plane::scene_ops_after(&journal, base, &me, &applied);
+    let pending = lunco_networking_sync::journal_plane::scene_ops_after(
+        &journal,
+        base.as_ref(),
+        &me,
+        &applied,
+    );
     for (id, op) in pending {
         registry.replay_op(doc, &op);
         applied.insert(id);
@@ -626,7 +632,7 @@ fn replay_scenario_journal(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_modelica(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
@@ -638,13 +644,13 @@ fn replay_scenario_journal_modelica(
     let (Some(journal), Some(mut registry)) = (journal, registry) else {
         return;
     };
-    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
         let Some(manifest) = remote.manifest.as_ref() else {
             return;
         };
-        manifest.journal_head.as_ref()
+        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
     };
     // Single active Modelica model (see doc note); >1 open model → defer.
     let docs: Vec<_> = registry.iter().map(|(id, _)| id).collect();
@@ -655,7 +661,7 @@ fn replay_scenario_journal_modelica(
     let me = journal.local_author();
     let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
-        base,
+        base.as_ref(),
         &me,
         &applied,
         lunco_twin_journal::DomainKind::Modelica,
@@ -682,7 +688,7 @@ fn replay_scenario_journal_modelica(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_script(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scripting::ScriptRegistry>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -690,13 +696,13 @@ fn replay_scenario_journal_script(
     let (Some(journal), Some(mut registry)) = (journal, registry) else {
         return;
     };
-    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
         let Some(manifest) = remote.manifest.as_ref() else {
             return;
         };
-        manifest.journal_head.as_ref()
+        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
     };
     // Single active script doc (see doc note); 0 or >1 → defer.
     let docs: Vec<_> = registry.documents.keys().copied().collect();
@@ -707,7 +713,7 @@ fn replay_scenario_journal_script(
     let me = journal.local_author();
     let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
-        base,
+        base.as_ref(),
         &me,
         &applied,
         lunco_twin_journal::DomainKind::Script,
@@ -728,7 +734,7 @@ fn replay_scenario_journal_script(
 #[cfg(all(feature = "networking", feature = "experiments"))]
 fn replay_scenario_journal_experiment(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -736,18 +742,18 @@ fn replay_scenario_journal_experiment(
     let (Some(journal), Some(mut registry)) = (journal, registry) else {
         return;
     };
-    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
         let Some(manifest) = remote.manifest.as_ref() else {
             return;
         };
-        manifest.journal_head.as_ref()
+        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
     };
     let me = journal.local_author();
     let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
-        base,
+        base.as_ref(),
         &me,
         &applied,
         lunco_twin_journal::DomainKind::Experiment,
@@ -768,7 +774,7 @@ fn replay_scenario_journal_experiment(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_shader(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scene_authoring::shader_doc::ShaderRegistry>>,
     asset_server: Option<Res<AssetServer>>,
@@ -780,18 +786,18 @@ fn replay_scenario_journal_shader(
     else {
         return;
     };
-    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
         let Some(manifest) = remote.manifest.as_ref() else {
             return;
         };
-        manifest.journal_head.as_ref()
+        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
     };
     let me = journal.local_author();
     let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
-        base,
+        base.as_ref(),
         &me,
         &applied,
         lunco_twin_journal::DomainKind::Shader,
@@ -827,7 +833,7 @@ fn replay_scenario_journal_shader(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_obstacle(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     spec: Option<ResMut<lunco_obstacle_field::ObstacleFieldSpec>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -835,18 +841,18 @@ fn replay_scenario_journal_obstacle(
     let (Some(journal), Some(mut spec)) = (journal, spec) else {
         return;
     };
-    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
         let Some(manifest) = remote.manifest.as_ref() else {
             return;
         };
-        manifest.journal_head.as_ref()
+        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
     };
     let me = journal.local_author();
     let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
-        base,
+        base.as_ref(),
         &me,
         &applied,
         lunco_twin_journal::DomainKind::ObstacleField,
@@ -875,7 +881,7 @@ fn replay_scenario_journal_obstacle(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_tools(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     scoped: Option<ResMut<lunco_scripting::tool_libs::TwinToolLibraries>>,
@@ -894,18 +900,18 @@ fn replay_scenario_journal_tools(
         return;
     };
     scoped.ensure_active(active);
-    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
         let Some(manifest) = remote.manifest.as_ref() else {
             return;
         };
-        manifest.journal_head.as_ref()
+        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
     };
     let me = journal.local_author();
     let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
-        base,
+        base.as_ref(),
         &me,
         &applied,
         lunco_twin_journal::DomainKind::ToolLibrary,
@@ -929,7 +935,7 @@ fn replay_scenario_journal_tools(
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_timeline(
     role: Res<lunco_core_session::NetworkRole>,
-    remote: Res<lunco_networking_scenario::RemoteScenarioManifest>,
+    remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     store: Option<ResMut<lunco_scripting::timelines::TimelineStore>>,
@@ -945,18 +951,18 @@ fn replay_scenario_journal_timeline(
         return;
     }
     store.ensure_scope(owner);
-    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+    let base: Option<lunco_twin_journal::EntryId> = if role.is_host() {
         None
     } else {
         let Some(manifest) = remote.manifest.as_ref() else {
             return;
         };
-        manifest.journal_head.as_ref()
+        lunco_networking_sync::scenario_sync::manifest_journal_head(Some(manifest))
     };
     let me = journal.local_author();
     let pending = lunco_networking_sync::journal_plane::domain_ops_after(
         &journal,
-        base,
+        base.as_ref(),
         &me,
         &applied,
         lunco_twin_journal::DomainKind::Timeline,

@@ -2,9 +2,9 @@
 //! outbox→clients / clients→inbox ferry. Native only.
 
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
-use lightyear::netcode::NetcodeServer;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lightyear::netcode::server_plugin::NetcodeConfig;
+use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::collections::BTreeMap;
@@ -14,12 +14,12 @@ use lunco_core::{SessionId, SimTick, SyncChannel};
 use lunco_core_session::{NetStatus, SessionProfiles, SessionRegistry};
 use lunco_doc_bevy::JournalResource;
 use lunco_networking_scenario::{
-    ScenarioAsset, ScenarioManifestMsg, ScenarioManifestResource, cid_for_content,
-    scenario_revision,
+    cid_for_content, scenario_revision, ScenarioAsset, ScenarioJournalHead, ScenarioManifestMsg,
 };
+use lunco_networking_sync::scenario_sync::ScenarioManifestResource;
 use lunco_networking_sync::sync::{
-    HandshakeMsg, MAX_SNAPSHOT_ENTRIES, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg,
-    ReplicationState, SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters,
+    HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg, ReplicationState,
+    SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
 };
 use lunco_workspace::{Twin, TwinAdded, WorkspaceResource};
 
@@ -63,7 +63,7 @@ impl AssignedSessions {
 }
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
-use crate::shared::{PROTOCOL_ID, is_dev_netcode_key, netcode_key, peer_to_session};
+use crate::shared::{is_dev_netcode_key, netcode_key, peer_to_session, PROTOCOL_ID};
 use lunco_networking_sync::codec::{deserialize_env, serialize_env};
 
 use lunco_storage::{FileStorage, Storage, StorageHandle};
@@ -1135,7 +1135,7 @@ struct ScenarioBuildInput {
     /// The host's journal head at build time — the base the asset snapshot
     /// corresponds to (journal-plane Layer B). Captured on the main thread by
     /// the caller (the build task has no World access).
-    journal_head: Option<lunco_twin_journal::EntryId>,
+    journal_head: Option<ScenarioJournalHead>,
 }
 
 /// Live-mutating host state that must NOT ride the content plane.
@@ -1275,7 +1275,9 @@ fn collect_scenario_input(
         default_scene,
         twin_scene,
         descriptors,
-        journal_head,
+        journal_head: journal_head
+            .as_ref()
+            .map(lunco_networking_sync::scenario_sync::scenario_journal_head),
     })
 }
 
