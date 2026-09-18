@@ -1,47 +1,19 @@
 use bevy::prelude::*;
 
 pub mod backend;
-pub mod commands;
+#[cfg(any(feature = "rhai", feature = "python"))]
+mod commands;
 pub mod doc;
-/// Twin-scoped native shared-library providers for declared hook contracts.
-#[cfg(feature = "native-plugins")]
-pub mod native_plugins;
-/// Runtime policy activation for every rhai hook seam, including generated
-/// Modelica synthesis policies.
-#[cfg(feature = "rhai")]
-pub mod policy;
 #[cfg(feature = "python")]
 pub mod python;
-/// Journaling for named registrations (tool libraries + timelines) — so a
-/// `RegisterToolLibrary`/`RegisterTimeline` syncs + persists via the journal plane.
-#[cfg(feature = "rhai")]
-pub mod registration_journal;
-/// Shared bounded-resource policy for every Rhai engine.
-///
-/// OWNED BY `lunco-hooks-rhai` — the rhai-only, bevy-free leaf crate that the
-/// hook plane also builds engines in. It cannot depend on this crate (that is a
-/// cycle), so the policy lives down there and this is a re-export: one set of
-/// numbers, both planes. Call sites keep using `crate::rhai_limits::apply`.
-#[cfg(feature = "rhai")]
-pub use lunco_hooks_rhai::rhai_limits;
 /// Language-neutral scenario lifecycle driver (native task/mission policy plus
 /// `on_start`/`on_tick`/`on_event`/`on_stop`, hot-reload, pause, teardown).
 /// Backends implement `ScenarioRuntime`.
 #[cfg(any(feature = "rhai", feature = "python"))]
 pub mod scenario;
 pub mod source_asset;
-/// Twin persistence + discovery for declarative mission timelines
-/// (`<twin>/timelines/*.json`; `ListTimelines`/`GetTimeline`/`RunStoredTimeline`).
-#[cfg(feature = "rhai")]
-pub mod timelines;
-/// Importable rhai tool libraries (named `libname::fn` modules).
-#[cfg(feature = "rhai")]
-pub mod tool_libs;
-pub mod world_bridge;
 
 pub use doc::{ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
-#[cfg(feature = "rhai")]
-use lunco_api::executor::DeferredCommandAppExt;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_doc::Document;
 use lunco_doc::{DocumentHost, DocumentId, FileBacked, Reject};
@@ -211,16 +183,6 @@ impl Plugin for LunCoScriptingPlugin {
     fn build(&self, app: &mut App) {
         info!("Initializing LunCo Scripting Bridge...");
 
-        // Scripting is INDEPENDENT of the HTTP API. `cmd()` dispatches through the
-        // transport-free command core (reflect dispatcher + entity registry), so
-        // we self-supply it here rather than assuming `LunCoApiPlugin` was added.
-        // An app can now embed scripting with NO API server and scripts still
-        // reach every `#[Command]`. Guarded, so it composes with `LunCoApiPlugin`
-        // (which adds the same core) in either order. Only the rhai/python
-        // backends pull `lunco-api`, hence the cfg.
-        #[cfg(any(feature = "rhai", feature = "python"))]
-        lunco_api::ensure_command_core(app);
-
         #[cfg(any(feature = "rhai", feature = "python"))]
         app.init_resource::<scenario::ScenarioExecutionGate>()
             .init_resource::<scenario::ScenarioReadinessArm>()
@@ -232,36 +194,19 @@ impl Plugin for LunCoScriptingPlugin {
                 scenario::open_scenarios_when_scene_ready.after(lunco_readiness::ReadinessSet),
             );
 
-        #[cfg(feature = "rhai")]
-        app.add_systems(
-            lunco_core::SceneTeardown,
-            scenario::stop_scene_owned_scripts,
-        );
-
         #[cfg(feature = "python")]
         if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {
             app.add_plugins(source_asset::PythonSourceAssetPlugin);
         }
-        // `.rhai` source asset loader — backs `info:sourceAsset` (file-referenced
-        // scenarios). It belongs to the Rhai feature because its discovery and
-        // import registry are owned by `lunco-assets-core`.
-        #[cfg(feature = "rhai")]
-        if !app.is_plugin_added::<source_asset::RhaiSourceAssetPlugin>() {
-            app.add_plugins(source_asset::RhaiSourceAssetPlugin);
-        }
-
         app.init_resource::<ScriptRegistry>();
-        #[cfg(feature = "rhai")]
-        app.init_resource::<policy::ScriptedPolicyRegistry>();
-        #[cfg(feature = "native-plugins")]
-        app.init_resource::<native_plugins::NativeTwinPlugins>();
         // Attended (a person is watching) or not — read by the `is_unattended()`
-        // verb so a lesson knows whether to drive itself. Resolved in Startup,
-        // once windows exist; the `Default` until then is `Unattended`, which is
-        // what a scenario ticked before Startup (there is none) would want.
+        // verb so a lesson knows whether to drive itself. Windowed application
+        // hosts opt into resolving this in Startup; the default remains
+        // `Unattended` for headless hosts.
         #[cfg(any(feature = "rhai", feature = "python"))]
         {
             app.init_resource::<lunco_scripting_bridge_core::ScenarioAudience>();
+            #[cfg(feature = "window-audience")]
             app.add_systems(Startup, scenario::resolve_scenario_audience);
         }
         app.add_observer(on_close_script_document);
@@ -286,7 +231,7 @@ impl Plugin for LunCoScriptingPlugin {
         // model used by USD Python-cosim port mapping in `lunco-usd-sim`:
         // `sync_script_inputs` feeds `ScriptedModel.inputs`, this runs the
         // script, `sync_script_outputs` reads `ScriptedModel.outputs`). Python
-        // only — rhai scenarios run via the world-bridge systems below.
+        // only — Rhai scenarios run in `lunco-scripting-rhai-runtime`.
         #[cfg(feature = "python")]
         {
             // Shared per-document diagnostics store (also init'd by the rhai
@@ -300,137 +245,6 @@ impl Plugin for LunCoScriptingPlugin {
                     .in_set(ScriptingSet)
                     .run_if(scenario::scenario_execution_enabled)
                     .run_if(scenario::simulation_is_running),
-            );
-        }
-
-        // World-bound rhai: typed source/tool requests drained by an exclusive
-        // system so scripts can `cmd()`/read the live `&mut World`.
-        // `RunRhai` enqueues here instead of evaluating inline (an observer
-        // can't hold `&mut World`); the drain records real stdout afterwards.
-        #[cfg(feature = "rhai")]
-        {
-            // Register only the tiny native substrate here. Prelude and tool
-            // behavior is authored source loaded through the Bevy asset graph.
-            tool_libs::register_native_builtins();
-            // Shared per-document diagnostics store (also init'd by Modelica;
-            // init_resource is idempotent). Scenario compile/runtime errors land
-            // here and surface via the ScriptStatus query.
-            app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
-            app.init_resource::<world_bridge::PendingWorldScripts>();
-            app.init_resource::<world_bridge::RhaiRuntimeStatus>();
-            // Hook contracts are link-collected by `declare_hook!` in their
-            // owner crates. The application startup policy installs the
-            // application manifest, while each active Twin gets its own
-            // startup/close/reload policy invocation.
-            app.add_systems(Startup, policy::load_application_policies_on_startup)
-                .add_observer(policy::sync_policies_on_twin_added)
-                .add_observer(policy::wind_down_policies_on_twin_closed);
-            // RunRhai needs full World access, so its API response is resolved
-            // by the Update drain after evaluation completes.
-            app.register_deferred_command::<commands::RunRhai>();
-            app.register_deferred_command::<commands::RunRhaiTool>();
-            app.register_deferred_command::<commands::RunRhaiToolHook>();
-            // The rhai scenario backend, wrapped in the language-neutral driver
-            // (owns the on_start/on_tick/on_event/on_stop + hot-reload + pause +
-            // teardown lifecycle; rhai supplies only the mechanics).
-            app.init_resource::<scenario::ScenarioDriver<world_bridge::RhaiScenarioRuntime>>();
-            // Publish the runtime's script registry so the asset side can fill the
-            // SAME map the engine's module resolver reads. `ScriptSources` is an
-            // `Arc` handle, so this is one storage with two owners — a script
-            // registered after engine construction is importable without a rebuild.
-            // Must run AFTER the driver exists, since the driver owns the registry.
-            let sources = app
-                .world()
-                .resource::<scenario::ScenarioDriver<world_bridge::RhaiScenarioRuntime>>()
-                .runtime
-                .script_sources();
-            app.insert_resource(sources);
-            // Event channel: scenarios subscribe to the existing TelemetryEvent
-            // bus via this observer (delivered on the next scenario pass into
-            // on_event hooks). Neutral — shared by every backend.
-            app.init_resource::<scenario::ScriptEventInbox>();
-            app.add_observer(scenario::collect_script_events);
-            // Tool-library discovery on the API (ListToolLibraries/GetToolLibrary);
-            // registration rides the RegisterToolLibrary command.
-            tool_libs::register_queries(app);
-            // Twin persistence: load the active Twin's shared tool libraries
-            // when it opens, and retire that scope on close. The observer is
-            // installed on every target so the lifecycle reset also exists on
-            // wasm, where there is no native directory scan.
-            app.init_resource::<tool_libs::TwinToolLibraries>();
-            app.add_observer(tool_libs::sync_tools_on_twin_added);
-            app.add_observer(tool_libs::wind_down_tools_on_twin_closed);
-            // Named mission timelines: in-memory store + `<twin>/timelines/*.json`
-            // discovery (ListTimelines/GetTimeline), loaded on Twin open. The
-            // RegisterTimeline/RunStoredTimeline commands ride this store.
-            app.init_resource::<timelines::TimelineStore>();
-            timelines::register_queries(app);
-            app.add_observer(timelines::sync_timelines_on_twin_added);
-            app.add_observer(timelines::wind_down_timelines_on_twin_closed);
-            // One-shot `RunRhai` evals stay host-authoritative — they carry no
-            // `ScriptScope`, so a client cannot run arbitrary sim-mutating
-            // snippets through the REPL/world-script queue. The drain belongs
-            // in Update, not FixedUpdate: kinematic celestial warp deliberately
-            // freezes FixedUpdate, but API requests and their deferred replies
-            // must remain responsive while the sky advances.
-            app.add_systems(
-                Update,
-                world_bridge::prepare_builtin_rhai_assets.after(source_asset::RhaiSourceAssetSet),
-            );
-            app.add_systems(
-                Update,
-                world_bridge::drain_world_scripts.run_if(scripts_run_here),
-            );
-            // Scene projection materialises the prim markers in Update. Scenario
-            // attachment consumes those markers in the following PreUpdate so it
-            // is visible to the same frame's FixedUpdate lifecycle driver. A rover
-            // opts into a policy
-            // through an authored scenario or an explicit RunScenario command;
-            // loading a vehicle must not invent control behavior.
-            //
-            // Attachment is independent of ScenarioExecutionGate: the gate
-            // holds lifecycle hooks, not scene composition. Consuming the marker
-            // in PreUpdate makes authored programs and their event subscriptions
-            // live before the first physics tick, so startup events cannot be
-            // lost. Their on_start/on_tick/on_event hooks remain gated by the
-            // FixedUpdate driver below.
-            app.add_systems(
-                PreUpdate,
-                (
-                    // File-referenced scenarios (`info:sourceAsset`): load the .rhai
-                    // asset and swap the path marker for EmbeddedScenarioSource.
-                    // Runs before attach so the loaded source attaches in this
-                    // pre-fixed-step boundary once the asset is ready.
-                    commands::resolve_embedded_scenario_paths,
-                    // API/UI/scripted launches use the same asset graph but do not
-                    // need a USD prim as an intermediate marker.
-                    commands::attach_requested_scenarios,
-                    // USD-embedded scenarios: attach any the loader stamped with
-                    // EmbeddedScenarioSource (`info:sourceCode` on the prim) so scene-
-                    // authored scenarios run on spawn.
-                    commands::attach_embedded_scenarios,
-                )
-                    .chain(),
-            );
-            app.add_systems(
-                FixedUpdate,
-                // Scenario execution stays fixed-step so control writes retain
-                // deterministic physics timing.
-                world_bridge::tick_rhai_scenarios
-                    .in_set(ScriptingSet)
-                    .run_if(scenario::scenario_execution_enabled)
-                    .run_if(world_bridge::rhai_runtime_ready)
-                    .run_if(scenario::simulation_is_running),
-            );
-            app.add_systems(
-                Update,
-                // A paused simulation stops FixedUpdate. Keep lifecycle startup
-                // and discrete event reactions responsive without advancing
-                // fixed-step behavior.
-                world_bridge::tick_rhai_scenarios_while_paused
-                    .run_if(scenario::scenario_execution_enabled)
-                    .run_if(world_bridge::rhai_runtime_ready)
-                    .run_if(scenario::simulation_is_paused),
             );
         }
 
@@ -451,14 +265,11 @@ impl Plugin for LunCoScriptingPlugin {
         #[cfg(not(feature = "python"))]
         let backends = backend::ScriptBackends::default();
         app.insert_resource(backends);
-
-        commands::register_all_commands(app);
-        // Data-driven RBAC: declare the script-execution commands' policies in
-        // the shared CommandPolicyRegistry so script submission goes through the
-        // same authorization seam as every other command (Operator floor for
-        // script execution; ownership-gated lifecycle). See the function's docs.
         #[cfg(any(feature = "rhai", feature = "python"))]
-        commands::register_command_policies(app);
+        {
+            commands::register_all_commands(app);
+            commands::register_command_policies(app);
+        }
     }
 }
 
@@ -605,28 +416,6 @@ fn run_scripted_models(
             }
         });
     }
-}
-
-/// Run condition: may scenario/script systems execute in THIS process?
-///
-/// Scripts are **host-authoritative** — they are the authoritative decision-maker
-/// for a scripted entity. They run on the `Host` and in single-player /
-/// headless (`Standalone`, or no role at all), but NOT on a networked `Client`.
-///
-/// The netcode is forward predict-and-smooth (no rewind/resimulate), so a client
-/// runs each `FixedUpdate` tick exactly once — but if scripts ran there they'd
-/// independently re-decide behavior the host already decided: double-firing
-/// `cmd()` commands and `emit()` telemetry into the client world, and advancing a
-/// per-entity `this` state that lives OUTSIDE the replicated / reconciled set and
-/// so would diverge from the host with nothing to correct it. A client must
-/// instead receive scripted behavior purely via replication of the resulting
-/// entity state. Mirrors cosim's identical gate (`lunco-cosim/src/lib.rs`).
-#[cfg(feature = "rhai")]
-fn scripts_run_here(role: Option<Res<lunco_core_session::NetworkRole>>) -> bool {
-    !matches!(
-        role.as_deref(),
-        Some(lunco_core_session::NetworkRole::Client)
-    )
 }
 
 #[cfg(all(test, any(feature = "rhai", feature = "python")))]

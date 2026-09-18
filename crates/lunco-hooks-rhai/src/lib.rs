@@ -12,7 +12,7 @@
 //! in dependency-free crates (the journal's merge, `lunco-core`'s authorize gate).
 
 /// Shared bounded-resource policy for every Rhai engine in the workspace.
-/// Re-exported as `lunco_scripting::rhai_limits` for the world-bound plane.
+/// Used by the world-bound `lunco-scripting-rhai-runtime` plane.
 pub mod rhai_limits;
 
 use lunco_hooks::{HookError, HookResult, HookValue, RegisteredHook, ScriptHook};
@@ -79,8 +79,8 @@ impl RhaiHook {
         // resource budget, and closing it costs authored content nothing (no
         // shipped hook uses `import`).
         //
-        // `rhai_limits` lives in this crate and is re-exported as
-        // `lunco_scripting::rhai_limits`, so re-enabling is one line here.
+        // `rhai_limits` lives in this crate, so the hook runtime keeps the
+        // resource-budget policy beside the interpreter configuration.
         // Hook sources are local authored inputs in this path. A remote source
         // must enter through the authenticated session boundary before it can
         // be compiled or registered as a hook.

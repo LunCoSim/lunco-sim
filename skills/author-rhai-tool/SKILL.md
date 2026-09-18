@@ -85,7 +85,7 @@ It reads existing runtime facts and leaves solver policy in Rust.
 
 Use the common engine's native `Vec3`/`Quat` values for repeated geometry,
 pose, and control math. They are the simulator's `bevy::math::DVec3` and
-`DQuat`, registered once by `lunco-scripting`; do not define tuple/vector
+`DQuat`, registered once by `lunco-scripting-rhai-runtime`; do not define tuple/vector
 helpers in a tool library. `world_pos3`, `world_forward3`, and
 `world_rotation_quat` keep the hot path native, and `vadd`/`vsub`/`vscale`/
 `vcross`/`vdot`/`vlen`/`vnorm`/`qrot` dispatch to Rust for native operands.

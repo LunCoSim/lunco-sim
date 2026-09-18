@@ -60,10 +60,10 @@ fn first_set_failure(id: u64, path: &str) -> bool {
         .insert((id, path.to_string()))
 }
 
-use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext, AST};
+use rhai::{AST, Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext};
 
-use crate::doc::ScriptLanguage;
 use lunco_doc::Diagnostic;
+use lunco_scripting::doc::ScriptLanguage;
 use lunco_scripting_bridge_core as bridge_core;
 use lunco_scripting_bridge_core::ValueBuilder;
 use lunco_scripting_bridge_spatial as spatial_bridge;
@@ -946,7 +946,7 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
     resolvers.push(lunco_scripting_rhai_core::module_resolver::AssetModuleResolver::new(sources));
     engine.set_module_resolver(resolvers);
 
-    crate::rhai_limits::apply(&mut engine);
+    lunco_hooks_rhai::rhai_limits::apply(&mut engine);
 
     // cmd(name, #{params}) -> #{ id, ok, status, data, error }. Routes through
     // ApiCommandEvent so it inherits macro-reflected dispatch, GlobalEntityId
@@ -2284,8 +2284,8 @@ pub fn validate_tool_library(
 // program with a native `task(me, ctx)`/`mission(me, ctx)` policy plus lifecycle hooks,
 // not a one-shot snippet. The lifecycle POLICY (scheduling, hot-reload, pause,
 // teardown, diagnostics) is language-neutral and lives in
-// [`crate::scenario::ScenarioDriver`]. This is the rhai BACKEND: it implements
-// [`crate::scenario::ScenarioRuntime`], supplying only the mechanics — compile
+// [`lunco_scripting::scenario::ScenarioDriver`]. This is the rhai BACKEND: it implements
+// [`lunco_scripting::scenario::ScenarioRuntime`], supplying only the mechanics — compile
 // source → `AST` (running top-level into a persistent `Scope` for `const`s), and
 // call a hook via `call_fn_raw`. Per-entity tick-to-tick state lives in a `this`
 // object-map (rhai functions are pure — they can't see top-level `let`s). One
@@ -2324,11 +2324,11 @@ impl ProgramMask {
     }
 
     /// Whether the two-arg lifecycle hook for `hook` is defined.
-    fn has(&self, hook: crate::scenario::ScenarioHook) -> bool {
+    fn has(&self, hook: lunco_scripting::scenario::ScenarioHook) -> bool {
         match hook {
-            crate::scenario::ScenarioHook::Start => self.start,
-            crate::scenario::ScenarioHook::Tick => self.tick,
-            crate::scenario::ScenarioHook::Stop => self.stop,
+            lunco_scripting::scenario::ScenarioHook::Start => self.start,
+            lunco_scripting::scenario::ScenarioHook::Tick => self.tick,
+            lunco_scripting::scenario::ScenarioHook::Stop => self.stop,
         }
     }
 
@@ -2530,7 +2530,7 @@ struct RhaiScenarioState {
     pending_events: Vec<(ImmutableString, i64)>,
 }
 
-/// The rhai [`ScenarioRuntime`](crate::scenario::ScenarioRuntime): one
+/// The rhai [`ScenarioRuntime`](lunco_scripting::scenario::ScenarioRuntime): one
 /// bridge-enabled engine + a per-entity program cache. Wrapped by
 /// `ScenarioDriver<RhaiScenarioRuntime>` (which owns the neutral lifecycle FSM).
 pub struct RhaiScenarioRuntime {
@@ -2657,7 +2657,7 @@ pub(crate) fn prepare_builtin_rhai_assets(
     assets: Option<Res<Assets<crate::source_asset::RhaiSource>>>,
     asset_server: Option<Res<AssetServer>>,
     sources: Option<Res<lunco_assets_core::script_source::ScriptSources>>,
-    driver: Option<ResMut<crate::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
+    driver: Option<ResMut<lunco_scripting::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
     mut status: ResMut<RhaiRuntimeStatus>,
 ) {
     let (
@@ -2794,7 +2794,7 @@ pub(crate) fn prepare_builtin_rhai_assets(
     }
 }
 
-impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
+impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
     fn invalidate(&mut self) {
         self.states.clear();
         self.compiled.clear();
@@ -2804,10 +2804,10 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         &mut self,
         entity: Entity,
         source: &str,
-        params: &crate::doc::ScenarioParameters,
+        params: &lunco_scripting::doc::ScenarioParameters,
         asset_id: Option<&str>,
-    ) -> crate::scenario::CompileOutcome {
-        use crate::scenario::CompileOutcome;
+    ) -> lunco_scripting::scenario::CompileOutcome {
+        use lunco_scripting::scenario::CompileOutcome;
         // ── Structure: the compiled program (parse + prelude-merge + hook mask)
         // is a pure function of `source` AND of `asset_id` — the id is stamped
         // onto the AST and is what a relative `import` anchors against, so the
@@ -2862,18 +2862,22 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         // script's id and the prelude's absence of one does no harm.
                         let ast = self.prelude_ast.merge(&ast);
                         let mask = ProgramMask::from_ast(&ast);
-                        let imports_ast =
-                            match build_hoisted_ast(&self.engine, source, &ast, asset_id) {
-                                Ok(ast) => ast,
-                                Err(e) => {
-                                    error!(
+                        let imports_ast = match build_hoisted_ast(
+                            &self.engine,
+                            source,
+                            &ast,
+                            asset_id,
+                        ) {
+                            Ok(ast) => ast,
+                            Err(e) => {
+                                error!(
                                     "[rhai] entity {entity:?} generated import scope failed: {e}"
                                 );
-                                    let d = rhai_diagnostic(e.to_string(), e.position());
-                                    self.compiled.insert(key, CacheEntry::Err(d.clone()));
-                                    return CompileOutcome::Failed(d);
-                                }
-                            };
+                                let d = rhai_diagnostic(e.to_string(), e.position());
+                                self.compiled.insert(key, CacheEntry::Err(d.clone()));
+                                return CompileOutcome::Failed(d);
+                            }
+                        };
                         let task_ast = build_task_ast(&ast, imports_ast.as_ref(), asset_id);
                         let p = Arc::new(CompiledProgram {
                             ast,
@@ -2926,10 +2930,10 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
     fn call_hook(
         &mut self,
         entity: Entity,
-        hook: crate::scenario::ScenarioHook,
+        hook: lunco_scripting::scenario::ScenarioHook,
         self_gid: i64,
     ) -> Option<Diagnostic> {
-        use crate::scenario::ScenarioHook;
+        use lunco_scripting::scenario::ScenarioHook;
         let st = self.states.get_mut(&entity)?;
         let (name, salt) = match hook {
             ScenarioHook::Start => ("on_start", 1),
@@ -3084,7 +3088,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         &self,
         entity: Entity,
         b: &B,
-    ) -> Option<crate::scenario::ScenarioSnapshot<B::Value>> {
+    ) -> Option<lunco_scripting::scenario::ScenarioSnapshot<B::Value>> {
         let st = self.states.get(&entity)?;
         // Walk the persistent `this` map straight into the caller's native value
         // type — no serde_json intermediate. JSON only results if the caller
@@ -3094,7 +3098,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // Report only the lifecycle hooks the program defines — straight from the
         // cached mask (derived at compile), no AST re-scan.
         let hooks = st.program.mask.hook_names();
-        Some(crate::scenario::ScenarioSnapshot { state, hooks })
+        Some(lunco_scripting::scenario::ScenarioSnapshot { state, hooks })
     }
 
     fn maintain(&mut self) {
@@ -3152,15 +3156,18 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
 }
 
 /// Exclusive system (FixedUpdate): drive every `ScriptedModel { Rhai }` through
-/// its lifecycle via the neutral [`crate::scenario::ScenarioDriver`].
+/// its lifecycle via the neutral [`lunco_scripting::scenario::ScenarioDriver`].
 pub fn tick_rhai_scenarios(world: &mut World) {
-    crate::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run(world, ScriptLanguage::Rhai);
+    lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run(
+        world,
+        ScriptLanguage::Rhai,
+    );
 }
 
 /// Exclusive system (Update while simulation time is paused): deliver scenario
 /// startup and queued discrete events without running fixed-step behavior.
 pub fn tick_rhai_scenarios_while_paused(world: &mut World) {
-    crate::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run_without_simulation_tick(
+    lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run_without_simulation_tick(
         world,
         ScriptLanguage::Rhai,
     );
@@ -3788,7 +3795,7 @@ mod tests {
     /// maintenance retries on the next tick.
     #[test]
     fn reentrant_engine_borrow_defers_reload_instead_of_panicking() {
-        use crate::scenario::ScenarioRuntime;
+        use lunco_scripting::scenario::ScenarioRuntime;
 
         let _registry_guard = crate::tool_libs::registry_test_guard();
         let mut rt = super::RhaiScenarioRuntime::default();
@@ -3829,7 +3836,7 @@ mod tests {
 
     #[test]
     fn removed_tool_is_not_callable_after_engine_maintenance() {
-        use crate::scenario::ScenarioRuntime;
+        use lunco_scripting::scenario::ScenarioRuntime;
 
         let _registry_guard = crate::tool_libs::registry_test_guard();
         let name = "h6_removed_tool_probe";
@@ -3967,7 +3974,7 @@ mod tests {
         };
         let full = lunco_scripting_bridge_core::build_event(&super::RhaiBuilder, &event);
         let mut limited = rhai::Engine::new();
-        crate::rhai_limits::apply(&mut limited);
+        lunco_hooks_rhai::rhai_limits::apply(&mut limited);
         assert!(
             limited.ensure_data_size_within_limits(&full).is_err(),
             "the fixture must exceed the Rhai string contract"
@@ -4260,9 +4267,11 @@ mod tests {
         let engine = super::build_world_engine_base(Default::default());
         let src = "fn on_tick(me, ctx) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
-        assert!(super::build_hoisted_ast(&engine, src, &full, None)
-            .unwrap()
-            .is_none());
+        assert!(
+            super::build_hoisted_ast(&engine, src, &full, None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// Two closures over one outer local SHARE it when either mutates it.

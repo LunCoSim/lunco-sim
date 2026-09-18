@@ -218,16 +218,16 @@ must stay explicit.
 **Scope:** small, but only after the ordering question is answered; not a
 mechanical move.
 
-### `lunco-scripting` persistence through Storage
+### `lunco-scripting-rhai-runtime` persistence through Storage
 
-**What:** Route timeline and tool-lib persistence in `lunco-scripting`
+**What:** Route timeline and tool-lib persistence in `lunco-scripting-rhai-runtime`
 through the `Storage` handle.
 
 **Why:** Storage is the I/O perimeter ([`40-asset-io.md`](40-asset-io.md));
 every `std::fs` bypass is a hole in wasm support and in any future
 confinement. Atomicity is already solved (temp+rename is in place) — what
 remains is the Storage-API migration, which needs a dependency line from
-`lunco-scripting` to the storage crate.
+`lunco-scripting-rhai-runtime` to the storage crate.
 
 **Scope:** small.
 

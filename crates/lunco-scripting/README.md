@@ -11,16 +11,21 @@ command/query API the HTTP API, MCP, and UI use.
 
 | Language | Status |
 |---|---|
-| **rhai** | **Default & primary.** Pure-Rust, sandboxed, wasm-clean — runs natively and in the browser. The full scenario lifecycle + world bridge. |
+| **rhai** | Optional runtime installed by `lunco-scripting-rhai-runtime`. Pure-Rust, sandboxed, wasm-clean — runs natively and in the browser. |
 | Python (PyO3) | Optional one-shot eval only (`RunPython`); compiled and registered only with the `python` feature. A full scenario lifecycle (`PythonScenarioRuntime`) is planned. |
 | Lua | Reserved language id; not implemented. |
 
-The language-neutral host means a backend supplies only the interpreter
-mechanics; lifecycle, scheduling, hot-reload, pause, teardown, and the generic
-world mechanism are shared. Reusable Rhai backend mechanics are installed by
-the companion `lunco-scripting-rhai-core` package; Rhai authoring queries and
-dataset projections are installed by `lunco-scripting-rhai`. Domain-specific world verbs are provided
-by the spatial, time, and USD bridge adapters (see the package layout below).
+The language-neutral host owns documents, backend-neutral lifecycle state,
+scheduling, hot-reload, pause, teardown, lifecycle/document commands, and the
+generic scenario contract. Window presence is an opt-in application adapter
+(`window-audience`); headless and server builds do not compile Bevy's window
+subsystem into this crate.
+The Rhai runtime, world bridge, commands, authored policies, source graph,
+tools, and timelines live in the companion `lunco-scripting-rhai-runtime`
+package. Reusable Rhai backend mechanics are installed by
+`lunco-scripting-rhai-core`; authoring queries and dataset projections are
+installed by `lunco-scripting-rhai`. Domain-specific world verbs are provided
+by the spatial, time, and USD bridge adapters.
 
 ## Model
 
@@ -116,27 +121,29 @@ and one typed conversion; it does not choose domain defaults or inject a global
 
 | Path | What |
 |---|---|
-| [`src/world_bridge.rs`](src/world_bridge.rs) | the rhai backend (verbs + `RhaiScenarioRuntime`) |
+| [`lunco-scripting-rhai-runtime`](../lunco-scripting-rhai-runtime) | Rhai runtime plugin, world bridge, commands, policies, tools, timelines, and Rhai source assets |
 | [`lunco-scripting-bridge-core`](../lunco-scripting-bridge-core) | language-neutral world mechanism (`ValueBuilder`) |
 | [`lunco-scripting-bridge-spatial`](../lunco-scripting-bridge-spatial) | pose, navigation, geolocation, and entity projections |
 | [`lunco-scripting-bridge-time`](../lunco-scripting-bridge-time) | deterministic simulation-clock projections |
 | [`lunco-scripting-bridge-usd`](../lunco-scripting-bridge-usd) | USD document and prim-path projections |
 | [`src/scenario.rs`](src/scenario.rs) | language-neutral lifecycle driver |
-| [`src/commands.rs`](src/commands.rs) | the `#[Command]` entry points |
+| [`lunco-scripting-rhai-runtime/src/commands.rs`](../lunco-scripting-rhai-runtime/src/commands.rs) | the Rhai `#[Command]` entry points |
 | [`lunco-scripting-rhai-core`](../lunco-scripting-rhai-core) | reusable Rhai backend mechanics: module resolution, native math, task-tree lowering, UI values, and persisted-name validation |
 | [`lunco-scripting-rhai`](../lunco-scripting-rhai) (`src/catalog.rs`, `src/diagnostics.rs`, `src/dataset_queries.rs`) | Rhai discovery, introspection, and dataset queries |
-| [`src/tool_libs.rs`](src/tool_libs.rs) · [`src/timelines.rs`](src/timelines.rs) | tool / timeline registries + Twin persistence |
+| [`lunco-scripting-rhai-runtime/src/tool_libs.rs`](../lunco-scripting-rhai-runtime/src/tool_libs.rs) · [`src/timelines.rs`](../lunco-scripting-rhai-runtime/src/timelines.rs) | tool / timeline registries + Twin persistence |
 | [`prelude/`](../../assets/scripting/prelude) · [`examples/`](../../assets/scripting/examples) · [`tools/`](../../assets/scripting/tools) | the helper library, example scenarios, example tool libraries |
 
 ## Cargo features
 
-- `rhai` (**default**) — the rhai backend; pure-Rust, wasm-clean.
+- `rhai` is not a feature of this language-neutral crate; enable the production
+  `lunco-scripting-rhai-runtime` package for the Rhai backend.
 - `python` — the optional PyO3 runtime (one-shot eval; requires a Python 3.12
   shared library, probed when Python is first used). Without this feature, the
   `.py` loader, Python status resource, and execution systems are not registered.
 
-The crate builds with `rhai`, with `--no-default-features` (script-free), with
-`python`, and for `wasm32-unknown-unknown`.
+The crate builds as a language-neutral host with `--no-default-features` and
+with the optional `python` backend. The Rhai runtime is validated in its own
+package, so changes to its world bridge do not rebuild this host.
 
 ## Testing
 

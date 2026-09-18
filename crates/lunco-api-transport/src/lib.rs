@@ -113,7 +113,7 @@ impl Default for LunCoApiPlugin {
 impl Plugin for LunCoApiPlugin {
     fn build(&self, app: &mut App) {
         // Transport-free command core (always enabled). Added via guarded helpers
-        // so it COMPOSES with `LunCoScriptingPlugin`, which now self-supplies the
+        // so it COMPOSES with `LunCoScriptingRhaiRuntimePlugin`, which self-supplies the
         // same core (`ensure_command_core`) to stay independent of this HTTP-API
         // plugin — either may be added first, and neither double-adds. Plain
         // `add_plugins` panics on a duplicate, hence the `is_plugin_added` guards.

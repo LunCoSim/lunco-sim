@@ -182,7 +182,7 @@ projection. SysML must not create a second Twin path or source reader.
 
 ### Rhai
 
-Rhai is feature-gated in `lunco-scripting` and demonstrates the asynchronous
+Rhai is provided by `lunco-scripting-rhai-runtime` and demonstrates the asynchronous
 asset/synchronous-language boundary:
 
 - `RhaiSourceLoader` loads text and discovers literal imports;
@@ -190,7 +190,7 @@ asset/synchronous-language boundary:
 - `ScriptSources` stores text by the same canonical id that `AssetServer` uses;
 - `AssetModuleResolver` performs synchronous lookup and memoizes compiled
   modules by source text;
-- `LunCoScriptingPlugin` owns registration, generation-aware recompilation,
+- `LunCoScriptingRhaiRuntimePlugin` owns registration, generation-aware recompilation,
   journaling, diagnostics, and fixed-step execution.
 
 SysML should copy this lifecycle and cache discipline, but not Rhai's import

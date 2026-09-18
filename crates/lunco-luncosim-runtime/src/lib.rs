@@ -39,7 +39,7 @@ impl Plugin for LunCoSimRuntimePlugin {
             headless: self.headless,
             startup_scene: self.startup_scene.clone(),
         });
-        app.add_plugins(lunco_scripting::LunCoScriptingPlugin)
+        app.add_plugins(lunco_scripting_rhai_runtime::LunCoScriptingRhaiRuntimePlugin)
             .add_plugins(lunco_scripting_rhai::LunCoScriptingRhaiPlugin);
 
         register_all_commands(app);
@@ -58,7 +58,8 @@ impl Plugin for LunCoSimRuntimePlugin {
 
         app.add_systems(
             Update,
-            project_usd_policies.after(lunco_scripting::source_asset::RhaiSourceAssetSet),
+            project_usd_policies
+                .after(lunco_scripting_rhai_runtime::source_asset::RhaiSourceAssetSet),
         );
 
         #[cfg(feature = "networking")]
@@ -224,10 +225,10 @@ fn resolve_policy_source_file(
     path: &str,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_server: &AssetServer,
-    sources: Option<&Assets<lunco_scripting::source_asset::RhaiSource>>,
+    sources: Option<&Assets<lunco_scripting_rhai_runtime::source_asset::RhaiSource>>,
     pending: &mut std::collections::HashMap<
         String,
-        Handle<lunco_scripting::source_asset::RhaiSource>,
+        Handle<lunco_scripting_rhai_runtime::source_asset::RhaiSource>,
     >,
 ) -> PolicySource {
     let Some(sources) = sources else {
@@ -264,15 +265,20 @@ fn project_usd_policies(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
     roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
-    mut registry: ResMut<lunco_scripting::policy::ScriptedPolicyRegistry>,
+    mut registry: ResMut<lunco_scripting_rhai_runtime::policy::ScriptedPolicyRegistry>,
     mut synthesizers: ResMut<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     asset_server: Res<AssetServer>,
-    sources: Option<Res<Assets<lunco_scripting::source_asset::RhaiSource>>>,
+    sources: Option<Res<Assets<lunco_scripting_rhai_runtime::source_asset::RhaiSource>>>,
     mut pending: Local<
-        std::collections::HashMap<String, Handle<lunco_scripting::source_asset::RhaiSource>>,
+        std::collections::HashMap<
+            String,
+            Handle<lunco_scripting_rhai_runtime::source_asset::RhaiSource>,
+        >,
     >,
-    mut source_events: MessageReader<AssetEvent<lunco_scripting::source_asset::RhaiSource>>,
+    mut source_events: MessageReader<
+        AssetEvent<lunco_scripting_rhai_runtime::source_asset::RhaiSource>,
+    >,
     mut last: Local<Option<(usize, usize, u64)>>,
     mut awaiting: Local<bool>,
 ) {
@@ -338,7 +344,7 @@ fn project_usd_policies(
         } else {
             continue;
         };
-        desired.push(lunco_scripting::policy::PolicyDef {
+        desired.push(lunco_scripting_rhai_runtime::policy::PolicyDef {
             seam: a.seam.clone(),
             entry: a.entry.clone(),
             source,
@@ -351,7 +357,11 @@ fn project_usd_policies(
         .iter()
         .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
         .collect();
-    lunco_scripting::policy::project_policies(desired, &mut registry, journal.as_deref());
+    lunco_scripting_rhai_runtime::policy::project_policies(
+        desired,
+        &mut registry,
+        journal.as_deref(),
+    );
     let active_synthesizers: std::collections::HashSet<String> = registry
         .policies
         .iter()
@@ -540,7 +550,7 @@ fn replay_scenario_journal_tools(
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    scoped: Option<ResMut<lunco_scripting::tool_libs::TwinToolLibraries>>,
+    scoped: Option<ResMut<lunco_scripting_rhai_runtime::tool_libs::TwinToolLibraries>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
     let Some(journal) = journal else {
@@ -574,7 +584,7 @@ fn replay_scenario_journal_tools(
     );
     for (id, op) in pending {
         if let Some((name, source)) =
-            lunco_scripting::registration_journal::replay_tool_library(&op)
+            lunco_scripting_rhai_runtime::registration_journal::replay_tool_library(&op)
         {
             if let Err(error) = scoped.register(active, &name, &source) {
                 warn!("[tool_libs] ignored journal replay outside its active scope: {error}");
@@ -590,16 +600,20 @@ fn replay_scenario_journal_timeline(
     remote: Res<lunco_networking_sync::scenario_sync::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    store: Option<ResMut<lunco_scripting::timelines::TimelineStore>>,
+    store: Option<ResMut<lunco_scripting_rhai_runtime::timelines::TimelineStore>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
 ) {
     let (Some(journal), Some(mut store)) = (journal, store) else {
         return;
     };
-    let Ok(owner) = lunco_scripting::timelines::active_owner(workspace.as_deref()) else {
+    let Ok(owner) = lunco_scripting_rhai_runtime::timelines::active_owner(workspace.as_deref())
+    else {
         return;
     };
-    if !matches!(owner, lunco_scripting::timelines::TimelineOwner::Twin(_)) {
+    if !matches!(
+        owner,
+        lunco_scripting_rhai_runtime::timelines::TimelineOwner::Twin(_)
+    ) {
         return;
     }
     store.ensure_scope(owner);
@@ -620,7 +634,8 @@ fn replay_scenario_journal_timeline(
         lunco_twin_journal::DomainKind::Timeline,
     );
     for (id, op) in pending {
-        if let Some((name, timeline)) = lunco_scripting::registration_journal::replay_timeline(&op)
+        if let Some((name, timeline)) =
+            lunco_scripting_rhai_runtime::registration_journal::replay_timeline(&op)
         {
             if let Err(error) = store.insert_for(owner, name, timeline) {
                 warn!("[timeline] ignored journal replay outside its active scope: {error:?}");

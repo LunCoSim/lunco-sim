@@ -1,14 +1,14 @@
 # Rhai Integration Design — scripting & scenarios
 
-> Status: Active · Audience: contributors on `lunco-scripting` and the scenario runtime
+> Status: Active · Audience: contributors on `lunco-scripting-rhai-runtime` and the scenario runtime
 >
 > The *how-to* is [`../scripting-guide.md`](../scripting-guide.md); this is the why.
 
 Rhai drives scenarios — *"rover moves along a path via checkpoints, loads next
 goals"* — and, more broadly, **manipulates every object in the sim (Twin, USD,
-Modelica, cosim, scene, vehicles) from script.** The engine builds on native
-(default), `--no-default-features` (script-free), `python`, and
-`wasm32-unknown-unknown`.
+Modelica, cosim, scene, vehicles) from script.** The production application
+enables the Rhai runtime by default; the language-neutral host can also be
+built script-free, with optional Python, and for `wasm32-unknown-unknown`.
 
 > **Authoring a scenario?** Read the **[Scripting Guide](../scripting-guide.md)** —
 > a task-oriented how-to. This document is the architecture + design rationale.
@@ -115,7 +115,7 @@ behavior trees, sequencing live in hot-reloadable `.rhai`, never compiled in).
 A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
 
 - **API / MCP / scripts:** the `RunScenario { target, source }` command
-  (`crates/lunco-scripting/src/commands.rs`). MCP tool: **`run_scenario`**
+  (`crates/lunco-scripting-rhai-runtime/src/commands.rs`). MCP tool: **`run_scenario`**
   (`mcp/src/index.js`). HTTP: `{"type":"ExecuteCommand","command":"RunScenario","params":{"target":<gid>,"source":"<rhai>"}}`.
   Idempotent + **hot-reload**: re-running on the same entity recompiles in place
   (bumps `ScriptDocument.generation`).
@@ -130,7 +130,7 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
 - **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
   attach `ScriptedModel { language: Rhai, document_id }`.
 
-### Lifecycle hooks (per-entity runtime, `world_bridge.rs` `tick_rhai_models`)
+### Lifecycle hooks (per-entity runtime, `lunco-scripting-rhai-runtime/src/world_bridge.rs` `tick_rhai_models`)
 
 ```rhai
 fn task(me, ctx) { ... }            // builds the native task tree once
@@ -159,7 +159,7 @@ on their live per-tick paths because they are state, not structural invalidation
 Structural edits still go through the typed USD owner, which advances the same
 generation and makes the cache refresh deterministic.
 
-### Host verbs (the entire Rust-exposed vocabulary — `world_bridge.rs`)
+### Host verbs (the entire Rust-exposed vocabulary — `lunco-scripting-rhai-runtime/src/world_bridge.rs`)
 
 | verb | channel | purpose |
 |------|---------|---------|
@@ -218,8 +218,9 @@ authoring through explicit document ids).
 
 ### Build notes / gotchas
 
-- rhai is a **default-on optional feature** (`default = ["rhai"]`); removable for
-  a script-free build.
+- `lunco-scripting` is the language-neutral host and defaults to no interpreter;
+  `lunco-scripting-rhai-runtime` is the production Rhai package installed by
+  application roots. Python remains an independent opt-in backend.
 - The scripting crate depends only on the transport-free `lunco-api` contracts;
   application roots add `lunco-api-transport` separately when they expose HTTP
   or the browser bridge.
@@ -261,7 +262,7 @@ Representative commands already covering the user's surface:
 | USD geometry editing | `ApplyUsdOp` with `UsdOp::SetAttribute` (`lunco-usd-commands`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this typed command |
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica-core/...`, UI adapters in `lunco-modelica-ui/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial-spatial/src/commands.rs`) |
-| Scripting | `RunRhai`, `RunRhaiTool`, `RunPython` (`lunco-scripting/src/commands.rs`) |
+| Scripting | `RunRhai`, `RunRhaiTool` (`lunco-scripting-rhai-runtime/src/commands.rs`); `RunPython`, `SetScenarioPaused`, `StopScenario`, and document history commands (`lunco-scripting/src/commands.rs`) |
 | Reads | `ListEntities`, `DiscoverSchema`, `ReadPorts`, `CausalTrace`, `ReadExposures`, `GetReadiness`, and domain query providers (all use the tagged `ExecuteCommand` envelope where applicable) |
 
 ---

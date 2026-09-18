@@ -1,7 +1,7 @@
 //! Rhai authoring and discovery surfaces.
 //!
-//! The world bridge and scenario mechanics remain in [`lunco-scripting`]'s
-//! runtime package for now. This package owns the API-facing surfaces that
+//! The world bridge and scenario mechanics live in
+//! [`lunco-scripting-rhai-runtime`]. This package owns the API-facing surfaces that
 //! describe and diagnose that runtime: catalog discovery, script diagnostics,
 //! and dataset queries. Keeping these query providers in a separate production
 //! package means editor/query changes do not invalidate the language-neutral

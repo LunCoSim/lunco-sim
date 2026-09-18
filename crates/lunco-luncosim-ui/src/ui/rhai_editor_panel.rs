@@ -29,9 +29,9 @@ use bevy_egui::egui;
 use lunco_doc::{CompileState, Diagnostic, DiagnosticSeverity, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_scene_selection::SelectedEntities;
-use lunco_scripting::commands::RunScenario;
 use lunco_scripting::doc::ScriptedModel;
 use lunco_scripting::{ScenarioReloadPolicy, ScriptRegistry};
+use lunco_scripting_rhai_runtime::commands::RunScenario;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workbench_widgets::UiIcon;
 

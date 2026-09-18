@@ -39,7 +39,7 @@ build silently no-ops or crashes. Without a policy, every wasm port
 hunts the same class of bug — the day we wrote this doc the team spent
 several hours tracing four separate instances (mio in `lunco-api`,
 `std::fs` in cosim, `std::fs` in the USD composer's sublayer reads,
-`crossbeam-channel` in `lunco-scripting::repl`).
+`crossbeam-channel` in an earlier scripting transport).
 
 The fix isn't a smarter function; it's a rule that any code reading a
 shippable asset goes through one path that works on both targets.
@@ -121,7 +121,7 @@ different loading/saving sequences.
 | `UsdLoader` | `UsdStageAsset` | `lunco-usd-bevy-core` | `.usda` |
 | `ModelicaSourceLoader` | `ModelicaSource` | `lunco-modelica-runtime` | `.mo` |
 | `PythonSourceLoader` | `PythonSource` | `lunco-scripting` (`python` feature) | `.py` |
-| `RhaiSourceLoader` | `RhaiSource` | `lunco-scripting` | `.rhai` |
+| `RhaiSourceLoader` | `RhaiSource` | `lunco-scripting-rhai-runtime` | `.rhai` |
 
 New source classes get their own `Asset` + `AssetLoader` in the owning
 domain crate. Loaders are normally dumb (parse to bytes / utf-8 / domain AST);

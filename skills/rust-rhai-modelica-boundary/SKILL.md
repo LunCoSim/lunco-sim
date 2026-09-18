@@ -74,7 +74,7 @@ the first entity, a fabricated value, or an older behavior.
 
 - `lunco-hooks` is the backend-neutral typed hook registry; `lunco-hooks-rhai`
   is the one Rhai adapter.
-- `lunco-scripting` already registers authored policy files from
+- `lunco-scripting-rhai-runtime` already registers authored policy files from
   `assets/scripting/policy/` and exposes the generic scripting surface.
 - `lunco-camera-core::DEFAULT_PRESENTATION_HOOK` is the camera example:
   Rust derives USD/ECS facts and realizes the closed decision, while the

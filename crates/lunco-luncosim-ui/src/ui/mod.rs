@@ -503,7 +503,7 @@ fn on_runtime_ui_action(
                 dropdowns.toggle(&key);
                 return;
             }
-            commands.trigger(lunco_scripting::commands::RunRhaiToolHook {
+            commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
                 tool: "runtime_ui".to_owned(),
                 hook: "on_action".to_owned(),
                 args: lunco_telemetry_core::TelemetryValue::String(action.clone()),

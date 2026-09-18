@@ -9,8 +9,8 @@
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy_egui::egui;
-use lunco_scripting::commands::RunScenarioAsset;
 use lunco_scripting::ScenarioReloadPolicy;
+use lunco_scripting_rhai_runtime::commands::RunScenarioAsset;
 use lunco_workbench_core::WorkbenchMenuRegistry;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};

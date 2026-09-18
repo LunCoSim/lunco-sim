@@ -1044,18 +1044,18 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ## Scripting & scenarios
 
-### `lunco-scripting` <a id="lunco-scripting"></a>
+### `lunco-scripting-rhai-runtime` <a id="lunco-scripting-rhai-runtime"></a>
 
 #### `RegisterTimeline`
 
  Save a named mission **timeline** to the Twin — the storage counterpart of
  `RunTimeline` (which runs an inline one). Validates the JSON parses as a
- timeline, stores it in the [`crate::timelines::TimelineStore`], and mirrors it
+ timeline, stores it in `lunco_scripting_rhai_runtime::timelines::TimelineStore`, and mirrors it
  to `<twin>/timelines/<name>.json` so it survives a restart (reloaded by the
  `TwinAdded` observer). Discover with `ListTimelines`/`GetTimeline`, run with
  `RunStoredTimeline`. Idempotent (re-registering a name replaces it).
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1066,13 +1066,13 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Register (or hot-replace) a named rhai **tool library** — a reusable bundle
  of selection / behaviour policy callable from any scenario as
- `name::fn(...)` (see [`crate::tool_libs`]). The scenario-authoring counterpart
+ `name::fn(...)` (see `lunco_scripting_rhai_runtime::tool_libs`). The scenario-authoring counterpart
  to RunScenario: RunScenario attaches a program to ONE entity; this publishes
  shared library code every scenario can call, with no Rust rebuild. Idempotent
  + hot-reload — re-registering a name replaces it and the runtime picks it up
  on the next tick.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1090,7 +1090,7 @@ actually call, with the fields the deserializer actually accepts. See the
  deferred API request with the real stdout. `Update` is intentional because
  kinematic celestial warp freezes `FixedUpdate`.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1106,7 +1106,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Rhai value inside the scripting backend. No source snippet or JSON literal
  is used to carry the payload.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1122,7 +1122,7 @@ actually call, with the fields the deserializer actually accepts. See the
  queued; the payload remains a typed [`TelemetryValue`] until the Rhai
  adapter creates its native value.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1142,7 +1142,7 @@ actually call, with the fields the deserializer actually accepts. See the
  reuses its document id and bumps the generation, so `tick_rhai_models`
  recompiles in place (state reset) instead of leaking documents.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1158,7 +1158,7 @@ actually call, with the fields the deserializer actually accepts. See the
  use the same path as USD-authored scenarios. This is the generic launch seam
  for authored flows; no domain-specific catalog or host is required.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1171,11 +1171,11 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `RunStoredTimeline`
 
  Run a stored mission timeline on an entity by name (resolved from the
- [`crate::timelines::TimelineStore`]) — the one-step "fetch + run" for a
+ `lunco_scripting_rhai_runtime::timelines::TimelineStore`) — the one-step "fetch + run" for a
  `RegisterTimeline`d / file-authored mission, sparing callers a
  `GetTimeline`→`RunTimeline` round-trip. Same execution path as `RunTimeline`.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1199,7 +1199,7 @@ actually call, with the fields the deserializer actually accepts. See the
  contain exactly one operation field; the operation word is the timeline
  discriminator and common fields are validated separately below.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1213,7 +1213,7 @@ actually call, with the fields the deserializer actually accepts. See the
  execution (python) but keep their state — resume continues where they left
  off. The clean API form of toggling the `paused` field; language-agnostic.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1227,7 +1227,7 @@ actually call, with the fields the deserializer actually accepts. See the
  runtime tick (the prune in `tick_rhai_models`). The `ScriptDocument` stays in
  the registry, so the scenario can be re-attached / re-run later.
 
-- *defined in:* `crates/lunco-scripting/src/commands.rs`
+- *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|

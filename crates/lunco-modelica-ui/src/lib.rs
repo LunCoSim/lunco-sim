@@ -69,8 +69,8 @@ impl Plugin for ModelicaPlugin {
             app.add_plugins(lunco_viz::LuncoVizPlugin);
         }
         #[cfg(feature = "scripting")]
-        if !app.is_plugin_added::<lunco_scripting::LunCoScriptingPlugin>() {
-            app.add_plugins(lunco_scripting::LunCoScriptingPlugin);
+        if !app.is_plugin_added::<lunco_scripting_rhai_runtime::LunCoScriptingRhaiRuntimePlugin>() {
+            app.add_plugins(lunco_scripting_rhai_runtime::LunCoScriptingRhaiRuntimePlugin);
         }
         #[cfg(feature = "scripting")]
         if !app.is_plugin_added::<lunco_scripting_rhai::LunCoScriptingRhaiPlugin>() {

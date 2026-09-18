@@ -167,7 +167,7 @@ pub(crate) fn on_scene_click_script_tool(
         &world.viewport,
         &world.surface,
     );
-    commands.trigger(lunco_scripting::commands::RunRhaiTool {
+    commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiTool {
         tool,
         args: context,
     });
@@ -613,7 +613,7 @@ pub(crate) fn on_scene_pointer_event(
         .map(|id| id.get())
         .unwrap_or_default();
     for tool in lunco_tools::ui_pointer_tools() {
-        commands.trigger(lunco_scripting::commands::RunRhaiToolHook {
+        commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
             tool: tool.name,
             hook: "on_pointer".to_string(),
             args: context.clone(),

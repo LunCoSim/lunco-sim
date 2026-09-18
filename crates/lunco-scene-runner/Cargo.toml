@@ -27,7 +27,7 @@ lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-physics = { workspace = true }
 lunco-readiness = { workspace = true }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
-lunco-scripting = { path = "../lunco-scripting" }
+lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
 lunco-settings = { path = "../lunco-settings", optional = true }
 lunco-time = { path = "../lunco-time" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }

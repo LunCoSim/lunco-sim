@@ -77,7 +77,7 @@ pub fn draw_scene_context_menu(
         });
 
     if let Some(item) = selected {
-        commands.trigger(lunco_scripting::commands::RunRhaiToolHook {
+        commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
             tool: item.tool,
             hook: item.hook,
             args: item.args,

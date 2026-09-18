@@ -1,7 +1,7 @@
 //! Pluggable script-execution backends.
 //!
-//! One backend per language, registered in [`ScriptBackends`] by
-//! `LunCoScriptingPlugin` under the matching cargo feature. The one-shot
+//! One backend per language, registered in [`ScriptBackends`] by the owning
+//! language package under the matching cargo feature. The one-shot
 //! command handler (`RunPython`) dispatches through this registry instead of
 //! hard-coding an interpreter — so adding a language later is "add a feature +
 //! a backend + a command", not "edit every call site". Python is the only

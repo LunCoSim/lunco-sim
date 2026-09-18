@@ -198,7 +198,7 @@ fn validate_startup_results(
             _ => {
                 return Err(format!(
                     "startup policy result for '{id}' has no boolean ok"
-                ))
+                ));
             }
         };
         let status = result
@@ -211,7 +211,7 @@ fn validate_startup_results(
             _ => {
                 return Err(format!(
                     "startup policy result for '{id}' has unknown status '{status}'"
-                ))
+                ));
             }
         };
         if ok != status_ok {

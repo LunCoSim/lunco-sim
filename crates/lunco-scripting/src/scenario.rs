@@ -10,7 +10,8 @@
 //!
 //! The only language-specific part is the *mechanics*: turning source into a
 //! compiled program and calling a hook. That's the [`ScenarioRuntime`] trait —
-//! one impl per language (rhai today; see the Python TODO below). This mirrors
+//! one impl per language (Rhai lives in `lunco-scripting-rhai-runtime`; see the
+//! Python TODO below). This mirrors
 //! the [`lunco_scripting_bridge_core`] split: neutral core + thin per-language
 //! binding.
 //!
@@ -119,38 +120,6 @@ pub fn open_scenarios_when_scene_ready(
     info!("[scenario] scene participants ready — lifecycle execution enabled");
 }
 
-/// Stop and close scripts whose ownership was declared by the outgoing USD
-/// scene before its entities are reclaimed.
-///
-/// The generic scenario driver normally observes a detached entity on its next
-/// tick. A scene boundary cannot wait for that tick: an outgoing `on_stop` hook
-/// must run while its world still exists, and the script document must not
-/// survive into the replacement scene. Interactive/API documents are not
-/// marked `SceneOwnedScript` and remain open until their explicit close.
-#[cfg(feature = "rhai")]
-pub fn stop_scene_owned_scripts(world: &mut World) {
-    let targets: Vec<(Entity, Option<u64>)> = {
-        let mut query = world
-            .query_filtered::<(Entity, Option<&ScriptedModel>), With<crate::SceneOwnedScript>>();
-        query
-            .iter(world)
-            .map(|(entity, model)| (entity, model.and_then(|model| model.document_id)))
-            .collect()
-    };
-
-    for (entity, document_id) in targets {
-        ScenarioDriver::<crate::world_bridge::RhaiScenarioRuntime>::stop_entity(world, entity);
-        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-            entity_mut.remove::<ScriptedModel>();
-        }
-        if let Some(document_id) = document_id {
-            if let Some(mut registry) = world.get_resource_mut::<crate::ScriptRegistry>() {
-                registry.documents.remove(&DocumentId::new(document_id));
-            }
-        }
-    }
-}
-
 /// Run condition for scenario lifecycle systems.
 pub fn scenario_execution_enabled(gate: Option<Res<ScenarioExecutionGate>>) -> bool {
     gate.is_some_and(|gate| gate.enabled)
@@ -234,26 +203,30 @@ mod readiness_gate_tests {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ScriptAuthority(pub Option<SessionId>);
 
-/// Startup: decide whether this run is [`Attended`](ScenarioAudience::Attended).
-///
-/// The fact consulted is a window, not a flag or a feature: a run that can show
-/// a coach card and take a click has a user, and one that cannot does not. That
-/// makes the default correct for every headless caller (test, CI, server,
-/// `--no-ui`) with nothing to remember to set.
-///
-/// `LUNCO_SCENARIO_UNATTENDED=1|0` forces it either way, so a windowed session
-/// can watch an authored program play (`1`), and a headless capture can hold a lesson
-/// still for a scripted driver (`0`), with no rebuild.
+/// Resolve whether this run is [`Attended`](ScenarioAudience::Attended) from
+/// application facts. The UI adapter supplies window presence; headless hosts
+/// can pass `false` without depending on Bevy's window subsystem.
+pub fn scenario_audience(window_present: bool, override_value: Option<&str>) -> ScenarioAudience {
+    match override_value {
+        Some("1") | Some("true") => ScenarioAudience::Unattended,
+        Some("0") | Some("false") => ScenarioAudience::Attended,
+        _ if !window_present => ScenarioAudience::Unattended,
+        _ => ScenarioAudience::Attended,
+    }
+}
+
+/// Resolve the audience at startup for windowed hosts. The `window-audience`
+/// feature is opt-in so the generic scripting host remains window-free in
+/// headless builds.
+#[cfg(feature = "window-audience")]
 pub fn resolve_scenario_audience(
     windows: Query<(), With<Window>>,
     mut audience: ResMut<ScenarioAudience>,
 ) {
-    *audience = match std::env::var("LUNCO_SCENARIO_UNATTENDED").ok().as_deref() {
-        Some("1") | Some("true") => ScenarioAudience::Unattended,
-        Some("0") | Some("false") => ScenarioAudience::Attended,
-        _ if windows.is_empty() => ScenarioAudience::Unattended,
-        _ => ScenarioAudience::Attended,
-    };
+    *audience = scenario_audience(
+        !windows.is_empty(),
+        std::env::var("LUNCO_SCENARIO_UNATTENDED").ok().as_deref(),
+    );
     info!("[scenario] audience: {:?}", *audience);
 }
 
@@ -514,7 +487,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     /// as the authored Rhai prelude, has changed. The scene entities remain
     /// attached; their programs are rebuilt on the next enabled pass.
     #[cfg(feature = "rhai")]
-    pub(crate) fn invalidate(&mut self) {
+    pub fn invalidate(&mut self) {
         self.fsm.clear();
         self.runtime.invalidate();
     }

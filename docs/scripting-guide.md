@@ -3,7 +3,7 @@
 How to write **scenarios** — persistent per-entity programs that sense and drive
 the simulation — in LunCoSim.
 
-- **Crate:** [`lunco-scripting`](../crates/lunco-scripting) · **Design rationale:** [rhai-integration.md](./architecture/rhai-integration.md)
+- **Crates:** [`lunco-scripting-rhai-runtime`](../crates/lunco-scripting-rhai-runtime) (runtime) · [`lunco-scripting`](../crates/lunco-scripting) (language-neutral lifecycle) · **Design rationale:** [rhai-integration.md](./architecture/rhai-integration.md)
 - **Examples:** [`assets/scripting/examples/`](../assets/scripting/examples) · **Helper library:** [`assets/scripting/prelude/`](../assets/scripting/prelude)
 - **Every command you can call:** [`commands-reference.md`](./commands-reference.md) (auto-generated)
 
@@ -263,7 +263,7 @@ Both paths avoid a Rust rebuild. The live helper delegates to the native
 `run_rhai_test.sh` for a one-shot verdict.
 
 The terminal frontend and the evaluator are deliberately separate. The
-running host's `lunco-scripting` package owns the Rhai engine and the reflected
+running host's `lunco-scripting-rhai-runtime` package owns the Rhai engine and the reflected
 `RunRhai` command. `lunco-rhai-repl` only reads terminal input and formats the
 result; `lunco-api-client` only sends the generic API envelope. Terminal
 evaluation therefore uses the same API command path as every other external

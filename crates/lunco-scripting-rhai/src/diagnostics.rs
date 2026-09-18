@@ -16,8 +16,8 @@ use lunco_doc_bevy::DocumentDiagnostics;
 
 use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_scripting::scenario::ScenarioDriver;
-use lunco_scripting::world_bridge::RhaiScenarioRuntime;
 use lunco_scripting_bridge_core::JsonBuilder;
+use lunco_scripting_rhai_runtime::world_bridge::RhaiScenarioRuntime;
 
 /// `ScriptStatus { target }` → `{ state, ok, diagnostics: [{severity,message,line,col}] }`
 /// for the scenario attached to entity `target` (a `GlobalEntityId`). Returns an

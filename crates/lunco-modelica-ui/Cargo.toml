@@ -64,7 +64,7 @@ server = ["api", "lunco-api-transport/transport-http", "native-allocator"]
 # feature — `lunco-scripting` self-supplies the transport-free command core, so
 # `cmd()` works with no HTTP server. On `default` so the GUI ships with it; drop
 # it (`--no-default-features`) for a scripting-free compile-core build.
-scripting = ["dep:lunco-scripting", "dep:lunco-scripting-rhai"]
+scripting = ["dep:lunco-scripting-rhai", "dep:lunco-scripting-rhai-runtime"]
 # Opt-in Tracy profiler hook. Off by default because tracy-client-sys needs a
 # C++ compile that breaks on wasm32 and on Windows MSVC 2019 (missing
 # `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs). Enable with
@@ -161,8 +161,8 @@ lunco-api-transport = { path = "../lunco-api-transport", optional = true, defaul
 # backend is wasm-clean, and it pulls `lunco-api` only default-features=false
 # (the transport-free command core) — no outward HTTP transport, keeping scripting
 # independent of the API server.
-lunco-scripting = { path = "../lunco-scripting", optional = true }
 lunco-scripting-rhai = { path = "../lunco-scripting-rhai", optional = true }
+lunco-scripting-rhai-runtime = { path = "../lunco-scripting-rhai-runtime", optional = true }
 # PERF-CRITICAL: compile-time static max level for the `log` facade.
 #
 # Why: parol_runtime (rumoca's parser engine) calls `log::trace!` in its

@@ -486,7 +486,7 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
                         .iter()
                         .map(|field| {
                             let field_writable =
-                                lunco_scripting::world_bridge::dynamic_write_supported(
+                                lunco_scripting_rhai_runtime::world_bridge::dynamic_write_supported(
                                     field.type_path(),
                                 );
                             writable |= field_writable;
@@ -502,7 +502,8 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
                 }
                 _ => (Vec::new(), false),
             };
-            let type_writable = lunco_scripting::world_bridge::dynamic_write_supported(short_type);
+            let type_writable =
+                lunco_scripting_rhai_runtime::world_bridge::dynamic_write_supported(short_type);
             Some(serde_json::json!({
                 "type": short_type,
                 "kind": if is_resource { "resource" } else { "component" },
@@ -522,15 +523,18 @@ fn prelude_surface(world: &World) -> Vec<serde_json::Value> {
     // asset registry. Keep imports fail-closed: completion must not read
     // arbitrary files from the process working directory.
     engine.set_module_resolver(rhai::module_resolvers::StaticModuleResolver::new());
-    lunco_scripting::rhai_limits::apply(&mut engine);
+    lunco_hooks_rhai::rhai_limits::apply(&mut engine);
     let Some(sources) = world.get_resource::<lunco_assets_core::script_source::ScriptSources>()
     else {
         return Vec::new();
     };
-    lunco_scripting::world_bridge::prelude_files_from_sources(sources)
+    lunco_scripting_rhai_runtime::world_bridge::prelude_files_from_sources(sources)
         .ok()
         .and_then(|files| {
-            lunco_scripting::world_bridge::compile_prelude_set_for_runtime(&engine, files).ok()
+            lunco_scripting_rhai_runtime::world_bridge::compile_prelude_set_for_runtime(
+                &engine, files,
+            )
+            .ok()
         })
         .map(|ast| {
             let mut functions: Vec<serde_json::Value> = ast
@@ -790,7 +794,7 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
             "verbs": verbs,
             "hooks": hooks,
             "policy_hooks": policy_hooks,
-            "policy_status": lunco_scripting::world_bridge::policy_status_json(world),
+            "policy_status": lunco_scripting_rhai_runtime::world_bridge::policy_status_json(world),
             "prelude": prelude,
             "tools": tools,
             "commands": commands,

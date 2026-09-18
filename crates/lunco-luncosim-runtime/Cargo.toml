@@ -17,9 +17,10 @@ lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
 lunco-luncosim-services = { path = "../lunco-luncosim-services", default-features = false }
-lunco-scripting = { path = "../lunco-scripting" }
+lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-scripting-rhai = { path = "../lunco-scripting-rhai" }
+lunco-scripting-rhai-runtime = { path = "../lunco-scripting-rhai-runtime" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
@@ -45,8 +46,11 @@ networking = [
 net-diag = ["networking", "lunco-luncosim-services/net-diag"]
 experiments = ["lunco-luncosim-services/experiments"]
 server = ["api-transport", "transport-http", "networking", "experiments"]
-python = ["lunco-scripting/python", "lunco-luncosim-core/python"]
-native-plugins = ["lunco-scripting/native-plugins"]
+python = [
+    "lunco-scripting/python",
+    "lunco-luncosim-core/python",
+]
+native-plugins = ["lunco-scripting-rhai-runtime/native-plugins"]
 
 [dependencies.lunco-networking-sync]
 path = "../lunco-networking-sync"

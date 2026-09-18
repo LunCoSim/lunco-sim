@@ -58,7 +58,7 @@ pub use subscription::*;
 /// Add `plugin` only if a plugin of the same type isn't already present.
 /// `Plugin` is unique by default and a duplicate `add_plugins` panics, so this
 /// keeps the transport-free core composable across the API transport plugin and
-/// `LunCoScriptingPlugin` (which both want it) regardless of add order.
+/// `LunCoScriptingRhaiRuntimePlugin` (which both want it) regardless of add order.
 pub fn add_plugin_once<P: Plugin>(app: &mut App, plugin: P) {
     if !app.is_plugin_added::<P>() {
         app.add_plugins(plugin);
@@ -70,7 +70,8 @@ pub fn add_plugin_once<P: Plugin>(app: &mut App, plugin: P) {
 /// ([`ApiEntityRegistryPlugin`]) — is present, without pulling any transport
 /// (no HTTP server, no `LunCoApiPlugin`). This is the seam that lets the
 /// scripting substrate run `cmd()` **independently of the API**: an app can add
-/// `LunCoScriptingPlugin` alone and scripts still dispatch every `#[Command]`.
+/// `LunCoScriptingRhaiRuntimePlugin` alone and scripts still dispatch every
+/// `#[Command]`.
 /// Idempotent — safe to call from both plugins.
 pub fn ensure_command_core(app: &mut App) {
     add_plugin_once::<ApiExecutorPlugin>(app, ApiExecutorPlugin);
