@@ -145,7 +145,6 @@ web-sys = { workspace = true, features = ["Window", "Location", "Performance"] }
 # Drives the async OPFS asset-persist future on the main thread without blocking
 # (the wasm counterpart of the native `AsyncComputeTaskPool` spawn). Only ever
 # compiled when the `networking` feature pulls this crate in (see note above).
-wasm-bindgen-futures = { workspace = true }
 # On wasm the getrandom crates `compile_error!` unless a browser-crypto backend
 # is enabled. Two incompatible majors land in our graph, each needing its own
 # feature turned on via unification (we never call getrandom directly):
@@ -160,9 +159,6 @@ getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"]
 # These are feature-only browser backend activators; the source intentionally
 # calls the owning crates' APIs rather than these packages directly.
 ignored = ["getrandom_v02", "getrandom_v04"]
-
-[dev-dependencies]
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

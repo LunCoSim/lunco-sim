@@ -106,6 +106,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
 
         self.assertIn('LUNCOSIM_ICON_OUTPUT_DIR="$ICON_OUTPUT_DIR"', package_builder)
         self.assertIn("cargo build", package_builder)
+        self.assertIn('PACKAGE_FEATURE_ARGS+=(--features package-icons,updates)', package_builder)
         self.assertIn('LUNCOSIM_ICON_OUTPUT_STAMP="$ICON_OUTPUT_STAMP"', package_builder)
         self.assertIn("prepare_package_icon", package_builder)
         self.assertIn('VPK_ICON_ARGS=(--icon "$PACKAGE_ICON")', package_builder)

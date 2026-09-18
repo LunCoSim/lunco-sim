@@ -37,7 +37,6 @@ lunco-workbench-core = { path = "../lunco-workbench-core" }
 transform-gizmo-bevy = { workspace = true }
 
 [dev-dependencies]
-lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-render = { path = "../lunco-render" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 

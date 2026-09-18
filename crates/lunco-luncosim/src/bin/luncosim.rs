@@ -5,7 +5,7 @@ fn main() -> lunco_luncosim_core::AppExit {
     // The UI package owns the Velopack process hook. It must see the original
     // process before CLI dispatch. It does not perform the GitHub update check;
     // that remains an explicit native GUI operation in the Updates menu.
-    #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+    #[cfg(all(feature = "ui", feature = "updates", not(target_arch = "wasm32")))]
     lunco_luncosim_ui::initialize_velopack();
 
     #[cfg(not(target_family = "wasm"))]

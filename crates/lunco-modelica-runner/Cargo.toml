@@ -28,6 +28,3 @@ workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { workspace = true, features = ["Window", "Navigator"] }
-
-[dev-dependencies]
-tempfile.workspace = true

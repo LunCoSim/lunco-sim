@@ -7829,7 +7829,6 @@ dependencies = [
  "lunco-celestial-spatial-core",
  "lunco-control-core",
  "lunco-core",
- "lunco-cosim-core",
  "lunco-doc",
  "lunco-interaction-core",
  "lunco-physics",
@@ -8263,7 +8262,6 @@ dependencies = [
  "bincode 2.0.1",
  "console_error_panic_hook",
  "crossbeam-channel",
- "getrandom 0.3.4",
  "js-sys",
  "lunco-assets-core",
  "lunco-core",
@@ -8272,6 +8270,7 @@ dependencies = [
  "lunco-modelica-ast",
  "lunco-modelica-compiler",
  "lunco-modelica-core",
+ "lunco-modelica-document",
  "lunco-modelica-index",
  "lunco-modelica-library",
  "lunco-modelica-runner",
@@ -8287,7 +8286,6 @@ dependencies = [
  "serde",
  "serde_json",
  "wasm-bindgen",
- "wasm-bindgen-futures",
  "web-sys",
  "web-time",
 ]
@@ -8339,7 +8337,6 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -8361,7 +8358,6 @@ dependencies = [
  "rumoca-compile",
  "rumoca-sim",
  "serde",
- "tempfile",
  "web-sys",
  "web-time",
 ]
@@ -8552,8 +8548,6 @@ dependencies = [
  "lunco-workspace",
  "rustls-pemfile",
  "serde",
- "tempfile",
- "wasm-bindgen-futures",
  "web-sys",
  "wtransport",
 ]
@@ -9350,7 +9344,6 @@ dependencies = [
  "lunco-core",
  "lunco-environment",
  "lunco-physics",
- "lunco-storage",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
  "lunco-usd-avian-filters",

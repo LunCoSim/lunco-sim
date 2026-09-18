@@ -76,10 +76,13 @@ default = ["ui", "api-transport", "transport-http", "sysml"]
 ui = [
     "dep:bevy",
     "dep:lunco-luncosim-ui",
-    "lunco-luncosim-ui/updates",
     "lunco-scene-runner/ui",
     "lunco-luncosim-ui/avatar-ui",
 ]
+# Installed desktop packages carry the native Velopack updater. Keeping this
+# separate from `ui` avoids compiling its HTTP/update closure for ordinary
+# source and headless development builds; the package script opts in here.
+updates = ["ui", "lunco-luncosim-ui/updates"]
 # Native package builds opt into icon rasterization only when the packaging
 # script requests it; ordinary GUI development keeps those build dependencies
 # out of the UI package graph.

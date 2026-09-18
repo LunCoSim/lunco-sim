@@ -29,6 +29,7 @@ lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-modelica-compiler = { path = "../lunco-modelica-compiler" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-runner = { path = "../lunco-modelica-runner" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-telemetry = { path = "../lunco-modelica-telemetry" }
@@ -48,10 +49,8 @@ anyhow.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 lunco-worker-transport = { path = "../lunco-worker-transport" }
-getrandom = { version = "0.3", features = ["wasm_js"] }
 js-sys.workspace = true
 wasm-bindgen.workspace = true
-wasm-bindgen-futures.workspace = true
 web-sys = { workspace = true, features = [
     "console",
     "DedicatedWorkerGlobalScope",

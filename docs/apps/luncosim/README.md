@@ -80,6 +80,9 @@ update-managed.
 The application reads the machine-only `LunCoSim/lunco-sim-updates` GitHub feed;
 human-facing installers remain in the dated LunCoSim release.
 
+The native package build enables the updater explicitly. Ordinary source and
+headless builds omit the updater closure and are not update-managed.
+
 ## CLI Usage
 
 ```bash
