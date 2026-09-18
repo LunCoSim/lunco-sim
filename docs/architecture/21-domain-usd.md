@@ -28,7 +28,8 @@ document synchronization, and explicit assembly-target resolution;
 runtime persistence, live document projection, and generic authored runtime
 surfaces (control bindings, executable programs, and scene-property ports);
 `lunco-usd-bevy-runtime`
-composes that runtime with the complete application plugin bundle;
+composes that runtime with the application plugin bundle; its `cosim` feature
+adds the authored Modelica/Rhai participant projection;
 `lunco-usd-geometry`
 owns the reusable render-free BasisCurves evaluator, NURBS, trim, and
 curve-sweep substrate;

@@ -14,13 +14,15 @@ lunco-usd-bevy-animation = { path = "../lunco-usd-bevy-animation" }
 lunco-usd-bevy-diagnostics = { path = "../lunco-usd-bevy-diagnostics" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
-lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
+lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim", optional = true }
 lunco-usd-sim-cosim-api = { path = "../lunco-usd-sim-cosim-api", optional = true }
 lunco-usd-sim-domain-api = { path = "../lunco-usd-sim-domain-api", optional = true }
 
 [features]
-python = ["lunco-usd-sim-cosim/python"]
+cosim = ["dep:lunco-usd-sim-cosim"]
+python = ["cosim", "lunco-usd-sim-cosim/python"]
 api = [
+    "cosim",
     "dep:lunco-usd-sim-cosim-api",
     "dep:lunco-usd-sim-domain-api",
 ]

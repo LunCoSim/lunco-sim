@@ -51,7 +51,7 @@ lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
-lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
+lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime", features = ["cosim"] }
 lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
