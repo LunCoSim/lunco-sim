@@ -2,9 +2,10 @@
 //!
 //! This package owns the scene/Twin lifecycle, runtime-overlay persistence,
 //! live document-to-stage projection, and generic USD runtime consumption.
-//! Authored controls, executable programs, and scene-property port surfaces
-//! are installed here after visual scene admission, so the visual projector
-//! remains a reusable presentation adapter.
+//! Authored controls and executable programs are installed here after visual
+//! scene admission, so the visual projector remains a reusable presentation
+//! adapter. The Bevy scene-property port backend is a separate package and is
+//! composed explicitly by the complete runtime bundle.
 //! It does not assemble the complete visual/physics/simulation plugin bundle;
 //! that application convenience composition remains in
 //! `lunco-usd-bevy-runtime`.
@@ -18,10 +19,9 @@ mod control_runtime;
 mod live_consume;
 mod program_runtime;
 mod runtime_persistence;
-mod schema_assets;
 pub mod scene;
-mod scene_ports;
 mod scene_runtime;
+mod schema_assets;
 mod twin_projection;
 
 /// Install the USD scene admission and live projection systems.
@@ -42,8 +42,7 @@ impl Plugin for UsdSceneRuntimePlugin {
             )
                 .chain(),
         );
-        app.add_plugins(scene_ports::ScenePortsPlugin)
-            .register_type::<lunco_camera_core::CameraFollow>();
+        app.register_type::<lunco_camera_core::CameraFollow>();
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
         app.init_resource::<lunco_usd_core::commands::EmptyViewportReason>();
         app.add_message::<lunco_usd_bevy_scene::UsdSceneProjectionReset>();

@@ -9567,6 +9567,7 @@ dependencies = [
  "lunco-usd-bevy-animation",
  "lunco-usd-bevy-diagnostics",
  "lunco-usd-bevy-runtime-core",
+ "lunco-usd-bevy-scene-ports",
  "lunco-usd-commands",
  "lunco-usd-queries",
  "lunco-usd-sim",
@@ -9624,6 +9625,14 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-data",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-bevy-scene-ports"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-port-core",
 ]
 
 [[package]]

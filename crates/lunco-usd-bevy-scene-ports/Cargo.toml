@@ -1,0 +1,13 @@
+[package]
+name = "lunco-usd-bevy-scene-ports"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Bevy scene-property port backend for the USD runtime"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_light"] }
+lunco-port-core = { path = "../lunco-port-core" }
+
+[lints]
+workspace = true

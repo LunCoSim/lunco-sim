@@ -100,7 +100,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
 | **`lunco-usd-commands`** | Headless USD document and authoring command boundary: document kind registration, open/new/save/undo/redo, document lifecycle, and typed USD authoring commands. It owns no scene admission or visual projection. |
-| **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, runtime persistence, live document-to-stage projection, generic authored control/program/scene-property runtime surfaces, and generic projection-change boundaries consumed by domain adapters. |
+| **`lunco-usd-bevy-runtime-core`** | Headless-safe USD scene runtime: scene admission, Twin-backed stage loading, runtime persistence, live document-to-stage projection, generic authored control/program runtime surfaces, and generic projection-change boundaries consumed by domain adapters. |
+| **`lunco-usd-bevy-scene-ports`** | Reusable Bevy adapter for USD-connected scene-property sinks: light intensity/radius/color channels and transform components. It owns the `PortBackend` and lifecycle markers; the aggregate USD runtime installs it explicitly. |
 | **`lunco-usd-bevy-runtime`** | Application-level composition of the USD runtime, visual, diagnostics, physics, simulation, and document-command plugins. The default `simulation` feature includes the standard vehicle/simulation projector; lean hosts can omit it, while the Modelica/Rhai co-simulation projection is opt-in through `cosim` (which implies `simulation`). |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, domain-owned live-edit registration, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
@@ -597,10 +598,15 @@ orchestration or UI presentation. Their public query contracts are tested in
 **`lunco-usd-bevy-runtime-core`**
 Headless-safe scene runtime boundary. Installs scene admission, Twin-backed
 stage loading, runtime persistence, live document-to-stage projection, generic
-authored info-change publication, authored control/program projection,
-scene-property port surfaces, scene commands, and the stage terminal-outcome
-contract. It does not assemble the complete visual,
+authored info-change publication, authored control/program projection, scene
+commands, and the stage terminal-outcome contract. It does not assemble the
+complete visual,
 diagnostics, physics, simulation, or document-command bundle.
+
+**`lunco-usd-bevy-scene-ports`**
+Reusable Bevy scene-property port backend. It exposes connected light channels
+and transform components as writable simulation sinks, owns the port-surface
+lifecycle markers, and is installed explicitly by the aggregate USD runtime.
 
 **`lunco-usd-bevy-runtime`**
 Application-level composition boundary. Installs the visual USD projector,
@@ -701,8 +707,9 @@ does not own BasisCurves geometry math.
 Visual OpenUSD bridge built on `lunco-usd-bevy-core` and
 `lunco-usd-bevy-mesh`. It maps USD prim hierarchies and visual facts into Bevy
 entities/components and orchestrates async mesh and render-intent projection.
-Authored controls, generic executable programs, and scene-property port
-surfaces belong to `lunco-usd-bevy-runtime-core`, not this visual adapter. The
+Authored controls and generic executable programs belong to
+`lunco-usd-bevy-runtime-core`; scene-property port surfaces belong to
+`lunco-usd-bevy-scene-ports`, not this visual adapter. The
 visual plugin installs the camera and light adapters at its integration boundary;
 `lunco-render-bevy` supplies the concrete render pipeline. Parametric
 NURBS/lathe definitions and their mesh regeneration live in the independent

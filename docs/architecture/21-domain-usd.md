@@ -27,7 +27,8 @@ document inspection, edit sessions, document synchronization, and explicit
 assembly-target resolution;
 `lunco-usd-bevy-runtime-core` owns scene admission, Twin-backed stage loading,
 runtime persistence, live document projection, and generic authored runtime
-surfaces (control bindings, executable programs, and scene-property ports);
+surfaces (control bindings and executable programs);
+`lunco-usd-bevy-scene-ports` owns the Bevy scene-property port backend;
 `lunco-usd-bevy-runtime`
 composes that runtime with the application plugin bundle; its default
 `simulation` feature adds the standard vehicle/simulation projector, while
@@ -63,8 +64,9 @@ refresh from the generic authored info-change message;
 `lunco-usd-bevy-animation` owns the render-free time-sample projection;
 `lunco-usd-bevy` owns hierarchy, transform, async projection orchestration, and
 material intent while consuming the camera, light, lathe, and mesh packages
-directly; authored control/program projection and scene-property port
-registration are installed by `lunco-usd-bevy-runtime-core`; and
+directly; authored control/program projection is installed by
+`lunco-usd-bevy-runtime-core`, while scene-property port registration is owned
+by `lunco-usd-bevy-scene-ports` and installed by the aggregate runtime; and
 `lunco-usd-avian-lint` owns composed `UsdPhysics` lint facts;
 `lunco-usd-avian-core` owns the USD-independent Avian/BigSpace physics-frame
 bridge, including f64 pose synchronization, rootless collider propagation,

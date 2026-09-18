@@ -296,15 +296,22 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
 /// (`translation_x`) rather than bare, so there is no simulation port on any prim
 /// for this to shadow. Widening a name here — accepting `intensity`, say — would
 /// break that guarantee, because `inputs:intensity` is also stock UsdLux.
-pub(crate) struct ScenePortsPlugin;
+///
+/// Installs the Bevy scene-property port backend.
+///
+/// The backend exposes authored scene properties such as light channels and
+/// transform components as writable simulation sinks. It is an application
+/// adapter and is therefore composed explicitly by hosts that install the
+/// complete USD runtime.
+pub struct UsdScenePortsPlugin;
 
-impl Plugin for ScenePortsPlugin {
+impl Plugin for UsdScenePortsPlugin {
     fn build(&self, app: &mut App) {
         build(app);
     }
 }
 
-pub(crate) fn build(app: &mut App) {
+fn build(app: &mut App) {
     app.add_observer(mark_point_light_surface_ready)
         .add_observer(mark_spot_light_surface_ready)
         .add_observer(lunco_port_core::ports::bump_port_topology_on_add::<PointLight>)
@@ -382,10 +389,11 @@ mod tests {
         app.world_mut().entity_mut(e).insert(PointLight::default());
         app.update();
 
-        assert!(app
-            .world()
-            .get::<lunco_port_core::PortSurfaceReady>(e)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<lunco_port_core::PortSurfaceReady>(e)
+                .is_some()
+        );
     }
 
     #[test]
@@ -470,20 +478,22 @@ mod tests {
         app.world_mut().clear_trackers();
 
         assert!(reg.write_port(app.world_mut(), e, "scale_y", 2.5));
-        assert!(!app
-            .world()
-            .entity(e)
-            .get_ref::<Transform>()
-            .unwrap()
-            .is_changed());
+        assert!(
+            !app.world()
+                .entity(e)
+                .get_ref::<Transform>()
+                .unwrap()
+                .is_changed()
+        );
 
         assert!(reg.write_port(app.world_mut(), e, "scale_y", 3.0));
-        assert!(app
-            .world()
-            .entity(e)
-            .get_ref::<Transform>()
-            .unwrap()
-            .is_changed());
+        assert!(
+            app.world()
+                .entity(e)
+                .get_ref::<Transform>()
+                .unwrap()
+                .is_changed()
+        );
     }
 
     /// `list` reports exactly what the entity has, so `ListPorts` and `write_input`

@@ -25,6 +25,7 @@ impl Plugin for UsdPlugins {
             lunco_usd_commands::UsdCommandsPlugin,
             lunco_usd_queries::UsdQueriesPlugin,
             lunco_usd_bevy_runtime_core::UsdSceneRuntimePlugin,
+            lunco_usd_bevy_scene_ports::UsdScenePortsPlugin,
             lunco_usd_bevy::UsdVisualPlugin,
             lunco_usd_bevy_animation::UsdAnimationPlugin,
             lunco_usd_bevy_diagnostics::UsdDiagnosticsPlugin,

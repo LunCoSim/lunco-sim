@@ -79,6 +79,7 @@ members = [
     "crates/lunco-usd-bevy-core",
     "crates/lunco-usd-bevy-diagnostics",
     "crates/lunco-usd-bevy-scene",
+    "crates/lunco-usd-bevy-scene-ports",
     "crates/lunco-usd-bevy-twin",
     "crates/lunco-usd-bevy-lathe",
     "crates/lunco-usd-core",
