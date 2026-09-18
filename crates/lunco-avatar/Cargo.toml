@@ -22,7 +22,6 @@ leafwing-input-manager = { workspace = true }
 lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-input-core = { path = "../lunco-input-core" }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
-lunco-avatar-input = { path = "../lunco-avatar-input" }
 lunco-avatar-camera-core = { path = "../lunco-avatar-camera-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }

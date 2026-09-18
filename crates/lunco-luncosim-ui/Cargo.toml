@@ -86,6 +86,7 @@ lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-capture = { path = "../lunco-capture", features = ["api"] }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-avatar-camera = { path = "../lunco-avatar-camera" }
+lunco-avatar-input = { path = "../lunco-avatar-input" }
 lunco-avatar-ui = { path = "../lunco-avatar-ui", optional = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-camera-celestial = { path = "../lunco-camera-celestial" }
@@ -94,6 +95,7 @@ lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-camera-runtime = { path = "../lunco-camera-runtime" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-input-ui = { path = "../lunco-input-ui" }
 lunco-doc = { path = "../lunco-doc" }

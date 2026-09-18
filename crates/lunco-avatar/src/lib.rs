@@ -164,9 +164,6 @@ impl Plugin for LunCoAvatarPlugin {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
-        if !app.is_plugin_added::<lunco_avatar_input::AvatarInputPlugin>() {
-            app.add_plugins(lunco_avatar_input::AvatarInputPlugin);
-        }
         if !app.is_plugin_added::<lunco_input_core::InputBindingsPlugin>() {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }
