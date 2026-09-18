@@ -42,3 +42,8 @@ Use `inspect-simulation`, `record-video`, or the API screenshot surface for
 visual evidence. Preserve authored shadow maps, terrain resolution, BigSpace,
 and physics settings. If an asset is missing, report the owning cache or
 manifest error visibly instead of adding a procedural fallback.
+
+For CPU-built RGBA8 mip chains, preserve the role-aware filtering above while
+using the GPU texture extent rule `max(1, floor(size / 2))` independently on
+each axis. Never use ceil-halving or silently clamp an oversized mip count:
+the level data would no longer match the texture's legal subresources.

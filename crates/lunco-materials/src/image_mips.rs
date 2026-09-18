@@ -21,9 +21,9 @@ pub enum Rgba8MipMode {
 /// Build a complete RGBA8 mip chain, with level zero first.
 ///
 /// The input must contain exactly `width * height * 4` bytes. Dimensions do
-/// not have to be powers of two: each next level uses `(size + 1) / 2` and
-/// clamps its four source samples at the edge. Invalid dimensions, lengths, or
-/// allocation sizes return `None` instead of panicking.
+/// not have to be powers of two: each next level uses the GPU texture rule
+/// `max(1, size / 2)` and clamps its four source samples at the edge. Invalid
+/// dimensions, lengths, or allocation sizes return `None` instead of panicking.
 pub fn rgba8_mip_chain(
     base: Vec<u8>,
     width: usize,
@@ -48,8 +48,11 @@ pub fn rgba8_mip_chain(
         if level_width == 1 && level_height == 1 {
             break;
         }
-        level_width = level_width.div_ceil(2);
-        level_height = level_height.div_ceil(2);
+        // WebGPU uses floor-halving for logical mip extents. Ceil-halving
+        // creates CPU levels that have no corresponding GPU subresource for
+        // odd-sized textures and makes the descriptor invalid.
+        level_width = (level_width / 2).max(1);
+        level_height = (level_height / 2).max(1);
     }
 
     let mut all = Vec::with_capacity(total_len);
@@ -199,5 +202,27 @@ mod tests {
     fn invalid_base_is_rejected() {
         assert!(rgba8_mip_chain(vec![0; 3], 1, 1, Rgba8MipMode::Linear).is_none());
         assert!(rgba8_mip_chain(Vec::new(), 0, 1, Rgba8MipMode::Linear).is_none());
+    }
+
+    #[test]
+    fn non_power_of_two_dimensions_use_gpu_legal_mip_counts() {
+        for (width, height, expected_levels) in [(2_500, 2_500, 12), (2_047, 2_047, 11)] {
+            let base = vec![0; width * height * 4];
+            let (chain, levels) =
+                rgba8_mip_chain(base, width, height, Rgba8MipMode::Linear).unwrap();
+            assert_eq!(levels, expected_levels);
+            assert!(chain.len() > width * height * 4);
+        }
+    }
+
+    #[test]
+    fn rectangular_mips_halve_each_axis_independently() {
+        let (chain, levels) =
+            rgba8_mip_chain(vec![0; 1 * 129 * 4], 1, 129, Rgba8MipMode::Linear).unwrap();
+
+        // 1x129 -> 1x64 -> 1x32 -> ... -> 1x1.
+        assert_eq!(levels, 8);
+        let expected_texels = 129 + 64 + 32 + 16 + 8 + 4 + 2 + 1;
+        assert_eq!(chain.len(), expected_texels * 4);
     }
 }
