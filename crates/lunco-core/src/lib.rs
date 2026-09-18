@@ -11,6 +11,7 @@
 // commands on exactly the same macro/reflection path as plugin commands.
 extern crate self as lunco_core;
 
+pub mod assembly;
 /// Runtime command markers, reflection, and result storage.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
@@ -25,6 +26,7 @@ pub mod identity;
 pub mod labels;
 /// Architectural marker components shared by engine subsystems.
 pub mod markers;
+pub mod math;
 pub mod physics_state;
 pub mod programs;
 /// Typed requests and lifecycle edges for scene ownership and transitions.
@@ -38,6 +40,10 @@ pub mod mobility;
 pub mod model_state;
 pub mod tools;
 
+pub use assembly::{
+    AssemblyComponent, AssemblyError, AssemblyLink, AssemblyPlan, AssemblyPort, ComponentId,
+    ComponentKind, PortId, PortKind,
+};
 pub use commands::{
     ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOutcome, CommandResults,
     EditIntent, MarkClientLocalExt, SpawnEntity,
@@ -56,6 +62,7 @@ pub use markers::{
     UsdPrimKind, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG,
     TRIGGER_COLLISION_LAYER,
 };
+pub use math::DTransform;
 pub use mobility::Mobility;
 pub use model_state::ModelStateRevision;
 pub use physics_state::*;

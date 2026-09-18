@@ -7,11 +7,35 @@
 use std::sync::Arc;
 
 use bevy::math::{DQuat, DVec3};
+use lunco_core::DTransform;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlEnumValue,
-    SysmlMultiplicity, SysmlQuantityValue, SysmlSubject, SysmlType,
+    SysmlMultiplicity, SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlSubject, SysmlType,
 };
 use rhai::{Dynamic, Engine, Map};
+
+/// A source-backed SysML record exposed as a native Rhai object.
+///
+/// Fields are resolved from typed AST attributes, so a script never needs to
+/// split CSV strings or parse a source comment to obtain a component value.
+#[derive(Clone, Debug)]
+pub struct SysmlRecordValue {
+    inner: SysmlRecord,
+}
+
+fn record_value(record: &mut SysmlRecordValue, name: &str) -> Dynamic {
+    record
+        .inner
+        .fields
+        .iter()
+        .find(|field| field.name == name)
+        .and_then(typed_attribute_value_dynamic)
+        .unwrap_or(Dynamic::UNIT)
+}
+
+fn record_has_field(record: &mut SysmlRecordValue, name: &str) -> bool {
+    record.inner.fields.iter().any(|field| field.name == name)
+}
 
 /// A requirement declaration/usage projected for a Rhai test report.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -206,7 +230,20 @@ pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
             analysis
                 .attributes()
                 .iter()
-                .map(attribute_dynamic)
+                .map(|attribute| {
+                    attribute_dynamic_at_revision(attribute, analysis.source_revision())
+                })
+                .collect(),
+        ),
+    );
+    report.insert(
+        "records".into(),
+        Dynamic::from_array(
+            analysis
+                .records()
+                .iter()
+                .cloned()
+                .map(|record| Dynamic::from(SysmlRecordValue { inner: record }))
                 .collect(),
         ),
     );
@@ -216,7 +253,7 @@ pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
             analysis
                 .requirements()
                 .iter()
-                .map(requirement_dynamic)
+                .map(|record| requirement_dynamic(record, analysis.source_revision()))
                 .collect(),
         ),
     );
@@ -268,10 +305,24 @@ pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
                 .collect(),
         ),
     );
-    report.insert("attributes".into(), attributes_short_dynamic(analysis));
+    report.insert(
+        "attributes".into(),
+        attributes_short_dynamic(analysis, analysis.source_revision()),
+    );
+    report.insert(
+        "records".into(),
+        Dynamic::from_array(
+            analysis
+                .records()
+                .iter()
+                .cloned()
+                .map(|record| Dynamic::from(SysmlRecordValue { inner: record }))
+                .collect(),
+        ),
+    );
     report.insert(
         "attributes_qualified".into(),
-        attributes_qualified_dynamic(analysis),
+        attributes_qualified_dynamic(analysis, analysis.source_revision()),
     );
     report.insert(
         "attribute_collisions".into(),
@@ -303,7 +354,7 @@ pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
             analysis
                 .requirements()
                 .iter()
-                .map(requirement_dynamic)
+                .map(|record| requirement_dynamic(record, analysis.source_revision()))
                 .collect(),
         ),
     );
@@ -416,7 +467,33 @@ pub fn register_sysml_types(engine: &mut Engine) {
         })
         .register_get("literal", |value: &mut SysmlEnumValue| {
             value.literal.clone()
-        });
+        })
+        .register_type_with_name::<SysmlSourceRef>("SourceRef")
+        .register_get("file", |value: &mut SysmlSourceRef| value.file.clone())
+        .register_get("start", |value: &mut SysmlSourceRef| value.start as i64)
+        .register_get("end", |value: &mut SysmlSourceRef| value.end as i64)
+        .register_get("revision", |value: &mut SysmlSourceRef| {
+            value.revision.to_string()
+        })
+        .register_type_with_name::<SysmlRecordValue>("SysmlRecord")
+        .register_get("type_name", |value: &mut SysmlRecordValue| {
+            value.inner.type_name.clone()
+        })
+        .register_get("field_names", |value: &mut SysmlRecordValue| {
+            Dynamic::from_array(
+                value
+                    .inner
+                    .fields
+                    .iter()
+                    .map(|field| Dynamic::from(field.name.clone()))
+                    .collect(),
+            )
+        })
+        .register_get("source", |value: &mut SysmlRecordValue| {
+            value.inner.source.clone()
+        })
+        .register_fn("value", record_value)
+        .register_fn("has_field", record_has_field);
 }
 
 /// Lower one resolved SysML literal into the native value used by Rhai and
@@ -482,6 +559,9 @@ fn typed_report_literal_value(literal: &Map, declared: Option<&Map>) -> Option<D
             let quaternion =
                 DQuat::from_xyzw(components[0], components[1], components[2], components[3]);
             return normalized_quat(quaternion);
+        }
+        if base.rsplit("::").next().unwrap_or_default() == "Transform" && values.len() == 3 {
+            return native_transform(&values);
         }
         return Some(Dynamic::from_array(values));
     }
@@ -582,6 +662,9 @@ fn typed_literal_dynamic(
                 components[3],
             ));
         }
+        if base == "Transform" && values.len() == 3 {
+            return native_transform(&values);
+        }
         return Some(Dynamic::from_array(values));
     }
 
@@ -622,6 +705,60 @@ fn typed_literal_dynamic(
         return Some(Dynamic::from_bool(value));
     }
     literal.string_value.clone().map(Dynamic::from)
+}
+
+fn native_transform(values: &[Dynamic]) -> Option<Dynamic> {
+    let translation = dynamic_vec3(&values[0])?;
+    let rotation = dynamic_quat(&values[1])?;
+    let scale = dynamic_vec3(&values[2])?;
+    Some(Dynamic::from(DTransform::new(
+        translation,
+        rotation,
+        scale,
+    )?))
+}
+
+fn dynamic_vec3(value: &Dynamic) -> Option<DVec3> {
+    if let Some(value) = value.clone().try_cast::<DVec3>() {
+        return value.is_finite().then_some(value);
+    }
+    let values = value.clone().try_cast::<rhai::Array>()?;
+    if values.len() != 3 {
+        return None;
+    }
+    let components = values
+        .iter()
+        .map(|value| value.as_float().ok())
+        .collect::<Option<Vec<_>>>()?;
+    let vector = DVec3::new(components[0], components[1], components[2]);
+    vector.is_finite().then_some(vector)
+}
+
+fn dynamic_quat(value: &Dynamic) -> Option<DQuat> {
+    if let Some(value) = value.clone().try_cast::<DQuat>() {
+        return normalized_quat_value(value);
+    }
+    let values = value.clone().try_cast::<rhai::Array>()?;
+    if values.len() != 4 {
+        return None;
+    }
+    let components = values
+        .iter()
+        .map(|value| value.as_float().ok())
+        .collect::<Option<Vec<_>>>()?;
+    normalized_quat_value(DQuat::from_xyzw(
+        components[0],
+        components[1],
+        components[2],
+        components[3],
+    ))
+}
+
+fn normalized_quat_value(value: DQuat) -> Option<DQuat> {
+    if !value.is_finite() || value.length_squared() <= f64::EPSILON {
+        return None;
+    }
+    Some(value.normalize())
 }
 
 fn finite_vec3(x: f64, y: f64, z: f64) -> Option<Dynamic> {
@@ -751,7 +888,7 @@ fn literal_dynamic(literal: &lunco_sysml_ast::SysmlLiteral) -> Dynamic {
     Dynamic::from_map(value)
 }
 
-fn attribute_dynamic(attribute: &SysmlAttribute) -> Dynamic {
+fn attribute_dynamic_at_revision(attribute: &SysmlAttribute, revision: u64) -> Dynamic {
     let mut value = Map::new();
     value.insert("owner".into(), Dynamic::from(attribute.owner.clone()));
     value.insert("name".into(), Dynamic::from(attribute.name.clone()));
@@ -802,24 +939,31 @@ fn attribute_dynamic(attribute: &SysmlAttribute) -> Dynamic {
     value.insert("file".into(), Dynamic::from(attribute.file.clone()));
     value.insert("start".into(), Dynamic::from_int(attribute.start as i64));
     value.insert("end".into(), Dynamic::from_int(attribute.end as i64));
+    value.insert(
+        "source".into(),
+        Dynamic::from(attribute.source_ref(revision)),
+    );
     Dynamic::from_map(value)
 }
 
-fn attributes_qualified_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
+fn attributes_qualified_dynamic(analysis: &SysmlAnalysis, revision: u64) -> Dynamic {
     let mut output = Map::new();
     for attribute in analysis.attributes() {
         output.insert(
             attribute.qualified_name.clone().into(),
-            attribute_dynamic(attribute),
+            attribute_dynamic_at_revision(attribute, revision),
         );
     }
     Dynamic::from_map(output)
 }
 
-fn attributes_short_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
+fn attributes_short_dynamic(analysis: &SysmlAnalysis, revision: u64) -> Dynamic {
     let mut output = Map::new();
     for attribute in analysis.attributes() {
-        output.insert(attribute.name.clone().into(), attribute_dynamic(attribute));
+        output.insert(
+            attribute.name.clone().into(),
+            attribute_dynamic_at_revision(attribute, revision),
+        );
     }
     Dynamic::from_map(output)
 }
@@ -848,14 +992,20 @@ fn attribute_collisions_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     )
 }
 
-fn requirement_dynamic(record: &lunco_sysml_ast::SysmlRequirementRecord) -> Dynamic {
+fn requirement_dynamic(record: &lunco_sysml_ast::SysmlRequirementRecord, revision: u64) -> Dynamic {
     let mut value = Map::new();
     value.insert("element".into(), element_dynamic(&record.element));
     value.insert("documentation".into(), string_array(&record.documentation));
     value.insert("subjects".into(), subject_array(&record.subjects));
     value.insert(
         "attributes".into(),
-        Dynamic::from_array(record.attributes.iter().map(attribute_dynamic).collect()),
+        Dynamic::from_array(
+            record
+                .attributes
+                .iter()
+                .map(|attribute| attribute_dynamic_at_revision(attribute, revision))
+                .collect(),
+        ),
     );
     value.insert("verifies".into(), string_array(&record.verifies));
     value.insert("satisfies".into(), string_array(&record.satisfies));
@@ -1032,5 +1182,35 @@ mod tests {
                 .unwrap(),
             "0xffffffffffffffff"
         );
+    }
+
+    #[test]
+    fn native_record_exposes_typed_transform_and_source() {
+        let analysis = Arc::new(SysmlAnalysis::from_files_without_stdlib([(
+            "griffin.sysml",
+            "part def Griffin { attribute pose : Transform = ((1.0, 2.0, 3.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0)); attribute railLength : Real = 2.6; }",
+        )]));
+        let mut engine = rhai::Engine::new();
+        lunco_scripting_rhai_core::rhai_math::register(&mut engine);
+        register_sysml_report(&mut engine, analysis);
+        let values: rhai::Array = engine
+            .eval(
+                "let record = sysml_report().records[0]; \
+                 [record.type_name, record.field_names[0], \
+                  record.value(\"pose\").translation.x, \
+                  record.source.file, record.source.revision]",
+            )
+            .expect("typed SysML record projection");
+        assert_eq!(
+            values[0].clone().into_immutable_string().unwrap(),
+            "Griffin"
+        );
+        assert_eq!(values[1].clone().into_immutable_string().unwrap(), "pose");
+        assert_eq!(values[2].as_float().unwrap(), 1.0);
+        assert_eq!(
+            values[3].clone().into_immutable_string().unwrap(),
+            "griffin.sysml"
+        );
+        assert_eq!(values[4].clone().into_immutable_string().unwrap(), "0");
     }
 }

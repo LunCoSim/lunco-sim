@@ -9318,6 +9318,7 @@ dependencies = [
  "bevy",
  "lunco-assets-runtime",
  "lunco-behavior",
+ "lunco-core",
  "lunco-telemetry-core",
  "rhai",
 ]
@@ -9361,6 +9362,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-command-contracts",
+ "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-hash",
@@ -9491,6 +9493,8 @@ name = "lunco-sysml-rhai"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-core",
+ "lunco-scripting-rhai-core",
  "lunco-sysml-ast",
  "rhai",
  "serde",

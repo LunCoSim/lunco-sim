@@ -45,7 +45,8 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         lunco_scripting_rhai_world::tool_libs::register_native_builtins();
         app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
             .init_resource::<lunco_scripting_rhai_world::world_bridge::PendingWorldScripts>()
-            .init_resource::<lunco_scripting_rhai_world::world_bridge::RhaiRuntimeStatus>();
+            .init_resource::<lunco_scripting_rhai_world::world_bridge::RhaiRuntimeStatus>()
+            .init_resource::<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>();
         #[cfg(feature = "native-plugins")]
         app.init_resource::<lunco_scripting_rhai_world::native_plugins::NativeTwinPlugins>();
         app.add_systems(

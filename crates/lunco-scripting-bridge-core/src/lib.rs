@@ -47,7 +47,7 @@ use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_command_contracts::{OpId, SessionId};
-use lunco_core::{CommandResults, GlobalEntityId};
+use lunco_core::{CommandResults, DTransform, GlobalEntityId};
 use lunco_core_session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
@@ -74,6 +74,50 @@ pub trait ValueBuilder {
     fn array(&self, items: Vec<Self::Value>) -> Self::Value;
     /// A string-keyed map (object).
     fn map(&self, entries: Vec<(String, Self::Value)>) -> Self::Value;
+
+    /// A native semantic vector when the backend supports one.  The default
+    /// keeps wire/serialization builders compatible without forcing them to
+    /// know the scripting backend's concrete vector type.
+    fn vec3(&self, x: f64, y: f64, z: f64) -> Self::Value {
+        self.array(vec![self.float(x), self.float(y), self.float(z)])
+    }
+
+    /// A native semantic quaternion when the backend supports one.
+    fn quat(&self, x: f64, y: f64, z: f64, w: f64) -> Self::Value {
+        self.array(vec![
+            self.float(x),
+            self.float(y),
+            self.float(z),
+            self.float(w),
+        ])
+    }
+
+    /// A native semantic transform when the backend supports one.
+    fn transform(&self, transform: DTransform) -> Self::Value {
+        self.map(vec![
+            (
+                "translation".into(),
+                self.vec3(
+                    transform.translation.x,
+                    transform.translation.y,
+                    transform.translation.z,
+                ),
+            ),
+            (
+                "rotation".into(),
+                self.quat(
+                    transform.rotation.x,
+                    transform.rotation.y,
+                    transform.rotation.z,
+                    transform.rotation.w,
+                ),
+            ),
+            (
+                "scale".into(),
+                self.vec3(transform.scale.x, transform.scale.y, transform.scale.z),
+            ),
+        ])
+    }
 }
 
 /// Whether a person can interact with the current scripted run.
@@ -139,7 +183,7 @@ pub fn build_from_reflect<B: ValueBuilder>(
             return Some(vec3_value(b, v.x as f64, v.y as f64, v.z as f64));
         }
         if let Some(v) = any.downcast_ref::<DVec3>() {
-            return Some(vec3_value(b, v.x, v.y, v.z));
+            return Some(b.vec3(v.x, v.y, v.z));
         }
         if let Some(v) = any.downcast_ref::<Vec2>() {
             return Some(b.array(vec![b.float(v.x as f64), b.float(v.y as f64)]));
@@ -156,7 +200,10 @@ pub fn build_from_reflect<B: ValueBuilder>(
             ]));
         }
         if let Some(v) = any.downcast_ref::<DQuat>() {
-            return Some(b.array(vec![b.float(v.x), b.float(v.y), b.float(v.z), b.float(v.w)]));
+            return Some(b.quat(v.x, v.y, v.z, v.w));
+        }
+        if let Some(v) = any.downcast_ref::<DTransform>() {
+            return Some(b.transform(*v));
         }
         // scalars
         if let Some(v) = any.downcast_ref::<f64>() {
@@ -284,7 +331,7 @@ pub fn build_from_json<B: ValueBuilder>(b: &B, v: &serde_json::Value) -> B::Valu
 
 /// Build a `[x, y, z]` array value.
 pub fn vec3_value<B: ValueBuilder>(b: &B, x: f64, y: f64, z: f64) -> B::Value {
-    b.array(vec![b.float(x), b.float(y), b.float(z)])
+    b.vec3(x, y, z)
 }
 
 /// The canonical *serialization* [`ValueBuilder`]: constructs `serde_json::Value`.

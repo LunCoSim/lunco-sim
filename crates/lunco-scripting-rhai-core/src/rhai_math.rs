@@ -28,38 +28,9 @@
 //! visible type error rather than silent poison.
 
 use bevy::math::{DQuat, DVec3, EulerRot};
-use bevy::prelude::Transform as BevyTransform;
+pub use lunco_core::DTransform;
+use lunco_core::DTransform as CoreDTransform;
 use rhai::{Dynamic, Engine, EvalAltResult, Position};
-
-/// The f64 pose exchanged by the core, Rhai, SysML-derived assembly plans,
-/// and Modelica-facing geometry policy.  Bevy's render transform remains f32;
-/// conversion is explicit at that boundary so scene authoring does not lose
-/// precision merely because the renderer does.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DTransform {
-    pub translation: DVec3,
-    pub rotation: DQuat,
-    pub scale: DVec3,
-}
-
-impl DTransform {
-    pub const IDENTITY: Self = Self {
-        translation: DVec3::ZERO,
-        rotation: DQuat::IDENTITY,
-        scale: DVec3::ONE,
-    };
-
-    /// Lower the precise authoring pose into Bevy's render-space component.
-    /// This is intentionally the only f32 conversion in the type's public
-    /// boundary; physics and requirement calculations keep `DTransform`.
-    pub fn as_bevy_transform(self) -> BevyTransform {
-        BevyTransform {
-            translation: self.translation.as_vec3(),
-            rotation: self.rotation.as_quat(),
-            scale: self.scale.as_vec3(),
-        }
-    }
-}
 
 /// Construct a Rhai runtime error for a value that cannot satisfy the native
 /// math type's invariant.  Native vectors/quaternions are deliberately
@@ -94,11 +65,12 @@ fn finite_transform(
     scale: DVec3,
     label: &str,
 ) -> Result<DTransform, Box<EvalAltResult>> {
-    Ok(DTransform {
-        translation: finite_vec3(translation, &format!("{label} translation"))?,
-        rotation: finite_quat(rotation, &format!("{label} rotation"))?,
-        scale: finite_vec3(scale, &format!("{label} scale"))?,
-    })
+    CoreDTransform::new(
+        finite_vec3(translation, &format!("{label} translation"))?,
+        finite_quat(rotation, &format!("{label} rotation"))?,
+        finite_vec3(scale, &format!("{label} scale"))?,
+    )
+    .ok_or_else(|| invalid_value(format!("{label} is not a finite transform")))
 }
 
 /// One numeric element of a script array.
@@ -504,6 +476,8 @@ pub fn register(engine: &mut Engine) {
             _ => Dynamic::UNIT,
         }
     });
+
+    crate::rhai_assembly::register(engine);
 }
 
 #[cfg(test)]

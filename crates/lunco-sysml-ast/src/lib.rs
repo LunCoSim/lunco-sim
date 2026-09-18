@@ -51,6 +51,23 @@ pub struct SysmlFile {
     pub text: String,
 }
 
+/// A compact, typed source location that can travel with a value or record.
+///
+/// Keeping provenance as a value object means Rhai and report consumers can
+/// inspect the source without parsing a comment string or reconstructing a
+/// location from a display-only diagnostic.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlSourceRef {
+    /// Logical source file containing the declaration.
+    pub file: String,
+    /// Inclusive-start byte offset.
+    pub start: u32,
+    /// Exclusive-end byte offset.
+    pub end: u32,
+    /// Source generation that produced the projection.
+    pub revision: u64,
+}
+
 /// The category of a semantic diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SysmlDiagnosticKind {
@@ -555,6 +572,58 @@ pub struct SysmlLiteral {
     pub elements: Option<Vec<SysmlLiteral>>,
 }
 
+/// A typed SysML value suitable for crossing into Rhai or a Modelica adapter.
+///
+/// Expressions remain opaque until an owning execution language evaluates
+/// them.  This is intentional: the AST owns source fidelity and type shape;
+/// Rhai/Modelica own domain-specific execution semantics.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlValue {
+    Integer(i64),
+    Real(SysmlNumber),
+    Boolean(bool),
+    String(String),
+    Quantity(SysmlQuantityValue),
+    Enumeration(SysmlEnumValue),
+    Collection(Vec<SysmlValue>),
+    Expression(String),
+}
+
+impl SysmlLiteral {
+    /// Lower a simple literal to the typed value algebra without evaluating
+    /// authored expressions.
+    pub fn typed_value(&self) -> Option<SysmlValue> {
+        if let Some(elements) = &self.elements {
+            return Some(SysmlValue::Collection(
+                elements
+                    .iter()
+                    .map(Self::typed_value)
+                    .collect::<Option<Vec<_>>>()?,
+            ));
+        }
+        if let (Some(value), Some(unit)) = (self.number_value, self.unit.as_ref()) {
+            return Some(SysmlValue::Quantity(SysmlQuantityValue {
+                value,
+                unit: unit.clone(),
+                quantity_kind: None,
+            }));
+        }
+        if let Some(value) = self.integer_value {
+            return Some(SysmlValue::Integer(value));
+        }
+        if let Some(value) = self.number_value {
+            return Some(SysmlValue::Real(value));
+        }
+        if let Some(value) = self.boolean_value {
+            return Some(SysmlValue::Boolean(value));
+        }
+        if let Some(value) = &self.string_value {
+            return Some(SysmlValue::String(value.clone()));
+        }
+        Some(SysmlValue::Expression(self.literal.clone()))
+    }
+}
+
 fn default_literal_kind() -> SysmlLiteralKind {
     SysmlLiteralKind::Expression
 }
@@ -583,6 +652,32 @@ pub struct SysmlAttribute {
     pub start: u32,
     /// Declaration byte-range end.
     pub end: u32,
+}
+
+impl SysmlAttribute {
+    /// Return the attribute's typed source identity for the requested source
+    /// generation.
+    pub fn source_ref(&self, revision: u64) -> SysmlSourceRef {
+        SysmlSourceRef {
+            file: self.file.clone(),
+            start: self.start,
+            end: self.end,
+            revision,
+        }
+    }
+}
+
+/// A source-backed structured record assembled from attributes owned by one
+/// SysML element.  It is the native bridge shape for component specifications
+/// such as a lander body, rail, tank, or solar-array mount.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlRecord {
+    /// Qualified owner/type name.
+    pub type_name: String,
+    /// Attributes in authored source order.
+    pub fields: Vec<SysmlAttribute>,
+    /// Span covering the record's authored fields.
+    pub source: SysmlSourceRef,
 }
 
 /// A subject declared on a requirement or verification case.
@@ -639,6 +734,7 @@ pub struct SysmlAnalysis {
     relationships: Vec<SysmlRelationship>,
     constraints: Vec<SysmlConstraint>,
     attributes: Vec<SysmlAttribute>,
+    records: Vec<SysmlRecord>,
     requirements: Vec<SysmlRequirementRecord>,
     verifications: Vec<SysmlVerificationRecord>,
     source_revision: u64,
@@ -779,6 +875,7 @@ impl SysmlAnalysis {
         let relationships = project_relationships(&workspace, &elements, &project_indices);
         let constraints = project_constraints(&workspace, &elements, &project_indices);
         let attributes = project_attributes(&files, &elements, &type_catalog);
+        let records = project_records(&attributes, source_revision);
         let requirements = project_requirements(&files, &elements, &attributes);
         let verifications = project_verifications(&files, &elements);
 
@@ -790,6 +887,7 @@ impl SysmlAnalysis {
             relationships,
             constraints,
             attributes,
+            records,
             requirements,
             verifications,
             source_revision,
@@ -872,6 +970,11 @@ impl SysmlAnalysis {
     /// Source-backed attributes with typed literal classification.
     pub fn attributes(&self) -> &[SysmlAttribute] {
         &self.attributes
+    }
+
+    /// Structured attribute records grouped by their SysML owner.
+    pub fn records(&self) -> &[SysmlRecord] {
+        &self.records
     }
 
     /// Structured requirement definitions and usages.
@@ -1104,6 +1207,34 @@ fn project_attributes(
                 file: element.file.clone(),
                 start: element.start,
                 end: element.end,
+            })
+        })
+        .collect()
+}
+
+fn project_records(attributes: &[SysmlAttribute], revision: u64) -> Vec<SysmlRecord> {
+    let mut grouped: BTreeMap<String, Vec<SysmlAttribute>> = BTreeMap::new();
+    for attribute in attributes {
+        grouped
+            .entry(attribute.owner.clone())
+            .or_default()
+            .push(attribute.clone());
+    }
+
+    grouped
+        .into_iter()
+        .filter_map(|(type_name, fields)| {
+            let first = fields.first()?;
+            let last = fields.last()?;
+            Some(SysmlRecord {
+                type_name,
+                source: SysmlSourceRef {
+                    file: first.file.clone(),
+                    start: first.start,
+                    end: last.end,
+                    revision,
+                },
+                fields,
             })
         })
         .collect()
@@ -1499,6 +1630,38 @@ mod tests {
         assert_eq!(value.number_value.map(SysmlNumber::as_f64), Some(2.5));
         assert_eq!(value.integer_value, None);
         assert_eq!(value.literal_kind, SysmlLiteralKind::Real);
+        assert_eq!(
+            value.typed_value(),
+            Some(SysmlValue::Real(SysmlNumber::new(2.5).unwrap()))
+        );
+    }
+
+    #[test]
+    fn records_group_component_fields_with_typed_source_identity() {
+        let analysis = SysmlAnalysis::build(
+            [(
+                "component.sysml",
+                "part def Body { attribute length : Real = 2.6; attribute width : Real = 2.4; }",
+            )],
+            false,
+            17,
+        );
+        let record = analysis
+            .records()
+            .iter()
+            .find(|record| record.type_name == "Body")
+            .expect("component record");
+        assert_eq!(
+            record
+                .fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["length", "width"]
+        );
+        assert_eq!(record.source.file, "component.sysml");
+        assert_eq!(record.source.revision, 17);
+        assert_eq!(record.fields[0].source_ref(17).file, "component.sysml");
     }
 
     #[test]

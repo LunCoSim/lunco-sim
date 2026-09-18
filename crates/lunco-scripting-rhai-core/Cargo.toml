@@ -9,6 +9,7 @@ description = "Reusable Rhai backend mechanics for LunCoSim scripting"
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true }
 lunco-behavior = { path = "../lunco-behavior" }
+lunco-core = { path = "../lunco-core" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 rhai = { workspace = true }
 

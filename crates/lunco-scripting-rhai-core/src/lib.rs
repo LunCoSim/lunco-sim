@@ -7,6 +7,7 @@
 
 pub mod module_resolver;
 pub mod names;
+pub mod rhai_assembly;
 pub mod rhai_math;
 pub mod task_tree;
 pub mod ui_bridge;

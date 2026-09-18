@@ -40,6 +40,7 @@ use bevy::prelude::*;
 use std::sync::Arc;
 
 use lunco_command_contracts::{Ack, OpId};
+use lunco_core::DTransform;
 use lunco_hash::Fnv1a;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 
@@ -105,6 +106,18 @@ impl ValueBuilder for RhaiBuilder {
             m.insert(k.into(), v);
         }
         Dynamic::from_map(m)
+    }
+
+    fn vec3(&self, x: f64, y: f64, z: f64) -> Dynamic {
+        Dynamic::from(DVec3::new(x, y, z))
+    }
+
+    fn quat(&self, x: f64, y: f64, z: f64, w: f64) -> Dynamic {
+        Dynamic::from(DQuat::from_xyzw(x, y, z, w).normalize())
+    }
+
+    fn transform(&self, transform: DTransform) -> Dynamic {
+        Dynamic::from(transform)
     }
 }
 
