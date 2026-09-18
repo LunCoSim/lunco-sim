@@ -34,7 +34,6 @@ lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-viewport-core = { path = "../lunco-usd-viewport-core" }
-lunco-workbench = { path = "../lunco-workbench" }
 lunco-workbench-state = { path = "../lunco-workbench-state" }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

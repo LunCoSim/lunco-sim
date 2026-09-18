@@ -59,9 +59,7 @@ pub struct UsdUiPlugin;
 
 impl Plugin for UsdUiPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<TwinBrowserPlugin>()
-            && app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>()
-        {
+        if !app.is_plugin_added::<TwinBrowserPlugin>() {
             app.add_plugins(TwinBrowserPlugin);
         }
         app.init_resource::<LoadedUsdStages>();

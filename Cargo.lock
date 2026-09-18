@@ -10011,7 +10011,6 @@ dependencies = [
  "lunco-usd-data",
  "lunco-usd-document",
  "lunco-usd-viewport-core",
- "lunco-workbench",
  "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workbench-file-dialog",
