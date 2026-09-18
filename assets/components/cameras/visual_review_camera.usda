@@ -5,20 +5,14 @@
     metersPerUnit = 1
 )
 
-# Shared observer for deterministic tutorial visual reviews. The fixture owns
-# the subject-specific pose; this component owns the camera/avatar contract and
-# the canonical lunar projection.
+# Shared standalone observer for deterministic visual reviews. The fixture owns
+# the subject-specific pose; this component owns the camera contract and the
+# canonical lunar projection.
 def Camera "VisualReviewCamera" (
-    prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
+    prepend apiSchemas = ["LunCoCameraAPI"]
     prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
 )
 {
-        def "Controls" (
-            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
-        )
-        {
-        }
-        uniform bool lunco:avatar = true
     double3 lunco:cameraLookAt = (0.0, 1.0, 50.0)
     double3 xformOp:translate = (0.0, 18.0, 82.0)
     float focalLength = 18.0

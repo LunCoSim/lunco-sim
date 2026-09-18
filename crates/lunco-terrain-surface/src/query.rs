@@ -443,8 +443,9 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
         let visual_foci = demands
             .visual_focus_snapshot()
             .into_iter()
-            .map(|(position, forward, screen_height_px, fov_y_rad)| {
+            .map(|(entity, position, forward, screen_height_px, fov_y_rad)| {
                 serde_json::json!({
+                    "entity": entity,
                     "position": position,
                     "forward": forward,
                     "screen_height_px": screen_height_px,
@@ -475,6 +476,10 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "focus_wanted": status.focus_wanted,
                 "focus_resident": status.focus_resident,
             },
+            "viewport_camera": world
+                .get_resource::<lunco_viewport_core::SceneViewport>()
+                .and_then(|viewport| viewport.active_camera)
+                .map(|entity| entity.to_bits()),
             "visual_foci": visual_foci,
         }))
     }

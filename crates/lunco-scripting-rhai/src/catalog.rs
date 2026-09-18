@@ -435,6 +435,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "READ. Stable twin:// authority of the active Twin, or an empty string.",
     ),
     (
+        "asset_source_relative_uri",
+        "asset_source_relative_uri(document, relative)",
+        "string | error",
+        "READ. Resolve a safe document-relative asset while preserving the document's registered source authority (for example, twin://name). This is URI algebra only; it does not read files.",
+    ),
+    (
         "is_unattended",
         "is_unattended()",
         "bool",

@@ -2140,6 +2140,29 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
     // ("" if none), for source-set and asset-provider queries.
     engine.register_fn("twin_name", || -> String { bridge_core::twin_name() });
 
+    // asset_source_relative_uri(document, relative) -> an addressable URI.
+    // This is the Rhai-facing form of the generic asset identity operation: it
+    // preserves the document's registered source (including a Twin authority)
+    // while rejecting unsafe relative input. It does not read the filesystem;
+    // authored tools and scene gates use it to exercise the same URI algebra as
+    // the runtime loader.
+    engine.register_fn(
+        "asset_source_relative_uri",
+        |document: ImmutableString,
+         relative: ImmutableString|
+         -> Result<ImmutableString, Box<rhai::EvalAltResult>> {
+            let path = bevy::asset::AssetPath::parse(document.as_str()).into_owned();
+            lunco_assets_core::asset_path::source_relative_uri(&path, relative.as_str())
+                .map(Into::into)
+                .ok_or_else(|| {
+                    format!(
+                        "asset_source_relative_uri rejected relative asset `{relative}` for `{document}`"
+                    )
+                    .into()
+                })
+        },
+    );
+
     // is_unattended() -> bool — is there NOBODY at the controls? A scenario
     // branches on it to decide whether to drive ITSELF:
     // `if !is_unattended() { return; }` at the top of an authored driver leaves the

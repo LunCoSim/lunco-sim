@@ -26,6 +26,22 @@ the transport anchor and tick; they are not independently accumulated by a
 consumer. A re-anchor is an explicit transport event and must remain
 host-authoritative in a networked run.
 
+`CelestialTime` is a separate presentation projection of the celestial clock.
+It normally equals `WorldTime.epoch_jd`, but a `SetClock` re-parent onto `Real`
+may advance it while the causal simulation is paused. Only explicitly
+presentation-owned celestial consumers may read it (for example detached globe
+imagery). The physical scene sun, terrain shadow direction, active surface
+frame, body state, and other causal consumers read `WorldTime` and must never be
+driven by `CelestialTime`. Fast-forwarding the presentation clock therefore
+cannot rotate the physical sun or repeatedly invalidate a terrain shadow cache.
+
+Rendered globe imagery is also presentation-owned. Earth and Moon globe tiles
+are placed under dedicated visual celestial frames that consume
+`CelestialTime`; the physical body, picking collider, surface terrain, and
+active BigSpace/Avian frame remain in the `WorldTime` hierarchy. This is the
+required boundary for a high-rate sky time-lapse: it moves the visible globe
+without teleporting the simulated body or invalidating the surface scene.
+
 The rate ceiling and fixed-step catch-up budget live in `lunco-time`; consumers
 must not add another rate path or silently drain an unbounded fixed-step burst.
 The canonical labels are supplied by `lunco-time` so fractional slow-motion
@@ -171,7 +187,8 @@ The API surface is `SetTimeTransport` for the bounded live world and
 `ControlAnimation` for the preview or an explicitly addressed driven domain.
 Consumers do not invent aliases for either command. `SetClock` is the separate
 API for a pure celestial presentation clock, including scales above the live
-transport ceiling.
+transport ceiling; it publishes `CelestialTime` and does not overwrite
+`WorldTime`.
 
 ## 11. Current clock-tree boundaries
 

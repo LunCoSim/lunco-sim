@@ -327,6 +327,7 @@ You'll use these constantly (the complete table is in
 | `query(name, #{params})` | **READ** — call a read-only query provider (Raycast, Nearest, GroundHeight, `CausalTrace`…). Successful data is returned directly; no-data is `()`; failures return `#{ok:false,error}`. |
 | `query("ListSpawnCatalog", #{})` | **READ** — discover the authoritative `entry_id`, name, category, default transform, source, and `origin` (`builtin` or named `twin`) for assets accepted by `cmd("SpawnEntity", ...)`. |
 | `query("ValidateTwin", #{path: "/work/rover-twin", policy: "warn"})` | **READ** — inspect Twin-wide Modelica, USD, Rhai tool, shader, and asset resolver namespaces; collisions are warnings by default and become errors with `policy: "error"`. |
+| `asset_source_relative_uri(document, relative)` | **READ** — resolve a safe document-relative asset while preserving its registered source authority (`twin://…`, `lunco://…`); URI algebra only, with no filesystem read. |
 | `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`); scalar co-simulation names use the canonical `PortRegistry` surface. |
 | `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame array vector. Use `world_point(id)` when the value crosses a position or authoring boundary. |
 | `world_pos3(id)` / `world_forward3(id)` / `world_rotation_quat(id)` | native glam `Vec3`/`Quat` pose for hot loops; use `vec3_array`/`quat_array` when producing a wire/report value. |
@@ -382,6 +383,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `query(name, #{params})` | value \| `()` \| error map | **READ** — call any query provider (Raycast, Nearest, GroundHeight, `CausalTrace`, …); successful data is direct, successful no-data is `()`, and failures are `#{ok:false,error}` |
 | `query("ListSpawnCatalog", #{})` | map | discover the spawn catalog used to validate `SpawnEntity.entry_id`, including each asset's source and authored `origin` |
 | `query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"})` | map | pre-flight one explicit Twin folder with the same `lint.twin` policy used by `RunLint { scope: "twin" }` |
+| `asset_source_relative_uri(document, relative)` | string \| error | resolve a safe document-relative asset while preserving the document's registered source authority; URI algebra only, with no filesystem read |
 | `get(id, "Comp.field")` | value \| `()` | reflected component **read** (vectors → `[x,y,z]`, quats → `[x,y,z,w]`, structs → maps) |
 | `set(id, "Comp.field", value)` | bool | host-side **tuning write** — reflected component field or canonical scalar co-simulation port; supported field types only; not replicated, undoable, or a persistent port hold; `false` on bad path/type |
 | `get_setting("Res.field")` | value \| `()` | reflected **resource read** — global settings/config live in resources, not components |

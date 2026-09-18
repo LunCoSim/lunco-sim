@@ -33,6 +33,7 @@ bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_light",
 wgpu-types = "29"
 lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 # The support-placement axis comes from the environment's authoritative local
 # gravity component; terrain does not derive or special-case a world-up axis.
 lunco-environment = { path = "../lunco-environment" }

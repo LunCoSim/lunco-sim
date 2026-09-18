@@ -31,7 +31,7 @@
 use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, KeplerOrbit};
 use lunco_settings::SettingsSection;
-use lunco_time::WorldTime;
+use lunco_time::{CelestialTime, WorldTime};
 use serde::{Deserialize, Serialize};
 
 /// How much celestial angular error is acceptable before the tree is re-solved.
@@ -187,6 +187,27 @@ pub struct CelestialSolvedEpoch {
     pub revision: u64,
 }
 
+/// The epoch and structural revision used by the render-only celestial sun
+/// projection. It is separate from [`CelestialSolvedEpoch`]: a detached
+/// celestial clock may move the sky while the causal body/frame hierarchy and
+/// active surface remain fixed at [`WorldTime`].
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct CelestialPresentationSolvedEpoch {
+    /// Julian date of the last sun presentation solve.
+    pub jd: f64,
+    /// Structural celestial inputs seen by that solve.
+    pub revision: u64,
+}
+
+impl Default for CelestialPresentationSolvedEpoch {
+    fn default() -> Self {
+        Self {
+            jd: f64::NEG_INFINITY,
+            revision: u64::MAX,
+        }
+    }
+}
+
 impl Default for CelestialSolvedEpoch {
     fn default() -> Self {
         Self {
@@ -311,6 +332,16 @@ pub fn tracked_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
     lunco_core::gate::tracked("celestial_needs_solve", celestial_needs_solve)
 }
 
+/// Gate the render-only celestial sun projection using the same certified
+/// angular error budget as the causal celestial solve, but against the
+/// detached presentation epoch. Structural changes always reopen it.
+pub fn presentation_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
+    lunco_core::gate::tracked(
+        "celestial_presentation_needs_solve",
+        celestial_presentation_needs_solve,
+    )
+}
+
 /// Decide whether the current celestial inputs are outside the committed
 /// solve. This is deliberately a pure epoch/revision decision: wall-clock
 /// time is not a valid proxy for geometric error when simulation time is
@@ -347,6 +378,33 @@ pub(crate) fn celestial_needs_solve(
     // `>=` with a 0.0 step: any epoch, including an unchanged one, re-solves.
     // That is what `EXACT` promises, and it is why the comparison is not `>`.
     epoch_requires_solve(world.epoch_jd, solved.jd, revision.0, solved.revision, step)
+}
+
+pub(crate) fn celestial_presentation_needs_solve(
+    celestial: Option<Res<CelestialTime>>,
+    solved: Res<CelestialPresentationSolvedEpoch>,
+    settings: Option<Res<CelestialCadenceSettings>>,
+    motion: Res<CelestialMotionBound>,
+    revision: Res<CelestialInputsRevision>,
+    activity: Option<Res<lunco_core::gate::GateActivity>>,
+) -> bool {
+    let step = settings.map_or_else(
+        || CelestialCadenceSettings::default().max_epoch_step_jd(motion.maximum_rate_rad_per_day),
+        |s| s.max_epoch_step_jd(motion.maximum_rate_rad_per_day),
+    );
+    if let Some(activity) = activity {
+        activity.expect_open("celestial_presentation_needs_solve", step <= 0.0);
+    }
+    let Some(celestial) = celestial else {
+        return true;
+    };
+    epoch_requires_solve(
+        celestial.epoch_jd,
+        solved.jd,
+        revision.0,
+        solved.revision,
+        step,
+    )
 }
 
 /// Record the epoch AND the input revision the cluster just solved for.
@@ -422,6 +480,19 @@ pub fn commit_celestial_epoch(
     solved.revision = revision.0;
 }
 
+/// Commit the presentation epoch only after the gated sun projection has run.
+pub fn commit_celestial_presentation_epoch(
+    celestial: Option<Res<CelestialTime>>,
+    revision: Res<CelestialInputsRevision>,
+    mut solved: ResMut<CelestialPresentationSolvedEpoch>,
+) {
+    let Some(celestial) = celestial else {
+        return;
+    };
+    solved.jd = celestial.epoch_jd;
+    solved.revision = revision.0;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,18 +539,14 @@ mod tests {
     #[test]
     fn exact_override_is_not_accepted_as_a_persisted_preference() {
         assert!(CelestialCadenceSettings::EXACT.validate_section().is_err());
-        assert!(
-            CelestialCadenceSettings {
-                tolerance_deg: f64::NAN
-            }
+        assert!(CelestialCadenceSettings {
+            tolerance_deg: f64::NAN
+        }
+        .validate_section()
+        .is_err());
+        assert!(CelestialCadenceSettings::default()
             .validate_section()
-            .is_err()
-        );
-        assert!(
-            CelestialCadenceSettings::default()
-                .validate_section()
-                .is_ok()
-        );
+            .is_ok());
     }
 
     #[test]

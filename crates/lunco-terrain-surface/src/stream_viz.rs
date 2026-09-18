@@ -3262,10 +3262,7 @@ pub(crate) fn bind_terrain_maps_to_materials(
             )>,
         ),
     >,
-    tile_looks: Query<
-        (&ShaderLook, Option<&TerrainDiagnosticTile>),
-        Without<DemTerrainSurface>,
-    >,
+    tile_looks: Query<(&ShaderLook, Option<&TerrainDiagnosticTile>), Without<DemTerrainSurface>>,
     mut commands: Commands,
 ) {
     for (terrain, tiles, maps, authored, look) in changed {
@@ -4049,7 +4046,10 @@ mod draw_partition_tests {
         let slot = terrain_tiles.tiles.get(&QuadCoord::ROOT).unwrap();
         assert!(!slot.ready);
         assert!(!slot.drawn);
-        assert_eq!(app.world().get::<Visibility>(tile), Some(&Visibility::Hidden));
+        assert_eq!(
+            app.world().get::<Visibility>(tile),
+            Some(&Visibility::Hidden)
+        );
     }
 
     #[test]

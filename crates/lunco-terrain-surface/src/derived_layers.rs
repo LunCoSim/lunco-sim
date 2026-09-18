@@ -142,12 +142,20 @@ pub struct TerrainAuthoredMaps {
 }
 
 impl TerrainAuthoredMaps {
-    /// Project the terrain roles already present in a generic `ShaderLook`.
+    /// Project the authored terrain roles already present in a generic `ShaderLook`.
     ///
     /// USD owns the material-network read. This conversion only gives the terrain
     /// stream a typed view of the existing texture handles and weights, so static
-    /// and streamed terrain use the same source without a second USD reader.
-    pub(crate) fn from_shader_look(look: &ShaderLook) -> Self {
+    /// and streamed terrain use the same source without a second USD reader. The
+    /// engine-derived surface and normal layers are excluded by their engine-owned
+    /// enable flags; otherwise a reconciliation pass would mistake its own output
+    /// for newly authored USD input. The published derived handles are also used
+    /// to cover the one-frame ordering where the map component arrives before the
+    /// first runtime enable flags are written onto the look.
+    pub(crate) fn from_shader_look(
+        look: &ShaderLook,
+        derived: Option<&TerrainDerivedMaps>,
+    ) -> Self {
         let weight = |name: &str, map_present: bool| match look.values.get(name) {
             Some(ParamValue::F32(value)) => *value,
             _ if map_present => 1.0,
@@ -155,8 +163,25 @@ impl TerrainAuthoredMaps {
         };
         let albedo = look.textures.get(&TextureLayer::Albedo).cloned();
         let mineral = look.textures.get(&TextureLayer::Mineral).cloned();
-        let surface = look.textures.get(&TextureLayer::Surface).cloned();
-        let normal = look.textures.get(&TextureLayer::Normal).cloned();
+        let engine_layer_on = |name: &str| {
+            matches!(
+                look.values.get(name),
+                Some(ParamValue::F32(value)) if *value > 0.5
+            )
+        };
+        let derived_surface = engine_layer_on("derived_surface_on")
+            || derived.is_some_and(|maps| {
+                look.textures.get(&TextureLayer::Surface) == Some(&maps.surface)
+            });
+        let derived_normal = engine_layer_on("derived_normal_on")
+            || derived
+                .is_some_and(|maps| look.textures.get(&TextureLayer::Normal) == Some(&maps.normal));
+        let surface = (!derived_surface)
+            .then(|| look.textures.get(&TextureLayer::Surface).cloned())
+            .flatten();
+        let normal = (!derived_normal)
+            .then(|| look.textures.get(&TextureLayer::Normal).cloned())
+            .flatten();
         Self {
             weight_albedo: weight("weight_albedo", albedo.is_some()),
             weight_mineral: weight("weight_mineral", mineral.is_some()),

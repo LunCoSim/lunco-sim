@@ -305,10 +305,10 @@ impl Plugin for CelestialPlugin {
         // System ordering is critical:
         // 1. big_space propagation runs first (default PreUpdate ordering)
         // 2. Our systems run AFTER to override GlobalTransform with body rotation
-        // The spine (`advance_world_clock`, in `TimeSpineSet`) runs first; then the
-        // celestial chain consumes the derived `WorldTime.epoch_jd` directly — no
-        // `CelestialClock` bridge anymore. Ordered `.after` the spine so the epoch
-        // is fresh this frame.
+        // The spine (`advance_world_clock`, in `TimeSpineSet`) runs first; the
+        // causal celestial hierarchy consumes `WorldTime.epoch_jd`. The sun
+        // presentation projection has its own gate and consumes `CelestialTime`,
+        // so a detached sky clock cannot re-pose the active surface or physics.
         // Orbital view MODE state (scene-hide, gravity hold, camera
         // park/restore) — the camera itself flies to the focused body; the
         // world is never re-posed for viewing (see `OrbitalViewPin`).
@@ -331,6 +331,7 @@ impl Plugin for CelestialPlugin {
         // hierarchy changes; no per-frame dirtying is allowed to manufacture a
         // change signal or hide an invalid low-precision subtree.
         app.init_resource::<cadence::CelestialSolvedEpoch>();
+        app.init_resource::<cadence::CelestialPresentationSolvedEpoch>();
         app.init_resource::<cadence::CelestialMotionBound>();
         lunco_settings::AppSettingsExt::register_settings_section::<
             cadence::CelestialCadenceSettings,
@@ -360,10 +361,16 @@ impl Plugin for CelestialPlugin {
             Last,
             cadence::commit_celestial_epoch.run_if(cadence::tracked_needs_solve()),
         );
+        app.add_systems(
+            Last,
+            cadence::commit_celestial_presentation_epoch
+                .run_if(cadence::presentation_needs_solve()),
+        );
 
         app.add_systems(
             PreUpdate,
             (
+                presentation_celestial_frame_system.run_if(cadence::presentation_needs_solve()),
                 ephemeris_update_system.run_if(cadence::tracked_needs_solve()),
                 body_rotation_system.run_if(cadence::tracked_needs_solve()),
                 // The solar hierarchy stays inertial. Site content is mounted
@@ -420,11 +427,12 @@ impl Plugin for CelestialPlugin {
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate
 
-        // Ephemeris-driven sun direction (doc 19 — T2). The system returns
-        // early when no ephemeris provider or site frame is available, so
-        // manual `SetEnvironmentLight` (yaw/pitch) remains an explicit
-        // operator command in non-orbital contexts. With a real ephemeris the
-        // sun tracks the sim clock:
+        // Ephemeris-driven physical-surface sun direction (doc 19 — T2). The
+        // system returns early when no ephemeris provider or site frame is
+        // available, so manual `SetEnvironmentLight` (yaw/pitch) remains an
+        // explicit operator command in non-orbital contexts. It tracks the
+        // causal world clock, while the detached globe presentation branch
+        // independently tracks CelestialTime:
         // required since the celestial sun light is a TOP-LEVEL entity (it
         // must not ride the Solar Grid — heliocentric-magnitude translations
         // corrupt the f32 cascade-shadow matrices) and therefore inherits no

@@ -284,6 +284,22 @@ terrain contract; the globe LOD clips that authored footprint through
 `GlobeHandoff`. No cell-size increase, depth bias, or camera-relative offset can
 resolve two coincident render surfaces honestly.
 
+### Physical surface and globe presentation ownership
+
+The body hierarchy has two intentionally separate surface-grid identities:
+
+- `GlobeLod.surface_grid` is the body-fixed physical grid. Site placement uses
+  it for authored terrain, vehicles, physics, and surface cameras.
+- `GlobeLod.globe_grid` is the detached presentation grid. The globe LOD
+  selector, streamed tile parents, and presentation-time camera projection use
+  it for derived planetary imagery.
+
+The presentation grid may be updated by an accelerated celestial clock. It must
+never be used as the physical site parent, and physical content must never be
+reparented into it as a way to make a view look aligned. Keeping the ownership
+split in the component contract makes an invalid wiring a compile-time field
+initialization error rather than a runtime timing symptom.
+
 Focused regression coverage lives beside the owning crates, notably
 `lunco-celestial` frame/placement tests, `lunco-usd-avian` bridge tests, and
 `lunco-core` world/lifecycle tests. The production check is:
