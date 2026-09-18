@@ -28,7 +28,38 @@
 //! visible type error rather than silent poison.
 
 use bevy::math::{DQuat, DVec3, EulerRot};
+use bevy::prelude::Transform as BevyTransform;
 use rhai::{Dynamic, Engine, EvalAltResult, Position};
+
+/// The f64 pose exchanged by the core, Rhai, SysML-derived assembly plans,
+/// and Modelica-facing geometry policy.  Bevy's render transform remains f32;
+/// conversion is explicit at that boundary so scene authoring does not lose
+/// precision merely because the renderer does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DTransform {
+    pub translation: DVec3,
+    pub rotation: DQuat,
+    pub scale: DVec3,
+}
+
+impl DTransform {
+    pub const IDENTITY: Self = Self {
+        translation: DVec3::ZERO,
+        rotation: DQuat::IDENTITY,
+        scale: DVec3::ONE,
+    };
+
+    /// Lower the precise authoring pose into Bevy's render-space component.
+    /// This is intentionally the only f32 conversion in the type's public
+    /// boundary; physics and requirement calculations keep `DTransform`.
+    pub fn as_bevy_transform(self) -> BevyTransform {
+        BevyTransform {
+            translation: self.translation.as_vec3(),
+            rotation: self.rotation.as_quat(),
+            scale: self.scale.as_vec3(),
+        }
+    }
+}
 
 /// Construct a Rhai runtime error for a value that cannot satisfy the native
 /// math type's invariant.  Native vectors/quaternions are deliberately
@@ -55,6 +86,19 @@ fn finite_quat(value: DQuat, label: &str) -> Result<DQuat, Box<EvalAltResult>> {
         return Err(invalid_value(format!("{label} must not have zero length")));
     }
     Ok(value.normalize())
+}
+
+fn finite_transform(
+    translation: DVec3,
+    rotation: DQuat,
+    scale: DVec3,
+    label: &str,
+) -> Result<DTransform, Box<EvalAltResult>> {
+    Ok(DTransform {
+        translation: finite_vec3(translation, &format!("{label} translation"))?,
+        rotation: finite_quat(rotation, &format!("{label} rotation"))?,
+        scale: finite_vec3(scale, &format!("{label} scale"))?,
+    })
 }
 
 /// One numeric element of a script array.
@@ -213,6 +257,28 @@ fn native_quat_to_euler_xyz_deg(q: DQuat) -> Result<DVec3, Box<EvalAltResult>> {
     )
 }
 
+fn native_transform_compose(
+    parent: DTransform,
+    local: DTransform,
+) -> Result<DTransform, Box<EvalAltResult>> {
+    finite_transform(
+        parent.translation + parent.rotation * (parent.scale * local.translation),
+        parent.rotation * local.rotation,
+        parent.scale * local.scale,
+        "composed transform",
+    )
+}
+
+fn native_transform_apply_point(
+    transform: DTransform,
+    point: DVec3,
+) -> Result<DVec3, Box<EvalAltResult>> {
+    finite_vec3(
+        transform.translation + transform.rotation * (transform.scale * point),
+        "transformed point",
+    )
+}
+
 /// Lift a binary vector op, returning `()` on degenerate input.
 fn binary(
     f: impl Fn(DVec3, DVec3) -> DVec3 + Send + Sync + 'static,
@@ -248,6 +314,7 @@ pub fn register(engine: &mut Engine) {
     engine
         .register_type_with_name::<DVec3>("Vec3")
         .register_type_with_name::<DQuat>("Quat")
+        .register_type_with_name::<DTransform>("Transform")
         .register_fn("vec3", |x: f64, y: f64, z: f64| {
             finite_vec3(DVec3::new(x, y, z), "vec3")
         })
@@ -276,6 +343,28 @@ pub fn register(engine: &mut Engine) {
         .register_get("y", |q: &mut DQuat| q.y)
         .register_get("z", |q: &mut DQuat| q.z)
         .register_get("w", |q: &mut DQuat| q.w);
+
+    engine
+        .register_fn(
+            "transform",
+            |translation: DVec3, rotation: DQuat, scale: DVec3| {
+                finite_transform(translation, rotation, scale, "transform")
+            },
+        )
+        .register_fn("transform_identity", || DTransform::IDENTITY)
+        .register_fn("transform_is_finite", |transform: DTransform| {
+            transform.translation.is_finite()
+                && transform.rotation.is_finite()
+                && transform.scale.is_finite()
+                && transform.rotation.length_squared() >= 1e-24
+        })
+        .register_fn("transform_compose", native_transform_compose)
+        .register_fn("transform_apply_point", native_transform_apply_point)
+        .register_get("translation", |transform: &mut DTransform| {
+            transform.translation
+        })
+        .register_get("rotation", |transform: &mut DTransform| transform.rotation)
+        .register_get("scale", |transform: &mut DTransform| transform.scale);
 
     // The familiar names are overloaded for native values as well as the
     // legacy arrays.  Existing scripts continue to exchange arrays, while new
@@ -549,6 +638,37 @@ mod tests {
         assert!((a[0].as_float().unwrap() - 10.0).abs() < 1e-9);
         assert!((a[1].as_float().unwrap() - 20.0).abs() < 1e-9);
         assert!((a[2].as_float().unwrap() - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn native_transform_keeps_pose_typed_and_composes_in_f64() {
+        let d = eval(
+            "let parent = transform(vec3(10.0, 0.0, 0.0), quat_identity(), vec3(2.0, 2.0, 2.0)); \
+             let local = transform(vec3(1.0, 2.0, 3.0), quat_identity(), vec3(1.0, 1.0, 1.0)); \
+             let composed = transform_compose(parent, local); \
+             [transform_is_finite(composed), composed.translation.x, composed.translation.y, composed.translation.z]",
+        );
+        let values = d
+            .into_array()
+            .expect("transform result must stay typed until fields are read");
+        assert!(values[0].as_bool().unwrap());
+        assert_eq!(values[1].as_float().unwrap(), 12.0);
+        assert_eq!(values[2].as_float().unwrap(), 4.0);
+        assert_eq!(values[3].as_float().unwrap(), 6.0);
+    }
+
+    #[test]
+    fn native_transform_applies_points_before_render_lowering() {
+        let d = eval(
+            "let pose = transform(vec3(4.0, 5.0, 6.0), quat_identity(), vec3(2.0, 3.0, 4.0)); \
+             vec3_array(transform_apply_point(pose, vec3(1.0, 1.0, 1.0)))",
+        );
+        let values = d
+            .into_array()
+            .expect("point application must lower explicitly");
+        assert_eq!(values[0].as_float().unwrap(), 6.0);
+        assert_eq!(values[1].as_float().unwrap(), 8.0);
+        assert_eq!(values[2].as_float().unwrap(), 10.0);
     }
 
     #[test]
