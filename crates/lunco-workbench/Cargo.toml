@@ -29,7 +29,15 @@ api = [
 # workbench validates persisted shadow settings against those authoritative
 # limits before it can reach the render world; it does not reimplement them.
 bevy = { workspace = true, features = ["bevy_render", "bevy_light", "bevy_pbr"] }
-bevy_egui = { workspace = true }
+# The shell is the egui host: it owns Bevy-UI ordering, scene-vs-chrome
+# picking, clipboard output, external-link handling, and the default font set.
+bevy_egui = { workspace = true, features = [
+    "bevy_ui",
+    "picking",
+    "manage_clipboard",
+    "open_url",
+    "default_fonts",
+] }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }

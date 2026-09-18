@@ -325,9 +325,11 @@ avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64"
 big_space = { git = "https://github.com/aevyrie/big_space", branch = "bevy-0.19" }
 leafwing-input-manager = "0.21.0"
 # egui 0.35 row. bevy_egui 0.41 = egui 0.35. The whole egui ecosystem must
-# agree on the egui minor or it dual-links. The maintained Bevy 0.19 and egui
-# 0.35 LunCoSim fork is vendored in the workspace for the shared viewport map.
-bevy_egui = { version = "0.41", features = ["serde"] }
+# agree on the egui minor or it dual-links. Keep the workspace integration
+# baseline to rendering; the concrete workbench host opts into picking,
+# Bevy-UI ordering, clipboard, external links, and default fonts where those
+# behaviors are actually owned.
+bevy_egui = { version = "0.41", default-features = false, features = ["serde", "render"] }
 # UI component crates that only exchange egui values should not depend on the
 # Bevy integration. Bevy hosts opt into `bevy_egui` separately.
 egui = "0.35"
