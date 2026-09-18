@@ -25,6 +25,7 @@ pub struct LunCoSimOffscreenPlugin;
 #[cfg(feature = "api-transport")]
 impl Plugin for LunCoSimOffscreenPlugin {
     fn build(&self, app: &mut App) {
+        crate::camera::install_camera_realizations(app);
         // Same non-UI cores the headless server needs (see the twin comments in
         // `LunCoSimHeadlessPlugin`): the Modelica compiler and execution
         // plugins plus the spawn-command registry normally arrive via UI

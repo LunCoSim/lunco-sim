@@ -27,9 +27,7 @@ lunco-controller = { path = "../lunco-controller" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-input-core = { path = "../lunco-input-core" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
-lunco-avatar-camera = { path = "../lunco-avatar-camera" }
 lunco-camera-runtime = { path = "../lunco-camera-runtime" }
-lunco-camera-celestial = { path = "../lunco-camera-celestial" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }

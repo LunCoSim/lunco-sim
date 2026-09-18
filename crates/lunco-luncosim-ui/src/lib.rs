@@ -6,6 +6,7 @@
 //! modules, so editing the UI does not rebuild the headless application core.
 
 mod application;
+mod camera;
 #[cfg(feature = "api-transport")]
 mod offscreen;
 mod presentation_bridge;

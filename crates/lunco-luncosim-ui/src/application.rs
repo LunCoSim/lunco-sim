@@ -595,6 +595,7 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         headless: false,
         startup_scene: None,
     });
+    crate::camera::install_camera_realizations(&mut app);
     // The browser boot-screen handshake is an application-shell concern. Keep
     // it at the UI edge so headless/server compositions do not carry web glue.
     app.add_plugins(lunco_web::WebReadyPlugin);
