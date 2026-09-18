@@ -15,6 +15,7 @@ pub struct UsdAuthoredRuntimePlugin;
 
 impl Plugin for UsdAuthoredRuntimePlugin {
     fn build(&self, app: &mut App) {
+        app.register_type::<lunco_camera_core::CameraFollow>();
         app.add_systems(
             Update,
             control_runtime::project_authored_runtime_components

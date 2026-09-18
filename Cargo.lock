@@ -9602,7 +9602,6 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-assets-core",
- "lunco-camera-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",

@@ -40,7 +40,6 @@ impl Plugin for UsdSceneRuntimePlugin {
             )
                 .chain(),
         );
-        app.register_type::<lunco_camera_core::CameraFollow>();
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
         app.init_resource::<lunco_usd_core::commands::EmptyViewportReason>();
         app.add_message::<lunco_usd_bevy_scene::UsdSceneProjectionReset>();
