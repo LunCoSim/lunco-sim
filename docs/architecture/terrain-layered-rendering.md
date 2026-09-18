@@ -60,6 +60,20 @@ diagnostic replacement:
    anti-aliased detail, roughness, and sun visibility. Streamed and static
    delivery may retain different vertex stages, but they must not choose
    different physical surface laws or distance-dependent colour/normal rules.
+   When a heightfield is present, the engine marks the look with the explicit
+   `terrain_geometry_on` source fact. The DEM mesh remains authoritative for
+   geometry and collision, while a co-registered authored/derived DEM normal
+   owns the measured normal band for visible lighting whenever it is present.
+   The tile mesh normal is the geometric fallback for materials without that
+   map; it must not be mixed into a mapped DEM's lighting law because its
+   interpolation changes at a CDLOD boundary. A separate footprint-filtered
+   micro-normal is allowed on every DEM as shading-only regolith grain: it does
+   not modify height, collision, or the measured DEM/raster normal band, and
+   fades out before it aliases. The larger procedural shader bumps remain
+   available for the general regolith material and their scalar height can
+   still drive authored fallback roughness/colour, but they do not perturb a
+   measured DEM normal. This prevents a second view-dependent surface from
+   being multiplied by low-angle lunar lighting.
    When USD supplies an illumination-bearing grayscale orthophoto, the native
    asset pipeline's `kind = "albedo"` bake removes its low-frequency source
    illumination, anchors local detail at a neutral regolith value, sRGB-encodes
@@ -67,10 +81,15 @@ diagnostic replacement:
    linear. The terrain shaders use that authored material directly at its
    weight; they do not apply an orthophoto transfer at runtime. `kind = "map"`
    remains an analysis/display product and is not a valid direct albedo input.
-   The static layered path scales its procedural dust/mottle colour by
-   `1 - weight_albedo`. Relief normals, roughness, ambient occlusion, and
-   photometry remain independent, so camera footprint or CDLOD replacement
-   cannot introduce unrelated colour changes.
+   The static layered path scales its broad procedural dust/mottle colour by
+   `1 - weight_albedo`. An authored albedo does not suppress the separate,
+   low-amplitude `micro_albedo` regolith grain: it is anchored to the DEM-local
+   coordinate and uses the same footprint fade as `micro_bump`. This resolves
+   the authored mosaic's finite texel size in close views without replacing
+   authored low-frequency colour or introducing a second LOD-dependent colour
+   path. Relief normals, roughness, ambient occlusion, and photometry remain
+   independent, so camera footprint or CDLOD replacement cannot introduce
+   unrelated colour changes.
    The packed surface map's G channel is ambient occlusion and is sent to
    Bevy's `PbrInput.diffuse_occlusion`, where it modulates indirect diffuse
    light only. It must never be multiplied into base albedo: doing so turns a
@@ -99,6 +118,12 @@ Static terrain that opts into `HorizonShadowTerrain` remains both a native
 directional-shadow caster and receiver. Bevy's cascaded shadow map owns the
 mesh-accurate near field and carries dynamic-object shadows onto the surface;
 the heightfield cache or march fades in outside the authored CSM range. The
+canonical terrain fragment applies the heightfield visibility only to the
+engine-selected Sun's direct contribution, using Bevy's own directional BRDF
+and native CSM shadow for that term. It does not multiply the completed PBR
+result: ambient/environment light and authored earthshine remain visible when a
+local terrain horizon blocks direct Sun. This keeps ambient, exposure, and
+shadow ownership in the renderer that owns those contracts.
 static terrain shaders use `csm_far` as that handoff boundary, so the two
 systems do not multiply the same terrain self-shadow in their overlap. Streamed
 tiles always remain directional-shadow receivers, so dynamic-object shadows
@@ -113,7 +138,7 @@ terrain shadow casting.
 
 | Distance | Required appearance | Allowed work |
 |---|---|---|
-| Near | DEM relief plus authored normal when present; restrained micro-detail; stable CSM/horizon visibility; no tiled or plastic look | Detail is shown only while its projected footprint supports it. |
+| Near | DEM relief plus authored normal when present; resolved granular regolith detail; stable CSM/horizon visibility; no tiled or plastic look | Measured DEM geometry owns relief; only the footprint-filtered shading-only micro-normal may cross the DEM boundary. |
 | Middle | Same albedo/roughness law and DEM relief; authored surface maps remain registered; no shader-path or LOD seam | Procedural detail fades analytically by footprint, not by mesh depth or morph state. |
 | Far | Stable authored albedo and large-scale relief with horizon visibility; no noisy high-frequency colour detail or mode switch | Use the existing derived/authored map source contract and pre-baked horizon cache. |
 

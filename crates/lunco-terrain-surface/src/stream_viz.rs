@@ -113,11 +113,12 @@ impl TerrainDetailDemands {
     /// for API diagnostics. Selection does not consume these root values: it
     /// projects each camera entity into each terrain through
     /// [`camera_pose_in_terrain`], preserving the nearest shared precision frame.
-    pub(crate) fn visual_focus_snapshot(&self) -> Vec<([f64; 3], [f64; 3], f64, f64)> {
+    pub(crate) fn visual_focus_snapshot(&self) -> Vec<(u64, [f64; 3], [f64; 3], f64, f64)> {
         self.visual
             .iter()
             .map(|demand| {
                 (
+                    demand.entity.to_bits(),
                     [demand.position.x, demand.position.y, demand.position.z],
                     [demand.forward.x, demand.forward.y, demand.forward.z],
                     demand.screen_height_px,
@@ -161,6 +162,7 @@ pub(crate) fn mark_terrain_visual_foci(
 pub(crate) fn collect_terrain_detail_demands(
     mut demands: ResMut<TerrainDetailDemands>,
     terrain_settings: Option<Res<lunco_settings::TerrainSettings>>,
+    viewport: Res<lunco_viewport_core::SceneViewport>,
     cameras: Query<(
         Entity,
         &Camera,
@@ -177,13 +179,15 @@ pub(crate) fn collect_terrain_detail_demands(
     demands.visual.extend(
         cameras
             .iter()
-            .filter(|(_, camera, projection, _, has_pipeline)| {
-                // `Camera::is_active` alone is insufficient: USD and avatar
-                // setup briefly create bare Camera components before their 3D
-                // render graph exists. They emit Bevy's "no render graph"
-                // warning and cannot affect the image, so letting them steer
-                // terrain detail creates an invisible competing focus.
-                *has_pipeline
+            .filter(|(entity, camera, projection, _, has_pipeline)| {
+                // The viewport binding is the presentation authority. A raw
+                // `Camera::is_active` flag is not enough: a stale camera can
+                // retain a render component during a handoff, and an
+                // offscreen camera can be active without contributing to the
+                // window image. Terrain refinement must follow exactly the
+                // camera that the viewport reconciler has selected.
+                viewport.active_camera == Some(*entity)
+                    && *has_pipeline
                     && camera.is_active
                     && matches!(projection, Projection::Perspective(_))
             })
@@ -261,6 +265,41 @@ fn camera_pose_in_terrain(
     ))
 }
 
+/// Convert a camera pose into the visual demand used by the finite terrain
+/// selector.
+///
+/// A finite DEM is still visible when the camera is outside its footprint —
+/// the opening shot commonly sits just beyond an edge while looking across the
+/// surface. The camera position must therefore remain the metric focus so
+/// `Square::distance_to` measures the real camera-to-tile distance. Only the
+/// ground sample is clamped to the DEM boundary, because the surface has no
+/// authored height outside that boundary.
+fn terrain_visual_demand(
+    demand: &VisualDemand,
+    terrain_local: DVec3,
+    local_forward: DVec3,
+    oracle: &SurfaceOracle,
+) -> Option<TerrainVisualDemand> {
+    if !terrain_local.is_finite() || !local_forward.is_finite() {
+        return None;
+    }
+    let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
+    let heading = (heading.length() > 1e-3).then(|| heading.normalize());
+    let h = oracle.half_extent() as f64;
+    let focus = [terrain_local.x, terrain_local.z];
+    let ground = oracle.height_at(focus[0].clamp(-h, h), focus[1].clamp(-h, h));
+    Some(TerrainVisualDemand {
+        focus,
+        eye_height: (terrain_local.y - ground).max(0.0),
+        heading,
+        screen_height_px: demand.screen_height_px,
+        fov_y_rad: demand.fov_y_rad,
+        required: true,
+        near_detail_radius_m: demand.near_detail_radius_m,
+        near_detail_hysteresis_m: demand.near_detail_hysteresis_m,
+    })
+}
+
 /// Marker: this terrain streams visual LOD tiles. Inserted by the build when
 /// the request set `lod_viz`. The authoritative tile-resolution and refinement
 /// policy lives in [`lunco_render::RenderingQualitySettings`], so this marker
@@ -334,11 +373,18 @@ pub(crate) fn retire_terrain_tiles(
 /// without rescanning every resident tile on stable frames.
 pub(crate) fn invalidate_removed_shader_look_ready(
     trigger: On<Remove, ShaderLookReady>,
+    mut commands: Commands,
     mut terrains: Query<&mut LodTiles>,
 ) {
     let entity = trigger.entity;
     for mut tiles in &mut terrains {
-        tiles.invalidate_material_readiness(entity);
+        // A tile whose concrete material lost readiness must leave the draw
+        // partition immediately. Keeping its visibility bit set lets the
+        // render world submit an entity after its material handle was removed,
+        // which is the opaque/black frame seen during streamed replacements.
+        if tiles.invalidate_material_readiness(entity) {
+            commands.entity(entity).try_insert(Visibility::Hidden);
+        }
     }
 }
 
@@ -1001,13 +1047,17 @@ impl LodTiles {
     /// be removed by a shader or texture reload after the terrain has reached
     /// its idle fast path; leaving the slot's cached `ready` bit set would then
     /// keep an invalid material visible until another tile happened to spawn.
-    fn invalidate_material_readiness(&mut self, entity: Entity) {
+    fn invalidate_material_readiness(&mut self, entity: Entity) -> bool {
+        let mut was_drawn = false;
         if self.tiles.values().any(|slot| slot.entity == entity) {
             self.materials_ready = false;
             for slot in self.tiles.values_mut().filter(|slot| slot.entity == entity) {
                 slot.ready = false;
+                was_drawn |= slot.drawn;
+                slot.drawn = false;
             }
         }
+        was_drawn
     }
 
     /// Every resident tile entity (the late-bind / live-tune targets).
@@ -1434,8 +1484,10 @@ pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
 /// cascade remains the terrain self-shadow producer.
 ///
 /// Written by the app glue (which can see both `HorizonShadowCache` and this
-/// crate); consumed by tile materials. `on == 0` disables sampling without
-/// changing the texture binding while a cache is stale.
+/// crate); consumed by tile materials. Cache freshness does not turn `on` off:
+/// the last committed image remains the presentation value until its in-place
+/// replacement is published. `on == 0` means that no committed cache owns
+/// terrain self-shadow (for example, the sun is below the local horizon).
 #[derive(Component, Clone)]
 pub struct TileShadowCache {
     pub image: Handle<Image>,
@@ -1662,6 +1714,10 @@ pub(crate) fn tile_look(
         "terrain_half_extent",
         ParamValue::F32(terrain_half_extent),
     );
+    // Every streamed tile is sampled from the terrain's composed DEM oracle.
+    // Keep the relief-source fact on the look itself so the canonical fragment
+    // does not guess from whichever derived map happens to be available.
+    set_param(&mut look, "terrain_geometry_on", ParamValue::F32(1.0));
     apply_terrain_maps_to_look(&mut look, maps, authored);
     if let Some(shadow) = shadow {
         apply_shadow_cache_to_look(&mut look, shadow);
@@ -2292,25 +2348,19 @@ pub fn update_lod_tiles(
                 let Some((terrain_local, local_forward)) =
                     camera_pose_in_terrain(demand.entity, terrain, &parents, &grids, &spatial)
                 else {
+                    debug!(
+                        target: "terrain_stream",
+                        camera = ?demand.entity,
+                        terrain = ?terrain,
+                        "visual camera and terrain have no common BigSpace frame"
+                    );
                     continue;
                 };
-                let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
-                let heading = (heading.length() > 1e-3).then(|| heading.normalize());
-                let here = [terrain_local.x, terrain_local.z];
-                if here[0].abs() > h || here[1].abs() > h {
-                    continue;
+                if let Some(visual_demand) =
+                    terrain_visual_demand(demand, terrain_local, local_forward, oracle)
+                {
+                    visual_foci.push(visual_demand);
                 }
-                let ground = oracle.height_at(here[0], here[1]);
-                visual_foci.push(TerrainVisualDemand {
-                    focus: here,
-                    eye_height: (terrain_local.y - ground).max(0.0),
-                    heading,
-                    screen_height_px: demand.screen_height_px,
-                    fov_y_rad: demand.fov_y_rad,
-                    required: true,
-                    near_detail_radius_m: demand.near_detail_radius_m,
-                    near_detail_hysteresis_m: demand.near_detail_hysteresis_m,
-                });
             }
             // The cover is shared by all active visual cameras. Use the actual
             // camera with the greatest angular pixel density, i.e. the one that can
@@ -3059,12 +3109,26 @@ pub fn update_lod_tiles(
                 })
                 .count();
             if uncovered > 0 {
+                let ready = tiles.tiles.values().filter(|slot| slot.ready).count();
+                let selected_ready = sel
+                    .iter()
+                    .filter(|selected| {
+                        tiles
+                            .tiles
+                            .get(&selected.coord)
+                            .is_some_and(|slot| slot.ready)
+                    })
+                    .count();
                 debug!(
                     target: "terrain_stream",
                     uncovered,
                     wanted = wanted.len(),
                     drawn = draw.len(),
                     resident = tiles.tiles.len(),
+                    ready,
+                    selected_ready,
+                    coarse_ready = tiles.coarse_ready,
+                    materials_ready = tiles.materials_ready,
                     backlog = pending.0.len(),
                     "terrain has uncovered area (coarse base still baking?)"
                 );
@@ -3187,7 +3251,7 @@ pub(crate) fn bind_terrain_maps_to_materials(
             Option<&LodTiles>,
             Option<&TerrainDerivedMaps>,
             Option<&TerrainAuthoredMaps>,
-            &mut ShaderLook,
+            &ShaderLook,
         ),
         (
             With<DemTerrainSurface>,
@@ -3198,30 +3262,38 @@ pub(crate) fn bind_terrain_maps_to_materials(
             )>,
         ),
     >,
-    mut tile_looks: Query<
-        (&mut ShaderLook, Option<&TerrainDiagnosticTile>),
+    tile_looks: Query<
+        (&ShaderLook, Option<&TerrainDiagnosticTile>),
         Without<DemTerrainSurface>,
     >,
     mut commands: Commands,
 ) {
-    for (terrain, tiles, maps, authored, mut look) in changed {
+    for (terrain, tiles, maps, authored, look) in changed {
         // The generic USD shader projection already put the material network into
         // this look. Publish the terrain-specific view from those same handles so
         // no second USD reader is needed. The temporary is also used immediately,
         // so the owner does not render one frame with the derived source before the
         // deferred component insertion becomes visible.
-        let inferred = TerrainAuthoredMaps::from_shader_look(&look);
+        let inferred = TerrainAuthoredMaps::from_shader_look(&look, maps);
         let source_changed = authored != Some(&inferred);
         if source_changed {
             commands.entity(terrain).try_insert(inferred.clone());
         }
         let authored = source_changed.then_some(&inferred).or(authored);
-        apply_terrain_maps_to_look(&mut look, maps, authored);
+        let mut terrain_look = look.clone();
+        apply_terrain_maps_to_look(&mut terrain_look, maps, authored);
+        if terrain_look != *look {
+            commands.entity(terrain).insert(terrain_look);
+        }
         if let Some(tiles) = tiles {
             for entity in tiles.tile_entities() {
-                if let Ok((mut look, diagnostic)) = tile_looks.get_mut(entity) {
+                if let Ok((look, diagnostic)) = tile_looks.get(entity) {
                     if diagnostic.is_none() {
-                        apply_terrain_maps_to_look(&mut look, maps, authored);
+                        let mut tile_look = look.clone();
+                        apply_terrain_maps_to_look(&mut tile_look, maps, authored);
+                        if tile_look != *look {
+                            commands.entity(entity).insert(tile_look);
+                        }
                     }
                 }
             }
@@ -3657,7 +3729,7 @@ mod draw_partition_tests {
     fn camera_projection_uses_the_nearest_shared_grid_for_sibling_branches() {
         let mut world = World::new();
         let root = world
-            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();
 
         let camera_grid_cell = CellCoord::new(2, 0, -1);
@@ -3746,6 +3818,30 @@ mod draw_partition_tests {
         )> = bevy::ecs::system::SystemState::new(&mut world);
         let (parents, grids, spatial) = state.get(&world).unwrap();
         assert!(camera_pose_in_terrain(camera, terrain, &parents, &grids, &spatial).is_none());
+    }
+
+    #[test]
+    fn finite_terrain_keeps_a_demand_when_camera_is_beyond_its_edge() {
+        let oracle = SurfaceOracle::bare(std::sync::Arc::new(
+            lunco_obstacle_field::field::HeightGrid::new_flat(3, 500.0),
+        ));
+        let camera = VisualDemand {
+            entity: Entity::PLACEHOLDER,
+            position: DVec3::new(-550.0, 100.0, -550.0),
+            forward: DVec3::NEG_Z,
+            screen_height_px: 1080.0,
+            fov_y_rad: std::f64::consts::FRAC_PI_4,
+            near_detail_radius_m: 30.0,
+            near_detail_hysteresis_m: 12.0,
+        };
+
+        let visual = terrain_visual_demand(&camera, camera.position, camera.forward, &oracle)
+            .expect("finite camera pose remains a valid visual demand");
+
+        assert_eq!(visual.focus, [-550.0, -550.0]);
+        assert_eq!(visual.eye_height, 100.0);
+        assert!(visual.required);
+        assert!(visual.near_detail_radius_m > 0.0);
     }
 
     fn c(depth: u8, x: u32, z: u32) -> QuadCoord {
@@ -3915,7 +4011,9 @@ mod draw_partition_tests {
         tiles.invalidate_material_readiness(tile);
 
         assert!(!tiles.materials_ready);
-        assert!(!tiles.tiles.get(&QuadCoord::ROOT).unwrap().ready);
+        let slot = tiles.tiles.get(&QuadCoord::ROOT).unwrap();
+        assert!(!slot.ready);
+        assert!(!slot.drawn);
     }
 
     #[test]
@@ -3939,13 +4037,19 @@ mod draw_partition_tests {
                 stitch_edges: [0.0; 4],
             },
         );
+        app.world_mut()
+            .entity_mut(tile)
+            .insert(Visibility::Inherited);
         let terrain = app.world_mut().spawn(terrain_tiles).id();
 
         app.world_mut().entity_mut(tile).remove::<ShaderLookReady>();
 
         let terrain_tiles = app.world().get::<LodTiles>(terrain).unwrap();
         assert!(!terrain_tiles.materials_ready);
-        assert!(!terrain_tiles.tiles.get(&QuadCoord::ROOT).unwrap().ready);
+        let slot = terrain_tiles.tiles.get(&QuadCoord::ROOT).unwrap();
+        assert!(!slot.ready);
+        assert!(!slot.drawn);
+        assert_eq!(app.world().get::<Visibility>(tile), Some(&Visibility::Hidden));
     }
 
     #[test]
@@ -4501,10 +4605,12 @@ mod draw_partition_tests {
     #[test]
     fn camera_whose_projection_arrives_after_the_camera_still_becomes_a_focus() {
         let mut app = App::new();
-        app.init_resource::<TerrainDetailDemands>().add_systems(
-            Update,
-            (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
-        );
+        app.init_resource::<TerrainDetailDemands>()
+            .init_resource::<lunco_viewport_core::SceneViewport>()
+            .add_systems(
+                Update,
+                (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
+            );
         let grid = app.world_mut().spawn(Grid::new(1_000.0, 100.0)).id();
         // EXACTLY `spawn_avatar_camera`'s shape: a bare `Camera`, no `Projection`.
         let camera = app
@@ -4523,6 +4629,9 @@ mod draw_partition_tests {
                 ChildOf(grid),
             ))
             .id();
+        app.world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .active_camera = Some(camera);
 
         // Tick with the camera still render-free: nothing to mark yet, and
         // crucially this is the tick that consumes `Added<Camera>`.
@@ -4551,10 +4660,12 @@ mod draw_partition_tests {
     #[test]
     fn ecs_focus_marker_collects_only_active_perspective_cameras() {
         let mut app = App::new();
-        app.init_resource::<TerrainDetailDemands>().add_systems(
-            Update,
-            (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
-        );
+        app.init_resource::<TerrainDetailDemands>()
+            .init_resource::<lunco_viewport_core::SceneViewport>()
+            .add_systems(
+                Update,
+                (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
+            );
         let grid = app.world_mut().spawn(Grid::new(1_000.0, 100.0)).id();
         let camera = app
             .world_mut()
@@ -4574,6 +4685,9 @@ mod draw_partition_tests {
                 ChildOf(grid),
             ))
             .id();
+        app.world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .active_camera = Some(camera);
         let inactive_camera = app
             .world_mut()
             .spawn((
@@ -4606,8 +4720,9 @@ mod draw_partition_tests {
         assert_eq!(demands.visual.len(), 1);
         assert_eq!(demands.visual[0].position, DVec3::new(123.0, 10.0, -45.0));
 
-        // A bare active Camera has no render graph; it must not add a hidden
-        // terrain-detail focus that can churn the visible camera's LOD cover.
+        // A stale renderable camera can temporarily retain `is_active` during
+        // a camera handoff. It is not the viewport owner and must not add a
+        // competing terrain-detail focus from its unrelated position.
         app.world_mut().spawn((
             Camera {
                 is_active: true,
@@ -4617,9 +4732,10 @@ mod draw_partition_tests {
                 }),
                 ..default()
             },
+            Camera3d::default(),
             Projection::Perspective(default()),
             CellCoord::default(),
-            Transform::from_xyz(-300.0, 10.0, 0.0),
+            Transform::from_xyz(-300.0, 10.0, 900.0),
             ChildOf(grid),
             TerrainVisualFocus::default(),
         ));
@@ -4638,10 +4754,12 @@ mod draw_partition_tests {
     #[test]
     fn nested_camera_detail_demand_uses_its_composed_world_pose() {
         let mut app = App::new();
-        app.init_resource::<TerrainDetailDemands>().add_systems(
-            Update,
-            (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
-        );
+        app.init_resource::<TerrainDetailDemands>()
+            .init_resource::<lunco_viewport_core::SceneViewport>()
+            .add_systems(
+                Update,
+                (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
+            );
         let grid = app.world_mut().spawn(Grid::new(1_000.0, 100.0)).id();
         let rover_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
         let rover = app
@@ -4668,6 +4786,9 @@ mod draw_partition_tests {
                 ChildOf(rover),
             ))
             .id();
+        app.world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .active_camera = Some(camera);
 
         app.update();
 

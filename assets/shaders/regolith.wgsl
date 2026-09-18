@@ -47,7 +47,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
-#import lunco::terrain::{aa_fade, bump_layer, layer_height, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
+#import lunco::terrain::{aa_fade, bump_layer, layer_height, ramp, surface_fbm, terrain_apply_sun_visibility, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
 // struct (field names → offsets) and the `//!@` annotations (UI ranges,
@@ -264,7 +264,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
-        color = vec4(color.rgb * mix(1.0, sun_vis, march_blend), color.a);
+        color = terrain_apply_sun_visibility(
+            pbr_input, color, mat.sun_dir_world, sun_vis, march_blend);
     }
 #endif
 

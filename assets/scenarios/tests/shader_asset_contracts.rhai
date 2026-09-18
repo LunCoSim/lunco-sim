@@ -68,6 +68,7 @@ fn on_tick(me, ctx) {
         #{ name: "v_scale", type: "F32" },
     ]) { failures.push(failure); }
     for failure in schema_checks("lunco://shaders/terrain_layered.wgsl", [
+        #{ name: "micro_albedo", type: "F32" },
         #{ name: "weight_albedo", type: "F32" },
         #{ name: "weight_mineral", type: "F32" },
         #{ name: "weight_rough", type: "F32" },
@@ -78,12 +79,15 @@ fn on_tick(me, ctx) {
         #{ name: "derived_normal_on", type: "F32" },
         #{ name: "authored_surface_on", type: "F32" },
         #{ name: "authored_normal_on", type: "F32" },
+        #{ name: "terrain_geometry_on", type: "F32" },
     ]) { failures.push(failure); }
     for failure in schema_checks("lunco://shaders/terrain_geomorph.wgsl", [
+        #{ name: "micro_albedo", type: "F32" },
         #{ name: "weight_albedo", type: "F32" },
         #{ name: "map_texel_size_m", type: "F32" },
         #{ name: "derived_surface_on", type: "F32" },
         #{ name: "authored_surface_on", type: "F32" },
+        #{ name: "terrain_geometry_on", type: "F32" },
     ]) { failures.push(failure); }
     for failure in schema_checks("lunco://shaders/terrain_debug.wgsl", [
         #{ name: "mode", type: "F32" },

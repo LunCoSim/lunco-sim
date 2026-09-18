@@ -1,9 +1,11 @@
 //! Layered lunar terrain material — `regolith.wgsl` + non-destructive map layers.
 //!
-//! The procedural regolith (DEM-anchored FBM bump + lunar BRDF + heightfield
-//! shadow march) is the **floor**: it always runs, so even where a layer map is
-//! low-res or absent the rover camera still sees real micro-detail. On top of it
-//! ride UV-registered raster **layers** (design `terrain-layered-pipeline-design.md`
+//! The procedural regolith (DEM-anchored micro detail + lunar BRDF + heightfield
+//! shadow march) is the **floor**: even where a layer map is low-res or absent
+//! the rover camera still sees real close-range detail. Larger procedural relief
+//! remains available for non-measured regolith, while measured DEM geometry owns
+//! its macro/mid/fine normal bands. On top of it ride UV-registered raster **layers**
+//! (design `terrain-layered-pipeline-design.md`
 //! Part C.2), each blended by a reflected `weight_*` knob:
 //!
 //!   * albedo  (binding 2/3) — real colour raster (e.g. the NASA lunar mosaic
@@ -38,7 +40,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
-#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
+#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm, terrain_apply_sun_visibility, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -46,6 +48,8 @@
 //!@default micro_scale       35
 //!@ui      micro_bump        0 0.05      "Regolith micro-normal strength"
 //!@default micro_bump        0.015
+//!@ui      micro_albedo      0 0.2       "Regolith micro-albedo strength"
+//!@default micro_albedo      0.045
 //!@ui      roughness         0 1         "Base regolith roughness"
 //!@default roughness         0.88
 //!@ui      macro_clump_scale 1 20        "Macro clump scale (/m)"
@@ -117,6 +121,7 @@ struct Material {
     albedo:            vec3<f32>,
     micro_scale:       f32,
     micro_bump:        f32,
+    micro_albedo:      f32,
     roughness:         f32,
     macro_clump_scale: f32,
     macro_bump:        f32,
@@ -139,6 +144,7 @@ struct Material {
     sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun (lunar BRDF)
     hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
     hf_res:            f32,  // engine-filled: heightfield resolution
+    terrain_geometry_on: f32, // engine-filled: measured DEM owns relief
     csm_far:           f32,  // engine-filled: CSM far bound (m); march fades in beyond
     shadow_cache_on:   f32,  // engine-filled: 1 = sample pre-baked shadow cache, 0 = ray-march
     horizon_march_steps: f32, // engine-filled: configured live ray-march iterations
@@ -190,8 +196,11 @@ var normal_smp: sampler;
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     let macro_scale = mat.macro_clump_scale;
     let fine_scale  = mat.fine_scale;
+    let micro_scale = mat.micro_scale;
     let macro_bump  = mat.macro_bump;
     let fine_bump   = mat.fine_bump;
+    let micro_bump  = mat.micro_bump;
+    let micro_albedo = mat.micro_albedo;
     let rough_mix   = mat.rough_mix;
     let mid_scale   = mat.mid_scale;
     let mid_bump    = mat.mid_bump;
@@ -212,18 +221,27 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let fine_fade  = aa_fade(fine_scale, pw);
     let macro_fade = aa_fade(macro_scale, pw);
     let mid_fade   = aa_fade(mid_scale, pw);
+    let micro_fade = aa_fade(micro_scale, pw);
 
-    // Procedural bump (the micro-detail floor; always runs).
+    // Footprint-filtered micro-detail is the shading-only close-range floor.
     var mid_h = 0.5;
     var macro_h = 0.5;
     var fine_h = 0.5;
-    if (mid_fade > 0.0) {
+    var micro_h = 0.5;
+    if (micro_fade > 0.0) {
+        detail_n = bump_layer(detail_n, detail_p, micro_scale, 3, 0.5, 0.45, 0.57, micro_bump * micro_fade, &micro_h);
+    }
+    // A measured DEM already carries its macro/mid/fine relief in geometry.
+    // Repeating those bands in the fragment normal creates a second, view- and
+    // LOD-dependent surface and can turn grazing Sun response into false dark
+    // patches. Keep only the footprint-filtered micro grain on DEM terrain.
+    if (mat.terrain_geometry_on < 0.5 && mid_fade > 0.0) {
         detail_n = bump_layer(detail_n, detail_p, mid_scale, 4, 0.55, 0.35, 0.65, mid_bump * mid_fade, &mid_h);
     }
-    if (macro_fade > 0.0) {
+    if (mat.terrain_geometry_on < 0.5 && macro_fade > 0.0) {
         detail_n = bump_layer(detail_n, detail_p, macro_scale, 5, 0.6, 0.34, 0.70, macro_bump * macro_fade, &macro_h);
     }
-    if (fine_fade > 0.0) {
+    if (mat.terrain_geometry_on < 0.5 && fine_fade > 0.0) {
         detail_n = bump_layer(detail_n, detail_p, fine_scale, 3, 0.5, 0.45, 0.57, fine_bump * fine_fade, &fine_h);
     }
 
@@ -246,6 +264,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             + (mix(0.5, mid_h, mid_fade) - 0.5)
                 * mottle
                 * procedural_albedo_weight;
+    }
+    // Authored albedo owns broad colour. This independent, DEM-anchored grain
+    // remains available in close views without reintroducing a second colour
+    // field when a tile changes LOD.
+    if (micro_fade > 0.0 && micro_albedo > 0.0) {
+        albedo *= 1.0 + (micro_h - 0.5) * micro_albedo * micro_fade;
     }
 
     let macro_rough = mix(0.5, macro_h, macro_fade);
@@ -345,7 +369,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
-        color = vec4(color.rgb * mix(1.0, sun_vis, march_blend), color.a);
+        color = terrain_apply_sun_visibility(
+            pbr_input, color, mat.sun_dir_world, sun_vis, march_blend);
     }
     // ── Overlay plane (UNLIT, doc 18 §4): the mineral/classification drape
     // composites over the LIT result — after PBR, after the sun march, after

@@ -34,6 +34,115 @@ use lunco_environment::horizon::{
 use lunco_environment::SunRenderState;
 use lunco_materials::ParamValue;
 
+struct TerrainEngineInputs {
+    height_map: Option<Handle<Image>>,
+    shadow_cache: Option<Handle<Image>>,
+    sun_dir: Vec3,
+    sun_dir_world: Vec3,
+    sun_tan_radius: f32,
+    hf_size: Vec2,
+    hf_res: f32,
+    terrain_geometry_on: f32,
+    csm_far: f32,
+    shadow_cache_on: f32,
+    horizon_march_steps: f32,
+}
+
+fn terrain_material_needs_engine_inputs(
+    material: &ShaderMaterial,
+    inputs: &TerrainEngineInputs,
+) -> bool {
+    material.height_map != inputs.height_map
+        || material.shadow_cache != inputs.shadow_cache
+        || material
+            .get_scalar("shadow_cache_on")
+            .is_none_or(|value| (value - inputs.shadow_cache_on).abs() > 1.0e-3)
+        || material
+            .get_vec3("sun_dir")
+            .is_none_or(|value| (value - inputs.sun_dir).length() > SUN_DIR_EPSILON)
+        || material
+            .get_vec3("sun_dir_world")
+            .is_none_or(|value| (value - inputs.sun_dir_world).length() > SUN_DIR_EPSILON)
+        || material
+            .get_scalar("sun_tan_radius")
+            .is_none_or(|value| (value - inputs.sun_tan_radius).abs() > 1.0e-6)
+        || material.get("hf_size").is_none_or(|value| {
+            let ParamValue::Vec2(value) = value else {
+                return true;
+            };
+            let delta = Vec2::from_array(value) - inputs.hf_size;
+            delta.length() > 1.0e-3
+        })
+        || material
+            .get_scalar("hf_res")
+            .is_none_or(|value| (value - inputs.hf_res).abs() > 1.0e-3)
+        || material
+            .get_scalar("terrain_geometry_on")
+            .is_none_or(|value| (value - inputs.terrain_geometry_on).abs() > 1.0e-3)
+        || material
+            .get_scalar("csm_far")
+            .is_none_or(|value| (value - inputs.csm_far).abs() > 1.0e-3)
+        || material
+            .get_scalar("horizon_march_steps")
+            .is_none_or(|value| (value - inputs.horizon_march_steps).abs() > 1.0e-3)
+}
+
+fn write_terrain_engine_inputs(material: &mut ShaderMaterial, inputs: &TerrainEngineInputs) {
+    if material.height_map != inputs.height_map {
+        material.height_map = inputs.height_map.clone();
+    }
+    if material.shadow_cache != inputs.shadow_cache {
+        material.shadow_cache = inputs.shadow_cache.clone();
+    }
+    material.set_many([
+        (
+            "sun_dir",
+            ParamValue::Vec3(inputs.sun_dir.to_array()),
+        ),
+        (
+            "sun_dir_world",
+            ParamValue::Vec3(inputs.sun_dir_world.to_array()),
+        ),
+        (
+            "sun_tan_radius",
+            ParamValue::F32(inputs.sun_tan_radius),
+        ),
+        (
+            "hf_size",
+            ParamValue::Vec2([inputs.hf_size.x, inputs.hf_size.y]),
+        ),
+        ("hf_res", ParamValue::F32(inputs.hf_res)),
+        (
+            "terrain_geometry_on",
+            ParamValue::F32(inputs.terrain_geometry_on),
+        ),
+        ("csm_far", ParamValue::F32(inputs.csm_far)),
+        (
+            "shadow_cache_on",
+            ParamValue::F32(inputs.shadow_cache_on),
+        ),
+        (
+            "horizon_march_steps",
+            ParamValue::F32(inputs.horizon_march_steps),
+        ),
+    ]);
+}
+
+fn write_terrain_material_if_needed(
+    materials: &mut Assets<ShaderMaterial>,
+    handle: &Handle<ShaderMaterial>,
+    inputs: &TerrainEngineInputs,
+) {
+    let needs = materials
+        .get(handle)
+        .is_some_and(|material| terrain_material_needs_engine_inputs(material, inputs));
+    if needs {
+        if let Some(mut material) = materials.get_mut(handle) {
+            write_terrain_engine_inputs(&mut material, inputs);
+        }
+    }
+}
+
 pub(crate) fn build(app: &mut App) {
     // `EnvironmentPlugin` also inits this (it drives the bake); `init_resource` is a
     // no-op when it is already there. Doing it here too means adding the render
@@ -150,6 +259,10 @@ pub fn wire_terrain_materials(
             Without<RenderLayers>,
         ),
     >,
+    tile_materials: Query<
+        (&lunco_terrain_surface::LodTileOf, &MeshMaterial3d<ShaderMaterial>),
+        Without<RenderLayers>,
+    >,
     // Hysteresis state for the cache↔march handoff, per terrain (see below).
     mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
     // Reuses the local sun direction while both the finalized terrain frame and
@@ -162,13 +275,31 @@ pub fn wire_terrain_materials(
         cache_engaged.remove(&e);
         sun_projection_cache.remove(e);
     }
+    let mut streamed_materials: std::collections::HashMap<
+        Entity,
+        Vec<Handle<ShaderMaterial>>,
+    > = std::collections::HashMap::new();
+    for (owner, material) in &tile_materials {
+        streamed_materials
+            .entry(owner.0)
+            .or_default()
+            .push(material.0.clone());
+    }
     let Some(mut shader_mats) = shader_mats else {
         return;
     };
     let Some((_, tan_r, csm_far)) = pick_sun(&sun) else {
-        for (_, _, _, _, _, shader_mat) in &terrains {
+        for (entity, _, _, _, _, shader_mat) in &terrains {
             if let Some(shader_mat) = shader_mat {
                 clear_sun_material(&mut shader_mats, shader_mat);
+            }
+            if let Some(materials) = streamed_materials.get(&entity) {
+                for material in materials {
+                    clear_sun_material(
+                        &mut shader_mats,
+                        &MeshMaterial3d(material.clone()),
+                    );
+                }
             }
         }
         return;
@@ -189,29 +320,36 @@ pub fn wire_terrain_materials(
         .as_deref()
         .and_then(|state| state.direction_to_sun_world)
     else {
-        for (_, _, _, _, _, shader_mat) in &terrains {
+        for (entity, _, _, _, _, shader_mat) in &terrains {
             if let Some(shader_mat) = shader_mat {
                 clear_sun_material(&mut shader_mats, shader_mat);
+            }
+            if let Some(materials) = streamed_materials.get(&entity) {
+                for material in materials {
+                    clear_sun_material(
+                        &mut shader_mats,
+                        &MeshMaterial3d(material.clone()),
+                    );
+                }
             }
         }
         return;
     };
     let cache_quality_valid = cfg.quality_is_valid();
 
-    for (entity, terrain_gt, map, shadow_cache, mesh, shader_mat) in &terrains {
+    for (entity, terrain_gt, map, shadow_cache, _mesh, shader_mat) in &terrains {
+        let mut materials = streamed_materials.remove(&entity).unwrap_or_default();
+        if let Some(shader_mat) = shader_mat {
+            materials.push(shader_mat.0.clone());
+        }
         // A streamed terrain owner has no mesh: its visible materials live on
-        // the LOD tile children. Only the static-mesh path needs an owner
-        // material here.
-        if mesh.is_none() && shader_mat.is_none() {
+        // the LOD tile children. The same engine contract must nevertheless be
+        // projected to those children; otherwise replacing a tile changes the
+        // terrain's lighting model. A terrain with no material yet has nothing
+        // to bind, but remains eligible on the next material-creation pass.
+        if materials.is_empty() {
             continue;
         }
-        let Some(handle) = shader_mat else {
-            // Material creation belongs to the USD/command `ShaderLook` owner and
-            // is deliberately independent of sun discovery. A static mesh without
-            // that intent remains visibly unbound instead of receiving a guessed
-            // shader; it also needs no terrain-local projection work here.
-            continue;
-        };
         let sun_local = sun_projection_cache.project_sun_local(
             entity,
             &terrain_gt,
@@ -230,9 +368,13 @@ pub fn wire_terrain_materials(
         // Shadow cache binding + the uniform flag that tells the fragment
         // shader to sample it (`1.0`) instead of ray-marching (`0.0`). The
         // handle is bound whenever a cache exists (it stays allocated on the
-        // `HorizonShadowCache` component regardless); only the flag toggles —
-        // cheap uniform write, no bind-group churn — when the sun dips below
-        // the horizon or the cache is disabled. Below-horizon sun falls back
+        // `HorizonShadowCache` component regardless). A committed cache is
+        // deliberately kept active while a replacement bake is pending or
+        // while the sun has moved past its sample: the old image is the
+        // double-buffered presentation value. Disabling it for every stale
+        // sample exposed the 48-step live march exactly when a fast clock was
+        // already consuming the bake workers, causing both stalls and an
+        // apparent terrain-texture loss. Below-horizon sun still falls back
         // to the march, which short-circuits to 0 in its first branch.
         let cache_image: Option<Handle<Image>> = shadow_cache.map(|c| c.image.clone());
         let engaged = {
@@ -245,9 +387,10 @@ pub fn wire_terrain_materials(
             cache_engaged.insert(entity, now);
             now
         };
-        let cache_current = shadow_cache
-            .is_some_and(|cache| cache.is_valid_for_sun(sun_local, cfg.sun_threshold_deg));
-        let shadow_cache_on: f32 = if cache_quality_valid && cfg.enabled && engaged && cache_current
+        let shadow_cache_on: f32 = if cache_quality_valid
+            && cfg.enabled
+            && engaged
+            && shadow_cache.is_some()
         {
             1.0
         } else {
@@ -258,73 +401,33 @@ pub fn wire_terrain_materials(
         // Named engine uniforms consumed by the terrain shaders (regolith /
         // terrain_shadow declare these in their `Material` struct; the engine
         // packs them at the reflected offsets).
-        let sun_dir = ParamValue::Vec3([sun_local.x, sun_local.y, sun_local.z]);
         // World-space to-sun for the BRDF opposition term. The march uses the
         // terrain-LOCAL `sun_dir` (heightfield space); the lunar BRDF runs in
         // world space (world N/V), so it needs the world-space sun. Passing the
         // CPU-picked canonical sun here means the shader never has to guess it
         // from `directional_lights[0]` — robust to the earthshine fill light.
-        let sun_dir_world = ParamValue::Vec3([to_sun_world.x, to_sun_world.y, to_sun_world.z]);
-        let hf_size = ParamValue::Vec2([hf_size_v.x, hf_size_v.y]);
-        let write_engine = |m: &mut ShaderMaterial| {
-            // Handle is a cheap Arc bump, but skip even that when unchanged (MAT-3).
-            if m.height_map != height_map_handle {
-                m.height_map = height_map_handle.clone();
-            }
-            // Shadow cache handle: swap only when the baked image changes
-            // (first bind / re-bake finished). Stays bound otherwise.
-            if m.shadow_cache != cache_image {
-                m.shadow_cache = cache_image.clone();
-            }
-            // One repack for all engine fields instead of one-per-field (MAT-1).
-            m.set_many([
-                ("sun_dir", sun_dir),
-                ("sun_dir_world", sun_dir_world),
-                ("sun_tan_radius", ParamValue::F32(tan_r)),
-                ("hf_size", hf_size),
-                ("hf_res", ParamValue::F32(hf_res)),
-                ("csm_far", ParamValue::F32(csm_far)),
-                ("shadow_cache_on", ParamValue::F32(shadow_cache_on)),
-                ("horizon_march_steps", ParamValue::F32(horizon_march_steps)),
-            ]);
+        let inputs = TerrainEngineInputs {
+            height_map: height_map_handle,
+            shadow_cache: cache_image,
+            sun_dir: sun_local,
+            sun_dir_world: to_sun_world,
+            sun_tan_radius: tan_r,
+            hf_size: hf_size_v,
+            hf_res,
+            terrain_geometry_on: f32::from(map.is_some()),
+            csm_far,
+            shadow_cache_on,
+            horizon_march_steps,
         };
 
-        // Compare before `get_mut` — a blind `get_mut` re-uploads the asset every
-        // frame. Sun direction + heightfield identity + csm bound + cache handle/flag
-        // cover everything that changes.
-        //
-        // `sun_dir` compares via `get_vec3`, NOT `get_vec4`. It is written as a
-        // `Vec3` (see `write_engine`) and `get_vec4` matches only `ParamValue::Vec4` —
-        // so it answered `None` for a value that was present and correct, `needs` was
-        // permanently true, and EVERY terrain material was re-uploaded every frame.
-        //
-        // EPSILON, not exact equality, for the same reason the scalars beside it use
-        // one. An exact compare is only quiet while the sun is BIT-identical frame to
-        // frame — true for a parked sun, false the moment the celestial clock runs,
-        // and then every terrain material repacks every frame again: the original
-        // cost, re-entered through a different door. At the lunar rate (360° / 29.5 d)
-        // `SUN_DIR_EPSILON` coalesces the write to roughly once every ten seconds, and
-        // the direction error it tolerates (~0.006°) is far below anything a shadow
-        // direction can show.
-        let needs = shader_mats.get(&handle.0).is_some_and(|m| {
-            m.height_map != height_map_handle
-                || m.shadow_cache != cache_image
-                || m.get_scalar("shadow_cache_on")
-                    .is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
-                || m.get_vec3("sun_dir")
-                    .is_none_or(|v| (v - sun_local).length() > SUN_DIR_EPSILON)
-                || m.get_vec3("sun_dir_world")
-                    .is_none_or(|v| (v - to_sun_world).length() > SUN_DIR_EPSILON)
-                || m.get_scalar("hf_res")
-                    .is_none_or(|r| (r - hf_res).abs() > 1e-3)
-                || m.get_scalar("csm_far")
-                    .is_none_or(|c| (c - csm_far).abs() > 1e-3)
-                || m.get_scalar("horizon_march_steps")
-                    .is_none_or(|s| (s - horizon_march_steps).abs() > 1e-3)
-        });
-        if needs {
-            if let Some(mut m) = shader_mats.get_mut(&handle.0) {
-                write_engine(&mut m);
+        // Compare before `get_mut`: this is a change-driven material feed even
+        // though the tile set itself is dynamic. The handle, heightfield/cache
+        // identity, sun revision epsilon, and all engine scalars cover the
+        // complete terrain shader contract.
+        let mut written = std::collections::HashSet::new();
+        for handle in materials {
+            if written.insert(handle.id()) {
+                write_terrain_material_if_needed(&mut shader_mats, &handle, &inputs);
             }
         }
     }
