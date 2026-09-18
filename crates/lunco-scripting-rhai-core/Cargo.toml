@@ -1,0 +1,16 @@
+[package]
+name = "lunco-scripting-rhai-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Reusable Rhai backend mechanics for LunCoSim scripting"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-behavior = { path = "../lunco-behavior" }
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
+rhai = { workspace = true }
+
+[lints]
+workspace = true

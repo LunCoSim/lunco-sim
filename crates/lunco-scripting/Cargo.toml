@@ -11,7 +11,9 @@ lunco-doc = { path = "../lunco-doc" }
 # The task-tree tick engine (`this.task` in scenarios) — scripts author pure
 # data maps; the dependency-free kernel ticks them (see src/task_tree.rs).
 # Rhai-only: Python and script-free consumers do not need task execution.
-lunco-behavior = { path = "../lunco-behavior", optional = true }
+# Rhai backend mechanics live in a separate production package so changes to
+# the lifecycle host do not recompile the interpreter substrate.
+lunco-scripting-rhai-core = { path = "../lunco-scripting-rhai-core", optional = true }
 # Shared per-document diagnostics store (the unified error-reporting substrate
 # used by Modelica + scripting). `default-features = false` drops its egui `ui`
 # feature so headless / wasm scripting builds don't pull bevy_egui→winit.
@@ -98,7 +100,7 @@ rhai = [
     "dep:getrandom",
     "dep:lunco-api",
     "dep:lunco-assets-core",
-    "dep:lunco-behavior",
+    "dep:lunco-scripting-rhai-core",
     "dep:lunco-core-session",
     "dep:lunco-hash",
     "dep:lunco-storage",

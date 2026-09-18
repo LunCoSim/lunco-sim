@@ -992,7 +992,7 @@ fn on_register_tool_library(
     // (which calls `register_tool_library` directly, not this command).
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) -> Result<Ack, String> {
-    crate::names::validate_file_stem(&cmd.name)
+    lunco_scripting_rhai_core::names::validate_file_stem(&cmd.name)
         .map_err(|error| format!("RegisterToolLibrary: {error}"))?;
     let functions = crate::world_bridge::validate_tool_library(
         &cmd.name,
@@ -1337,7 +1337,7 @@ fn on_register_timeline(
     // fires for LOCAL registrations only (remote ones arrive via the replay leg).
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) -> Result<Ack, String> {
-    crate::names::validate_file_stem(&cmd.name)
+    lunco_scripting_rhai_core::names::validate_file_stem(&cmd.name)
         .map_err(|error| format!("RegisterTimeline: {error}"))?;
     // Reject malformed timelines at store time, not at run time.
     parse_timeline_steps(&cmd.timeline).map_err(|e| format!("RegisterTimeline: {e}"))?;

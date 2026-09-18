@@ -269,7 +269,7 @@ under `frozen: true`** — with `frozen: false` there is no explicit step to ord
 ## 8. The sequencer — `lib/shots.rhai`
 
 An episode is a `seq` of shots on the native task-tree kernel
-(`lunco-scripting/src/task_tree.rs`), which every scenario gets for free via `fn task(me, ctx)`.
+(`lunco-scripting-rhai-core/src/task_tree.rs`), which every scenario gets for free via `fn task(me, ctx)`.
 **There is no `on_tick`** — the kernel advances the tree. `fn on_start(me, ctx)` still runs once.
 
 ```rhai

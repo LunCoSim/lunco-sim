@@ -372,7 +372,9 @@ fn screen_position_array(value: &Dynamic) -> Option<[f32; 2]> {
     ])
 }
 
-fn context_menu_items(value: &Dynamic) -> Option<Vec<crate::ui_bridge::ScriptMenuItem>> {
+fn context_menu_items(
+    value: &Dynamic,
+) -> Option<Vec<lunco_scripting_rhai_core::ui_bridge::ScriptMenuItem>> {
     let values = value.clone().try_cast::<rhai::Array>()?;
     values
         .into_iter()
@@ -382,7 +384,7 @@ fn context_menu_items(value: &Dynamic) -> Option<Vec<crate::ui_bridge::ScriptMen
             let tool = map.get("tool")?.clone().into_string().ok()?;
             let hook = map.get("hook")?.clone().into_string().ok()?;
             let args = map.get("args").map(rhai_to_telemetry).unwrap_or_default();
-            Some(crate::ui_bridge::ScriptMenuItem {
+            Some(lunco_scripting_rhai_core::ui_bridge::ScriptMenuItem {
                 label,
                 tool,
                 hook,
@@ -708,7 +710,7 @@ pub fn compile_prelude_set_for_runtime(
 /// Constant propagation rewrites *identifier* uses inside function bodies. A
 /// script that reads its constant as `global::X` is doing a namespaced lookup,
 /// which the optimizer does not touch and which resolves at runtime against the
-/// `GlobalRuntimeState` — see [`crate::module_resolver::top_level_hoist_source`] for the half that makes
+/// `GlobalRuntimeState` — see [`lunco_scripting_rhai_core::module_resolver::top_level_hoist_source`] for the half that makes
 /// `global::X` work. The two mechanisms are complementary and every script gets
 /// both; there is no per-caller variation.
 ///
@@ -783,7 +785,7 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
 /// STATEMENTS are only the `import`s and whose functions are the whole program
 /// (see [`CompiledProgram::hook_target`]), and call hooks against that with
 /// `eval_ast(true)`. Each hook call then re-executes the imports and nothing else.
-/// That is cheap — [`crate::module_resolver::AssetModuleResolver`] memoizes
+/// That is cheap — [`lunco_scripting_rhai_core::module_resolver::AssetModuleResolver`] memoizes
 /// compiled modules, so a re-import is a hash lookup plus an `Arc` clone.
 ///
 /// # Why not `Engine::register_static_module`
@@ -828,7 +830,7 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
 /// const is not literal, so it never folded either, and re-running it is strictly
 /// more correct than the previous "throws at runtime".
 /// Build the "hoisted statements only" AST described on
-/// [`crate::module_resolver::top_level_hoist_source`]:
+/// [`lunco_scripting_rhai_core::module_resolver::top_level_hoist_source`]:
 /// the script's top-level `import` and `const` statements as the BODY, the full
 /// prelude-merged program's functions as the LIBRARY.
 ///
@@ -846,7 +848,8 @@ fn build_hoisted_ast(
     full: &AST,
     asset_id: Option<&str>,
 ) -> Result<Option<AST>, rhai::ParseError> {
-    let Some(hoisted) = crate::module_resolver::top_level_hoist_source(source) else {
+    let Some(hoisted) = lunco_scripting_rhai_core::module_resolver::top_level_hoist_source(source)
+    else {
         return Ok(None);
     };
     let head = engine.compile(&hoisted)?;
@@ -940,7 +943,7 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
     // precomputed in a second dependency graph.
     let mut resolvers = rhai::module_resolvers::ModuleResolversCollection::new();
     resolvers.push(lunco_tools_rhai::ToolModuleResolver::new());
-    resolvers.push(crate::module_resolver::AssetModuleResolver::new(sources));
+    resolvers.push(lunco_scripting_rhai_core::module_resolver::AssetModuleResolver::new(sources));
     engine.set_module_resolver(resolvers);
 
     crate::rhai_limits::apply(&mut engine);
@@ -984,10 +987,12 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
                 return false;
             };
             bridge_core::with_world(|world| {
-                world.trigger(crate::ui_bridge::ScriptUiRequest::ContextMenu {
-                    screen_position,
-                    items,
-                });
+                world.trigger(
+                    lunco_scripting_rhai_core::ui_bridge::ScriptUiRequest::ContextMenu {
+                        screen_position,
+                        items,
+                    },
+                );
                 true
             })
             .unwrap_or(false)
@@ -1019,9 +1024,9 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
     });
 
     // Vector + angle math, in Rust. Scripts pass the same `[x, y, z]` arrays
-    // `world_pos`/`world_forward` return; see `crate::rhai_math` for why this is
+    // `world_pos`/`world_forward` return; see `lunco_scripting_rhai_core::rhai_math` for why this is
     // not the prelude's job.
-    crate::rhai_math::register(&mut engine);
+    lunco_scripting_rhai_core::rhai_math::register(&mut engine);
 
     // world_pos(id) -> [x, y, z] in the active simulation frame, or () on miss.
     engine.register_fn("world_pos", |id: i64| -> Dynamic {
@@ -1041,7 +1046,7 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
     // command boundary.
     engine.register_fn("world_pos3", |id: i64| -> Dynamic {
         spatial_bridge::world_pos(id as u64)
-            .map(crate::rhai_math::to_native)
+            .map(lunco_scripting_rhai_core::rhai_math::to_native)
             .unwrap_or(Dynamic::UNIT)
     });
 
@@ -1085,7 +1090,7 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
 
     engine.register_fn("world_forward3", |id: i64| -> Dynamic {
         spatial_bridge::world_forward(id as u64)
-            .map(crate::rhai_math::to_native)
+            .map(lunco_scripting_rhai_core::rhai_math::to_native)
             .unwrap_or(Dynamic::UNIT)
     });
 
@@ -1097,7 +1102,7 @@ fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSour
     engine.register_fn(
         "nav_command",
         |id: i64, target: Dynamic, speed: f64, radius: f64| -> Dynamic {
-            let Some(target) = crate::rhai_math::to_vec3(&target) else {
+            let Some(target) = lunco_scripting_rhai_core::rhai_math::to_vec3(&target) else {
                 return Dynamic::UNIT;
             };
             let Some(command) =
@@ -2343,7 +2348,7 @@ struct CompiledProgram {
     /// its body — so a hook call can re-run those imports (and nothing else)
     /// before the function executes, making `cam::foo()` resolve inside a `fn`.
     /// `None` when the script imports nothing. See
-    /// [`crate::module_resolver::top_level_hoist_source`] for
+    /// [`lunco_scripting_rhai_core::module_resolver::top_level_hoist_source`] for
     /// why this is the shape of the fix.
     imports_ast: Option<AST>,
     /// Callable task invoker plus the same import/const body as `imports_ast`.
@@ -2494,7 +2499,7 @@ struct RhaiScenarioState {
     /// The `this.task` map compiled onto the [`lunco_behavior`] kernel. Runtime
     /// tick state (cursors, dwell stamps) lives HERE, not in the map — the map
     /// stays the pristine spec.
-    task: Option<crate::task_tree::CompiledTask>,
+    task: Option<lunco_scripting_rhai_core::task_tree::CompiledTask>,
     /// Event identities buffered since the last fixed tick
     /// (`(name, emitter-gid)`). The native task kernel and the declarative
     /// mission driver consume this same bounded projection; full telemetry
@@ -3148,7 +3153,7 @@ pub fn tick_rhai_scenarios_while_paused(world: &mut World) {
 /// and must not re-fire its world effects), or the imports-only AST with
 /// `eval_ast=true` so the script's top-level `import`s are on rhai's import stack
 /// while the function body runs. Never mix the two — see
-/// [`crate::module_resolver::top_level_hoist_source`].
+/// [`lunco_scripting_rhai_core::module_resolver::top_level_hoist_source`].
 fn call_hook(
     engine: &Engine,
     scope: &mut rhai::Scope,
@@ -3317,7 +3322,7 @@ impl RhaiTaskCtx {
     }
 }
 
-impl crate::task_tree::TaskCtx for RhaiTaskCtx {
+impl lunco_scripting_rhai_core::task_tree::TaskCtx for RhaiTaskCtx {
     fn now(&self) -> f64 {
         self.now
     }
@@ -3327,16 +3332,22 @@ impl crate::task_tree::TaskCtx for RhaiTaskCtx {
     fn resolve(&mut self, path: &str) -> i64 {
         usd_bridge::find_path(path)
     }
-    fn call_action(&mut self, f: &FnPtr) -> Result<(), crate::task_tree::TaskCallbackError> {
+    fn call_action(
+        &mut self,
+        f: &FnPtr,
+    ) -> Result<(), lunco_scripting_rhai_core::task_tree::TaskCallbackError> {
         match self.call_fn(f) {
             Ok(_) => Ok(()),
             Err(e) => {
                 self.note(e);
-                Err(crate::task_tree::TaskCallbackError)
+                Err(lunco_scripting_rhai_core::task_tree::TaskCallbackError)
             }
         }
     }
-    fn call_pred(&mut self, f: &FnPtr) -> Result<bool, crate::task_tree::TaskCallbackError> {
+    fn call_pred(
+        &mut self,
+        f: &FnPtr,
+    ) -> Result<bool, lunco_scripting_rhai_core::task_tree::TaskCallbackError> {
         match self.call_fn(f) {
             Ok(d) => d.as_bool().map_err(|t| {
                 error!("[rhai] task predicate returned `{t}`, expected bool");
@@ -3346,11 +3357,11 @@ impl crate::task_tree::TaskCtx for RhaiTaskCtx {
                         rhai::Position::NONE,
                     ));
                 }
-                crate::task_tree::TaskCallbackError
+                lunco_scripting_rhai_core::task_tree::TaskCallbackError
             }),
             Err(e) => {
                 self.note(e);
-                Err(crate::task_tree::TaskCallbackError)
+                Err(lunco_scripting_rhai_core::task_tree::TaskCallbackError)
             }
         }
     }
@@ -3413,15 +3424,22 @@ fn tick_native_task(
             return None;
         }
         TaskPlan::Have => {}
-        TaskPlan::Compile(spec, id) => match crate::task_tree::compile_node(&spec) {
-            Ok(tree) => st.task = Some(crate::task_tree::CompiledTask::new(id, tree)),
-            Err(msg) => {
-                error!("[rhai] this.task does not compile: {msg}");
-                // Poisoned (latched done) so the error reports once, not every tick.
-                st.task = Some(crate::task_tree::CompiledTask::poisoned(id));
-                return Some((format!("task tree invalid: {msg}"), rhai::Position::NONE));
+        TaskPlan::Compile(spec, id) => {
+            match lunco_scripting_rhai_core::task_tree::compile_node(&spec) {
+                Ok(tree) => {
+                    st.task = Some(lunco_scripting_rhai_core::task_tree::CompiledTask::new(
+                        id, tree,
+                    ))
+                }
+                Err(msg) => {
+                    error!("[rhai] this.task does not compile: {msg}");
+                    // Poisoned (latched done) so the error reports once, not every tick.
+                    st.task =
+                        Some(lunco_scripting_rhai_core::task_tree::CompiledTask::poisoned(id));
+                    return Some((format!("task tree invalid: {msg}"), rhai::Position::NONE));
+                }
             }
-        },
+        }
     }
 
     let program = st.program.clone();
@@ -3441,17 +3459,17 @@ fn tick_native_task(
         events: events.to_vec(),
         error: None,
     };
-    let status = ct.tree.tick(&mut ctx);
+    let status = ct.tick(&mut ctx);
     let task_error = ctx.error;
     st.scope = ctx.scope;
     st.this = ctx.this;
     match status {
-        lunco_behavior::Status::Running => {}
-        lunco_behavior::Status::Success => {
+        lunco_scripting_rhai_core::task_tree::Status::Running => {}
+        lunco_scripting_rhai_core::task_tree::Status::Success => {
             ct.done = true;
             bridge_core::emit("TASK_COMPLETE", TelemetryValue::I64(0));
         }
-        lunco_behavior::Status::Failure => {
+        lunco_scripting_rhai_core::task_tree::Status::Failure => {
             ct.done = true;
             warn!("[rhai] task tree ended in Failure for gid {self_gid}");
             bridge_core::emit("TASK_FAILED", TelemetryValue::I64(0));
@@ -4224,47 +4242,6 @@ mod tests {
             .is_none());
     }
 
-    /// The extractor takes only DEPTH-0 imports, and is not fooled by imports
-    /// mentioned inside strings, comments, or function bodies. An import already
-    /// inside a `fn` is visible to that `fn` and must not be hoisted.
-    #[test]
-    fn only_top_level_imports_are_extracted() {
-        let src = r#"
-            // import "commented" as c;
-            import "twin://ep1/a" as a;
-            const S = "import \"in_a_string\" as s;";
-            fn f() {
-                import "nested" as n;
-                n::go();
-            }
-            import "b" as b;
-        "#;
-        let got =
-            crate::module_resolver::top_level_hoist_source(src).expect("two imports + one const");
-        assert!(
-            got.contains(r#"import "twin://ep1/a" as a;"#),
-            "got:\n{got}"
-        );
-        assert!(got.contains(r#"import "b" as b;"#), "got:\n{got}");
-        assert!(!got.contains("commented"), "comment leaked:\n{got}");
-        assert!(
-            !got.contains("nested"),
-            "an in-function import was hoisted:\n{got}"
-        );
-        // `const S` IS hoisted (it is a top-level const), carried whole. The point
-        // is that the `import` inside its string literal did not become a statement
-        // of its own — one const line, not a const line plus a bogus import.
-        assert!(got.contains(r#"const S = "#), "const not hoisted:\n{got}");
-        assert_eq!(
-            got.lines()
-                .filter(|l| l.trim_start().starts_with("import"))
-                .count(),
-            2,
-            "string literal leaked as an import:\n{got}"
-        );
-        assert_eq!(got.lines().count(), 3, "got:\n{got}");
-    }
-
     /// Two closures over one outer local SHARE it when either mutates it.
     ///
     /// Lessons depend on this. Objective callbacks (`on_complete`, `done`) are
@@ -4297,39 +4274,6 @@ mod tests {
              value, so a lesson objective holding state in a captured local would \
              never complete"
         );
-    }
-
-    #[test]
-    fn a_script_with_nothing_to_hoist_extracts_nothing() {
-        assert!(
-            crate::module_resolver::top_level_hoist_source("fn f() { 1 } let x = 2;").is_none()
-        );
-        // `important`/`constant` are not `import`/`const` — whole-token match only.
-        assert!(crate::module_resolver::top_level_hoist_source("let important = 1;").is_none());
-        assert!(crate::module_resolver::top_level_hoist_source("let constant = 1;").is_none());
-    }
-
-    /// A `const` whose value is a map/array literal must survive the scanner.
-    ///
-    /// Its closing `}` returns brace depth to 0 mid-statement, which the block-end
-    /// rule used to read as "statement over" — silently dropping the const, i.e.
-    /// exactly the `Variable not found: global::X` this hoist exists to prevent.
-    #[test]
-    fn a_const_holding_a_brace_literal_is_hoisted_whole() {
-        let src = r#"
-            const P = #{ hover: 0.327, tip: 40.0 };
-            const R = [1, 2, 3];
-            fn go() { global::P.hover }
-        "#;
-        let got =
-            crate::module_resolver::top_level_hoist_source(src).expect("two top-level consts");
-        assert!(
-            got.contains("const P = #{ hover: 0.327, tip: 40.0 };"),
-            "got:\n{got}"
-        );
-        assert!(got.contains("const R = [1, 2, 3];"), "got:\n{got}");
-        assert!(!got.contains("fn go"), "a fn body was hoisted:\n{got}");
-        assert_eq!(got.lines().count(), 2, "got:\n{got}");
     }
 
     /// The end-to-end contract: a top-level `const` read as `global::X` inside a

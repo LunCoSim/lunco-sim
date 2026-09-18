@@ -8,7 +8,7 @@ and the runtime ticks that tree against its generic context.
   traversal, reset, ordered composites, parallel/race, loops, reactive
   composites, and decorators. It has no knowledge of vehicles, routes, USD,
   Modelica, Avian, or Rhai.
-- **Binding:** [`lunco-scripting`](../crates/lunco-scripting/src/task_tree.rs)
+- **Binding:** [`lunco-scripting-rhai-core`](../crates/lunco-scripting-rhai-core/src/task_tree.rs)
   validates Rhai data once, converts it to the kernel's typed nodes, and gives
   leaves access to the public scripting bridge.
 - **Policy:** `.rhai` sources choose subjects, route points, events, tolerances,

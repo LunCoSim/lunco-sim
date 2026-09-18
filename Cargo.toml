@@ -168,6 +168,7 @@ members = [
     "crates/lunco-status-core",
     "crates/lunco-web",
     "crates/lunco-scripting",
+    "crates/lunco-scripting-rhai-core",
     "crates/lunco-scripting-rhai",
     "crates/lunco-rhai-repl",
     "crates/lunco-scripting-bridge-core",

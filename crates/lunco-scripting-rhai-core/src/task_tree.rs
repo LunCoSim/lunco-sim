@@ -29,9 +29,10 @@
 //! leaf (predicate → Success/Failure) that makes Selector/Retry meaningful
 //! from scripts.
 
+pub use lunco_behavior::Status;
 use lunco_behavior::{
     BoxNode, Force, Invert, Node, Parallel, ParallelPolicy, ReactiveSelector, ReactiveSequence,
-    Repeat, Retry, Selector, Sequence, Status,
+    Repeat, Retry, Selector, Sequence,
 };
 use rhai::{Dynamic, FnPtr, ImmutableString, Map};
 
@@ -177,6 +178,11 @@ impl CompiledTask {
             tree: Box::new(Sequence::new(Vec::new())),
             done: true,
         }
+    }
+
+    /// Advance the compiled tree once against the host's world context.
+    pub fn tick(&mut self, ctx: &mut (dyn TaskCtx + 'static)) -> Status {
+        self.tree.tick(ctx)
     }
 }
 
@@ -553,38 +559,46 @@ mod tests {
         assert!(compile_node(&map(&[("items", Dynamic::from_array(vec![]))])).is_err()); // missing kind
         assert!(compile_node(&tagged("warp", &[])).is_err()); // unknown kind
         assert!(compile_node(&tagged("once", &[("act", Dynamic::from_int(5))])).is_err()); // act not a closure
-        assert!(compile_node(&tagged(
-            "once",
-            &[("act", Dynamic::from(FnPtr::new("named_action").unwrap()))],
-        ))
-        .is_ok()); // named script functions use the same task callback contract
-        assert!(compile_node(&tagged(
-            "act_for",
-            &[
-                ("act", Dynamic::from_int(5)),
-                ("secs", Dynamic::from_float(1.0))
-            ],
-        ))
-        .is_err()); // act_for still requires a callback
+        assert!(
+            compile_node(&tagged(
+                "once",
+                &[("act", Dynamic::from(FnPtr::new("named_action").unwrap()))],
+            ))
+            .is_ok()
+        ); // named script functions use the same task callback contract
+        assert!(
+            compile_node(&tagged(
+                "act_for",
+                &[
+                    ("act", Dynamic::from_int(5)),
+                    ("secs", Dynamic::from_float(1.0))
+                ],
+            ))
+            .is_err()
+        ); // act_for still requires a callback
         assert!(compile_node(&tagged("wait", &[("secs", Dynamic::from_float(-1.0))])).is_err());
-        assert!(compile_node(&tagged(
-            "once",
-            &[
-                ("act", Dynamic::from_int(5)),
-                ("secs", Dynamic::from_float(1.0))
-            ],
-        ))
-        .is_err()); // fields from another kind are rejected
-        assert!(compile_node(&tagged(
-            "repeat",
-            &[
-                ("n", Dynamic::from_int(-1)),
-                (
-                    "body",
-                    tagged("wait", &[("secs", Dynamic::from_float(0.0))])
-                )
-            ],
-        ))
-        .is_err()); // counts are explicit, never clamped as a fallback
+        assert!(
+            compile_node(&tagged(
+                "once",
+                &[
+                    ("act", Dynamic::from_int(5)),
+                    ("secs", Dynamic::from_float(1.0))
+                ],
+            ))
+            .is_err()
+        ); // fields from another kind are rejected
+        assert!(
+            compile_node(&tagged(
+                "repeat",
+                &[
+                    ("n", Dynamic::from_int(-1)),
+                    (
+                        "body",
+                        tagged("wait", &[("secs", Dynamic::from_float(0.0))])
+                    )
+                ],
+            ))
+            .is_err()
+        ); // counts are explicit, never clamped as a fallback
     }
 }

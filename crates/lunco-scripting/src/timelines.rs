@@ -174,7 +174,8 @@ pub fn save_timeline_file(
     name: &str,
     json: &str,
 ) -> lunco_storage::StorageResult<std::path::PathBuf> {
-    crate::names::validate_file_stem(name).map_err(lunco_storage::StorageError::Unsupported)?;
+    lunco_scripting_rhai_core::names::validate_file_stem(name)
+        .map_err(lunco_storage::StorageError::Unsupported)?;
     let dir = root.join(TIMELINES_DIR);
     let path = dir.join(format!("{name}.json"));
     lunco_storage::write_file_sync(&path, json.as_bytes())?;

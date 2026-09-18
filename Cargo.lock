@@ -7940,6 +7940,7 @@ dependencies = [
  "lunco-scene-catalog",
  "lunco-scene-selection",
  "lunco-scripting",
+ "lunco-scripting-rhai-core",
  "lunco-settings",
  "lunco-spatial",
  "lunco-telemetry-core",
@@ -8978,7 +8979,6 @@ dependencies = [
  "libloading",
  "lunco-api",
  "lunco-assets-core",
- "lunco-behavior",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8994,6 +8994,7 @@ dependencies = [
  "lunco-scripting-bridge-spatial",
  "lunco-scripting-bridge-time",
  "lunco-scripting-bridge-usd",
+ "lunco-scripting-rhai-core",
  "lunco-spatial",
  "lunco-storage",
  "lunco-telemetry-core",
@@ -9084,6 +9085,17 @@ dependencies = [
  "lunco-tools",
  "rhai",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-scripting-rhai-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-assets-core",
+ "lunco-behavior",
+ "lunco-telemetry-core",
+ "rhai",
 ]
 
 [[package]]

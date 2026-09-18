@@ -232,7 +232,7 @@ fn scan_script(source: &str) -> ScriptScan<'_> {
 /// Extract the top-level `import` and `const` statements used by the hook
 /// compiler. The scanner is shared with dependency discovery below so authored
 /// source has one lexical interpretation in both paths.
-pub(crate) fn top_level_hoist_source(source: &str) -> Option<String> {
+pub fn top_level_hoist_source(source: &str) -> Option<String> {
     let statements = scan_script(source).top_level_statements;
     (!statements.is_empty()).then(|| {
         let mut output = String::new();
@@ -248,7 +248,7 @@ pub(crate) fn top_level_hoist_source(source: &str) -> Option<String> {
 /// are included because Rhai resolves them when that function executes; making
 /// them Bevy dependencies keeps those later calls synchronous without loading
 /// unrelated scripts at startup.
-pub(crate) fn imported_paths(source: &str) -> Result<Vec<String>, String> {
+pub fn imported_paths(source: &str) -> Result<Vec<String>, String> {
     let mut seen = HashSet::new();
     let mut paths = Vec::new();
     for result in scan_script(source).imports {

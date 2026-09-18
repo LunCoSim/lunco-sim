@@ -7,7 +7,7 @@ use std::path::Path;
 /// The same contract is used by timeline and tool-library persistence. A
 /// name is one normal path component; separators, `.`/`..`, and empty names
 /// are rejected before any filesystem path is built.
-pub(crate) fn validate_file_stem(name: &str) -> Result<(), String> {
+pub fn validate_file_stem(name: &str) -> Result<(), String> {
     if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
         return Err("name must be one non-empty file stem".to_string());
     }

@@ -3,12 +3,6 @@ use bevy::prelude::*;
 pub mod backend;
 pub mod commands;
 pub mod doc;
-/// `import` resolution over the asset pipeline. Holds no path logic of its own —
-/// ids come from `lunco_assets_core::script_source::ScriptSources`.
-#[cfg(feature = "rhai")]
-pub mod module_resolver;
-#[cfg(feature = "rhai")]
-mod names;
 /// Twin-scoped native shared-library providers for declared hook contracts.
 #[cfg(feature = "native-plugins")]
 pub mod native_plugins;
@@ -22,9 +16,6 @@ pub mod python;
 /// `RegisterToolLibrary`/`RegisterTimeline` syncs + persists via the journal plane.
 #[cfg(feature = "rhai")]
 pub mod registration_journal;
-/// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
-#[cfg(feature = "rhai")]
-pub mod rhai_math;
 /// Shared bounded-resource policy for every Rhai engine.
 ///
 /// OWNED BY `lunco-hooks-rhai` — the rhai-only, bevy-free leaf crate that the
@@ -39,11 +30,6 @@ pub use lunco_hooks_rhai::rhai_limits;
 #[cfg(any(feature = "rhai", feature = "python"))]
 pub mod scenario;
 pub mod source_asset;
-/// rhai task maps compiled onto the `lunco-behavior` kernel — the native tick
-/// engine behind the prelude's `seq`/`par_*`/`repeat`/`wait_*` task vocabulary
-/// (replaces the prelude's retired `__tick*` rhai recursion).
-#[cfg(feature = "rhai")]
-pub mod task_tree;
 /// Twin persistence + discovery for declarative mission timelines
 /// (`<twin>/timelines/*.json`; `ListTimelines`/`GetTimeline`/`RunStoredTimeline`).
 #[cfg(feature = "rhai")]
@@ -51,9 +37,6 @@ pub mod timelines;
 /// Importable rhai tool libraries (named `libname::fn` modules).
 #[cfg(feature = "rhai")]
 pub mod tool_libs;
-/// Typed requests from authored scripts to generic runtime UI adapters.
-#[cfg(feature = "rhai")]
-pub mod ui_bridge;
 pub mod world_bridge;
 
 pub use doc::{ScenarioParameters, ScenarioReloadPolicy, ScriptDocument, ScriptedModel};

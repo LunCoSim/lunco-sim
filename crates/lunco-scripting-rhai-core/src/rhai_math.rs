@@ -76,7 +76,7 @@ fn scalar(d: &Dynamic) -> Option<f64> {
 /// array, a non-numeric element, or a non-finite component from a degenerate
 /// orientation. Rejecting non-finite input HERE keeps every operation below
 /// total.
-pub(crate) fn to_vec3(d: &Dynamic) -> Option<DVec3> {
+pub fn to_vec3(d: &Dynamic) -> Option<DVec3> {
     if let Some(v) = d.clone().try_cast::<DVec3>() {
         return v.is_finite().then_some(v);
     }
@@ -104,7 +104,7 @@ fn to_array(v: DVec3) -> Dynamic {
 /// Put the engine's native vector into a Rhai value without an intermediate
 /// array.  Arrays remain the wire/telemetry representation; this is the
 /// explicit lowering used by `world_pos3`, `vec3_array`, and telemetry.
-pub(crate) fn to_native(v: DVec3) -> Dynamic {
+pub fn to_native(v: DVec3) -> Dynamic {
     Dynamic::from(v)
 }
 
@@ -356,11 +356,7 @@ pub fn register(engine: &mut Engine) {
     engine.register_fn(
         "clamp",
         |x: f64, lo: f64, hi: f64| {
-            if x.is_nan() {
-                lo
-            } else {
-                x.clamp(lo, hi)
-            }
+            if x.is_nan() { lo } else { x.clamp(lo, hi) }
         },
     );
 
@@ -558,9 +554,11 @@ mod tests {
     #[test]
     fn native_constructors_reject_non_finite_and_degenerate_values() {
         assert!(engine().eval::<Dynamic>("vec3(0.0/0.0, 0.0, 0.0)").is_err());
-        assert!(engine()
-            .eval::<Dynamic>("quat(0.0, 0.0, 0.0, 0.0)")
-            .is_err());
+        assert!(
+            engine()
+                .eval::<Dynamic>("quat(0.0, 0.0, 0.0, 0.0)")
+                .is_err()
+        );
         assert!(engine().eval::<Dynamic>("vnorm(vec3_zero())").is_err());
     }
 

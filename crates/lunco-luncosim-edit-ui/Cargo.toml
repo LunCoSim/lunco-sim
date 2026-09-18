@@ -68,6 +68,7 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-scripting = { path = "../lunco-scripting" }
+lunco-scripting-rhai-core = { path = "../lunco-scripting-rhai-core" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 
 [dev-dependencies]

@@ -6,7 +6,7 @@ This is the contract between Rhai mission policy and the reusable
 `lunco-behavior` kernel. Rhai owns which actions, predicates, event names, and
 compositions a mission requests. Rust owns parsing, validation, scheduling, and
 the fixed-step tree mechanism. The adapter is
-[`crates/lunco-scripting/src/task_tree.rs`](../../crates/lunco-scripting/src/task_tree.rs);
+[`crates/lunco-scripting-rhai-core/src/task_tree.rs`](../../crates/lunco-scripting-rhai-core/src/task_tree.rs);
 the kernel is [`lunco-behavior`](../../crates/lunco-behavior).
 
 ## One explicit node schema

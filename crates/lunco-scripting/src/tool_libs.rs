@@ -30,7 +30,8 @@ pub const SOURCE_CLASSIFY_HOOK: &str = "scripting.source.classify";
 #[cfg(test)]
 pub(crate) fn registry_test_guard() -> MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 lunco_hooks::declare_hook! {
@@ -154,10 +155,9 @@ pub enum ScriptSourceRole {
 }
 
 pub fn classify_source(asset_id: &str) -> Result<Option<ScriptSourceRole>, String> {
-    let Some(result) = lunco_hooks::invoke(
-        SOURCE_CLASSIFY_HOOK,
-        &[HookValue::str(asset_id.to_owned())],
-    ) else {
+    let Some(result) =
+        lunco_hooks::invoke(SOURCE_CLASSIFY_HOOK, &[HookValue::str(asset_id.to_owned())])
+    else {
         return Ok(None);
     };
     let value = result.map_err(|error| error.to_string())?;
@@ -170,12 +170,12 @@ pub fn classify_source(asset_id: &str) -> Result<Option<ScriptSourceRole>, Strin
         "tool" => {
             let Some(name) = value.get("name").and_then(HookValue::as_str) else {
                 return Err(
-                    "source classification policy selected a tool without a string `name`"
-                        .into(),
+                    "source classification policy selected a tool without a string `name`".into(),
                 );
             };
-            crate::names::validate_file_stem(name)
-                .map_err(|error| format!("source classification returned invalid tool name: {error}"))?;
+            lunco_scripting_rhai_core::names::validate_file_stem(name).map_err(|error| {
+                format!("source classification returned invalid tool name: {error}")
+            })?;
             Ok(Some(ScriptSourceRole::Tool(name.to_owned())))
         }
         other => Err(format!(
@@ -241,7 +241,8 @@ pub fn save_tool_library_file(
     name: &str,
     source: &str,
 ) -> lunco_storage::StorageResult<std::path::PathBuf> {
-    crate::names::validate_file_stem(name).map_err(lunco_storage::StorageError::Unsupported)?;
+    lunco_scripting_rhai_core::names::validate_file_stem(name)
+        .map_err(lunco_storage::StorageError::Unsupported)?;
     let dir = root.join(TOOLS_DIR);
     let path = dir.join(format!("{name}.rhai"));
     lunco_storage::write_file_sync(&path, source.as_bytes())?;
@@ -470,7 +471,9 @@ mod tests {
         let twin = lunco_workspace::TwinId::new(1);
         let mut scoped = TwinToolLibraries::default();
         scoped.activate(twin);
-        scoped.register(twin, "persist_probe", &loaded[0].1).unwrap();
+        scoped
+            .register(twin, "persist_probe", &loaded[0].1)
+            .unwrap();
         let tool = lunco_tools::get("persist_probe").expect("registered");
         assert_eq!(tool.backend(), "rhai");
         assert_eq!(tool.source(), Some(src));

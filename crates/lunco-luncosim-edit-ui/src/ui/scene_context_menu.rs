@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use lunco_scripting::ui_bridge::{ScriptMenuItem, ScriptUiRequest};
+use lunco_scripting_rhai_core::ui_bridge::{ScriptMenuItem, ScriptUiRequest};
 
 #[derive(Clone, Debug)]
 struct PendingMenu {

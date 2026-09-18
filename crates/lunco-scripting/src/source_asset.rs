@@ -135,7 +135,7 @@ fn load_import_dependencies(
 
 #[cfg(feature = "rhai")]
 fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, anyhow::Error> {
-    crate::module_resolver::imported_paths(source)
+    lunco_scripting_rhai_core::module_resolver::imported_paths(source)
         .map_err(|error| anyhow::anyhow!("cannot inspect Rhai imports in {importer}: {error}"))
         .map(|paths| {
             paths
@@ -183,11 +183,7 @@ fn request_builtin_rhai_assets(
         return;
     };
 
-    for rel in manifest
-        .rels()
-        .iter()
-        .filter(|rel| rel.ends_with(".rhai"))
-    {
+    for rel in manifest.rels().iter().filter(|rel| rel.ends_with(".rhai")) {
         let rel = rel.clone();
         if !rel.ends_with(".rhai") {
             continue;

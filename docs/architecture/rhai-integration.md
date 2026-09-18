@@ -280,7 +280,7 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 | Sandboxed Rhai scenario runtime | `ScenarioDriver` owns the persistent per-entity engine and lifecycle caps |
 | rhai → World access | `ScenarioRuntime` exposes host functions to rhai engine |
 | Persistent script state across ticks | `this` map persisted on scenario entity across ticks |
-| Temporal sequencing (wait/over-time) | Task-tree constructors in `prelude/tasks.rhai` (pure data), ticked NATIVELY on the `lunco-behavior` kernel (`lunco-scripting/src/task_tree.rs`) |
+| Temporal sequencing (wait/over-time) | Task-tree constructors in `prelude/tasks.rhai` (pure data), ticked NATIVELY on the `lunco-behavior` kernel (`lunco-scripting-rhai-core/src/task_tree.rs`) |
 | Navigation: waypoints/goals/arrival/path-follow | `nav_to`, `drive`, task trees in `prelude/nav.rhai` and `prelude/tasks.rhai` |
 | By-name entity lookup | `find(name)` verb; `name(id)` returns the presentation label and `QueryEntity` supplies the full USD path |
 | Timer "after N seconds" | `wait(secs)` / `wait_until(cond)` in the native task tree |
