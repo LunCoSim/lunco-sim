@@ -92,7 +92,7 @@ catalog's labels still use `display_channel_label`.
 
 | | today |
 |---|---|
-| Channel declaration | `lunco_core::telemetry::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`. A declaration on a prim with its own sampled port may omit `lunco:telemetry:target` and self-target; otherwise its optional target relationship names exactly one composed measured prim. Missing, multiple, or unresolved targets are runtime diagnostics and USD lint errors. Referenced component relationships stay on the stable assembly prim, while a variant deactivates an absent realization through standard USD `active` authoring. |
+| Channel declaration | `lunco_telemetry_core::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`. A declaration on a prim with its own sampled port may omit `lunco:telemetry:target` and self-target; otherwise its optional target relationship names exactly one composed measured prim. Missing, multiple, or unresolved targets are runtime diagnostics and USD lint errors. Referenced component relationships stay on the stable assembly prim, while a variant deactivates an absent realization through standard USD `active` authoring. |
 | Sampling | `lunco-telemetry::sample_parameters` — reflection-driven, exclusive `&mut World`, `FixedUpdate` |
 | **Rate** | Per-channel `rate_hz` in the channel's bound simulation clock; `FIXED_HZ` is the execution ceiling |
 | Transport | `SampledParameter` (pull/continuous) and `TelemetryEvent` (push/discrete) — Bevy events |
@@ -103,6 +103,15 @@ catalog's labels still use `display_channel_label`.
 `LunCoTelemetryPlugin` is registered in `lunco-luncosim`. Sampling is
 `run_if`-gated on a `Parameter` existing and runs on the fixed clock, so it
 costs nothing until a channel is authored.
+
+`lunco-telemetry-core` owns the transport-neutral telemetry contracts
+(`TelemetryEvent`, `SampledParameter`, `Parameter`, `ChannelSource`, and their
+typed values), the shared reflection registrations, and the black-box event
+logger. It also projects generic core facts such as command occurrences and
+runtime errors into the telemetry bus. `lunco-telemetry` owns sampling cadence,
+settings, retention, and query/history integration. The dependency direction is
+deliberate: `lunco-core` emits generic facts and does not depend on telemetry;
+the telemetry crates consume those facts.
 
 ---
 

@@ -816,7 +816,7 @@ pub const TELEMETRY_SOURCE: &str = "Telemetry";
 /// **This is the bridge every emitting crate assumes exists.** Domain
 /// crates (`lunco-terrain-surface`, `lunco-assets`, `lunco-celestial`,
 /// the application lesson menu, `lunco-workspace`, `lunco-usd-bevy`) deliberately do
-/// not depend on the workbench — they raise a `lunco_core::TelemetryEvent`
+/// not depend on the workbench — they raise a `lunco_telemetry_core::TelemetryEvent`
 /// and document that "the status bar surfaces it". Nothing did: before
 /// this observer the only `StatusLevel::Error` pushes in the workspace
 /// were Modelica-specific, so every one of those failures reached the log
@@ -831,10 +831,10 @@ pub const TELEMETRY_SOURCE: &str = "Telemetry";
 /// the telemetry stream itself. `Warning` is forwarded too, since
 /// Diagnostics is meant to show warnings tied to a document.
 pub fn surface_error_telemetry(
-    trigger: On<lunco_core::TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::TelemetryEvent>,
     mut bus: ResMut<StatusBus>,
 ) {
-    use lunco_core::{Severity, TelemetryValue};
+    use lunco_telemetry_core::{Severity, TelemetryValue};
 
     let ev = trigger.event();
     let level = match ev.severity {
@@ -897,7 +897,7 @@ mod tests {
     /// away, so does the guarantee.
     #[test]
     fn error_telemetry_reaches_the_status_bus() {
-        use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+        use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
         let mut app = App::new();
         app.add_plugins(StatusBusPlugin);
@@ -975,7 +975,7 @@ mod tests {
     /// those would bury real failures in the bar and the history.
     #[test]
     fn routine_telemetry_does_not_reach_the_status_bus() {
-        use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+        use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
         let mut app = App::new();
         app.add_plugins(StatusBusPlugin);

@@ -47,11 +47,11 @@ fn on_activate_perspective(
 }
 
 pub(crate) fn report_unknown_perspective(commands: &mut Commands, id: &str) {
-    commands.trigger(lunco_core::TelemetryEvent {
+    commands.trigger(lunco_telemetry_core::TelemetryEvent {
         name: "perspective-activation-failed".to_string(),
         source: 0,
-        severity: lunco_core::Severity::Error,
-        data: lunco_core::TelemetryValue::String(format!(
+        severity: lunco_telemetry_core::Severity::Error,
+        data: lunco_telemetry_core::TelemetryValue::String(format!(
             "No workbench perspective named `{id}` is registered"
         )),
         timestamp: 0.0,

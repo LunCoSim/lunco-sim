@@ -80,7 +80,9 @@ pub(crate) fn on_select_entity_target(
         request.intent,
     );
     inspector_target.part = None;
-    commands.trigger(lunco_core::command_telemetry_event("SelectEntity"));
+    commands.trigger(lunco_core::CommandOccurred {
+        name: "SelectEntity".to_string(),
+    });
 }
 
 /// Select a prim under the pointer in the isolated USD preview.

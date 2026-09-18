@@ -162,11 +162,11 @@ fn publish_terrain_schema_status(status: Res<TerrainSchemaStatus>, mut commands:
     let Some(error) = status.error.as_deref() else {
         return;
     };
-    commands.trigger(lunco_core::TelemetryEvent {
+    commands.trigger(lunco_telemetry_core::TelemetryEvent {
         name: "USD_SCHEMA_INVALID".to_owned(),
         source: 0,
-        severity: lunco_core::Severity::Critical,
-        data: lunco_core::TelemetryValue::String(format!(
+        severity: lunco_telemetry_core::Severity::Critical,
+        data: lunco_telemetry_core::TelemetryValue::String(format!(
             "Terrain projection schema contract is invalid: {}",
             error
         )),
@@ -1828,11 +1828,11 @@ fn bridge_dem_prim_read(
                 commands
                     .entity(entity)
                     .try_insert(DemDatasetPending::new(entry.id.clone()));
-                commands.trigger(lunco_core::TelemetryEvent {
+                commands.trigger(lunco_telemetry_core::TelemetryEvent {
                     name: "DEM_DATASET_REQUIRED".to_owned(),
                     source: 0,
-                    severity: lunco_core::Severity::Warning,
-                    data: lunco_core::TelemetryValue::String(detail),
+                    severity: lunco_telemetry_core::Severity::Warning,
+                    data: lunco_telemetry_core::TelemetryValue::String(detail),
                     timestamp: 0.0,
                 });
                 return;

@@ -55,25 +55,25 @@ use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::image::Image;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
-use lunco_api::executor::{PendingApiRequest, finish_command_result};
+use lunco_api::executor::{finish_command_result, PendingApiRequest};
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_assets_core::twin_source::TwinRoots;
-use lunco_core::{Ack, ActiveCommandId, OpId, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, OpId};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed};
 use lunco_render::{
-    GraphicsCameraDefaults, LightGraphicsDefaults, RenderQualityProfile, RenderingQualitySettings,
-    scene_camera_look_with_profile,
+    scene_camera_look_with_profile, GraphicsCameraDefaults, LightGraphicsDefaults,
+    RenderQualityProfile, RenderingQualitySettings,
 };
 use lunco_settings::AppSettingsExt;
-use lunco_usd_bevy_core::{UsdStageAsset, is_descendant_or_self};
+use lunco_usd_bevy_core::{is_descendant_or_self, UsdStageAsset};
 use lunco_usd_bevy_scene::{
-    UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
-    UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision, is_preview_entity,
+    is_preview_entity, UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending,
+    UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision,
 };
 use lunco_usd_viewport_core::{
     ApplyUsdInspectionPreset, CloseUsdPreview, CloseUsdPreviewView, DeleteUsdInspectionPreset,
@@ -90,12 +90,12 @@ use lunco_viewport_core::PanelRect;
 use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::PanelRects;
 use lunco_workbench_core::{
-    PanelId, TabId,
     commands::{CloseTab, OpenTab},
     source::OpenTwinSource,
     tabs::PendingTabCloses,
+    PanelId, TabId,
 };
-use lunco_workspace::{TwinClosed, WorkspaceResource, document_belongs_to_twin_root};
+use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
 use openusd::sdf::Path as SdfPath;
 
 use lunco_doc_bevy::DocumentRegistry;
@@ -2970,11 +2970,11 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
 }
 
 fn report_preview_error(world: &mut World, name: &str, detail: String) {
-    world.trigger(lunco_core::TelemetryEvent {
+    world.trigger(lunco_telemetry_core::TelemetryEvent {
         name: name.to_string(),
         source: 0,
-        severity: lunco_core::Severity::Error,
-        data: lunco_core::TelemetryValue::String(detail),
+        severity: lunco_telemetry_core::Severity::Error,
+        data: lunco_telemetry_core::TelemetryValue::String(detail),
         timestamp: 0.0,
     });
 }
@@ -3151,11 +3151,11 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
     let name = match world.resource::<TwinRoots>().register(&name, base) {
         Ok(name) => name,
         Err(error) => {
-            world.trigger(lunco_core::TelemetryEvent {
+            world.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: "twin-asset-mount-failed".into(),
                 source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(error.to_string()),
+                severity: lunco_telemetry_core::Severity::Error,
+                data: lunco_telemetry_core::TelemetryValue::String(error.to_string()),
                 timestamp: 0.0,
             });
             return None;
@@ -3166,19 +3166,19 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
         &rel,
         std::sync::Arc::new(composed.into_bytes()),
     ) {
-        world.trigger(lunco_core::TelemetryEvent {
+        world.trigger(lunco_telemetry_core::TelemetryEvent {
             name: "twin-asset-mount-failed".into(),
             source: 0,
-            severity: lunco_core::Severity::Error,
-            data: lunco_core::TelemetryValue::String(error.to_string()),
+            severity: lunco_telemetry_core::Severity::Error,
+            data: lunco_telemetry_core::TelemetryValue::String(error.to_string()),
             timestamp: 0.0,
         });
         if let Err(cleanup_error) = world.resource::<TwinRoots>().unregister_name(&name) {
-            world.trigger(lunco_core::TelemetryEvent {
+            world.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: "twin-asset-unmount-failed".into(),
                 source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(cleanup_error.to_string()),
+                severity: lunco_telemetry_core::Severity::Error,
+                data: lunco_telemetry_core::TelemetryValue::String(cleanup_error.to_string()),
                 timestamp: 0.0,
             });
         }
@@ -3245,11 +3245,10 @@ mod tests {
         let state = app.world().resource::<UsdViewportState>();
         assert_eq!(state.session_count(), 0);
         assert_eq!(state.focused_doc(), None);
-        assert!(
-            app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .contains(doc)
-        );
+        assert!(app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(doc));
     }
 
     fn explode_fixture() -> (App, UsdPreviewId, DocumentId, Entity, Entity) {
@@ -3429,14 +3428,13 @@ mod tests {
         .expect("valid assembly explode resets");
         assert_eq!(app.world().get::<Transform>(part_a).unwrap(), &baseline_a);
         assert_eq!(app.world().get::<Transform>(part_b).unwrap(), &baseline_b);
-        assert!(
-            app.world()
-                .resource::<UsdViewportState>()
-                .session(preview)
-                .unwrap()
-                .explode
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .resource::<UsdViewportState>()
+            .session(preview)
+            .unwrap()
+            .explode
+            .is_none());
     }
 
     #[test]
@@ -3697,22 +3695,18 @@ mod tests {
             .session(preview)
             .unwrap();
         assert!(session.text_ready());
-        assert!(
-            session
-                .text
-                .authored
-                .as_deref()
-                .unwrap()
-                .contains("Initial")
-        );
-        assert!(
-            session
-                .text
-                .composed
-                .as_deref()
-                .unwrap()
-                .contains("Initial")
-        );
+        assert!(session
+            .text
+            .authored
+            .as_deref()
+            .unwrap()
+            .contains("Initial"));
+        assert!(session
+            .text
+            .composed
+            .as_deref()
+            .unwrap()
+            .contains("Initial"));
 
         let updated = "#usda 1.0\ndef Xform \"Second\" {}\n";
         let latest = "#usda 1.0\ndef Xform \"Latest\" {}\n";
@@ -4005,17 +3999,15 @@ mod tests {
         assert!(target.x <= budget.max_view_dimension);
         assert!(target.y <= budget.max_view_dimension);
         assert!(u64::from(target.x) * u64::from(target.y) <= budget.max_view_pixels);
-        assert!(
-            bounded_view_size(
-                UVec2::new(800, 600),
-                &UsdPreviewRenderBudget {
-                    max_view_dimension: 0,
-                    max_view_pixels: 1,
-                    max_total_pixels: 1,
-                },
-            )
-            .is_none()
-        );
+        assert!(bounded_view_size(
+            UVec2::new(800, 600),
+            &UsdPreviewRenderBudget {
+                max_view_dimension: 0,
+                max_view_pixels: 1,
+                max_total_pixels: 1,
+            },
+        )
+        .is_none());
     }
 
     #[test]

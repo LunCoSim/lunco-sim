@@ -267,7 +267,11 @@ fn runtime_ui_facts(
         .unwrap_or_default();
     if let Some(entity) = root {
         if let Ok((_, sim)) = q_sim.get(entity) {
-            input_values.extend(sim.inputs.iter().map(|(name, value)| (name.clone(), *value)));
+            input_values.extend(
+                sim.inputs
+                    .iter()
+                    .map(|(name, value)| (name.clone(), *value)),
+            );
         }
     }
     let inputs = scalar_hook_map(&input_values);
@@ -857,7 +861,7 @@ fn resolve_authored_telemetry(
     q_parents: &Query<&ChildOf>,
     q_channels: &Query<(
         Entity,
-        &lunco_core::telemetry::Parameter,
+        &lunco_telemetry_core::Parameter,
         Option<&lunco_core::markers::Callsign>,
     )>,
 ) -> Vec<PublicTelemetryValue> {
@@ -1505,7 +1509,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
         's,
         (
             Entity,
-            &'static lunco_core::telemetry::Parameter,
+            &'static lunco_telemetry_core::Parameter,
             Option<&'static lunco_core::markers::Callsign>,
         ),
     >,
@@ -2161,7 +2165,7 @@ fn publish_runtime_surface_exposures(
     signals: &SignalRegistry,
     q_channels: &Query<(
         Entity,
-        &lunco_core::telemetry::Parameter,
+        &lunco_telemetry_core::Parameter,
         Option<&lunco_core::markers::Callsign>,
     )>,
     q_parents: &Query<&ChildOf>,

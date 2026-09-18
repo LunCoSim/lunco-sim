@@ -1,7 +1,7 @@
 //! # Telemetry sampling — the producer half of parameter telemetry
 //!
-//! Samples every entity tagged with a [`lunco_core::telemetry::Parameter`] and emits
-//! a [`SampledParameter`](lunco_core::telemetry::SampledParameter) per sample.
+//! Samples every entity tagged with a [`lunco_telemetry_core::Parameter`] and emits
+//! a [`SampledParameter`](lunco_telemetry_core::SampledParameter) per sample.
 //!
 //! ## The channel
 //!
@@ -43,9 +43,9 @@
 //!
 //! `SampledParameter` is observed by `lunco_api::subscription::sampled_param_observer`
 //! (this is what `SubscribeTelemetry` delivers), mapped by
-//! `TelemetryResponse::from_sampled`, and logged by `lunco_core::log`. **All of that
-//! already existed while this crate sat unwired**, so the API advertised parameter
-//! telemetry that could never arrive. Adding `LunCoTelemetryPlugin` was the whole fix.
+//! `TelemetryResponse::from_sampled`, and logged by `lunco-telemetry-core`.
+//! `LunCoTelemetryPlugin` supplies the sampling producer; the core plugin supplies
+//! the shared bus and its observers.
 //!
 //! Distinct from `TelemetryEvent`, which is the *push* channel (something explicitly
 //! emits an event). This is the *pull* channel: it samples state nobody emitted.
@@ -55,11 +55,11 @@
 mod api;
 
 use bevy::prelude::*;
-use lunco_core::telemetry::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_port_core::ports::{PortRegistry, ResolvedPort};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_signal::TelemetryDeadband;
+use lunco_telemetry_core::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
 use lunco_time::{domain_time, ResolvedDomains, TimeBinding, WorldTime};
 use serde::{Deserialize, Serialize};
 
@@ -1143,8 +1143,10 @@ mod tests {
         app.add_plugins((
             MinimalPlugins,
             lunco_core::LunCoCorePlugin,
+            lunco_telemetry_core::LunCoTelemetryCorePlugin,
             LunCoTelemetryPlugin,
         ));
+        lunco_port_core::register_endpoint_types(&mut app);
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
             UPDATE_MS,
         )));

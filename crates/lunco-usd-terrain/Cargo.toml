@@ -14,9 +14,9 @@ license.workspace = true
 # its collider) without linking any UI. The terrain material rides the universal
 # USD material path in `lunco-usd-bevy`, so nothing here names a material.
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 openusd = { workspace = true }
-lunco-core = { path = "../lunco-core" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }

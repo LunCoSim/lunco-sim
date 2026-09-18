@@ -17,6 +17,7 @@ api = [
 ] # `web-time` is already an unconditional dep
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # `bevy_render` facade feature: the workbench's viewport and graphics menu
 # `bevy::render::{RenderApp, RenderDevice, WgpuSettings, RenderStartup}`
 # directly. The workspace baseline is render-free; this crate genuinely

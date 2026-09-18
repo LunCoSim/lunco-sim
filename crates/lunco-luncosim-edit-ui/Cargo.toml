@@ -6,6 +6,7 @@ license.workspace = true
 description = "LunCoSim's egui panels for in-scene editing"
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-luncosim-edit-core = { path = "../lunco-luncosim-edit-core" }
 lunco-luncosim-edit-gizmo-ui = { path = "../lunco-luncosim-edit-gizmo-ui" }
 lunco-scene-camera = { path = "../lunco-scene-camera" }

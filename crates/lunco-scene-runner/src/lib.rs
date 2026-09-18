@@ -159,11 +159,11 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use lunco_core::SimTick;
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_core::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
+use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 use lunco_usd_document::document::UsdDocument;
 use lunco_usd_sim_cosim::PendingModelicaSource;
 

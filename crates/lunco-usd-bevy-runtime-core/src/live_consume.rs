@@ -266,17 +266,17 @@ fn publish_stage_projected(world: &mut World, doc: lunco_doc::DocumentId, genera
     let mut data = BTreeMap::new();
     data.insert(
         "doc_id".to_string(),
-        lunco_core::TelemetryValue::I64(doc.raw() as i64),
+        lunco_telemetry_core::TelemetryValue::I64(doc.raw() as i64),
     );
     data.insert(
         "generation".to_string(),
-        lunco_core::TelemetryValue::I64(generation as i64),
+        lunco_telemetry_core::TelemetryValue::I64(generation as i64),
     );
-    world.trigger(lunco_core::TelemetryEvent {
+    world.trigger(lunco_telemetry_core::TelemetryEvent {
         name: "usd.document.projected".to_string(),
         source: 0,
-        severity: lunco_core::Severity::Info,
-        data: lunco_core::TelemetryValue::Map(data),
+        severity: lunco_telemetry_core::Severity::Info,
+        data: lunco_telemetry_core::TelemetryValue::Map(data),
         timestamp: 0.0,
     });
 }

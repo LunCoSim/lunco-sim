@@ -36,8 +36,6 @@ use lunco_api::executor::PendingApiRequest;
 use lunco_core::register_commands;
 #[cfg(feature = "rhai")]
 use lunco_core::ActiveCommandId;
-#[cfg(feature = "rhai")]
-use lunco_core::TelemetryValue;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_core::{on_command, Ack, Command, OpId};
 #[cfg(feature = "rhai")]
@@ -46,6 +44,8 @@ use lunco_doc::DocumentId;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_scripting_bridge_core as bridge_core;
+#[cfg(feature = "rhai")]
+use lunco_telemetry_core::TelemetryValue;
 
 // Pause/stop scenario commands are language-agnostic (`any(rhai, python)`) and
 // touch `ScriptedModel`; rhai already imports it above, so a python-only build

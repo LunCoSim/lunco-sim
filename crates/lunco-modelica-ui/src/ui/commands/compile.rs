@@ -42,7 +42,7 @@ use super::{entity_for_doc, resolve_doc_or_active};
 /// Telemetry event published when a Compile never reaches the worker at all —
 /// the channel is closed or the worker was never started.
 ///
-/// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
+/// Published at [`lunco_telemetry_core::Severity::Error`] so the workbench status bar's
 /// error-telemetry observer surfaces it. This is a failure of the user's own
 /// click: pressing Compile and getting
 /// nothing back is precisely the case that must not live only in a log.
@@ -1260,7 +1260,7 @@ pub fn on_compile_model(
 /// 2. the model entity stops claiming it is compiling/stepping, so
 ///    `spawn_modelica_requests` doesn't keep waiting on a reply that is not coming;
 /// 3. the console + Diagnostics log get the reason;
-/// 4. an Error-severity [`lunco_core::TelemetryEvent`] is published, which is
+/// 4. an Error-severity [`lunco_telemetry_core::TelemetryEvent`] is published, which is
 ///    what the workbench status bar's error observer fans to the status bar.
 ///    A `console.error` alone is a panel
 ///    the user may not have open.
@@ -1300,11 +1300,11 @@ fn fail_compile_dispatch(
         model.resume_after_compile = false;
         model.last_error = Some(msg.clone());
     }
-    commands.trigger(lunco_core::TelemetryEvent {
+    commands.trigger(lunco_telemetry_core::TelemetryEvent {
         name: COMPILE_DISPATCH_FAILED.into(),
         source: 0,
-        severity: lunco_core::Severity::Error,
-        data: lunco_core::TelemetryValue::String(msg),
+        severity: lunco_telemetry_core::Severity::Error,
+        data: lunco_telemetry_core::TelemetryValue::String(msg),
         timestamp: 0.0,
     });
 }

@@ -131,7 +131,7 @@ fn load_body_image(
 
 /// Telemetry event published when a body's imagery is given up on.
 ///
-/// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
+/// Published at [`lunco_telemetry_core::Severity::Error`] so the workbench status bar's
 /// error-telemetry observer surfaces it. Silent give-up is indistinguishable
 /// from "this body simply has no
 /// imagery declared", which is a legitimate state — the user has to be told
@@ -278,11 +278,11 @@ pub(crate) fn adopt_authored_body_albedo(
                  {MAX_IMAGERY_ATTEMPTS} times — keeping the body's untextured colour",
                 request.dataset_key, request.naif_id
             );
-            commands.trigger(lunco_core::TelemetryEvent {
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: BODY_IMAGERY_FAILED.into(),
                 source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(format!(
+                severity: lunco_telemetry_core::Severity::Error,
+                data: lunco_telemetry_core::TelemetryValue::String(format!(
                     "authored imagery '{}' for body {} failed to load after \
                      {MAX_IMAGERY_ATTEMPTS} attempts — body renders untextured",
                     request.dataset_key, request.naif_id
@@ -463,11 +463,11 @@ pub(crate) fn bind_dataset_body_imagery(
                  in the asset cache and is a decodable image.",
                 request.dataset_key, request.naif_id
             );
-            commands.trigger(lunco_core::TelemetryEvent {
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: BODY_IMAGERY_FAILED.into(),
                 source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(format!(
+                severity: lunco_telemetry_core::Severity::Error,
+                data: lunco_telemetry_core::TelemetryValue::String(format!(
                     "imagery dataset '{}' for body {} failed to load after \
                      {MAX_IMAGERY_ATTEMPTS} attempts — body renders untextured",
                     request.dataset_key, request.naif_id

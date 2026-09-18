@@ -232,15 +232,17 @@ impl Plugin for LunCoAvatarPlugin {
         // that rhai both produces (`emit`) and consumes (`on_event`/`wait_for`).
         {
             use bevy::input::keyboard::KeyboardInput;
-            use lunco_core::ScriptEventAppExt;
+            use lunco_telemetry_core::ScriptEventAppExt;
             app.project_events::<KeyboardInput, _>(|e| {
-                e.state.is_pressed().then(|| lunco_core::TelemetryEvent {
-                    name: format!("key:{:?}", e.key_code),
-                    source: 0, // raw input — no emitting entity
-                    severity: lunco_core::Severity::Info,
-                    data: lunco_core::TelemetryValue::Bool(true),
-                    timestamp: 0.0,
-                })
+                e.state
+                    .is_pressed()
+                    .then(|| lunco_telemetry_core::TelemetryEvent {
+                        name: format!("key:{:?}", e.key_code),
+                        source: 0, // raw input — no emitting entity
+                        severity: lunco_telemetry_core::Severity::Info,
+                        data: lunco_telemetry_core::TelemetryValue::Bool(true),
+                        timestamp: 0.0,
+                    })
             });
         }
 

@@ -62,12 +62,9 @@ fn on_set_subsystem_enabled(
         return;
     }
     info!("[subsystem] {} = {}", ev.name, ev.on);
-    commands.trigger(crate::TelemetryEvent {
-        name: format!("subsystem:{}", ev.name),
-        source: 0,
-        severity: crate::Severity::Info,
-        data: crate::TelemetryValue::Bool(ev.on),
-        timestamp: 0.0,
+    commands.trigger(crate::SubsystemStateChanged {
+        name: ev.name.clone(),
+        on: ev.on,
     });
 }
 

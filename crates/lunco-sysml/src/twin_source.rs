@@ -369,5 +369,5 @@ fn report_source_error(commands: &mut Commands, twin_name: &str, detail: impl In
     let detail = detail.into();
     let message = format!("Twin `{twin_name}` SysML source load failed: {detail}");
     error!("[sysml] {message}");
-    lunco_core::trigger_error(commands, SYSML_TWIN_SOURCE_LOAD_FAILED, message);
+    lunco_core::trigger_runtime_error(commands, SYSML_TWIN_SOURCE_LOAD_FAILED, message);
 }

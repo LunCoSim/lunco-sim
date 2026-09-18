@@ -112,7 +112,7 @@ fn load_input_bindings_defaults(
         }
         if selected.is_some() {
             state.completed = true;
-            lunco_core::trigger_error(
+            lunco_core::trigger_runtime_error(
                 &mut commands,
                 "input-bindings-defaults-ambiguous",
                 format!(
@@ -131,7 +131,7 @@ fn load_input_bindings_defaults(
 
     state.completed = true;
     let Some((path, text)) = selected else {
-        lunco_core::trigger_error(
+        lunco_core::trigger_runtime_error(
             &mut commands,
             "input-bindings-defaults-missing",
             format!(
@@ -147,7 +147,7 @@ fn load_input_bindings_defaults(
         return;
     };
     if let Err(error) = settings.apply_defaults_json(&text) {
-        lunco_core::trigger_error(
+        lunco_core::trigger_runtime_error(
             &mut commands,
             "input-bindings-defaults-invalid",
             format!("{path}: invalid authored input bindings: {error}"),
@@ -500,7 +500,7 @@ fn load_ready_scenario(
     ) {
         Ok(uri) => uri,
         Err(error) => {
-            lunco_core::trigger_error(
+            lunco_core::trigger_runtime_error(
                 &mut commands,
                 "scenario-twin-mount-failed",
                 format!("could not mount downloaded scenario Twin: {error}"),
@@ -1836,6 +1836,7 @@ impl Plugin for LunCoSimCorePlugin {
             // application paths from silently simulating different mechanics.
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
+            .add_plugins(lunco_telemetry_core::LunCoTelemetryCorePlugin)
             .add_plugins(lunco_core_session::LunCoCoreSessionPlugin)
             // Renderer-independent exposure aggregation is kept in its own
             // production crate. It remains in the shared core path so GUI and
@@ -2484,7 +2485,7 @@ struct StartupSceneGuard {
 /// non-zero exit. Disarms on success (scene produced `UsdPrimPath` entities) so
 /// runtime loads are safe.
 fn startup_twin_scan_failguard(
-    trigger: On<lunco_core::TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::TelemetryEvent>,
     guard: Option<Res<StartupSceneGuard>>,
     mut commands: Commands,
 ) {
@@ -2492,7 +2493,7 @@ fn startup_twin_scan_failguard(
     if trigger.event().name != lunco_workspace::open::TWIN_OPEN_FAILED {
         return;
     }
-    let lunco_core::TelemetryValue::String(detail) = &trigger.event().data else {
+    let lunco_telemetry_core::TelemetryValue::String(detail) = &trigger.event().data else {
         return;
     };
     if !detail.starts_with("StartupScene failed:") {

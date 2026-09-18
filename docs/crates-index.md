@@ -158,6 +158,7 @@ External communication, ECS replication, telemetry extraction, and distributed a
 | **`lunco-api-client`** | Generic native command-API client. It owns endpoint configuration and HTTP request/response handling; it knows no Rhai command or simulator implementation. |
 | **`lunco-api`** | ECS API runtime: typed command/query execution, reflection-based discovery, entity identity, and response/telemetry infrastructure. Its internal requests are converted to/from `lunco-api-contracts` only at transport edges. |
 | **`lunco-api-transport`** | Application-bound API transports: native Axum HTTP listener, asset endpoint, and wasm browser bridge. It converts the pure wire contract to the Bevy-backed `lunco-api` runtime. |
+| **`lunco-telemetry-core`** | Transport-neutral telemetry contracts, typed event/value bus, reflection registration, black-box logging, and projection of generic core lifecycle facts into telemetry. It does not own sampling or retained history. |
 | **`lunco-telemetry`** | Telemetry channels: per-channel rate + deadband, bound to a `TimeDomain` (so pause/warp come free), retained in `lunco-signal`'s ring buffer, plus the OpenMCT-shaped query surface (catalog / history / recording). |
 | **`lunco-signal`** | The signal DATA model — `SignalRegistry`, `SignalRef`, `ScalarHistory`, and the backend-neutral `SimRegistry`/`SimStream` snapshot publication path. **Render-free by construction**: split out of `lunco-viz` (which links bevy_egui → bevy_render) so a headless run can retain history without a GPU stack. `lunco-viz` re-exports the signal registry. |
 
@@ -922,6 +923,10 @@ Application-bound API transports. Owns the native Axum HTTP listener, asset endp
 
 **`lunco-telemetry`**
 Reflection-based data extraction engine. Automatically samples and standardizes internal physics and software values for broadcast to external monitoring systems or Mission Control bridges (YAMCS/XTCE).
+
+**`lunco-telemetry-core`**
+Shared typed telemetry contracts and the generic event projection/logging boundary used by
+producers, API/status consumers, scripting, and the sampling engine.
 
 ---
 

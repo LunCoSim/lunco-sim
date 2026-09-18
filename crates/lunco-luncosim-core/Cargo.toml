@@ -10,6 +10,7 @@ name = "lunco_luncosim_core"
 path = "src/lib.rs"
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # Core owns the CPU/ECS simulation composition. Asset/image/shader stores are
 # retained because USD document projection uses them as data, but renderer,
 # window, glTF, mesh, and light plugins belong to the GUI edge.

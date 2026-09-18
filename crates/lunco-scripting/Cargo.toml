@@ -5,6 +5,7 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
 # The task-tree tick engine (`this.task` in scenarios) — scripts author pure

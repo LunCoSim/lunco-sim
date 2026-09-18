@@ -6,6 +6,7 @@ license.workspace = true
 description = "Headless-safe USD scene admission and live projection runtime"
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true, features = ["bevy_light"] }
 big_space = { workspace = true }
 openusd = { workspace = true }

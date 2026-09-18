@@ -621,7 +621,7 @@ fn report_capture_failure(
 ) {
     let message = message.into();
     warn!("[CaptureFromCamera] {message}");
-    lunco_core::trigger_error(commands, "camera-capture-failed", message.clone());
+    lunco_core::trigger_runtime_error(commands, "camera-capture-failed", message.clone());
     if let Some(correlation_id) = correlation_id {
         commands.trigger(ApiResponseEvent {
             correlation_id,

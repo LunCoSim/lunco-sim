@@ -1,0 +1,14 @@
+[package]
+name = "lunco-telemetry-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Shared LunCoSim telemetry contracts and typed event bus"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

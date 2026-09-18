@@ -5,6 +5,7 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # BigSpace/runtime adapter for celestial mechanics. The sibling
 # `lunco-celestial` package owns the headless astronomy and frame semantics;
 # this package owns their ECS projection into BigSpace, terrain, physics, and

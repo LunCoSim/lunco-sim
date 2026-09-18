@@ -10,6 +10,7 @@ name = "lunco_scene_runner"
 path = "src/lib.rs"
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 avian3d = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 big_space = { workspace = true }

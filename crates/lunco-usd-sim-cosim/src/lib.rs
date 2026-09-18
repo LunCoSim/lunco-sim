@@ -23,7 +23,6 @@
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use lunco_core::telemetry::{ChannelSource, Parameter};
 use lunco_core::{DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics};
 use lunco_cosim_core::{
     BindingEpochDirty, ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConnection,
@@ -44,6 +43,7 @@ use lunco_scripting::python::{get_python_status, PythonStatus};
 use lunco_scripting::source_asset::PythonSource;
 #[cfg(feature = "python")]
 use lunco_scripting::{doc::ScriptedModel, SceneOwnedScript, ScriptRegistry};
+use lunco_telemetry_core::{ChannelSource, Parameter};
 use lunco_usd_bevy_core::read::read_authored_bool_strict;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{
@@ -195,7 +195,7 @@ fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjection
 /// the solver at all — the worker channel was closed, so the compile that
 /// `SimStatus::Compiling` is waiting for will never be attempted.
 ///
-/// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
+/// Published at [`lunco_telemetry_core::Severity::Error`] so the workbench status bar's
 /// error-telemetry observer surfaces it. A scene whose models silently
 /// never step is indistinguishable from a scene that is merely still compiling;
 /// the difference has to reach the UI, not just the log.
@@ -1077,11 +1077,11 @@ fn process_usd_cosim_prim_read(
         ));
         wiring_dirty.0 = true;
         warn!("[usd-cosim] {reason}");
-        commands.trigger(lunco_core::TelemetryEvent {
+        commands.trigger(lunco_telemetry_core::TelemetryEvent {
             name: MODEL_CONFIGURATION_INVALID.into(),
             source: 0,
-            severity: lunco_core::Severity::Error,
-            data: lunco_core::TelemetryValue::String(reason),
+            severity: lunco_telemetry_core::Severity::Error,
+            data: lunco_telemetry_core::TelemetryValue::String(reason),
             timestamp: 0.0,
         });
         return;
@@ -1132,11 +1132,11 @@ fn process_usd_cosim_prim_read(
             ));
             wiring_dirty.0 = true;
             error!("[usd-cosim] {reason}");
-            commands.trigger(lunco_core::TelemetryEvent {
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: MODEL_CONFIGURATION_INVALID.into(),
                 source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(reason),
+                severity: lunco_telemetry_core::Severity::Error,
+                data: lunco_telemetry_core::TelemetryValue::String(reason),
                 timestamp: 0.0,
             });
             return;
@@ -1179,11 +1179,11 @@ fn process_usd_cosim_prim_read(
                 "[usd-cosim] program {} unavailable ({asset_path}): {reason}",
                 prim_path.path
             );
-            commands.trigger(lunco_core::TelemetryEvent {
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: MODEL_DISPATCH_FAILED.into(),
                 source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(reason),
+                severity: lunco_telemetry_core::Severity::Error,
+                data: lunco_telemetry_core::TelemetryValue::String(reason),
                 timestamp: 0.0,
             });
             // The terminal component still participates in topology resolution:
@@ -1560,11 +1560,11 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 level: lunco_modelica_runtime::NoticeLevel::Error,
                 text: format!("[{}] {error}", component.model_name),
             });
-            commands.trigger(lunco_core::TelemetryEvent {
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: MODEL_CONFIGURATION_INVALID.into(),
                 source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(error),
+                severity: lunco_telemetry_core::Severity::Error,
+                data: lunco_telemetry_core::TelemetryValue::String(error),
                 timestamp: 0.0,
             });
             continue;
@@ -1641,11 +1641,11 @@ pub(crate) fn dispatch_loaded_modelica_sources(
             // Immediate verdict for this tick; `modelica_status` keeps it from
             // the following one.
             component.status = SimStatus::Error(error.clone());
-            commands.trigger(lunco_core::TelemetryEvent {
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: MODEL_DISPATCH_FAILED.into(),
                 source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(error),
+                severity: lunco_telemetry_core::Severity::Error,
+                data: lunco_telemetry_core::TelemetryValue::String(error),
                 timestamp: 0.0,
             });
         }
@@ -1697,11 +1697,11 @@ pub fn dispatch_loaded_python_sources(
                 level: lunco_modelica_runtime::NoticeLevel::Error,
                 text: format!("[{model_name}] Asset load error: {error}"),
             });
-            commands.trigger(lunco_core::TelemetryEvent {
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: MODEL_DISPATCH_FAILED.into(),
                 source: 0,
-                severity: lunco_core::Severity::Error,
-                data: lunco_core::TelemetryValue::String(error),
+                severity: lunco_telemetry_core::Severity::Error,
+                data: lunco_telemetry_core::TelemetryValue::String(error),
                 timestamp: 0.0,
             });
             commands.entity(entity).try_remove::<PendingPythonSource>();
@@ -2644,10 +2644,10 @@ mod tests {
     }
 
     #[derive(Resource, Default)]
-    struct CapturedTelemetry(Vec<lunco_core::TelemetryEvent>);
+    struct CapturedTelemetry(Vec<lunco_telemetry_core::TelemetryEvent>);
 
     fn capture_telemetry(
-        trigger: On<lunco_core::TelemetryEvent>,
+        trigger: On<lunco_telemetry_core::TelemetryEvent>,
         mut captured: ResMut<CapturedTelemetry>,
     ) {
         captured.0.push(trigger.event().clone());
@@ -2677,7 +2677,7 @@ mod tests {
                 source_path: "/".into(),
                 output: "armed".into(),
                 name: "ARMED".into(),
-                severity: lunco_core::Severity::Info,
+                severity: lunco_telemetry_core::Severity::Info,
                 latched: false,
                 qualification_time_s: 0.0,
                 qualified_for_s: 0.0,
@@ -2994,7 +2994,7 @@ mod tests {
         assert_eq!(parse_event_severity("not-a-severity"), None);
         assert_eq!(
             parse_event_severity("critical"),
-            Some(lunco_core::Severity::Critical)
+            Some(lunco_telemetry_core::Severity::Critical)
         );
     }
 }

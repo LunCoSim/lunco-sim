@@ -24,10 +24,10 @@
 
 use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use lunco_core::{Command, on_command, register_commands};
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
-use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
+use lunco_workbench_widgets::{icon_text_button, paint_icon, UiIcon};
 
 /// Shared layer for guided presentation. Workbench menus and window controls
 /// use egui's `Foreground` order, so guided HUDs, rings, coach cards, and
@@ -198,15 +198,21 @@ pub struct GuidedBack {}
 pub struct GuidedSkip {}
 
 fn on_guided_next(_trigger: On<GuidedNext>, mut world: DeferredWorld) {
-    world.trigger(lunco_core::command_telemetry_event(stringify!(GuidedNext)));
+    world.trigger(lunco_core::CommandOccurred {
+        name: stringify!(GuidedNext).to_string(),
+    });
 }
 
 fn on_guided_back(_trigger: On<GuidedBack>, mut world: DeferredWorld) {
-    world.trigger(lunco_core::command_telemetry_event(stringify!(GuidedBack)));
+    world.trigger(lunco_core::CommandOccurred {
+        name: stringify!(GuidedBack).to_string(),
+    });
 }
 
 fn on_guided_skip(_trigger: On<GuidedSkip>, mut world: DeferredWorld) {
-    world.trigger(lunco_core::command_telemetry_event(stringify!(GuidedSkip)));
+    world.trigger(lunco_core::CommandOccurred {
+        name: stringify!(GuidedSkip).to_string(),
+    });
 }
 
 #[on_command(SetHint)]
@@ -721,11 +727,11 @@ enum CalloutSide {
 
 /// Fire a tour-navigation event on the bus. The running rhai tour advances on
 /// these in its `on_event`; `data` carries the jump index for `cmd:GuidedGoto`.
-fn emit_tour(commands: &mut Commands, name: &str, data: lunco_core::TelemetryValue) {
-    commands.trigger(lunco_core::TelemetryEvent {
+fn emit_tour(commands: &mut Commands, name: &str, data: lunco_telemetry_core::TelemetryValue) {
+    commands.trigger(lunco_telemetry_core::TelemetryEvent {
         name: name.to_string(),
         source: 0,
-        severity: lunco_core::Severity::Info,
+        severity: lunco_telemetry_core::Severity::Info,
         data,
         timestamp: 0.0,
     });
@@ -1097,7 +1103,7 @@ fn draw_tour(
         emit_tour(
             &mut commands,
             "cmd:GuidedGoto",
-            lunco_core::TelemetryValue::I64(i as i64),
+            lunco_telemetry_core::TelemetryValue::I64(i as i64),
         );
     }
 }

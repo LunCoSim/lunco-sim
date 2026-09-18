@@ -699,7 +699,7 @@ pub fn on_scene_click_spawn(
             entry_id,
             "[spawn] click rejected: footprint corner has no surface sample"
         );
-        lunco_core::trigger_error(
+        lunco_core::trigger_runtime_error(
             &mut commands,
             "spawn-placement-failed",
             format!("Cannot place '{entry_id}': footprint is outside the available surface"),

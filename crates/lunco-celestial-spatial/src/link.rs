@@ -53,11 +53,10 @@ use big_space::prelude::{CellCoord, Grid};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use lunco_core::{
-    on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
-};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_hooks::HookValue;
 use lunco_spatial::coords::world_pose;
+use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 use lunco_terrain_surface::{DemHeightField, SurfaceOracle};
 use lunco_time::WorldTime;
 

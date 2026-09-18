@@ -23,8 +23,8 @@
 //! driver reads its declared inputs and writes its declared outputs.
 //!
 //! So a driver is an ordinary Bevy **system**, registered through
-//! [`ProgramDriverAppExt::register_program_driver`] (the shape
-//! [`crate::telemetry::ScriptEventAppExt::project_events`] already uses), and this
+//! [`ProgramDriverAppExt::register_program_driver`] (the shape used by
+//! `lunco_telemetry_core::ScriptEventAppExt::project_events`), and this
 //! registry holds only the *names* — enough to warn about an id nothing implements.
 //! Same contract as the kernels, different storage, because the shape of the work
 //! differs.

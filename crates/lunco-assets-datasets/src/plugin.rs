@@ -68,7 +68,7 @@ fn scan_open_twins_for_datasets(
     let open = match roots.names() {
         Ok(open) => open,
         Err(error) => {
-            lunco_core::trigger_error(
+            lunco_core::trigger_runtime_error(
                 &mut commands,
                 "twin-dataset-registry-unavailable",
                 format!("could not enumerate open Twins for dataset discovery: {error}"),
@@ -91,7 +91,7 @@ fn scan_open_twins_for_datasets(
             }
             Ok(None) => {}
             Err(error) => {
-                lunco_core::trigger_error(
+                lunco_core::trigger_runtime_error(
                     &mut commands,
                     "twin-dataset-registry-unavailable",
                     format!("could not resolve Twin {name} for dataset discovery: {error}"),

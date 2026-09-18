@@ -314,7 +314,7 @@ fn report_twin_doc_load_failed(
     let detail = detail.into();
     warn!("[usd-e1b] {detail}");
     empty_reason.0 = Some(format!("`{twin_path}` could not be loaded: {detail}"));
-    lunco_core::trigger_error(commands, TWIN_SCENE_LOAD_FAILED, detail);
+    lunco_core::trigger_runtime_error(commands, TWIN_SCENE_LOAD_FAILED, detail);
 }
 
 /// Transfer source-asset lifecycle events into the pending document transaction.

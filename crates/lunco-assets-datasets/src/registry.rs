@@ -174,10 +174,9 @@ impl DatasetEntry {
     /// Resolve the consumer-facing asset URI.
     pub fn artifact_uri(&self) -> String {
         match &self.scope {
-            DatasetScope::Engine => lunco_assets_path::uri(
-                lunco_assets_core::LUNCO_SCHEME,
-                &self.artifact_rel,
-            ),
+            DatasetScope::Engine => {
+                lunco_assets_path::uri(lunco_assets_core::LUNCO_SCHEME, &self.artifact_rel)
+            }
             DatasetScope::Twin { name, .. } => {
                 lunco_assets_core::twin_uri(name, &self.artifact_rel)
             }
@@ -249,12 +248,12 @@ fn artifact_rel_of(
 pub const DATASET_FAILED: &str = "DATASET_FAILED";
 
 /// Create the canonical dataset failure telemetry event.
-pub fn dataset_failed(detail: impl Into<String>) -> lunco_core::TelemetryEvent {
-    lunco_core::TelemetryEvent {
+pub fn dataset_failed(detail: impl Into<String>) -> lunco_telemetry_core::TelemetryEvent {
+    lunco_telemetry_core::TelemetryEvent {
         name: DATASET_FAILED.into(),
         source: 0,
-        severity: lunco_core::Severity::Error,
-        data: lunco_core::TelemetryValue::String(detail.into()),
+        severity: lunco_telemetry_core::Severity::Error,
+        data: lunco_telemetry_core::TelemetryValue::String(detail.into()),
         timestamp: 0.0,
     }
 }

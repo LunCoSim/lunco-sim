@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use lunco_core::TelemetryValue;
 use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
+use lunco_telemetry_core::TelemetryValue;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Serialize};

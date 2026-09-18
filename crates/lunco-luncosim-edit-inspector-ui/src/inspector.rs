@@ -47,11 +47,11 @@ use lunco_usd_document::document::{LayerId, UsdOp};
 fn report_inspector_error(world: &mut World, message: impl Into<String>) {
     let message = message.into();
     warn!("[inspector] {message}");
-    world.trigger(lunco_core::TelemetryEvent {
+    world.trigger(lunco_telemetry_core::TelemetryEvent {
         name: "inspector-edit-failed".to_string(),
         source: 0,
-        severity: lunco_core::Severity::Error,
-        data: lunco_core::TelemetryValue::String(message),
+        severity: lunco_telemetry_core::Severity::Error,
+        data: lunco_telemetry_core::TelemetryValue::String(message),
         timestamp: 0.0,
     });
 }
@@ -1679,11 +1679,11 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                         let Some(gid) = ctx.get::<lunco_core::GlobalEntityId>(entity).copied()
                         else {
                             warn!("INSPECTOR: {entity:?} has no GlobalEntityId — not movable");
-                            ctx.trigger(lunco_core::TelemetryEvent {
+                            ctx.trigger(lunco_telemetry_core::TelemetryEvent {
                                 name: "inspector-move-failed".to_string(),
                                 source: 0,
-                                severity: lunco_core::Severity::Error,
-                                data: lunco_core::TelemetryValue::String(
+                                severity: lunco_telemetry_core::Severity::Error,
+                                data: lunco_telemetry_core::TelemetryValue::String(
                                     "The selected object has no stable entity identity and cannot be moved"
                                         .to_string(),
                                 ),

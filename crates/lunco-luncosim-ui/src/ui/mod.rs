@@ -506,13 +506,13 @@ fn on_runtime_ui_action(
             commands.trigger(lunco_scripting::commands::RunRhaiToolHook {
                 tool: "runtime_ui".to_owned(),
                 hook: "on_action".to_owned(),
-                args: lunco_core::TelemetryValue::String(action.clone()),
+                args: lunco_telemetry_core::TelemetryValue::String(action.clone()),
             });
-            commands.trigger(lunco_core::TelemetryEvent {
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: "runtime.ui.action".to_owned(),
                 source: 0,
-                severity: lunco_core::Severity::Info,
-                data: lunco_core::TelemetryValue::String(action),
+                severity: lunco_telemetry_core::Severity::Info,
+                data: lunco_telemetry_core::TelemetryValue::String(action),
                 timestamp: 0.0,
             });
         }
@@ -540,7 +540,7 @@ fn runtime_focus_body(
 
 fn report_runtime_ui_failure(commands: &mut Commands, message: &str) {
     warn!("[runtime-ui] {message}");
-    lunco_core::trigger_error(commands, "runtime-ui-action-failed", message);
+    lunco_core::trigger_runtime_error(commands, "runtime-ui-action-failed", message);
 }
 
 fn reset_runtime_ui_dropdowns(mut dropdowns: ResMut<RuntimeUiDropdownState>) {
@@ -746,11 +746,11 @@ fn draw_runtime_ui_dropdowns(
         dropdowns.close();
     }
     if let Some(action) = selected_action {
-        commands.trigger(lunco_core::TelemetryEvent {
+        commands.trigger(lunco_telemetry_core::TelemetryEvent {
             name: "runtime.ui.action".to_owned(),
             source: 0,
-            severity: lunco_core::Severity::Info,
-            data: lunco_core::TelemetryValue::String(action),
+            severity: lunco_telemetry_core::Severity::Info,
+            data: lunco_telemetry_core::TelemetryValue::String(action),
             timestamp: 0.0,
         });
     }
@@ -1277,11 +1277,11 @@ fn report_scenario_registry_error(ctx: &mut MenuCtx, detail: impl Into<String>) 
                 && event.message == status_message
         });
     if !already_reported {
-        ctx.trigger(lunco_core::TelemetryEvent {
+        ctx.trigger(lunco_telemetry_core::TelemetryEvent {
             name: SCENARIO_REGISTRY_ERROR_EVENT.to_owned(),
             source: 0,
-            severity: lunco_core::Severity::Error,
-            data: lunco_core::TelemetryValue::String(detail),
+            severity: lunco_telemetry_core::Severity::Error,
+            data: lunco_telemetry_core::TelemetryValue::String(detail),
             timestamp: 0.0,
         });
     }
@@ -1381,11 +1381,11 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                     ) {
                                         Ok(path) => path,
                                         Err(error) => {
-                                            ctx.trigger(lunco_core::TelemetryEvent {
+                                            ctx.trigger(lunco_telemetry_core::TelemetryEvent {
                                                 name: "scenario-twin-mount-failed".into(),
                                                 source: 0,
-                                                severity: lunco_core::Severity::Error,
-                                                data: lunco_core::TelemetryValue::String(
+                                                severity: lunco_telemetry_core::Severity::Error,
+                                                data: lunco_telemetry_core::TelemetryValue::String(
                                                     format!(
                                                         "could not mount downloaded scenario Twin: {error}"
                                                     ),

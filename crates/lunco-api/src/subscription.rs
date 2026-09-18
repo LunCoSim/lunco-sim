@@ -179,7 +179,11 @@ impl TelemetrySubscriptions {
             .insert((name.to_string(), source_bits), sim_secs);
         true
     }
-    fn should_broadcast(&self, name: &str, severity: Option<lunco_core::Severity>) -> bool {
+    fn should_broadcast(
+        &self,
+        name: &str,
+        severity: Option<lunco_telemetry_core::Severity>,
+    ) -> bool {
         if self.subscriptions.is_empty() {
             return false;
         }
@@ -191,12 +195,12 @@ impl TelemetrySubscriptions {
                 (Some(_), None) => true,
                 (Some(sev), Some(min_str)) => {
                     let min = match min_str.as_str() {
-                        "Debug" => lunco_core::Severity::Debug,
-                        "Info" => lunco_core::Severity::Info,
-                        "Warning" => lunco_core::Severity::Warning,
-                        "Error" => lunco_core::Severity::Error,
-                        "Critical" => lunco_core::Severity::Critical,
-                        _ => lunco_core::Severity::Debug,
+                        "Debug" => lunco_telemetry_core::Severity::Debug,
+                        "Info" => lunco_telemetry_core::Severity::Info,
+                        "Warning" => lunco_telemetry_core::Severity::Warning,
+                        "Error" => lunco_telemetry_core::Severity::Error,
+                        "Critical" => lunco_telemetry_core::Severity::Critical,
+                        _ => lunco_telemetry_core::Severity::Debug,
                     };
                     sev >= min
                 }
@@ -213,7 +217,7 @@ impl TelemetrySubscriptions {
 
 /// Observer for sampled parameters.
 pub fn sampled_param_observer(
-    trigger: On<lunco_core::telemetry::SampledParameter>,
+    trigger: On<lunco_telemetry_core::SampledParameter>,
     mut subscriptions: ResMut<TelemetrySubscriptions>,
     // Parameter names are not unique across entities, so a subscriber needs the
     // owning entity's global id to tell two `"motor_current"`s apart.
@@ -241,7 +245,7 @@ pub fn sampled_param_observer(
 
 /// Observer for telemetry events.
 pub fn telemetry_event_observer(
-    trigger: On<lunco_core::telemetry::TelemetryEvent>,
+    trigger: On<lunco_telemetry_core::TelemetryEvent>,
     mut subscriptions: ResMut<TelemetrySubscriptions>,
     mut commands: Commands,
 ) {
@@ -315,7 +319,7 @@ mod tests {
         let mut subs = TelemetrySubscriptions::default();
         subs.subscribe(None);
         assert!(subs.should_broadcast("any_name", None));
-        assert!(subs.should_broadcast("any_name", Some(lunco_core::Severity::Critical)));
+        assert!(subs.should_broadcast("any_name", Some(lunco_telemetry_core::Severity::Critical)));
     }
 
     #[test]
@@ -326,9 +330,9 @@ mod tests {
             min_severity: Some("Warning".to_string()),
             rate_hz: None,
         }));
-        assert!(!subs.should_broadcast("alert", Some(lunco_core::Severity::Debug)));
-        assert!(subs.should_broadcast("alert", Some(lunco_core::Severity::Warning)));
-        assert!(subs.should_broadcast("alert", Some(lunco_core::Severity::Critical)));
+        assert!(!subs.should_broadcast("alert", Some(lunco_telemetry_core::Severity::Debug)));
+        assert!(subs.should_broadcast("alert", Some(lunco_telemetry_core::Severity::Warning)));
+        assert!(subs.should_broadcast("alert", Some(lunco_telemetry_core::Severity::Critical)));
     }
 
     #[test]

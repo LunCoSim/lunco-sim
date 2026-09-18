@@ -43,11 +43,11 @@ use bevy::input::{
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
 use leafwing_input_manager::prelude::ActionState;
+use lunco_control_core::ControlLink;
 use lunco_control_core::{
     ensure_control_plugin, ControlBinding, InteractionControlSet, UserIntent,
 };
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
-use lunco_control_core::ControlLink;
 use lunco_input_core::InputBindingsSettings;
 use serde::{Deserialize, Serialize};
 
@@ -463,7 +463,7 @@ fn project_intent_edge(
     mut causal_trace: ResMut<lunco_control_core::CausalTrace>,
     mut commands: Commands,
 ) {
-    use lunco_core::telemetry::TelemetryValue;
+    use lunco_telemetry_core::TelemetryValue;
     use std::collections::BTreeMap;
 
     let edge = trigger.event();
@@ -486,10 +486,10 @@ fn project_intent_edge(
         "correlation_id".to_string(),
         TelemetryValue::I64(edge.correlation_id as i64),
     );
-    commands.trigger(lunco_core::TelemetryEvent {
+    commands.trigger(lunco_telemetry_core::TelemetryEvent {
         name: "intent.edge".to_string(),
         source: target_gid.map_or(0, |gid| gid.get()),
-        severity: lunco_core::Severity::Info,
+        severity: lunco_telemetry_core::Severity::Info,
         data: TelemetryValue::Map(data),
         timestamp: 0.0,
     });
@@ -1421,7 +1421,7 @@ mod tests {
     #[derive(Resource, Default)]
     struct SemanticEdgeObserved {
         typed: Vec<lunco_control_core::SemanticIntentEdge>,
-        telemetry: Vec<lunco_core::TelemetryEvent>,
+        telemetry: Vec<lunco_telemetry_core::TelemetryEvent>,
     }
 
     fn observe_semantic_edge(
@@ -1432,7 +1432,7 @@ mod tests {
     }
 
     fn observe_edge_telemetry(
-        trigger: On<lunco_core::TelemetryEvent>,
+        trigger: On<lunco_telemetry_core::TelemetryEvent>,
         mut observed: ResMut<SemanticEdgeObserved>,
     ) {
         if trigger.event().name == "intent.edge" {
@@ -1496,21 +1496,24 @@ mod tests {
         assert_ne!(observed.typed[0].target, other);
         assert_eq!(observed.telemetry.len(), 1);
         assert_eq!(observed.telemetry[0].source, 0x11);
-        let lunco_core::TelemetryValue::Map(data) = &observed.telemetry[0].data else {
+        let lunco_telemetry_core::TelemetryValue::Map(data) = &observed.telemetry[0].data else {
             panic!("semantic edge telemetry must be structured");
         };
         assert_eq!(
             data["intent"],
-            lunco_core::TelemetryValue::String("release".into())
+            lunco_telemetry_core::TelemetryValue::String("release".into())
         );
         assert_eq!(
             data["edge"],
-            lunco_core::TelemetryValue::String("pulse".into())
+            lunco_telemetry_core::TelemetryValue::String("pulse".into())
         );
-        assert_eq!(data["target_gid"], lunco_core::TelemetryValue::I64(0x11));
+        assert_eq!(
+            data["target_gid"],
+            lunco_telemetry_core::TelemetryValue::I64(0x11)
+        );
         assert_eq!(
             data["correlation_id"],
-            lunco_core::TelemetryValue::I64(observed.typed[0].correlation_id as i64)
+            lunco_telemetry_core::TelemetryValue::I64(observed.typed[0].correlation_id as i64)
         );
         let trace = app.world().resource::<lunco_control_core::CausalTrace>();
         assert_eq!(trace.len(), 1);

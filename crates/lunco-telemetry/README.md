@@ -32,7 +32,7 @@ lunco-telemetry/
 By tagging a component with a `Parameter`, any field can be monitored without manual coding:
 
 ```rust
-use lunco_core::telemetry::{ChannelSource, Parameter};
+use lunco_telemetry_core::{ChannelSource, Parameter};
 
 commands.spawn((
     Port { value: 42.0 },

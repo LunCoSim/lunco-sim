@@ -234,7 +234,11 @@ mod tests {
     #[test]
     fn test_discovery_runs() {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, lunco_core::LunCoCorePlugin));
+        app.add_plugins((
+            MinimalPlugins,
+            lunco_core::LunCoCorePlugin,
+            lunco_telemetry_core::LunCoTelemetryCorePlugin,
+        ));
         let schema = discover_schema(app.world());
         // Schema should not crash; may be empty
         let _ = schema;

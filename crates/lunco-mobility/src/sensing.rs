@@ -11,8 +11,9 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::{Severity, TelemetryEvent, TelemetryValue, TriggerZone};
+use lunco_core::TriggerZone;
 use lunco_spatial::coords::GridPos;
+use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
 /// Parse a `[x, y, z]` JSON array under `key`.
 fn parse_vec3(params: &serde_json::Value, key: &str) -> Option<DVec3> {

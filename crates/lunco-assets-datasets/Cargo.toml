@@ -6,6 +6,7 @@ license.workspace = true
 description = "Lightweight dataset declarations, lifecycle state, and registry contracts"
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }

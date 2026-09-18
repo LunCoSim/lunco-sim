@@ -146,7 +146,7 @@ pub(crate) fn open_usd_docs_on_twin_asset_mounted(
                 );
                 warn!("[twin] {detail}");
                 empty_reason.0 = Some(detail.clone());
-                lunco_core::trigger_error(&mut commands, TWIN_SCENE_LOAD_FAILED, detail);
+                lunco_core::trigger_runtime_error(&mut commands, TWIN_SCENE_LOAD_FAILED, detail);
             }
         }
         None => {

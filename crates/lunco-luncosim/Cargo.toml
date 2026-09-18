@@ -32,6 +32,7 @@ path = "examples/usd_rover_visual.rs"
 required-features = ["ui"]
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true, optional = true }
 lunco-api = { path = "../lunco-api", optional = true }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }

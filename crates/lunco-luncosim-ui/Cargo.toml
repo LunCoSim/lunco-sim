@@ -52,6 +52,7 @@ package-icons = [
 tracy = ["bevy/trace_tracy"]
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true, features = [
     "bevy_asset",
     "bevy_mesh",

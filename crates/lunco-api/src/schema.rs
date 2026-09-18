@@ -137,7 +137,7 @@ impl TelemetryResponse {
     /// `source` is the sampling entity's `GlobalEntityId`, resolved by the caller (the
     /// observer has the world; this type does not).
     pub fn from_sampled(
-        param: &lunco_core::telemetry::SampledParameter,
+        param: &lunco_telemetry_core::SampledParameter,
         source: Option<u64>,
     ) -> Self {
         Self {
@@ -149,7 +149,7 @@ impl TelemetryResponse {
             source,
         }
     }
-    pub fn from_event(event: &lunco_core::telemetry::TelemetryEvent) -> Self {
+    pub fn from_event(event: &lunco_telemetry_core::TelemetryEvent) -> Self {
         Self {
             name: event.name.clone(),
             value: telemetry_value_to_json(&event.data),
@@ -163,16 +163,16 @@ impl TelemetryResponse {
     }
 }
 
-fn telemetry_value_to_json(value: &lunco_core::TelemetryValue) -> serde_json::Value {
+fn telemetry_value_to_json(value: &lunco_telemetry_core::TelemetryValue) -> serde_json::Value {
     match value {
-        lunco_core::TelemetryValue::F64(v) => serde_json::json!(*v),
-        lunco_core::TelemetryValue::I64(v) => serde_json::json!(*v),
-        lunco_core::TelemetryValue::Bool(v) => serde_json::json!(*v),
-        lunco_core::TelemetryValue::String(v) => serde_json::json!(v),
-        lunco_core::TelemetryValue::Array(v) => {
+        lunco_telemetry_core::TelemetryValue::F64(v) => serde_json::json!(*v),
+        lunco_telemetry_core::TelemetryValue::I64(v) => serde_json::json!(*v),
+        lunco_telemetry_core::TelemetryValue::Bool(v) => serde_json::json!(*v),
+        lunco_telemetry_core::TelemetryValue::String(v) => serde_json::json!(v),
+        lunco_telemetry_core::TelemetryValue::Array(v) => {
             serde_json::Value::Array(v.iter().map(telemetry_value_to_json).collect())
         }
-        lunco_core::TelemetryValue::Map(v) => serde_json::Value::Object(
+        lunco_telemetry_core::TelemetryValue::Map(v) => serde_json::Value::Object(
             v.iter()
                 .map(|(key, value)| (key.clone(), telemetry_value_to_json(value)))
                 .collect(),

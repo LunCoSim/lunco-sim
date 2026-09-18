@@ -41,8 +41,9 @@ use bevy::prelude::*;
 
 use std::sync::Arc;
 
-use lunco_core::{Ack, OpId, TelemetryEvent, TelemetryValue};
+use lunco_core::{Ack, OpId};
 use lunco_hash::Fnv1a;
+use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 
 /// True the FIRST time this (entity, path) `set` failure is seen; false after.
 ///
@@ -926,9 +927,7 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 /// relative to the process working directory — a sandbox escape in a system that
 /// otherwise routes every asset through a scoped source. Installing ours closes it.
 ///
-fn build_world_engine_base(
-    sources: lunco_assets_core::script_source::ScriptSources,
-) -> Engine {
+fn build_world_engine_base(sources: lunco_assets_core::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
 
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
@@ -2591,10 +2590,7 @@ impl RhaiScenarioRuntime {
 
     /// Install the externally loaded prelude as the runtime's global module and
     /// merge source functions into future scenario ASTs.
-    pub(crate) fn install_prelude(
-        &mut self,
-        files: Vec<(String, String)>,
-    ) -> Result<(), String> {
+    pub(crate) fn install_prelude(&mut self, files: Vec<(String, String)>) -> Result<(), String> {
         let mut rebuilt = build_world_engine_base(self.sources.clone());
         rebuilt.on_print(|s| info!("[rhai] {s}"));
         let prelude_ast = install_prelude_on_engine(&mut rebuilt, files.clone())?;
@@ -2617,9 +2613,7 @@ pub(crate) struct RhaiRuntimeStatus {
 }
 
 /// Gate scenario execution on the authored prelude being installed.
-pub(crate) fn rhai_runtime_ready(
-    status: Option<Res<RhaiRuntimeStatus>>,
-) -> bool {
+pub(crate) fn rhai_runtime_ready(status: Option<Res<RhaiRuntimeStatus>>) -> bool {
     status.is_some_and(|status| status.ready)
 }
 
@@ -2638,8 +2632,14 @@ pub(crate) fn prepare_builtin_rhai_assets(
     driver: Option<ResMut<crate::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
     mut status: ResMut<RhaiRuntimeStatus>,
 ) {
-    let (Some(manifest), Some(mut builtins), Some(assets), Some(asset_server), Some(sources), Some(mut driver)) =
-        (manifest, builtins, assets, asset_server, sources, driver)
+    let (
+        Some(manifest),
+        Some(mut builtins),
+        Some(assets),
+        Some(asset_server),
+        Some(sources),
+        Some(mut driver),
+    ) = (manifest, builtins, assets, asset_server, sources, driver)
     else {
         return;
     };
@@ -2678,7 +2678,9 @@ pub(crate) fn prepare_builtin_rhai_assets(
         if builtins
             .processed
             .get(&rel)
-            .is_some_and(|(text, generation)| text == &source.text && *generation == hook_generation)
+            .is_some_and(|(text, generation)| {
+                text == &source.text && *generation == hook_generation
+            })
         {
             continue;
         }
@@ -3704,7 +3706,7 @@ mod tests {
     //! or editing a `.rhai` file does not require rebuilding this crate.
 
     use bevy::math::DVec3;
-    use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+    use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
     #[test]
     fn source_scoped_event_filter_accepts_only_the_declared_emitter() {

@@ -518,7 +518,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                     UsdSceneProjectionFailed(message.clone()),
                     Visibility::Hidden,
                 ));
-                lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
                 return;
             }
         };
@@ -604,7 +604,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                     UsdSceneProjectionFailed(message.clone()),
                     Visibility::Hidden,
                 ));
-                lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
                 return;
             }
             let instances = match read_point_instancer(reader, &sdf_path, 0.0) {
@@ -619,7 +619,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                         UsdSceneProjectionFailed(message.clone()),
                         Visibility::Hidden,
                     ));
-                    lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                    lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
                     return;
                 }
             };
@@ -640,7 +640,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                     UsdSceneProjectionFailed(message.clone()),
                     Visibility::Hidden,
                 ));
-                lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
                 return;
             }
         }
@@ -663,7 +663,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                         UsdSceneProjectionFailed(message.clone()),
                         Visibility::Hidden,
                     ));
-                    lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                    lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
                     return;
                 }
             };
@@ -678,7 +678,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 UsdSceneProjectionFailed(message.clone()),
                 Visibility::Hidden,
             ));
-            lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+            lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
             return;
         }
         if procedural_skybox {

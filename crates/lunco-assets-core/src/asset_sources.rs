@@ -61,7 +61,7 @@ fn register_twin_root(
     let assigned = match roots.register_twin(twin) {
         Ok(assigned) => assigned,
         Err(error) => {
-            lunco_core::trigger_error(
+            lunco_core::trigger_runtime_error(
                 &mut commands,
                 TWIN_ASSET_MOUNT_FAILED,
                 format!(
@@ -88,7 +88,7 @@ fn unregister_twin_root(
     mut commands: Commands,
 ) {
     if let Err(error) = roots.unregister_root(&trigger.event().root) {
-        lunco_core::trigger_error(
+        lunco_core::trigger_runtime_error(
             &mut commands,
             TWIN_ASSET_UNMOUNT_FAILED,
             format!("could not unmount Twin asset root: {error}"),

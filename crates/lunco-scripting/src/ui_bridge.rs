@@ -5,7 +5,7 @@
 //! this bridge.
 
 use bevy::prelude::Event;
-use lunco_core::TelemetryValue;
+use lunco_telemetry_core::TelemetryValue;
 
 #[derive(Clone, Debug)]
 pub struct ScriptMenuItem {

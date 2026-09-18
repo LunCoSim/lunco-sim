@@ -9,6 +9,7 @@ description = "USD co-simulation, participant readiness, and connection projecti
 python = ["lunco-scripting/python", "dep:lunco-doc"]
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 avian3d = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }

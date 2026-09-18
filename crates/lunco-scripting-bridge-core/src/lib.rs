@@ -46,10 +46,9 @@ use lunco_api::executor::{
 use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_core::{
-    CommandResults, GlobalEntityId, OpId, SessionId, Severity, TelemetryEvent, TelemetryValue,
-};
+use lunco_core::{CommandResults, GlobalEntityId, OpId, SessionId};
 use lunco_core_session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
+use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
 // ── Native value construction ──────────────────────────────────────────────
 

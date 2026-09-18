@@ -32,9 +32,10 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_core::{SessionId, TelemetryEvent};
+use lunco_core::SessionId;
 use lunco_doc::{Diagnostic, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
+use lunco_telemetry_core::TelemetryEvent;
 
 use crate::doc::ScenarioParameters;
 use crate::doc::{ScriptLanguage, ScriptedModel};
@@ -1067,7 +1068,7 @@ pub fn collect_script_events(
 #[cfg(test)]
 mod tests {
     use super::{ScriptEventInbox, SCRIPT_EVENT_INBOX_CAPACITY};
-    use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+    use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
     fn event(index: usize) -> TelemetryEvent {
         TelemetryEvent {

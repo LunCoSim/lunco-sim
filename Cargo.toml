@@ -116,6 +116,7 @@ members = [
     "crates/lunco-ui",
     "crates/lunco-assets-core",
     "crates/lunco-assets-path",
+    "crates/lunco-telemetry-core",
     "crates/lunco-assets-datasets",
     "crates/lunco-assets-transport",
     "crates/lunco-assets-download",

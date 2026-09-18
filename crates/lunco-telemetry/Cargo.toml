@@ -5,6 +5,7 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }

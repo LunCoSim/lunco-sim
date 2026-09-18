@@ -342,7 +342,9 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
             _trigger: bevy::prelude::On<#cmd_type>,
             mut commands: bevy::prelude::Commands,
         ) {
-            commands.trigger(::lunco_core::command_telemetry_event(stringify!(#cmd_type)));
+            commands.trigger(::lunco_core::CommandOccurred {
+                name: stringify!(#cmd_type).to_string(),
+            });
         }
 
         /// Generated registration function — call via `register_commands!`.

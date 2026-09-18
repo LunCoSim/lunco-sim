@@ -28,13 +28,13 @@
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use lunco_control_core::ControlLink;
-use lunco_core::{TelemetryEvent, TelemetryValue};
 use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_input_core::InputBindingsSettings;
 use lunco_scene_selection::SelectedEntities;
 use lunco_spatial::coords::{
     ActiveFrameCoordinates, RenderPos, ACTIVE_FRAME_NAME, RENDER_FRAME_NAME,
 };
+use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 use std::collections::HashSet;
 
 /// Build the language-neutral map passed to a script tool. The map is an
@@ -622,7 +622,7 @@ pub(crate) fn on_scene_pointer_event(
     commands.trigger(TelemetryEvent {
         name: "scene.pointer".to_string(),
         source,
-        severity: lunco_core::Severity::Info,
+        severity: lunco_telemetry_core::Severity::Info,
         data: context,
         timestamp: 0.0,
     });

@@ -17,7 +17,7 @@
 //!    histories use that simulation time, never a render or wall-clock
 //!    accumulator.
 //!
-//! ## Why this lives in `lunco-core` (substrate justification, review C8)
+//! ## Why this lives in `lunco-telemetry-core` (substrate justification, review C8)
 //!
 //! `lunco-telemetry` is the telemetry *engine* (sampling cadence, channel
 //! clocks, the wired plan); this module is only the **currency types** every
@@ -33,7 +33,7 @@
 //!   `lunco-core` cannot depend on `lunco-telemetry` (cycle).
 //! - [`Parameter`]/[`ChannelSource`]: the authored channel *declaration*
 //!   (a reflect-authored component scripts and `lunco-usd-sim` stamp), not
-//!   engine state; registered by `LunCoCorePlugin` and authored by crates
+//!   engine state; registered by `LunCoTelemetryCorePlugin` and authored by crates
 //!   that never link the sampler.
 //!
 //! Telemetry-domain *machinery* (settings, channel clocks, the sampling plan,
@@ -108,7 +108,7 @@ pub struct TelemetryEvent {
 /// native panels, or typed observers) use this same representation as the API
 /// projector. Tutorial and mission policy can therefore consume the command
 /// name without importing the command's owning crate.
-pub fn command_telemetry_event(name: impl Into<String>) -> TelemetryEvent {
+pub(crate) fn command_telemetry_event(name: impl Into<String>) -> TelemetryEvent {
     let name = name.into();
     TelemetryEvent {
         name: format!("cmd:{name}"),
@@ -136,7 +136,11 @@ impl Default for TelemetryEvent {
 /// Context-heavy callers still own their domain-specific logging and mnemonic;
 /// this helper owns the repeated event construction so UI adapters cannot drift
 /// in severity, source, or timestamp semantics.
-pub fn trigger_error(commands: &mut Commands, name: impl Into<String>, message: impl Into<String>) {
+pub(crate) fn trigger_error(
+    commands: &mut Commands,
+    name: impl Into<String>,
+    message: impl Into<String>,
+) {
     commands.trigger(TelemetryEvent {
         name: name.into(),
         source: 0,
@@ -223,7 +227,7 @@ pub struct Parameter {
     /// Samples per second, **in this channel's own time domain**. `None` ⇒
     /// `TelemetrySettings::default_rate_hz`.
     ///
-    /// A finite positive value above [`FIXED_HZ`](crate::FIXED_HZ) is clamped to the
+    /// A finite positive value above the fixed-step ceiling is clamped to the
     /// fixed-step ceiling. A non-positive or non-finite value is invalid and the
     /// channel is skipped until it is corrected; it never falls back to another rate.
     pub rate_hz: Option<f64>,

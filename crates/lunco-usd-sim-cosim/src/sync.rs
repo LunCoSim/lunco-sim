@@ -149,20 +149,20 @@ pub struct EventBinding {
     pub(crate) source_path: String,
     pub(crate) output: String,
     pub(crate) name: String,
-    pub(crate) severity: lunco_core::Severity,
+    pub(crate) severity: lunco_telemetry_core::Severity,
     pub(crate) latched: bool,
     pub(crate) qualification_time_s: f64,
     pub(crate) qualified_for_s: f64,
     pub(crate) armed: bool,
 }
 
-pub(crate) fn parse_event_severity(value: &str) -> Option<lunco_core::Severity> {
+pub(crate) fn parse_event_severity(value: &str) -> Option<lunco_telemetry_core::Severity> {
     match value {
-        "debug" => Some(lunco_core::Severity::Debug),
-        "info" => Some(lunco_core::Severity::Info),
-        "warning" => Some(lunco_core::Severity::Warning),
-        "error" => Some(lunco_core::Severity::Error),
-        "critical" => Some(lunco_core::Severity::Critical),
+        "debug" => Some(lunco_telemetry_core::Severity::Debug),
+        "info" => Some(lunco_telemetry_core::Severity::Info),
+        "warning" => Some(lunco_telemetry_core::Severity::Warning),
+        "error" => Some(lunco_telemetry_core::Severity::Error),
+        "critical" => Some(lunco_telemetry_core::Severity::Critical),
         _ => None,
     }
 }
@@ -266,11 +266,11 @@ pub fn fire_connected_events(
             value,
             delta_s,
         ) {
-            commands.trigger(lunco_core::TelemetryEvent {
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: binding.name.clone(),
                 source,
                 severity: binding.severity,
-                data: lunco_core::TelemetryValue::F64(value),
+                data: lunco_telemetry_core::TelemetryValue::F64(value),
                 timestamp: world_time.epoch_jd,
             });
         }

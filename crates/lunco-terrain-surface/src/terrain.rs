@@ -42,7 +42,7 @@ use wasm_bindgen::JsCast;
 /// failed coarse bake stage before a terrain existed.
 /// The payload is a human-readable string naming the site/DEM and the cause.
 ///
-/// Published at [`lunco_core::Severity::Error`] so the workbench status bar's
+/// Published at [`lunco_telemetry_core::Severity::Error`] so the workbench status bar's
 /// error telemetry observer surfaces it. Terrain IS the world here: a `warn!`
 /// in a terminal nobody is reading
 /// leaves the user staring at an empty scene with a clean status bar, unable to
@@ -65,19 +65,22 @@ pub const TERRAIN_BUILD_FAULT_KIND: &str = "terrain-build-failed";
 fn dem_failure_event(
     detail: impl Into<String>,
     disposition: DemBuildFailureDisposition,
-) -> lunco_core::TelemetryEvent {
+) -> lunco_telemetry_core::TelemetryEvent {
     let (name, severity) = match disposition {
-        DemBuildFailureDisposition::Terminal => (DEM_BUILD_FAILED, lunco_core::Severity::Error),
-        #[cfg(any(target_arch = "wasm32", test))]
-        DemBuildFailureDisposition::Refinement => {
-            (DEM_REFINEMENT_FAILED, lunco_core::Severity::Warning)
+        DemBuildFailureDisposition::Terminal => {
+            (DEM_BUILD_FAILED, lunco_telemetry_core::Severity::Error)
         }
+        #[cfg(any(target_arch = "wasm32", test))]
+        DemBuildFailureDisposition::Refinement => (
+            DEM_REFINEMENT_FAILED,
+            lunco_telemetry_core::Severity::Warning,
+        ),
     };
-    lunco_core::TelemetryEvent {
+    lunco_telemetry_core::TelemetryEvent {
         name: name.into(),
         source: 0,
         severity,
-        data: lunco_core::TelemetryValue::String(detail.into()),
+        data: lunco_telemetry_core::TelemetryValue::String(detail.into()),
         timestamp: 0.0,
     }
 }
@@ -3046,13 +3049,13 @@ mod visual_product_tests {
     fn terrain_failure_telemetry_identifies_terminal_vs_refinement() {
         let terminal = dem_failure_event("no ground", DemBuildFailureDisposition::Terminal);
         assert_eq!(terminal.name, DEM_BUILD_FAILED);
-        assert_eq!(terminal.severity, lunco_core::Severity::Error);
+        assert_eq!(terminal.severity, lunco_telemetry_core::Severity::Error);
 
         let refinement = dem_failure_event(
             "coarse terrain remains",
             DemBuildFailureDisposition::Refinement,
         );
         assert_eq!(refinement.name, DEM_REFINEMENT_FAILED);
-        assert_eq!(refinement.severity, lunco_core::Severity::Warning);
+        assert_eq!(refinement.severity, lunco_telemetry_core::Severity::Warning);
     }
 }

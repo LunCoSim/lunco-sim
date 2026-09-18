@@ -89,7 +89,8 @@ use avian3d::math::{Scalar, Vector};
 use avian3d::prelude::*;
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
-use lunco_core::{GlobalEntityId, Severity, TelemetryEvent, TelemetryValue};
+use lunco_core::GlobalEntityId;
+use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
 /// Fraction of the static world's largest extent added as lateral/downward
 /// slack. Ten percent is comfortably more than terrain-tile paging jitter and

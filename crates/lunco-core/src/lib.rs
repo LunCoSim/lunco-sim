@@ -24,7 +24,6 @@ pub mod identity;
 pub mod ids;
 /// Shared semantic labels for UI, API, and scripting presentation.
 pub mod labels;
-pub mod log;
 /// Architectural marker components shared by engine subsystems.
 pub mod markers;
 pub mod physics_state;
@@ -37,15 +36,16 @@ pub mod reconcile;
 pub mod scene;
 /// Shared scene teardown schedule for all scene-owned subsystems.
 mod scene_lifecycle;
+pub mod subsystems;
 /// Recoverable locking for shared process state.
 pub mod sync;
-pub mod subsystems;
-pub mod telemetry;
 
 pub mod derived;
 
 /// Domain-free named engine exposure snapshots for UI, API, and diagnostics.
 pub mod exposure;
+
+pub mod events;
 
 pub mod faults;
 
@@ -59,36 +59,31 @@ pub mod pacing;
 /// Run-condition effectiveness — see [`gate::tracked`].
 pub mod gate;
 
-pub use derived::RebuildOnChange;
-pub use faults::{
-    clear_runtime_diagnostics, DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics,
-    RuntimeFault, RuntimeFaults,
-};
-pub use markers::NoSelectionBounds;
-pub use mobility::Mobility;
-pub use model_state::ModelStateRevision;
-pub use pacing::{
-    KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
-};
-pub use physics_state::*;
-pub use telemetry::*;
-// Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
-// crate-root `use bevy::prelude::*` below shadows the glob above for external
-// path resolution (`lunco_core::Severity` would hit bevy's private import).
-// An explicit item outranks both globs.
 pub use commands::{
     Ack, ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOutcome, CommandResults,
     EditIntent, MarkClientLocalExt, Mutation, OpId, Reject, SessionId, SpawnEntity, SyncChannel,
 };
+pub use derived::RebuildOnChange;
+pub use events::{trigger_runtime_error, CommandOccurred, RuntimeError, SubsystemStateChanged};
+pub use faults::{
+    clear_runtime_diagnostics, DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics,
+    RuntimeFault, RuntimeFaults,
+};
 pub use identity::Provenance;
 pub use labels::{entity_display_name, humanize_identifier};
-pub use log::*;
+pub use markers::NoSelectionBounds;
 pub use markers::{
     CatalogEntryId, EmbeddedScenarioPath, EmbeddedScenarioSource, HorizonShadowTerrain,
     PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams, SunAngularDiameter, TriggerZone,
     UsdPrimKind, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG,
     TRIGGER_COLLISION_LAYER,
 };
+pub use mobility::Mobility;
+pub use model_state::ModelStateRevision;
+pub use pacing::{
+    KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
+};
+pub use physics_state::*;
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{
     SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted, SceneTransitionCompleted,
@@ -96,7 +91,6 @@ pub use scene::{
     SceneTransitionRequest, SceneTransitionStarted,
 };
 pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};
-pub use telemetry::Severity;
 pub use sync::LockExt;
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
@@ -459,19 +453,11 @@ pub enum NetcodeSet {
 
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(LunCoLogPlugin);
         // Scene projection has an ownership fence independent of the USD
         // plugins.  Load/restart/clear invalidate it synchronously, while the
         // deferred root spawner registers the replacement after creation.
         app.init_resource::<SceneMountState>();
         app.register_type::<PhysicsPoseAuthoritative>()
-            // `telemetry::` — bevy 0.19's prelude exports its own `Severity`
-            // (log-level type), which shadows ours in glob-import scopes.
-            .register_type::<crate::telemetry::Severity>()
-            .register_type::<TelemetryValue>()
-            .register_type::<TelemetryEvent>()
-            .register_type::<Parameter>()
-            .register_type::<SampledParameter>()
             .register_type::<ModelStateRevision>()
             .register_type::<PhysicalProperties>()
             .register_type::<CelestialBody>()
@@ -483,7 +469,7 @@ impl Plugin for LunCoCorePlugin {
 
         // All always-on core/substrate resources live in one function so a
         // unit test can assert the full set is present without building the
-        // heavier LunCoCorePlugin (log + core registrations). See its doc comment for
+        // heavier LunCoCorePlugin (core registrations). See its doc comment for
         // the invariant this enforces.
         register_core_resources(app);
         app.add_systems(
