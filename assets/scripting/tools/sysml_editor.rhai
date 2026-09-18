@@ -26,7 +26,7 @@ fn new_document() { cmd("NewDocument", #{ kind: "sysml" }) }
 fn save(doc) {
     let valid = _doc_required(doc, "save");
     if !valid.ok { return valid; }
-    cmd("SaveDocument", #{ doc_id: doc })
+    cmd("SaveSysmlDocument", #{ doc_id: doc })
 }
 
 /// Persist one explicit SysML document to a new file.

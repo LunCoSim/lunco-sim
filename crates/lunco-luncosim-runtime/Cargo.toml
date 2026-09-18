@@ -54,6 +54,11 @@ python = [
     "lunco-luncosim-core/python",
 ]
 native-plugins = ["lunco-scripting-rhai-runtime/native-plugins"]
+sysml = [
+    "lunco-luncosim-core/sysml",
+    "lunco-scripting-rhai-runtime/sysml",
+    "lunco-scripting-rhai-world/sysml",
+]
 
 [dependencies.lunco-networking-sync]
 path = "../lunco-networking-sync"

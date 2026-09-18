@@ -290,6 +290,62 @@ fn number(report, name) {
     ()
 }
 
+// Return a numeric SysML vector as a native Rhai array. The provider parses
+// the authored collection once; callers never split CSV strings or round-trip
+// through JSON. A non-numeric vector is rejected as a typed-source error.
+fn vector(report, name) {
+    let resolved = attribute(report, name);
+    if resolved.ok != true || resolved.record.value == ()
+        || resolved.record.value.kind != "vector"
+        || resolved.record.value.elements == () {
+        return ();
+    }
+    if resolved.record.declared_type == ()
+        || resolved.record.declared_type.dimensions == ()
+        || resolved.record.declared_type.dimensions.len() != 1
+        || (resolved.record.declared_type.base != "Real"
+            && resolved.record.declared_type.base != "Integer") {
+        return ();
+    }
+    if resolved.record.declared_type.dimensions[0] != resolved.record.value.elements.len() {
+        return ();
+    }
+    let result = [];
+    for element in resolved.record.value.elements {
+        if element.number_value == () { return (); }
+        result.push(element.number_value);
+    }
+    result
+}
+
+// Return a declared `String[N]` as a native Rhai array. String collections
+// are source data, not CSV payloads: the Rust projection supplies recursive
+// elements and the declared cardinality, while this adapter only unwraps the
+// already-typed scalar literals.
+fn string_vector(report, name) {
+    let resolved = attribute(report, name);
+    if resolved.ok != true || resolved.record.value == ()
+        || resolved.record.value.kind != "vector"
+        || resolved.record.value.elements == ()
+        || resolved.record.declared_type == ()
+        || resolved.record.declared_type.base != "String"
+        || resolved.record.declared_type.dimensions == ()
+        || resolved.record.declared_type.dimensions.len() != 1
+        || resolved.record.declared_type.dimensions[0] != resolved.record.value.elements.len() {
+        return ();
+    }
+    let result = [];
+    for element in resolved.record.value.elements {
+        if element.kind != "string" || element.literal == () { return (); }
+        let value = element.literal;
+        if value.len() < 2 || !value.starts_with("\"") || !value.ends_with("\"") {
+            return ();
+        }
+        result.push(_text(value));
+    }
+    result
+}
+
 fn text(report, name) {
     let resolved = attribute(report, name);
     if resolved.ok != true || resolved.record.value == () { return (); }
@@ -424,10 +480,10 @@ fn _check_one(report, check, indexes) {
     if expected_error != "" { return _failure(check, expected_error); }
     if check.kind == "coverage" { return #{ok: true, id: check.id, component: check.component, requirement: check.requirement}; }
 
-    // Compare a typed comma-separated SysML identity list with its declared
-    // count.  This is intentionally a generic source-side check: Twin tests
-    // still verify every composed USD path separately, while this catches a
-    // stale list/count contract before a loop can silently omit a component.
+    // Compare a typed SysML collection with its declared count. This is a
+    // generic source-side check: Twin tests still verify every composed USD
+    // path separately, while this catches a stale list/count contract before
+    // a loop can silently omit a component. No authored literal is split.
     if check.kind == "source_list_count" {
         if check.list_attr == () || check.list_attr == "" {
             return _failure(check, "SysML identity list attribute is missing");
@@ -436,14 +492,16 @@ fn _check_one(report, check, indexes) {
         if resolved.ok != true || resolved.record.value == () {
             return _failure(check, "SysML identity list is missing");
         }
-        let literal = _text(resolved.record.value.literal);
-        let actual = 0;
-        if literal != "" {
-            for item in literal.split(",") {
-                item.trim();
-                if item != "" { actual += 1; }
-            }
+        let values = if resolved.record.declared_type != ()
+            && resolved.record.declared_type.base == "String" {
+            string_vector(report, check.list_attr)
+        } else {
+            vector(report, check.list_attr)
+        };
+        if values == () {
+            return _failure(check, "SysML identity list is not a typed vector");
         }
+        let actual = values.len();
         let expected = _expected(report, check);
         if expected == () { return _failure(check, "SysML expected count is missing"); }
         if actual.to_float() != expected.to_float() {
@@ -774,7 +832,7 @@ fn evaluate_stream(source_report, checks, channel, title) {
                 title: title, channel: channel, verification: verification,
                 source_revision: source_report.source_revision_hex,
                 source_revision_hex: source_report.source_revision_hex,
-                result_count: checks.len(), failure_count: 0,
+                result_count: checks.len(), failure_count: (),
                 result_index: result_index, result: result});
         }
         result_index += 1;
@@ -791,6 +849,16 @@ fn evaluate_stream(source_report, checks, channel, title) {
             requirement_summary[requirement].checks += 1;
             if result.ok != true { requirement_summary[requirement].failures += 1; }
         }
+    }
+    if channel != () && channel != "" {
+        emit(channel + "_EVIDENCE_STREAM_SUMMARY", #{schema_version: 1,
+            title: title, channel: channel, verification: verification,
+            source_revision: source_report.source_revision_hex,
+            source_revision_hex: source_report.source_revision_hex,
+            result_count: checks.len(), failure_count: failure_count,
+            requirement_count: requirement_names.len(),
+            requirement_names: requirement_names,
+            requirement_summary: requirement_summary});
     }
     #{ok: failure_count == 0, results: [], failures: failures,
       result_chunks: [], failure_chunks: [], streamed: true,
@@ -836,4 +904,41 @@ fn source_with_attributes(names) {
     }
     query("ValidateSysml", #{path: "twin://" + name,
         compact: true, attributes: selected})
+}
+
+// Read one typed requirement-evidence record from the Twin's standard SysML
+// provenance catalog.  The native ValidateSysml provider groups evidence by
+// semantic requirementId and returns only the selected record, so a large
+// Twin does not move its complete attribute table across the Rhai boundary.
+// The caller receives source reference, rationale, optional status, and the
+// exact SysML source span as structured data rather than a comment string.
+fn provenance(report, requirement_id) {
+    if report == () || report.path == () || report.path == "" {
+        return #{ok: false, error: "SysML source report is unavailable"};
+    }
+    if requirement_id == () || requirement_id == "" {
+        return #{ok: false, error: "SysML provenance requirement ID is missing"};
+    }
+    let selected = query("ValidateSysml", #{
+        path: report.path,
+        compact: true,
+        attributes: [],
+        provenance_ids: [requirement_id]
+    });
+    if selected == () || selected.ok != true
+        || selected.provenance_records == () {
+        return #{ok: false, error: "SysML provenance projection is unavailable"};
+    }
+    if selected.provenance_records.len() == 0 {
+        return #{ok: false,
+            error: "SysML provenance record is missing: " + requirement_id};
+    }
+    if selected.provenance_records.len() != 1 {
+        return #{ok: false,
+            error: "ambiguous SysML provenance record: " + requirement_id};
+    }
+    #{ok: true, evidence: selected.provenance_records[0],
+      source_revision: selected.source_revision,
+      source_revision_hex: selected.source_revision_hex,
+      source_files: selected.source_files}
 }

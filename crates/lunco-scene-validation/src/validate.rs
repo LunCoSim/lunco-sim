@@ -746,6 +746,20 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                     .filter_map(serde_json::Value::as_str)
                     .collect::<std::collections::BTreeSet<_>>()
             });
+        let selected_provenance = params
+            .get("provenance_ids")
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<std::collections::BTreeSet<_>>()
+            });
+        let provenance_requested = selected_provenance.is_some()
+            || params
+                .get("provenance")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
         let value = if compact {
             json!({
                 "path": report.path,
@@ -769,14 +783,22 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 // non-Rhai tooling.
                 "attribute_projection": if selected_attributes.is_some() { "selected" } else { "complete" },
                 "attributes_qualified": compact_sysml_attributes(report.info.get("attributes_qualified"), selected_attributes.as_ref()),
-                "attribute_collisions": report
-                    .info
-                    .get("attribute_collisions")
-                    .cloned()
-                    .unwrap_or_else(|| json!([])),
+                "attribute_collisions": compact_sysml_attribute_collisions(
+                    report.info.get("attribute_collisions"),
+                    selected_attributes.as_ref(),
+                ),
                 "requirement_records": compact_requirement_records(report.info.get("requirement_records")),
                 "verification_cases": verification_cases,
                 "verification_records": compact_verification_records(report.info.get("verification_cases")),
+                "provenance_projection": if provenance_requested { "selected" } else { "none" },
+                "provenance_records": if provenance_requested {
+                    compact_sysml_provenance(
+                        report.info.get("attributes_qualified"),
+                        selected_provenance.as_ref(),
+                    )
+                } else {
+                    json!([])
+                },
                 "verification_registry": report.info.get("verification_registry").cloned().unwrap_or_else(|| json!([])),
                 "verification_registry_errors": report.info.get("verification_registry_errors").cloned().unwrap_or_else(|| json!([])),
                 "components": report.info.get("components").cloned().unwrap_or_else(|| json!([])),
@@ -856,11 +878,155 @@ fn compact_sysml_attributes(
                     .get("qualified_name")
                     .cloned()
                     .unwrap_or_else(|| json!(name)),
+                "type_name": record.get("type_name").cloned().unwrap_or(serde_json::Value::Null),
+                "declared_type": record.get("declared_type").cloned().unwrap_or(serde_json::Value::Null),
                 "value": value,
             }),
         );
     }
     serde_json::Value::Object(output)
+}
+
+/// Project typed provenance usages without shipping the complete attribute
+/// table over the Rhai boundary.  A provenance usage is identified by the
+/// semantic pair `requirementId` + `qualifiedRequirement`; the catalog's
+/// owner name is not treated as a contract, so this remains reusable for
+/// other Twin evidence catalogs.
+fn compact_sysml_provenance(
+    value: Option<&serde_json::Value>,
+    selected_ids: Option<&std::collections::BTreeSet<&str>>,
+) -> serde_json::Value {
+    use std::collections::BTreeMap;
+
+    let Some(serde_json::Value::Object(attributes)) = value else {
+        return json!([]);
+    };
+    let mut owners = BTreeMap::<String, BTreeMap<String, &serde_json::Value>>::new();
+    for (qualified_name, record) in attributes {
+        let Some(owner) = record
+            .get("owner")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| qualified_name.rsplit_once("::").map(|(owner, _)| owner))
+        else {
+            continue;
+        };
+        let Some(attribute_name) = record
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| qualified_name.rsplit_once("::").map(|(_, name)| name))
+        else {
+            continue;
+        };
+        owners
+            .entry(owner.to_owned())
+            .or_default()
+            .insert(attribute_name.to_owned(), record);
+    }
+
+    let mut output = Vec::new();
+    for (owner, fields) in owners {
+        let Some(requirement_id) = provenance_literal(fields.get("requirementId")) else {
+            continue;
+        };
+        let Some(qualified_requirement) = provenance_literal(fields.get("qualifiedRequirement"))
+        else {
+            continue;
+        };
+        if let Some(selected) = selected_ids {
+            if !selected.contains(requirement_id.as_str())
+                && !selected.contains(qualified_requirement.as_str())
+            {
+                continue;
+            }
+        }
+
+        let source_records = fields.values().copied().collect::<Vec<_>>();
+        let source_file = source_records
+            .iter()
+            .find_map(|record| record.get("file").and_then(serde_json::Value::as_str))
+            .unwrap_or_default();
+        let source_start = source_records
+            .iter()
+            .filter_map(|record| record.get("start").and_then(serde_json::Value::as_u64))
+            .min()
+            .unwrap_or_default();
+        let source_end = source_records
+            .iter()
+            .filter_map(|record| record.get("end").and_then(serde_json::Value::as_u64))
+            .max()
+            .unwrap_or(source_start);
+
+        let mut projected = json!({
+            "owner": owner,
+            "requirement_id": requirement_id,
+            "qualified_requirement": qualified_requirement,
+            "source_span": {
+                "file": source_file,
+                "start": source_start,
+                "end": source_end,
+            },
+        });
+        for (attribute_name, output_name) in [
+            ("sourceReference", "source_reference"),
+            ("rationale", "rationale"),
+            ("status", "status"),
+        ] {
+            if let Some(literal) = provenance_literal(fields.get(attribute_name)) {
+                projected[output_name] = json!(literal);
+            }
+        }
+        output.push(projected);
+    }
+    output.sort_by(|left, right| {
+        left["requirement_id"]
+            .as_str()
+            .cmp(&right["requirement_id"].as_str())
+    });
+    json!(output)
+}
+
+/// Decode a source-backed SysML literal while retaining a usable string at
+/// the API boundary.  The authored literal remains available in the full
+/// attribute projection; provenance consumers need the semantic string only.
+fn provenance_literal(record: Option<&&serde_json::Value>) -> Option<String> {
+    let literal = record?.get("value")?.get("literal")?.as_str()?.trim();
+    if literal.len() >= 2 && literal.starts_with('"') && literal.ends_with('"') {
+        serde_json::from_str::<String>(literal)
+            .ok()
+            .or_else(|| Some(literal[1..literal.len() - 1].to_owned()))
+    } else {
+        Some(literal.to_owned())
+    }
+}
+
+fn compact_sysml_attribute_collisions(
+    value: Option<&serde_json::Value>,
+    selected: Option<&std::collections::BTreeSet<&str>>,
+) -> serde_json::Value {
+    let Some(selected) = selected else {
+        return value.cloned().unwrap_or_else(|| json!([]));
+    };
+    // An empty selector is the lazy Rhai source request.  It intentionally
+    // carries no literal or collision payload; callers that need one value
+    // ask for it by qualified name and receive only the relevant projection.
+    if selected.is_empty() {
+        return json!([]);
+    }
+    let Some(serde_json::Value::Array(collisions)) = value else {
+        return json!([]);
+    };
+    serde_json::Value::Array(
+        collisions
+            .iter()
+            .filter(|collision| {
+                collision
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|name| selected.contains(name))
+            })
+            .cloned()
+            .collect(),
+    )
 }
 
 fn compact_requirement_records(value: Option<&serde_json::Value>) -> serde_json::Value {
@@ -1280,5 +1446,73 @@ def Xform \"Battery\" (\n\
             compact_sysml_attributes(report.info.get("attributes_qualified"), Some(&selected));
         assert!(compact.get("Example::Lander::mass").is_some());
         assert!(compact.get("Example::Lander::height").is_none());
+    }
+
+    #[test]
+    fn compact_sysml_provenance_groups_typed_evidence_by_requirement_id() {
+        let attributes = json!({
+            "Evidence::evidence_gr_001::requirementId": {
+                "owner": "Evidence::evidence_gr_001", "name": "requirementId",
+                "value": {"literal": "\"GR-001\""},
+                "file": "requirements/evidence.sysml", "start": 10, "end": 42
+            },
+            "Evidence::evidence_gr_001::qualifiedRequirement": {
+                "owner": "Evidence::evidence_gr_001", "name": "qualifiedRequirement",
+                "value": {"literal": "\"Griffin::GR001\""},
+                "file": "requirements/evidence.sysml", "start": 43, "end": 91
+            },
+            "Evidence::evidence_gr_001::sourceReference": {
+                "owner": "Evidence::evidence_gr_001", "name": "sourceReference",
+                "value": {"literal": "\"https://example.invalid/source\""},
+                "file": "requirements/evidence.sysml", "start": 92, "end": 140
+            },
+            "Evidence::evidence_gr_001::rationale": {
+                "owner": "Evidence::evidence_gr_001", "name": "rationale",
+                "value": {"literal": "\"keeps the datum reviewable\""},
+                "file": "requirements/evidence.sysml", "start": 141, "end": 185
+            },
+            "Evidence::evidence_gr_001::status": {
+                "owner": "Evidence::evidence_gr_001", "name": "status",
+                "value": {"literal": "\"study_assumption\""},
+                "file": "requirements/evidence.sysml", "start": 186, "end": 225
+            }
+        });
+        let selected = std::collections::BTreeSet::from(["GR-001"]);
+        let projected = compact_sysml_provenance(Some(&attributes), Some(&selected));
+        assert_eq!(projected.as_array().unwrap().len(), 1);
+        let record = &projected[0];
+        assert_eq!(record["requirement_id"], "GR-001");
+        assert_eq!(record["qualified_requirement"], "Griffin::GR001");
+        assert_eq!(record["source_reference"], "https://example.invalid/source");
+        assert_eq!(record["rationale"], "keeps the datum reviewable");
+        assert_eq!(record["status"], "study_assumption");
+        assert_eq!(record["source_span"]["start"], 10);
+        assert_eq!(record["source_span"]["end"], 225);
+    }
+
+    #[test]
+    fn compact_sysml_collision_projection_follows_selector() {
+        let collisions = json!([
+            {
+                "name": "mass",
+                "qualified_names": ["Example::Lander::mass", "Example::Rover::mass"]
+            },
+            {
+                "name": "height",
+                "qualified_names": ["Example::Lander::height", "Example::Rover::height"]
+            }
+        ]);
+        let empty = std::collections::BTreeSet::new();
+        assert_eq!(
+            compact_sysml_attribute_collisions(Some(&collisions), Some(&empty))
+                .as_array()
+                .expect("collision array")
+                .len(),
+            0
+        );
+        let selected = std::collections::BTreeSet::from(["mass"]);
+        let projected = compact_sysml_attribute_collisions(Some(&collisions), Some(&selected));
+        assert_eq!(projected.as_array().expect("collision array").len(), 1);
+        assert_eq!(projected[0]["name"], "mass");
     }
 }

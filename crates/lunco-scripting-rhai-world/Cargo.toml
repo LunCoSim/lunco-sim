@@ -39,11 +39,13 @@ lunco-workspace = { path = "../lunco-workspace" }
 lunco-hooks-native = { path = "../lunco-hooks-native", optional = true }
 lunco-storage = { path = "../lunco-storage" }
 lunco-tools = { path = "../lunco-tools" }
+lunco-sysml-rhai = { path = "../lunco-sysml-rhai", optional = true }
 
 [features]
 default = ["rhai"]
 rhai = []
 native-plugins = ["dep:lunco-hooks-native"]
+sysml = ["dep:lunco-sysml-rhai"]
 
 [lints]
 workspace = true

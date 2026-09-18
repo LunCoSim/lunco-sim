@@ -10,6 +10,7 @@ lunco-hash = { path = "../lunco-hash" }
 lunco-hooks = { path = "../lunco-hooks" }
 serde = { workspace = true }
 sysml_semantics = { package = "sysmlv2-semantics", version = "=0.1.1" }
+sysml_model = { package = "sysmlv2-model", version = "=0.1.1" }
 sysml_syntax = { package = "sysmlv2-syntax", version = "=0.1.2" }
 sysml_stdlib = { package = "sysmlv2-stdlib", version = "=0.1.0" }
 

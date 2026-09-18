@@ -324,6 +324,27 @@ fn sysml_report_value(path: &str, compact: bool) -> Dynamic {
     )
 }
 
+#[cfg(feature = "sysml")]
+fn sysml_typed_value(path: &str, qualified_name: &str) -> Dynamic {
+    let report = sysml_report_value(path, false);
+    let Some(report) = report.clone().try_cast::<Map>() else {
+        return Dynamic::UNIT;
+    };
+    let Some(attributes) = report
+        .get("attributes_qualified")
+        .and_then(|value| value.clone().try_cast::<Map>())
+    else {
+        return Dynamic::UNIT;
+    };
+    let Some(record) = attributes
+        .get(qualified_name)
+        .and_then(|value| value.clone().try_cast::<Map>())
+    else {
+        return Dynamic::UNIT;
+    };
+    lunco_sysml_rhai::typed_report_attribute_value(&record).unwrap_or(Dynamic::UNIT)
+}
+
 /// Map a rhai value to the engine-wide TelemetryValue for emit. Scalars, arrays,
 /// and maps retain their structure; unit is a bare pulse.
 fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
@@ -1025,6 +1046,12 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     // `world_pos`/`world_forward` return; see `lunco_scripting_rhai_core::rhai_math` for why this is
     // not the prelude's job.
     lunco_scripting_rhai_core::rhai_math::register(&mut engine);
+
+    // SysML semantic wrappers share the existing f64 DVec3/DQuat registrations
+    // instead of creating a second spatial type family. The feature is enabled
+    // by the production SysML application profile.
+    #[cfg(feature = "sysml")]
+    lunco_sysml_rhai::register_sysml_types(&mut engine);
 
     // world_pos(id) -> [x, y, z] in the active simulation frame, or () on miss.
     engine.register_fn("world_pos", |id: i64| -> Dynamic {
@@ -1974,6 +2001,13 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     engine.register_fn(
         "sysml_requirement_report",
         |path: ImmutableString| -> Dynamic { sysml_report_value(path.as_str(), true) },
+    );
+    #[cfg(feature = "sysml")]
+    engine.register_fn(
+        "sysml_value",
+        |path: ImmutableString, qualified_name: ImmutableString| -> Dynamic {
+            sysml_typed_value(path.as_str(), qualified_name.as_str())
+        },
     );
 
     // find(name) -> id (i64), or -1 if no entity has that canonical Name.
@@ -3487,7 +3521,7 @@ fn tick_native_task(
         events: events.to_vec(),
         error: None,
     };
-    let status = ct.tick(&mut ctx);
+    let status = ct.tree.tick(&mut ctx);
     let task_error = ctx.error;
     st.scope = ctx.scope;
     st.this = ctx.this;
