@@ -180,6 +180,13 @@ impl EngineParams {
                     doc: "Heightfield texture resolution in texels (terrain shaders).",
                 },
                 EngineParam {
+                    name: "terrain_geometry_on",
+                    ty: ParamType::F32,
+                    source: Runtime,
+                    prop_fillable: false,
+                    doc: "1 when measured DEM geometry owns terrain relief (terrain shaders).",
+                },
+                EngineParam {
                     name: "csm_far",
                     ty: ParamType::F32,
                     source: Runtime,

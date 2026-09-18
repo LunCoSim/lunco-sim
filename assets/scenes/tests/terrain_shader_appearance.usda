@@ -56,6 +56,7 @@ def Xform "TerrainShaderAppearance" (
                 color3f inputs:albedo = (0.13, 0.125, 0.12)
                 float inputs:micro_scale = 35.0
                 float inputs:micro_bump = 0.015
+                float inputs:micro_albedo = 0.045
                 float inputs:roughness = 0.88
                 float inputs:macro_clump_scale = 8.0
                 float inputs:macro_bump = 0.06

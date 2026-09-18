@@ -24,6 +24,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
+#import lunco::terrain::terrain_apply_sun_visibility
 
 // Dynamic, self-describing parameters (reflected from this file). Only the
 // albedo is author-settable; the rest are engine-filled by the horizon system.
@@ -117,7 +118,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
-        color = vec4(color.rgb * mix(1.0, vis, march_blend), color.a);
+        color = terrain_apply_sun_visibility(
+            pbr_input, color, mat.sun_dir_world, vis, march_blend);
     }
 #endif
 
