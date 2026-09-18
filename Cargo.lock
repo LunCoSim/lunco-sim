@@ -8685,7 +8685,6 @@ dependencies = [
  "lunco-id",
  "lunco-networking-core",
  "lunco-networking-scenario",
- "lunco-scripting",
  "lunco-settings",
  "lunco-spatial",
  "lunco-storage",

@@ -17,6 +17,20 @@ checks.push(t_true(camera.parameters.len() == 1
 checks.push(t_true(camera.output == "string",
     "hook output type is reflected"));
 
+let merge = ();
+for hook in hooks {
+    if hook.id == "journal.merge.order" { merge = hook; }
+}
+checks.push(t_true(merge != () && merge.declared == true
+        && merge.deterministic == true
+        && merge.required == false
+        && merge.installable == true
+        && merge.parameters.len() == 2
+        && merge.parameters[0].type == "map"
+        && merge.parameters[1].type == "map"
+        && merge.output == "int",
+    "journal merge policy exposes its deterministic typed contract"));
+
 let lifecycle = ();
 for hook in hooks {
     if hook.id == "twin.lifecycle" { lifecycle = hook; }

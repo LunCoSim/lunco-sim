@@ -49,7 +49,6 @@ uuid = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
-lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
 tempfile = { workspace = true }
 
 [lints]

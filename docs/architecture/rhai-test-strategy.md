@@ -159,6 +159,11 @@ gates. The scripting crate does not maintain a second Rust integration harness
 for scenario product behavior; low-level Rust tests, when needed for mechanisms
 that authored runtime tests cannot observe, use inline fixtures at their
 owning crate boundary.
+Convergent journal ordering follows the same split: `lunco-twin-journal` keeps
+the generic comparator and fallback mechanism test, while the production Rhai
+hook probe reflects the typed `journal.merge.order` contract. The networking
+adapter tests only its domain filtering and replay boundary; they do not embed
+the Rhai runtime to repeat journal-policy coverage.
 The task/mission semantics are exercised by the production
 `scripting_task_contract` scene and
 `assets/scenarios/tests/scripting_task_contract.rhai`; the Rust harness no
