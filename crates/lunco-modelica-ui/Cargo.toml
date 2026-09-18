@@ -97,7 +97,7 @@ lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 # The whole egui IDE stack is UI-only. Optional behind `ui` so compiler-only
 # consumers do not inherit the workbench shell. The GUI/lunica build enables
 # the complete workbench surface.
-bevy_egui = { workspace = true, optional = true }
+bevy_egui = { workspace = true, optional = true, features = ["render"] }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }

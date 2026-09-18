@@ -97,7 +97,7 @@ lunco-usd-compose = { path = "../lunco-usd-compose", optional = true }
 lunco-storage = { path = "../lunco-storage", optional = true }
 # Optional: only the Layer-4 `mod ui` (egui overlays) uses it, behind the `ui`
 # feature. Headless servers never link egui.
-bevy_egui = { workspace = true, optional = true }
+bevy_egui = { workspace = true, optional = true, features = ["render"] }
 avian3d = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 # URL-dialing WebTransport client IO (`wt_client`): lets the browser/native connect by

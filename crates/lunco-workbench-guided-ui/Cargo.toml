@@ -7,7 +7,7 @@ description = "Optional Rhai-driven guided HUD and coach-mark presentation for L
 
 [dependencies]
 bevy = { workspace = true }
-bevy_egui = { workspace = true }
+bevy_egui = { workspace = true, features = ["render"] }
 lunco-core = { path = "../lunco-core" }
 lunco-theme = { path = "../lunco-theme" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

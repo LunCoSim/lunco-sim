@@ -9,7 +9,7 @@ description = "Core design tokens and theming system for LunCoSim"
 bevy = { workspace = true }
 # Theme installs the application fallback font against egui's built-in font
 # set; it does not own the workbench's picking, clipboard, or URL policy.
-bevy_egui = { workspace = true, features = ["default_fonts"] }
+bevy_egui = { workspace = true, features = ["render", "default_fonts"] }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-settings = { path = "../lunco-settings" }
 serde = { workspace = true }

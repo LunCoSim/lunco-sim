@@ -12,7 +12,7 @@ bevy = { workspace = true, features = [
     "bevy_light",
     "bevy_render",
 ] }
-bevy_egui = { workspace = true }
+bevy_egui = { workspace = true, features = ["render"] }
 lunco-api = { path = "../lunco-api" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }

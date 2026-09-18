@@ -20,7 +20,7 @@ bevy = { workspace = true, features = [
     "bevy_gizmos",
 ] }
 openusd = { workspace = true }
-bevy_egui = { workspace = true }
+bevy_egui = { workspace = true, features = ["render"] }
 lunco-theme = { path = "../lunco-theme" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }

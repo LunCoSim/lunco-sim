@@ -32,6 +32,7 @@ bevy = { workspace = true, features = ["bevy_render", "bevy_light", "bevy_pbr"] 
 # The shell is the egui host: it owns Bevy-UI ordering, scene-vs-chrome
 # picking, clipboard output, external-link handling, and the default font set.
 bevy_egui = { workspace = true, features = [
+    "render",
     "bevy_ui",
     "picking",
     "manage_clipboard",

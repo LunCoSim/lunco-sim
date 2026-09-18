@@ -329,7 +329,7 @@ leafwing-input-manager = "0.21.0"
 # baseline to rendering; the concrete workbench host opts into picking,
 # Bevy-UI ordering, clipboard, external links, and default fonts where those
 # behaviors are actually owned.
-bevy_egui = { version = "0.41", default-features = false, features = ["serde", "render"] }
+bevy_egui = { version = "0.41", default-features = false, features = ["serde"] }
 # UI component crates that only exchange egui values should not depend on the
 # Bevy integration. Bevy hosts opt into `bevy_egui` separately.
 egui = "0.35"

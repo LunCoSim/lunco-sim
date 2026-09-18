@@ -67,7 +67,7 @@ bevy = { workspace = true, features = [
     "webgl2",
 ] }
 big_space = { workspace = true }
-bevy_egui = { workspace = true }
+bevy_egui = { workspace = true, features = ["render"] }
 bevy_winit = { version = "0.19" }
 winit = { version = "0.30.13" }
 

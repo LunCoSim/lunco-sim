@@ -7,7 +7,7 @@ description = "Reusable egui presentation for the shared LunCoSim input state"
 
 [dependencies]
 bevy = { workspace = true }
-bevy_egui = { workspace = true }
+bevy_egui = { workspace = true, features = ["render"] }
 lunco-core = { path = "../lunco-core" }
 lunco-input-core = { path = "../lunco-input-core" }
 lunco-settings = { path = "../lunco-settings" }

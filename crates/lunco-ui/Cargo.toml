@@ -7,7 +7,7 @@ description = "Reusable UI adapter layer for LunCoSim workbench contracts"
 
 [dependencies]
 bevy = { workspace = true }
-bevy_egui = { workspace = true }
+bevy_egui = { workspace = true, features = ["render"] }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-status-core = { path = "../lunco-status-core" }
