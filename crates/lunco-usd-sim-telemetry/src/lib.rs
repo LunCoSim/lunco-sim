@@ -427,8 +427,7 @@ pub fn retain_physics_telemetry(
                 .as_deref()
                 .map(Time::delta_secs_f64)
                 .unwrap_or(0.0);
-            let (contact, contact_force) =
-                lunco_cosim::avian::contact_of(graph, physics_dt, entity);
+            let (contact, contact_force) = lunco_physics::contact_of(graph, physics_dt, entity);
             samples.extend([
                 PhysicsSample::scalar(
                     "contact",

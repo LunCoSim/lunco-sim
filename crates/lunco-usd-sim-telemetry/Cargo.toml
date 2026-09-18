@@ -9,8 +9,10 @@ description = "Render-free USD/Avian physics telemetry for LunCoSim"
 avian3d = { workspace = true }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-mobility = { path = "../lunco-mobility" }
+# Contact aggregation is a physics fact; telemetry should not depend on the
+# co-simulation orchestrator merely to read Avian's contact graph.
+lunco-physics = { path = "../lunco-physics" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-time = { path = "../lunco-time" }

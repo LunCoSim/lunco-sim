@@ -549,6 +549,69 @@ pub fn contact_force_from_impulse(normal_impulse: f64, physics_dt: f64) -> f64 {
     }
 }
 
+/// Whether a collider is touching anything, and the total contact normal
+/// force (N) on it, as computed by Avian's contact graph.
+///
+/// `contact_pairs_with` includes pairs whose AABBs overlap without touching;
+/// only pairs for which Avian reports `is_touching()` contribute to the result.
+/// The force conversion uses the master physics interval and the one shared
+/// Avian solver-phase contract in [`contact_force_from_impulse`].
+pub fn contact_of(graph: &ContactGraph, physics_dt: f64, entity: Entity) -> (bool, f64) {
+    contact_of_filtered(graph, physics_dt, entity, |_| false)
+}
+
+/// Read contact while excluding explicitly authored overlap-only colliders.
+/// The predicate is supplied by the caller because `ContactGraph` stores pair
+/// topology, not ECS component semantics.
+fn contact_of_filtered(
+    graph: &ContactGraph,
+    physics_dt: f64,
+    entity: Entity,
+    is_sensor: impl Fn(Entity) -> bool,
+) -> (bool, f64) {
+    let mut normal_impulse = 0.0;
+    let mut touching = false;
+    for pair in graph.contact_pairs_with(entity) {
+        let other = if pair.collider1 == entity {
+            pair.collider2
+        } else {
+            pair.collider1
+        };
+        if is_sensor(entity) || is_sensor(other) || !pair.is_touching() {
+            continue;
+        }
+        touching = true;
+        for manifold in &pair.manifolds {
+            for point in &manifold.points {
+                normal_impulse += point.normal_impulse;
+            }
+        }
+    }
+    (
+        touching,
+        contact_force_from_impulse(normal_impulse, physics_dt),
+    )
+}
+
+/// Read contact for a caller holding only a `&World`.
+///
+/// Physics timing comes from the same resource the solver uses, so a port
+/// read and the solver agree about the duration of the solved step. Missing
+/// resources mean physics has not started; the truthful result is then no
+/// contact and zero force.
+pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
+    let Some(graph) = world.get_resource::<ContactGraph>() else {
+        return (false, 0.0);
+    };
+    let dt = world
+        .get_resource::<Time<Physics>>()
+        .map(|time| time.delta_secs_f64())
+        .unwrap_or(0.0);
+    contact_of_filtered(graph, dt, entity, |candidate| {
+        world.get::<Sensor>(candidate).is_some()
+    })
+}
+
 /// A target pose for a kinematic Avian body driven outside the physics clock.
 ///
 /// The pose is in Avian's global physics frame (`Position`/`Rotation`), not in

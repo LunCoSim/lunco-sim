@@ -19,9 +19,9 @@
 
 use avian3d::prelude::{
     AngularInertia, AngularVelocity, CenterOfMass, Collider, ColliderMassProperties,
-    ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, ContactGraph, Forces,
+    ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, Forces,
     LinearVelocity, Mass, NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, Physics, Position,
-    RevoluteJoint, RigidBody, Rotation, Sensor, Sleeping, WriteRigidBodyForces,
+    RevoluteJoint, RigidBody, Rotation, Sleeping, WriteRigidBodyForces,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -397,84 +397,6 @@ fn with_pending_actuator_command(world: &mut World, entity: Entity, value: f64) 
     }
 }
 
-/// Whether a collider is touching anything, and the total contact normal force
-/// (N) on it — computed from avian's own contact graph.
-///
-/// THE one contact computation in the engine. The [`COLLIDER_CONTACT_GROUP`]
-/// ports call it through [`contact_from_world`]. Modelica touchdown conversion
-/// reads the same native contact fact; it does not re-derive it, or the two
-/// answers could drift.
-///
-/// The shared physics boundary converts Avian's solver-phase accounting into a
-/// physical load over the master interval. It accounts for Avian's biased and
-/// relaxation phases once, and never divides by the internal substep count.
-/// This keeps Modelica touchdown signals and vehicle tire loads on the same
-/// contract.
-///
-/// `contact_pairs_with` yields every pair whose AABBs overlap, INCLUDING pairs
-/// that are not yet touching, so `is_touching` is not optional: without it a leg
-/// reads "in contact" while its pad is still approaching, which is the exact
-/// false-early-contact this replaced. Sensor colliders are also excluded here:
-/// a landing marker's overlap volume is a mission event, not a load-bearing
-/// surface, and must not feed a physical touchdown signal.
-pub fn contact_of(graph: &ContactGraph, physics_dt: f64, entity: Entity) -> (bool, f64) {
-    contact_of_filtered(graph, physics_dt, entity, |_| false)
-}
-
-/// Read contact while excluding explicitly authored overlap-only colliders.
-/// The predicate is supplied by the caller because `ContactGraph` deliberately
-/// stores pair topology, not ECS component semantics.
-fn contact_of_filtered(
-    graph: &ContactGraph,
-    physics_dt: f64,
-    entity: Entity,
-    is_sensor: impl Fn(Entity) -> bool,
-) -> (bool, f64) {
-    let mut normal_impulse = 0.0;
-    let mut touching = false;
-    for pair in graph.contact_pairs_with(entity) {
-        let other = if pair.collider1 == entity {
-            pair.collider2
-        } else {
-            pair.collider1
-        };
-        if is_sensor(entity) || is_sensor(other) {
-            continue;
-        }
-        if !pair.is_touching() {
-            continue;
-        }
-        touching = true;
-        for manifold in &pair.manifolds {
-            for point in &manifold.points {
-                normal_impulse += point.normal_impulse;
-            }
-        }
-    }
-    (
-        touching,
-        lunco_physics::contact_force_from_impulse(normal_impulse, physics_dt),
-    )
-}
-
-/// [`contact_of`] for a caller holding only a `&World` — the port-read closures.
-///
-/// Physics timing comes from the same resource the solver uses, so a port read
-/// and the solver agree about the duration of the solved step. Missing resources mean physics
-/// has not started; "not touching" is the truthful answer then, not a panic.
-pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
-    let Some(graph) = world.get_resource::<ContactGraph>() else {
-        return (false, 0.0);
-    };
-    let dt = world
-        .get_resource::<Time<Physics>>()
-        .map(|t| t.delta_secs_f64())
-        .unwrap_or(0.0);
-    contact_of_filtered(graph, dt, entity, |candidate| {
-        world.get::<Sensor>(candidate).is_some()
-    })
-}
-
 /// Contact as a PHYSICS fact, on any collider — no instrument required.
 ///
 /// Gated on [`Collider`] for the same reason the rigid-body group is gated on
@@ -490,7 +412,7 @@ pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
 ///
 /// Flight software reads these primitive contact facts through an authored
 /// Modelica conversion when it needs a touchdown signal. Both answers come
-/// from [`contact_of`].
+/// from [`lunco_physics::contact_of`].
 ///
 /// Read on demand from the contact graph — no mirror component, no per-tick sync
 /// system, matching every other port in this module.
@@ -504,13 +426,19 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "contact",
             dir: PortDirection::Out,
-            read: Some(|w, e| Some(if contact_from_world(w, e).0 { 1.0 } else { 0.0 })),
+            read: Some(|w, e| {
+                Some(if lunco_physics::contact_from_world(w, e).0 {
+                    1.0
+                } else {
+                    0.0
+                })
+            }),
             write: None,
         },
         AvianPort {
             name: "contact_force",
             dir: PortDirection::Out,
-            read: Some(|w, e| Some(contact_from_world(w, e).1)),
+            read: Some(|w, e| Some(lunco_physics::contact_from_world(w, e).1)),
             write: None,
         },
         // This SHAPE's own mass (kg), as physics computes it from the geometry and

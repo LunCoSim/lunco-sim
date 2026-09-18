@@ -88,7 +88,7 @@ pub struct AvianGroup {
 /// notice. The last three are INSTRUMENTS — authored in USD, mounted at a point,
 /// read by onboard control. Instruments CONSUME the physics layer; they do not
 /// compete with it, which is why the touchdown switch and the collider contact
-/// ports share one computation (`crate::avian::contact_of`).
+/// ports share one computation (`lunco_physics::contact_of`).
 pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::avian::RIGID_BODY_GROUP,
     crate::avian::KINEMATIC_POSITION_GROUP,
