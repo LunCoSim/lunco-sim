@@ -3,7 +3,9 @@
 # LunCoSim — render-decoupling gate
 # ============================================================================
 # Asserts the contract in docs/architecture/render-decoupling.md: the
-# `--no-ui` server links no GPU stack. A domain crate may name `Mesh3d`; it
+# `--no-ui` server links no GPU stack or window-backed input focus, and the
+# high-fanout `lunco-core` remains free of host-only state/window features. A
+# domain crate may name `Mesh3d`; it
 # may not name `MeshMaterial3d`, because the material is what drags
 # bevy_pbr → bevy_render → wgpu/naga into the whole graph.
 #
@@ -33,8 +35,8 @@
 #   scripts/check_render_decoupling.sh
 #
 # Exit codes:
-#   0  — the server links no GPU stack
-#   1  — a GPU crate is back in the headless graph; the offending chain is printed
+#   0  — all headless and core feature-boundary checks pass
+#   1  — a forbidden dependency is linked; the offending chain is printed
 # ============================================================================
 
 set -euo pipefail
@@ -46,13 +48,15 @@ cd "$PROJECT_DIR"
 # The headless server. Anything reachable from here on normal edges ships in
 # the `--no-ui` binary and in the wasm worker.
 PKG="lunco-luncosim-server"
+CORE_PKG="lunco-core"
 
 # `naga` is deliberately ABSENT from this list. It remains in the graph via
 # `bevy_shader`, which supplies the WGSL compiler that `SetShaderSource` /
 # `CreateShader` use to compile shader edits into `Assets<Shader>` without a
 # disk round-trip. A compiler is not a GPU stack. Moving it behind the gate
 # is a separate, smaller job — see render-decoupling.md.
-BANNED=(wgpu bevy_render bevy_pbr bevy_core_pipeline egui winit)
+BANNED=(wgpu bevy_render bevy_pbr bevy_core_pipeline egui winit bevy_input_focus)
+CORE_BANNED=(bevy_state bevy_input_focus bevy_window)
 
 fail=0
 
@@ -72,8 +76,13 @@ if ! cargo pkgid -p "$PKG" >/dev/null 2>&1; then
     echo "        update PKG here — do not delete the check."
     exit 1
 fi
+if ! cargo pkgid -p "$CORE_PKG" >/dev/null 2>&1; then
+    echo "  ERROR package '$CORE_PKG' not found in this workspace."
+    echo "        The core feature-boundary check cannot run."
+    exit 1
+fi
 
-echo "── render-decoupling: $PKG must link no GPU stack ──────────"
+echo "── render-decoupling: $PKG must link no GPU stack or UI focus ─"
 for crate in "${BANNED[@]}"; do
     out="$(cargo tree -p "$PKG" -i "$crate" -e normal 2>&1 || true)"
     # TWO distinct shapes of absence, both genuine:
@@ -102,6 +111,23 @@ for crate in "${BANNED[@]}"; do
         fail=1
     else
         printf '  FAIL  %-20s LINKED into the headless binary\n' "$crate"
+        echo "$out" | head -20 | sed 's/^/        /'
+        fail=1
+    fi
+done
+
+echo
+echo "── workspace core must remain free of host-only Bevy features ──"
+for crate in "${CORE_BANNED[@]}"; do
+    out="$(cargo tree -p "$CORE_PKG" -i "$crate" -e normal 2>&1 || true)"
+    if echo "$out" | grep -qi "nothing to print\|did not match any packages"; then
+        printf '  ok    %-20s absent from %s\n' "$crate" "$CORE_PKG"
+    elif echo "$out" | grep -qi "^error"; then
+        printf '  ERROR %-20s cargo tree failed (not an architecture verdict)\n' "$crate"
+        echo "$out" | head -5 | sed 's/^/        /'
+        fail=1
+    else
+        printf '  FAIL  %-20s linked into %s\n' "$crate" "$CORE_PKG"
         echo "$out" | head -20 | sed 's/^/        /'
         fail=1
     fi

@@ -271,7 +271,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-luncosim-presentation`** | — | Application-edge visual bridges: status/environment projection, terrain horizon, USD camera/light composition, capture integration, and scene presentation wiring. |
 | **`lunco-updater`** | — | Native desktop update capability and rendered update surface. It owns Velopack admission and update UI behind the application’s opt-in `updates` feature. |
 | **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, readiness barriers, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
-| **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: asset source/type registration, task-pool policy, build identity, and log deduplication. It does not install domain plugins. |
+| **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, build identity, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
 | **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, scene commands, and headless execution. |
 | **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, and persisted experiment artifacts. It is composed by the runtime boundary rather than embedded in the generic core. |
 | **`lunco-luncosim-runtime`** | — | Production application composition: services plus Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
@@ -1308,9 +1308,12 @@ Production headless runner for authored USD + Rhai scene and Twin verification c
 
 **`lunco-luncosim-core`**
 Dependency-light host substrate shared by GUI, server, and scene-test hosts. It
-owns the headless Bevy plugin group, asset source/type registration, task-pool
-policy, build identity, and log deduplication. It does not install physics,
-USD, terrain, Modelica, celestial, avatar, or scene-command plugins.
+owns the headless Bevy plugin group, raw input/state schedules, asset
+source/type registration, task-pool policy, build identity, and log
+deduplication. It opts into only the Bevy state and keyboard/mouse event
+features it uses; window-backed input focus belongs to the UI composition. It
+does not install physics, USD, terrain, Modelica, celestial, avatar, or
+scene-command plugins.
 
 **`lunco-luncosim-simulation`**
 Renderer-independent domain composition above the host substrate. It owns the
@@ -1324,7 +1327,7 @@ services remain in `lunco-luncosim-services` and Rhai integration remains in
 Production application integration above the generic simulation substrate. It installs the Rhai runtime, projects USD-authored policies, registers `SetRhaiPolicy`, consumes scripting/tool/timeline journal entries, and owns the public headless builders and launcher. Keeping this boundary above core prevents scripting and policy changes from invalidating the generic simulation composition.
 
 **`lunco-luncosim-ui`**
-Windowed LunCoSim application and presentation boundary: Bevy window/render plugin composition and CLI render choices, egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, and native desktop integration. Platform icon rasterization and live window-icon installation are isolated behind the packaging-only `package-icons` feature; `scripts/build_native.sh` enables it for packaged `luncosim` builds. Optional offscreen, networking, and updater edges are feature-scoped; native Velopack update handling is behind the opt-in `updates` feature, which the package script enables for installed desktop builds. The headless application core and ordinary UI builds do not compile the icon graphics toolchain or updater closure.
+Windowed LunCoSim application and presentation boundary: Bevy window/render and input-focus plugin composition, CLI render choices, egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, and native desktop integration. Platform icon rasterization and live window-icon installation are isolated behind the packaging-only `package-icons` feature; `scripts/build_native.sh` enables it for packaged `luncosim` builds. Optional offscreen, networking, and updater edges are feature-scoped; native Velopack update handling is behind the opt-in `updates` feature, which the package script enables for installed desktop builds. The headless application core and ordinary UI builds do not compile the icon graphics toolchain or updater closure.
 
 **`lunco-luncosim-presentation`**
 Application-edge presentation composition. It owns the status/environment,

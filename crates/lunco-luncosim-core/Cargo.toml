@@ -10,7 +10,15 @@ name = "lunco_luncosim_core"
 path = "src/lib.rs"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_shader"] }
+bevy = { workspace = true, features = [
+    "bevy_asset",
+    "bevy_image",
+    "bevy_mesh",
+    "bevy_shader",
+    "bevy_state",
+    "keyboard",
+    "mouse",
+] }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 

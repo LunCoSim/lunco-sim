@@ -14,6 +14,7 @@ bevy = { workspace = true, features = [
     "bevy_ui_render",
     "bevy_window",
     "bevy_picking",
+    "mouse",
 ] }
 bevy_egui = { workspace = true }
 bevy_flair = { workspace = true }

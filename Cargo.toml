@@ -310,8 +310,9 @@ bevy = { version = "0.19.1", default-features = false, features = [
     # crates that need 3D opt in via their own Cargo.toml so the
     # Lunica (LunCoSim Modelica Workbench) web binary doesn't carry them. See
     # `crates/lunco-luncosim/Cargo.toml` for the opt-in pattern.
-    # SUBSTRATE ONLY (ECS / app / log / state / color — no GPU, window, winit,
-    # egui). This baseline reaches every `bevy = { workspace = true }` crate, so
+    # SUBSTRATE ONLY (ECS / app / log / color — no GPU, window, winit, egui,
+    # state, or input-focus plugins). This baseline reaches every
+    # `bevy = { workspace = true }` crate, so
     # render-free crates (lunco-core, lunco-cosim, lunco-networking, …) and the
     # `--no-ui` server binary do NOT transitively link bevy_render / bevy_winit /
     # wayland. Render/window/winit are opted into by the consumer:
@@ -320,9 +321,7 @@ bevy = { version = "0.19.1", default-features = false, features = [
     #   - GUI BINARIES add the windowing backend (bevy_winit/wayland/x11/bevy_window)
     #     via their own bevy feature list.
     "bevy_log",                    # info!/warn!/error! macros workspace-wide
-    "bevy_state",                  # state machine (some panels)
     "bevy_color",                  # Color / ClearColor (ECS-level, no GPU)
-    "bevy_input_focus",            # focus tracking (ECS-level)
     "multi_threaded",              # task pools (AsyncCompute/Io)
     # NOTE: `trace_tracy` is intentionally NOT in the workspace default features
     # because tracy-client-sys requires a C++ compile that doesn't work

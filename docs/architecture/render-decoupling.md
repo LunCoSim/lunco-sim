@@ -37,11 +37,16 @@ simulation.
 
 The dependency rule is enforced twice: in Cargo and at runtime.
 
-`lunco-luncosim-core` requests only the asset/image/shader stores needed to
+`lunco-luncosim-core` requests only the asset/image/mesh/shader stores needed to
 project USD data. Its `default_plugins()` is built from Bevy's
 `MinimalPlugins`, with the schedule runner disabled until the headless host
-chooses its execution mode. It adds only logging, diagnostics, input/state,
-`AssetPlugin`, and the USD data stores. It never constructs `DefaultPlugins`,
+chooses its execution mode. It adds only logging, diagnostics, raw input and
+state schedules, `AssetPlugin`, and the USD data stores. The workspace Bevy
+baseline omits state and input-focus features. The host substrate opts into
+`bevy_state` and the keyboard/mouse event data it uses, while windowed UI
+compositions opt into `bevy_input_focus` (`lunco-luncosim-ui` and the `ui`
+feature of `lunco-modelica-ui`). This keeps Bevy's window-backed focus plugin
+out of headless package closures. It never constructs `DefaultPlugins`,
 `RenderPlugin`, `PbrPlugin`, `PostProcessPlugin`, a window backend, or a GPU
 resource. The application-level Rhai/policy integration is supplied by
 `lunco-luncosim-runtime`, so scripting changes do not belong to the generic
@@ -91,10 +96,10 @@ whose dependency closure can express the contract:
 
 | Package | Owns | Must not own |
 | --- | --- | --- |
-| `lunco-luncosim-core` | headless Bevy substrate, asset source/type registration, task-pool policy, build identity, and log deduplication | domain plugins, windows, GPU resources, egui, or render policy |
+| `lunco-luncosim-core` | headless Bevy substrate, raw input/state schedules, asset source/type registration, task-pool policy, build identity, and log deduplication | input-focus/window plugins, domain plugins, GPU resources, egui, or render policy |
 | `lunco-luncosim-simulation` | renderer-independent simulation composition, physics, USD load/projection, terrain, Modelica/cosim, and headless execution | windows, GPU resources, egui, or render policy |
 | `lunco-luncosim` | process/CLI dispatch | simulation rules or renderer/window composition |
-| `lunco-luncosim-ui` | window/render composition and interactive shell assembly | headless simulation rules, application presentation bridges, or a second runtime loop |
+| `lunco-luncosim-ui` | window/render composition, input-focus plugins, and interactive shell assembly | headless simulation rules, application presentation bridges, or a second runtime loop |
 | `lunco-luncosim-presentation` | application-edge status, environment, camera/light, terrain-horizon, capture, and scene presentation bridges | headless simulation rules or reusable shell contracts |
 | `lunco-updater` | optional native update startup and update presentation | ordinary UI builds, headless runtime, or update policy in simulation core |
 | `lunco-scripting-bridge-core` | interpreter-free language-neutral world bridge mechanism | authored policy, language runtimes, or render/UI dependencies |
