@@ -6,9 +6,10 @@
 > reads exposed over HTTP at `/api/commands`. Start any binary with `--api` and
 > drive the sim from scripts, agents, or the MCP bridge.
 
-Transport-agnostic API contracts for LunCoSim. The `lunco-api` core owns
-commands, queries, discovery, execution, and response types; the
-`lunco-api-transport` package exposes them through HTTP or the browser bridge.
+Typed API contracts and ECS runtime for LunCoSim. `lunco-api-core` owns the
+lightweight in-process values and request/response types; `lunco-api` owns
+ECS execution and discovery; `lunco-api-codec` owns JSON conversion at wire
+boundaries; and `lunco-api-transport` exposes HTTP and browser adapters.
 
 ## Quick Start
 
@@ -184,15 +185,17 @@ fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack
         .eval(&cmd.code)?;
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "stdout": out }),
+        lunco_api::api_value!({ "stdout": out }),
     )) // Ok → Succeeded, Err → Failed
 }
 ```
 
 `Ack.data` is the command's generic response payload. The handler owns its
-structured shape; use it for request results such as allocated ids, queued
-status, generated text, or stdout. Live simulation values do not belong in an
-acknowledgement — expose those as authored USD `outputs:*` ports instead.
+structured shape through the typed `HookValue` ABI; use it for request results
+such as allocated ids, queued status, generated text, or stdout. The API adapter
+converts it to the external response representation once. Live simulation
+values do not belong in an acknowledgement — expose those as authored USD
+`outputs:*` ports instead.
 
 Deferred commands answer on the original request. `RunRhai`, for example,
 waits for the next `Update` and returns its captured stdout or error in the
@@ -637,6 +640,18 @@ executor differentiates internally.
 │  └──────┬───────┘                                         │
 │         │ transport-neutral request/response              │
 │         ▼                                                  │
+│  lunco-api-codec                                           │
+│  JSON ↔ typed values (wire boundary only)                  │
+└────────────────────┬───────────────────────────────────────┘
+                     │ typed request/response
+                     ▼
+┌────────────────────────────────────────────────────────────┐
+│  lunco-api-core                                            │
+│  ApiValue · ApiRequest · ApiResponse · schemas              │
+└────────────────────┬───────────────────────────────────────┘
+                     │
+                     ▼
+┌────────────────────────────────────────────────────────────┐
 │  lunco-api                                                 │
 │  ┌──────────────┐  ┌──────────────────┐  ┌──────────────┐ │
 │  │ ApiExecutor  │→ │ ApiQueryRegistry │  │ ApiDiscovery │ │

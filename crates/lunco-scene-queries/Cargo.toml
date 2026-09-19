@@ -13,6 +13,7 @@ lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 avian3d = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-control-core = { path = "../lunco-control-core" }
@@ -26,7 +27,6 @@ lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 openusd = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

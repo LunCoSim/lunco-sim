@@ -21,6 +21,8 @@ bincode = { workspace = true }
 crossbeam-channel = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
+lunco-api-codec = { path = "../lunco-api-codec" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-assets-transport = { path = "../lunco-assets-transport" }

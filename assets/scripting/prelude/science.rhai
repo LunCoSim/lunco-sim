@@ -27,8 +27,8 @@ fn take_photo() {
     #{ kind: "run_tool", tool: "science::take_photo" }
 }
 
-/// `take_photo(args)` → the same action with opaque args forwarded to the
-/// handler (e.g. `take_photo(#{exposure: 0.5})` — the handler parses them).
+/// `take_photo(args)` → the same action with typed args forwarded to the
+/// handler (e.g. `take_photo(#{exposure: 0.5})`).
 fn take_photo(args) {
-    #{ kind: "run_tool", tool: "science::take_photo", args: to_json(args) }
+    #{ kind: "run_tool", tool: "science::take_photo", args: args }
 }

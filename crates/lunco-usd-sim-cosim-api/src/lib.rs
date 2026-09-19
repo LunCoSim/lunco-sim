@@ -1,4 +1,4 @@
-//! Optional JSON/API query providers for the USD co-simulation runtime.
+//! Typed API query providers for the USD co-simulation runtime.
 //
 //! The co-simulation crate owns projection, wiring, and lifecycle state. This
 //! package owns only the transport-facing read projections so API serialization
@@ -7,6 +7,8 @@
 use avian3d::schedule::PhysicsTime;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
+use lunco_api::queries::{ApiQueryError, ApiQueryResult};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_cosim_core::{
     BindingEpochDirty, BoundConnection, ConnectionBinding, SimComponent, SimConnection, SimStatus,
     UsdSourcedCosim,
@@ -21,6 +23,21 @@ use lunco_usd_sim_core::PendingDifferential;
 use lunco_usd_sim_cosim::{modelica_models_terminal, BindingEpochWait};
 
 mod broken_connections;
+
+fn api_ok(value: ApiValue) -> ApiQueryResult {
+    Ok(Some(value))
+}
+
+fn api_error(code: ApiErrorCode, message: impl Into<String>) -> ApiQueryResult {
+    Err(ApiQueryError::new(code, message))
+}
+
+fn api_u64(value: &ApiValue) -> Option<u64> {
+    match value {
+        ApiValue::Int(value) => u64::try_from(*value).ok(),
+        _ => None,
+    }
+}
 
 /// Registers all co-simulation API query providers when an API registry exists.
 pub struct UsdSimCosimApiPlugin;
@@ -64,23 +81,23 @@ fn port_dir_str(d: lunco_port_core::ports::PortDirection) -> &'static str {
     }
 }
 
-fn port_to_json(p: &lunco_port_core::ports::PortInfo) -> serde_json::Value {
+fn port_api_value(p: &lunco_port_core::ports::PortInfo) -> ApiValue {
     let range = match (p.metadata.min, p.metadata.max) {
-        (Some(min), Some(max)) => serde_json::json!({ "min": min, "max": max }),
-        (Some(min), None) => serde_json::json!({ "min": min }),
-        (None, Some(max)) => serde_json::json!({ "max": max }),
-        (None, None) => serde_json::Value::Null,
+        (Some(min), Some(max)) => api_value!({ "min": min, "max": max }),
+        (Some(min), None) => api_value!({ "min": min }),
+        (None, Some(max)) => api_value!({ "max": max }),
+        (None, None) => ApiValue::Unit,
     };
-    serde_json::json!({
-        "name": p.name,
+    api_value!({
+        "name": p.name.clone(),
         "direction": port_dir_str(p.direction),
         "value": p.value,
         "metadata": {
             "type": p.metadata.value_type,
-            "unit": p.metadata.unit,
+            "unit": p.metadata.unit.clone(),
             "range": range,
-            "source": p.metadata.source,
-            "authority": p.metadata.authority,
+            "source": p.metadata.source.clone(),
+            "authority": p.metadata.authority.clone(),
             "writable": p.metadata.writable,
         },
     })
@@ -89,13 +106,35 @@ fn port_to_json(p: &lunco_port_core::ports::PortInfo) -> serde_json::Value {
 /// Resolve the optional `api_id` / `entity` field of a params object to an ECS
 /// `Entity` via the `ApiEntityRegistry`. Returns `None` when absent (the
 /// caller lists all) or when the id doesn't resolve.
-fn resolve_param_entity(world: &World, params: &serde_json::Value) -> Option<Entity> {
-    let raw = params
-        .get("api_id")
-        .or_else(|| params.get("entity"))
-        .and_then(|v| v.as_u64())?;
-    let reg = world.get_resource::<lunco_api::ApiEntityRegistry>()?;
-    reg.resolve(&lunco_core::GlobalEntityId::from_raw(raw))
+fn resolve_param_entity(world: &World, params: &ApiValue) -> Result<Option<Entity>, ApiQueryError> {
+    let raw = match params.get("api_id").or_else(|| params.get("entity")) {
+        None => return Ok(None),
+        Some(ApiValue::Int(value)) => u64::try_from(*value).ok(),
+        Some(_) => None,
+    }
+    .ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            "ListPorts: `api_id` must be an unsigned integer",
+        )
+    })?;
+    let reg = world
+        .get_resource::<lunco_api::ApiEntityRegistry>()
+        .ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "ListPorts: API entity registry is not installed",
+            )
+        })?;
+    let entity = reg
+        .resolve(&lunco_core::GlobalEntityId::from_raw(raw))
+        .ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
+                format!("ListPorts: API entity {raw} is not registered"),
+            )
+        })?;
+    Ok(Some(entity))
 }
 
 /// `ListPorts` — enumerate exposed ports. With `{"api_id": N}`, lists that
@@ -108,24 +147,29 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
     fn name(&self) -> &'static str {
         "ListPorts"
     }
-    fn execute(&self, world: &World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let ports_reg = world
             .resource::<lunco_port_core::ports::PortRegistry>()
             .clone();
         // Single-entity form.
-        if let Some(e) = resolve_param_entity(world, params) {
+        if let Some(e) = resolve_param_entity(world, params)? {
             let ports: Vec<_> = ports_reg
                 .entity_port_infos(world, e)
                 .iter()
-                .map(port_to_json)
+                .map(port_api_value)
                 .collect();
-            return lunco_api::ApiResponse::ok(serde_json::json!({ "ports": ports }));
+            return api_ok(api_value!({ "ports": ports }));
         }
         // All-entities form: snapshot the registry list first (owned), then
         // read ports — avoids holding the resource borrow across `entity_ports`.
-        let Some(reg) = world.get_resource::<lunco_api::ApiEntityRegistry>() else {
-            return lunco_api::ApiResponse::ok(serde_json::json!({ "entities": [] }));
-        };
+        let reg = world
+            .get_resource::<lunco_api::ApiEntityRegistry>()
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "ListPorts: API entity registry is not installed",
+                )
+            })?;
         let entries = reg.entities();
         let mut rows = Vec::new();
         for (api_id, e) in entries {
@@ -133,13 +177,13 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
             if ports.is_empty() {
                 continue;
             }
-            rows.push(serde_json::json!({
+            rows.push(api_value!({
                 "api_id": api_id.get(),
                 "name": world.get::<Name>(e).map(|n| n.as_str().to_string()).unwrap_or_default(),
-                "ports": ports.iter().map(port_to_json).collect::<Vec<_>>(),
+                "ports": ports.iter().map(port_api_value).collect::<Vec<_>>(),
             }));
         }
-        lunco_api::ApiResponse::ok(serde_json::json!({ "entities": rows }))
+        api_ok(api_value!({ "entities": rows }))
     }
 }
 
@@ -152,16 +196,16 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
     fn name(&self) -> &'static str {
         "GetPort"
     }
-    fn execute(&self, world: &World, params: &serde_json::Value) -> lunco_api::ApiResponse {
-        let Some(e) = resolve_param_entity(world, params) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::EntityNotFound,
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(e) = resolve_param_entity(world, params)? else {
+            return api_error(
+                lunco_api_core::ApiErrorCode::EntityNotFound,
                 "GetPort requires a resolvable `api_id`",
             );
         };
-        let Some(name) = params.get("name").and_then(|v| v.as_str()) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::DeserializationError,
+        let Some(name) = params.get("name").and_then(ApiValue::as_str) else {
+            return api_error(
+                lunco_api_core::ApiErrorCode::DeserializationError,
                 "GetPort requires a `name`",
             );
         };
@@ -169,11 +213,9 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
             .resource::<lunco_port_core::ports::PortRegistry>()
             .clone();
         match ports_reg.read_port(world, e, name) {
-            Some(value) => {
-                lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value }))
-            }
-            None => lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::DeserializationError,
+            Some(value) => api_ok(api_value!({ "name": name, "value": value })),
+            None => api_error(
+                lunco_api_core::ApiErrorCode::DeserializationError,
                 format!("no port `{}` on entity", name),
             ),
         }
@@ -189,26 +231,26 @@ fn causal_binding_status(binding: Option<&ConnectionBinding>) -> &'static str {
     }
 }
 
-fn causal_port_owner_json(owner: &lunco_port_core::ports::PortOwnerInfo) -> serde_json::Value {
-    serde_json::json!({
+fn causal_port_owner_api_value(owner: &lunco_port_core::ports::PortOwnerInfo) -> ApiValue {
+    api_value!({
         "precedence": owner.precedence,
         "direction": port_dir_str(owner.direction),
         "metadata": {
             "type": owner.metadata.value_type,
-            "unit": owner.metadata.unit,
+            "unit": owner.metadata.unit.clone(),
             "range": {
                 "min": owner.metadata.min,
                 "max": owner.metadata.max,
             },
-            "source": owner.metadata.source,
-            "authority": owner.metadata.authority,
+            "source": owner.metadata.source.clone(),
+            "authority": owner.metadata.authority.clone(),
             "writable": owner.metadata.writable,
         },
     })
 }
 
-fn causal_endpoint_json(world: &World, entity: Entity) -> serde_json::Value {
-    serde_json::json!({
+fn causal_endpoint_api_value(world: &World, entity: Entity) -> ApiValue {
+    api_value!({
         "entity": entity.to_bits(),
         "api_id": world.get::<lunco_core::GlobalEntityId>(entity).map(|gid| gid.get()),
         "name": world.get::<Name>(entity).map(|name| name.as_str()),
@@ -234,40 +276,37 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
         "CausalTrace"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let Some(raw_target) = params
             .get("target")
             .or_else(|| params.get("api_id"))
-            .and_then(serde_json::Value::as_u64)
+            .and_then(api_u64)
         else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::DeserializationError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::DeserializationError,
                 "CausalTrace requires a numeric `target` API id",
             );
         };
         let target_gid = lunco_core::GlobalEntityId::from_raw(raw_target);
         let Some(trace) = world.get_resource::<lunco_control_core::CausalTrace>() else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "CausalTrace ledger is unavailable",
             );
         };
-        let record = match params
-            .get("correlation_id")
-            .and_then(serde_json::Value::as_u64)
-        {
+        let record = match params.get("correlation_id").and_then(api_u64) {
             Some(correlation_id) => trace.find(target_gid, correlation_id),
             None => trace.latest_for_target(target_gid),
         };
         let Some(record) = record else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::EntityNotFound,
+            return api_error(
+                lunco_api_core::ApiErrorCode::EntityNotFound,
                 format!(
                     "no semantic edge trace for target {}{}",
                     raw_target,
                     params
                         .get("correlation_id")
-                        .and_then(serde_json::Value::as_u64)
+                        .and_then(api_u64)
                         .map(|id| format!(" and correlation_id {}", id))
                         .unwrap_or_default()
                 ),
@@ -278,10 +317,10 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
             .get::<lunco_core::GlobalEntityId>(record.target)
             .is_some()
             .then_some(record.target);
-        let target_json = target
-            .map(|entity| causal_endpoint_json(world, entity))
+        let target_value = target
+            .map(|entity| causal_endpoint_api_value(world, entity))
             .unwrap_or_else(|| {
-                serde_json::json!({
+                api_value!({
                     "api_id": raw_target,
                     "lifecycle": "despawned",
                 })
@@ -295,7 +334,7 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                         .binds
                         .iter()
                         .filter(|(intent, _, _)| *intent == record.intent)
-                        .map(|(_, port, scale)| serde_json::json!({ "port": port, "scale": scale }))
+                        .map(|(_, port, scale)| api_value!({ "port": port, "scale": *scale }))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
@@ -305,7 +344,7 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
             let owners = ports.entity_port_owners(world, entity);
             let mut names = binding_entries
                 .iter()
-                .filter_map(|entry| entry.get("port").and_then(serde_json::Value::as_str))
+                .filter_map(|entry| entry.get("port").and_then(ApiValue::as_str))
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
             names.sort();
@@ -326,14 +365,14 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                                     | lunco_port_core::ports::PortDirection::InOut
                             )
                         })
-                        .map(|owner| causal_port_owner_json(owner));
-                    serde_json::json!({
-                        "name": name,
+                        .map(|owner| causal_port_owner_api_value(owner));
+                    api_value!({
+                        "name": name.clone(),
                         "current_input": ports.read_input_port(world, entity, &name),
                         "selected_owner": selected,
                         "owners": candidates
                             .into_iter()
-                            .map(causal_port_owner_json)
+                            .map(causal_port_owner_api_value)
                             .collect::<Vec<_>>(),
                     })
                 })
@@ -353,8 +392,8 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                 ),
                 With<SimConnection>,
             >::try_new(world) else {
-                return lunco_api::ApiResponse::error(
-                    lunco_api::ApiErrorCode::InternalError,
+                return api_error(
+                    lunco_api_core::ApiErrorCode::InternalError,
                     "CausalTrace: connection query is unavailable",
                 );
             };
@@ -364,13 +403,13 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                     connection.start_element == entity || connection.end_element == entity
                 })
                 .map(|(edge, connection, binding, bound)| {
-                    serde_json::json!({
+                    api_value!({
                         "edge": edge.to_bits(),
-                        "source": causal_endpoint_json(world, connection.start_element),
-                        "source_port": connection.start_connector,
+                        "source": causal_endpoint_api_value(world, connection.start_element),
+                        "source_port": connection.start_connector.clone(),
                         "source_is_input": connection.start_is_input,
-                        "sink": causal_endpoint_json(world, connection.end_element),
-                        "sink_port": connection.end_connector,
+                        "sink": causal_endpoint_api_value(world, connection.end_element),
+                        "sink_port": connection.end_connector.clone(),
                         "scale": connection.scale,
                         "offset": connection.offset,
                         "binding": causal_binding_status(binding),
@@ -394,8 +433,8 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                 Has<avian3d::prelude::SphericalJoint>,
                 Has<avian3d::prelude::DistanceJoint>,
             )>::try_new(world) else {
-                return lunco_api::ApiResponse::error(
-                    lunco_api::ApiErrorCode::InternalError,
+                return api_error(
+                    lunco_api_core::ApiErrorCode::InternalError,
                     "CausalTrace: joint admission query is unavailable",
                 );
             };
@@ -423,7 +462,7 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                             .or_else(|| fixed.then_some("fixed"))
                             .or_else(|| spherical.then_some("spherical"))
                             .or_else(|| distance.then_some("distance"));
-                        Some(serde_json::json!({
+                        Some(api_value!({
                             "joint": joint.to_bits(),
                             "path": path.map(|path| path.path.as_str()),
                             "body0": link.body0.to_bits(),
@@ -444,9 +483,8 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
             Vec::new()
         };
 
-        let measured_channels = world
-            .get_resource::<lunco_signal::SignalRegistry>()
-            .map(|signals| {
+        let measured_channels =
+            if let Some(signals) = world.get_resource::<lunco_signal::SignalRegistry>() {
                 signals
                     .iter_signals()
                     .filter(|(signal, _)| {
@@ -456,24 +494,33 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                     .filter_map(|(signal, _)| {
                         let history = signals.scalar_history(signal)?;
                         let latest = history.samples.back()?;
-                        let meta = signals.meta(signal);
-                        Some(serde_json::json!({
-                            "channel": signal.path,
+                        Some((signal, latest, signals.meta(signal)))
+                    })
+                    .map(|(signal, latest, meta)| {
+                        let metadata = meta
+                            .map(lunco_api_core::api_value_from_serializable)
+                            .transpose()
+                            .map_err(|error| {
+                                ApiQueryError::new(ApiErrorCode::InternalError, error.to_string())
+                            })?;
+                        Ok(api_value!({
+                            "channel": signal.path.clone(),
                             "owner_entity": signal.entity.to_bits(),
                             "active": signals.is_active(signal),
                             "latest": {
                                 "time": latest.time,
                                 "value": latest.value,
                             },
-                            "metadata": meta,
+                            "metadata": metadata,
                         }))
                     })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+                    .collect::<Result<Vec<_>, ApiQueryError>>()?
+            } else {
+                Vec::new()
+            };
 
-        lunco_api::ApiResponse::ok(serde_json::json!({
-            "target": target_json,
+        api_ok(api_value!({
+            "target": target_value,
             "correlation_id": record.correlation_id,
             "intent": record.intent.canonical_name(),
             "edge": record.kind.as_str(),
@@ -501,7 +548,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
     fn name(&self) -> &'static str {
         "CosimStatus"
     }
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let Some(mut q) = QueryState::<
             (
                 &Name,
@@ -512,13 +559,13 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
             ),
             With<UsdSourcedCosim>,
         >::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "CosimStatus: ECS query is unavailable",
             );
         };
 
-        let entities: Vec<serde_json::Value> = q
+        let entities: Vec<ApiValue> = q
             .iter(world)
             .map(|(name, tf, comp, model, lv)| {
                 // Full input/output maps so any cosim signal is readable
@@ -529,19 +576,19 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     .map(|c| {
                         c.outputs
                             .iter()
-                            .map(|(k, v)| (k.clone(), serde_json::json!(v)))
-                            .collect::<serde_json::Map<_, _>>()
+                            .map(|(k, v)| (k.clone(), api_value!(*v)))
+                            .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
                 let inputs = comp
                     .map(|c| {
                         c.inputs
                             .iter()
-                            .map(|(k, v)| (k.clone(), serde_json::json!(v)))
-                            .collect::<serde_json::Map<_, _>>()
+                            .map(|(k, v)| (k.clone(), api_value!(*v)))
+                            .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                serde_json::json!({
+                api_value!({
                     "name": name.as_str(),
                     "y": tf.translation.y,
                     "yaw": tf.rotation.to_euler(EulerRot::YXZ).0,
@@ -574,8 +621,8 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     // here beside timing/ports so live API diagnosis does not
                     // require access to the process log.
                     "modelica_error": model.and_then(|m| m.last_error.clone()),
-                    "outputs": outputs,
-                    "inputs": inputs,
+                    "outputs": ApiValue::Map(outputs),
+                    "inputs": ApiValue::Map(inputs),
                 })
             })
             .collect();
@@ -594,7 +641,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     .entities
                     .iter()
                     .map(|entity| {
-                        serde_json::json!({
+                        api_value!({
                             "entity": entity.to_bits(),
                             "name": world.get::<Name>(*entity).map(Name::as_str),
                             "usd_path": world
@@ -608,25 +655,26 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
         let Some(mut causal_sinks) =
             QueryState::<(), With<lunco_port_core::CausalStateSink>>::try_new(world)
         else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "CosimStatus: causal sink query is unavailable",
             );
         };
         let causal_sink_count = causal_sinks.iter(world).count();
-        lunco_api::ApiResponse::ok(serde_json::json!({
+        let synchronization = api_value!({
+            "barrier_held": barrier.held,
+            "active_participants": barrier.active_participants,
+            "shared_clock_participants": barrier.shared_clock_participants,
+            "worst_lag_secs": barrier.worst_lag_secs,
+            "worst_entity": barrier.worst_entity.map(Entity::to_bits),
+            "topology_ready": topology_ready,
+            "causal_participant_count": causal_participant_count,
+            "causal_participants": causal_participants,
+            "causal_sink_count": causal_sink_count,
+        });
+        api_ok(api_value!({
             "entities": entities,
-            "synchronization": {
-                "barrier_held": barrier.held,
-                "active_participants": barrier.active_participants,
-                "shared_clock_participants": barrier.shared_clock_participants,
-                "worst_lag_secs": barrier.worst_lag_secs,
-                "worst_entity": barrier.worst_entity.map(Entity::to_bits),
-                "topology_ready": topology_ready,
-                "causal_participant_count": causal_participant_count,
-                "causal_participants": causal_participants,
-                "causal_sink_count": causal_sink_count,
-            }
+            "synchronization": synchronization,
         }))
     }
 }
@@ -642,12 +690,12 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         "BindingStatus"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let Some(mut awaiting_query) =
             QueryState::<&UsdPrimPath, With<UsdSceneAwaitingStage>>::try_new(world)
         else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: awaiting-stage query is unavailable",
             );
         };
@@ -666,21 +714,21 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             ),
             With<lunco_usd_avian_contracts::PendingUsdJoint>,
         >::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: pending-joint query is unavailable",
             );
         };
         let pending_joints = pending_joints_query
             .iter(world)
             .map(|(entity, path, joint, provenance, gid, is_instance_root)| {
-                serde_json::json!({
+                api_value!({
                     "entity": entity.to_bits(),
-                    "path": path.path,
+                    "path": path.path.clone(),
                     "stage": format!("{:?}", path.stage_handle),
-                    "joint_type": joint.joint_type,
-                    "body0": joint.body0_path,
-                    "body1": joint.body1_path,
+                    "joint_type": joint.joint_type.clone(),
+                    "body0": joint.body0_path.clone(),
+                    "body1": joint.body1_path.clone(),
                     "provenance": provenance.map(|value| format!("{value:?}")),
                     "gid": gid.map(|value| value.get()),
                     "instance_root": is_instance_root,
@@ -690,8 +738,8 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         let Some(mut pending_differentials_query) =
             QueryState::<&UsdPrimPath, With<PendingDifferential>>::try_new(world)
         else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: pending-differential query is unavailable",
             );
         };
@@ -703,10 +751,9 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         let pending_body_paths = pending_joints
             .iter()
             .filter_map(|joint| {
-                let object = joint.as_object()?;
                 Some([
-                    object.get("body0")?.as_str()?.to_string(),
-                    object.get("body1")?.as_str()?.to_string(),
+                    joint.get("body0")?.as_str()?.to_owned(),
+                    joint.get("body1")?.as_str()?.to_owned(),
                 ])
             })
             .flatten()
@@ -722,8 +769,8 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             Option<&lunco_core::GlobalEntityId>,
             Has<UsdInstanceRoot>,
         )>::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: body query is unavailable",
             );
         };
@@ -742,9 +789,9 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                     gid,
                     is_instance_root,
                 )| {
-                    serde_json::json!({
+                    api_value!({
                         "entity": entity.to_bits(),
-                        "path": path.path,
+                        "path": path.path.clone(),
                         "stage": format!("{:?}", path.stage_handle),
                         "rigid_body": body.map(|body| format!("{body:?}")),
                         "has_position": position.is_some(),
@@ -763,14 +810,14 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             (&Name, Option<&ModelicaModel>, Option<&SimComponent>),
             With<UsdSourcedCosim>,
         >::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: model query is unavailable",
             );
         };
         for (name, model, component) in models.iter(world) {
             if !modelica_models_terminal(std::iter::once((model, component))) {
-                non_terminal_models.push(serde_json::json!({
+                non_terminal_models.push(api_value!({
                     "name": name.as_str(),
                     "has_model": model.is_some(),
                     "has_simcomponent": component.is_some(),
@@ -782,8 +829,8 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         let Some(mut connections_count_query) =
             QueryState::<(), With<SimConnection>>::try_new(world)
         else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: connection query is unavailable",
             );
         };
@@ -802,8 +849,8 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             ),
             With<SimConnection>,
         >::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: connection detail query is unavailable",
             );
         };
@@ -811,7 +858,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             .iter(world)
             .map(|(edge, spec, binding, bound)| {
                 let endpoint = |entity: Entity| {
-                    serde_json::json!({
+                    api_value!({
                         "entity": entity.to_bits(),
                         "name": world.get::<Name>(entity).map(|name| name.as_str()),
                         "usd_path": world
@@ -819,13 +866,13 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                             .map(|path| path.path.as_str()),
                     })
                 };
-                serde_json::json!({
+                api_value!({
                     "edge": edge.to_bits(),
                     "source": endpoint(spec.start_element),
-                    "source_port": spec.start_connector,
+                    "source_port": spec.start_connector.clone(),
                     "source_is_input": spec.start_is_input,
                     "sink": endpoint(spec.end_element),
-                    "sink_port": spec.end_connector,
+                    "sink_port": spec.end_connector.clone(),
                     "scale": spec.scale,
                     "offset": spec.offset,
                     "binding": binding.map(|value| format!("{value:?}")),
@@ -837,8 +884,8 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             (),
             With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::RevoluteJoint>>,
         >::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: pending revolute-joint query is unavailable",
             );
         };
@@ -846,8 +893,8 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             (),
             With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::PrismaticJoint>>,
         >::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: pending prismatic-joint query is unavailable",
             );
         };
@@ -855,12 +902,12 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             (),
             With<lunco_usd_avian_joints::PendingJoint<avian3d::prelude::FixedJoint>>,
         >::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: pending fixed-joint query is unavailable",
             );
         };
-        let pending_avian_joints = serde_json::json!({
+        let pending_avian_joints = api_value!({
             "revolute": pending_revolute_query.iter(world).count(),
             "prismatic": pending_prismatic_query.iter(world).count(),
             "fixed": pending_fixed_query.iter(world).count(),
@@ -873,8 +920,8 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             ),
             With<lunco_usd_avian_contracts::PendingJointAdmission>,
         >::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: joint-admission query is unavailable",
             );
         };
@@ -884,7 +931,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                 let body = |entity: Entity| {
                     let rb = world.get::<avian3d::prelude::RigidBody>(entity);
                     let body_path = world.get::<UsdPrimPath>(entity);
-                    serde_json::json!({
+                    api_value!({
                         "entity": entity.to_bits(),
                         "path": body_path.map(|value| value.path.clone()),
                         "rigid_body": rb.map(|value| format!("{value:?}")),
@@ -902,7 +949,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
                             .is_some(),
                     })
                 };
-                serde_json::json!({
+                api_value!({
                     "joint_entity": joint_entity.to_bits(),
                     "joint_path": path.map(|value| value.path.clone()),
                     "body0": body(pending.body0),
@@ -913,28 +960,28 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
         let Some(mut admitted_revolute_query) =
             QueryState::<(), With<avian3d::prelude::RevoluteJoint>>::try_new(world)
         else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: admitted revolute-joint query is unavailable",
             );
         };
         let Some(mut admitted_prismatic_query) =
             QueryState::<(), With<avian3d::prelude::PrismaticJoint>>::try_new(world)
         else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: admitted prismatic-joint query is unavailable",
             );
         };
         let Some(mut admitted_fixed_query) =
             QueryState::<(), With<avian3d::prelude::FixedJoint>>::try_new(world)
         else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "BindingStatus: admitted fixed-joint query is unavailable",
             );
         };
-        let admitted_avian_joints = serde_json::json!({
+        let admitted_avian_joints = api_value!({
             "revolute": admitted_revolute_query.iter(world).count(),
             "prismatic": admitted_prismatic_query.iter(world).count(),
             "fixed": admitted_fixed_query.iter(world).count(),
@@ -954,15 +1001,15 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             .get_resource::<lunco_core::RuntimeFaults>()
             .and_then(|faults| faults.first.as_ref())
             .map(|fault| {
-                serde_json::json!({
+                api_value!({
                     "kind": fault.kind,
                     "entity": fault.entity.map(Entity::to_bits),
-                    "subject": fault.subject,
-                    "detail": fault.detail,
+                    "subject": fault.subject.clone(),
+                    "detail": fault.detail.clone(),
                 })
             });
 
-        lunco_api::ApiResponse::ok(serde_json::json!({
+        api_ok(api_value!({
             "wait_open": wait_open,
             "dirty": dirty,
             "connection_count": connection_count,
@@ -998,7 +1045,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
         "SceneCameraAudit"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let Some(mut query) = QueryState::<
             (
                 Entity,
@@ -1013,8 +1060,8 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
             ),
             With<SceneCamera>,
         >::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return api_error(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "SceneCameraAudit: ECS query is unavailable",
             );
         };
@@ -1022,7 +1069,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
             .iter(world)
             .map(
                 |(entity, name, prim, camera, target, scene_camera, mounted, avatar, local)| {
-                    serde_json::json!({
+                    api_value!({
                         "entity": entity.to_bits(),
                         "name": name.map(|n| n.as_str()).unwrap_or_default(),
                         "usd_path": prim.map(|p| p.path.as_str()),
@@ -1059,8 +1106,8 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
                 },
             )
             .collect();
-        candidates.sort_by_key(|row| row["entity"].as_u64());
-        lunco_api::ApiResponse::ok(serde_json::json!({
+        candidates.sort_by_key(|row| row.get("entity").and_then(api_u64));
+        api_ok(api_value!({
             "count": candidates.len(),
             "candidates": candidates,
         }))

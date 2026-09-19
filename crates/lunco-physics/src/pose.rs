@@ -17,9 +17,10 @@ use bevy::ecs::query::QueryState;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
+use lunco_api::queries::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{api_param_array, api_param_f64, api_param_u64};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_spatial::coords::{pose_in_grid, ActiveFramePoseQuery, GridPos, GridRot};
 
 /// Read-only query state for API and other non-system callers.
@@ -114,8 +115,8 @@ impl SimulationPoseQuery<'_, '_> {
     }
 }
 
-fn parse_point(params: &serde_json::Value, key: &str) -> Option<bevy::math::DVec3> {
-    let values = params.get(key)?.as_array()?;
+fn parse_point(params: &ApiValue, key: &str) -> Option<bevy::math::DVec3> {
+    let values = api_param_array(params, key)?;
     if values.len() != 3 {
         return None;
     }
@@ -134,21 +135,21 @@ impl ApiQueryProvider for NearestProvider {
         "Nearest"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let Some(point) = parse_point(params, "point") else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "Nearest: `point` [x,y,z] required".to_string(),
-            );
+                "Nearest: `point` [x,y,z] required",
+            ));
         };
-        let max = params.get("max").and_then(serde_json::Value::as_f64);
-        let exclude = params.get("exclude").and_then(serde_json::Value::as_u64);
+        let max = optional_f64(params, "max", "Nearest")?;
+        let exclude = optional_u64(params, "exclude", "Nearest")?;
         let entities = world.resource::<ApiEntityRegistry>().entities();
         let Some(mut poses) = SimulationPoseReadState::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "Nearest: simulation pose query is unavailable".to_string(),
-            );
+                "Nearest: simulation pose query is unavailable",
+            ));
         };
         let mut best: Option<(u64, f64, bevy::math::DVec3)> = None;
         for (gid, entity) in entities {
@@ -167,12 +168,12 @@ impl ApiQueryProvider for NearestProvider {
             }
         }
         match best {
-            Some((id, distance, position)) => ApiResponse::ok(serde_json::json!({
+            Some((id, distance, position)) => Ok(Some(api_value!({
                 "id": id,
                 "distance": distance,
-                "point": [position.x, position.y, position.z]
-            })),
-            None => ApiResponse::ok(serde_json::json!({ "id": serde_json::Value::Null })),
+                "point": api_value!([position.x, position.y, position.z])
+            }))),
+            None => Ok(Some(api_value!({ "id": null }))),
         }
     }
 }
@@ -185,24 +186,21 @@ impl ApiQueryProvider for EntitiesInRadiusProvider {
         "EntitiesInRadius"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let Some(point) = parse_point(params, "point") else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "EntitiesInRadius: `point` [x,y,z] required".to_string(),
-            );
+                "EntitiesInRadius: `point` [x,y,z] required",
+            ));
         };
-        let radius = params
-            .get("radius")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(0.0);
-        let exclude = params.get("exclude").and_then(serde_json::Value::as_u64);
+        let radius = optional_f64(params, "radius", "EntitiesInRadius")?.unwrap_or(0.0);
+        let exclude = optional_u64(params, "exclude", "EntitiesInRadius")?;
         let entities = world.resource::<ApiEntityRegistry>().entities();
         let Some(mut poses) = SimulationPoseReadState::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "EntitiesInRadius: simulation pose query is unavailable".to_string(),
-            );
+                "EntitiesInRadius: simulation pose query is unavailable",
+            ));
         };
         let ids: Vec<u64> = entities
             .into_iter()
@@ -211,7 +209,32 @@ impl ApiQueryProvider for EntitiesInRadiusProvider {
                 (poses.position(world, entity)?.0.distance(point) <= radius).then_some(gid.get())
             })
             .collect();
-        ApiResponse::ok(serde_json::json!({ "count": ids.len(), "ids": ids }))
+        let count = ids.len();
+        Ok(Some(api_value!({ "count": count, "ids": ids })))
+    }
+}
+
+fn optional_f64(params: &ApiValue, name: &str, query: &str) -> Result<Option<f64>, ApiQueryError> {
+    match params.get(name) {
+        None => Ok(None),
+        Some(_) => api_param_f64(params, name).map(Some).ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("{query}: `{name}` must be a number"),
+            )
+        }),
+    }
+}
+
+fn optional_u64(params: &ApiValue, name: &str, query: &str) -> Result<Option<u64>, ApiQueryError> {
+    match params.get(name) {
+        None => Ok(None),
+        Some(_) => api_param_u64(params, name).map(Some).ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("{query}: `{name}` must be an unsigned integer"),
+            )
+        }),
     }
 }
 
@@ -319,17 +342,11 @@ mod tests {
             .resource_mut::<ApiEntityRegistry>()
             .assign(body, lunco_core::GlobalEntityId::from_raw(42));
 
-        let response =
-            NearestProvider.execute(&world, &serde_json::json!({"point": [12.0, -1901.0, -4.0]}));
-        let ApiResponse::Ok {
-            data: Some(data), ..
-        } = response
-        else {
-            panic!("nearest query did not return data");
-        };
-        assert_eq!(
-            data["point"],
-            serde_json::json!([exact.x, exact.y, exact.z])
-        );
+        let data = NearestProvider
+            .execute(&world, &api_value!({ "point": [12.0, -1901.0, -4.0] }))
+            .expect("nearest query succeeds")
+            .expect("nearest query returns data");
+        let point = data.get("point").expect("query point");
+        assert_eq!(point, &api_value!([exact.x, exact.y, exact.z]));
     }
 }

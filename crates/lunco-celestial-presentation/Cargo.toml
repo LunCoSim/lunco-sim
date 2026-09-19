@@ -16,7 +16,6 @@ lunco-render = { path = "../lunco-render" }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-time = { path = "../lunco-time" }
-serde = { workspace = true }
 
 [lints]
 workspace = true

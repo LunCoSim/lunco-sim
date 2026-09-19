@@ -670,6 +670,11 @@ User preferences (HUD visibility, editor word-wrap, palette filters,
 — layouts are TOML and high-structure, recents are high-churn list
 state — but everything else funnels through `settings.json`.
 
+The performance slice and its diagnostics sampler live in the reusable
+`lunco-workbench-perf-ui` capability package. `lunco-workbench` consumes that
+package to paint the status-bar segment; physics-aware UI packages publish the
+optional physics timing field without making the shell own Avian diagnostics.
+
 The shape mirrors VS Code: one document, namespaced keys. Each
 domain crate owns a typed slice that implements `SettingsSection`:
 

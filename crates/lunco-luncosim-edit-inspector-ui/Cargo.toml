@@ -27,7 +27,6 @@ lunco-api = { path = "../lunco-api" }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
@@ -38,6 +37,7 @@ lunco-materials = { path = "../lunco-materials" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+lunco-luncosim-edit-inspector-core = { path = "../lunco-luncosim-edit-inspector-core" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-render = { path = "../lunco-render" }
 lunco-scene-authoring = { path = "../lunco-scene-authoring" }
@@ -47,7 +47,6 @@ lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
-lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-data = { path = "../lunco-usd-data" }

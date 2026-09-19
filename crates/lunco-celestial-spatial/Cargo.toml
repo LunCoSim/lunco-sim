@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # BigSpace/runtime adapter for celestial mechanics. The sibling
 # `lunco-celestial` package owns the headless astronomy and frame semantics;
@@ -43,7 +44,6 @@ lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # pulls the mesh raycast backend, which is cursor hit-testing — nothing a
 # headless server can do, and nothing this crate asks for.
 bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_light", "bevy_picking"] }
-bevy_mesh = { workspace = true }
 big_space = { workspace = true }
 # Headless astronomy and semantic frame types. This is intentionally a
 # one-way dependency: `lunco-celestial` does not depend on this adapter.
@@ -72,7 +72,6 @@ avian3d = { workspace = true }
 lunco-input-core = { path = "../lunco-input-core" }
 futures-lite = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 # `bevy_asset`, `bevy_shader` and `uuid` are GONE: they existed only for the
 # `load_internal_asset!` + const-UUID `Handle<Shader>` of the dead trajectory
 # `MaterialExtension` (removed 2026-07-13). Nothing here holds a shader handle now.

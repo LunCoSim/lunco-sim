@@ -32,7 +32,8 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::schema::ApiResponse;
+use lunco_api::{api_param_u64, ApiQueryError, ApiQueryResult};
+use lunco_api_core::{api_value, ApiValue};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
@@ -716,16 +717,16 @@ impl ApiQueryProvider for LintReportQuery {
         "LintReport"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let requested_doc = match _params.get("doc_id") {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let requested_doc = match params.get("doc_id") {
             None => None,
-            Some(value) => match value.as_u64() {
+            Some(_) => match api_param_u64(params, "doc_id") {
                 Some(raw) => Some(DocumentId::new(raw)),
                 None => {
-                    return lunco_api::schema::ApiResponse::error(
-                        lunco_api::schema::ApiErrorCode::DeserializationError,
+                    return Err(ApiQueryError::new(
+                        lunco_api_core::ApiErrorCode::DeserializationError,
                         "LintReport: doc_id must be an explicit numeric document id",
-                    );
+                    ));
                 }
             },
         };
@@ -745,12 +746,12 @@ impl ApiQueryProvider for LintReportQuery {
                         .findings
                         .iter()
                         .map(|f| {
-                            json!({
-                                "domain": f.domain,
-                                "rule": f.rule,
+                            api_value!({
+                                "domain": f.domain.clone(),
+                                "rule": f.rule.clone(),
                                 "severity": f.severity.as_str(),
-                                "subject": f.subject,
-                                "message": f.message,
+                                "subject": f.subject.clone(),
+                                "message": f.message.clone(),
                             })
                         })
                         .collect::<Vec<_>>()
@@ -774,7 +775,7 @@ impl ApiQueryProvider for LintReportQuery {
                         .count()
                 })
                 .unwrap_or(0);
-            return ApiResponse::ok(json!({
+            return Ok(Some(api_value!({
                 "scope": "document",
                 "doc_id": doc.raw(),
                 "generation": report_generation,
@@ -789,20 +790,20 @@ impl ApiQueryProvider for LintReportQuery {
                 "errors": errors,
                 "warnings": warnings,
                 "findings": findings,
-            }));
+            })));
         }
         let report = world.get_resource::<lunco_lint::LintReport>();
-        let findings: Vec<serde_json::Value> = report
+        let findings: Vec<ApiValue> = report
             .map(|r| {
                 r.findings
                     .iter()
                     .map(|f| {
-                        json!({
-                            "domain": f.domain,
-                            "rule": f.rule,
+                        api_value!({
+                            "domain": f.domain.clone(),
+                            "rule": f.rule.clone(),
                             "severity": f.severity.as_str(),
-                            "subject": f.subject,
-                            "message": f.message,
+                            "subject": f.subject.clone(),
+                            "message": f.message.clone(),
                         })
                     })
                     .collect()
@@ -810,7 +811,7 @@ impl ApiQueryProvider for LintReportQuery {
             .unwrap_or_default();
         let errors = report.map(|r| r.errors()).unwrap_or(0);
         let warnings = report.map(|r| r.warnings()).unwrap_or(0);
-        ApiResponse::ok(json!({
+        Ok(Some(api_value!({
             "scope": "loaded_stages",
             "ok": errors == 0
                 && !report.is_some_and(|report| report.pending),
@@ -818,7 +819,7 @@ impl ApiQueryProvider for LintReportQuery {
             "errors": errors,
             "warnings": warnings,
             "findings": findings,
-        }))
+        })))
     }
 }
 
@@ -833,7 +834,7 @@ impl ApiQueryProvider for RuntimeDiagnosticsQuery {
         "RuntimeDiagnostics"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let findings = world
             .get_resource::<lunco_core::RuntimeDiagnostics>()
             .map(|diagnostics| {
@@ -841,22 +842,30 @@ impl ApiQueryProvider for RuntimeDiagnosticsQuery {
                     .findings
                     .iter()
                     .map(|finding| {
-                        json!({
-                            "code": finding.code,
+                        api_value!({
+                            "code": finding.code.clone(),
                             "severity": finding.severity.as_str(),
-                            "producer": finding.producer,
-                            "subject": finding.subject,
-                            "message": finding.message,
+                            "producer": finding.producer.clone(),
+                            "subject": finding.subject.clone(),
+                            "message": finding.message.clone(),
                         })
                     })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        ApiResponse::ok(json!({
-            "errors": findings.iter().filter(|f| f["severity"] == "error").count(),
-            "warnings": findings.iter().filter(|f| f["severity"] == "warning").count(),
+        let errors = findings
+            .iter()
+            .filter(|finding| finding.get("severity").and_then(ApiValue::as_str) == Some("error"))
+            .count();
+        let warnings = findings
+            .iter()
+            .filter(|finding| finding.get("severity").and_then(ApiValue::as_str) == Some("warning"))
+            .count();
+        Ok(Some(api_value!({
+            "errors": errors,
+            "warnings": warnings,
             "findings": findings,
-        }))
+        })))
     }
 }
 

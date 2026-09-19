@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_api::executor::{finish_command_result, DeferredCommandAppExt, PendingApiRequest};
-use lunco_api::schema::ApiErrorCode;
+use lunco_api_core::ApiErrorCode;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{on_command, register_commands, ActiveCommandId, Command, CommandResults};
 use lunco_doc::OpenOutcome;
@@ -539,10 +539,10 @@ fn on_fork_usd_document(
         .ok_or_else(|| format!("forked document {doc} was not installed"))?;
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({
-            "source_doc_id": command.source_doc_id,
-            "doc_id": doc,
-            "name": command.name,
+        lunco_api_core::api_value!({
+            "source_doc_id": command.source_doc_id.raw(),
+            "doc_id": doc.raw(),
+            "name": command.name.clone(),
             "generation": generation,
             "target_layer": LayerId::root().as_str(),
             "diagnostics": [],
@@ -607,8 +607,8 @@ fn on_discard_usd_document(
                         .remove(doc);
                     Ok(Ack::with_data(
                         OpId::new(),
-                        serde_json::json!({
-                            "doc_id": doc,
+                        lunco_api_core::api_value!({
+                            "doc_id": doc.raw(),
                             "action": "closed",
                             "generation": generation,
                             "diagnostics": [],
@@ -731,8 +731,8 @@ fn drain_pending_usd_discards(world: &mut World) {
                                     .unwrap_or_default();
                                 Ok(Ack::with_data(
                                     OpId::new(),
-                                    serde_json::json!({
-                                        "doc_id": doc,
+                                    lunco_api_core::api_value!({
+                                        "doc_id": doc.raw(),
                                         "action": "discarded",
                                         "generation": generation,
                                         "target_layer": LayerId::root().as_str(),
@@ -923,9 +923,9 @@ fn proposal_ack(
 ) -> Ack {
     Ack::with_data(
         OpId::new(),
-        serde_json::json!({
-            "proposal": proposal,
-            "doc_id": doc,
+        lunco_api_core::api_value!({
+            "proposal": proposal.0,
+            "doc_id": doc.raw(),
             "action": action,
             "generation": generation,
             "state": state.as_str(),
@@ -1196,11 +1196,11 @@ fn on_commit_usd_proposal(
                     ) {
                         Ok((mut ack, _)) => {
                             claim_user_document_if_projected(world, proposal.doc);
-                            let edit = ack.data.take().unwrap_or(serde_json::Value::Null);
+                            let edit = ack.data.take().unwrap_or_default();
                             world.resource_mut::<UsdEditSessions>().remove(proposal.id);
-                            ack.data = Some(serde_json::json!({
-                                "proposal": proposal.id,
-                                "doc_id": proposal.doc,
+                            ack.data = Some(lunco_api_core::api_value!({
+                                "proposal": proposal.id.0,
+                                "doc_id": proposal.doc.raw(),
                                 "action": "committed",
                                 "edit": edit,
                                 "diagnostics": [],
@@ -1517,7 +1517,7 @@ fn usd_ack_data(
     generation: u64,
     change_set_id: Option<lunco_twin_journal::ChangeSetId>,
     journal: Option<&lunco_doc_bevy::JournalResource>,
-) -> serde_json::Value {
+) -> lunco_api_core::ApiValue {
     let journal_cursor = journal.and_then(|journal| {
         journal.with_read(|journal| {
             journal
@@ -1526,14 +1526,22 @@ fn usd_ack_data(
                 .map(|entry| entry.id.clone())
         })
     });
-    serde_json::json!({
+    let journal_cursor = journal_cursor
+        .map(|cursor| {
+            lunco_api_core::api_value!({
+                "author": cursor.author.0,
+                "lamport": cursor.lamport,
+            })
+        })
+        .unwrap_or_default();
+    lunco_api_core::api_value!({
         "status": "applied",
-        "doc_id": doc,
+        "doc_id": doc.raw(),
         "target_layer": target_layers.first(),
-        "target_layers": target_layers,
-        "paths": paths,
+        "target_layers": target_layers.to_vec(),
+        "paths": paths.to_vec(),
         "generation": generation,
-        "change_set_id": change_set_id,
+        "change_set_id": change_set_id.map(|id| id.0),
         "journal_cursor": journal_cursor,
         "diagnostics": [],
     })
@@ -2387,7 +2395,7 @@ fn on_attach_component(
                     );
                     Ok(Ack::with_data(
                         OpId::new(),
-                        serde_json::json!({
+                        lunco_api_core::api_value!({
                             "component_path": format!("{}/{}", spec.host_path.trim_end_matches('/'), spec.name),
                             "joint_path": format!("{}/{}", spec.host_path.trim_end_matches('/'), spec.joint_name),
                         }),
@@ -2435,7 +2443,7 @@ fn on_detach_component(
                     );
                     Ok(Ack::with_data(
                         OpId::new(),
-                        serde_json::json!({
+                        lunco_api_core::api_value!({
                             "component_path": command.spec.component_path,
                             "joint_path": command.spec.joint_path,
                             "socket_path": command.spec.socket_path,

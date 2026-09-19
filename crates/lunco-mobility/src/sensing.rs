@@ -8,16 +8,17 @@
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
+use lunco_api::queries::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{api_param_array, api_param_bool, api_param_f64};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_core::TriggerZone;
 use lunco_spatial::coords::GridPos;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
-/// Parse a `[x, y, z]` JSON array under `key`.
-fn parse_vec3(params: &serde_json::Value, key: &str) -> Option<DVec3> {
-    let a = params.get(key)?.as_array()?;
+/// Parse a three-coordinate vector under `key`.
+fn parse_vec3(params: &ApiValue, key: &str) -> Option<DVec3> {
+    let a = api_param_array(params, key)?;
     if a.len() < 3 {
         return None;
     }
@@ -33,23 +34,20 @@ impl ApiQueryProvider for RaycastProvider {
         "Raycast"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let (Some(origin), Some(dir_v)) = (parse_vec3(params, "origin"), parse_vec3(params, "dir"))
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "Raycast: `origin` and `dir` [x,y,z] required".to_string(),
-            );
+                "Raycast: `origin` and `dir` [x,y,z] required",
+            ));
         };
-        let max = params
-            .get("max")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(1.0e6);
+        let max = optional_f64(params, "max", 1.0e6, "Raycast")?;
         let Ok(dir) = Dir3::new(dir_v.as_vec3()) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "Raycast: `dir` must be non-zero".to_string(),
-            );
+                "Raycast: `dir` must be non-zero",
+            ));
         };
         cast_ray_response(world, GridPos(origin), dir, max)
     }
@@ -64,48 +62,41 @@ impl ApiQueryProvider for GroundHeightProvider {
         "GroundHeight"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let (Some(x), Some(z)) = (
-            params.get("x").and_then(serde_json::Value::as_f64),
-            params.get("z").and_then(serde_json::Value::as_f64),
-        ) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let (Some(x), Some(z)) = (api_param_f64(params, "x"), api_param_f64(params, "z")) else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "GroundHeight: `x` and `z` required".to_string(),
-            );
+                "GroundHeight: `x` and `z` required",
+            ));
         };
-        let from = params
-            .get("from")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(1.0e5);
-        let max = params
-            .get("max")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(2.0e5);
+        let from = optional_f64(params, "from", 1.0e5, "GroundHeight")?;
+        let max = optional_f64(params, "max", 2.0e5, "GroundHeight")?;
         let origin = GridPos(DVec3::new(x, from, z));
-        match cast_ray_response(world, origin, Dir3::NEG_Y, max) {
-            ApiResponse::Ok { data: Some(d), .. } => {
-                let hit = d
-                    .get("hit")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
-                let height = d
-                    .get("point")
-                    .and_then(|p| p.get(1))
-                    .and_then(serde_json::Value::as_f64);
-                ApiResponse::ok(serde_json::json!({
-                    "hit": hit,
-                    "height": height,
-                    "entity": d.get("entity").cloned().unwrap_or(serde_json::Value::Null),
-                    "normal": d.get("normal").cloned().unwrap_or(serde_json::Value::Null),
-                }))
-            }
-            other => other,
-        }
+        let Some(ray) = cast_ray_response(world, origin, Dir3::NEG_Y, max)? else {
+            return Ok(None);
+        };
+        let hit = api_param_bool(&ray, "hit").ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "GroundHeight: ray query returned no `hit` boolean",
+            )
+        })?;
+        let height = match ray.get("point") {
+            Some(ApiValue::Array(point)) => point.get(1).and_then(ApiValue::as_f64),
+            _ => None,
+        };
+        let entity = ray.get("entity").cloned().unwrap_or(ApiValue::Unit);
+        let normal = ray.get("normal").cloned().unwrap_or(ApiValue::Unit);
+        Ok(Some(api_value!({
+            "hit": hit,
+            "height": height,
+            "entity": entity,
+            "normal": normal,
+        })))
     }
 }
 
-/// Shared cast → JSON. Maps the hit collider back to its `GlobalEntityId` (null
+/// Shared cast → typed value. Maps the hit collider back to its `GlobalEntityId` (null
 /// when the collider has no registered id, e.g. unregistered terrain).
 ///
 /// `origin` is a [`GridPos`] in the explicit
@@ -114,7 +105,7 @@ impl ApiQueryProvider for GroundHeightProvider {
 /// API callers never provide a camera-relative render point: that frame moves
 /// whenever BigSpace recentres and is therefore not stable user or simulation
 /// state. The returned point stays in the same active frame.
-fn cast_ray_response(world: &World, origin: GridPos, dir: Dir3, max: f64) -> ApiResponse {
+fn cast_ray_response(world: &World, origin: GridPos, dir: Dir3, max: f64) -> ApiQueryResult {
     let query_state = world.resource::<lunco_physics::GridSpatialQueryState>();
     let result = query_state.with_query(world, |spatial| {
         let registry = world.resource::<ApiEntityRegistry>();
@@ -122,24 +113,41 @@ fn cast_ray_response(world: &World, origin: GridPos, dir: Dir3, max: f64) -> Api
         (hit, registry)
     });
     let Ok((hit, registry)) = result else {
-        return ApiResponse::error(
+        return Err(ApiQueryError::new(
             ApiErrorCode::InternalError,
-            "Raycast: spatial query is unavailable".to_string(),
-        );
+            "Raycast: spatial query is unavailable",
+        ));
     };
     match hit {
         Some(hit) => {
             let point = origin.0 + (*dir).as_dvec3() * hit.distance;
             let entity = registry.api_id_for(hit.entity).map(|g| g.get());
-            ApiResponse::ok(serde_json::json!({
+            Ok(Some(api_value!({
                 "hit": true,
                 "entity": entity,
                 "distance": hit.distance,
-                "point": [point.x, point.y, point.z],
-                "normal": [hit.normal.x, hit.normal.y, hit.normal.z],
-            }))
+                "point": api_value!([point.x, point.y, point.z]),
+                "normal": api_value!([hit.normal.x, hit.normal.y, hit.normal.z]),
+            })))
         }
-        None => ApiResponse::ok(serde_json::json!({ "hit": false })),
+        None => Ok(Some(api_value!({ "hit": false }))),
+    }
+}
+
+fn optional_f64(
+    params: &ApiValue,
+    name: &str,
+    default: f64,
+    query: &str,
+) -> Result<f64, ApiQueryError> {
+    match params.get(name) {
+        None => Ok(default),
+        Some(_) => api_param_f64(params, name).ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("{query}: `{name}` must be a number"),
+            )
+        }),
     }
 }
 
@@ -375,15 +383,6 @@ mod tests {
     use core::time::Duration;
     use lunco_core::GlobalEntityId;
 
-    fn response_data(response: ApiResponse) -> serde_json::Value {
-        match response {
-            ApiResponse::Ok {
-                data: Some(data), ..
-            } => data,
-            other => panic!("expected query data, got {other:?}"),
-        }
-    }
-
     #[test]
     fn ground_height_uses_the_active_physics_frame_at_an_elevated_site() {
         let mut app = App::new();
@@ -414,12 +413,18 @@ mod tests {
             app.update();
         }
 
-        let data = response_data(GroundHeightProvider.execute(
-            app.world_mut(),
-            &serde_json::json!({"x": 0.0, "z": 0.0, "from": -1_800.0, "max": 200.0}),
-        ));
-        assert_eq!(data["hit"], true);
-        let height = data["height"].as_f64().expect("height");
+        let data = GroundHeightProvider
+            .execute(
+                app.world_mut(),
+                &api_value!({"x": 0.0, "z": 0.0, "from": -1_800.0, "max": 200.0}),
+            )
+            .expect("ground query succeeds")
+            .expect("ground query returns data");
+        assert_eq!(data.get("hit").and_then(ApiValue::as_bool), Some(true));
+        let height = data
+            .get("height")
+            .and_then(ApiValue::as_f64)
+            .expect("height");
         assert!(
             (height - -1_899.5).abs() < 1.0e-6,
             "active-frame height must remain at the authored -1899.5 m ground top, got {height}"

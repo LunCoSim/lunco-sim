@@ -184,7 +184,7 @@ fn on_apply_script_ops(
         .apply_group_against(request.parent_generation, ops)
         .map_err(|reject| format!("ApplyScriptOps: {reject}"))?;
     Ok(Ack {
-        data: Some(serde_json::json!({
+        data: Some(lunco_api_core::api_value!({
             "doc_id": request.doc_id.raw(),
             "operations": count,
         })),
@@ -220,7 +220,7 @@ fn on_run_rhai(
     });
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "status": "queued" }),
+        lunco_api_core::api_value!({ "status": "queued" }),
     ))
 }
 
@@ -254,7 +254,7 @@ fn on_run_rhai_tool(
     });
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "status": "queued" }),
+        lunco_api_core::api_value!({ "status": "queued" }),
     ))
 }
 
@@ -300,7 +300,7 @@ fn on_run_rhai_tool_hook(
     });
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "status": "queued" }),
+        lunco_api_core::api_value!({ "status": "queued" }),
     ))
 }
 
@@ -419,7 +419,7 @@ fn on_run_scenario(
     )?;
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "document_id": doc_id_raw, "generation": generation }),
+        lunco_api_core::api_value!({ "document_id": doc_id_raw, "generation": generation }),
     ))
 }
 
@@ -463,7 +463,7 @@ fn on_run_scenario_asset(
     }
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "status": "queued" }),
+        lunco_api_core::api_value!({ "status": "queued" }),
     ))
 }
 
@@ -979,16 +979,16 @@ fn on_register_tool_library(
                 .rsplit_once('/')
                 .map(|(name, arity)| (name, arity.parse::<usize>().unwrap_or_default()))
                 .unwrap_or((signature.as_str(), 0));
-            serde_json::json!({ "name": name, "arity": arity })
+            lunco_api_core::api_value!({ "name": name, "arity": arity })
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<lunco_api_core::ApiValue>>();
     let scope = active_twin
-        .map(|twin| serde_json::json!({ "kind": "twin", "id": twin.raw() }))
-        .unwrap_or_else(|| serde_json::json!({ "kind": "session" }));
+        .map(|twin| lunco_api_core::api_value!({ "kind": "twin", "id": twin.raw() }))
+        .unwrap_or_else(|| lunco_api_core::api_value!({ "kind": "session" }));
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({
-            "name": cmd.name,
+        lunco_api_core::api_value!({
+            "name": cmd.name.clone(),
             "active_twin": active_twin.map(|twin| twin.raw()),
             "scope": scope,
             "registry_generation": lunco_scripting_rhai_world::tool_libs::generation(),
@@ -1001,13 +1001,12 @@ fn on_register_tool_library(
 }
 
 /// Run a declarative **mission timeline** on an entity — Layer 2 of the
-/// sequencer. The timeline is pure DATA (`timeline` is a JSON string: either a
-/// `[ ...steps ]` array or `{ "name": ..., "steps": [ ... ] }`), so a mission is
-/// authorable/storable/shippable without writing rhai. The handler lowers it to
-/// a generated `task(me, ctx)` source that calls the prelude's `compile_timeline`
-/// and hands the resulting tree to the native behavior kernel. It attaches via
-/// the same path as `RunScenario` — so hot-reload, per-entity state, and
-/// `TASK_COMPLETE`/`TASK_FAILED` telemetry all come from the native task driver.
+/// sequencer. The timeline is a typed parameter map containing a `steps` array
+/// and optional `name`. The handler attaches a fixed Rhai executor and passes
+/// the structured timeline through `ctx`; no data is generated into source.
+/// It attaches via the same path as `RunScenario` — so hot-reload, per-entity
+/// state, and `TASK_COMPLETE`/`TASK_FAILED` telemetry all come from the native
+/// task driver.
 ///
 /// Step vocabulary (see prelude `timeline_step`): `{move_to,speed,radius}`,
 /// `{move_to_entity,speed,radius}`, `{possess}`, `{brake,secs}`,
@@ -1019,86 +1018,33 @@ fn on_register_tool_library(
 pub struct RunTimeline {
     #[authz_target]
     pub target: Entity,
-    /// JSON: a steps array, or an object with a `steps` array (and optional `name`).
-    pub timeline: String,
+    /// Structured timeline object with required `steps` and optional `name`.
+    pub timeline: ScenarioParameters,
 }
 
-/// Serialise a `serde_json::Value` as a rhai literal (object→`#{}`, array→`[]`,
-/// string→quoted+escaped, null→`()`). Keys are quoted so reserved words / odd
-/// names are safe. Used to embed timeline DATA into the generated executor.
+/// Validate the typed timeline structure and return its step count.
 #[cfg(feature = "rhai")]
-fn json_to_rhai_literal(v: &serde_json::Value, out: &mut String) {
-    use serde_json::Value;
-    match v {
-        Value::Null => out.push_str("()"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) => out.push_str(&n.to_string()),
-        Value::String(s) => push_rhai_string(s, out),
-        Value::Array(items) => {
-            out.push('[');
-            for (i, it) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                json_to_rhai_literal(it, out);
-            }
-            out.push(']');
-        }
-        Value::Object(map) => {
-            out.push_str("#{");
-            for (i, (k, val)) in map.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                push_rhai_string(k, out);
-                out.push(':');
-                json_to_rhai_literal(val, out);
-            }
-            out.push('}');
+fn timeline_step_count(timeline: &ScenarioParameters) -> Result<usize, String> {
+    let values = timeline.as_map();
+    for key in values.keys() {
+        if key != "steps" && key != "name" {
+            return Err(format!("timeline has unknown field `{key}`"));
         }
     }
-}
-
-/// Push a rhai string literal with the necessary escapes.
-#[cfg(feature = "rhai")]
-fn push_rhai_string(s: &str, out: &mut String) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(c),
-        }
+    if let Some(name) = values.get("name")
+        && !matches!(name, TelemetryValue::String(_))
+    {
+        return Err("timeline `name` must be a string".to_string());
     }
-    out.push('"');
-}
-
-/// Parse a timeline JSON string into its `steps` array value + step count.
-/// Accepts a bare `[ ...steps ]` array or an object with a `steps` array. Shared
-/// by `RunTimeline` (execute), `RunStoredTimeline`, and `RegisterTimeline`
-/// (validate-before-store). Errors are caller-prefixed.
-#[cfg(feature = "rhai")]
-fn parse_timeline_steps(timeline: &str) -> Result<(serde_json::Value, usize), String> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(timeline).map_err(|e| format!("`timeline` is not valid JSON: {e}"))?;
-    let steps = match &parsed {
-        serde_json::Value::Array(_) => parsed.clone(),
-        serde_json::Value::Object(o) => o
-            .get("steps")
-            .cloned()
-            .ok_or_else(|| "object form needs a `steps` array".to_string())?,
-        _ => return Err("`timeline` must be an array or object".to_string()),
+    let steps = match values.get("steps") {
+        Some(TelemetryValue::Array(steps)) => steps,
+        Some(_) => return Err("timeline `steps` must be an array".to_string()),
+        None => return Err("timeline object needs a `steps` array".to_string()),
     };
-    let steps_array = steps
-        .as_array()
-        .ok_or_else(|| "`steps` must be an array".to_string())?;
-    for (index, step) in steps_array.iter().enumerate() {
-        let object = step
-            .as_object()
-            .ok_or_else(|| format!("step {index} must be an object"))?;
+    for (index, step) in steps.iter().enumerate() {
+        let TelemetryValue::Map(object) = step else {
+            return Err(format!("step {index} must be an object"));
+        };
         let active: Vec<&str> = TimelineOperation::ALL
             .iter()
             .map(|operation| operation.name())
@@ -1122,8 +1068,7 @@ fn parse_timeline_steps(timeline: &str) -> Result<(serde_json::Value, usize), St
             }
         }
     }
-    let count = steps_array.len();
-    Ok((steps, count))
+    Ok(steps.len())
 }
 
 #[cfg(feature = "rhai")]
@@ -1190,22 +1135,9 @@ impl TimelineOperation {
     }
 }
 
-/// Lower a timeline `steps` array into a generated `task(me, ctx)` source. The task
-/// function owns the data-to-tree lowering; the native behavior kernel owns
-/// fixed-tick progression and event delivery. Attaching the result via
-/// `attach_rhai_scenario` gives the timeline hot-reload, per-entity state, and
-/// `TASK_COMPLETE`/`TASK_FAILED` telemetry for free.
+/// Fixed executor source; mission data arrives as the typed `ctx` map.
 #[cfg(feature = "rhai")]
-fn timeline_executor_source(steps: &serde_json::Value) -> String {
-    let mut steps_lit = String::new();
-    json_to_rhai_literal(steps, &mut steps_lit);
-    format!(
-        "fn task(me, ctx) {{\n\
-             let timeline = {steps_lit};\n\
-             seq(compile_timeline(timeline))\n\
-         }}\n"
-    )
-}
+const TIMELINE_EXECUTOR_SOURCE: &str = "fn task(me, ctx) { seq(compile_timeline(ctx.steps)) }\n";
 
 #[cfg(feature = "rhai")]
 #[on_command(RunTimeline)]
@@ -1216,14 +1148,11 @@ fn on_run_timeline(
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
-    let (steps, step_count) =
-        parse_timeline_steps(&cmd.timeline).map_err(|e| format!("RunTimeline: {e}"))?;
-    let source = timeline_executor_source(&steps);
+    let step_count = timeline_step_count(&cmd.timeline).map_err(|e| format!("RunTimeline: {e}"))?;
     let (doc_id_raw, generation) = attach_rhai_scenario(
         cmd.target,
-        source,
-        // Timelines are pure data; the generated executor doesn't read `params`.
-        ScenarioParameters::default(),
+        TIMELINE_EXECUTOR_SOURCE.to_string(),
+        cmd.timeline.clone(),
         // Generated source — no file, no id, no relative imports.
         None,
         ScenarioSourceMode::Runtime,
@@ -1236,7 +1165,7 @@ fn on_run_timeline(
     )?;
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({
+        lunco_api_core::api_value!({
             "document_id": doc_id_raw,
             "generation": generation,
             "steps": step_count,
@@ -1245,17 +1174,17 @@ fn on_run_timeline(
 }
 
 /// Save a named mission **timeline** to the Twin — the storage counterpart of
-/// `RunTimeline` (which runs an inline one). Validates the JSON parses as a
-/// timeline, stores it in the [`crate::timelines::TimelineStore`], and mirrors it
-/// to `<twin>/timelines/<name>.json` so it survives a restart (reloaded by the
+/// `RunTimeline` (which runs an inline one). Validates the typed timeline,
+/// stores it in the [`crate::timelines::TimelineStore`], and mirrors its
+/// persistent representation to `<twin>/timelines/<name>.json` (reloaded by the
 /// `TwinAdded` observer). Discover with `ListTimelines`/`GetTimeline`, run with
 /// `RunStoredTimeline`. Idempotent (re-registering a name replaces it).
 #[cfg(feature = "rhai")]
 #[Command(default)]
 pub struct RegisterTimeline {
     pub name: String,
-    /// JSON: a steps array, or an object with a `steps` array (and optional `name`).
-    pub timeline: String,
+    /// Structured timeline object with required `steps` and optional `name`.
+    pub timeline: ScenarioParameters,
 }
 
 #[cfg(feature = "rhai")]
@@ -1274,7 +1203,7 @@ fn on_register_timeline(
     lunco_scripting_rhai_core::names::validate_file_stem(&cmd.name)
         .map_err(|error| format!("RegisterTimeline: {error}"))?;
     // Reject malformed timelines at store time, not at run time.
-    parse_timeline_steps(&cmd.timeline).map_err(|e| format!("RegisterTimeline: {e}"))?;
+    timeline_step_count(&cmd.timeline).map_err(|e| format!("RegisterTimeline: {e}"))?;
     let owner = crate::timelines::active_owner(ws.as_deref())
         .map_err(|e| format!("RegisterTimeline: cannot register without an active scope: {e}"))?;
     #[cfg(not(target_arch = "wasm32"))]
@@ -1296,7 +1225,7 @@ fn on_register_timeline(
     }
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "name": cmd.name, "timelines": store.names() }),
+        lunco_api_core::api_value!({ "name": cmd.name.clone(), "timelines": store.names() }),
     ))
 }
 
@@ -1332,18 +1261,17 @@ fn on_run_stored_timeline(
             owner
         ));
     }
-    // Own the JSON so the store borrow is released before we touch the registry.
+    // Own the typed timeline so the store borrow is released before attaching it.
     let timeline = store
         .get(&cmd.name)
         .ok_or_else(|| format!("RunStoredTimeline: no timeline named '{}'", cmd.name))?
-        .to_string();
-    let (steps, step_count) =
-        parse_timeline_steps(&timeline).map_err(|e| format!("RunStoredTimeline: {e}"))?;
-    let source = timeline_executor_source(&steps);
+        .clone();
+    let step_count =
+        timeline_step_count(&timeline).map_err(|e| format!("RunStoredTimeline: {e}"))?;
     let (doc_id_raw, generation) = attach_rhai_scenario(
         cmd.target,
-        source,
-        ScenarioParameters::default(),
+        TIMELINE_EXECUTOR_SOURCE.to_string(),
+        timeline,
         // Generated source — no file, no id, no relative imports.
         None,
         ScenarioSourceMode::Runtime,
@@ -1356,8 +1284,8 @@ fn on_run_stored_timeline(
     )?;
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({
-            "name": cmd.name,
+        lunco_api_core::api_value!({
+            "name": cmd.name.clone(),
             "document_id": doc_id_raw,
             "generation": generation,
             "steps": step_count,
@@ -1462,74 +1390,40 @@ register_commands!(
 
 #[cfg(all(test, feature = "rhai"))]
 mod tests {
-    //! The JSON→rhai-literal serialiser that `RunTimeline` embeds into the
-    //! generated executor. It must produce valid rhai that round-trips the data.
-
-    fn lit(v: &serde_json::Value) -> String {
-        let mut s = String::new();
-        super::json_to_rhai_literal(v, &mut s);
-        s
-    }
+    //! Runtime behavior for typed timeline values is covered by the authored
+    //! Rhai scene-test gate; this module checks only the generic reflection seam.
 
     #[test]
-    fn serialises_scalars_and_nesting() {
-        assert_eq!(lit(&serde_json::json!(null)), "()");
-        assert_eq!(lit(&serde_json::json!(true)), "true");
-        assert_eq!(lit(&serde_json::json!(3)), "3");
-        assert_eq!(lit(&serde_json::json!(2.5)), "2.5");
-        assert_eq!(lit(&serde_json::json!("hi")), "\"hi\"");
-        assert_eq!(lit(&serde_json::json!([1, 2])), "[1,2]");
-        // object keys are quoted; one key so order is stable
-        assert_eq!(lit(&serde_json::json!({ "wait": 5.0 })), "#{\"wait\":5.0}");
-    }
+    fn run_timeline_reflection_accepts_typed_steps_map() {
+        use bevy::prelude::{App, AppTypeRegistry};
+        use lunco_api_core::ApiValue;
 
-    #[test]
-    fn escapes_strings_so_embedding_is_safe() {
-        // A value containing a quote/backslash must not break out of the literal.
-        let s = lit(&serde_json::json!("a\"b\\c\n"));
-        assert_eq!(s, "\"a\\\"b\\\\c\\n\"");
-    }
-
-    #[test]
-    fn generated_timeline_literal_parses_as_rhai() {
-        // The serialized data dropped into the native task executor must
-        // compile (proves the literal + generated task template are valid).
-        let steps = serde_json::json!([
-            { "move_to": [12.0, 0.0, 0.0], "speed": 1.0, "radius": 2.0 },
-            { "wait": 5.0 },
-            { "brake": true, "secs": 1.0 },
-            { "cmd": "SetPorts", "params": {} },
-            { "wait_event": "GO" },
+        let mut app = App::new();
+        super::__register_on_run_timeline(&mut app);
+        let target = app.world_mut().spawn_empty().id();
+        let registry = app.world().resource::<AppTypeRegistry>().read();
+        let registration = registry
+            .get_with_short_type_path("RunTimeline")
+            .expect("RunTimeline is reflected");
+        let params = ApiValue::map([
+            ("target", ApiValue::Int(target.to_bits() as i64)),
+            (
+                "timeline",
+                ApiValue::map([(
+                    "steps",
+                    ApiValue::Array(vec![ApiValue::map([("wait", ApiValue::Float(0.0))])]),
+                )]),
+            ),
         ]);
-        let source = super::timeline_executor_source(&steps);
-        rhai::Engine::new()
-            .compile(&source)
-            .expect("generated timeline task source must be valid rhai");
-    }
 
-    #[test]
-    fn generated_timeline_uses_native_task_entrypoint() {
-        let steps = serde_json::json!([{ "wait": 1.0 }, { "wait_event": "GO" }]);
-        let source = super::timeline_executor_source(&steps);
-        assert!(source.contains("fn task(me, ctx)"), "{source}");
-        assert!(source.contains("compile_timeline"), "{source}");
-        assert!(!source.contains("fn on_tick"), "{source}");
-    }
-
-    #[test]
-    fn timeline_parser_rejects_unknown_or_ambiguous_steps() {
-        let unknown = r#"[{"drive_to":[1,2,3]}]"#;
-        let err = super::parse_timeline_steps(unknown).expect_err("unknown step must fail");
-        assert!(err.contains("no recognized operation"), "{err}");
-
-        let ambiguous = r#"[{"wait":1,"emit":"DONE"}]"#;
-        let err = super::parse_timeline_steps(ambiguous).expect_err("ambiguous step must fail");
-        assert!(err.contains("multiple operations"), "{err}");
-
-        let cross_operation = r#"[{"wait":1,"params":{}}]"#;
-        let err = super::parse_timeline_steps(cross_operation)
-            .expect_err("cross-operation fields must fail");
-        assert!(err.contains("unknown field `params`"), "{err}");
+        lunco_api::executor::validate_command_params_value(
+            "RunTimeline",
+            &params,
+            registration,
+            &registry,
+            &lunco_api::ApiEntityRegistry::default(),
+        )
+        .expect("typed structured timeline parameters deserialize");
     }
 
     #[test]

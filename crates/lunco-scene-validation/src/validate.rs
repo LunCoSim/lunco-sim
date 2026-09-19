@@ -39,7 +39,9 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{api_param_str, ApiQueryError, ApiQueryResult};
+use lunco_api_core::ApiErrorCode;
+use lunco_api_core::{api_value, ApiValue};
 use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_stage::{canonical::CanonicalStage, UsdRead};
 use serde_json::json;
@@ -688,18 +690,15 @@ impl ApiQueryProvider for ValidateAssetProvider {
         "ValidateAsset"
     }
 
-    fn execute(&self, _world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(path) = params.get("path").and_then(|p| p.as_str()) else {
-            return ApiResponse::error(
+    fn execute(&self, _world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(path) = api_param_str(params, "path") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 "ValidateAsset requires params.path (string): a lunco:// or filesystem path",
-            );
+            ));
         };
         let report = validate_asset(path);
-        match serde_json::to_value(&report) {
-            Ok(v) => ApiResponse::ok(v),
-            Err(e) => ApiResponse::error(ApiErrorCode::InternalError, e.to_string()),
-        }
+        Ok(Some(lunco_api_core::api_value_from_serializable(&report)?))
     }
 }
 
@@ -717,12 +716,12 @@ impl ApiQueryProvider for ValidateSysmlProvider {
         "ValidateSysml"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(path) = params.get("path").and_then(|p| p.as_str()) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(path) = api_param_str(params, "path") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 "ValidateSysml requires params.path (string): a filesystem path or twin:// URI",
-            );
+            ));
         };
         let report = validate_sysml_reference(world, path);
         let requirements = qualified_names(report.info.get("requirement_records"));
@@ -733,41 +732,40 @@ impl ApiQueryProvider for ValidateSysmlProvider {
         // `compact=true` therefore projects the same validated snapshot into
         // a small deterministic record set instead of serializing the whole
         // AST through the scripting bridge.
-        let compact = params
-            .get("compact")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let selected_attributes = params
-            .get("attributes")
-            .and_then(serde_json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .collect::<std::collections::BTreeSet<_>>()
-            });
-        let selected_provenance = params
-            .get("provenance_ids")
-            .and_then(serde_json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .collect::<std::collections::BTreeSet<_>>()
-            });
+        let compact = optional_bool(params, "compact", "ValidateSysml")?.unwrap_or(false);
+        let selected_attributes = optional_string_set(params, "attributes", "ValidateSysml")?;
+        let selected_provenance = optional_string_set(params, "provenance_ids", "ValidateSysml")?;
         let provenance_requested = selected_provenance.is_some()
-            || params
-                .get("provenance")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
+            || optional_bool(params, "provenance", "ValidateSysml")?.unwrap_or(false);
+        let source_files =
+            api_info_value(report.info.get("source_files"), ApiValue::Array(Vec::new()))?;
+        let verification_registry = api_info_value(
+            report.info.get("verification_registry"),
+            ApiValue::Array(Vec::new()),
+        )?;
+        let verification_registry_errors = api_info_value(
+            report.info.get("verification_registry_errors"),
+            ApiValue::Array(Vec::new()),
+        )?;
+        let components =
+            api_info_value(report.info.get("components"), ApiValue::Array(Vec::new()))?;
+        let component_registry_errors = api_info_value(
+            report.info.get("component_registry_errors"),
+            ApiValue::Array(Vec::new()),
+        )?;
+        let source_revision = api_info_value(report.info.get("source_revision"), ApiValue::Int(0))?;
+        let source_revision_hex = api_info_value(
+            report.info.get("source_revision_hex"),
+            ApiValue::str("0x0000000000000000"),
+        )?;
         let value = if compact {
-            json!({
-                "path": report.path,
-                "kind": report.kind,
+            api_value!({
+                "path": report.path.clone(),
+                "kind": report.kind.clone(),
                 "ok": report.ok,
-                "errors": report.errors,
-                "warnings": report.warnings,
-                "source_files": report.info.get("source_files").cloned().unwrap_or_else(|| json!([])),
+                "errors": report.errors.clone(),
+                "warnings": report.warnings.clone(),
+                "source_files": source_files,
                 "requirements": requirements,
                 // Keep one compact, lossless qualified-name table. A short-name
                 // table cannot represent collisions (for example each
@@ -775,71 +773,115 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 // Rhai bridge resolves qualified names directly; no duplicate
                 // short/qualified maps are serialized through its bounded
                 // value budget.
-                "attributes": json!({}),
+                "attributes": ApiValue::Map(Vec::new()),
                 // Rhai tests normally use the lazy projection (`attributes: []`)
                 // and request only the qualified literals they need.  A caller
                 // asking for a selection receives exactly that selection; an
                 // omitted selector retains the complete compact report for
                 // non-Rhai tooling.
                 "attribute_projection": if selected_attributes.is_some() { "selected" } else { "complete" },
-                "attributes_qualified": compact_sysml_attributes(report.info.get("attributes_qualified"), selected_attributes.as_ref()),
-                "attribute_collisions": compact_sysml_attribute_collisions(
+                "attributes_qualified": lunco_api_core::api_value_from_serializable(&compact_sysml_attributes(report.info.get("attributes_qualified"), selected_attributes.as_ref()))?,
+                "attribute_collisions": lunco_api_core::api_value_from_serializable(&compact_sysml_attribute_collisions(
                     report.info.get("attribute_collisions"),
                     selected_attributes.as_ref(),
-                ),
-                "requirement_records": compact_requirement_records(report.info.get("requirement_records")),
+                ))?,
+                "requirement_records": lunco_api_core::api_value_from_serializable(&compact_requirement_records(report.info.get("requirement_records")))?,
                 "verification_cases": verification_cases,
-                "verification_records": compact_verification_records(report.info.get("verification_cases")),
+                "verification_records": lunco_api_core::api_value_from_serializable(&compact_verification_records(report.info.get("verification_cases")))?,
                 "provenance_projection": if provenance_requested { "selected" } else { "none" },
                 "provenance_records": if provenance_requested {
-                    compact_sysml_provenance(
+                    lunco_api_core::api_value_from_serializable(&compact_sysml_provenance(
                         report.info.get("attributes_qualified"),
                         selected_provenance.as_ref(),
-                    )
+                    ))?
                 } else {
-                    json!([])
+                    ApiValue::Array(Vec::new())
                 },
-                "verification_registry": report.info.get("verification_registry").cloned().unwrap_or_else(|| json!([])),
-                "verification_registry_errors": report.info.get("verification_registry_errors").cloned().unwrap_or_else(|| json!([])),
-                "components": report.info.get("components").cloned().unwrap_or_else(|| json!([])),
-                "component_registry_errors": report.info.get("component_registry_errors").cloned().unwrap_or_else(|| json!([])),
-                "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
-                "source_revision_hex": report.info.get("source_revision_hex").cloned().unwrap_or_else(|| json!("0x0000000000000000")),
+                "verification_registry": verification_registry,
+                "verification_registry_errors": verification_registry_errors,
+                "components": components,
+                "component_registry_errors": component_registry_errors,
+                "source_revision": source_revision,
+                "source_revision_hex": source_revision_hex,
             })
         } else {
-            json!({
-                "path": report.path,
-                "kind": report.kind,
+            api_value!({
+                "path": report.path.clone(),
+                "kind": report.kind.clone(),
                 "ok": report.ok,
-                "errors": report.errors,
-                "warnings": report.warnings,
-                "source_files": report.info.get("source_files").cloned().unwrap_or_else(|| json!([])),
+                "errors": report.errors.clone(),
+                "warnings": report.warnings.clone(),
+                "source_files": source_files,
                 "requirements": requirements,
-                "attributes": report.info.get("attributes").cloned().unwrap_or_else(|| json!({})),
-                "attributes_qualified": report
-                    .info
-                    .get("attributes_qualified")
-                    .cloned()
-                    .unwrap_or_else(|| json!({})),
-                "attribute_collisions": report
-                    .info
-                    .get("attribute_collisions")
-                    .cloned()
-                    .unwrap_or_else(|| json!([])),
-                "attribute_records": report.info.get("attribute_records").cloned().unwrap_or_else(|| json!([])),
-                "requirement_records": report.info.get("requirement_records").cloned().unwrap_or_else(|| json!([])),
+                "attributes": api_info_value(report.info.get("attributes"), ApiValue::Map(Vec::new()))?,
+                "attributes_qualified": api_info_value(report.info.get("attributes_qualified"), ApiValue::Map(Vec::new()))?,
+                "attribute_collisions": api_info_value(report.info.get("attribute_collisions"), ApiValue::Array(Vec::new()))?,
+                "attribute_records": api_info_value(report.info.get("attribute_records"), ApiValue::Array(Vec::new()))?,
+                "requirement_records": api_info_value(report.info.get("requirement_records"), ApiValue::Array(Vec::new()))?,
                 "verification_cases": verification_cases,
-                "verification_records": report.info.get("verification_cases").cloned().unwrap_or_else(|| json!([])),
-                "verification_registry": report.info.get("verification_registry").cloned().unwrap_or_else(|| json!([])),
-                "verification_registry_errors": report.info.get("verification_registry_errors").cloned().unwrap_or_else(|| json!([])),
-                "components": report.info.get("components").cloned().unwrap_or_else(|| json!([])),
-                "component_registry_errors": report.info.get("component_registry_errors").cloned().unwrap_or_else(|| json!([])),
-                "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
-                "source_revision_hex": report.info.get("source_revision_hex").cloned().unwrap_or_else(|| json!("0x0000000000000000")),
+                "verification_records": api_info_value(report.info.get("verification_cases"), ApiValue::Array(Vec::new()))?,
+                "verification_registry": verification_registry,
+                "verification_registry_errors": verification_registry_errors,
+                "components": components,
+                "component_registry_errors": component_registry_errors,
+                "source_revision": source_revision,
+                "source_revision_hex": source_revision_hex,
             })
         };
-        ApiResponse::ok(value)
+        Ok(Some(value))
     }
+}
+
+fn optional_bool(
+    params: &ApiValue,
+    name: &str,
+    query: &str,
+) -> Result<Option<bool>, ApiQueryError> {
+    match params.get(name) {
+        None | Some(ApiValue::Unit) => Ok(None),
+        Some(ApiValue::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            format!("{query}: `{name}` must be a boolean"),
+        )),
+    }
+}
+
+fn optional_string_set<'a>(
+    params: &'a ApiValue,
+    name: &str,
+    query: &str,
+) -> Result<Option<std::collections::BTreeSet<&'a str>>, ApiQueryError> {
+    match params.get(name) {
+        None | Some(ApiValue::Unit) => Ok(None),
+        Some(ApiValue::Array(values)) => {
+            let mut selected = std::collections::BTreeSet::new();
+            for value in values {
+                let ApiValue::Str(value) = value else {
+                    return Err(ApiQueryError::new(
+                        ApiErrorCode::DeserializationError,
+                        format!("{query}: `{name}` must contain only strings"),
+                    ));
+                };
+                selected.insert(value.as_str());
+            }
+            Ok(Some(selected))
+        }
+        Some(_) => Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            format!("{query}: `{name}` must be an array of strings"),
+        )),
+    }
+}
+
+fn api_info_value(
+    value: Option<&serde_json::Value>,
+    default: ApiValue,
+) -> Result<ApiValue, ApiQueryError> {
+    value
+        .map(lunco_api_core::api_value_from_serializable)
+        .transpose()?
+        .map_or(Ok(default), Ok)
 }
 
 fn compact_sysml_attributes(
@@ -1273,22 +1315,25 @@ impl ApiQueryProvider for ValidateTwinProvider {
         "ValidateTwin"
     }
 
-    fn execute(&self, _world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(path) = params.get("path").and_then(|p| p.as_str()) else {
-            return ApiResponse::error(
+    fn execute(&self, _world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(path) = api_param_str(params, "path") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 "ValidateTwin requires params.path (string): a Twin folder path",
-            );
+            ));
         };
-        let policy = params
-            .get("policy")
-            .and_then(|value| value.as_str())
-            .unwrap_or("warn");
+        let policy = match params.get("policy") {
+            None => "warn",
+            Some(ApiValue::Str(policy)) => policy.as_str(),
+            Some(_) => {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "ValidateTwin: `policy` must be a string",
+                ));
+            }
+        };
         let report = validate_twin(path, policy);
-        match serde_json::to_value(&report) {
-            Ok(value) => ApiResponse::ok(value),
-            Err(error) => ApiResponse::error(ApiErrorCode::InternalError, error.to_string()),
-        }
+        Ok(Some(lunco_api_core::api_value_from_serializable(&report)?))
     }
 }
 

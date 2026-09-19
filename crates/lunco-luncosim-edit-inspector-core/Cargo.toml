@@ -1,0 +1,21 @@
+[package]
+name = "lunco-luncosim-edit-inspector-core"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Renderer-independent Inspector readouts for LunCoSim scene editing"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_post_process"] }
+lunco-camera-core = { path = "../lunco-camera-core" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-port-core = { path = "../lunco-port-core" }
+lunco-render = { path = "../lunco-render" }
+lunco-scene-selection = { path = "../lunco-scene-selection" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
+
+[lints]
+workspace = true

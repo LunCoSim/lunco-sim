@@ -20,8 +20,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::transports::envelope::{decode_request, encode_response};
 use crate::transports::HttpBridge;
-use lunco_api::schema::{ApiRequest, ApiResponse};
 use lunco_api_contracts::{ApiRequestEnvelope, ApiResponseEnvelope};
+use lunco_api_core::{ApiRequest, ApiResponse};
 
 thread_local! {
     /// The bridge tx, installed by `LunCoApiPlugin` during `build()`. `None`

@@ -1,18 +1,34 @@
 # lunco-api
 
-Transport-agnostic API core for LunCoSim. It owns simulation state and typed
-command/query contracts; the native HTTP and browser transports live in the
-separate `lunco-api-transport` package.
+Bevy ECS runtime for typed commands, queries, discovery, and telemetry. The
+lightweight in-process contracts are in `lunco-api-core`; `lunco-api-codec`
+converts values only at JSON wire boundaries, and outward transports are in
+`lunco-api-transport`.
 
 ## Architecture
 
 ```
 ┌────────────────────────────────────────────────────────────┐
+│  lunco-api-transport                                     │
+│  HTTP / browser adapters                                  │
+└────────────────────┬───────────────────────────────────────┘
+                     │ JSON at the wire boundary
+                     ▼
+┌────────────────────────────────────────────────────────────┐
+│  lunco-api-codec                                           │
+│  JSON ↔ typed lunco-api-core values                        │
+└────────────────────┬───────────────────────────────────────┘
+                     │ external representation
+                     ▼
+┌────────────────────────────────────────────────────────────┐
+│  lunco-api-core                                             │
+│  ApiRequest · ApiResponse · ApiValue · schemas              │
+└────────────────────┬───────────────────────────────────────┘
+                     │ typed requests and responses
+                     ▼
+┌────────────────────────────────────────────────────────────┐
 │  lunco-api                                                 │
-│  ApiEntityRegistry  — GlobalEntityId (u64) ↔ Bevy Entity   │
-│  ApiExecutor        — ApiRequest → ECS                    │
-│  ApiDiscovery       — schema introspection via reflection  │
-│  ApiTelemetry       — telemetry subscription + broadcast   │
+│  ApiEntityRegistry · executor · discovery · telemetry      │
 └────────────────────┬───────────────────────────────────────┘
                      │
                      ▼
@@ -25,7 +41,8 @@ separate `lunco-api-transport` package.
 ## Key Design
 
 - **No hardcoded commands**: Any registered `#[Command]` type is automatically discoverable via `AppTypeRegistry` reflection; arbitrary internal reflected events are excluded.
-- **Transport-independent**: The core types know nothing about HTTP, sockets, or browser bindings. Those are application-bound transport concerns.
+- **Typed inside the app**: ECS callers exchange `ApiValue`; JSON is confined to `lunco-api-codec` at wire boundaries.
+- **Small contracts**: Consumers that only need typed request/response/value contracts depend on `lunco-api-core`, not the Bevy runtime.
 - **Headless-compatible**: Runs without GPU/graphics. Perfect for server deployments.
 
 ## Commands
@@ -34,10 +51,10 @@ Commands are discovered automatically. The API scans `AppTypeRegistry` for refle
 
 ### HTTP Endpoint
 
-The endpoint is supplied by `lunco-api-transport`. The pure JSON wire
-envelopes shared by that transport and native clients live in
-`lunco-api-contracts`; this package owns the Bevy-backed runtime request and
-response types.
+The endpoint is supplied by `lunco-api-transport`. Pure JSON wire envelopes
+live in `lunco-api-contracts`; `lunco-api-codec` translates them to/from the
+typed contracts in `lunco-api-core`. This package owns ECS execution and
+contains no JSON value conversion.
 
 ```
 POST /api/commands
@@ -187,11 +204,12 @@ The API addresses entities by **numeric** `GlobalEntityId` (a `u64`, defined in
 `lunco-core`). The `ApiEntityRegistry` resource maintains a
 bidirectional `GlobalEntityId ↔ Bevy Entity` map; `sync_api_registry` keeps it
 in step as entities carrying a `GlobalEntityId` component are added/removed.
-Entity fields in command params are plain JSON numbers:
+Entity fields in command params use the global entity ID returned by the API:
 
 ```json
 { "target": 42 }
 ```
 
-(`ListEntities` / discovery responses report the same numeric ids, so a client
-reads an id from one call and passes it straight back as a command param.)
+(`ListEntities` reports the same IDs, so a client reads one from a response and
+passes it back as a command parameter. The transport codec preserves values
+outside the signed in-process integer range as decimal text.)

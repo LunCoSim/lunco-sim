@@ -202,14 +202,14 @@ fn on_tick(me, ctx) {
             // reference-spawn path. Do not confuse that load boundary with a
             // topology failure; this polling is test-only verdict orchestration.
             if this.elapsed < 10.0 { return; }
-            fail(this, "attached component did not materialize: " + to_json(part));
+            fail(this, "attached component did not materialize: " + part.to_string());
             return;
         }
         if !query_ok(socket) || !query_ok(host)
             || part_joint == () || socket_part == () || host_sockets == ()
             || part_joint.len() != 1 || socket_part.len() != 1 {
             fail(this, "attach did not project its explicit relationships: part="
-                 + to_json(part) + " socket=" + to_json(socket) + " host=" + to_json(host));
+                 + part.to_string() + " socket=" + socket.to_string() + " host=" + host.to_string());
             return;
         }
         if part_joint[0] != JOINT || socket_part[0] != COMPONENT || host_sockets.len() != 1 || host_sockets[0] != SOCKET {

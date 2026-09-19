@@ -15,13 +15,14 @@ lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-exposure-core = { path = "../lunco-exposure-core" }
+lunco-hooks = { path = "../lunco-hooks" }
 lunco-time = { path = "../lunco-time" }
 lunco-workspace = { path = "../lunco-workspace", optional = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

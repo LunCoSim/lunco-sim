@@ -6,8 +6,10 @@
 //! document from UI state.
 
 use bevy::prelude::{App, Plugin, World};
-use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::queries::{
+    api_param_u64, ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult,
+};
+use lunco_api_core::{api_value, api_value_from_serializable, ApiErrorCode, ApiValue};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
 use lunco_usd_bevy_stage::UsdRead;
@@ -16,6 +18,14 @@ use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
 use lunco_usd_core::edit_session::UsdEditSessions;
 use lunco_usd_document::document::UsdDocument;
+
+fn query_ok(value: ApiValue) -> ApiQueryResult {
+    Ok(Some(value))
+}
+
+fn query_error(code: ApiErrorCode, message: impl Into<String>) -> ApiQueryResult {
+    Err(ApiQueryError::new(code, message))
+}
 
 /// Installs the public USD document query providers.
 ///
@@ -35,19 +45,22 @@ impl Plugin for UsdQueriesPlugin {
     }
 }
 
-fn journal_position(world: &World, doc: DocumentId) -> serde_json::Value {
-    world
-        .get_resource::<JournalResource>()
-        .map(|journal| {
-            journal.with_read(|journal| {
-                let entries: Vec<_> = journal.entries_for_doc(doc).collect();
-                serde_json::json!({
-                    "entries": entries.len(),
-                    "cursor": entries.last().map(|entry| entry.id.clone()),
-                })
-            })
-        })
-        .unwrap_or_else(|| serde_json::json!({ "entries": 0, "cursor": null }))
+fn journal_position(world: &World, doc: DocumentId) -> Result<ApiValue, ApiQueryError> {
+    let journal = world.get_resource::<JournalResource>().ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::InternalError,
+            "USD document journal is not installed",
+        )
+    })?;
+    let (entry_count, cursor) = journal.with_read(|journal| {
+        let entries: Vec<_> = journal.entries_for_doc(doc).collect();
+        (entries.len(), entries.last().map(|entry| entry.id.clone()))
+    });
+    let cursor = api_value_from_serializable(&cursor)?;
+    Ok(api_value!({
+        "entries": entry_count,
+        "cursor": cursor,
+    }))
 }
 
 fn runtime_source(document: &UsdDocument) -> Result<String, String> {
@@ -61,9 +74,10 @@ fn document_snapshot(
     document: &UsdDocument,
     reason: &str,
     from_generation: Option<u64>,
-) -> Result<serde_json::Value, String> {
+) -> Result<ApiValue, ApiQueryError> {
     let source = document.source();
-    let runtime = runtime_source(document)?;
+    let runtime = runtime_source(document)
+        .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?;
     let mut diagnostics = Vec::new();
     if let Some(error) = document.parse_error() {
         diagnostics.push(error.to_owned());
@@ -75,13 +89,13 @@ fn document_snapshot(
             Vec::new()
         }
     };
-    Ok(serde_json::json!({
+    Ok(api_value!({
         "kind": "snapshot",
         "reason": reason,
         "from_generation": from_generation,
-        "doc_id": doc,
+        "doc_id": doc.raw(),
         "generation": document.generation(),
-        "origin": document.origin(),
+        "origin": api_value_from_serializable(document.origin())?,
         "dirty": document.is_dirty(),
         "layers": {
             "root": {
@@ -101,7 +115,7 @@ fn document_snapshot(
             "dependencies": dependencies,
             "owner": "lunco-usd-compose",
         },
-        "journal": journal_position(world, doc),
+        "journal": journal_position(world, doc)?,
         "diagnostics": diagnostics,
     }))
 }
@@ -111,13 +125,7 @@ fn composed_attribute_inspection(
     doc: DocumentId,
     document: &UsdDocument,
     path: &SdfPath,
-) -> (
-    bool,
-    Option<String>,
-    bool,
-    Vec<String>,
-    Vec<serde_json::Value>,
-) {
+) -> (bool, Option<String>, bool, Vec<String>, Vec<ApiValue>) {
     // The document is the synchronous authoring boundary. The canonical stage
     // is a derived projection and may still be settling the newest generation.
     // Read document-owned paths here so a command response and its immediate
@@ -137,7 +145,7 @@ fn composed_attribute_inspection(
                 let value = spec.get("default").cloned().and_then(|value| {
                     lunco_usd_authoring::author::value_to_literal(&type_name, value)
                 });
-                Some(serde_json::json!({
+                Some(api_value!({
                     "name": property.name(),
                     "type": type_name,
                     "value": value,
@@ -169,7 +177,7 @@ fn composed_attribute_inspection(
                 let value = reader.attr_value(path, &name).and_then(|value| {
                     lunco_usd_authoring::author::value_to_literal(&type_name, value)
                 });
-                Some(serde_json::json!({
+                Some(api_value!({
                     "name": name,
                     "type": type_name,
                     "value": value,
@@ -192,48 +200,48 @@ fn composed_attribute_inspection(
     (false, None, false, Vec::new(), Vec::new())
 }
 
-fn reference_json(reference: &openusd::sdf::Reference) -> serde_json::Value {
-    serde_json::json!({
-        "asset_path": reference.asset_path,
+fn reference_api_value(reference: &openusd::sdf::Reference) -> ApiValue {
+    api_value!({
+        "asset_path": reference.asset_path.clone(),
         "prim_path": if reference.prim_path.is_empty() {
-            serde_json::Value::Null
+            ApiValue::Unit
         } else {
-            serde_json::Value::String(reference.prim_path.to_string())
+            ApiValue::Str(reference.prim_path.to_string())
         },
     })
 }
 
-fn references_json(references: &[openusd::sdf::Reference]) -> Vec<serde_json::Value> {
-    references.iter().map(reference_json).collect()
+fn references_api_value(references: &[openusd::sdf::Reference]) -> Vec<ApiValue> {
+    references.iter().map(reference_api_value).collect()
 }
 
-fn reference_list_json(data: &dyn openusd::sdf::AbstractData, path: &SdfPath) -> serde_json::Value {
+fn reference_list_api_value(data: &dyn openusd::sdf::AbstractData, path: &SdfPath) -> ApiValue {
     let Some(value) = data
         .try_field(path, openusd::sdf::FieldKey::References.as_str())
         .ok()
         .flatten()
     else {
-        return serde_json::json!({
+        return api_value!({
             "present": false,
             "items": [],
         });
     };
     let SdfValue::ReferenceListOp(op) = value.as_ref() else {
-        return serde_json::json!({
+        return api_value!({
             "present": false,
             "items": [],
         });
     };
-    serde_json::json!({
+    api_value!({
         "present": true,
         "explicit": op.explicit,
-        "explicit_items": references_json(&op.explicit_items),
-        "prepended_items": references_json(&op.prepended_items),
-        "appended_items": references_json(&op.appended_items),
-        "added_items": references_json(&op.added_items),
-        "deleted_items": references_json(&op.deleted_items),
-        "ordered_items": references_json(&op.ordered_items),
-        "items": references_json(&op.flatten()),
+        "explicit_items": references_api_value(&op.explicit_items),
+        "prepended_items": references_api_value(&op.prepended_items),
+        "appended_items": references_api_value(&op.appended_items),
+        "added_items": references_api_value(&op.added_items),
+        "deleted_items": references_api_value(&op.deleted_items),
+        "ordered_items": references_api_value(&op.ordered_items),
+        "items": references_api_value(&op.flatten()),
     })
 }
 
@@ -241,11 +249,11 @@ fn reference_list_json(data: &dyn openusd::sdf::AbstractData, path: &SdfPath) ->
 /// mounted. The document-layer view above remains the synchronous authoring
 /// source; this additional view reports the composed sites and list result
 /// after external references and local overrides have been resolved.
-fn canonical_reference_json(
+fn canonical_reference_api_value(
     world: &World,
     doc: DocumentId,
     path: &SdfPath,
-) -> Option<serde_json::Value> {
+) -> Option<ApiValue> {
     let stage = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)?;
     let prim = stage.stage().prim(path.clone());
     if !prim.is_valid().ok()? {
@@ -269,10 +277,10 @@ fn canonical_reference_json(
         let SdfValue::ReferenceListOp(op) = value.as_ref() else {
             continue;
         };
-        sites.push(serde_json::json!({
+        sites.push(api_value!({
             "layer": layer_id,
             "path": authored_path.to_string(),
-            "list": reference_list_json(layer.data(), &authored_path),
+            "list": reference_list_api_value(layer.data(), &authored_path),
         }));
         list_ops.push(op.clone());
     }
@@ -280,54 +288,54 @@ fn canonical_reference_json(
     for op in list_ops.iter().rev() {
         composed = op.compose_over(&composed);
     }
-    Some(serde_json::json!({
+    Some(api_value!({
         "source": "canonical_stage",
         "sites": sites,
-        "items": references_json(&composed),
+        "items": references_api_value(&composed),
     }))
 }
 
-fn token_metadata_json(
+fn token_metadata_api_value(
     data: &dyn openusd::sdf::AbstractData,
     path: &SdfPath,
     field: &str,
     source: &str,
-) -> serde_json::Value {
+) -> ApiValue {
     let Some(value) = data.try_field(path, field).ok().flatten() else {
-        return serde_json::json!({
+        return api_value!({
             "present": false,
-            "value": serde_json::Value::Null,
+            "value": ApiValue::Unit,
             "source": source,
         });
     };
     match value.as_ref() {
-        SdfValue::Token(token) => serde_json::json!({
+        SdfValue::Token(token) => api_value!({
             "present": true,
             "value": token.to_string(),
             "source": source,
         }),
-        _ => serde_json::json!({
+        _ => api_value!({
             "present": true,
-            "value": serde_json::Value::Null,
+            "value": ApiValue::Unit,
             "source": source,
             "error": "metadata is not a USD token",
         }),
     }
 }
 
-fn variant_selection_metadata_json(
+fn variant_selection_metadata_api_value(
     data: &dyn openusd::sdf::AbstractData,
     path: &SdfPath,
     source: &str,
-) -> serde_json::Value {
+) -> ApiValue {
     let Some(value) = data
         .try_field(path, openusd::sdf::FieldKey::VariantSelection.as_str())
         .ok()
         .flatten()
     else {
-        return serde_json::json!({
+        return api_value!({
             "present": false,
-            "value": serde_json::Value::Null,
+            "value": ApiValue::Unit,
             "source": source,
         });
     };
@@ -335,65 +343,74 @@ fn variant_selection_metadata_json(
         SdfValue::VariantSelectionMap(map) => {
             let selections = map
                 .iter()
-                .map(|(set, variant)| (set.to_string(), serde_json::json!(variant.to_string())))
-                .collect::<serde_json::Map<_, _>>();
-            serde_json::json!({
+                .map(|(set, variant)| (set.to_string(), api_value!(variant.to_string())))
+                .collect::<Vec<(String, ApiValue)>>();
+            api_value!({
                 "present": true,
-                "value": selections,
+                "value": ApiValue::Map(selections),
                 "source": source,
             })
         }
-        _ => serde_json::json!({
+        _ => api_value!({
             "present": true,
-            "value": serde_json::Value::Null,
+            "value": ApiValue::Unit,
             "source": source,
             "error": "metadata is not a USD variant-selection map",
         }),
     }
 }
 
-fn variant_selection_stack_json(document: &UsdDocument, path: &SdfPath) -> serde_json::Value {
-    serde_json::json!({
+fn variant_selection_stack_api_value(document: &UsdDocument, path: &SdfPath) -> ApiValue {
+    api_value!({
         "authored": {
-            "root": variant_selection_metadata_json(
+            "root": variant_selection_metadata_api_value(
                 document.data(), path, "@root@",
             ),
-            "runtime": variant_selection_metadata_json(
+            "runtime": variant_selection_metadata_api_value(
                 document.runtime_data(), path, "@runtime@",
             ),
         },
-        "composed": variant_selection_metadata_json(
+        "composed": variant_selection_metadata_api_value(
             document.composed_arc().as_ref(), path, "document_composed",
         ),
     })
 }
 
-fn metadata_stack_json(
+fn metadata_stack_api_value(
     document: &UsdDocument,
     path: &SdfPath,
     field: &str,
     canonical_value: Option<String>,
-) -> serde_json::Value {
-    let mut metadata = serde_json::json!({
-        "authored": {
-            "root": token_metadata_json(document.data(), path, field, "@root@"),
-            "runtime": token_metadata_json(document.runtime_data(), path, field, "@runtime@"),
-        },
-        "composed": token_metadata_json(
-            document.composed_arc().as_ref(),
-            path,
-            field,
-            "document_composed",
+) -> ApiValue {
+    let mut metadata = vec![
+        (
+            "authored".to_owned(),
+            api_value!({
+                "root": token_metadata_api_value(document.data(), path, field, "@root@"),
+                "runtime": token_metadata_api_value(document.runtime_data(), path, field, "@runtime@"),
+            }),
         ),
-    });
+        (
+            "composed".to_owned(),
+            token_metadata_api_value(
+                document.composed_arc().as_ref(),
+                path,
+                field,
+                "document_composed",
+            ),
+        ),
+    ];
     if let Some(value) = canonical_value {
-        metadata["canonical_stage"] = serde_json::json!({
-            "present": true,
-            "value": value,
-            "source": "canonical_stage",
-        });
+        metadata.push((
+            "canonical_stage".to_owned(),
+            api_value!({
+                "present": true,
+                "value": value,
+                "source": "canonical_stage",
+            }),
+        ));
     }
-    metadata
+    ApiValue::Map(metadata)
 }
 
 /// Read-only query for one explicit open USD document.
@@ -418,9 +435,9 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
         "InspectUsdDocument"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw_doc) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(raw_doc) = api_param_u64(params, "doc_id") else {
+            return query_error(
                 ApiErrorCode::DeserializationError,
                 "InspectUsdDocument requires an explicit numeric `doc_id`",
             );
@@ -430,15 +447,16 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
             .get_resource::<DocumentRegistry<UsdDocument>>()
             .and_then(|registry| registry.host(doc))
         else {
-            return ApiResponse::error(
+            return query_error(
                 ApiErrorCode::EntityNotFound,
                 format!("USD document {doc} is not open"),
             );
         };
         let document = host.document();
         let source = document.source();
-        let runtime_bytes = lunco_usd_authoring::author::data_to_usda(document.runtime_data())
-            .map_or(0, |source| source.len());
+        let runtime_bytes = runtime_source(document)
+            .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?
+            .len();
         let mut diagnostics = Vec::new();
         if let Some(error) = document.parse_error() {
             diagnostics.push(error.to_owned());
@@ -450,88 +468,115 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                 Vec::new()
             }
         };
-        let journal = journal_position(world, doc);
+        let journal = journal_position(world, doc)?;
         let root_path = SdfPath::abs_root();
         let canonical_default_prim = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
             .and_then(|stage| stage.view().default_prim());
 
-        let mut response = serde_json::json!({
-            "doc_id": doc,
-            "generation": document.generation(),
-            "origin": document.origin(),
-            "dirty": document.is_dirty(),
-            "layers": {
-                "root": {
-                    "id": "@root@",
-                    "persistent": true,
-                    "revision": document.base_revision(),
-                    "bytes": source.len(),
-                },
-                "runtime": {
-                    "id": "@runtime@",
-                    "persistent": false,
-                    "revision": document.runtime_revision(),
-                    "bytes": runtime_bytes,
-                },
-            },
-            "composition": {
-                "dependencies": dependencies,
-                "owner": "lunco-usd-compose",
-            },
-            "metadata": {
-                "defaultPrim": metadata_stack_json(
-                    document,
-                    &root_path,
-                    openusd::sdf::FieldKey::DefaultPrim.as_str(),
-                    canonical_default_prim,
-                ),
-            },
-            "journal": journal,
-            "diagnostics": diagnostics,
-        });
+        let mut response = vec![
+            ("doc_id".to_owned(), api_value!(doc.raw())),
+            ("generation".to_owned(), api_value!(document.generation())),
+            (
+                "origin".to_owned(),
+                api_value_from_serializable(document.origin())?,
+            ),
+            ("dirty".to_owned(), api_value!(document.is_dirty())),
+            (
+                "layers".to_owned(),
+                api_value!({
+                    "root": {
+                        "id": "@root@",
+                        "persistent": true,
+                        "revision": document.base_revision(),
+                        "bytes": source.len(),
+                    },
+                    "runtime": {
+                        "id": "@runtime@",
+                        "persistent": false,
+                        "revision": document.runtime_revision(),
+                        "bytes": runtime_bytes,
+                    },
+                }),
+            ),
+            (
+                "composition".to_owned(),
+                api_value!({
+                    "dependencies": dependencies,
+                    "owner": "lunco-usd-compose",
+                }),
+            ),
+            (
+                "metadata".to_owned(),
+                api_value!({
+                    "defaultPrim": metadata_stack_api_value(
+                        document,
+                        &root_path,
+                        openusd::sdf::FieldKey::DefaultPrim.as_str(),
+                        canonical_default_prim,
+                    ),
+                }),
+            ),
+            ("journal".to_owned(), journal),
+            ("diagnostics".to_owned(), api_value!(diagnostics)),
+        ];
 
-        if let Some(raw_path) = params.get("path").and_then(serde_json::Value::as_str) {
+        if params.get("path").is_some() && params.get("path").and_then(ApiValue::as_str).is_none() {
+            return query_error(
+                ApiErrorCode::DeserializationError,
+                "InspectUsdDocument `path` must be a string",
+            );
+        }
+        if let Some(raw_path) = params.get("path").and_then(ApiValue::as_str) {
             let Ok(path) = SdfPath::new(raw_path) else {
-                return ApiResponse::error(
+                return query_error(
                     ApiErrorCode::DeserializationError,
                     format!("invalid USD prim path `{raw_path}`"),
                 );
             };
             let (exists, type_name, active, children, attributes) =
                 composed_attribute_inspection(world, doc, document, &path);
-            let mut references = serde_json::json!({
-                "authored": {
-                    "root": reference_list_json(document.data(), &path),
-                    "runtime": reference_list_json(document.runtime_data(), &path),
-                },
-                "composed": reference_list_json(document.composed_arc().as_ref(), &path),
-            });
-            if let Some(canonical) = canonical_reference_json(world, doc, &path) {
-                references["canonical_stage"] = canonical;
+            let mut references = vec![
+                (
+                    "authored".to_owned(),
+                    api_value!({
+                        "root": reference_list_api_value(document.data(), &path),
+                        "runtime": reference_list_api_value(document.runtime_data(), &path),
+                    }),
+                ),
+                (
+                    "composed".to_owned(),
+                    reference_list_api_value(document.composed_arc().as_ref(), &path),
+                ),
+            ];
+            if let Some(canonical) = canonical_reference_api_value(world, doc, &path) {
+                references.push(("canonical_stage".to_owned(), canonical));
             }
             let canonical_kind = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
                 .and_then(|stage| stage.view().kind(&path));
-            response["prim"] = serde_json::json!({
-                "path": raw_path,
-                "exists": exists,
-                "type": type_name,
-                "active": active,
-                "children": children,
-                "attributes": attributes,
-                "metadata": {
-                    "kind": metadata_stack_json(
-                        document,
-                        &path,
-                        openusd::sdf::FieldKey::Kind.as_str(),
-                        canonical_kind,
-                    ),
-                    "variantSelections": variant_selection_stack_json(document, &path),
-                },
-                "references": references,
-            });
+            response.push((
+                "prim".to_owned(),
+                api_value!({
+                    "path": raw_path,
+                    "exists": exists,
+                    "type": type_name,
+                    "active": active,
+                    "children": children,
+                    "attributes": attributes,
+                    "metadata": {
+                        "kind": metadata_stack_api_value(
+                            document,
+                            &path,
+                            openusd::sdf::FieldKey::Kind.as_str(),
+                            canonical_kind,
+                        ),
+                        "variantSelections": variant_selection_stack_api_value(document, &path),
+                    },
+                    "references": ApiValue::Map(references),
+                }),
+            ));
         }
 
-        ApiResponse::ok(response)
+        query_ok(ApiValue::Map(response))
     }
 }
 
@@ -547,9 +592,9 @@ impl ApiQueryProvider for InspectUsdEditSessionProvider {
         "InspectUsdEditSession"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw_doc) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(raw_doc) = api_param_u64(params, "doc_id") else {
+            return query_error(
                 ApiErrorCode::DeserializationError,
                 "InspectUsdEditSession requires an explicit numeric `doc_id`",
             );
@@ -560,7 +605,7 @@ impl ApiQueryProvider for InspectUsdEditSessionProvider {
             .and_then(|registry| registry.host(doc))
             .map(|host| host.document())
         else {
-            return ApiResponse::error(
+            return query_error(
                 ApiErrorCode::EntityNotFound,
                 format!("USD document {doc} is not open"),
             );
@@ -569,45 +614,49 @@ impl ApiQueryProvider for InspectUsdEditSessionProvider {
             .get_resource::<DocumentRegistry<UsdDocument>>()
             .is_some_and(|registry| registry.stale_docs().contains(&doc));
 
-        let mut proposals: Vec<_> = world
-            .get_resource::<UsdEditSessions>()
-            .map(|sessions| {
-                sessions
-                    .for_document(doc)
-                    .map(|proposal| {
-                        serde_json::json!({
-                            "id": proposal.id,
+        let sessions = world.get_resource::<UsdEditSessions>().ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "USD edit sessions are not installed",
+            )
+        })?;
+        let mut proposals: Vec<_> = sessions
+            .for_document(doc)
+            .map(|proposal| -> Result<_, ApiQueryError> {
+                Ok((
+                    proposal.id.0,
+                    api_value!({
+                            "id": proposal.id.0,
                             "scope": proposal.scope.as_str(),
-                            "label": proposal.label,
+                            "label": proposal.label.clone(),
                             "parent_generation": proposal.parent_generation,
                             "base_revision": proposal.base_revision,
-                            "origin": proposal.origin,
+                            "origin": proposal.origin.clone(),
                             "state": proposal.state.as_str(),
-                            "ops": proposal.ops,
-                            "affected_paths": proposal.affected_paths,
-                            "diagnostics": proposal.diagnostics,
+                            "ops": api_value_from_serializable(&proposal.ops)?,
+                            "affected_paths": proposal.affected_paths.clone(),
+                            "diagnostics": proposal.diagnostics.clone(),
                             "stale": proposal.parent_generation != document.generation()
                                 || proposal.base_revision != document.base_revision()
                                 || proposal.origin != document.origin().session_uri()
                                 || externally_stale,
-                        })
-                    })
-                    .collect()
+                    }),
+                ))
             })
-            .unwrap_or_default();
-        proposals.sort_by_key(|proposal| {
-            proposal
-                .get("id")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or_default()
-        });
+            .collect::<Result<_, ApiQueryError>>()?;
+        proposals.sort_by_key(|(id, _)| *id);
+        let proposals = proposals
+            .into_iter()
+            .map(|(_, proposal)| proposal)
+            .collect::<Vec<_>>();
 
-        ApiResponse::ok(serde_json::json!({
-            "doc_id": doc,
+        let origin = api_value_from_serializable(document.origin())?;
+        query_ok(api_value!({
+            "doc_id": doc.raw(),
             "generation": document.generation(),
             "base_revision": document.base_revision(),
             "dirty": document.is_dirty(),
-            "origin": document.origin(),
+            "origin": origin,
             "proposals": proposals,
         }))
     }
@@ -633,9 +682,9 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
         "SyncUsdDocument"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw_doc) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(raw_doc) = api_param_u64(params, "doc_id") else {
+            return query_error(
                 ApiErrorCode::DeserializationError,
                 "SyncUsdDocument requires an explicit numeric `doc_id`",
             );
@@ -646,16 +695,16 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
             .and_then(|registry| registry.host(doc))
             .map(|host| host.document())
         else {
-            return ApiResponse::error(
+            return query_error(
                 ApiErrorCode::EntityNotFound,
                 format!("USD document {doc} is not open"),
             );
         };
         let since = match params.get("since_generation") {
             None => None,
-            Some(value) => {
-                let Some(generation) = value.as_u64() else {
-                    return ApiResponse::error(
+            Some(_) => {
+                let Some(generation) = api_param_u64(params, "since_generation") else {
+                    return query_error(
                         ApiErrorCode::DeserializationError,
                         "SyncUsdDocument `since_generation` must be a non-negative integer",
                     );
@@ -665,13 +714,13 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
         };
         let Some(since) = since else {
             return match document_snapshot(world, doc, document, "initial", None) {
-                Ok(snapshot) => ApiResponse::ok(snapshot),
-                Err(error) => ApiResponse::error(ApiErrorCode::InternalError, error),
+                Ok(snapshot) => query_ok(snapshot),
+                Err(error) => Err(error),
             };
         };
         let generation = document.generation();
         if since > generation {
-            return ApiResponse::error(
+            return query_error(
                 ApiErrorCode::CommandRejected,
                 format!(
                     "SyncUsdDocument cursor {since} is newer than document {doc} generation {generation}"
@@ -679,14 +728,18 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
             );
         }
         match document.ops_since(since) {
-            Some(ops) => ApiResponse::ok(serde_json::json!({
-                "kind": "delta",
-                "doc_id": doc,
-                "from_generation": since,
-                "to_generation": generation,
-                "ops": ops,
-                "journal": journal_position(world, doc),
-            })),
+            Some(ops) => {
+                let journal = journal_position(world, doc)?;
+                let ops = api_value_from_serializable(&ops)?;
+                query_ok(api_value!({
+                    "kind": "delta",
+                    "doc_id": doc.raw(),
+                    "from_generation": since,
+                    "to_generation": generation,
+                    "ops": ops,
+                    "journal": journal,
+                }))
+            }
             None => match document_snapshot(
                 world,
                 doc,
@@ -694,8 +747,8 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
                 "history_window_exceeded",
                 Some(since),
             ) {
-                Ok(snapshot) => ApiResponse::ok(snapshot),
-                Err(error) => ApiResponse::error(ApiErrorCode::InternalError, error),
+                Ok(snapshot) => query_ok(snapshot),
+                Err(error) => Err(error),
             },
         }
     }
@@ -723,37 +776,34 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
         "ResolveUsdTarget"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw_doc) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(raw_doc) = api_param_u64(params, "doc_id") else {
+            return query_error(
                 ApiErrorCode::DeserializationError,
                 "ResolveUsdTarget requires an explicit numeric `doc_id`",
             );
         };
-        let Some(raw_path) = params.get("path").and_then(serde_json::Value::as_str) else {
-            return ApiResponse::error(
+        let Some(raw_path) = params.get("path").and_then(ApiValue::as_str) else {
+            return query_error(
                 ApiErrorCode::DeserializationError,
                 "ResolveUsdTarget requires an explicit USD prim `path`",
             );
         };
-        let Some(raw_target) = params
-            .get("edit_target")
-            .and_then(serde_json::Value::as_str)
-        else {
-            return ApiResponse::error(
+        let Some(raw_target) = params.get("edit_target").and_then(ApiValue::as_str) else {
+            return query_error(
                 ApiErrorCode::DeserializationError,
                 "ResolveUsdTarget requires an explicit `edit_target`",
             );
         };
         let edit_target = lunco_usd_document::document::LayerId::new(raw_target);
         if !edit_target.is_root() && !edit_target.is_runtime() {
-            return ApiResponse::error(
+            return query_error(
                 ApiErrorCode::DeserializationError,
                 format!("unknown USD edit target `{raw_target}`"),
             );
         }
         let Ok(path) = SdfPath::new(raw_path) else {
-            return ApiResponse::error(
+            return query_error(
                 ApiErrorCode::DeserializationError,
                 format!("invalid USD prim path `{raw_path}`"),
             );
@@ -764,7 +814,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             .and_then(|registry| registry.host(doc))
             .map(|host| host.document())
         else {
-            return ApiResponse::error(
+            return query_error(
                 ApiErrorCode::EntityNotFound,
                 format!("USD document {doc} is not open"),
             );
@@ -772,7 +822,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
         let authored_here = match document.authored_prim_exists(&edit_target, raw_path) {
             Ok(exists) => exists,
             Err(error) => {
-                return ApiResponse::error(ApiErrorCode::DeserializationError, error.to_string());
+                return query_error(ApiErrorCode::DeserializationError, error.to_string());
             }
         };
         let authored_in_document = match (
@@ -782,13 +832,13 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
         ) {
             (Ok(root), Ok(runtime)) => root || runtime,
             (Err(error), _) | (_, Err(error)) => {
-                return ApiResponse::error(ApiErrorCode::DeserializationError, error.to_string());
+                return query_error(ApiErrorCode::DeserializationError, error.to_string());
             }
         };
         let under_arc = match document.path_is_under_composed_arc(raw_path) {
             Ok(value) => value,
             Err(error) => {
-                return ApiResponse::error(ApiErrorCode::DeserializationError, error.to_string());
+                return query_error(ApiErrorCode::DeserializationError, error.to_string());
             }
         };
 
@@ -798,10 +848,10 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             .is_some_and(|spec| spec.ty == openusd::sdf::SpecType::Prim)
             || authored_in_document;
         let document_layer_response = || {
-            ApiResponse::ok(serde_json::json!({
-                "doc_id": doc,
+            query_ok(api_value!({
+                "doc_id": doc.raw(),
                 "path": raw_path,
-                "edit_target": edit_target,
+                "edit_target": edit_target.as_str(),
                 "status": if document_composed_exists { "resolved" } else { "missing" },
                 "source": "document_layers",
                 "composed_exists": document_composed_exists,
@@ -824,7 +874,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             let composed_exists = match prim.is_valid() {
                 Ok(exists) => exists,
                 Err(error) => {
-                    return ApiResponse::error(
+                    return query_error(
                         ApiErrorCode::InternalError,
                         format!("OpenUSD could not validate `{raw_path}`: {error}"),
                     );
@@ -832,15 +882,15 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             };
             if composed_exists {
                 let Ok(stack) = prim.prim_stack() else {
-                    return ApiResponse::error(
+                    return query_error(
                         ApiErrorCode::InternalError,
                         format!("OpenUSD could not return the prim stack for `{raw_path}`"),
                     );
                 };
-                return ApiResponse::ok(serde_json::json!({
-                    "doc_id": doc,
+                return query_ok(api_value!({
+                    "doc_id": doc.raw(),
                     "path": raw_path,
-                    "edit_target": edit_target,
+                    "edit_target": edit_target.as_str(),
                     "status": "resolved",
                     "source": "canonical_stage",
                     "composed_exists": true,
@@ -855,7 +905,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                         "composed_read_only"
                     },
                     "prim_stack": stack.into_iter().map(|(layer, authored_path)| {
-                        serde_json::json!({
+                        api_value!({
                             "layer": layer,
                             "path": authored_path.to_string(),
                         })
@@ -866,7 +916,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                 return document_layer_response();
             }
             if under_arc {
-                return ApiResponse::error(
+                return query_error(
                     ApiErrorCode::EntityNotFound,
                     format!("OpenUSD composed stage does not contain referenced path `{raw_path}`"),
                 );
@@ -875,7 +925,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             if authored_in_document {
                 return document_layer_response();
             }
-            return ApiResponse::error(
+            return query_error(
                 ApiErrorCode::CommandRejected,
                 format!(
                     "referenced path `{raw_path}` cannot be resolved until its canonical USD stage is mounted"

@@ -7,9 +7,10 @@ description = "Backend-agnostic internal HOOK registry — the extension-point s
 
 [dependencies]
 # `inventory` makes owner-side `declare_hook!` invocations link into one catalog
-# automatically. It is the only registration dependency and carries no runtime
-# engine, Bevy, serialization, or scripting closure into hook owners.
+# automatically. `serde` serializes the shared typed value in command contracts;
+# neither dependency brings a runtime engine, Bevy, or scripting closure.
 inventory = "0.3"
+serde = { workspace = true }
 
 [lints]
 workspace = true

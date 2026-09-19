@@ -1,7 +1,7 @@
 // Example: a mission as DATA (Layer 2). Unlike sequence.rhai (which carries
 // rhai closures), every step here is a plain map of fields — so this whole
-// const is serialisable. The exact same data can be sent over the API as
-// `RunTimeline { target, timeline }` with NO rhai authored at all; this file
+// const is serialisable. The exact same data can be sent as the typed
+// `RunTimeline { target, timeline: #{ steps: [...] } }` parameter; this file
 // just shows the equivalent in-scenario form.
 //
 // compile_timeline lowers the data steps to explicit task leaves once when

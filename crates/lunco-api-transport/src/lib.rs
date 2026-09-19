@@ -5,6 +5,8 @@
 //! in `lunco-api`; application roots depend on this package only when they need
 //! an outward transport.
 use bevy::prelude::*;
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+use lunco_api::executor;
 use lunco_api::{
     add_plugin_once,
     discovery::ApiDiscoveryPlugin,
@@ -12,8 +14,7 @@ use lunco_api::{
     queries::{self, ApiQueryRegistryPlugin, ApiVisibilityPlugin},
     subscription::ApiTelemetryPlugin,
 };
-#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
-use lunco_api::{executor, schema};
+use lunco_api_core::ApiResponse;
 pub mod transports;
 
 /// Configuration for the API plugin.
@@ -287,7 +288,7 @@ pub struct ApiHttpBridgeReceiver(tokio::sync::mpsc::Receiver<transports::BridgeM
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 #[derive(Resource, Default)]
 pub struct ApiHttpResponsePending(
-    std::collections::HashMap<u64, tokio::sync::oneshot::Sender<schema::ApiResponse>>,
+    std::collections::HashMap<u64, tokio::sync::oneshot::Sender<ApiResponse>>,
 );
 
 /// Lifecycle hand-off for the native window wake hook. The resource is removed

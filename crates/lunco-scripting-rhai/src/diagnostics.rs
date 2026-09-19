@@ -1,22 +1,23 @@
 //! Scripting's adapter onto the unified diagnostics substrate.
 //!
-//! The store + diagnostic type + status JSON are shared
+//! The store + diagnostic type + typed status projection are shared
 //! ([`lunco_doc_bevy::DocumentDiagnostics`]); the only scripting-specific part
 //! is resolving an *entity* to its scenario document and source. This provider
-//! is the rhai analogue of Modelica's `CompileStatus` query — same JSON shape,
+//! is the rhai analogue of Modelica's `CompileStatus` query — same API shape,
 //! so any caller (HTTP API, MCP, UI) polls scenario health the same way.
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{ApiQueryError, ApiQueryResult, api_param_u64, api_param_u64_or_string};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_core::GlobalEntityId;
-use lunco_doc::{Document, DocumentId, status_json};
+use lunco_doc::{DocDiagnostics, Document, DocumentId, document_status};
 use lunco_doc_bevy::DocumentDiagnostics;
 
 use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_scripting::scenario::ScenarioDriver;
-use lunco_scripting_bridge_core::JsonBuilder;
+use lunco_scripting_bridge_core::ApiValueBuilder;
 use lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime;
 
 /// `ScriptStatus { target }` → `{ state, ok, diagnostics: [{severity,message,line,col}] }`
@@ -31,22 +32,22 @@ impl ApiQueryProvider for ScriptStatusProvider {
         "ScriptStatus"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(gid) = params.get("target").and_then(serde_json::Value::as_u64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(gid) = api_param_u64(params, "target") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "ScriptStatus: `target` (entity id) required".to_string(),
-            );
+                "ScriptStatus: `target` (entity id) required",
+            ));
         };
 
         let Some(entity) = world
             .get_resource::<ApiEntityRegistry>()
             .and_then(|r| r.resolve(&GlobalEntityId::from_raw(gid)))
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("ScriptStatus: no entity with id {gid}"),
-            );
+            ));
         };
 
         // No scenario attached → idle (not an error — the entity simply isn't scripted).
@@ -54,13 +55,13 @@ impl ApiQueryProvider for ScriptStatusProvider {
             .get::<ScriptedModel>(entity)
             .and_then(|m| m.document_id)
         else {
-            return ApiResponse::ok(status_json(None));
+            return Ok(Some(document_status_api_value(None)));
         };
         let doc = DocumentId::new(doc_raw);
         let entry = world
             .get_resource::<DocumentDiagnostics>()
             .and_then(|s| s.get(doc));
-        ApiResponse::ok(status_json(entry))
+        Ok(Some(document_status_api_value(entry)))
     }
 }
 
@@ -73,31 +74,28 @@ impl ApiQueryProvider for InspectScriptDocumentProvider {
         "InspectScriptDocument"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw) = params
-            .get("doc_id")
-            .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
-        else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(raw) = api_param_u64_or_string(params, "doc_id") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "InspectScriptDocument requires an explicit numeric `doc_id`".to_owned(),
-            );
+                "InspectScriptDocument requires an explicit numeric `doc_id`",
+            ));
         };
         let doc_id = DocumentId::new(raw);
         if doc_id.is_unassigned() {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "InspectScriptDocument requires an assigned `doc_id`".to_owned(),
-            );
+                "InspectScriptDocument requires an assigned `doc_id`",
+            ));
         }
         let Some(host) = world
             .get_resource::<lunco_scripting::ScriptRegistry>()
             .and_then(|registry| registry.documents.get(&doc_id))
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("script document {doc_id} is not open"),
-            );
+            ));
         };
         let document = host.document();
         let origin = document.origin();
@@ -108,11 +106,12 @@ impl ApiQueryProvider for InspectScriptDocumentProvider {
             ScriptLanguage::Rhai => "rhai",
             ScriptLanguage::Python => "python",
         };
-        ApiResponse::ok(serde_json::json!({
+        let status = document_status_api_value(status);
+        Ok(Some(api_value!({
             "doc_id": raw,
             "kind": kind,
             "language": format!("{:?}", document.language),
-            "source": document.source,
+            "source": document.source.clone(),
             "generation": document.generation(),
             "dirty": document.is_dirty(),
             "read_only": origin.is_read_only(),
@@ -121,11 +120,11 @@ impl ApiQueryProvider for InspectScriptDocumentProvider {
                 "title": origin.display_name(),
                 "writable": origin.is_writable(),
             },
-            "asset_id": document.asset_id,
-            "inputs": document.inputs,
-            "outputs": document.outputs,
-            "status": status_json(status),
-        }))
+            "asset_id": document.asset_id.clone(),
+            "inputs": document.inputs.clone(),
+            "outputs": document.outputs.clone(),
+            "status": status,
+        })))
     }
 }
 
@@ -142,40 +141,38 @@ impl ApiQueryProvider for ScriptInspectProvider {
         "ScriptInspect"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(gid) = params.get("target").and_then(serde_json::Value::as_u64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(gid) = api_param_u64(params, "target") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "ScriptInspect: `target` (entity id) required".to_string(),
-            );
+                "ScriptInspect: `target` (entity id) required",
+            ));
         };
 
         let Some(entity) = world
             .get_resource::<ApiEntityRegistry>()
             .and_then(|r| r.resolve(&GlobalEntityId::from_raw(gid)))
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("ScriptInspect: no entity with id {gid}"),
-            );
+            ));
         };
 
         // Not scripted → say so plainly (not an error: a bare entity is valid).
         let Some(model) = world.get::<ScriptedModel>(entity) else {
-            return ApiResponse::ok(serde_json::json!({ "scripted": false }));
+            return Ok(Some(api_value!({ "scripted": false })));
         };
         let paused = model.paused;
         let language = model.language;
         let doc_raw = model.document_id;
 
-        // Live FSM + per-entity state from the rhai scenario driver. The
-        // JsonBuilder is the serialization seam — the driver/backend build state
-        // natively and JSON appears only here, at the API boundary. (Other
-        // backends would each contribute their own driver; rhai is the only one
-        // with a lifecycle today — see scenario.rs Python TODO.)
+        // Live FSM + per-entity state from the Rhai scenario driver. The driver
+        // builds the typed API value; JSON is introduced only below when this
+        // provider constructs its external API response.
         let intro = world
             .get_resource::<ScenarioDriver<RhaiScenarioRuntime>>()
-            .and_then(|d| d.introspect(entity, &JsonBuilder));
+            .and_then(|d| d.introspect(entity, &ApiValueBuilder));
 
         // Compile/runtime health, the SAME block ScriptStatus returns.
         let status = match doc_raw {
@@ -183,34 +180,56 @@ impl ApiQueryProvider for ScriptInspectProvider {
                 let entry = world
                     .get_resource::<DocumentDiagnostics>()
                     .and_then(|s| s.get(DocumentId::new(raw)));
-                status_json(entry)
+                document_status_api_value(entry)
             }
-            None => status_json(None),
+            None => document_status_api_value(None),
         };
 
-        let mut out = serde_json::json!({
-            "scripted": true,
-            "language": language.map(|l| format!("{l:?}")),
-            "paused": paused,
-            "status": status,
-        });
         match intro {
-            Some(i) => {
-                out["running"] = serde_json::json!(i.compiled && i.started && !paused);
-                out["compiled"] = serde_json::json!(i.compiled);
-                out["started"] = serde_json::json!(i.started);
-                out["generation"] = serde_json::json!(i.generation);
-                out["hooks"] = serde_json::json!(i.hooks);
-                out["state"] = i.state;
-            }
+            Some(i) => Ok(Some(api_value!({
+                "scripted": true,
+                "language": language.map(|language| format!("{language:?}")),
+                "paused": paused,
+                "status": status,
+                "running": i.compiled && i.started && !paused,
+                "compiled": i.compiled,
+                "started": i.started,
+                "generation": i.generation,
+                "hooks": i.hooks,
+                "state": i.state,
+            }))),
             // Tracked-but-not-yet-driven (or a non-rhai backend): attached but the
             // driver hasn't compiled/started it this run.
-            None => {
-                out["running"] = serde_json::json!(false);
-            }
+            None => Ok(Some(api_value!({
+                "scripted": true,
+                "language": language.map(|language| format!("{language:?}")),
+                "paused": paused,
+                "status": status,
+                "running": false,
+            }))),
         }
-        ApiResponse::ok(out)
     }
+}
+
+fn document_status_api_value(entry: Option<&DocDiagnostics>) -> ApiValue {
+    let status = document_status(entry);
+    let diagnostics = status
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            api_value!({
+                "severity": diagnostic.severity,
+                "message": diagnostic.message,
+                "line": diagnostic.line,
+                "col": diagnostic.col,
+            })
+        })
+        .collect::<Vec<_>>();
+    api_value!({
+        "state": status.state,
+        "ok": status.ok,
+        "diagnostics": diagnostics,
+    })
 }
 
 /// Register the scripting diagnostics + introspection query providers.

@@ -94,7 +94,7 @@ pub(crate) fn on_select_entity_target(
 /// The nearest prim-backed ancestor is the selection target, which keeps a
 /// generated visual mesh attached to the authored USD prim it represents.
 pub(crate) fn on_usd_viewport_click(
-    trigger: On<lunco_usd_viewport_runtime::UsdViewportClick>,
+    trigger: On<lunco_usd_viewport_core::UsdViewportClick>,
     viewport: Res<UsdViewportState>,
     q_cameras: Query<(&Camera, &GlobalTransform)>,
     q_paths: Query<&UsdPrimPath>,

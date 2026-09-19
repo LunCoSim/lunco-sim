@@ -7,7 +7,7 @@ description = "Render-bound screenshot and offline recording commands"
 
 [features]
 default = []
-api = ["dep:image", "dep:lunco-api"]
+api = ["dep:image", "dep:lunco-api", "dep:lunco-api-core"]
 
 [[test]]
 name = "capture_from_camera_test"
@@ -18,13 +18,13 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_render", "bevy_window"] }
 image = { workspace = true, optional = true }
 lunco-api = { path = "../lunco-api", optional = true }
+lunco-api-core = { path = "../lunco-api-core", optional = true }
 lunco-core = { path = "../lunco-core" }
 lunco-render = { path = "../lunco-render" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-tools-bevy = { path = "../lunco-tools-bevy" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
-serde_json = { workspace = true }
 web-time = { workspace = true }
 
 [lints]

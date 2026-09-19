@@ -8,7 +8,7 @@
 //! - **capture** (`capture_command::<C>`, registered by [`DeclareChannelExt`]):
 //!   a global `On<C>` observer for each declared command. On a *client* it
 //!   reflect-serializes the command (symmetric with the apply path), rewrites
-//!   local `Entity` refs → portable `GlobalEntityId` ([`globalize_ids_in_json`]),
+//!   local `Entity` refs → portable `GlobalEntityId` using the reflected command schema,
 //!   wraps a [`Mutation`], and pushes onto [`SyncOutbox`]. Suppressed for
 //!   wire-applied commands (echo guard) and in single-player.
 //! - **apply** ([`apply_sync_command`]): an `On<SyncCommandEvent>` observer that
@@ -50,8 +50,12 @@ use lunco_embodiment_core::roles::{EmbodimentCorePlugin, LocalEmbodiment};
 use lunco_networking_core::session::{IncomingSnapshots, SnapshotSample};
 use lunco_spatial::ActivePhysicsFrame;
 
-use lunco_api::executor::{authz_target_gid, globalize_command_ids, resolve_command_ids};
+use lunco_api::executor::{
+    authz_target_gid_value, globalize_command_ids_value, resolve_command_ids_value,
+};
 use lunco_api::registry::ApiEntityRegistry;
+use lunco_api_codec::{value_from_json, value_to_json};
+use lunco_api_core::{ApiValue, ApiValueDeserializer, api_value_from_serializable};
 use lunco_celestial::ReferenceFrame;
 use lunco_doc_bevy::JournalResource;
 pub use lunco_doc_bevy::{Presence, PresenceInfo, UserId};
@@ -780,7 +784,7 @@ impl SyncDedup {
 #[derive(Event, Debug, Clone)]
 pub struct SyncCommandEvent {
     pub type_name: String,
-    pub params: serde_json::Value,
+    pub params: ApiValue,
     pub op_id: OpId,
     pub origin: SessionId,
 }
@@ -854,7 +858,7 @@ fn capture_command<C: Event + Reflect + TypePath>(
     // Serialize through the SAME reflect path the apply side deserializes with.
     let mut data = {
         let serializer = TypedReflectSerializer::new(cmd.as_partial_reflect(), &type_reg);
-        match serde_json::to_value(&serializer) {
+        match api_value_from_serializable(&serializer) {
             Ok(v) => v,
             Err(e) => {
                 warn!("[sync] capture serialize {type_name} failed: {e}");
@@ -867,16 +871,28 @@ fn capture_command<C: Event + Reflect + TypePath>(
     // `avatar`) are replaced with `Entity::PLACEHOLDER` inside the walker — a
     // local camera concern whose bits must never leak; wire control identity is
     // the session `origin`, not the avatar entity. No field-name special-casing.
-    globalize_command_ids(
+    if let Err(error) = globalize_command_ids_value(
         &mut data,
         std::any::TypeId::of::<C>(),
         &type_reg,
         &entity_registry,
-    );
+    ) {
+        warn!("[sync] capture entity globalization for {type_name} failed: {error}");
+        return;
+    }
     drop(type_reg);
 
-    // Serialize the (id-translated) Value to compact JSON text for the wire.
-    let data = serde_json::to_string(&data).unwrap_or_else(|_| "null".to_string());
+    // JSON is the network protocol representation; in-memory command events
+    // retain the typed value and never carry serde_json::Value.
+    let data = match value_to_json(&data)
+        .and_then(|value| serde_json::to_string(&value).map_err(|error| error.to_string()))
+    {
+        Ok(data) => data,
+        Err(error) => {
+            warn!("[sync] capture wire encode for {type_name} failed: {error}");
+            return;
+        }
+    };
     let mut mutation = Mutation::local(SyncCommand { type_name, data });
     mutation.origin = local.0;
     outbox.0.push((channel, SyncEnvelope::Command(mutation)));
@@ -939,9 +955,21 @@ pub fn apply_sync_command(
         // no hardcoded field name.
         let target_gid = {
             let type_reg = type_registry.read();
-            type_reg
-                .get_with_short_type_path(&ev.type_name)
-                .and_then(|r| authz_target_gid(&ev.params, r.type_id(), &type_reg))
+            match type_reg.get_with_short_type_path(&ev.type_name) {
+                Some(registration) => {
+                    match authz_target_gid_value(&ev.params, registration.type_id(), &type_reg) {
+                        Ok(target_gid) => target_gid,
+                        Err(error) => {
+                            warn!(
+                                "[sync] rejected malformed authorization target for '{}': {error}",
+                                ev.type_name
+                            );
+                            return;
+                        }
+                    }
+                }
+                None => None,
+            }
         };
         if let Err(reject) = authorize(
             &session_registry,
@@ -994,11 +1022,19 @@ pub fn apply_sync_command(
         // side's `globalize_command_ids`.
         {
             let entity_registry = world.resource::<ApiEntityRegistry>();
-            resolve_command_ids(&mut params, registration.type_id(), &type_reg, entity_registry);
+            if let Err(error) = resolve_command_ids_value(
+                &mut params,
+                registration.type_id(),
+                &type_reg,
+                entity_registry,
+            ) {
+                warn!("[sync] resolve entity identities for '{type_name}' failed: {error}");
+                return;
+            }
         }
         let deserializer = TypedReflectDeserializer::new(registration, &type_reg);
         use serde::de::DeserializeSeed;
-        let reflected = match deserializer.deserialize(params) {
+        let reflected = match deserializer.deserialize(ApiValueDeserializer::new(params)) {
             Ok(r) => r,
             Err(e) => {
                 warn!("[sync] deserialize '{type_name}' failed: {e}");
@@ -1116,8 +1152,26 @@ pub fn drain_sync_inbox(
     for (sender, env) in drained {
         match env {
             SyncEnvelope::Command(m) => {
-                let params =
-                    serde_json::from_str(&m.payload.data).unwrap_or(serde_json::Value::Null);
+                let wire_value: serde_json::Value = match serde_json::from_str(&m.payload.data) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        warn!(
+                            "[sync] malformed command payload for '{}': {error}",
+                            m.payload.type_name
+                        );
+                        continue;
+                    }
+                };
+                let params = match value_from_json(&wire_value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        warn!(
+                            "[sync] unsupported command payload for '{}': {error}",
+                            m.payload.type_name
+                        );
+                        continue;
+                    }
+                };
                 commands.trigger(SyncCommandEvent {
                     op_id: m.id,
                     origin: sender,

@@ -8,7 +8,6 @@ description = "Native offline image, DEM, map, albedo, normal-map, and glTF asse
 [dependencies]
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-celestial-data = { path = "../lunco-celestial-data" }
-lunco-core = { path = "../lunco-core" }
 lunco-geotiff = { path = "../lunco-geotiff" }
 image = { workspace = true }
 

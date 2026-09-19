@@ -11,9 +11,12 @@ description = "LunCoSim's interactive USD preview viewport"
 # and GPU features; this package only needs Bevy's ECS/app facade directly.
 bevy = { workspace = true }
 egui = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-usd-viewport-core = { path = "../lunco-usd-viewport-core" }
 lunco-usd-viewport-runtime = { path = "../lunco-usd-viewport-runtime" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }

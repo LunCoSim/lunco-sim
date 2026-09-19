@@ -1,3 +1,9 @@
+//! Reusable performance diagnostics and status-bar HUD state.
+//!
+//! The capability is separate from the concrete Workbench shell so physics
+//! bridges, status renderers, and other hosts can consume the same resources
+//! and command without depending on the shell implementation.
+
 //! Performance HUD for the status bar.
 //!
 //! Off by default. Persisted via `lunco-settings` (one shared
@@ -19,7 +25,7 @@
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 

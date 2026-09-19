@@ -8,7 +8,7 @@ use avian3d::diagnostics::{
     PhysicsDiagnosticsPlugin, PhysicsTotalDiagnostics, PhysicsTotalDiagnosticsPlugin,
 };
 use bevy::prelude::*;
-use lunco_workbench::perf_hud::{PerfHudSettings, PerfStats};
+use lunco_workbench_perf_ui::{PerfHudSettings, PerfStats};
 
 /// Adds avian's diagnostics plugins (the framework one + the
 /// total-step one that actually inserts `PhysicsTotalDiagnostics`)

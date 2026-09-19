@@ -9,7 +9,7 @@ use bevy::prelude::*;
 #[cfg(feature = "api")]
 use lunco_api::executor::{finish_command_result, PendingApiRequest};
 #[cfg(feature = "api")]
-use lunco_api::schema::ApiErrorCode;
+use lunco_api_core::ApiErrorCode;
 use lunco_command_contracts::{Ack, OpId};
 #[cfg(not(feature = "api"))]
 use lunco_core::CommandResults;
@@ -160,11 +160,14 @@ fn set_model_input_result(
         .map(|applied_doc| {
             Ack::with_data(
                 OpId::new(),
-                serde_json::json!({
-                    "doc_id": applied_doc.raw(),
-                    "name": name,
-                    "value": value,
-                }),
+                lunco_hooks::HookValue::map([
+                    (
+                        "doc_id",
+                        lunco_hooks::HookValue::Int(applied_doc.raw() as i64),
+                    ),
+                    ("name", lunco_hooks::HookValue::str(name)),
+                    ("value", lunco_hooks::HookValue::Float(value)),
+                ]),
             )
         })
         .map_err(|error| error.message())

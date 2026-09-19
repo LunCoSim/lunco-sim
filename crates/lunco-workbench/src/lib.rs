@@ -95,7 +95,6 @@ use render::{
 };
 
 pub mod control_status;
-pub mod perf_hud;
 pub mod perspective_command;
 pub mod theme_command;
 
@@ -678,8 +677,8 @@ impl Plugin for WorkbenchPlugin {
         }
         // Guided presentation is an optional host-level plugin. The workbench
         // only publishes the generic render-set and anchor contracts it uses.
-        if !app.is_plugin_added::<perf_hud::PerfHudPlugin>() {
-            app.add_plugins(perf_hud::PerfHudPlugin);
+        if !app.is_plugin_added::<lunco_workbench_perf_ui::PerfHudPlugin>() {
+            app.add_plugins(lunco_workbench_perf_ui::PerfHudPlugin);
         }
         // Input overlay visualizer for video recording & AI observation.
         if !app

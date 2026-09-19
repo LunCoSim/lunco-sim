@@ -1,0 +1,46 @@
+#usda 1.0
+(
+    defaultPrim = "UsdMaterialEditProjection"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "UsdMaterialEditProjection"
+{
+    def Xform "World"
+    {
+        def DistantLight "TestLight" { float intensity = 1.0 }
+
+        def Material "MyMaterial"
+        {
+            token outputs:surface.connect = </UsdMaterialEditProjection/World/MyMaterial/PbrShader.outputs:surface>
+
+            def Shader "PbrShader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (1.0, 0.5, 0.25)
+                float inputs:roughness = 0.75
+                float inputs:metallic = 0.25
+                token outputs:surface
+            }
+        }
+
+        def Cube "MeshWithMaterial" (
+            apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding = </UsdMaterialEditProjection/World/MyMaterial>
+            double size = 2.0
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "usd-material-edit-projection"
+        def Scope "Test" (prepend apiSchemas = ["LunCoProgramAPI"])
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/usd_material_edit_projection.rhai@
+        }
+    }
+}

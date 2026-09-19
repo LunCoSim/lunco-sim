@@ -18,19 +18,19 @@ impl lunco_api::queries::ApiQueryProvider for InspectSelectionProvider {
     fn execute(
         &self,
         world: &World,
-        _params: &serde_json::Value,
-    ) -> lunco_api::schema::ApiResponse {
+        _params: &lunco_api_core::ApiValue,
+    ) -> lunco_api::ApiQueryResult {
         let Some(selected) = world.get_resource::<SelectedEntities>() else {
-            return lunco_api::schema::ApiResponse::error(
-                lunco_api::schema::ApiErrorCode::InternalError,
+            return Err(lunco_api::ApiQueryError::new(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "InspectSelection: SelectedEntities resource is not present",
-            );
+            ));
         };
         let Some(registry) = world.get_resource::<lunco_api::registry::ApiEntityRegistry>() else {
-            return lunco_api::schema::ApiResponse::error(
-                lunco_api::schema::ApiErrorCode::InternalError,
+            return Err(lunco_api::ApiQueryError::new(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "InspectSelection: ApiEntityRegistry resource is not present",
-            );
+            ));
         };
 
         let selected_ids: Vec<u64> = selected
@@ -38,12 +38,14 @@ impl lunco_api::queries::ApiQueryProvider for InspectSelectionProvider {
             .iter()
             .filter_map(|entity| registry.api_id_for(*entity).map(|id| id.get()))
             .collect();
-        lunco_api::schema::ApiResponse::ok(serde_json::json!({
+        let primary = selected_ids.last().copied();
+        let stale_count = selected.entities.len() - selected_ids.len();
+        Ok(Some(lunco_api_core::api_value!({
             "selected": selected_ids,
-            "primary": selected_ids.last().copied(),
-            "paths": selected.stable_paths,
-            "stale_count": selected.entities.len() - selected_ids.len(),
-        }))
+            "primary": primary,
+            "paths": selected.stable_paths.clone(),
+            "stale_count": stale_count,
+        })))
     }
 }
 

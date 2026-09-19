@@ -6,7 +6,10 @@
 //! their typed intent into the generic document registry.
 
 use bevy::prelude::*;
-use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
+use lunco_api::{
+    api_param_u64_or_string, ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult,
+};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_command_contracts::Ack;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId, FileBacked, OpenOutcome};
@@ -230,7 +233,7 @@ fn on_apply_sysml_ops(
     let mut ack = registry
         .apply_group_against(doc_id, parent_generation, ops)
         .map_err(|reject| format!("ApplySysmlOps: {reject}"))?;
-    ack.data = Some(serde_json::json!({
+    ack.data = Some(lunco_api_core::api_value!({
         "operations": count,
         "doc_id": doc_id.raw(),
     }));
@@ -282,9 +285,9 @@ fn on_save_sysml_document_explicit(
     registry.note_saved(doc_id);
     commands.trigger(DocumentSaved::local(doc_id));
     Ok(Ack {
-        data: Some(serde_json::json!({
+        data: Some(lunco_api_core::api_value!({
             "doc_id": doc_id.raw(),
-            "path": path,
+            "path": path.display().to_string(),
             "generation": generation,
             "action": "saved",
         })),
@@ -416,28 +419,24 @@ impl ApiQueryProvider for InspectSysmlDocumentProvider {
         "InspectSysmlDocument"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(doc_id) = params
-            .get("doc_id")
-            .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
-            .map(DocumentId::new)
-        else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(doc_id) = api_param_u64_or_string(params, "doc_id").map(DocumentId::new) else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "InspectSysmlDocument requires an explicit numeric `doc_id`".to_owned(),
-            );
+                "InspectSysmlDocument requires an explicit numeric `doc_id`",
+            ));
         };
         let Some(registry) = world.get_resource::<DocumentRegistry<SysmlDocument>>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "InspectSysmlDocument requires the SysML document registry".to_owned(),
-            );
+                "InspectSysmlDocument requires the SysML document registry",
+            ));
         };
         let Some(host) = registry.host(doc_id) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("SysML document {} is not open", doc_id.raw()),
-            );
+            ));
         };
         let document = host.document();
         let origin = document.origin();
@@ -446,16 +445,16 @@ impl ApiQueryProvider for InspectSysmlDocumentProvider {
             .diagnostics()
             .iter()
             .map(|diagnostic| {
-                serde_json::json!({
+                api_value!({
                     "kind": format!("{:?}", diagnostic.kind),
-                    "message": diagnostic.message,
-                    "file": diagnostic.file,
+                    "message": diagnostic.message.clone(),
+                    "file": diagnostic.file.clone(),
                     "start": diagnostic.start,
                     "end": diagnostic.end,
                 })
             })
             .collect::<Vec<_>>();
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "doc_id": doc_id.raw(),
             "kind": "sysml",
             "source": document.source(),
@@ -469,6 +468,6 @@ impl ApiQueryProvider for InspectSysmlDocumentProvider {
             },
             "diagnostics": diagnostics,
             "semantic_errors": document.has_diagnostics(),
-        }))
+        })))
     }
 }

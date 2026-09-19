@@ -11,6 +11,7 @@ lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-storage = { path = "../lunco-storage" }

@@ -9,6 +9,7 @@ description = "UI-free public query providers for USD documents and edit session
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-doc = { path = "../lunco-doc" }
 # Query providers are shared by headless/API hosts. The optional egui bridge is
 # a UI composition concern and must not enter this crate's dependency closure.
@@ -20,7 +21,6 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 openusd = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

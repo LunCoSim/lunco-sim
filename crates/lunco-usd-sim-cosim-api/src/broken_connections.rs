@@ -6,8 +6,8 @@
 //! surface.
 
 use bevy::prelude::*;
-use lunco_api::queries::ApiQueryProvider;
-use lunco_api::schema::ApiResponse;
+use lunco_api::queries::{ApiQueryProvider, ApiQueryResult};
+use lunco_api_core::{api_value, ApiValue};
 use lunco_cosim_core::CosimDiagnostics;
 
 /// `GetBrokenConnections` — backs `GET /api/diagnostics`. Reports the co-sim
@@ -32,25 +32,25 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
         "GetBrokenConnections"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let diag = world.get_resource::<CosimDiagnostics>();
         let runtime_fault = world
             .get_resource::<lunco_core::RuntimeFaults>()
             .and_then(|faults| faults.first.as_ref())
             .map(|fault| {
-                serde_json::json!({
+                api_value!({
                     "kind": fault.kind,
                     "entity_bits": fault.entity.map(|entity| entity.to_bits()),
-                    "subject": fault.subject,
-                    "detail": fault.detail,
+                    "subject": fault.subject.clone(),
+                    "detail": fault.detail.clone(),
                 })
             });
         let encode = |items: &[lunco_cosim_core::BrokenConnection]| {
             items
                 .iter()
                 .map(|b| {
-                    serde_json::json!({
-                        "port": b.port,
+                    api_value!({
+                        "port": b.port.clone(),
                         "entity_bits": b.entity.to_bits(),
                         "global_id": b.global_id.map(|g| g.get()),
                         "has_port_surface": b.has_port_surface,
@@ -66,10 +66,10 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
                 d.algebraic_loops
                     .iter()
                     .map(|loop_diag| {
-                        serde_json::json!({
+                        api_value!({
                             "entity_bits": loop_diag.entity.to_bits(),
                             "global_id": loop_diag.global_id.map(|g| g.get()),
-                            "detail": loop_diag.detail,
+                            "detail": loop_diag.detail.clone(),
                             "force_producing": loop_diag.force_producing,
                             "rejected": loop_diag.rejected,
                         })
@@ -77,7 +77,7 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "cosim_tracked": diag.is_some(),
             "broken_count": broken.len(),
             "pending_count": pending.len(),
@@ -91,6 +91,6 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
             "pending": pending,
             "algebraic_loops": algebraic_loops,
             "runtime_fault": runtime_fault,
-        }))
+        })))
     }
 }

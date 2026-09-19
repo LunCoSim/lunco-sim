@@ -12,7 +12,7 @@ description = "Headless Modelica document and runtime integration for LunCoSim"
 default = []
 # Compile the transport-free API contracts. Application roots add
 # `lunco-api-transport` when they expose native HTTP or the browser bridge.
-api = ["dep:lunco-api"]
+api = ["dep:lunco-api", "dep:lunco-api-core"]
 # Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
 # bin with `--no-default-features --features server`. No rendered capture capability
 # (`lunco-capture/api`; the server captures no screenshots) and no winit/egui.
@@ -27,6 +27,7 @@ tracy = ["bevy/trace_tracy"]
 [dependencies]
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
+lunco-hooks = { path = "../lunco-hooks" }
 bevy.workspace = true
 # The solver worker and Fast Run stack live in `lunco-modelica-execution`.
 # Source-library artifacts and the optional worker callback seam live in
@@ -63,6 +64,7 @@ rumoca-compile = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api", optional = true }
+lunco-api-core = { path = "../lunco-api-core", optional = true }
 # PERF-CRITICAL: compile-time static max level for the `log` facade.
 #
 # Why: parol_runtime (rumoca's parser engine) calls `log::trace!` in its

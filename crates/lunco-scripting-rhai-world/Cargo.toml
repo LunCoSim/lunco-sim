@@ -16,8 +16,8 @@ anyhow = { workspace = true }
 bevy = { workspace = true }
 rhai = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-doc = { path = "../lunco-doc" }
@@ -35,7 +35,7 @@ lunco-scripting-bridge-usd = { path = "../lunco-scripting-bridge-usd" }
 lunco-scripting-rhai-core = { path = "../lunco-scripting-rhai-core" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-tools-rhai = { path = "../lunco-tools-rhai" }
-lunco-twin-journal = { path = "../lunco-twin-journal" }
+lunco-twin-journal = { path = "../lunco-twin-journal", features = ["hooks"] }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-hooks-native = { path = "../lunco-hooks-native", optional = true }
 lunco-storage = { path = "../lunco-storage" }
@@ -47,6 +47,9 @@ default = ["rhai"]
 rhai = []
 native-plugins = ["dep:lunco-hooks-native"]
 sysml = ["dep:lunco-sysml-rhai"]
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

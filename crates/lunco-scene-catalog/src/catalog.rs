@@ -32,7 +32,9 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{ApiQueryError, ApiQueryResult};
+use lunco_api_core::ApiErrorCode;
+use lunco_api_core::{api_value, ApiValue};
 use lunco_core::{on_command, Command};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::UsdInstanceRoot;
@@ -55,63 +57,62 @@ impl ApiQueryProvider for SpawnCatalogProvider {
         "ListSpawnCatalog"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let Some(catalog) = world.get_resource::<SpawnCatalog>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "ListSpawnCatalog: SpawnCatalog resource is not present",
-            );
+            ));
         };
         let metadata = world.get_resource::<AssetMetaStore>();
-        let mut entries: Vec<_> = catalog
-            .entries
-            .iter()
+        let mut entries: Vec<_> = catalog.entries.iter().collect();
+        entries.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+        let entries: Vec<_> = entries
+            .into_iter()
             .map(|entry| {
                 let source = match &entry.source {
-                    SpawnSource::UsdFile(path) => serde_json::json!({
+                    SpawnSource::UsdFile(path) => api_value!({
                         "kind": "usd_file",
-                        "path": path,
+                        "path": path.clone(),
                     }),
                 };
-                serde_json::json!({
-                    "entry_id": entry.id,
-                    "name": entry.display_name,
-                    "category": entry.category,
+                api_value!({
+                    "entry_id": entry.id.clone(),
+                    "name": entry.display_name.clone(),
+                    "category": entry.category.clone(),
                     "origin": entry.origin.as_api_value(),
                     "description": match &entry.source {
                         SpawnSource::UsdFile(path) => metadata
                             .and_then(|store| store.description(path))
-                            .map(serde_json::Value::from)
-                            .unwrap_or(serde_json::Value::Null),
+                            .map(str::to_string),
                     },
                     "default_transform": {
-                        "position": [
+                        "position": api_value!([
                             entry.default_transform.translation.x,
                             entry.default_transform.translation.y,
                             entry.default_transform.translation.z,
-                        ],
-                        "rotation": [
+                        ]),
+                        "rotation": api_value!([
                             entry.default_transform.rotation.x,
                             entry.default_transform.rotation.y,
                             entry.default_transform.rotation.z,
                             entry.default_transform.rotation.w,
-                        ],
-                        "scale": [
+                        ]),
+                        "scale": api_value!([
                             entry.default_transform.scale.x,
                             entry.default_transform.scale.y,
                             entry.default_transform.scale.z,
-                        ],
+                        ]),
                     },
                     "source": source,
                 })
             })
             .collect();
-        entries.sort_unstable_by(|a, b| a["entry_id"].as_str().cmp(&b["entry_id"].as_str()));
         let count = entries.len();
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "entries": entries,
             "count": count,
-        }))
+        })))
     }
 }
 
@@ -127,19 +128,19 @@ impl ApiQueryProvider for UsdAssetMetadataProvider {
         "ListUsdAssetMetadata"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let Some(manifest) = world.get_resource::<lunco_assets_runtime::discovery::AssetManifest>()
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "ListUsdAssetMetadata: AssetManifest resource is not present",
-            );
+            ));
         };
         let Some(store) = world.get_resource::<AssetMetaStore>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "ListUsdAssetMetadata: AssetMetaStore resource is not present",
-            );
+            ));
         };
 
         let mut entries = Vec::new();
@@ -151,41 +152,29 @@ impl ApiQueryProvider for UsdAssetMetadataProvider {
         {
             let Some(meta) = store.get(path) else {
                 pending += 1;
-                entries.push(serde_json::json!({
-                    "path": path,
-                    "read_ok": serde_json::Value::Null,
-                    "read_error": serde_json::Value::Null,
-                    "parse_ok": serde_json::Value::Null,
-                    "parse_error": serde_json::Value::Null,
+                entries.push(api_value!({
+                    "path": path.clone(),
+                    "read_ok": null,
+                    "read_error": null,
+                    "parse_ok": null,
+                    "parse_error": null,
                     "spawnable": false,
-                    "description": serde_json::Value::Null,
+                    "description": null,
                 }));
                 continue;
             };
-            entries.push(serde_json::json!({
-                "path": path,
+            entries.push(api_value!({
+                "path": path.clone(),
                 "read_ok": meta.read_error.is_none(),
-                "read_error": meta
-                    .read_error
-                    .as_deref()
-                    .map(serde_json::Value::from)
-                    .unwrap_or(serde_json::Value::Null),
+                "read_error": meta.read_error.clone(),
                 "parse_ok": meta
                     .read_error
                     .is_none()
                     .then(|| meta.parse_error.is_none())
                     .unwrap_or_default(),
-                "parse_error": meta
-                    .parse_error
-                    .as_deref()
-                    .map(serde_json::Value::from)
-                    .unwrap_or(serde_json::Value::Null),
+                "parse_error": meta.parse_error.clone(),
                 "spawnable": meta.spawnable,
-                "description": meta
-                    .description
-                    .as_deref()
-                    .map(serde_json::Value::from)
-                    .unwrap_or(serde_json::Value::Null),
+                "description": meta.description.clone(),
             }));
         }
 
@@ -196,39 +185,32 @@ impl ApiQueryProvider for UsdAssetMetadataProvider {
             if manifest.rels().iter().any(|known| known == path) {
                 continue;
             }
-            entries.push(serde_json::json!({
-                "path": path,
+            entries.push(api_value!({
+                "path": path.clone(),
                 "read_ok": meta.read_error.is_none(),
-                "read_error": meta
-                    .read_error
-                    .as_deref()
-                    .map(serde_json::Value::from)
-                    .unwrap_or(serde_json::Value::Null),
+                "read_error": meta.read_error.clone(),
                 "parse_ok": meta
                     .read_error
                     .is_none()
                     .then(|| meta.parse_error.is_none())
                     .unwrap_or_default(),
-                "parse_error": meta
-                    .parse_error
-                    .as_deref()
-                    .map(serde_json::Value::from)
-                    .unwrap_or(serde_json::Value::Null),
+                "parse_error": meta.parse_error.clone(),
                 "spawnable": meta.spawnable,
-                "description": meta
-                    .description
-                    .as_deref()
-                    .map(serde_json::Value::from)
-                    .unwrap_or(serde_json::Value::Null),
+                "description": meta.description.clone(),
             }));
         }
-        entries.sort_unstable_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+        entries.sort_unstable_by(|a, b| {
+            a.get("path")
+                .and_then(ApiValue::as_str)
+                .cmp(&b.get("path").and_then(ApiValue::as_str))
+        });
 
-        ApiResponse::ok(serde_json::json!({
+        let count = entries.len();
+        Ok(Some(api_value!({
             "ready": manifest.ready() && pending == 0,
             "entries": entries,
-            "count": entries.len(),
-        }))
+            "count": count,
+        })))
     }
 }
 
@@ -366,13 +348,13 @@ impl SpawnOrigin {
     }
 
     /// Stable machine-readable provenance for API consumers.
-    pub fn as_api_value(&self) -> serde_json::Value {
+    pub fn as_api_value(&self) -> ApiValue {
         match self {
-            Self::BuiltIn => serde_json::json!({
+            Self::BuiltIn => api_value!({
                 "kind": "builtin",
                 "label": "Built-in LunCo",
             }),
-            Self::Twin(name) => serde_json::json!({
+            Self::Twin(name) => api_value!({
                 "kind": "twin",
                 "name": name,
                 "label": format!("Active Twin: {name}"),
@@ -1343,21 +1325,61 @@ mod tests {
             .collect(),
         });
 
-        let response = SpawnCatalogProvider.execute(&world, &serde_json::Value::Null);
-        let data = match response {
-            ApiResponse::Ok { data: Some(data) } => data,
-            other => panic!("expected catalog response, got {other:?}"),
+        let Ok(Some(data)) = SpawnCatalogProvider.execute(&world, &ApiValue::Unit) else {
+            panic!("expected catalog response");
         };
-        assert_eq!(data["count"], 2);
-        assert_eq!(data["entries"][0]["entry_id"], "a-first");
-        assert_eq!(data["entries"][1]["entry_id"], "z-last");
-        assert_eq!(data["entries"][0]["source"]["kind"], "usd_file");
-        assert_eq!(data["entries"][0]["origin"]["kind"], "builtin");
-        assert_eq!(data["entries"][0]["origin"]["label"], "Built-in LunCo");
-        assert_eq!(data["entries"][1]["origin"]["kind"], "twin");
-        assert_eq!(data["entries"][1]["origin"]["name"], "summer-space-school");
-        assert_eq!(data["entries"][0]["description"], "First authored asset");
-        assert_eq!(data["entries"][1]["description"], serde_json::Value::Null);
+        assert_eq!(data.get("count").and_then(ApiValue::as_i64), Some(2));
+        let Some(ApiValue::Array(entries)) = data.get("entries") else {
+            panic!("catalog entries must be an array");
+        };
+        assert_eq!(
+            entries[0].get("entry_id").and_then(ApiValue::as_str),
+            Some("a-first")
+        );
+        assert_eq!(
+            entries[1].get("entry_id").and_then(ApiValue::as_str),
+            Some("z-last")
+        );
+        assert_eq!(
+            entries[0]
+                .get("source")
+                .and_then(|value| value.get("kind"))
+                .and_then(ApiValue::as_str),
+            Some("usd_file")
+        );
+        assert_eq!(
+            entries[0]
+                .get("origin")
+                .and_then(|value| value.get("kind"))
+                .and_then(ApiValue::as_str),
+            Some("builtin")
+        );
+        assert_eq!(
+            entries[0]
+                .get("origin")
+                .and_then(|value| value.get("label"))
+                .and_then(ApiValue::as_str),
+            Some("Built-in LunCo")
+        );
+        assert_eq!(
+            entries[1]
+                .get("origin")
+                .and_then(|value| value.get("kind"))
+                .and_then(ApiValue::as_str),
+            Some("twin")
+        );
+        assert_eq!(
+            entries[1]
+                .get("origin")
+                .and_then(|value| value.get("name"))
+                .and_then(ApiValue::as_str),
+            Some("summer-space-school")
+        );
+        assert_eq!(
+            entries[0].get("description").and_then(ApiValue::as_str),
+            Some("First authored asset")
+        );
+        assert_eq!(entries[1].get("description"), Some(&ApiValue::Unit));
     }
 
     #[test]
@@ -1383,14 +1405,19 @@ mod tests {
             .collect(),
         });
 
-        let response = UsdAssetMetadataProvider.execute(&world, &serde_json::Value::Null);
-        let ApiResponse::Ok { data: Some(data) } = response else {
+        let Ok(Some(data)) = UsdAssetMetadataProvider.execute(&world, &ApiValue::Unit) else {
             panic!("expected metadata response");
         };
-        assert_eq!(data["ready"], false);
-        assert_eq!(data["count"], 2);
-        assert_eq!(data["entries"][0]["description"], "Arena");
-        assert_eq!(data["entries"][1]["description"], serde_json::Value::Null);
+        assert_eq!(data.get("ready"), Some(&ApiValue::Bool(false)));
+        assert_eq!(data.get("count").and_then(ApiValue::as_i64), Some(2));
+        let Some(ApiValue::Array(entries)) = data.get("entries") else {
+            panic!("metadata entries must be an array");
+        };
+        assert_eq!(
+            entries[0].get("description").and_then(ApiValue::as_str),
+            Some("Arena")
+        );
+        assert_eq!(entries[1].get("description"), Some(&ApiValue::Unit));
     }
 
     #[test]

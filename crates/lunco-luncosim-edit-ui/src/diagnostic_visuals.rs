@@ -15,7 +15,6 @@ use lunco_core::{on_command, register_commands, Command, GlobalEntityId};
 use lunco_render::SceneCamera;
 use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_viewport_core::SceneViewport;
-use serde_json::json;
 use std::collections::HashMap;
 
 const MAX_HIERARCHY_WALK: usize = 1024;
@@ -255,28 +254,28 @@ impl DiagnosticVisualStore {
         self.last_error = None;
     }
 
-    fn json(&self, entities: &ApiEntityRegistry) -> serde_json::Value {
-        let mut leases: Vec<_> = self
-            .leases
-            .values()
+    fn api_value(&self, entities: &ApiEntityRegistry) -> lunco_api_core::ApiValue {
+        let mut source_leases: Vec<_> = self.leases.values().collect();
+        source_leases.sort_by_key(|lease| lease.id);
+        let leases: Vec<_> = source_leases
+            .into_iter()
             .map(|lease| {
-                json!({
+                lunco_api_core::api_value!({
                     "lease_id": lease.id,
                     "target": lease.target.and_then(|entity| entities.api_id_for(entity).map(|id| id.get())),
                     "kind": lease.kind.as_str(),
-                    "policy": lease.policy,
+                    "policy": lease.policy.clone(),
                     "generation": lease.generation,
                     "root": lease.root.and_then(|entity| entities.api_id_for(entity).map(|id| id.get())),
                     "revision": lease.revision,
                 })
             })
             .collect();
-        leases.sort_by_key(|lease| lease["lease_id"].as_u64().unwrap_or_default());
-        json!({
+        lunco_api_core::api_value!({
             "generation": self.generation,
             "count": leases.len(),
             "leases": leases,
-            "last_error": self.last_error,
+            "last_error": self.last_error.clone(),
         })
     }
 }
@@ -332,7 +331,7 @@ pub struct SetDiagnosticLayers {
 fn ack(id: u64, changed: bool, kind: DiagnosticVisualKind, target: u64) -> Ack {
     Ack::with_data(
         OpId::new(),
-        json!({
+        lunco_api_core::api_value!({
             "lease_id": id,
             "changed": changed,
             "kind": kind.as_str(),
@@ -533,9 +532,9 @@ fn on_set_diagnostic_layers(
     }
     Ok(Ack::with_data(
         OpId::new(),
-        json!({
+        lunco_api_core::api_value!({
             "enabled": command.enabled,
-            "layers": command.layers,
+            "layers": command.layers.clone(),
             "generation": store.generation(),
         }),
     ))
@@ -594,20 +593,24 @@ impl lunco_api::ApiQueryProvider for DiagnosticVisualsQueryProvider {
         "DiagnosticVisuals"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
+    fn execute(
+        &self,
+        world: &World,
+        _params: &lunco_api_core::ApiValue,
+    ) -> lunco_api::ApiQueryResult {
         let Some(store) = world.get_resource::<DiagnosticVisualStore>() else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return Err(lunco_api::ApiQueryError::new(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "DiagnosticVisuals: store is unavailable",
-            );
+            ));
         };
         let Some(entities) = world.get_resource::<ApiEntityRegistry>() else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
+            return Err(lunco_api::ApiQueryError::new(
+                lunco_api_core::ApiErrorCode::InternalError,
                 "DiagnosticVisuals: entity registry is unavailable",
-            );
+            ));
         };
-        lunco_api::ApiResponse::ok(store.json(entities))
+        Ok(Some(store.api_value(entities)))
     }
 }
 

@@ -68,7 +68,10 @@
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{
+    api_param_array, api_param_bool, api_param_str, api_param_u64, ApiQueryError, ApiQueryResult,
+};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_authoring::author::open_doc_stage;
@@ -86,7 +89,7 @@ use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
 
-/// One attribute, converted to JSON by probing the typed readers in turn.
+/// One attribute, converted to a typed API value by probing the USD readers.
 ///
 /// USD's value types are distinct `sdf::Value` variants, so there is no single
 /// "get me whatever this is" call — `scalar::<f64>` misses a `float` opinion,
@@ -98,42 +101,44 @@ use std::collections::{HashMap, HashSet};
 /// Emptiness is why the array probes are guarded with `is_empty()`: an
 /// unguarded `reals()` would answer `[]` for a `token` attribute and shadow the
 /// text reader below it.
-fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Value {
-    use serde_json::json;
-
+fn attr_api_value(view: &StageView<'_>, prim: &SdfPath, name: &str) -> ApiValue {
     // Scalars first — an array reader would answer `[]` for these, not `None`.
     if let Some(v) = view.real(prim, name) {
-        return json!(v);
+        return api_value!(v);
     }
     if let Some(v) = view.boolean(prim, name) {
-        return json!(v);
+        return api_value!(v);
     }
     if let Some(v) = view.scalar::<i32>(prim, name) {
-        return json!(v);
+        return api_value!(v);
     }
     if let Some(v) = view.text(prim, name) {
-        return json!(v);
+        return api_value!(v);
     }
     if let Some(v) = view.asset(prim, name) {
-        return json!(v);
+        return api_value!(v);
     }
     if let Some(q) = view.quat_d(prim, name) {
-        return json!([q.w, q.x, q.y, q.z]);
+        return api_value!([q.w, q.x, q.y, q.z]);
     }
 
     // Arrays. `points3` before `reals` because a `point3f[]` also satisfies no
     // scalar reader and we want it shaped [[x,y,z], …], not flattened.
     let pts = view.points3(prim, name);
     if !pts.is_empty() {
-        return json!(pts);
+        return ApiValue::Array(
+            pts.into_iter()
+                .map(|point| api_value!([point[0], point[1], point[2]]))
+                .collect(),
+        );
     }
     let reals = view.reals(prim, name);
     if !reals.is_empty() {
-        return json!(reals);
+        return api_value!(reals);
     }
     let texts = view.texts(prim, name);
     if !texts.is_empty() {
-        return json!(texts);
+        return api_value!(texts);
     }
     // Scalar vectors and integer arrays require the raw Value variants;
     // the typed readers above do not cover their shapes.
@@ -141,21 +146,21 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
         // Scalar 2/3/4-vectors as flat JSON arrays — the same shape `points3`
         // gives each element of a `point3f[]`, so `v[1]` means "y" whether the
         // caller is reading one translate or one control point.
-        Some(Value::Vec2f(v)) => json!([v.x, v.y]),
-        Some(Value::Vec2d(v)) => json!([v.x, v.y]),
-        Some(Value::Vec2i(v)) => json!([v.x, v.y]),
-        Some(Value::Vec3f(v)) => json!([v.x, v.y, v.z]),
-        Some(Value::Vec3d(v)) => json!([v.x, v.y, v.z]),
-        Some(Value::Vec3i(v)) => json!([v.x, v.y, v.z]),
-        Some(Value::Vec4f(v)) => json!([v.x, v.y, v.z, v.w]),
-        Some(Value::Vec4d(v)) => json!([v.x, v.y, v.z, v.w]),
-        Some(Value::Vec4i(v)) => json!([v.x, v.y, v.z, v.w]),
+        Some(Value::Vec2f(v)) => api_value!([v.x, v.y]),
+        Some(Value::Vec2d(v)) => api_value!([v.x, v.y]),
+        Some(Value::Vec2i(v)) => api_value!([v.x, v.y]),
+        Some(Value::Vec3f(v)) => api_value!([v.x, v.y, v.z]),
+        Some(Value::Vec3d(v)) => api_value!([v.x, v.y, v.z]),
+        Some(Value::Vec3i(v)) => api_value!([v.x, v.y, v.z]),
+        Some(Value::Vec4f(v)) => api_value!([v.x, v.y, v.z, v.w]),
+        Some(Value::Vec4d(v)) => api_value!([v.x, v.y, v.z, v.w]),
+        Some(Value::Vec4i(v)) => api_value!([v.x, v.y, v.z, v.w]),
 
-        Some(Value::IntVec(v)) if !v.is_empty() => json!(v),
+        Some(Value::IntVec(v)) if !v.is_empty() => api_value!(v.clone()),
         Some(Value::Int64Vec(v)) if !v.is_empty() => {
-            json!(v.to_vec())
+            api_value!(v.to_vec())
         }
-        _ => serde_json::Value::Null,
+        _ => ApiValue::Unit,
     }
 }
 
@@ -198,58 +203,58 @@ fn nearest_rigid_body(view: &StageView<'_>, path: &SdfPath) -> Option<SdfPath> {
     None
 }
 
-fn aabb_json(aabb: ObjectAabb) -> serde_json::Value {
-    serde_json::json!({
-        "min": [aabb.min.x, aabb.min.y, aabb.min.z],
-        "max": [aabb.max.x, aabb.max.y, aabb.max.z],
-        "center": [
+fn aabb_api_value(aabb: ObjectAabb) -> ApiValue {
+    api_value!({
+        "min": api_value!([aabb.min.x, aabb.min.y, aabb.min.z]),
+        "max": api_value!([aabb.max.x, aabb.max.y, aabb.max.z]),
+        "center": api_value!([
             (aabb.min.x + aabb.max.x) * 0.5,
             (aabb.min.y + aabb.max.y) * 0.5,
             (aabb.min.z + aabb.max.z) * 0.5,
-        ],
-        "half_extents": [
+        ]),
+        "half_extents": api_value!([
             (aabb.max.x - aabb.min.x) * 0.5,
             (aabb.max.y - aabb.min.y) * 0.5,
             (aabb.max.z - aabb.min.z) * 0.5,
-        ],
+        ]),
         "frame": "canonical_stage",
     })
 }
 
-fn transform_json(transform: Option<Transform>) -> serde_json::Value {
-    transform.map_or(serde_json::Value::Null, |transform| {
-        serde_json::json!({
-            "translation": [
+fn transform_api_value(transform: Option<Transform>) -> ApiValue {
+    transform.map_or(ApiValue::Unit, |transform| {
+        api_value!({
+            "translation": api_value!([
                 transform.translation.x,
                 transform.translation.y,
                 transform.translation.z,
-            ],
-            "rotation": [
+            ]),
+            "rotation": api_value!([
                 transform.rotation.w,
                 transform.rotation.x,
                 transform.rotation.y,
                 transform.rotation.z,
-            ],
-            "scale": [transform.scale.x, transform.scale.y, transform.scale.z],
+            ]),
+            "scale": api_value!([transform.scale.x, transform.scale.y, transform.scale.z]),
         })
     })
 }
 
-fn source_layer_json(view: &StageView<'_>, path: &SdfPath) -> serde_json::Value {
+fn source_layer_api_value(view: &StageView<'_>, path: &SdfPath) -> ApiValue {
     let Ok(stack) = view.stage().prim(path.clone()).prim_stack() else {
-        return serde_json::Value::Null;
+        return ApiValue::Unit;
     };
     let Some((layer, authored_path)) = stack.first() else {
-        return serde_json::Value::Null;
+        return ApiValue::Unit;
     };
-    serde_json::json!({
+    api_value!({
         "layer": layer.to_string(),
         "path": authored_path.to_string(),
         "stack_depth": stack.len(),
     })
 }
 
-fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::Value {
+fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> ApiValue {
     let mut diagnostics = Vec::new();
     let body_owner = nearest_rigid_body(view, selected);
     let root = body_owner.clone().unwrap_or_else(|| selected.clone());
@@ -282,35 +287,35 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
             None => None,
         };
         let bounds = match prim_geometry_aabb(view, candidate.as_str()) {
-            Ok(Some(aabb)) => aabb_json(aabb),
+            Ok(Some(aabb)) => aabb_api_value(aabb),
             Ok(None) => {
                 diagnostics.push(format!(
                     "{candidate}: geometry bounds are unavailable for {type_name}"
                 ));
-                serde_json::Value::Null
+                ApiValue::Unit
             }
             Err(error) => {
                 diagnostics.push(format!("{candidate}: geometry bounds failed: {error}"));
-                serde_json::Value::Null
+                ApiValue::Unit
             }
         };
 
         let local = match view.local_transform_at(candidate, 0.0) {
-            Ok(value) => transform_json(value),
+            Ok(value) => transform_api_value(value),
             Err(error) => {
                 diagnostics.push(format!("{candidate}: local transform failed: {error}"));
-                serde_json::Value::Null
+                ApiValue::Unit
             }
         };
         let world = match lunco_usd_bevy_stage::world_transform(view, candidate) {
-            Ok(value) => transform_json(Some(value)),
+            Ok(value) => transform_api_value(Some(value)),
             Err(error) => {
                 diagnostics.push(format!("{candidate}: world transform failed: {error}"));
-                serde_json::Value::Null
+                ApiValue::Unit
             }
         };
 
-        frames.push(serde_json::json!({
+        frames.push(api_value!({
             "path": candidate.as_str(),
             "local_frame": "canonical_stage_parent",
             "local": local.clone(),
@@ -321,7 +326,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
         let physics_material = view.bound_material(candidate, MaterialPurpose::Physics);
         let shader = resolve_bound_shader(view, candidate).map(|path| path.as_str().to_string());
 
-        parts.push(serde_json::json!({
+        parts.push(api_value!({
             "path": candidate.as_str(),
             "type_name": type_name,
             "purpose": purpose_name(effective_purpose(view, candidate)),
@@ -342,7 +347,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
                 "physics": physics_material,
                 "shader": shader,
             },
-            "source": source_layer_json(view, candidate),
+            "source": source_layer_api_value(view, candidate),
         }));
     }
 
@@ -373,16 +378,16 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
                 "{candidate}: joint is missing physics:body0 or physics:body1"
             ));
         }
-        joints.push(serde_json::json!({
+        joints.push(api_value!({
             "path": candidate.as_str(),
             "type_name": type_name,
             "body0": body0,
             "body1": body1,
-            "source": source_layer_json(view, candidate),
+            "source": source_layer_api_value(view, candidate),
         }));
     }
 
-    serde_json::json!({
+    api_value!({
         "selection": {
             "path": selected.as_str(),
             "scope": root.as_str(),
@@ -395,9 +400,9 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
     })
 }
 
-fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Value {
+fn runtime_binding_api_value(world: &World, entity: Option<Entity>) -> ApiValue {
     let Some(entity) = entity else {
-        return serde_json::json!({ "state": "not_projected" });
+        return api_value!({ "state": "not_projected" });
     };
     let visual_synced = world
         .get::<lunco_usd_bevy_scene::UsdSceneProjected>(entity)
@@ -418,12 +423,12 @@ fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Va
     let joint_link = world
         .get::<lunco_physics::PhysicsJointLink>(entity)
         .map(|link| {
-            serde_json::json!({
+            api_value!({
                 "body0": link.body0.to_bits(),
                 "body1": link.body1.to_bits(),
             })
         });
-    serde_json::json!({
+    api_value!({
         "state": state,
         "entity": entity.to_bits(),
         "visual_synced": visual_synced,
@@ -447,15 +452,15 @@ fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Va
 type PrimRead = (
     Option<Vec3>,
     String,
-    serde_json::Map<String, serde_json::Value>,
-    serde_json::Map<String, serde_json::Value>,
-    serde_json::Map<String, serde_json::Value>,
+    Vec<(String, ApiValue)>,
+    Vec<(String, ApiValue)>,
+    Vec<(String, ApiValue)>,
     Vec<String>,
     Vec<String>,
     bool,
-    Option<serde_json::Value>,
-    Option<serde_json::Value>,
-    Option<serde_json::Value>,
+    Option<ApiValue>,
+    Option<ApiValue>,
+    Option<ApiValue>,
 );
 
 /// The read switches shared by the single- and multi-prim query surfaces.
@@ -475,68 +480,67 @@ struct UsdPrimQueryOptions {
     include_topology: bool,
 }
 
-fn query_options(params: &serde_json::Value) -> UsdPrimQueryOptions {
-    let requested = params
-        .get("attrs")
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect()
-        });
-    let requested_relationships = params
-        .get("rels")
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect()
-        });
-    UsdPrimQueryOptions {
+fn query_options(params: &ApiValue) -> Result<UsdPrimQueryOptions, ApiQueryError> {
+    let requested = optional_string_array(params, "attrs")?;
+    let requested_relationships = optional_string_array(params, "rels")?;
+    Ok(UsdPrimQueryOptions {
         requested,
         requested_relationships,
-        include_relationships: params
-            .get("relationships")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-        include_connections: params
-            .get("connections")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-        include_schemas: params
-            .get("schemas")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-        include_children: params
-            .get("children")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-        include_collision_bounds: params
-            .get("collision_bounds")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-        include_geometry_bounds: params
-            .get("geometry_bounds")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
-        include_topology: params
-            .get("topology")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
+        include_relationships: optional_bool(params, "relationships")?,
+        include_connections: optional_bool(params, "connections")?,
+        include_schemas: optional_bool(params, "schemas")?,
+        include_children: optional_bool(params, "children")?,
+        include_collision_bounds: optional_bool(params, "collision_bounds")?,
+        include_geometry_bounds: optional_bool(params, "geometry_bounds")?,
+        include_topology: optional_bool(params, "topology")?,
+    })
+}
+
+fn optional_string_array(
+    params: &ApiValue,
+    name: &str,
+) -> Result<Option<Vec<String>>, ApiQueryError> {
+    match params.get(name) {
+        None | Some(ApiValue::Unit) => Ok(None),
+        Some(ApiValue::Array(values)) => values
+            .iter()
+            .map(|value| match value {
+                ApiValue::Str(value) => Ok(value.clone()),
+                _ => Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("QueryUsdPrim: `{name}` must contain only strings"),
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            format!("QueryUsdPrim: `{name}` must be an array of strings"),
+        )),
+    }
+}
+
+fn optional_bool(params: &ApiValue, name: &str) -> Result<bool, ApiQueryError> {
+    match params.get(name) {
+        None | Some(ApiValue::Unit) => Ok(false),
+        Some(_) => api_param_bool(params, name).ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("QueryUsdPrim: `{name}` must be a boolean"),
+            )
+        }),
     }
 }
 
 fn query_document_id(
     world: &World,
-    params: &serde_json::Value,
-) -> Result<(Option<DocumentId>, Option<u64>), ApiResponse> {
+    params: &ApiValue,
+) -> Result<(Option<DocumentId>, Option<u64>), ApiQueryError> {
     if params.get("doc_id").is_none() {
         return Ok((None, None));
     }
-    let Some(raw) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
-        return Err(ApiResponse::error(
+    let Some(raw) = api_param_u64(params, "doc_id") else {
+        return Err(ApiQueryError::new(
             ApiErrorCode::DeserializationError,
             "QueryUsdPrim: doc_id must be an explicit numeric document id",
         ));
@@ -546,7 +550,7 @@ fn query_document_id(
         .get_resource::<DocumentRegistry<UsdDocument>>()
         .and_then(|registry| registry.host(doc))
     else {
-        return Err(ApiResponse::error(
+        return Err(ApiQueryError::new(
             ApiErrorCode::EntityNotFound,
             format!("QueryUsdPrim: document {doc} is not open"),
         ));
@@ -557,7 +561,7 @@ fn query_document_id(
         .and_then(|scenes| scenes.synced_generation(doc))
     {
         if synced_generation != generation {
-            return Err(ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 format!("QueryUsdPrim: document {doc} projection is not current"),
             ));
@@ -571,12 +575,12 @@ fn spawned_entities_for_paths(
     paths: &HashSet<&str>,
     doc: Option<DocumentId>,
     live_stage: Option<bevy::asset::AssetId<UsdStageAsset>>,
-) -> Result<HashMap<String, Entity>, ApiResponse> {
+) -> Result<HashMap<String, Entity>, ApiQueryError> {
     if doc.is_some() {
         return Ok(HashMap::new());
     }
     let Some(mut query) = QueryState::<(Entity, &UsdPrimPath)>::try_new(world) else {
-        return Err(ApiResponse::error(
+        return Err(ApiQueryError::new(
             ApiErrorCode::InternalError,
             "QueryUsdPrim: USD entity query is unavailable",
         ));
@@ -598,7 +602,7 @@ fn spawned_entities_for_paths(
     let mut spawned = HashMap::new();
     for (path, entity) in candidates {
         if spawned.insert(path.clone(), entity).is_some() {
-            return Err(ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 format!("QueryUsdPrim: multiple live entities are bound to prim `{path}`"),
             ));
@@ -607,7 +611,7 @@ fn spawned_entities_for_paths(
     Ok(spawned)
 }
 
-fn query_record_json(
+fn query_record_value(
     world: &World,
     path: &str,
     read: PrimRead,
@@ -617,7 +621,7 @@ fn query_record_json(
     spawned: Option<Entity>,
     options: &UsdPrimQueryOptions,
     poses: &mut Option<lunco_physics::SimulationPoseReadState>,
-) -> Result<serde_json::Value, ApiResponse> {
+) -> Result<ApiValue, ApiQueryError> {
     let (
         authored_position,
         type_name,
@@ -634,78 +638,103 @@ fn query_record_json(
 
     // Document placement is authored; live entity poses use the active
     // physics frame shared with `QueryEntity`.
-    let mut out = serde_json::json!({
-        "path": path,
-        "type_name": type_name,
-        "attrs": attrs,
-        "spawned": spawned.is_some(),
-        "active": active,
-    });
+    let mut out = vec![
+        ("path".to_string(), ApiValue::str(path)),
+        ("type_name".to_string(), ApiValue::str(type_name)),
+        ("attrs".to_string(), ApiValue::Map(attrs)),
+        ("spawned".to_string(), ApiValue::Bool(spawned.is_some())),
+        ("active".to_string(), ApiValue::Bool(active)),
+    ];
     if let Some(doc) = doc {
-        out["doc_id"] = serde_json::json!(doc);
-        out["generation"] = serde_json::json!(generation);
+        out.push(("doc_id".to_string(), api_value!(doc.raw())));
+        out.push(("generation".to_string(), api_value!(generation)));
         if let Some(position) = authored_position {
-            out["world_position"] = serde_json::json!([position.x, position.y, position.z]);
-            out["position_frame"] = serde_json::json!("canonical_stage");
+            out.push((
+                "world_position".to_string(),
+                api_value!([position.x, position.y, position.z]),
+            ));
+            out.push((
+                "position_frame".to_string(),
+                ApiValue::str("canonical_stage"),
+            ));
         }
     } else if let Some(doc) = live_document {
-        out["doc_id"] = serde_json::json!(doc);
+        out.push(("doc_id".to_string(), api_value!(doc.raw())));
     }
     if options.requested_relationships.is_some() || options.include_relationships {
-        out["relationships"] = serde_json::Value::Object(relationships);
+        out.push(("relationships".to_string(), ApiValue::Map(relationships)));
     }
     if options.include_connections {
-        out["connections"] = serde_json::Value::Object(connections);
+        out.push(("connections".to_string(), ApiValue::Map(connections)));
     }
     if options.include_schemas {
-        out["api_schemas"] = serde_json::json!(schemas);
+        out.push(("api_schemas".to_string(), api_value!(schemas)));
     }
     if options.include_children {
-        out["children"] = serde_json::json!(children);
+        out.push(("children".to_string(), api_value!(children)));
     }
     if options.include_collision_bounds {
-        out["collision_bounds"] = collision_bounds.unwrap_or(serde_json::Value::Null);
+        out.push((
+            "collision_bounds".to_string(),
+            collision_bounds.unwrap_or(ApiValue::Unit),
+        ));
     }
     if options.include_geometry_bounds {
-        out["geometry_bounds"] = geometry_bounds.unwrap_or(serde_json::Value::Null);
+        out.push((
+            "geometry_bounds".to_string(),
+            geometry_bounds.unwrap_or(ApiValue::Unit),
+        ));
     }
     if options.include_topology {
-        let mut topology = topology.unwrap_or(serde_json::Value::Null);
-        if let Some(object) = topology.as_object_mut() {
-            object.insert(
-                "projection".to_string(),
-                serde_json::json!({
-                    "source": if doc.is_some() { "document" } else { "live_stage" },
-                    "composed": true,
-                    "document_generation": generation,
-                    "projected_generation": generation,
-                }),
-            );
-            object.insert("binding".to_string(), runtime_binding_json(world, spawned));
-        }
-        out["topology"] = topology;
+        let mut topology = topology.unwrap_or(ApiValue::Unit);
+        let ApiValue::Map(object) = &mut topology else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: topology projection is not a map",
+            ));
+        };
+        object.push((
+            "projection".to_string(),
+            api_value!({
+                "source": if doc.is_some() { "document" } else { "live_stage" },
+                "composed": true,
+                "document_generation": generation,
+                "projected_generation": generation,
+            }),
+        ));
+        object.push((
+            "binding".to_string(),
+            runtime_binding_api_value(world, spawned),
+        ));
+        out.push(("topology".to_string(), topology));
     }
 
     if let Some(entity) = spawned {
         let Some(poses) = poses.as_mut() else {
-            return Err(ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "QueryUsdPrim: active physics frame is unavailable",
             ));
         };
         let Some(pos) = poses.position(world, entity) else {
-            return Err(ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 format!(
                     "QueryUsdPrim: spawned prim `{path}` is disconnected from the active physics frame"
                 ),
             ));
         };
-        out["world_position"] = serde_json::json!([pos.0.x, pos.0.y, pos.0.z]);
-        out["position_frame"] = serde_json::json!("active_physics");
+        out.push((
+            "world_position".to_string(),
+            api_value!([pos.0.x, pos.0.y, pos.0.z]),
+        ));
+        out.push((
+            "position_frame".to_string(),
+            ApiValue::str("active_physics"),
+        ));
     }
 
-    Ok(out)
+    Ok(ApiValue::Map(out))
 }
 
 /// Execute one or more prim reads against one validated stage/document
@@ -714,17 +743,17 @@ fn query_record_json(
 /// stage or repeating projection/generation checks for every path.
 fn execute_query_paths(
     world: &World,
-    params: &serde_json::Value,
+    params: &ApiValue,
     paths: &[(String, SdfPath)],
-) -> Result<Vec<serde_json::Value>, ApiResponse> {
-    let options = query_options(params);
+) -> Result<Vec<ApiValue>, ApiQueryError> {
+    let options = query_options(params)?;
     let (doc, generation) = query_document_id(world, params)?;
 
     // Unscoped queries belong to the live simulation root. Preview stages and
     // detached cached stages cannot satisfy a live-scene query.
     let Some(mut live_roots) = QueryState::<&UsdPrimPath, With<UsdSceneRoot>>::try_new(world)
     else {
-        return Err(ApiResponse::error(
+        return Err(ApiQueryError::new(
             ApiErrorCode::InternalError,
             "QueryUsdPrim: live scene ownership is unavailable",
         ));
@@ -734,7 +763,7 @@ fn execute_query_paths(
         .map(|p| p.stage_handle.id())
         .collect::<HashSet<_>>();
     if doc.is_none() && live_stages.len() != 1 {
-        return Err(ApiResponse::error(
+        return Err(ApiQueryError::new(
             ApiErrorCode::InternalError,
             "QueryUsdPrim: exactly one mounted live stage is required; pass doc_id for an Editor document",
         ));
@@ -760,7 +789,7 @@ fn execute_query_paths(
     } else {
         Some(
             lunco_physics::SimulationPoseReadState::try_new(world).ok_or_else(|| {
-                ApiResponse::error(
+                ApiQueryError::new(
                     ApiErrorCode::InternalError,
                     "QueryUsdPrim: active physics frame is unavailable",
                 )
@@ -768,7 +797,7 @@ fn execute_query_paths(
         )
     };
 
-    let mut read_paths = |view: &StageView<'_>| -> Result<Vec<serde_json::Value>, ApiResponse> {
+    let mut read_paths = |view: &StageView<'_>| -> Result<Vec<ApiValue>, ApiQueryError> {
         paths
             .iter()
             .map(|(path, prim)| {
@@ -787,16 +816,16 @@ fn execute_query_paths(
                     options.include_topology,
                     doc,
                 )
-                .map_err(|error| ApiResponse::error(ApiErrorCode::InternalError, error))?
+                .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?
                 .ok_or_else(|| {
-                    ApiResponse::error(
+                    ApiQueryError::new(
                         ApiErrorCode::EntityNotFound,
                         format!(
                             "QueryUsdPrim: prim `{path}` not found in the requested document or live stage"
                         ),
                     )
                 })?;
-                query_record_json(
+                query_record_value(
                     world,
                     path,
                     read,
@@ -825,7 +854,7 @@ fn execute_query_paths(
     }
 
     let Some(doc) = doc else {
-        return Err(ApiResponse::error(
+        return Err(ApiQueryError::new(
             ApiErrorCode::InternalError,
             "QueryUsdPrim: no USD stage loaded",
         ));
@@ -835,13 +864,13 @@ fn execute_query_paths(
         .and_then(|registry| registry.host(doc))
         .map(|host| host.document())
     else {
-        return Err(ApiResponse::error(
+        return Err(ApiQueryError::new(
             ApiErrorCode::EntityNotFound,
             format!("QueryUsdPrim: document {doc} is not open"),
         ));
     };
     let stage = open_doc_stage(document.composed_arc().as_ref()).map_err(|error| {
-        ApiResponse::error(
+        ApiQueryError::new(
             ApiErrorCode::InternalError,
             format!("QueryUsdPrim: document stage could not be opened: {error}"),
         )
@@ -880,8 +909,8 @@ fn read_prim_from_view(
 
     let geometry_bounds = if include_geometry_bounds {
         match prim_geometry_aabb(view, path) {
-            Ok(Some(aabb)) => Some(aabb_json(aabb)),
-            Ok(None) => Some(serde_json::Value::Null),
+            Ok(Some(aabb)) => Some(aabb_api_value(aabb)),
+            Ok(None) => Some(ApiValue::Unit),
             Err(error) => {
                 return Err(format!(
                     "QueryUsdPrim: invalid geometry bounds at `{path}`: {error}"
@@ -894,23 +923,23 @@ fn read_prim_from_view(
 
     let collision_bounds = if include_collision_bounds {
         match collision_aabb(view, path) {
-            Ok(Some(aabb)) => Some(serde_json::json!({
-                "min": [aabb.min.x, aabb.min.y, aabb.min.z],
-                "max": [aabb.max.x, aabb.max.y, aabb.max.z],
-                "center": [
+            Ok(Some(aabb)) => Some(api_value!({
+                "min": api_value!([aabb.min.x, aabb.min.y, aabb.min.z]),
+                "max": api_value!([aabb.max.x, aabb.max.y, aabb.max.z]),
+                "center": api_value!([
                     (aabb.min.x + aabb.max.x) * 0.5,
                     (aabb.min.y + aabb.max.y) * 0.5,
                     (aabb.min.z + aabb.max.z) * 0.5,
-                ],
-                "half_extents": [
+                ]),
+                "half_extents": api_value!([
                     (aabb.max.x - aabb.min.x) * 0.5,
                     (aabb.max.y - aabb.min.y) * 0.5,
                     (aabb.max.z - aabb.min.z) * 0.5,
-                ],
+                ]),
                 "frame": "canonical_stage",
                 "rest_depth": aabb.rest_depth(),
             })),
-            Ok(None) => Some(serde_json::Value::Null),
+            Ok(None) => Some(ApiValue::Unit),
             Err(error) => {
                 return Err(format!(
                     "QueryUsdPrim: invalid collision bounds at `{path}`: {error}"
@@ -923,12 +952,12 @@ fn read_prim_from_view(
 
     let type_name = view.type_name(prim).unwrap_or_default();
     let names = requested.clone().unwrap_or_else(|| view.attr_names(prim));
-    let mut attrs = serde_json::Map::new();
+    let mut attrs = Vec::new();
     for name in names {
-        attrs.insert(name.clone(), attr_json(view, prim, &name));
+        attrs.push((name.clone(), attr_api_value(view, prim, &name)));
     }
 
-    let mut relationships = serde_json::Map::new();
+    let mut relationships = Vec::new();
     let relationship_names = if include_relationships {
         view.relationship_names(prim)
     } else {
@@ -941,16 +970,16 @@ fn read_prim_from_view(
                 .into_iter()
                 .map(|path| path.as_str().to_string())
                 .collect::<Vec<_>>();
-            relationships.insert(name, serde_json::json!(targets));
+            relationships.push((name, api_value!(targets)));
         }
     }
 
-    let mut connections = serde_json::Map::new();
+    let mut connections = Vec::new();
     if include_connections {
         for name in view.attr_names(prim) {
             let sources = view.connections(prim, &name);
             if !sources.is_empty() {
-                connections.insert(name, serde_json::json!(sources));
+                connections.push((name, api_value!(sources)));
             }
         }
     }
@@ -996,29 +1025,30 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         "QueryUsdPrim"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(path) = params.get("path").and_then(serde_json::Value::as_str) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(path) = api_param_str(params, "path") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "QueryUsdPrim: `path` (USD prim path) required".to_string(),
-            );
+                "QueryUsdPrim: `path` (USD prim path) required",
+            ));
         };
         let Ok(prim) = SdfPath::new(path) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 format!("QueryUsdPrim: `{path}` is not a valid USD prim path"),
-            );
+            ));
         };
         let records = match execute_query_paths(world, params, &[(path.to_string(), prim)]) {
             Ok(records) => records,
-            Err(error) => return error,
+            Err(error) => return Err(error),
         };
-        ApiResponse::ok(
-            records
-                .into_iter()
-                .next()
-                .expect("one query path produces one record"),
-        )
+        let Some(record) = records.into_iter().next() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: one validated path produced no record",
+            ));
+        };
+        Ok(Some(record))
     }
 }
 
@@ -1036,45 +1066,45 @@ impl ApiQueryProvider for QueryUsdPrimsProvider {
         "QueryUsdPrims"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(values) = params.get("paths").and_then(serde_json::Value::as_array) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(values) = api_param_array(params, "paths") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 "QueryUsdPrims: `paths` (array of USD prim paths) required",
-            );
+            ));
         };
         if values.is_empty() {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 "QueryUsdPrims: `paths` must contain at least one USD prim path",
-            );
+            ));
         }
 
         let mut paths = Vec::with_capacity(values.len());
         for value in values {
             let Some(path) = value.as_str() else {
-                return ApiResponse::error(
+                return Err(ApiQueryError::new(
                     ApiErrorCode::DeserializationError,
                     "QueryUsdPrims: every entry in `paths` must be a string",
-                );
+                ));
             };
             let Ok(prim) = SdfPath::new(path) else {
-                return ApiResponse::error(
+                return Err(ApiQueryError::new(
                     ApiErrorCode::DeserializationError,
                     format!("QueryUsdPrims: `{path}` is not a valid USD prim path"),
-                );
+                ));
             };
             paths.push((path.to_string(), prim));
         }
 
         let records = match execute_query_paths(world, params, &paths) {
             Ok(records) => records,
-            Err(error) => return error,
+            Err(error) => return Err(error),
         };
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "records": records,
             "count": paths.len(),
-        }))
+        })))
     }
 }
 

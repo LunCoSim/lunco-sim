@@ -1,12 +1,11 @@
 //! Twin persistence + discovery for declarative mission **timelines**.
 //!
-//! A timeline is the pure-DATA mission format `RunTimeline` executes (a JSON
-//! steps array, or `{ name?, steps: [...] }`). This module gives timelines the
-//! same durable, discoverable treatment shared tool libraries get
-//! (the sibling `lunco-scripting-rhai-world::tool_libs` registry): named
-//! timelines persist as `<twin>/timelines/*.json`
-//! files (the file IS the source of truth, loaded on active Twin open), and the API can
-//! enumerate / fetch / run them by name.
+//! A timeline is the typed parameter map `RunTimeline` executes
+//! (`{ name?, steps: [...] }`). This module gives timelines the same durable,
+//! discoverable treatment shared tool libraries get (the sibling
+//! `lunco-scripting-rhai-world::tool_libs` registry): named timelines persist
+//! as `<twin>/timelines/*.json` files (the file is the source of truth, loaded
+//! on active Twin open), and the API can enumerate / fetch / run them by name.
 //!
 //! Unlike tool libraries — which must be reachable from the rhai engine OUTSIDE
 //! the ECS (hence a process-global static) — timelines are plain data only ever
@@ -17,7 +16,10 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{ApiQueryError, ApiQueryResult};
+use lunco_api_core::ApiErrorCode;
+use lunco_api_core::{ApiValue, IntoApiValue, api_value_from_serializable};
+use lunco_scripting::ScenarioParameters;
 use std::collections::HashMap;
 
 /// The owner of the currently addressable timeline set.
@@ -44,15 +46,15 @@ pub struct TimelineOwnerMismatch {
     pub requested: TimelineOwner,
 }
 
-/// In-memory store of named mission timelines (the `RunTimeline` JSON format),
-/// mirrored to `<twin>/timelines/*.json` on disk. Populated on Twin open and by
+/// In-memory store of named typed mission timelines, mirrored to
+/// `<twin>/timelines/*.json` on disk. Populated on Twin open and by
 /// `RegisterTimeline`; read by `ListTimelines` / `GetTimeline` / `RunStoredTimeline`.
 #[derive(Resource, Default)]
 pub struct TimelineStore {
     /// The lifecycle scope whose names are currently addressable.
     owner: Option<TimelineOwner>,
-    /// name → timeline JSON (a steps array, or a `{ name?, steps: [...] }` object).
-    timelines: HashMap<String, String>,
+    /// Name to structured timeline parameters.
+    timelines: HashMap<String, ScenarioParameters>,
 }
 
 impl TimelineStore {
@@ -67,7 +69,7 @@ impl TimelineStore {
     pub fn replace_scope(
         &mut self,
         owner: TimelineOwner,
-        timelines: impl IntoIterator<Item = (String, String)>,
+        timelines: impl IntoIterator<Item = (String, ScenarioParameters)>,
     ) {
         self.owner = Some(owner);
         self.timelines.clear();
@@ -88,7 +90,7 @@ impl TimelineStore {
         &mut self,
         owner: TimelineOwner,
         name: impl Into<String>,
-        json: impl Into<String>,
+        timeline: ScenarioParameters,
     ) -> Result<(), TimelineOwnerMismatch> {
         if self.owner != Some(owner) {
             return Err(TimelineOwnerMismatch {
@@ -96,7 +98,7 @@ impl TimelineStore {
                 requested: owner,
             });
         }
-        self.timelines.insert(name.into(), json.into());
+        self.timelines.insert(name.into(), timeline);
         Ok(())
     }
 
@@ -111,9 +113,9 @@ impl TimelineStore {
         true
     }
 
-    /// The stored JSON for `name`, if any.
-    pub fn get(&self, name: &str) -> Option<&str> {
-        self.timelines.get(name).map(String::as_str)
+    /// The stored structured timeline for `name`, if any.
+    pub fn get(&self, name: &str) -> Option<&ScenarioParameters> {
+        self.timelines.get(name)
     }
 
     /// Sorted names of every stored timeline.
@@ -127,59 +129,61 @@ impl TimelineStore {
 /// Sub-directory under a Twin root that holds saved mission timelines.
 pub const TIMELINES_DIR: &str = "timelines";
 
-/// Scan `<root>/timelines/*.json` → `(name, json)` for each (file stem = name).
+/// Scan `<root>/timelines/*.json` → `(name, timeline)` for each valid file.
 /// A single unreadable file is logged and skipped, never blocking the rest. A
 /// missing dir is the common case (twin has none) → empty, not an error.
 /// Native-only.
-// `disallowed_methods` bans `std::fs` because it silently fails on wasm. This fn
-// is `cfg(not(wasm32))`, so that failure mode is unreachable. Scoped to this fn,
-// not the module, so the lint stays live for anything wasm-reachable added later.
-#[allow(clippy::disallowed_methods)]
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_timelines_from_dir(root: &std::path::Path) -> Vec<(String, String)> {
+pub fn load_timelines_from_dir(root: &std::path::Path) -> Vec<(String, ScenarioParameters)> {
     let dir = root.join(TIMELINES_DIR);
     let mut loaded = Vec::new();
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return loaded,
+    let entries = match lunco_storage::read_directory_sync(&dir) {
+        Ok(entries) => entries,
+        Err(lunco_storage::StorageError::NotFound) => return loaded,
+        Err(error) => {
+            warn!("[timelines] failed to list {}: {error}", dir.display());
+            return loaded;
+        }
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in entries {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
         let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        match lunco_storage::read_file_sync(&path)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-        {
-            Some(json) => loaded.push((name.to_string(), json)),
-            None => warn!("[timelines] failed to read {}", path.display()),
+        let result = lunco_storage::read_file_sync(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                serde_json::from_slice::<ScenarioParameters>(&bytes)
+                    .map_err(|error| error.to_string())
+            });
+        match result {
+            Ok(timeline) => loaded.push((name.to_string(), timeline)),
+            Err(error) => warn!("[timelines] failed to load {}: {error}", path.display()),
         }
     }
     loaded.sort_by(|a, b| a.0.cmp(&b.0));
     loaded
 }
 
-/// Persist a timeline's JSON to `<root>/timelines/<name>.json` (creating the dir
-/// if needed). The on-disk counterpart of scoped timeline registration, so an
-/// interactively-registered timeline survives a restart. Native-only.
-// See `load_timelines_from_dir` — native-only, so the wasm foot-gun the
-// `disallowed_methods` ban guards against cannot occur here.
-#[allow(clippy::disallowed_methods)]
+/// Persist a typed timeline to `<root>/timelines/<name>.json` (creating the dir
+/// if needed). JSON is only the durable file representation; runtime consumers
+/// use `ScenarioParameters`. Native-only.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_timeline_file(
     root: &std::path::Path,
     name: &str,
-    json: &str,
+    timeline: &ScenarioParameters,
 ) -> lunco_storage::StorageResult<std::path::PathBuf> {
     lunco_scripting_rhai_core::names::validate_file_stem(name)
         .map_err(lunco_storage::StorageError::Unsupported)?;
     let dir = root.join(TIMELINES_DIR);
     let path = dir.join(format!("{name}.json"));
-    lunco_storage::write_file_sync(&path, json.as_bytes())?;
+    let source = serde_json::to_vec_pretty(timeline).map_err(|error| {
+        lunco_storage::StorageError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    })?;
+    lunco_storage::write_file_sync(&path, &source)?;
     Ok(path)
 }
 
@@ -267,38 +271,65 @@ impl ApiQueryProvider for ListTimelinesProvider {
         "ListTimelines"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let names = world
-            .get_resource::<TimelineStore>()
-            .map(TimelineStore::names)
-            .unwrap_or_default();
-        ApiResponse::ok(serde_json::json!({ "count": names.len(), "timelines": names }))
+    fn execute(
+        &self,
+        world: &World,
+        _params: &lunco_api_core::ApiValue,
+    ) -> lunco_api::ApiQueryResult {
+        let Some(store) = world.get_resource::<TimelineStore>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "ListTimelines requires TimelineStore",
+            ));
+        };
+        let names = store.names();
+        Ok(Some(lunco_api_core::ApiValue::map([
+            ("count", (names.len() as i64).into_api_value()),
+            ("timelines", names.into_api_value()),
+        ])))
     }
 }
 
-/// `GetTimeline { name }` → `{ name, timeline }` (the stored JSON), or not-found.
+/// `GetTimeline { name }` → `{ name, timeline }` (the structured data), or not-found.
 struct GetTimelineProvider;
 impl ApiQueryProvider for GetTimelineProvider {
     fn name(&self) -> &'static str {
         "GetTimeline"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(name) = params.get("name").and_then(serde_json::Value::as_str) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(name) = params
+            .get("name")
+            .and_then(lunco_api_core::ApiValue::as_str)
+        else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "GetTimeline: `name` required".to_string(),
-            );
+                "GetTimeline: `name` required",
+            ));
         };
-        match world
-            .get_resource::<TimelineStore>()
-            .and_then(|s| s.get(name).map(str::to_string))
-        {
-            Some(json) => ApiResponse::ok(serde_json::json!({ "name": name, "timeline": json })),
-            None => ApiResponse::error(
+        let Some(store) = world.get_resource::<TimelineStore>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "GetTimeline requires TimelineStore",
+            ));
+        };
+        match store.get(name) {
+            Some(timeline) => {
+                let timeline = api_value_from_serializable(timeline).map_err(|error| {
+                    ApiQueryError::new(
+                        ApiErrorCode::InternalError,
+                        format!("GetTimeline: could not expose typed timeline: {error}"),
+                    )
+                })?;
+                Ok(Some(ApiValue::map([
+                    ("name", name.into_api_value()),
+                    ("timeline", timeline),
+                ])))
+            }
+            None => Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("timeline '{name}' not found"),
-            ),
+            )),
         }
     }
 }
@@ -315,19 +346,23 @@ pub fn register_queries(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// `save_timeline_file` → `load_timelines_from_dir` round-trips by name.
+    fn timeline() -> ScenarioParameters {
+        serde_json::from_str(r#"{"steps":[{"wait":1.0}]}"#).expect("typed timeline fixture")
+    }
+
+    /// `save_timeline_file` → `load_timelines_from_dir` round-trips typed data.
     #[test]
     fn timeline_file_save_load_roundtrip() {
         let temp = tempfile::tempdir().expect("timeline test directory");
         let root = temp.path();
 
-        let json = r#"[{"wait":1.0},{"emit":"GO"}]"#;
-        let path = save_timeline_file(&root, "approach", json).unwrap();
+        let source = timeline();
+        let path = save_timeline_file(root, "approach", &source).unwrap();
         assert!(lunco_storage::read_file_sync(&path).is_ok());
         assert_eq!(path, root.join("timelines").join("approach.json"));
 
-        let loaded = load_timelines_from_dir(&root);
-        assert_eq!(loaded, vec![("approach".to_string(), json.to_string())]);
+        let loaded = load_timelines_from_dir(root);
+        assert_eq!(loaded, vec![("approach".to_string(), source)]);
     }
 
     /// A missing `timelines/` dir yields nothing, not an error.
@@ -344,13 +379,15 @@ mod tests {
         let first = TimelineOwner::Twin(lunco_workspace::TwinId::new(1));
         let second = TimelineOwner::Twin(lunco_workspace::TwinId::new(2));
 
-        store.replace_scope(first, [("old".to_string(), "[]".to_string())]);
-        assert_eq!(store.get("old"), Some("[]"));
+        let old = timeline();
+        store.replace_scope(first, [("old".to_string(), old.clone())]);
+        assert_eq!(store.get("old"), Some(&old));
 
-        store.replace_scope(second, [("new".to_string(), "[]".to_string())]);
+        let new = timeline();
+        store.replace_scope(second, [("new".to_string(), new.clone())]);
         assert_eq!(store.owner(), Some(second));
         assert_eq!(store.get("old"), None);
-        assert_eq!(store.get("new"), Some("[]"));
+        assert_eq!(store.get("new"), Some(&new));
     }
 
     #[test]
@@ -358,11 +395,12 @@ mod tests {
         let mut store = TimelineStore::default();
         let first = TimelineOwner::Twin(lunco_workspace::TwinId::new(1));
         let second = TimelineOwner::Twin(lunco_workspace::TwinId::new(2));
-        store.replace_scope(second, [("current".to_string(), "[]".to_string())]);
+        let current = timeline();
+        store.replace_scope(second, [("current".to_string(), current.clone())]);
 
         assert!(!store.clear_for(first));
-        assert!(store.insert_for(first, "stale", "[]").is_err());
-        assert_eq!(store.get("current"), Some("[]"));
+        assert!(store.insert_for(first, "stale", timeline()).is_err());
+        assert_eq!(store.get("current"), Some(&current));
     }
 
     #[test]
@@ -371,8 +409,10 @@ mod tests {
         let replacement_temp = tempfile::tempdir().expect("replacement Twin directory");
         let root = root_temp.path().to_path_buf();
         let replacement = replacement_temp.path().to_path_buf();
-        save_timeline_file(&root, "old", "[]").unwrap();
-        save_timeline_file(&replacement, "new", "[]").unwrap();
+        let old_timeline = timeline();
+        let new_timeline = timeline();
+        save_timeline_file(&root, "old", &old_timeline).unwrap();
+        save_timeline_file(&replacement, "new", &new_timeline).unwrap();
 
         let first_twin = match lunco_workspace::TwinMode::open(&root).unwrap() {
             lunco_workspace::TwinMode::Folder(twin) | lunco_workspace::TwinMode::Twin(twin) => twin,
@@ -396,7 +436,7 @@ mod tests {
             .trigger(lunco_workspace::TwinAdded { twin: first_id });
         assert_eq!(
             app.world().resource::<TimelineStore>().get("old"),
-            Some("[]")
+            Some(&old_timeline)
         );
 
         let mut workspace = app
@@ -418,6 +458,6 @@ mod tests {
         let store = app.world().resource::<TimelineStore>();
         assert_eq!(store.owner(), Some(TimelineOwner::Twin(second_id)));
         assert_eq!(store.get("old"), None);
-        assert_eq!(store.get("new"), Some("[]"));
+        assert_eq!(store.get("new"), Some(&new_timeline));
     }
 }

@@ -1,10 +1,8 @@
 //! Telemetry subscription system — streams telemetry events to API subscribers.
 
-use crate::{
-    executor::ApiResponseEvent,
-    schema::{ApiResponse, TelemetryFilter, TelemetryResponse},
-};
+use crate::executor::ApiResponseEvent;
 use bevy::prelude::*;
+use lunco_api_core::{ApiResponse, TelemetryFilter, TelemetryResponse};
 use lunco_command_contracts::SessionId;
 
 /// Telemetry events ride the same `ApiResponseEvent` channel as HTTP

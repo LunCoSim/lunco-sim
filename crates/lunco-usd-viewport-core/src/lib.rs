@@ -615,6 +615,79 @@ pub struct UsdViewportState {
     next_view_id: u64,
 }
 
+/// Measurement emitted by a rendered USD viewport surface after layout.
+#[derive(bevy::ecs::event::Event, Debug, Clone, Copy)]
+pub struct UsdViewportMeasured {
+    /// View whose offscreen target was laid out.
+    pub view: UsdPreviewViewId,
+    /// Whether the pointer is over the rendered image.
+    pub over_scene: bool,
+    /// Whether the image is visible in the current panel pass.
+    pub visible: bool,
+    /// Physical-pixel rectangle occupied by the rendered image.
+    pub image_rect: Option<PanelRect>,
+}
+
+/// Measurement emitted by an additional rendered USD preview view.
+#[derive(bevy::ecs::event::Event, Debug, Clone, Copy)]
+pub struct UsdPreviewViewMeasured {
+    /// View whose offscreen target was laid out.
+    pub view: UsdPreviewViewId,
+    /// Whether the pointer is over the rendered image.
+    pub over_scene: bool,
+    /// Whether the image is visible in the current panel pass.
+    pub visible: bool,
+    /// Physical-pixel rectangle occupied by the rendered image.
+    pub image_rect: Option<PanelRect>,
+}
+
+/// Primary click in one visible USD preview image.
+#[derive(bevy::ecs::event::Event, Debug, Clone, Copy)]
+pub struct UsdViewportClick {
+    /// View receiving the click.
+    pub view: UsdPreviewViewId,
+    /// Image-local click position in logical viewport coordinates.
+    pub position: Vec2,
+    /// Logical viewport size at the time of the click.
+    pub viewport_size: Vec2,
+    /// Whether Shift was held.
+    pub shift: bool,
+    /// Whether Control was held.
+    pub ctrl: bool,
+}
+
+/// Pointer-driven navigation input for one USD preview view.
+#[derive(bevy::ecs::event::Event, Debug, Clone, Copy)]
+pub struct UsdViewportOrbitInput {
+    /// View receiving the navigation input.
+    pub view: UsdPreviewViewId,
+    /// Orbit drag in logical viewport coordinates.
+    pub drag: Vec2,
+    /// Pan drag in logical viewport coordinates.
+    pub pan: Vec2,
+    /// Painted viewport size in logical coordinates.
+    pub viewport_size: Vec2,
+    /// Scroll delta used for zoom.
+    pub scroll_y: f32,
+}
+
+/// Resolve preview pointer buttons into the shared camera interaction policy.
+///
+/// Primary and middle drags pan, secondary drags orbit, and Shift+secondary
+/// provides an explicit pan chord. A captured primary drag belongs to the
+/// editor gizmo rather than the preview camera.
+pub fn preview_drag_channels(
+    primary: bool,
+    middle: bool,
+    secondary: bool,
+    shift: bool,
+    gizmo_pointer_capture: bool,
+) -> (bool, bool) {
+    let pan = (primary && !gizmo_pointer_capture) || middle || (secondary && shift);
+    let orbit = secondary && !pan;
+    (orbit, pan)
+}
+
 impl UsdViewportState {
     /// The focused preview identity.
     pub fn focused_preview_id(&self) -> Option<UsdPreviewId> {

@@ -17,6 +17,17 @@ fn on_tick(me, ctx) {
 
     let inventory = query("ListBundled", #{});
     let failures = [];
+    let search = query("FindModel", #{ query: "rocket", limit: 20 });
+    let bundled_example_found = false;
+    if search != () && search.items != () {
+        for item in search.items {
+            if item.uri == "bundled://AnnotatedRocketStage.mo" && item.source == "bundled" {
+                bundled_example_found = true;
+            }
+        }
+    }
+    failures.push(t_true(bundled_example_found,
+        "FindModel did not return the bundled rocket example without an open document"));
     if inventory == () || inventory.sources == () {
         failures.push(t_true(false,
             "ListBundled did not publish the complete Modelica source inventory"));

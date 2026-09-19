@@ -1,0 +1,14 @@
+[package]
+name = "lunco-api-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Typed transport-independent LunCoSim API values and contracts"
+
+[dependencies]
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

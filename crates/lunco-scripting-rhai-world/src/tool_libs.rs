@@ -11,7 +11,9 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{ApiQueryError, ApiQueryResult};
+use lunco_api_core::ApiErrorCode;
+use lunco_api_core::{ApiValue, api_value};
 use lunco_hooks::HookValue;
 use rhai::Engine;
 use std::collections::{HashMap, HashSet};
@@ -365,18 +367,19 @@ impl ApiQueryProvider for ListToolLibrariesProvider {
         "ListToolLibraries"
     }
 
-    fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let libs: Vec<serde_json::Value> = lunco_tools::index()
+    fn execute(&self, _world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let libs: Vec<ApiValue> = lunco_tools::index()
             .into_iter()
             .map(|i| {
-                serde_json::json!({
+                api_value!({
                     "name": i.name,
                     "backend": i.backend,
                     "functions": i.functions,
                 })
             })
             .collect();
-        ApiResponse::ok(serde_json::json!({ "count": libs.len(), "libraries": libs }))
+        let count = libs.len();
+        Ok(Some(api_value!({ "count": count, "libraries": libs })))
     }
 }
 
@@ -389,12 +392,12 @@ impl ApiQueryProvider for GetToolLibraryProvider {
         "GetToolLibrary"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(name) = params.get("name").and_then(serde_json::Value::as_str) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(name) = params.get("name").and_then(ApiValue::as_str) else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "GetToolLibrary: `name` required".to_string(),
-            );
+                "GetToolLibrary: `name` required",
+            ));
         };
         match lunco_tools::get(name) {
             Some(tool) => {
@@ -404,33 +407,38 @@ impl ApiQueryProvider for GetToolLibraryProvider {
                     .unwrap_or_default();
                 let engine = match crate::world_bridge::build_world_engine(sources) {
                     Ok(engine) => engine,
-                    Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
+                    Err(error) => {
+                        return Err(ApiQueryError::new(ApiErrorCode::InternalError, error));
+                    }
                 };
                 let binding = lunco_tools_rhai::inspect_tool_with_engine(&tool, &engine);
                 let scope = world
                     .get_resource::<TwinToolLibraries>()
                     .and_then(TwinToolLibraries::owner)
-                    .map(|twin| serde_json::json!({ "kind": "twin", "id": twin.raw() }))
-                    .unwrap_or_else(|| serde_json::json!({ "kind": "session" }));
-                ApiResponse::ok(serde_json::json!({
+                    .map(|twin| api_value!({ "kind": "twin", "id": twin.raw() }))
+                    .unwrap_or_else(|| api_value!({ "kind": "session" }));
+                let functions = lunco_api_core::api_value_from_serializable(&binding.functions)?;
+                let diagnostics =
+                    lunco_api_core::api_value_from_serializable(&binding.diagnostics)?;
+                Ok(Some(api_value!({
                     "name": name,
-                    "backend": tool.backend(),
-                    "source": tool.source(),
+                    "backend": tool.backend().to_string(),
+                    "source": tool.source().map(str::to_string),
                     "active_twin": world
                         .get_resource::<TwinToolLibraries>()
                         .and_then(TwinToolLibraries::owner)
                         .map(|twin| twin.raw()),
                     "scope": scope,
                     "registry_generation": generation(),
-                    "functions": binding.functions,
+                    "functions": functions,
                     "callable": binding.callable,
-                    "diagnostics": binding.diagnostics,
-                }))
+                    "diagnostics": diagnostics,
+                })))
             }
-            None => ApiResponse::error(
+            None => Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("tool library '{name}' not found"),
-            ),
+            )),
         }
     }
 }

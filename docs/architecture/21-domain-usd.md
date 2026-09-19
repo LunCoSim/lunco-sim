@@ -111,9 +111,11 @@ cannot be observed through the public contract. Scene projection seams remain
 beside `lunco-usd-bevy-runtime-core`; shared contract helpers are tested in
 `lunco-usd-core/tests/`.
 
-The public query contracts live beside their owning package in
-`crates/lunco-usd-queries/tests/query_api.rs`; they do not require the larger
-runtime-orchestration package to compile.
+Public USD query behavior is exercised through the production query bridge by
+`assets/scenes/tests/usd_query_api.usda` and
+`assets/scenarios/tests/usd_query_api.rhai`, with its reference-arc layer in
+`assets/scenes/fixtures/usd_query_api/site.usda`. The editor proposal lifecycle
+is covered by the authored `assembly_editor_proposal` scene and scenario.
 
 The public composed-stage reader, StageView, and prepared-reader contracts live
 in `crates/lunco-usd-bevy-stage/tests/stage_reads.rs`. They use in-memory
@@ -855,7 +857,8 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-mesh/tests/meshes.rs` — low-level USD geometry-to-Bevy mesh tests owned by the mesh package
 - `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms
 - `crates/lunco-usd-bevy-animation/src/lib.rs` — production animation planning, time-domain binding, and ECS sampling systems
-- `crates/lunco-usd-queries/tests/query_api.rs` — public inspection, edit-session, assembly-target, and document-sync query contracts
+- `assets/scenes/tests/usd_query_api.usda` + `assets/scenarios/tests/usd_query_api.rhai` — production inspection, reference-target resolution, and document-sync contracts
+- `assets/scenes/tests/usd_material_edit_projection.usda` + `assets/scenarios/tests/usd_material_edit_projection.rhai` — production typed material edits, source replacement, and preview-generation lifecycle
 - `crates/lunco-usd-viewport-runtime/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-avian-core/src/lib.rs` — Avian/BigSpace frame bridge and low-level bridge tests

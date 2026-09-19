@@ -227,7 +227,8 @@ pub fn hook_to_dynamic(v: &HookValue) -> Dynamic {
 /// Convert a rhai [`Dynamic`] back into a neutral [`HookValue`]. The hook ABI is
 /// deliberately closed: an opaque Rhai value is a policy error, never a debug
 /// string that can accidentally satisfy a downstream schema.
-fn dynamic_to_hook(d: &Dynamic) -> HookResult {
+/// Convert a Rhai value to the shared typed hook ABI.
+pub fn dynamic_to_hook(d: &Dynamic) -> HookResult {
     if d.is_unit() {
         Ok(HookValue::Unit)
     } else if d.is_int() {
@@ -263,7 +264,7 @@ fn dynamic_to_hook(d: &Dynamic) -> HookResult {
             .map(HookValue::Map)
     } else {
         Err(HookError(format!(
-            "unsupported Rhai hook return type `{}`",
+            "unsupported Rhai value type `{}`",
             d.type_name()
         )))
     }

@@ -10,8 +10,6 @@ bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-sysml-ast = { path = "../lunco-sysml-ast" }
 rhai = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

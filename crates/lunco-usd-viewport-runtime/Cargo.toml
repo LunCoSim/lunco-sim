@@ -18,6 +18,7 @@ bevy = { workspace = true, features = [
 ] }
 bevy_egui = { workspace = true, features = ["render"] }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
@@ -29,11 +30,9 @@ lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-viewport-core = { path = "../lunco-usd-viewport-core" }
-lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 openusd = { workspace = true }
-serde_json = { workspace = true }
 
 [dev-dependencies]
 lunco-usd-commands = { path = "../lunco-usd-commands" }

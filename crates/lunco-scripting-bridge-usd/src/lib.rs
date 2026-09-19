@@ -9,7 +9,7 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_scripting_bridge_core::{resolve_entity, with_world};
 
 /// Read the authoritative USD document generation without constructing the
-/// full `InspectUsdDocument` JSON response.
+/// full `InspectUsdDocument` snapshot.
 ///
 /// A fixed-step policy may use this as its structural invalidation clock, then
 /// perform its expensive topology read only when the generation changes. The

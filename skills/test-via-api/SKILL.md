@@ -88,6 +88,21 @@ calls `RunLint` and verifies the structured `LintReport` winner, shadowed owner,
 property paths, and precedence. Prefer this authored pair for observable lint
 behavior instead of embedding USDA or fake backend components in Rust tests.
 
+Public USD query-provider behavior belongs in authored `.usda` fixtures and
+Rhai scene gates, exercised through the production query bridge. Keep Rust
+tests for provider internals only when the behavior cannot be observed through
+that public surface; do not construct `DocumentRegistry` worlds with inline
+USDA to duplicate inspection, target-resolution, or synchronization behavior.
+The `usd_query_api` gate covers those public contracts, while the assembly
+proposal lifecycle gate covers edit-session inspection.
+
+Editor material edits belong in an authored USD fixture plus an editor Rhai
+scenario, not a Rust test with a multiline USDA string. The
+`usd_material_edit_projection` fixture exercises typed material edits,
+whole-source replacement, and the preview's projected-generation lifecycle
+through the production editor runner. Keep Rust coverage for the focused
+USD-to-render-intent mapping mechanism, where the mapping itself is the subject.
+
 For spatial safety coverage, keep malformed authored transforms in the USD
 projection layer: that layer must reject them before ECS materialization. Test
 runtime-state admission at the `lunco-usd-avian` bridge owner, where a finite

@@ -12,10 +12,10 @@ path = "src/lib.rs"
 [dependencies]
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true }
-rhai = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-core = { path = "../lunco-core" }

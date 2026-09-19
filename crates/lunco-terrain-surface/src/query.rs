@@ -29,9 +29,12 @@ use std::sync::Arc;
 use bevy::ecs::query::QueryState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
+use lunco_api::queries::{
+    api_param_f64, api_param_str, api_param_u64, ApiQueryError, ApiQueryProvider, ApiQueryRegistry,
+    ApiQueryResult,
+};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_spatial::coords::GridPos;
 use lunco_terrain_core::{
     field_map, normal_at_bounded, AspectField, BoundedHeightSource, ElevationField, SlopeField,
@@ -44,7 +47,7 @@ use crate::stream_viz::{TerrainDetailDemands, TerrainStreamStatus};
 
 /// Largest raster a single `TerrainField` query may materialise per side (256×256 =
 /// 65 k texels). A deliberate readback for a tool/analyst, not a streaming path — the
-/// cap just bounds one JSON payload; larger coverage is a tiled/streamed concern.
+/// cap just bounds one response payload; larger coverage is a tiled/streamed concern.
 const FIELD_MAX_RES: usize = 256;
 
 /// Resolve a field id (the stable [`SurfaceField::id`]) to a boxed instance. The set
@@ -76,27 +79,43 @@ impl ApiQueryProvider for TerrainHeightProvider {
         "TerrainHeight"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let (Some(x), Some(z)) = (
-            params.get("x").and_then(serde_json::Value::as_f64),
-            params.get("z").and_then(serde_json::Value::as_f64),
-        ) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let (Some(x), Some(z)) = (api_param_f64(params, "x"), api_param_f64(params, "z")) else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "TerrainHeight: `x` and `z` required".to_string(),
-            );
+                "TerrainHeight: `x` and `z` required",
+            ));
         };
-        let eps_override = params.get("eps").and_then(serde_json::Value::as_f64);
-        // Wire params are raw scalars; typed the instant they become a point.
+        if !x.is_finite() || !z.is_finite() {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "TerrainHeight: `x` and `z` must be finite",
+            ));
+        }
+        let eps_override = match params.get("eps") {
+            None => None,
+            Some(_) => Some(api_param_f64(params, "eps").ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "TerrainHeight: `eps` must be a number",
+                )
+            })?),
+        };
+        if eps_override.is_some_and(|eps| !eps.is_finite() || eps <= 0.0) {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "TerrainHeight: `eps` must be finite and positive",
+            ));
+        }
         let p = GridPos(DVec3::new(x, 0.0, z));
 
         // Snapshot the DEM terrains, releasing the world borrow before the
         // registry read. The oracle is shared via `Arc`.
         let Some(mut q) = QueryState::<(Entity, &DemHeightField)>::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "TerrainHeight: DEM query is unavailable".to_string(),
-            );
+                "TerrainHeight: DEM query is unavailable",
+            ));
         };
         let terrains: Vec<(Entity, Arc<SurfaceOracle>)> =
             q.iter(world).map(|(e, hf)| (e, hf.0.clone())).collect();
@@ -136,16 +155,16 @@ impl ApiQueryProvider for TerrainHeightProvider {
                 .and_then(|reg| reg.api_id_for(entity))
                 .map(|g| g.get());
 
-            return ApiResponse::ok(serde_json::json!({
+            return Ok(Some(api_value!({
                 "found": true,
                 "height": h,
-                "normal": [n[0], n[1], n[2]],
+                "normal": api_value!([n[0], n[1], n[2]]),
                 "slope": slope,
                 "entity": entity,
-            }));
+            })));
         }
 
-        ApiResponse::ok(serde_json::json!({ "found": false }))
+        Ok(Some(api_value!({ "found": false })))
     }
 }
 
@@ -174,53 +193,63 @@ impl ApiQueryProvider for TerrainFieldProvider {
         "TerrainField"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let field_id = params
-            .get("field")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("slope");
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let field_id = match params.get("field") {
+            None => "slope",
+            Some(_) => api_param_str(params, "field").ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "TerrainField: `field` must be a string",
+                )
+            })?,
+        };
         let Some(field) = field_by_id(field_id) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 format!("TerrainField: unknown field `{field_id}` (slope|aspect|elevation)"),
-            );
+            ));
         };
         let (Some(x), Some(z), Some(half)) = (
-            params.get("x").and_then(serde_json::Value::as_f64),
-            params.get("z").and_then(serde_json::Value::as_f64),
-            params.get("half").and_then(serde_json::Value::as_f64),
+            api_param_f64(params, "x"),
+            api_param_f64(params, "z"),
+            api_param_f64(params, "half"),
         ) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "TerrainField: `x`, `z`, `half` required".to_string(),
-            );
+                "TerrainField: `x`, `z`, `half` required",
+            ));
         };
         if half.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "TerrainField: `half` must be > 0".to_string(),
-            );
+                "TerrainField: `half` must be > 0",
+            ));
         }
         if !x.is_finite() || !z.is_finite() || !half.is_finite() {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "TerrainField: `x`, `z`, and `half` must be finite".to_string(),
-            );
+                "TerrainField: `x`, `z`, and `half` must be finite",
+            ));
         }
-        let res = params
-            .get("res")
-            .and_then(serde_json::Value::as_u64)
-            .map(|r| (r as usize).clamp(1, FIELD_MAX_RES))
-            .unwrap_or(64);
-        // Wire params are raw scalars; typed the instant they become a point.
+        let res = match params.get("res") {
+            None => 64,
+            Some(_) => api_param_u64(params, "res")
+                .map(|r| r.clamp(1, FIELD_MAX_RES as u64) as usize)
+                .ok_or_else(|| {
+                    ApiQueryError::new(
+                        ApiErrorCode::DeserializationError,
+                        "TerrainField: `res` must be an unsigned integer",
+                    )
+                })?,
+        };
         let center = GridPos(DVec3::new(x, 0.0, z));
 
         // Snapshot DEM terrains, releasing the world borrow (see `TerrainHeight`).
         let Some(mut q) = QueryState::<(Entity, &DemHeightField)>::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "TerrainField: DEM query is unavailable".to_string(),
-            );
+                "TerrainField: DEM query is unavailable",
+            ));
         };
         let terrains: Vec<Arc<SurfaceOracle>> = q.iter(world).map(|(_, hf)| hf.0.clone()).collect();
 
@@ -244,46 +273,43 @@ impl ApiQueryProvider for TerrainFieldProvider {
                 min = min.min(v);
                 max = max.max(v);
             }
-            return ApiResponse::ok(serde_json::json!({
+            return Ok(Some(api_value!({
                 "found": true,
                 "field": field_id,
                 "res": res,
                 "half": half,
-                "center": [x, z],
+                "center": api_value!([x, z]),
                 "min": min,
                 "max": max,
                 "data": data,
-            }));
+            })));
         }
 
-        ApiResponse::ok(serde_json::json!({ "found": false }))
+        Ok(Some(api_value!({ "found": false })))
     }
 }
 
-/// Read a `[x,y,z]` array or `{x,y,z}` map into a bare [`DVec3`] — for wire
+/// Read a `[x,y,z]` array or `{x,y,z}` map into a bare [`DVec3`] — for typed
 /// values that are frame-free vectors (`dir`). `None` if malformed.
-fn parse_vec3(v: Option<&serde_json::Value>) -> Option<DVec3> {
+fn parse_vec3(v: Option<&ApiValue>) -> Option<DVec3> {
     let v = v?;
-    if let Some(arr) = v.as_array() {
-        if arr.len() < 3 {
+    if let ApiValue::Array(arr) = v {
+        if arr.len() != 3 {
             return None;
         }
-        return Some(DVec3::new(
-            arr[0].as_f64()?,
-            arr[1].as_f64()?,
-            arr[2].as_f64()?,
-        ));
+        let value = DVec3::new(arr[0].as_f64()?, arr[1].as_f64()?, arr[2].as_f64()?);
+        return value.is_finite().then_some(value);
     }
-    Some(DVec3::new(
+    let value = DVec3::new(
         v.get("x")?.as_f64()?,
         v.get("y")?.as_f64()?,
         v.get("z")?.as_f64()?,
-    ))
+    );
+    value.is_finite().then_some(value)
 }
 
-/// Read a wire value as a GRID-ABSOLUTE point (`origin`/`target`). The JSON is
-/// raw `[x,y,z]`; it is typed the instant it leaves the wire.
-fn parse_point(v: Option<&serde_json::Value>) -> Option<GridPos> {
+/// Read a typed API value as a GRID-ABSOLUTE point (`origin`/`target`).
+fn parse_point(v: Option<&ApiValue>) -> Option<GridPos> {
     parse_vec3(v).map(GridPos)
 }
 
@@ -306,47 +332,84 @@ impl ApiQueryProvider for TerrainRaycastProvider {
         "TerrainRaycast"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let Some(origin) = parse_point(params.get("origin")) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "TerrainRaycast: `origin` [x,y,z] required".to_string(),
-            );
+                "TerrainRaycast: `origin` [x,y,z] required",
+            ));
         };
+        if params.get("target").is_some()
+            && (params.get("dir").is_some() || params.get("max").is_some())
+        {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "TerrainRaycast: use either `target` or `dir` with optional `max`, not both forms",
+            ));
+        }
         // Direction is either implied by `target` (segment form, exact range) or
         // an explicit `dir` + `max` (ray form, for sensors/AI).
-        let (dir, max) = if let Some(target) = parse_point(params.get("target")) {
+        let (dir, max) = if params.get("target").is_some() {
+            let Some(target) = parse_point(params.get("target")) else {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "TerrainRaycast: `target` must be a [x,y,z] point",
+                ));
+            };
             let d = target - origin;
             let len = d.length();
+            if !len.is_finite() {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "TerrainRaycast: `target` must be a finite distance from `origin`",
+                ));
+            }
             if len < 1e-6 {
-                return ApiResponse::ok(serde_json::json!({ "hit": false }));
+                return Ok(Some(api_value!({ "hit": false })));
             }
             (d / len, len)
-        } else if let Some(dir) = parse_vec3(params.get("dir")) {
+        } else if params.get("dir").is_some() {
+            let Some(dir) = parse_vec3(params.get("dir")) else {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "TerrainRaycast: `dir` must be a [x,y,z] vector",
+                ));
+            };
             let d = dir.normalize_or_zero();
             if d.length_squared() < 0.5 {
-                return ApiResponse::error(
+                return Err(ApiQueryError::new(
                     ApiErrorCode::DeserializationError,
-                    "TerrainRaycast: `dir` must be non-zero".to_string(),
-                );
+                    "TerrainRaycast: `dir` must be non-zero",
+                ));
             }
-            let max = params
-                .get("max")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(1.0e6);
+            let max = match params.get("max") {
+                None => 1.0e6,
+                Some(_) => api_param_f64(params, "max").ok_or_else(|| {
+                    ApiQueryError::new(
+                        ApiErrorCode::DeserializationError,
+                        "TerrainRaycast: `max` must be a number",
+                    )
+                })?,
+            };
+            if !max.is_finite() || max <= 0.0 {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "TerrainRaycast: `max` must be finite and positive",
+                ));
+            }
             (d, max)
         } else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "TerrainRaycast: give `target` [x,y,z] or `dir` + `max`".to_string(),
-            );
+                "TerrainRaycast: give `target` [x,y,z] or `dir` + `max`",
+            ));
         };
 
         let Some(mut q) = QueryState::<(Entity, &DemHeightField)>::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "TerrainRaycast: DEM query is unavailable".to_string(),
-            );
+                "TerrainRaycast: DEM query is unavailable",
+            ));
         };
         let terrains: Vec<(Entity, Arc<SurfaceOracle>)> =
             q.iter(world).map(|(e, hf)| (e, hf.0.clone())).collect();
@@ -382,14 +445,14 @@ impl ApiQueryProvider for TerrainRaycastProvider {
                     .get_resource::<ApiEntityRegistry>()
                     .and_then(|reg| reg.api_id_for(entity))
                     .map(|g| g.get());
-                ApiResponse::ok(serde_json::json!({
+                Ok(Some(api_value!({
                     "hit": true,
                     "distance": dist,
-                    "point": [p.0.x, p.0.y, p.0.z],
+                    "point": api_value!([p.0.x, p.0.y, p.0.z]),
                     "entity": api_entity,
-                }))
+                })))
             }
-            None => ApiResponse::ok(serde_json::json!({ "hit": false })),
+            None => Ok(Some(api_value!({ "hit": false }))),
         }
     }
 }
@@ -412,39 +475,39 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
         "TerrainLodStatus"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let Some(status) = world.get_resource::<TerrainStreamStatus>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "TerrainLodStatus: terrain streaming is unavailable".to_string(),
-            );
+                "TerrainLodStatus: terrain streaming is unavailable",
+            ));
         };
         let Some(settings) = world.get_resource::<lunco_render::RenderingQualitySettings>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "TerrainLodStatus: rendering quality settings are unavailable".to_string(),
-            );
+                "TerrainLodStatus: rendering quality settings are unavailable",
+            ));
         };
         let profile = match settings.validated_profile() {
             Ok(profile) => profile,
             Err(reason) => {
-                return ApiResponse::error(
+                return Err(ApiQueryError::new(
                     ApiErrorCode::InternalError,
                     format!("TerrainLodStatus: rendering quality settings are invalid: {reason}"),
-                );
+                ));
             }
         };
         let Some(demands) = world.get_resource::<TerrainDetailDemands>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "TerrainLodStatus: terrain detail demands are unavailable".to_string(),
-            );
+                "TerrainLodStatus: terrain detail demands are unavailable",
+            ));
         };
         let visual_foci = demands
             .visual_focus_snapshot()
             .into_iter()
             .map(|(entity, position, forward, screen_height_px, fov_y_rad)| {
-                serde_json::json!({
+                api_value!({
                     "entity": entity,
                     "position": position,
                     "forward": forward,
@@ -453,7 +516,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 })
             })
             .collect::<Vec<_>>();
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "config": {
                 "pixel_error": profile.terrain_lod_pixel_error,
                 "max_depth": profile.terrain_lod_max_depth,
@@ -481,7 +544,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 .and_then(|viewport| viewport.active_camera)
                 .map(|entity| entity.to_bits()),
             "visual_foci": visual_foci,
-        }))
+        })))
     }
 }
 
@@ -500,7 +563,6 @@ pub fn register_terrain_queries(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     /// A 3×3 grid spanning ±10 m, tilted along +X so height = 0.1·x and the
     /// gradient (hence slope) is constant and known.
@@ -519,11 +581,27 @@ mod tests {
             .id()
     }
 
-    fn ok_data(resp: ApiResponse) -> serde_json::Value {
-        match resp {
-            ApiResponse::Ok { data: Some(d), .. } => d,
-            other => panic!("expected Ok with data, got {other:?}"),
-        }
+    fn ok_data(result: ApiQueryResult) -> ApiValue {
+        result.expect("query succeeds").expect("query returns data")
+    }
+
+    fn field<'a>(value: &'a ApiValue, name: &str) -> &'a ApiValue {
+        value
+            .get(name)
+            .unwrap_or_else(|| panic!("missing field `{name}`"))
+    }
+
+    fn array(value: &ApiValue) -> &[ApiValue] {
+        let ApiValue::Array(values) = value else {
+            panic!("expected array, got {value:?}");
+        };
+        values
+    }
+
+    fn number(value: &ApiValue) -> f64 {
+        value
+            .as_f64()
+            .unwrap_or_else(|| panic!("expected number, got {value:?}"))
     }
 
     #[test]
@@ -535,21 +613,21 @@ mod tests {
         // Small `eps` keeps the central difference inside the linear region (the
         // default eps = sample spacing = 10 m would clamp at the ±10 m edge).
         let d = ok_data(
-            TerrainHeightProvider.execute(&world, &json!({"x": 5.0, "z": 0.0, "eps": 1.0})),
+            TerrainHeightProvider.execute(&world, &api_value!({"x": 5.0, "z": 0.0, "eps": 1.0})),
         );
-        assert_eq!(d["found"], json!(true));
+        assert_eq!(field(&d, "found").as_bool(), Some(true));
         assert!(
-            (d["height"].as_f64().unwrap() - 0.5).abs() < 1e-4,
-            "height {d}"
+            (number(field(&d, "height")) - 0.5).abs() < 1e-4,
+            "height {d:?}"
         );
         // slope = atan(0.1) ≈ 0.0997 rad from the constant 0.1 gradient.
         assert!(
-            (d["slope"].as_f64().unwrap() - 0.1f64.atan()).abs() < 1e-3,
-            "slope {d}"
+            (number(field(&d, "slope")) - 0.1f64.atan()).abs() < 1e-3,
+            "slope {d:?}"
         );
         // Up-normal tilts away from the climb (−x), still mostly +Y.
-        let n = d["normal"].as_array().unwrap();
-        assert!(n[0].as_f64().unwrap() < 0.0 && n[1].as_f64().unwrap() > 0.9);
+        let n = array(field(&d, "normal"));
+        assert!(number(&n[0]) < 0.0 && number(&n[1]) > 0.9);
     }
 
     /// **The query must answer in the grid frame, not the render frame.**
@@ -570,12 +648,12 @@ mod tests {
             )));
 
         let d = ok_data(
-            TerrainHeightProvider.execute(&world, &json!({"x": 5.0, "z": 0.0, "eps": 1.0})),
+            TerrainHeightProvider.execute(&world, &api_value!({"x": 5.0, "z": 0.0, "eps": 1.0})),
         );
-        assert_eq!(d["found"], json!(true), "{d}");
+        assert_eq!(field(&d, "found").as_bool(), Some(true), "{d:?}");
         assert!(
-            (d["height"].as_f64().unwrap() - 0.5).abs() < 1e-4,
-            "height {d}"
+            (number(field(&d, "height")) - 0.5).abs() < 1e-4,
+            "height {d:?}"
         );
     }
 
@@ -583,15 +661,15 @@ mod tests {
     fn reports_not_found_outside_footprint() {
         let mut world = World::new();
         tilted_terrain(&mut world);
-        let d = ok_data(TerrainHeightProvider.execute(&world, &json!({"x": 100.0, "z": 0.0})));
-        assert_eq!(d["found"], json!(false));
+        let d = ok_data(TerrainHeightProvider.execute(&world, &api_value!({"x": 100.0, "z": 0.0})));
+        assert_eq!(field(&d, "found").as_bool(), Some(false));
     }
 
     #[test]
     fn missing_params_error() {
         let world = World::new();
-        let resp = TerrainHeightProvider.execute(&world, &json!({"x": 1.0}));
-        assert!(matches!(resp, ApiResponse::Error { .. }));
+        let result = TerrainHeightProvider.execute(&world, &api_value!({"x": 1.0}));
+        assert!(matches!(result, Err(ApiQueryError { .. })));
     }
 
     // ── TerrainField ─────────────────────────────────────────────────────────
@@ -604,18 +682,16 @@ mod tests {
             &world,
             // ±5 m region well inside the ±10 m footprint, so every texel-centred
             // finite difference stays in the linear region.
-            &json!({"field": "slope", "x": 0.0, "z": 0.0, "half": 5.0, "res": 4}),
+            &api_value!({"field": "slope", "x": 0.0, "z": 0.0, "half": 5.0, "res": 4}),
         ));
-        assert_eq!(d["found"], json!(true));
-        assert_eq!(d["res"], json!(4));
+        assert_eq!(field(&d, "found").as_bool(), Some(true));
+        assert_eq!(field(&d, "res").as_i64(), Some(4));
         let want = 0.1f64.atan();
-        assert!((d["min"].as_f64().unwrap() - want).abs() < 1e-3, "min {d}");
-        assert!((d["max"].as_f64().unwrap() - want).abs() < 1e-3, "max {d}");
-        let data = d["data"].as_array().unwrap();
+        assert!((number(field(&d, "min")) - want).abs() < 1e-3, "min {d:?}");
+        assert!((number(field(&d, "max")) - want).abs() < 1e-3, "max {d:?}");
+        let data = array(field(&d, "data"));
         assert_eq!(data.len(), 16); // res*res
-        assert!(data
-            .iter()
-            .all(|v| (v.as_f64().unwrap() - want).abs() < 1e-3));
+        assert!(data.iter().all(|v| (number(v) - want).abs() < 1e-3));
     }
 
     #[test]
@@ -624,9 +700,9 @@ mod tests {
         tilted_terrain(&mut world);
         let d = ok_data(TerrainFieldProvider.execute(
             &world,
-            &json!({"field": "slope", "x": 100.0, "z": 0.0, "half": 5.0}),
+            &api_value!({"field": "slope", "x": 100.0, "z": 0.0, "half": 5.0}),
         ));
-        assert_eq!(d["found"], json!(false));
+        assert_eq!(field(&d, "found").as_bool(), Some(false));
     }
 
     #[test]
@@ -635,9 +711,9 @@ mod tests {
         tilted_terrain(&mut world);
         let d = ok_data(TerrainFieldProvider.execute(
             &world,
-            &json!({"field": "elevation", "x": 8.0, "z": 0.0, "half": 5.0}),
+            &api_value!({"field": "elevation", "x": 8.0, "z": 0.0, "half": 5.0}),
         ));
-        assert_eq!(d["found"], json!(false));
+        assert_eq!(field(&d, "found").as_bool(), Some(false));
     }
 
     #[test]
@@ -646,14 +722,14 @@ mod tests {
         tilted_terrain(&mut world);
         let bad_field = TerrainFieldProvider.execute(
             &world,
-            &json!({"field": "mineral", "x": 0.0, "z": 0.0, "half": 5.0}),
+            &api_value!({"field": "mineral", "x": 0.0, "z": 0.0, "half": 5.0}),
         );
-        assert!(matches!(bad_field, ApiResponse::Error { .. }));
+        assert!(matches!(bad_field, Err(ApiQueryError { .. })));
         let bad_half = TerrainFieldProvider.execute(
             &world,
-            &json!({"field": "slope", "x": 0.0, "z": 0.0, "half": 0.0}),
+            &api_value!({"field": "slope", "x": 0.0, "z": 0.0, "half": 0.0}),
         );
-        assert!(matches!(bad_half, ApiResponse::Error { .. }));
+        assert!(matches!(bad_half, Err(ApiQueryError { .. })));
     }
 
     #[test]
@@ -662,9 +738,9 @@ mod tests {
         tilted_terrain(&mut world);
         let d = ok_data(TerrainFieldProvider.execute(
             &world,
-            &json!({"field": "elevation", "x": 0.0, "z": 0.0, "half": 5.0, "res": 100000}),
+            &api_value!({"field": "elevation", "x": 0.0, "z": 0.0, "half": 5.0, "res": 100000}),
         ));
-        assert_eq!(d["res"], json!(FIELD_MAX_RES as u64));
+        assert_eq!(field(&d, "res").as_i64(), Some(FIELD_MAX_RES as i64));
     }
 
     // ── TerrainRaycast ───────────────────────────────────────────────────────
@@ -678,16 +754,13 @@ mod tests {
         // dips below the surface past x≈8 → a hit near there.
         let d = ok_data(TerrainRaycastProvider.execute(
             &world,
-            &json!({ "origin": [0.0, 2.0, 0.0], "target": [10.0, 0.5, 0.0] }),
+            &api_value!({ "origin": [0.0, 2.0, 0.0], "target": [10.0, 0.5, 0.0] }),
         ));
-        assert_eq!(d["hit"], json!(true), "{d}");
-        let p = d["point"].as_array().unwrap();
-        assert!(
-            (p[0].as_f64().unwrap() - 8.0).abs() < 0.5,
-            "intercept x {d}"
-        );
-        let dist = d["distance"].as_f64().unwrap();
-        assert!(dist > 6.0 && dist < 9.0, "distance {d}");
+        assert_eq!(field(&d, "hit").as_bool(), Some(true), "{d:?}");
+        let p = array(field(&d, "point"));
+        assert!((number(&p[0]) - 8.0).abs() < 0.5, "intercept x {d:?}");
+        let dist = number(field(&d, "distance"));
+        assert!(dist > 6.0 && dist < 9.0, "distance {d:?}");
     }
 
     #[test]
@@ -697,9 +770,9 @@ mod tests {
         // Horizontal ray well above the highest terrain (max height 1.0 at x=10).
         let d = ok_data(TerrainRaycastProvider.execute(
             &world,
-            &json!({ "origin": [-10.0, 100.0, 0.0], "dir": [1.0, 0.0, 0.0], "max": 20.0 }),
+            &api_value!({ "origin": [-10.0, 100.0, 0.0], "dir": [1.0, 0.0, 0.0], "max": 20.0 }),
         ));
-        assert_eq!(d["hit"], json!(false), "{d}");
+        assert_eq!(field(&d, "hit").as_bool(), Some(false), "{d:?}");
     }
 
     #[test]
@@ -708,9 +781,9 @@ mod tests {
         tilted_terrain(&mut world);
         let d = ok_data(TerrainRaycastProvider.execute(
             &world,
-            &json!({ "origin": [200.0, 5.0, 0.0], "target": [210.0, 5.0, 0.0] }),
+            &api_value!({ "origin": [200.0, 5.0, 0.0], "target": [210.0, 5.0, 0.0] }),
         ));
-        assert_eq!(d["hit"], json!(false), "{d}");
+        assert_eq!(field(&d, "hit").as_bool(), Some(false), "{d:?}");
     }
 
     #[test]
@@ -718,16 +791,23 @@ mod tests {
         let mut world = World::new();
         tilted_terrain(&mut world);
         // {x,y,z} map form parses the same as the array form.
-        let d = ok_data(TerrainRaycastProvider.execute(
-            &world,
-            &json!({ "origin": {"x": 0.0, "y": 2.0, "z": 0.0},
-                     "target": {"x": 10.0, "y": 0.5, "z": 0.0} }),
-        ));
-        assert_eq!(d["hit"], json!(true), "{d}");
+        let origin = ApiValue::map([
+            ("x", api_value!(0.0)),
+            ("y", api_value!(2.0)),
+            ("z", api_value!(0.0)),
+        ]);
+        let target = ApiValue::map([
+            ("x", api_value!(10.0)),
+            ("y", api_value!(0.5)),
+            ("z", api_value!(0.0)),
+        ]);
+        let params = ApiValue::map([("origin", origin), ("target", target)]);
+        let d = ok_data(TerrainRaycastProvider.execute(&world, &params));
+        assert_eq!(field(&d, "hit").as_bool(), Some(true), "{d:?}");
         // No origin → error.
         assert!(matches!(
-            TerrainRaycastProvider.execute(&world, &json!({ "dir": [1.0, 0.0, 0.0] })),
-            ApiResponse::Error { .. }
+            TerrainRaycastProvider.execute(&world, &api_value!({ "dir": [1.0, 0.0, 0.0] })),
+            Err(ApiQueryError { .. })
         ));
     }
 }

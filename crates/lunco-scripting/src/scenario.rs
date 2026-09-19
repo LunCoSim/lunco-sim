@@ -313,8 +313,8 @@ pub enum CompileOutcome {
 /// program.
 ///
 /// Generic over the value type `V` so the backend builds `state` *natively* via a
-/// [`ValueBuilder`] — JSON appears only when the caller passes a
-/// [`bridge_core::JsonBuilder`] at an API seam, never as an internal transform.
+/// [`ValueBuilder`]. The API boundary can use its typed value builder and
+/// serialize once for an external response; JSON is never an internal transform.
 pub struct ScenarioSnapshot<V> {
     /// The scenario's per-entity state object (rhai `this`, future Python state),
     /// built into `V` by the caller's builder. The builder's `unit` if none.
@@ -729,7 +729,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
 
             // Everything that reaches `work` on a client passed the scope gate, so
             // it is a client-scoped scenario: restrict its `cmd()`s to the
-            // client-local surface (see `bridge_core::cmd_raw`). Host/standalone
+            // client-local surface (see `bridge_core::cmd_value`). Host/standalone
             // leaves the filter off.
             bridge_core::set_script_client_local(is_client);
 
@@ -828,7 +828,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 }
 
                 // Authoritative commands a client-scoped scenario tried (and was
-                // denied) this pass — collected in `bridge_core::cmd_raw`. Surface
+                // denied) this pass — collected in `bridge_core::cmd_value`. Surface
                 // them as ONE per-scenario warning diagnostic, not a per-tick log:
                 // the author sees, once, that a presentation-scoped script is
                 // reaching for host-owned state. Warning severity → the scenario
@@ -909,7 +909,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     /// with the backend's [`ScenarioSnapshot`]. `None` if the driver isn't
     /// tracking this entity (no scenario, or it hasn't been driven yet). Powers
     /// the `ScriptInspect` query — the same data for any language `R`. `builder`
-    /// chooses the value format (a [`bridge_core::JsonBuilder`] for the API).
+    /// chooses the value format (for example, the API's typed value builder).
     pub fn introspect<B: ValueBuilder>(
         &self,
         entity: Entity,
