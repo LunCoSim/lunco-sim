@@ -36,22 +36,20 @@ payload, habitat, or instrument; it is not a model-specific design contract.
 
 ## Highest-value gaps
 
-### 1. One checkpoint helper for the live edit loop
+### 1. Generation-bound checkpoint helper (partially implemented)
 
-The normal edit still requires several hand-written calls: apply a plan, poll
-the command, wait for projected generation, query the affected paths, capture
-an Editor screenshot, and run the component gate. A generic
-`editor_workflow::checkpoint` Rhai helper should accept the exact document,
-generation, affected paths, and optional test command, then return one bounded
-structured record:
+`editor_workflow::checkpoint(doc, expected_generation, affected_paths,
+preview_id, view_id)` now checks one explicit document generation, its matching
+Editor projection/view, exact composed-path readback, document-scoped lint, and
+a final generation recheck. It is read-only and preserves selection, camera,
+preview, perspective, and persistence state. Results distinguish `pending`,
+`stale`, failed readback/lint, and `verified`.
 
-```text
-apply acknowledgement -> projected generation -> readback -> screenshot -> gate
-```
-
-It must preserve the current view, never restart the scene, and report a loud
-`pending`, `stale`, or `projection_failed` state rather than retrying through a
-second writer.
+The checkpoint deliberately does not claim screenshot or component-test
+acceptance. `CaptureScreenshot` is still a separate render operation, and the
+API does not yet atomically bind the captured image and the Twin verification
+verdict to the same generation. That lifecycle binding, plus the interactive
+component runner, remains open work.
 
 ### 2. Atomic primitive replacement
 
@@ -71,6 +69,11 @@ recipes for rounded/beveled boxes, rings, extruded profiles, brackets and
 PBR/material presets. Recipes must remain Rhai plans over standard USD
 `UsdGeom`/`UsdShade`; the Rust core should only gain a capability when the
 standard operation cannot represent the requested fact.
+
+The shared f64 profile kernel and Rhai `extrude_profile` surface now cover
+strictly-convex polygon prisms with explicit outward topology and
+face-varying normals. This is a primitive, not a general CAD/BREP kernel;
+rounded edges, Boolean operations, and material recipes are still missing.
 
 ### 4. Source-backed measurement report for every Gprim
 
@@ -135,10 +138,14 @@ layer.
 
 ## Implementation order
 
-1. Add checkpoint/status helpers and use them for every component iteration.
-2. Add atomic Gprim replacement and shape/material recipes.
-3. Add the read-only measurement and component-runner conveniences.
-4. Add the visual evidence record and CI checks for stale generations.
+1. Bind screenshot and declared component-verification results to the
+   generation-checked Editor checkpoint.
+2. Add atomic Gprim replacement and reusable shape/material recipes beyond
+   convex profile extrusion.
+3. Complete the authored-versus-composed measurement report and add an
+   in-process component runner using the existing Twin resolver.
+4. Keep visual review human-approved while persisting exact preview/view,
+   camera, screenshot, selection, and document/projected-generation evidence.
 
 This order shortens the feedback loop first and improves modeling fidelity
 without expanding the simulator core or creating another authoring path.
