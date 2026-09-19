@@ -10518,6 +10518,7 @@ dependencies = [
  "lunco-render",
  "lunco-settings",
  "lunco-telemetry-core",
+ "lunco-twin",
  "lunco-usd-bevy",
  "lunco-usd-bevy-runtime-core",
  "lunco-usd-bevy-scene",
@@ -10532,6 +10533,7 @@ dependencies = [
  "lunco-workspace",
  "openusd",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

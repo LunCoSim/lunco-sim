@@ -103,6 +103,7 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_document::document::{LayerId, UsdDocument};
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 /// Stable id of the workbench tab the viewport renders into.
 pub const USD_VIEWPORT_PANEL_ID: PanelId = PanelId("usd::viewport");
@@ -3111,13 +3112,35 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
         _ => (std::path::PathBuf::from("."), "scene.usda".to_string()),
     };
 
-    // A file opened from inside an already registered Twin must keep that
-    // Twin's real authority.  Using a synthetic `__viewport_*` authority here
-    // would make a component edit invisible to an assembly recipe whose
-    // resolver keys the same layer as `twin://<twin>/<relative-path>`.
-    // Resolve the deepest matching registered root so nested authorities remain
-    // deterministic when more than one Twin contains the file.
+    // Resolve file-backed documents against the workspace first. The workspace
+    // owns which Twin contains a file; the asset-root registry is a separate
+    // projection and can briefly lag a Twin open/replacement. Ensure the exact
+    // owning Twin is mounted before asking AssetServer to compose the preview.
+    // Otherwise the synthetic viewport authority below makes every authored
+    // `twin://<twin>/components/...` reference in the document unresolved.
     if matches!(host.document().origin(), DocumentOrigin::File { .. }) {
+        let file_path = base.join(&rel);
+        let workspace_result = world.get_resource::<WorkspaceResource>().map(|workspace| {
+            workspace_twin_coordinates(workspace, world.resource::<TwinRoots>(), &file_path)
+        });
+        if let Some(result) = workspace_result {
+            match result {
+                Ok(Some(coords)) => return Some(coords),
+                Ok(None) => {}
+                Err(error) => {
+                    report_preview_error(
+                        world,
+                        "twin-asset-mount-failed",
+                        format!("could not mount the document's workspace Twin: {error}"),
+                    );
+                    return None;
+                }
+            }
+        }
+
+        // Preserve compatibility for a Twin authority mounted by a host that
+        // does not install WorkspacePlugin. Among matching roots, choose the
+        // deepest one so nested authorities remain deterministic.
         let roots = world.resource::<TwinRoots>();
         if let Ok(names) = roots.names() {
             let mut matches = names
@@ -3188,6 +3211,31 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
     Some((name, rel))
 }
 
+/// Return the canonical Twin authority and Twin-relative source path for a
+/// file owned by the open workspace. Registering here is idempotent for an
+/// already-mounted root and closes the ordering gap between workspace admission
+/// and isolated preview creation.
+fn workspace_twin_coordinates(
+    workspace: &WorkspaceResource,
+    roots: &TwinRoots,
+    file_path: &Path,
+) -> Result<Option<(String, String)>, lunco_assets_core::TwinRootsError> {
+    let Some((twin, relative)) = workspace
+        .twins()
+        .filter_map(|(_, twin)| {
+            let relative = file_path.strip_prefix(&twin.root).ok()?.to_path_buf();
+            Some((twin, relative))
+        })
+        .max_by_key(|(twin, _)| twin.root.components().count())
+    else {
+        return Ok(None);
+    };
+
+    let name = roots.register_twin(twin)?;
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    Ok(Some((name, relative)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3195,6 +3243,46 @@ mod tests {
     use lunco_usd_commands::UsdCommandsPlugin;
     use lunco_usd_document::document::UsdOp;
     use lunco_usd_viewport_core::UsdPreviewExplodeAxis;
+
+    #[test]
+    fn workspace_owned_preview_uses_the_mounted_twin_authority() {
+        let temp_dir = if Path::new("/tmp").is_dir() {
+            Path::new("/tmp").to_path_buf()
+        } else {
+            std::env::temp_dir()
+        };
+        let root = tempfile::Builder::new()
+            .prefix("luncosim-preview-twin-")
+            .tempdir_in(temp_dir)
+            .expect("temporary Twin root");
+        let twin = match lunco_twin::TwinMode::open(root.path()).expect("open Twin folder") {
+            lunco_twin::TwinMode::Folder(twin) | lunco_twin::TwinMode::Twin(twin) => twin,
+            lunco_twin::TwinMode::Orphan(_) => panic!("a folder must open as a Twin"),
+        };
+        let twin_root = twin.root.clone();
+        let expected_name = twin_root
+            .file_name()
+            .expect("temporary folder has a name")
+            .to_string_lossy()
+            .into_owned();
+        let file_path = twin_root.join("vehicles/griffin_1_visual.usda");
+
+        let mut workspace = WorkspaceResource::new();
+        workspace.add_twin(twin);
+        let roots = TwinRoots::default();
+
+        let (name, relative) = workspace_twin_coordinates(&workspace, &roots, &file_path)
+            .expect("workspace Twin should mount")
+            .expect("document path belongs to the workspace Twin");
+
+        assert_eq!(name, expected_name);
+        assert_eq!(relative, "vehicles/griffin_1_visual.usda");
+        assert_eq!(
+            roots.root_for(&name).expect("read mounted root"),
+            Some(twin_root.canonicalize().expect("canonical Twin root"))
+        );
+    }
+
     /// Without any rendering plugins (`Assets<Image>` absent), opening a
     /// document does not allocate a preview session or panic.
     #[test]

@@ -39,6 +39,8 @@ serde_json = { workspace = true }
 lunco-usd-commands = { path = "../lunco-usd-commands" }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
+lunco-twin = { path = "../lunco-twin" }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
