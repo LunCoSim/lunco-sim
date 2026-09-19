@@ -38,28 +38,46 @@ impl EphemerisProvider for StubEphemeris {
 /// Note the `CelestialBodyDecl` spawns: celestial content is **opt-in per scene**
 /// (doc 19 §11e). A scene declares its bodies in USD (`LunCoCelestialBodyAPI` →
 /// `CelestialBodyDecl`), and nothing celestial — hierarchy, globes, orbit views,
-/// ephemeris — exists without them. These stand in for that declaration, exactly as
-/// `assets/celestial/solar_system.usda` does for a real scene.
+/// ephemeris — exists without them. The fixture supplies those declarations
+/// directly without loading scene assets.
 fn celestial_test_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::input::InputPlugin);
     app.add_plugins(bevy::transform::TransformPlugin);
-    let _ = lunco_assets_runtime::register_lunco_asset_sources(&mut app);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.init_resource::<Assets<Mesh>>();
     app.init_asset::<Image>();
+    install_test_input_bindings(&mut app);
     app.add_plugins(CelestialPlugin);
     // The scene asks for a sky: Sun, Earth, Moon.
+    declare_test_bodies(app.world_mut());
+    app
+}
+
+fn install_test_input_bindings(app: &mut App) {
+    app.add_plugins(lunco_input_core::InputBindingsPlugin);
+    app.insert_resource(lunco_input_core::InputBindingsSettings {
+        look_button: "Right".to_string(),
+        ..Default::default()
+    });
+}
+
+/// Headless declarations still satisfy the hierarchy's authored-look contract.
+/// An empty look keeps these mechanics tests independent of visual asset paths.
+fn declare_test_bodies(world: &mut World) {
     for naif in [
         lunco_celestial::ephemeris_id::SUN,
         lunco_celestial::ephemeris_id::EARTH,
         lunco_celestial::ephemeris_id::MOON,
     ] {
-        app.world_mut()
-            .spawn(lunco_celestial_spatial_core::CelestialBodyDecl { naif });
+        let mut declaration = world.spawn(lunco_celestial_spatial_core::CelestialBodyDecl { naif });
+        if naif == lunco_celestial::ephemeris_id::EARTH
+            || naif == lunco_celestial::ephemeris_id::MOON
+        {
+            declaration.insert(lunco_materials::ShaderLook::default());
+        }
     }
-    app
 }
 
 /// **The `SolarSystemRoot` invariant: exactly one bearer, and it is the Grid.**
@@ -545,14 +563,7 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
     );
 
     // …and re-declaring bodies rebuilds it (the idempotent gate, not a spent latch).
-    for naif in [
-        lunco_celestial::ephemeris_id::SUN,
-        lunco_celestial::ephemeris_id::EARTH,
-        lunco_celestial::ephemeris_id::MOON,
-    ] {
-        app.world_mut()
-            .spawn(lunco_celestial_spatial_core::CelestialBodyDecl { naif });
-    }
+    declare_test_bodies(app.world_mut());
     app.update();
     app.update();
     assert!(
@@ -569,12 +580,8 @@ fn test_celestial_startup_and_movement() {
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::input::InputPlugin);
     app.add_plugins(bevy::transform::TransformPlugin);
-    // setup_big_space_hierarchy loads lunco://textures/earth.png at Startup.
-    // The source must be registered *before* `AssetPlugin`, else bevy 0.18 panics
-    // on the async load task (it resolves the source off-thread). The app entry
-    // registers these; the test must too — otherwise it only passed by timing
-    // luck (the load task never ran before the 2 `update()`s completed).
-    let _ = lunco_assets_runtime::register_lunco_asset_sources(&mut app);
+    // The plugin's asset-facing systems need Bevy's asset resources, but these
+    // mechanics tests use only in-memory mesh/image stores and load no files.
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.init_resource::<Assets<Mesh>>();
     // NO material asset stores, and no `Shader` asset type, any more: the crate is
@@ -586,17 +593,11 @@ fn test_celestial_startup_and_movement() {
     app.init_asset::<Image>();
     // `GizmoPlugin` is likewise gone — it came from `bevy_gizmos` (a render feature),
     // and nothing in this crate draws gizmos.
+    install_test_input_bindings(&mut app);
     app.add_plugins(CelestialPlugin);
     // The scene declares its bodies — celestial content is opt-in (doc 19 §11e), so
     // without these there is no hierarchy, no globes and no ephemeris at all.
-    for naif in [
-        lunco_celestial::ephemeris_id::SUN,
-        lunco_celestial::ephemeris_id::EARTH,
-        lunco_celestial::ephemeris_id::MOON,
-    ] {
-        app.world_mut()
-            .spawn(lunco_celestial_spatial_core::CelestialBodyDecl { naif });
-    }
+    declare_test_bodies(app.world_mut());
     // Install the provider whose output depends on the epoch, so the clock seek
     // below actually repositions Earth's grid via `ephemeris_update_system`.
     app.insert_resource(EphemerisResource {
@@ -610,16 +611,14 @@ fn test_celestial_startup_and_movement() {
 
     // 1. Verify Sun and Earth exist.
     //
-    // `EarthRoot` is the Earth *grid* (a frame) inside the EMB grid. Its pose is
-    // `CellCoord × cell_edge + Transform`, and BOTH parts move as it orbits —
-    // the cells are real (2 km edges; see `big_space_setup`). Comparing only the
-    // `Transform` residual would pass even if the cell were computed wrong, and
-    // would break outright the moment Earth crossed a cell boundary. Compose.
+    // `EarthRoot` is the Earth *grid* (a frame) inside the EMB grid. Both its
+    // cell and local Transform move as it orbits; compose through BigSpace so
+    // the assertion covers cell-boundary movement too.
     let mut query = app
         .world_mut()
         .query::<(&lunco_celestial_spatial::EarthRoot, &CellCoord, &Transform)>();
     let earth = query.iter(app.world()).next().expect("No EarthRoot found");
-    let earth_pose_1 = (*earth.1, earth.2.translation);
+    let earth_pose_1 = (*earth.1, *earth.2);
 
     // 2. Advance the clock by 10 days. The epoch is a *derived* view
     //    (`WorldTime.epoch_jd`, written by the `lunco-time` spine each frame), so
@@ -644,27 +643,21 @@ fn test_celestial_startup_and_movement() {
     let mut grid_q = app
         .world_mut()
         .query::<(&lunco_celestial_spatial::EMBRoot, &big_space::prelude::Grid)>();
-    let edge = grid_q
+    let emb_grid = grid_q
         .iter(app.world())
         .next()
         .expect("No EMBRoot grid found")
         .1
-        .cell_edge_length() as f64;
+        .clone();
 
     let mut query = app
         .world_mut()
         .query::<(&lunco_celestial_spatial::EarthRoot, &CellCoord, &Transform)>();
     let earth = query.iter(app.world()).next().expect("No EarthRoot found");
-    let earth_pose_2 = (*earth.1, earth.2.translation);
-
-    let compose = |(cell, tf): (CellCoord, bevy::math::Vec3)| {
-        bevy::math::DVec3::new(
-            cell.x as f64 * edge + tf.x as f64,
-            cell.y as f64 * edge + tf.y as f64,
-            cell.z as f64 * edge + tf.z as f64,
-        )
-    };
-    let moved = (compose(earth_pose_2) - compose(earth_pose_1)).length();
+    let earth_pose_2 = (*earth.1, *earth.2);
+    let moved = (emb_grid.grid_position_double(&earth_pose_2.0, &earth_pose_2.1)
+        - emb_grid.grid_position_double(&earth_pose_1.0, &earth_pose_1.1))
+    .length();
 
     // Earth about the EMB traces a ~4.7e6 m radius circle once a month, so 10
     // days must move it by megametres. A bare `assert_ne!` on the residual would
@@ -793,33 +786,8 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
     );
 }
 
-/// **The celestial takeover must not add a SECOND sun to a scene that authored one.**
-///
-/// The takeover must not spawn a second scene sun. `lunco-usd-bevy` keeps
-/// such lights when an authored one appeared, but that retirement was edge-triggered on
-/// the authored light's `Add` — and the celestial hierarchy is enabled by the site
-/// anchor the scene load itself detects, so it runs AFTER that edge has passed. Its
-/// unconditional spawn therefore re-created the duplicate the retirement existed to
-/// prevent.
-///
-/// The spawn is now gone entirely: the engine sun is composed from
-/// `lunco://lighting/sun.usda` as the weakest opinion on the scene's own `Sun` prim,
-/// so there is one prim and nothing to race. This test pins that the takeover adds
-/// no light of its own — the regression it guards is someone reintroducing a
-/// "helpful" default sun here.
-///
-/// Two suns is not merely wasteful. `update_sun_light_system` used to steer the
-/// BRIGHTEST `DirectionalLight`, so a second light could take the aim and the
-/// scene's authored sun stayed frozen at its authored `xformOp:rotateXYZ` — the
-/// summer-space-school twin lighting and shadowing Hadley from a direction the
-/// ephemeris never sanctioned ("the DistantLight does not follow the sun"). It
-/// now picks structurally instead, but a second unfilterable top-level
-/// `DistantLight` would still make "which one?" unanswerable — which is why the
-/// spawn had to go rather than the tiebreak get smarter.
-///
-/// Asserted on the light COUNT and on which entity survives, because "the authored
-/// one is aimed correctly" passes for the wrong reason as soon as the authored sun
-/// happens to be the brighter of the two.
+/// A scene-owned directional light remains the only light when celestial frames
+/// are created. The plugin owns frame mechanics and must not invent scene content.
 #[test]
 fn the_celestial_takeover_spawns_no_sun_of_its_own() {
     let mut app = celestial_test_app();
@@ -827,14 +795,12 @@ fn the_celestial_takeover_spawns_no_sun_of_its_own() {
         provider: Arc::new(StubEphemeris),
     });
 
-    // The scene's own sun, present BEFORE the celestial takeover — the real
-    // ordering, where the site anchor that enables the hierarchy is detected
-    // during the same scene load that instantiated this light.
+    // A pre-existing scene-owned light must remain the sole light.
     let authored = app
         .world_mut()
         .spawn((
             DirectionalLight {
-                illuminance: 10_000.0, // dimmer than the authored calibrated sun
+                illuminance: 10_000.0,
                 ..default()
             },
             Transform::default(),

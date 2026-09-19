@@ -1249,45 +1249,49 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                 // and committing it fed that short value to `MoveEntity`,
                 // teleporting the object one cell. This is the same frame
                 // the gizmo authors and the same one `MoveEntity` expects.
-                if let Some(t) = grid_absolute_of(ctx, entity).map(|p| p.as_vec3()) {
-                    let (mut x, mut y, mut z) = (t.x, t.y, t.z);
-                    // `DragValue`, not a ±1000 `Slider`: a grid-absolute
-                    // coordinate is unbounded (a moonbase prim sits well
-                    // outside ±1000 m of the grid origin), and a slider would
-                    // CLAMP it — merely showing the panel and nudging one axis
-                    // would have hauled the object back inside the range.
-                    let rx = ui.add(egui::DragValue::new(&mut x).speed(0.1).prefix("X: "));
-                    let ry = ui.add(egui::DragValue::new(&mut y).speed(0.1).prefix("Y: "));
-                    let rz = ui.add(egui::DragValue::new(&mut z).speed(0.1).prefix("Z: "));
-                    // Author ONCE, on release — not on every `changed()` frame, which
-                    // would flood the journal with an op per mouse-move for a single
-                    // drag. Same rule as the gizmo's drag-end authoring.
-                    let committed = [&rx, &ry, &rz]
-                        .iter()
-                        .any(|r| r.drag_stopped() || (r.changed() && !r.dragged()));
-                    if committed {
-                        let new_t = Vec3::new(x, y, z);
-                        // Route through the typed `MoveEntity` verb; it owns
-                        // physics pose seating and USD persistence.
-                        let Some(gid) = ctx.get::<lunco_core::GlobalEntityId>(entity).copied()
-                        else {
-                            warn!("INSPECTOR: {entity:?} has no GlobalEntityId — not movable");
-                            ctx.trigger(lunco_telemetry_core::TelemetryEvent {
-                                name: "inspector-move-failed".to_string(),
-                                source: 0,
-                                severity: lunco_telemetry_core::Severity::Error,
-                                data: lunco_telemetry_core::TelemetryValue::String(
-                                    "The selected object has no stable entity identity and cannot be moved"
-                                        .to_string(),
-                                ),
-                                timestamp: 0.0,
+                match grid_absolute_of(ctx, entity) {
+                    Ok(position) => {
+                        let (mut x, mut y, mut z) = (position.x, position.y, position.z);
+                        // `DragValue`, not a ±1000 `Slider`: a grid-absolute
+                        // coordinate is unbounded (a moonbase prim sits well
+                        // outside ±1000 m of the grid origin), and a slider would
+                        // CLAMP it — merely showing the panel and nudging one axis
+                        // would have hauled the object back inside the range.
+                        let rx = ui.add(egui::DragValue::new(&mut x).speed(0.1).prefix("X: "));
+                        let ry = ui.add(egui::DragValue::new(&mut y).speed(0.1).prefix("Y: "));
+                        let rz = ui.add(egui::DragValue::new(&mut z).speed(0.1).prefix("Z: "));
+                        // Author ONCE, on release — not on every `changed()` frame, which
+                        // would flood the journal with an op per mouse-move for a single
+                        // drag. Same rule as the gizmo's drag-end authoring.
+                        let committed = [&rx, &ry, &rz]
+                            .iter()
+                            .any(|r| r.drag_stopped() || (r.changed() && !r.dragged()));
+                        if committed {
+                            // Route through the typed `MoveEntity` verb; it owns
+                            // physics pose seating and USD persistence.
+                            let Some(gid) = ctx.get::<lunco_core::GlobalEntityId>(entity).copied()
+                            else {
+                                warn!("INSPECTOR: {entity:?} has no GlobalEntityId — not movable");
+                                ctx.trigger(lunco_telemetry_core::TelemetryEvent {
+                                    name: "inspector-move-failed".to_string(),
+                                    source: 0,
+                                    severity: lunco_telemetry_core::Severity::Error,
+                                    data: lunco_telemetry_core::TelemetryValue::String(
+                                        "The selected object has no stable entity identity and cannot be moved"
+                                            .to_string(),
+                                    ),
+                                    timestamp: 0.0,
+                                });
+                                return;
+                            };
+                            ctx.trigger(lunco_scene_commands::commands::MoveEntity {
+                                entity_id: gid.get(),
+                                translation: [x, y, z],
                             });
-                            return;
-                        };
-                        ctx.trigger(lunco_scene_commands::commands::MoveEntity {
-                            entity_id: gid.get(),
-                            translation: new_t.to_array().map(f64::from),
-                        });
+                        }
+                    }
+                    Err(error) => {
+                        ui.weak(format!("Position unavailable: {error}"));
                     }
                 }
             });
@@ -1494,26 +1498,25 @@ fn camera_projection_section(
 /// `customData`-ranged attributes. Component prims use the same typed proposal
 /// boundary as Rhai/AI plans; non-component legacy parameter views retain the
 /// direct grouped edit command until their owning schema gets a proposal UI.
-/// Grid-absolute translation of `entity` — `cell × edge + local`, the frame USD
-/// authors `xformOp:translate` in and the frame `MoveEntity` takes.
+/// Grid-absolute translation of `entity`, the frame `MoveEntity` takes.
 ///
-/// The `PanelCtx` (one-component-at-a-time) spelling of
-/// [`lunco_spatial::coords::grid_absolute`], which needs `Query`s the panel doesn't
-/// have. Same rule: no parent `Grid` ⇒ no cell ⇒ the local translation already
-/// IS the authored value.
-fn grid_absolute_of(ctx: &PanelCtx, entity: Entity) -> Option<bevy::math::DVec3> {
-    let tf = ctx.get::<Transform>(entity)?;
-    let Some(grid) = ctx
-        .get::<ChildOf>(entity)
-        .and_then(|c| ctx.get::<big_space::prelude::Grid>(c.parent()))
-    else {
-        return Some(tf.translation.as_dvec3());
-    };
-    let cell = ctx
-        .get::<big_space::prelude::CellCoord>(entity)
-        .copied()
-        .unwrap_or_default();
-    Some(grid.grid_position_double(&cell, tf))
+/// Resolve the selected entity through the shared spatial contract.
+///
+/// `PanelCtx` exposes one-component-at-a-time reads rather than Bevy queries,
+/// so this gathers the component facts and delegates coordinate interpretation
+/// to `lunco-spatial`. A cell without its parent Grid remains an explicit error.
+fn grid_absolute_of(
+    ctx: &PanelCtx,
+    entity: Entity,
+) -> Result<bevy::math::DVec3, lunco_spatial::coords::CoordinateError> {
+    let transform = ctx
+        .get::<Transform>(entity)
+        .ok_or(lunco_spatial::coords::CoordinateError::MissingSpatial { entity })?;
+    let parent = ctx.get::<ChildOf>(entity).map(ChildOf::parent);
+    let grid = parent.and_then(|parent| ctx.get::<big_space::prelude::Grid>(parent));
+    let cell = ctx.get::<big_space::prelude::CellCoord>(entity);
+    lunco_spatial::coords::grid_absolute_from_components(entity, parent, cell, transform, grid)
+        .map(|position| position.0)
 }
 
 fn usd_edit_scope_label(scope: UsdEditScope) -> &'static str {

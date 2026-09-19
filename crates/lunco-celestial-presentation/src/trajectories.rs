@@ -1409,9 +1409,11 @@ fn trajectory_alignment_system(
                 Some(ft) => path.anchor - ft,
                 None => bevy::math::DVec3::ZERO,
             };
-            let (new_cell, new_translation) = parent_grid.translation_to_grid(desired_local);
-            let next_transform =
-                Transform::from_translation(new_translation).with_rotation(Quat::IDENTITY);
+            let (new_cell, next_transform) = lunco_spatial::attach::local_pose_to_grid_storage(
+                parent_grid,
+                desired_local,
+                bevy::math::DQuat::IDENTITY,
+            );
             if !is_current_parent {
                 lunco_spatial::attach::migrate_to_grid(
                     &mut commands,
@@ -1428,10 +1430,11 @@ fn trajectory_alignment_system(
                 } else {
                     commands.entity(v_entity).try_insert(new_cell);
                 }
-                if transform.translation != new_translation || transform.rotation != Quat::IDENTITY
-                {
-                    transform.translation = new_translation;
-                    transform.rotation = Quat::IDENTITY;
+                if transform.translation != next_transform.translation {
+                    transform.translation = next_transform.translation;
+                }
+                if transform.rotation != next_transform.rotation {
+                    transform.rotation = next_transform.rotation;
                 }
             }
             // The mesh child is a low-precision subtree below this cell entity.

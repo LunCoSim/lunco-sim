@@ -196,9 +196,7 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
 fn coarse_parent_cells_destroy_split_precision() {
     let grid = Grid::new(OLD.solar.0, OLD.solar.1);
     let (cell, local) = grid.translation_to_grid(EMB_IN_SOLAR);
-    let reconstructed = DVec3::new(cell.x as f64, cell.y as f64, cell.z as f64)
-        * grid.cell_edge_length() as f64
-        + local.as_dvec3();
+    let reconstructed = grid.grid_position_double(&cell, &Transform::from_translation(local));
     let err = (reconstructed - EMB_IN_SOLAR).length();
     println!("OLD (Solar 1e9 / EMB 1e8) split error: {err:.4} m");
     // The historical config loses metres in the f32 cell-local remainder.

@@ -169,8 +169,11 @@ pub fn on_set_camera_look_at(
         (y, p)
     };
     let rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
-    let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
-    let new_transform = Transform::from_translation(new_translation).with_rotation(rotation);
+    let (new_cell, new_transform) = lunco_spatial::attach::local_pose_to_grid_storage(
+        grid,
+        cmd.eye.as_dvec3(),
+        rotation.as_dquat(),
+    );
     if child_of.parent() == root {
         if let Some(mut cell) = cell {
             cell.set_if_neq(new_cell);
@@ -265,7 +268,10 @@ mod tests {
         );
         let cell = *app.world().get::<CellCoord>(avatar).unwrap();
         let translation = app.world().get::<Transform>(avatar).unwrap().translation;
-        let composed_y = cell.y as f64 * 2_000.0 + translation.y as f64;
+        let active_grid = app.world().get::<Grid>(active_physics_grid).unwrap();
+        let composed_y = active_grid
+            .grid_position_double(&cell, &Transform::from_translation(translation))
+            .y;
         assert!((composed_y - 2_500.0).abs() < 1.0e-3);
         assert_ne!(canonical_render_grid, active_physics_grid);
         assert_eq!(

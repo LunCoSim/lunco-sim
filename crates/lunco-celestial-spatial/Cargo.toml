@@ -5,7 +5,6 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
-lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-api-core = { path = "../lunco-api-core" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
