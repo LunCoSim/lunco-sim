@@ -21,6 +21,7 @@ bevy = { workspace = true, features = [
     "bevy_shader",
     "mesh_picking",
     "bevy_gizmos",
+    "keyboard",
 ] }
 openusd = { workspace = true }
 bevy_egui = { workspace = true, features = ["render"] }

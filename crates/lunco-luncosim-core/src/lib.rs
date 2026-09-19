@@ -79,8 +79,6 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
         })
         .add(bevy::diagnostic::DiagnosticsPlugin)
         .add(bevy::input::InputPlugin)
-        .add(bevy::input_focus::InputFocusPlugin)
-        .add(bevy::input_focus::InputDispatchPlugin)
         .add(bevy::state::app::StatesPlugin)
         .add(AssetPlugin {
             file_path: lunco_assets_core::assets_dir_abs().to_string_lossy().to_string(),

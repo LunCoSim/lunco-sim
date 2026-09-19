@@ -9,6 +9,8 @@
 //! 4. Adjacent tiles share edges (no gaps)
 
 use bevy::math::{DVec3, Vec3};
+use bevy::prelude::Transform;
+use big_space::prelude::Grid;
 
 const MOON_R: f64 = 1_737_000.0;
 
@@ -106,23 +108,6 @@ fn generate_tile_vertices(
     (positions, normals)
 }
 
-/// Compute body-local position of a tile center, given its cell and local transform.
-fn tile_body_local_position(
-    cell_x: i64,
-    cell_y: i64,
-    cell_z: i64,
-    local_x: f32,
-    local_y: f32,
-    local_z: f32,
-    cell_size: f64,
-) -> DVec3 {
-    DVec3::new(
-        cell_x as f64 * cell_size + local_x as f64,
-        cell_y as f64 * cell_size + local_y as f64,
-        cell_z as f64 * cell_size + local_z as f64,
-    )
-}
-
 fn cube_to_sphere(face: u8, u: f64, v: f64) -> DVec3 {
     let p = match face {
         0 => DVec3::new(1.0, v, -u),
@@ -202,15 +187,9 @@ fn test_tile_vertices_on_sphere() {
 
 #[test]
 fn test_tile_positions_match_grid_decomposition() {
-    // big_space Grid::translation_to_grid should decompose tile center
-    // positions so reassembly gives back the original. Mirror the REAL
-    // implementation (grid/mod.rs): the split is computed in **f64** with a
-    // *rounded* cell index, and only the small (≤ half-cell) remainder is
-    // narrowed to f32 — that's what keeps sub-centimetre placement at body
-    // radius. (An earlier version of this test simulated the split in f32
-    // with a floored index, which injects ~0.1 m of f32 rounding at 1.7e6 m
-    // magnitude and fails — an artifact of the simulation, not the engine.)
-    let cell_size = 10_000.0_f64;
+    // Exercise BigSpace's real cell split and reconstruction; the test owns
+    // tile geometry, not a copy of the grid algorithm.
+    let grid = Grid::new(10_000.0, 0.0);
 
     for face in 0..6u8 {
         for tile_i in 0..2i32 {
@@ -221,23 +200,13 @@ fn test_tile_positions_match_grid_decomposition() {
                 let v_mid = -1.0 + (tile_j as f64 + 0.5) * step;
                 let tile_center = cube_to_sphere(face, u_mid, v_mid) * MOON_R;
 
-                // Mirror Grid::translation_to_grid: f64 rounded cell + f64
-                // remainder, narrowed to f32 (the Transform's precision).
-                let cell_x = (tile_center.x / cell_size).round() as i64;
-                let cell_y = (tile_center.y / cell_size).round() as i64;
-                let cell_z = (tile_center.z / cell_size).round() as i64;
-                let local_x = (tile_center.x - cell_x as f64 * cell_size) as f32;
-                let local_y = (tile_center.y - cell_y as f64 * cell_size) as f32;
-                let local_z = (tile_center.z - cell_z as f64 * cell_size) as f32;
-
-                // Reassemble
-                let reassembled = tile_body_local_position(
-                    cell_x, cell_y, cell_z, local_x, local_y, local_z, cell_size,
-                );
+                let (cell, local) = grid.translation_to_grid(tile_center);
+                let reassembled =
+                    grid.grid_position_double(&cell, &Transform::from_translation(local));
                 let error = (reassembled - tile_center).length();
                 assert!(error < 0.01,
                     "Face {} tile [{},{}] grid decomposition error: {:.4} (center={:?}, cell=({},{},{}), local=({},{},{}))",
-                    face, tile_i, tile_j, error, tile_center, cell_x, cell_y, cell_z, local_x, local_y, local_z);
+                    face, tile_i, tile_j, error, tile_center, cell.x, cell.y, cell.z, local.x, local.y, local.z);
             }
         }
     }

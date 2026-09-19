@@ -9,7 +9,7 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
-bevy = { workspace = true }
+bevy = { workspace = true, features = ["bevy_window", "keyboard", "mouse"] }
 leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }

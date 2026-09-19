@@ -6,7 +6,7 @@ license.workspace = true
 description = "Bevy integration for the LunCoSim Document System — generic document-lifecycle events and the Twin-level change journal."
 
 [dependencies]
-bevy = { workspace = true }
+bevy = { workspace = true, features = ["keyboard"] }
 # egui only powers two UI-only systems (keyboard-intent suppression + repaint
 # fanout). Optional so a headless `--no-default-features` build (server) drops
 # egui→winit entirely; the document-lifecycle events/types stay egui-free.

@@ -6,7 +6,7 @@ license.workspace = true
 description = "Avatar-specific semantic input and camera-input projection for LunCoSim"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_camera"] }
+bevy = { workspace = true, features = ["bevy_camera", "keyboard", "mouse"] }
 big_space = { workspace = true }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-avatar-camera-core = { path = "../lunco-avatar-camera-core" }

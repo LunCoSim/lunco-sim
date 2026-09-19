@@ -14,7 +14,7 @@ lunco-command-contracts = { path = "../lunco-command-contracts" }
 # sibling `lunco-scene-authoring` package; this package owns runtime scene
 # mutation and remains render-free.
 #
-bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader", "keyboard"] }
 avian3d = { workspace = true }
 
 big_space.workspace = true

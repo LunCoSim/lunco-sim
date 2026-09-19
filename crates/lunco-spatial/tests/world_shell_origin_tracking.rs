@@ -63,11 +63,11 @@ fn world_grid_global_transform_tracks_traveling_origin() {
     app.update();
     app.update(); // second frame: past any command-flush / tagging latency
 
-    let edge = {
+    let grid = {
         let mut q = app.world_mut().query::<&Grid>();
-        q.get(app.world(), world_grid).unwrap().cell_edge_length() as f64
+        q.get(app.world(), world_grid).unwrap().clone()
     };
-    let expected = -(CELLS as f64) * edge; // origin-relative: grid origin is behind the camera
+    let expected = -grid.cell_to_float(&CellCoord::new(CELLS, 0, 0)).x; // origin-relative: grid origin is behind the camera
 
     let gt = {
         let mut q = app.world_mut().query::<&GlobalTransform>();

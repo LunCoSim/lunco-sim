@@ -15,7 +15,7 @@ lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 #
 # Render-bound screenshots and offline recording live in `lunco-capture`; keeping them out
 # preserves this crate's render-free camera/interaction dependency boundary.
-bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"] }
+bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh", "keyboard"] }
 # Camera INTENT: `SceneCamera` — "this entity is the scene camera, and this is how it
 # should look" — stated without naming a render pipeline.
 lunco-render = { path = "../lunco-render" }

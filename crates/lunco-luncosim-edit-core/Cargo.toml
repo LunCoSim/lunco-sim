@@ -17,7 +17,14 @@ lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 # This crate names no `bevy_pbr` material type. Appearance is stated as intent
 # and bound by `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`.
-bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
+bevy = { workspace = true, features = [
+    "bevy_asset",
+    "bevy_mesh",
+    "bevy_light",
+    "bevy_shader",
+    "keyboard",
+    "mouse",
+] }
 # Appearance intent (render-free): `PbrLook`.
 lunco-render = { path = "../lunco-render" }
 # Scene-editing mechanisms use the shared settings and command/state contracts;

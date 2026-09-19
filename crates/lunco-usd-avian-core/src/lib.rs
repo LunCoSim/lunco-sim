@@ -71,7 +71,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_spatial::coords::{
-    cell_local_remainder, compose_cell_local, grid_relative_pose_seeded,
+    grid_absolute_from_components, grid_local_remainder, grid_relative_pose_seeded,
     grid_transform_between_grids, pose_in_grid, pose_in_grid_seeded, GridPos, GridRot,
 };
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -1363,7 +1363,7 @@ fn position_to_pose(
         }
     }
 
-    for (e, pos, rot, cell, mut tf, mut shadow, rb, pose_override) in &mut q_dyn {
+    'writeback_body: for (e, pos, rot, cell, mut tf, mut shadow, rb, pose_override) in &mut q_dyn {
         // Sync Position → Transform for every body avian moves via `Position`:
         // `Dynamic` (solver-integrated) AND `Kinematic` (externally seated — the
         // networked client pins replicated proxies `Kinematic` and drives their
@@ -1407,6 +1407,7 @@ fn position_to_pose(
         chain.clear();
         let mut anchor = Anchor::Root;
         let mut anchored = false;
+        let mut coordinate_error = None;
         let mut cur = e;
         for _ in 0..32 {
             let Ok(co) = q_parents.get(cur) else {
@@ -1426,25 +1427,46 @@ fn position_to_pose(
             }
             // Plain intermediate node: local offset in ITS parent's frame.
             let Ok((p_cell, p_tf)) = q_plain.get(parent) else {
-                panic!(
+                coordinate_error = Some(format!(
                     "writeback body {e:?} has ancestor {parent:?} without a plain spatial Transform"
-                );
+                ));
+                break;
             };
-            let edge = q_parents
-                .get(parent)
-                .ok()
-                .and_then(|co2| q_grids.get(co2.parent()).ok())
-                .map(|g| g.cell_edge_length() as f64);
+            let parent_grid_entity = q_parents.get(parent).ok().map(ChildOf::parent);
+            let parent_grid = parent_grid_entity.and_then(|grid| q_grids.get(grid).ok());
             // `.0`: the composed point re-enters the mixed-frame chain as a
             // parent-frame offset (see the `chain` note above).
-            chain.push((
-                compose_cell_local(p_cell, edge, p_tf.translation).0,
-                p_tf.rotation,
-            ));
+            match grid_absolute_from_components(
+                parent,
+                parent_grid_entity,
+                p_cell,
+                p_tf,
+                parent_grid,
+            ) {
+                Ok(position) => chain.push((position.0, p_tf.rotation)),
+                Err(error) => {
+                    coordinate_error = Some(error.to_string());
+                    break;
+                }
+            }
             cur = parent;
         }
-        if !anchored {
-            panic!("writeback body {e:?} exceeds the 32-node BigSpace ancestor limit");
+        if coordinate_error.is_none() && !anchored {
+            coordinate_error = Some(format!(
+                "writeback body {e:?} exceeds the 32-node BigSpace ancestor limit"
+            ));
+        }
+        if let Some(detail) = coordinate_error {
+            let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
+            report_physics_runtime_fault(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                e,
+                physics_subject(e, name, prim_path),
+                "avian-coordinate-topology-invalid",
+                detail,
+            );
+            continue 'writeback_body;
         }
 
         let (mut fp, mut fr) = match anchor {
@@ -1452,9 +1474,18 @@ fn position_to_pose(
             Anchor::GridEntity(g) => {
                 let Some((p, r)) = pose_in_grid(g, active_frame, &q_parents, &q_grids, &q_plain)
                 else {
-                    panic!(
-                        "writeback body {e:?} has Grid anchor {g:?} with no connected pose in active PhysicsFrame {active_frame:?}"
+                    let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
+                    report_physics_runtime_fault(
+                        faults.as_deref_mut(),
+                        holds.as_deref_mut(),
+                        e,
+                        physics_subject(e, name, prim_path),
+                        "avian-coordinate-frame-disconnected",
+                        format!(
+                            "writeback body {e:?} has Grid anchor {g:?} with no connected pose in active PhysicsFrame {active_frame:?}"
+                        ),
                     );
+                    continue 'writeback_body;
                 };
                 (GridPos(p), GridRot(r))
             }
@@ -1478,12 +1509,24 @@ fn position_to_pose(
 
         // Subtract the current cell only when the direct parent is a Grid —
         // the same convention `world_pose` reads with.
-        let direct_edge = q_parents
-            .get(e)
-            .ok()
-            .and_then(|co| q_grids.get(co.parent()).ok())
-            .map(|g| g.cell_edge_length() as f64);
-        let rem = cell_local_remainder(local, cell, direct_edge);
+        let rem = match cell {
+            Some(cell) => match grid_local_remainder(e, local, cell, &q_parents, &q_grids) {
+                Ok(remainder) => remainder,
+                Err(error) => {
+                    let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
+                    report_physics_runtime_fault(
+                        faults.as_deref_mut(),
+                        holds.as_deref_mut(),
+                        e,
+                        physics_subject(e, name, prim_path),
+                        "avian-coordinate-topology-invalid",
+                        error.to_string(),
+                    );
+                    continue 'writeback_body;
+                }
+            },
+            None => local.0,
+        };
         // The `Transform` write below stays raw: `rem` leaves the grid frame
         // here and becomes render currency (cell-local f32).
         let new_t = rem.as_vec3();
@@ -1796,13 +1839,13 @@ mod tests {
 
         // WRITEBACK direction: world → parent-grid-local → remainder against
         // the CURRENT cell (the bridge never rewrites the cell itself) —
-        // the same `cell_local_remainder` split the live writeback uses.
+        // the same BigSpace-backed `grid_local_remainder` used by live writeback.
         let (gp, grot) = world_pose(grid_e, &q_parents, &q_grids, &q_spatial).unwrap();
         let inv = grot.0.inverse();
         let local = GridPos(inv * (p - gp));
         let local_rot = inv * r.0;
-        let e64 = edge as f64;
-        let rem = cell_local_remainder(local, Some(&b_cell), Some(e64));
+        let rem = grid_local_remainder(body, local, &b_cell, &q_parents, &q_grids)
+            .expect("body remains a direct child of its BigSpace Grid");
 
         assert!(
             (rem.as_vec3() - Vec3::new(120.0, -40.0, 80.0)).length() < 1e-2,

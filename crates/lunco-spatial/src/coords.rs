@@ -23,11 +23,24 @@ use crate::GridAnchor;
 /// surface it as an integration error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoordinateError {
-    MissingSpatial { entity: Entity },
-    MissingAncestorSpatial { entity: Entity, parent: Entity },
-    CellCoordWithoutGrid { entity: Entity, parent: Entity },
-    Cycle { entity: Entity },
-    DepthExceeded { entity: Entity, limit: usize },
+    MissingSpatial {
+        entity: Entity,
+    },
+    MissingAncestorSpatial {
+        entity: Entity,
+        parent: Entity,
+    },
+    CellCoordWithoutGrid {
+        entity: Entity,
+        parent: Option<Entity>,
+    },
+    Cycle {
+        entity: Entity,
+    },
+    DepthExceeded {
+        entity: Entity,
+        limit: usize,
+    },
 }
 
 impl core::fmt::Display for CoordinateError {
@@ -40,10 +53,16 @@ impl core::fmt::Display for CoordinateError {
                 f,
                 "entity {entity:?} has an ancestor {parent:?} without a spatial component"
             ),
-            Self::CellCoordWithoutGrid { entity, parent } => write!(
-                f,
-                "entity {entity:?} carries a CellCoord but its parent {parent:?} is not a Grid"
-            ),
+            Self::CellCoordWithoutGrid { entity, parent } => match parent {
+                Some(parent) => write!(
+                    f,
+                    "entity {entity:?} carries a CellCoord but parent {parent:?} has no Grid"
+                ),
+                None => write!(
+                    f,
+                    "entity {entity:?} carries a CellCoord but has no parent Grid"
+                ),
+            },
             Self::Cycle { entity } => {
                 write!(f, "coordinate hierarchy contains a cycle at {entity:?}")
             }
@@ -729,7 +748,7 @@ pub fn world_pose<F: QueryFilter>(
                     }
                     return Err(CoordinateError::CellCoordWithoutGrid {
                         entity: current,
-                        parent: child_of.parent(),
+                        parent: Some(child_of.parent()),
                     });
                 }
                 (None, _) => cur_tf.translation.as_dvec3(),
@@ -1162,44 +1181,28 @@ pub fn grid_absolute_seeded(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
 ) -> Option<GridPos> {
-    match (cell, parent_grid(entity, q_parents, q_grids)) {
-        (Some(cell), Some(grid)) => Some(GridPos(grid.grid_position_double(cell, tf))),
-        (Some(_), None) => None,
-        (None, _) => Some(GridPos(tf.translation.as_dvec3())),
-    }
+    let parent = q_parents.get(entity).ok().map(ChildOf::parent);
+    let grid = parent.and_then(|parent| q_grids.get(parent).ok());
+    grid_absolute_from_components(entity, parent, cell, tf, grid).ok()
 }
 
-/// Reassemble BigSpace's stored cell/local split in the parent grid frame.
+/// Resolve an entity's parent-frame position from its spatial component facts.
 ///
-/// `edge == None` means the entity is not grid-direct, so its Transform is an
-/// ordinary parent-local point and `cell` must also be absent.
-pub fn compose_cell_local(
+/// BigSpace owns cell sizing and cell/local composition. A cell without its
+/// parent Grid is malformed topology and is returned as a typed error; a plain
+/// Transform without a cell remains parent-local.
+pub fn grid_absolute_from_components(
+    entity: Entity,
+    parent: Option<Entity>,
     cell: Option<&CellCoord>,
-    edge: Option<f64>,
-    local_translation: Vec3,
-) -> GridPos {
-    let local = local_translation.as_dvec3();
-    match (cell, edge) {
-        (Some(cell), Some(edge)) => GridPos(
-            DVec3::new(
-                cell.x as f64 * edge,
-                cell.y as f64 * edge,
-                cell.z as f64 * edge,
-            ) + local,
-        ),
-        (None, _) => GridPos(local),
-        (Some(_), None) => {
-            panic!("CellCoord cannot be composed without a direct parent Grid")
-        }
+    transform: &Transform,
+    grid: Option<&Grid>,
+) -> Result<GridPos, CoordinateError> {
+    match (cell, grid) {
+        (Some(cell), Some(grid)) => Ok(GridPos(grid.grid_position_double(cell, transform))),
+        (Some(_), None) => Err(CoordinateError::CellCoordWithoutGrid { entity, parent }),
+        (None, _) => Ok(GridPos(transform.translation.as_dvec3())),
     }
-}
-
-/// Inverse of [`compose_cell_local`] for an already-selected BigSpace cell.
-///
-/// This does not choose or mutate a cell; BigSpace owns re-splitting. It only
-/// returns the f64 remainder that the terminal render `Transform` stores.
-pub fn cell_local_remainder(point: GridPos, cell: Option<&CellCoord>, edge: Option<f64>) -> DVec3 {
-    point - compose_cell_local(cell, edge, Vec3::ZERO)
 }
 
 /// Split a grid-absolute position back into the `(CellCoord, Transform)` pair
@@ -1232,10 +1235,12 @@ pub fn grid_local_remainder(
     cell: &CellCoord,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
-) -> DVec3 {
-    parent_grid(entity, q_parents, q_grids)
-        .map(|grid| abs.0 - grid.grid_position_double(cell, &Transform::default()))
-        .unwrap_or_else(|| panic!("grid-direct entity {entity:?} has no parent Grid"))
+) -> Result<DVec3, CoordinateError> {
+    let parent = q_parents.get(entity).ok().map(ChildOf::parent);
+    let grid = parent
+        .and_then(|parent| q_grids.get(parent).ok())
+        .ok_or(CoordinateError::CellCoordWithoutGrid { entity, parent })?;
+    Ok(abs.0 - grid.cell_to_float(cell))
 }
 
 /// The `Grid` this entity is a direct child of, if any.
@@ -1404,12 +1409,12 @@ pub fn world_pose_seeded<F: QueryFilter>(
             .map(|grid| grid.cell_to_float(cell))
             .map_err(|_| CoordinateError::CellCoordWithoutGrid {
                 entity,
-                parent: co.parent(),
+                parent: Some(co.parent()),
             })?,
         (Some(_), Err(_)) => {
             return Err(CoordinateError::CellCoordWithoutGrid {
                 entity,
-                parent: entity,
+                parent: None,
             });
         }
         (None, _) => DVec3::ZERO,
@@ -1441,12 +1446,12 @@ pub fn world_pose_seeded<F: QueryFilter>(
                 .map(|grid| grid.grid_position_double(cell, &tf))
                 .map_err(|_| CoordinateError::CellCoordWithoutGrid {
                     entity: parent,
-                    parent: co.parent(),
+                    parent: Some(co.parent()),
                 })?,
             (Some(_), Err(_)) => {
                 return Err(CoordinateError::CellCoordWithoutGrid {
                     entity: parent,
-                    parent,
+                    parent: None,
                 });
             }
             (None, _) => tf.translation.as_dvec3(),
@@ -1828,8 +1833,28 @@ mod tests {
             world_position(child, &q_parents, &q_grids, &q_spatial),
             Err(CoordinateError::CellCoordWithoutGrid {
                 entity: child,
-                parent
+                parent: Some(parent)
             })
+        );
+        let (cell, transform) = q_spatial.get(child).expect("child has spatial components");
+        let expected = CoordinateError::CellCoordWithoutGrid {
+            entity: child,
+            parent: Some(parent),
+        };
+        assert_eq!(
+            grid_absolute_from_components(child, Some(parent), cell, transform, None),
+            Err(expected)
+        );
+        assert!(grid_absolute_seeded(child, cell, transform, &q_parents, &q_grids).is_none());
+        assert_eq!(
+            grid_local_remainder(
+                child,
+                GridPos(DVec3::ZERO),
+                cell.expect("child carries its cell"),
+                &q_parents,
+                &q_grids,
+            ),
+            Err(expected)
         );
     }
 

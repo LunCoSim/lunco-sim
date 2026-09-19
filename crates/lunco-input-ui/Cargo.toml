@@ -6,7 +6,7 @@ license.workspace = true
 description = "Reusable egui presentation for the shared LunCoSim input state"
 
 [dependencies]
-bevy = { workspace = true }
+bevy = { workspace = true, features = ["keyboard", "mouse"] }
 bevy_egui = { workspace = true, features = ["render"] }
 lunco-core = { path = "../lunco-core" }
 lunco-input-core = { path = "../lunco-input-core" }

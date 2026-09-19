@@ -16,6 +16,8 @@ bevy = { workspace = true, features = [
     "bevy_anti_alias",
     "mesh_picking",
     "bevy_gizmos",
+    "keyboard",
+    "mouse",
 ] }
 big_space = { workspace = true }
 lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }

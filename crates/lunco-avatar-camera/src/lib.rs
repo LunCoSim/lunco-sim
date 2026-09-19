@@ -34,6 +34,7 @@ use lunco_core::{on_command, register_commands};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_spatial::attach::{local_pose_to_grid_storage, migrate_to_grid_local_pose};
+use lunco_spatial::coords::grid_absolute_seeded;
 
 mod collision;
 pub(crate) mod handoff;
@@ -220,7 +221,21 @@ fn apply_pending_focus(
         );
         return;
     };
-    let avatar_pos = grid.grid_position_double(&cell, &tf);
+    let Some(avatar_pos) = grid_absolute_seeded(avatar_ent, Some(&cell), &tf, &q_parents, &q_grids)
+        .map(|position| position.0)
+    else {
+        let message = format!(
+            "authoritative LocalEmbodiment {avatar_ent:?} has no complete pose in its parent Grid"
+        );
+        warn!("FOCUS_ENTITY: {message}");
+        lunco_camera_core::replace_camera_diagnostic(
+            &mut diagnostics,
+            "avatar-camera",
+            "LocalEmbodiment",
+            Some(message),
+        );
+        return;
+    };
     let target_pos = if target == avatar_ent {
         avatar_pos
     } else {
@@ -250,10 +265,14 @@ fn apply_pending_focus(
     // authored camera policies can still issue a different typed command.
     let dir = Vec3::new(1.0, 0.4, 0.25).normalize();
     let offset = dir * dist;
-    let (new_cell, new_translation) = grid.translation_to_grid(target_pos + offset.as_dvec3());
+    let (new_cell, new_transform) = lunco_spatial::attach::local_pose_to_grid_storage(
+        grid,
+        target_pos + offset.as_dvec3(),
+        tf.rotation.as_dquat(),
+    );
     cell.set_if_neq(new_cell);
-    if tf.translation != new_translation {
-        tf.translation = new_translation;
+    if tf.translation != new_transform.translation {
+        tf.translation = new_transform.translation;
     }
     let d = (-offset).normalize();
     let (yaw, pitch) = ((-d.x).atan2(-d.z), d.y.clamp(-1.0, 1.0).asin());
