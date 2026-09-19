@@ -74,9 +74,16 @@ pub trait ValueBuilder {
     fn array(&self, items: Vec<Self::Value>) -> Self::Value;
     /// A string-keyed map (object).
     fn map(&self, entries: Vec<(String, Self::Value)>) -> Self::Value;
-    /// A native semantic vector when the backend supports one.  The default
+    /// A native semantic two-vector when the backend supports one. The default
     /// keeps wire/serialization builders compatible without forcing them to
     /// know the scripting backend's concrete vector type.
+    fn vec2(&self, x: f64, y: f64) -> Self::Value {
+        self.array(vec![self.float(x), self.float(y)])
+    }
+
+    /// A native semantic three-vector when the backend supports one. The
+    /// default keeps wire/serialization builders compatible without forcing
+    /// them to know the scripting backend's concrete vector type.
     fn vec3(&self, x: f64, y: f64, z: f64) -> Self::Value {
         self.array(vec![self.float(x), self.float(y), self.float(z)])
     }
@@ -165,11 +172,12 @@ impl IgnoredScenarioCommands {
 
 /// Convert a reflected value to a backend-native value in one pass.
 ///
-/// glam vectors/quats become arrays (`Vec3` → `[x,y,z]`, `Quat` → `[x,y,z,w]`)
-/// so vector math operates on them directly; newtype components (e.g.
-/// `LinearVelocity(Vec3)`) unwrap to their inner value; structs become maps;
-/// lists/arrays/tuples become arrays. Anything still unconvertible (enums,
-/// opaque) falls back to its `Debug` string.
+/// glam vectors/quaternions and transforms use the backend's semantic builder
+/// methods. Rhai maps them to the shared f64 math types; transport builders
+/// retain arrays/maps at their serialization boundary. Newtype components
+/// (e.g. `LinearVelocity(Vec3)`) unwrap to their inner value; structs become
+/// maps; lists/arrays/tuples become arrays. Anything still unconvertible
+/// (enums, opaque) falls back to its `Debug` string.
 pub fn build_from_reflect<B: ValueBuilder>(
     b: &B,
     value: &dyn bevy::reflect::PartialReflect,
@@ -179,7 +187,9 @@ pub fn build_from_reflect<B: ValueBuilder>(
 
     if let Some(reflected) = value.try_as_reflect() {
         let any = reflected.as_any();
-        // glam vectors / quats → arrays (the common component-read case).
+        // Bevy f32 values widen into the same f64 semantic types used by core
+        // calculations; the backend chooses whether that representation is
+        // native (Rhai) or lowered (transport).
         if let Some(v) = any.downcast_ref::<Vec3>() {
             return Some(vec3_value(b, v.x as f64, v.y as f64, v.z as f64));
         }
@@ -187,18 +197,13 @@ pub fn build_from_reflect<B: ValueBuilder>(
             return Some(b.vec3(v.x, v.y, v.z));
         }
         if let Some(v) = any.downcast_ref::<Vec2>() {
-            return Some(b.array(vec![b.float(v.x as f64), b.float(v.y as f64)]));
+            return Some(vec2_value(b, v.x as f64, v.y as f64));
         }
         if let Some(v) = any.downcast_ref::<DVec2>() {
-            return Some(b.array(vec![b.float(v.x), b.float(v.y)]));
+            return Some(vec2_value(b, v.x, v.y));
         }
         if let Some(v) = any.downcast_ref::<Quat>() {
-            return Some(b.array(vec![
-                b.float(v.x as f64),
-                b.float(v.y as f64),
-                b.float(v.z as f64),
-                b.float(v.w as f64),
-            ]));
+            return Some(b.quat(v.x as f64, v.y as f64, v.z as f64, v.w as f64));
         }
         if let Some(v) = any.downcast_ref::<DQuat>() {
             return Some(b.quat(v.x, v.y, v.z, v.w));
@@ -321,7 +326,12 @@ pub fn build_from_value<B: ValueBuilder>(b: &B, value: &ApiValue) -> B::Value {
     }
 }
 
-/// Build a `[x, y, z]` array value.
+/// Build the backend's semantic two-vector value.
+pub fn vec2_value<B: ValueBuilder>(b: &B, x: f64, y: f64) -> B::Value {
+    b.vec2(x, y)
+}
+
+/// Build the backend's semantic three-vector value.
 pub fn vec3_value<B: ValueBuilder>(b: &B, x: f64, y: f64, z: f64) -> B::Value {
     b.vec3(x, y, z)
 }
@@ -1475,6 +1485,39 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
 mod tests {
     use super::*;
     use lunco_core_session::{AuthorityRole, CommandPolicy, UserSession};
+
+    #[test]
+    fn api_value_boundary_lowers_reflected_geometry_to_ordered_arrays() {
+        use bevy::math::{Quat, Vec2, Vec3};
+
+        let vector2 = build_from_reflect(&ApiValueBuilder, &Vec2::new(1.0, -2.0)).unwrap();
+        assert_eq!(
+            vector2,
+            HookValue::Array(vec![HookValue::Float(1.0), HookValue::Float(-2.0)])
+        );
+
+        let vector3 = build_from_reflect(&ApiValueBuilder, &Vec3::new(1.0, -2.0, 3.5)).unwrap();
+        assert_eq!(
+            vector3,
+            HookValue::Array(vec![
+                HookValue::Float(1.0),
+                HookValue::Float(-2.0),
+                HookValue::Float(3.5),
+            ])
+        );
+
+        let quaternion =
+            build_from_reflect(&ApiValueBuilder, &Quat::from_xyzw(0.0, 0.0, 0.0, 1.0)).unwrap();
+        assert_eq!(
+            quaternion,
+            HookValue::Array(vec![
+                HookValue::Float(0.0),
+                HookValue::Float(0.0),
+                HookValue::Float(0.0),
+                HookValue::Float(1.0),
+            ])
+        );
+    }
 
     fn map_value<'a>(value: &'a ApiValue, key: &str) -> Option<&'a HookValue> {
         match value {

@@ -18,6 +18,8 @@ pub mod assembly;
 pub mod commands;
 pub mod derived;
 pub mod faults;
+/// Shared f64 bounds and oriented-box relations for geometry verification.
+pub mod geometry;
 /// M1 — deterministic identity from `Provenance`. The only place network
 /// ids are *derived*; the session identity-admission system is the only place they
 /// are *minted*.
@@ -53,6 +55,7 @@ pub use events::{trigger_runtime_error, CommandOccurred, RuntimeError, Subsystem
 pub use faults::{
     DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics, RuntimeFault, RuntimeFaults,
 };
+pub use geometry::{Bounds3, BoundsRelation, OrientedBounds3};
 pub use identity::Provenance;
 pub use labels::{entity_display_name, humanize_identifier};
 pub use markers::NoSelectionBounds;

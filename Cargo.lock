@@ -9364,6 +9364,7 @@ dependencies = [
  "lunco-hooks",
  "lunco-hooks-rhai",
  "lunco-telemetry-core",
+ "lunco-usd-geometry",
  "rhai",
 ]
 

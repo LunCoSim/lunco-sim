@@ -9,5 +9,6 @@
 pub mod curve;
 pub mod curve_sweep;
 pub mod nurbs;
+pub mod profile_extrusion;
 pub mod ribbon;
 pub mod trim;

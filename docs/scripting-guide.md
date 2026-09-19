@@ -647,6 +647,14 @@ if checked.stage == "projection" {
 }
 ```
 
+For a read-only audit of a known visible edit, use
+`editor_workflow::checkpoint(doc, expected_generation, affected_paths,
+preview_id, view_id)`. It verifies the exact projected generation, focused
+view handle, composed path readback, document lint, and a final generation
+recheck without saving or changing the camera. Screenshot capture and the
+Twin's declared component test are still separate operations; do not call this
+checkpoint alone a visual or mission PASS.
+
 ### Generic physics acceptance evidence
 
 Use `physics_acceptance` in authored scene tests when a result needs more than
@@ -796,6 +804,34 @@ metres, geometry dimensions must be positive, and attachment/actuator frame
 names must be unique. The plan does not guess a body or joint and does not
 create a material, so add an explicit reviewed joint/mount plan and author the
 material target separately when those contracts are required.
+
+### Native f64 spatial values and parametric profile geometry
+
+The production Rhai engine exposes the same Bevy/glam `DVec2`, `DVec3`,
+`DQuat`, and `DTransform` values used by the core, named `Vec2`, `Vec3`,
+`Quat`, and `Transform`. Values remain `f64` through SysML projection and
+geometry calculations; conversion to the USD schema's narrower point types
+belongs only at the USD authoring boundary. Native vectors support typed
+arithmetic, finite checks, and direct component access.
+
+`Bounds3` and `OrientedBounds3` provide f64 extents and pose-aware separating
+axis checks. `extrude_profile(points, length, plane)` consumes native `Vec2`
+values and returns a native `ProfileMesh` with points, face counts/indices,
+and one outward face-varying normal per face corner. The current kernel
+supports a simple strictly-convex profile and produces a closed prism; it is
+not a general BREP system and does not provide Boolean, fillet, or arbitrary
+concave-polygon operations.
+
+The generic `assembly_audit::oriented_box_clearance` helper accepts caller-
+supplied centers, dimensions, rotations, and policy clearance. It returns a
+structured SAT axis and signed projection margin. The margin is a conservative
+clearance bound for these oriented boxes, not an exact closest-point distance;
+it must not be mistaken for measured arbitrary-mesh interference.
+
+Run the native geometry contract in the production Rhai runtime with
+`scripts/api/run_rhai_test.sh <port> assets/scripting/tests/test_spatial_geometry.rhai`.
+This keeps the engine surface, registrations, and authored test in one path
+without embedding Twin assets in Rust tests.
 
 `place_plan` handles local translation, Euler XYZ rotation, and scale;
 `frame_plan` handles a validated empty Xform frame;

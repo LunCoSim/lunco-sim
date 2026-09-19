@@ -13,6 +13,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
+lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 rhai = { workspace = true }
 
 [lints]

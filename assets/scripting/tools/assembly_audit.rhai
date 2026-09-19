@@ -90,6 +90,61 @@ fn aabb_clearance(position_a, extents_a, position_b, extents_b) {
     #{ margin: margin, axis: axis, separated: margin >= 0.0 }
 }
 
+/// Compare two caller-defined component envelopes with the shared native f64
+/// oriented-box SAT kernel. Poses are explicit so this helper never guesses a
+/// part's transform from its name or from an AABB that has already lost its
+/// orientation. `required_clearance` is a signed minimum gap in metres.
+fn valid_oriented_box_input(center, dimensions, rotation) {
+    if type_of(center) != "Vec3" || type_of(dimensions) != "Vec3"
+        || type_of(rotation) != "Quat" || !vec3_is_finite(center)
+        || !vec3_is_finite(dimensions) || !quat_is_valid(rotation) {
+        return false;
+    }
+    dimensions.x > 0.0 && dimensions.y > 0.0 && dimensions.z > 0.0
+}
+
+fn oriented_box_clearance(label, center_a, dimensions_a, rotation_a,
+    center_b, dimensions_b, rotation_b, required_clearance) {
+    if label == () || required_clearance == ()
+        || !required_clearance.is_finite() || required_clearance < 0.0 {
+        return #{ok: false, status: "invalid_input", label: label};
+    }
+    if !valid_oriented_box_input(center_a, dimensions_a, rotation_a)
+        || !valid_oriented_box_input(center_b, dimensions_b, rotation_b) {
+        return #{ok: false, status: "invalid_input", label: label};
+    }
+    let a = oriented_bounds3(center_a, dimensions_a * 0.5, rotation_a);
+    let b = oriented_bounds3(center_b, dimensions_b * 0.5, rotation_b);
+    let relation = bounds_relation(a, b);
+    let margin = relation.greatest_axis_margin;
+    #{ok: margin >= required_clearance,
+      status: if margin >= required_clearance { "clear" } else { "overlap_or_clearance_shortfall" },
+      label: label,
+      signed_axis_margin_m: margin,
+      required_clearance_m: required_clearance,
+      separating_axis: relation.axis_from_a_to_b,
+      separated: relation.separated}
+}
+
+/// Return a deterministic, path-addressable set of oriented clearance checks.
+/// Each pair is a typed policy record with names, dimensions and transforms;
+/// the helper only computes evidence and never decides which contacts are
+/// intentional.
+fn oriented_clearance_report(pairs) {
+    let records = [];
+    let failures = [];
+    for pair in pairs {
+        let record = oriented_box_clearance(pair.label,
+            pair.center_a, pair.dimensions_a, pair.rotation_a,
+            pair.center_b, pair.dimensions_b, pair.rotation_b,
+            pair.required_clearance_m);
+        records.push(record);
+        if record.ok != true { failures.push(pair.label); }
+    }
+    #{ok: failures.is_empty(), check_count: records.len(),
+      failure_count: failures.len(), checks: records, failures: failures}
+}
+
 fn world_position(doc, path) {
     let record = query_prim(doc, path, [], (), false);
     if !query_ok(record) { return (); }

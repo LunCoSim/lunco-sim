@@ -27,7 +27,7 @@
 //! the script's own `== ()` idiom, so a caller that forgets to check gets a
 //! visible type error rather than silent poison.
 
-use bevy::math::{DQuat, DVec3, EulerRot};
+use bevy::math::{DQuat, DVec2, DVec3, EulerRot};
 pub use lunco_core::DTransform;
 use lunco_core::DTransform as CoreDTransform;
 use rhai::{Dynamic, Engine, EvalAltResult, Position};
@@ -47,16 +47,32 @@ fn finite_vec3(value: DVec3, label: &str) -> Result<DVec3, Box<EvalAltResult>> {
         .ok_or_else(|| invalid_value(format!("{label} must contain only finite values")))
 }
 
+fn finite_vec2(value: DVec2, label: &str) -> Result<DVec2, Box<EvalAltResult>> {
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or_else(|| invalid_value(format!("{label} must contain only finite values")))
+}
+
 fn finite_quat(value: DQuat, label: &str) -> Result<DQuat, Box<EvalAltResult>> {
     if !value.is_finite() {
         return Err(invalid_value(format!(
             "{label} must contain only finite values"
         )));
     }
-    if value.length_squared() < 1e-24 {
-        return Err(invalid_value(format!("{label} must not have zero length")));
+    let length_squared = value.length_squared();
+    if !length_squared.is_finite() || length_squared < 1e-24 {
+        return Err(invalid_value(format!(
+            "{label} must have a finite, non-zero magnitude"
+        )));
     }
-    Ok(value.normalize())
+    let normalized = value.normalize();
+    if !normalized.is_finite() {
+        return Err(invalid_value(format!(
+            "{label} must normalize to a finite rotation"
+        )));
+    }
+    Ok(normalized)
 }
 
 fn finite_transform(
@@ -108,6 +124,23 @@ pub fn to_vec3(d: &Dynamic) -> Option<DVec3> {
     v.is_finite().then_some(v)
 }
 
+/// Read a native `Vec2` or `[x, y]` script value as a vector.
+pub fn to_vec2(d: &Dynamic) -> Option<DVec2> {
+    if let Some(v) = d.clone().try_cast::<DVec2>() {
+        return v.is_finite().then_some(v);
+    }
+    let a = d.read_lock::<rhai::Array>()?;
+    if a.len() != 2 {
+        return None;
+    }
+    let mut out = [0.0f64; 2];
+    for (slot, value) in out.iter_mut().zip(a.iter()) {
+        *slot = scalar(value)?;
+    }
+    let v = DVec2::from_array(out);
+    v.is_finite().then_some(v)
+}
+
 /// A vector as an `[x, y, z]` script array.
 fn to_array(v: DVec3) -> Dynamic {
     Dynamic::from_array(vec![
@@ -115,6 +148,10 @@ fn to_array(v: DVec3) -> Dynamic {
         Dynamic::from_float(v.y),
         Dynamic::from_float(v.z),
     ])
+}
+
+fn vec2_to_array(v: DVec2) -> Dynamic {
+    Dynamic::from_array(vec![Dynamic::from_float(v.x), Dynamic::from_float(v.y)])
 }
 
 /// Put the engine's native vector into a Rhai value without an intermediate
@@ -143,12 +180,22 @@ fn quat_from_array(d: &Dynamic) -> Option<DQuat> {
         *slot = scalar(value)?;
     }
     let q = DQuat::from_xyzw(c[0], c[1], c[2], c[3]);
-    (q.is_finite() && q.length_squared() >= 1e-24).then_some(q.normalize())
+    let length_squared = q.length_squared();
+    if !q.is_finite() || !length_squared.is_finite() || length_squared < 1e-24 {
+        return None;
+    }
+    let normalized = q.normalize();
+    normalized.is_finite().then_some(normalized)
 }
 
 fn to_quat(d: &Dynamic) -> Option<DQuat> {
     if let Some(q) = d.clone().try_cast::<DQuat>() {
-        return (q.is_finite() && q.length_squared() >= 1e-24).then_some(q.normalize());
+        let length_squared = q.length_squared();
+        if !q.is_finite() || !length_squared.is_finite() || length_squared < 1e-24 {
+            return None;
+        }
+        let normalized = q.normalize();
+        return normalized.is_finite().then_some(normalized);
     }
     quat_from_array(d)
 }
@@ -283,6 +330,8 @@ pub fn register(engine: &mut Engine) {
     // and no per-operation array round-trip).  There are intentionally getters
     // but no setters: construction and every operation validate finiteness so a
     // script cannot mutate a valid pose into a NaN behind the bridge's back.
+    register_vec2(engine);
+
     engine
         .register_type_with_name::<DVec3>("Vec3")
         .register_type_with_name::<DQuat>("Quat")
@@ -308,6 +357,10 @@ pub fn register(engine: &mut Engine) {
         .register_fn("quat_identity", || DQuat::IDENTITY)
         .register_fn("quat_array", quat_to_array)
         .register_fn("quat_is_finite", |q: DQuat| q.is_finite())
+        .register_fn("quat_is_valid", |q: DQuat| {
+            let length_squared = q.length_squared();
+            q.is_finite() && length_squared.is_finite() && length_squared >= 1e-24
+        })
         .register_fn("quat_from_euler_xyz_deg", native_quat_from_euler_xyz_deg)
         .register_fn("quat_to_euler_xyz_deg", native_quat_to_euler_xyz_deg)
         .register_fn("quat_inverse", native_quat_inverse)
@@ -325,10 +378,12 @@ pub fn register(engine: &mut Engine) {
         )
         .register_fn("transform_identity", || DTransform::IDENTITY)
         .register_fn("transform_is_finite", |transform: DTransform| {
+            let rotation_length_squared = transform.rotation.length_squared();
             transform.translation.is_finite()
                 && transform.rotation.is_finite()
+                && rotation_length_squared.is_finite()
                 && transform.scale.is_finite()
-                && transform.rotation.length_squared() >= 1e-24
+                && rotation_length_squared >= 1e-24
         })
         .register_fn("transform_compose", native_transform_compose)
         .register_fn("transform_apply_point", native_transform_apply_point)
@@ -345,6 +400,10 @@ pub fn register(engine: &mut Engine) {
     engine
         .register_fn("+", native_add)
         .register_fn("-", native_sub)
+        .register_fn("*", native_scale)
+        .register_fn("*", |scalar: f64, vector: DVec3| {
+            native_scale(vector, scalar)
+        })
         .register_fn("*", native_quat_mul)
         .register_fn("vadd", native_add)
         .register_fn("vsub", native_sub)
@@ -478,6 +537,69 @@ pub fn register(engine: &mut Engine) {
     });
 
     crate::rhai_assembly::register(engine);
+    crate::rhai_geometry::register(engine);
+}
+
+/// Register the common f64 two-vector type and its minimal arithmetic API.
+/// SysML's standard `VectorValues::CartesianTwoVectorValue` projects to this
+/// same Bevy/glam value used by profile geometry and script calculations.
+pub fn register_vec2(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<DVec2>("Vec2")
+        .register_fn("vec2", |x: f64, y: f64| {
+            finite_vec2(DVec2::new(x, y), "vec2")
+        })
+        .register_fn("vec2_from", |value: Dynamic| {
+            to_vec2(&value).ok_or_else(|| invalid_value("expected a finite Vec2 or [x, y]"))
+        })
+        .register_fn("vec2_zero", || DVec2::ZERO)
+        .register_fn("vec2_array", vec2_to_array)
+        .register_fn("vec2_is_finite", |v: DVec2| v.is_finite())
+        .register_get("x", |v: &mut DVec2| v.x)
+        .register_get("y", |v: &mut DVec2| v.y)
+        .register_fn("+", |a: DVec2, b: DVec2| finite_vec2(a + b, "vector sum"))
+        .register_fn("-", |a: DVec2, b: DVec2| {
+            finite_vec2(a - b, "vector difference")
+        })
+        .register_fn("*", |a: DVec2, scalar: f64| {
+            if !scalar.is_finite() {
+                return Err(invalid_value("vector scale must be finite"));
+            }
+            finite_vec2(a * scalar, "scaled vector")
+        })
+        .register_fn("v2add", |a: DVec2, b: DVec2| {
+            finite_vec2(a + b, "vector sum")
+        })
+        .register_fn("v2sub", |a: DVec2, b: DVec2| {
+            finite_vec2(a - b, "vector difference")
+        })
+        .register_fn("v2scale", |a: DVec2, scalar: f64| {
+            if !scalar.is_finite() {
+                return Err(invalid_value("vector scale must be finite"));
+            }
+            finite_vec2(a * scalar, "scaled vector")
+        })
+        .register_fn("v2dot", |a: DVec2, b: DVec2| {
+            let value = a.dot(b);
+            value
+                .is_finite()
+                .then_some(value)
+                .ok_or_else(|| invalid_value("vector dot product must be finite"))
+        })
+        .register_fn("v2len", |v: DVec2| {
+            let value = v.length();
+            value
+                .is_finite()
+                .then_some(value)
+                .ok_or_else(|| invalid_value("vector length must be finite"))
+        })
+        .register_fn("v2norm", |v: DVec2| {
+            let length = v.length();
+            if !length.is_finite() || length < 1.0e-12 {
+                return Err(invalid_value("cannot normalize a zero-length Vec2"));
+            }
+            finite_vec2(v / length, "normalized vector")
+        });
 }
 
 #[cfg(test)]

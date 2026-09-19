@@ -110,6 +110,9 @@ impl ValueBuilder for RhaiBuilder {
         }
         Dynamic::from_map(m)
     }
+    fn vec2(&self, x: f64, y: f64) -> Dynamic {
+        Dynamic::from(bevy::math::DVec2::new(x, y))
+    }
     fn vec3(&self, x: f64, y: f64, z: f64) -> Dynamic {
         Dynamic::from(DVec3::new(x, y, z))
     }
@@ -415,11 +418,14 @@ fn sysml_typed_value(path: &str, qualified_name: &str) -> Dynamic {
     let report = bridge_core::query(
         &RhaiBuilder,
         "ValidateSysml",
-        serde_json::json!({
-            "path": path,
-            "compact": true,
-            "attributes": [qualified_name],
-        }),
+        HookValue::map([
+            ("path", HookValue::Str(path.to_owned())),
+            ("compact", HookValue::Bool(true)),
+            (
+                "attributes",
+                HookValue::Array(vec![HookValue::Str(qualified_name.to_owned())]),
+            ),
+        ]),
     );
     let Some(report) = report.clone().try_cast::<Map>() else {
         return Dynamic::UNIT;
@@ -3690,29 +3696,47 @@ mod tests {
     }
 
     #[test]
-    fn get_returns_vectors_as_arrays() {
-        use bevy::math::{Quat, Vec3};
-        // Vec3 → [x,y,z]
+    fn reflected_bevy_math_uses_shared_native_f64_types() {
+        use bevy::math::{DQuat, DVec2, DVec3, Quat, Vec2, Vec3};
+        // Bevy's f32 vectors and quaternion widen once into core f64 types.
+        let d = lunco_scripting_bridge_core::build_from_reflect(
+            &super::RhaiBuilder,
+            &Vec2::new(1.0, 2.0),
+        )
+        .unwrap();
+        let vector = d
+            .try_cast::<DVec2>()
+            .expect("Vec2 should remain a native f64 Rhai vector");
+        assert_eq!(vector, DVec2::new(1.0, 2.0));
+
         let d = lunco_scripting_bridge_core::build_from_reflect(
             &super::RhaiBuilder,
             &Vec3::new(1.0, 2.0, 3.0),
         )
         .unwrap();
-        let a = d.into_array().expect("Vec3 should become a rhai array");
-        assert_eq!(a.len(), 3);
-        assert_eq!(a[0].as_float().unwrap(), 1.0);
-        assert_eq!(a[2].as_float().unwrap(), 3.0);
+        let vector = d
+            .try_cast::<DVec3>()
+            .expect("Vec3 should remain a native f64 Rhai vector");
+        assert_eq!(vector, DVec3::new(1.0, 2.0, 3.0));
 
-        // Quat → [x,y,z,w]
         let q = lunco_scripting_bridge_core::build_from_reflect(
             &super::RhaiBuilder,
             &Quat::from_xyzw(0.0, 0.0, 0.0, 1.0),
         )
-        .unwrap()
-        .into_array()
-        .expect("Quat should become a rhai array");
-        assert_eq!(q.len(), 4);
-        assert_eq!(q[3].as_float().unwrap(), 1.0);
+        .unwrap();
+        let quaternion = q
+            .try_cast::<DQuat>()
+            .expect("Quat should widen to the shared native f64 Rhai rotation");
+        assert_eq!(quaternion, DQuat::IDENTITY);
+
+        let q =
+            lunco_scripting_bridge_core::build_from_reflect(&super::RhaiBuilder, &DQuat::IDENTITY)
+                .unwrap();
+        assert_eq!(
+            q.try_cast::<DQuat>(),
+            Some(DQuat::IDENTITY),
+            "core DQuat remains native through reflection"
+        );
 
         // scalar stays scalar
         let s =
