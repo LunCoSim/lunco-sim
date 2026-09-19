@@ -404,6 +404,12 @@ fn is_structured_type_name(name: &str) -> bool {
         name.rsplit("::").next().unwrap_or(name),
         "Vec2"
             | "Vec3"
+            | "VectorValue"
+            | "NumericalVectorValue"
+            | "CartesianVectorValue"
+            | "ThreeVectorValue"
+            | "CartesianTwoVectorValue"
+            | "CartesianThreeVectorValue"
             | "Position"
             | "Direction"
             | "Quaternion"

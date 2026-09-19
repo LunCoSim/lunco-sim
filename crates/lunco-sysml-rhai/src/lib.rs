@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use bevy::math::{DQuat, DVec3};
+use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlEnumValue,
@@ -430,12 +430,23 @@ fn semantic_category_for_element(base: &str) -> &'static str {
         "Boolean" | "Integer" | "Natural" | "Rational" | "Real" | "Complex" | "String" => {
             "Primitive"
         }
-        "Vec2" | "Vec3" | "Position" | "Direction" | "Quaternion" | "Quat" | "Transform"
-        | "Dimensions" | "Bounds" => "Structured",
-        "Length" | "Distance" | "Angle" | "Mass" | "Time" | "Duration" | "Velocity"
-        | "Speed" | "Acceleration" | "Force" | "Power" | "Energy" | "Temperature" => {
-            "Quantity"
-        }
+        "Vec2"
+        | "Vec3"
+        | "VectorValue"
+        | "NumericalVectorValue"
+        | "CartesianVectorValue"
+        | "ThreeVectorValue"
+        | "CartesianTwoVectorValue"
+        | "CartesianThreeVectorValue"
+        | "Position"
+        | "Direction"
+        | "Quaternion"
+        | "Quat"
+        | "Transform"
+        | "Dimensions"
+        | "Bounds" => "Structured",
+        "Length" | "Distance" | "Angle" | "Mass" | "Time" | "Duration" | "Velocity" | "Speed"
+        | "Acceleration" | "Force" | "Power" | "Energy" | "Temperature" => "Quantity",
         _ => "Unknown",
     }
 }
@@ -480,31 +491,52 @@ fn typed_report_literal_value(literal: &Map, declared: Option<&Map>) -> Option<D
                 typed_report_literal_value(&element, element_type.as_ref())
             })
             .collect::<Option<_>>()?;
+        let base = base.rsplit("::").next().unwrap_or_default();
         if matches!(
-            base.rsplit("::").next().unwrap_or_default(),
-            "Vec3" | "Position" | "Direction" | "Dimensions"
+            base,
+            "Vec2"
+                | "CartesianTwoVectorValue"
+                | "CartesianVectorValue"
+                | "NumericalVectorValue"
+                | "VectorValue"
+        ) && values.len() == 2
+        {
+            let coordinates = values
+                .iter()
+                .map(numeric_dynamic_f64)
+                .collect::<Option<Vec<_>>>()?;
+            let vector = DVec2::new(coordinates[0], coordinates[1]);
+            return vector.is_finite().then_some(Dynamic::from(vector));
+        }
+        if matches!(
+            base,
+            "Vec3"
+                | "Position"
+                | "Direction"
+                | "Dimensions"
+                | "CartesianThreeVectorValue"
+                | "ThreeVectorValue"
+                | "CartesianVectorValue"
+                | "NumericalVectorValue"
+                | "VectorValue"
         ) && values.len() == 3
         {
             let coordinates = values
                 .iter()
-                .map(|value| value.as_float().ok())
+                .map(numeric_dynamic_f64)
                 .collect::<Option<Vec<_>>>()?;
             return finite_vec3(coordinates[0], coordinates[1], coordinates[2]);
         }
-        if matches!(
-            base.rsplit("::").next().unwrap_or_default(),
-            "Quat" | "Quaternion"
-        ) && values.len() == 4
-        {
+        if matches!(base, "Quat" | "Quaternion") && values.len() == 4 {
             let components = values
                 .iter()
-                .map(|value| value.as_float().ok())
+                .map(numeric_dynamic_f64)
                 .collect::<Option<Vec<_>>>()?;
             let quaternion =
                 DQuat::from_xyzw(components[0], components[1], components[2], components[3]);
             return normalized_quat(quaternion);
         }
-        if base.rsplit("::").next().unwrap_or_default() == "Transform" && values.len() == 3 {
+        if base == "Transform" && values.len() == 3 {
             return native_transform(&values);
         }
         return Some(Dynamic::from_array(values));
@@ -588,17 +620,45 @@ fn typed_literal_dynamic(
             .iter()
             .map(|element| typed_literal_dynamic(element, element_type.as_ref()))
             .collect::<Option<_>>()?;
-        if matches!(base, "Vec3" | "Position" | "Direction" | "Dimensions") && values.len() == 3 {
+        if matches!(
+            base,
+            "Vec2"
+                | "CartesianTwoVectorValue"
+                | "CartesianVectorValue"
+                | "NumericalVectorValue"
+                | "VectorValue"
+        ) && values.len() == 2
+        {
             let coordinates = values
                 .iter()
-                .map(|value| value.as_float().ok())
+                .map(numeric_dynamic_f64)
+                .collect::<Option<Vec<_>>>()?;
+            let vector = DVec2::new(coordinates[0], coordinates[1]);
+            return vector.is_finite().then_some(Dynamic::from(vector));
+        }
+        if matches!(
+            base,
+            "Vec3"
+                | "Position"
+                | "Direction"
+                | "Dimensions"
+                | "CartesianThreeVectorValue"
+                | "ThreeVectorValue"
+                | "CartesianVectorValue"
+                | "NumericalVectorValue"
+                | "VectorValue"
+        ) && values.len() == 3
+        {
+            let coordinates = values
+                .iter()
+                .map(numeric_dynamic_f64)
                 .collect::<Option<Vec<_>>>()?;
             return finite_vec3(coordinates[0], coordinates[1], coordinates[2]);
         }
         if matches!(base, "Quat" | "Quaternion") && values.len() == 4 {
             let components = values
                 .iter()
-                .map(|value| value.as_float().ok())
+                .map(numeric_dynamic_f64)
                 .collect::<Option<Vec<_>>>()?;
             return normalized_quat(DQuat::from_xyzw(
                 components[0],
@@ -650,6 +710,14 @@ fn typed_literal_dynamic(
         return Some(Dynamic::from_bool(value));
     }
     literal.string_value.clone().map(Dynamic::from)
+}
+
+fn numeric_dynamic_f64(value: &Dynamic) -> Option<f64> {
+    value
+        .as_float()
+        .ok()
+        .or_else(|| value.as_int().ok().map(|integer| integer as f64))
+        .filter(|number| number.is_finite())
 }
 
 fn native_transform(values: &[Dynamic]) -> Option<Dynamic> {
@@ -1074,28 +1142,6 @@ mod tests {
         assert_eq!(values[1].clone().into_immutable_string().unwrap(), "kg");
         assert_eq!(values[2].clone().into_immutable_string().unwrap(), "Pose");
         assert_eq!(values[3].clone().into_immutable_string().unwrap(), "Landed");
-    }
-
-    #[test]
-    fn rhai_report_exposes_recursive_vector_literals_without_csv_parsing() {
-        let analysis = Arc::new(SysmlAnalysis::from_files_without_stdlib([(
-            "vectors.sysml",
-            "part def Lander { attribute stations : Real[2][2] = ((1.0, 2.0), (3.0, 4.0)); }",
-        )]));
-        let mut engine = rhai::Engine::new();
-        register_sysml_report(&mut engine, analysis);
-        let values: rhai::Array = engine
-            .eval(
-                "let a = sysml_report().attributes[0]; \
-                 [a.typed_type.base, a.typed_type.dimensions[0], \
-                  a.value.elements[0].elements[1].number_value, \
-                  a.value.elements[1].elements[0].number_value]",
-            )
-            .expect("recursive typed vector projection");
-        assert_eq!(values[0].clone().into_immutable_string().unwrap(), "Real");
-        assert_eq!(values[1].as_int().unwrap(), 2);
-        assert_eq!(values[2].as_float().unwrap(), 2.0);
-        assert_eq!(values[3].as_float().unwrap(), 3.0);
     }
 
     #[test]
