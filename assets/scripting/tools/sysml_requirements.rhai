@@ -281,6 +281,24 @@ fn attribute(report, name) {
     #{ok: true, record: report.attributes[name]}
 }
 
+// Lower a selected source literal through the shared Rust SysML/Rhai bridge.
+// Callers should include `name` in source_with_attributes() when requesting a
+// batch; that preserves native Vec3, enum, quantity and recursive collection
+// values without reparsing source text or converting through JSON strings.
+fn native_value(report, name) {
+    let resolved = attribute(report, name);
+    if resolved.ok != true || resolved.record == () { return (); }
+    let qualified = if resolved.record.qualified_name != () {
+        resolved.record.qualified_name
+    } else {
+        name
+    };
+    let value = sysml_value_from_report(report, qualified);
+    if value != () { return value; }
+    if report.path == () || report.path == "" { return (); }
+    sysml_value(report.path, qualified)
+}
+
 fn number(report, name) {
     let resolved = attribute(report, name);
     if resolved.ok != true || resolved.record.value == () {
@@ -318,10 +336,9 @@ fn vector(report, name) {
     result
 }
 
-// Return a declared `String[N]` as a native Rhai array. String collections
-// are source data, not CSV payloads: the Rust projection supplies recursive
-// elements and the declared cardinality, while this adapter only unwraps the
-// already-typed scalar literals.
+// Return declared String[N] textual data as a native Rhai array. Engineering
+// identities should be SysML enumerations and are projected by native_value;
+// this helper is retained for actual prose/text collections only.
 fn string_vector(report, name) {
     let resolved = attribute(report, name);
     if resolved.ok != true || resolved.record.value == ()
@@ -492,14 +509,13 @@ fn _check_one(report, check, indexes) {
         if resolved.ok != true || resolved.record.value == () {
             return _failure(check, "SysML identity list is missing");
         }
-        let values = if resolved.record.declared_type != ()
-            && resolved.record.declared_type.base == "String" {
-            string_vector(report, check.list_attr)
-        } else {
-            vector(report, check.list_attr)
-        };
-        if values == () {
-            return _failure(check, "SysML identity list is not a typed vector");
+        // Use the native typed projection for every collection kind.  This
+        // preserves enum and value-type arrays (for example
+        // LandingLegInstanceName[] and Position[]) instead of forcing their
+        // members through a String/numeric-vector compatibility decoder.
+        let values = native_value(report, check.list_attr);
+        if values == () || type_of(values) != "array" {
+            return _failure(check, "SysML collection is not a typed array value");
         }
         let actual = values.len();
         let expected = _expected(report, check);
@@ -507,7 +523,7 @@ fn _check_one(report, check, indexes) {
         if actual.to_float() != expected.to_float() {
             return #{ok: false, id: check.id, component: check.component,
                 requirement: check.requirement, path: check.path,
-                error: "SysML identity list length disagrees with declared count",
+                error: "SysML collection length disagrees with declared count",
                 actual: actual, expected: expected};
         }
         return #{ok: true, id: check.id, component: check.component,

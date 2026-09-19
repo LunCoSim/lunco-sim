@@ -339,10 +339,38 @@ fn sysml_report_value(path: &str, compact: bool) -> Dynamic {
 
 #[cfg(feature = "sysml")]
 fn sysml_typed_value(path: &str, qualified_name: &str) -> Dynamic {
-    let report = sysml_report_value(path, false);
+    // Select one literal from the compact SysML projection.  Loading the full
+    // source/attribute report for a single typed read needlessly duplicates
+    // large Twin snapshots across the Rhai boundary.
+    let report = bridge_core::query(
+        &RhaiBuilder,
+        "ValidateSysml",
+        serde_json::json!({
+            "path": path,
+            "compact": true,
+            "attributes": [qualified_name],
+        }),
+    );
     let Some(report) = report.clone().try_cast::<Map>() else {
         return Dynamic::UNIT;
     };
+    let Some(attributes) = report
+        .get("attributes_qualified")
+        .and_then(|value| value.clone().try_cast::<Map>())
+    else {
+        return Dynamic::UNIT;
+    };
+    let Some(record) = attributes
+        .get(qualified_name)
+        .and_then(|value| value.clone().try_cast::<Map>())
+    else {
+        return Dynamic::UNIT;
+    };
+    lunco_sysml_rhai::typed_report_attribute_value(&record).unwrap_or(Dynamic::UNIT)
+}
+
+#[cfg(feature = "sysml")]
+fn sysml_typed_value_from_report(report: &Map, qualified_name: &str) -> Dynamic {
     let Some(attributes) = report
         .get("attributes_qualified")
         .and_then(|value| value.clone().try_cast::<Map>())
@@ -2020,6 +2048,13 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
         "sysml_value",
         |path: ImmutableString, qualified_name: ImmutableString| -> Dynamic {
             sysml_typed_value(path.as_str(), qualified_name.as_str())
+        },
+    );
+    #[cfg(feature = "sysml")]
+    engine.register_fn(
+        "sysml_value_from_report",
+        |report: Map, qualified_name: ImmutableString| -> Dynamic {
+            sysml_typed_value_from_report(&report, qualified_name.as_str())
         },
     );
 

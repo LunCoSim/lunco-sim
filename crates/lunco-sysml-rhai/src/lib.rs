@@ -11,6 +11,7 @@ use lunco_core::DTransform;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlEnumValue,
     SysmlMultiplicity, SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlSubject, SysmlType,
+    SysmlTypeCategory,
 };
 use rhai::{Dynamic, Engine, Map};
 
@@ -520,6 +521,71 @@ pub fn typed_report_attribute_value(record: &Map) -> Option<Dynamic> {
     typed_report_literal_value(&literal, declared.as_ref())
 }
 
+fn report_element_type(declared: Option<&Map>) -> Option<Map> {
+    let mut element = declared?.clone();
+    let mut dimensions = element
+        .get("dimensions")?
+        .clone()
+        .try_cast::<rhai::Array>()?;
+    if dimensions.is_empty() {
+        return None;
+    }
+    let _ = dimensions.remove(0);
+    let remaining = dimensions.len();
+    element.insert("dimensions".into(), Dynamic::from_array(dimensions));
+    if remaining == 0
+        && element
+            .get("category")
+            .and_then(|value| value.clone().into_immutable_string().ok())
+            .is_some_and(|category| category.as_str() == "Collection")
+    {
+        let base = element
+            .get("base")
+            .and_then(|value| value.clone().into_immutable_string().ok())?;
+        let category = semantic_category_for_element(&base);
+        element.insert("category".into(), Dynamic::from(category));
+    }
+    Some(element)
+}
+
+fn semantic_category_for_element(base: &str) -> &'static str {
+    match base.rsplit("::").next().unwrap_or(base) {
+        "Boolean" | "Integer" | "Natural" | "Rational" | "Real" | "Complex" | "String" => {
+            "Primitive"
+        }
+        "Vec2" | "Vec3" | "Position" | "Direction" | "Quaternion" | "Quat" | "Transform"
+        | "Dimensions" | "Bounds" => "Structured",
+        "Length" | "Distance" | "Angle" | "Mass" | "Time" | "Duration" | "Velocity"
+        | "Speed" | "Acceleration" | "Force" | "Power" | "Energy" | "Temperature" => {
+            "Quantity"
+        }
+        _ => "Unknown",
+    }
+}
+
+fn sysml_element_type(declared: Option<&SysmlType>) -> Option<SysmlType> {
+    let mut element = declared?.clone();
+    if element.dimensions.is_empty() {
+        return None;
+    }
+    element.dimensions.remove(0);
+    element.multiplicity = element
+        .dimensions
+        .first()
+        .copied()
+        .map(SysmlMultiplicity::fixed)
+        .unwrap_or_else(SysmlMultiplicity::one);
+    if element.dimensions.is_empty() && element.category == SysmlTypeCategory::Collection {
+        element.category = match semantic_category_for_element(&element.base) {
+            "Primitive" => SysmlTypeCategory::Primitive,
+            "Structured" => SysmlTypeCategory::Structured,
+            "Quantity" => SysmlTypeCategory::Quantity,
+            _ => SysmlTypeCategory::Unknown,
+        };
+    }
+    Some(element)
+}
+
 fn typed_report_literal_value(literal: &Map, declared: Option<&Map>) -> Option<Dynamic> {
     if let Some(elements) = literal
         .get("elements")
@@ -529,11 +595,12 @@ fn typed_report_literal_value(literal: &Map, declared: Option<&Map>) -> Option<D
             .and_then(|value| value.get("base"))
             .and_then(|value| value.clone().into_immutable_string().ok())
             .unwrap_or_default();
+        let element_type = report_element_type(declared);
         let values: Vec<Dynamic> = elements
             .iter()
             .map(|element| {
                 let element = element.clone().try_cast::<Map>()?;
-                typed_report_literal_value(&element, None)
+                typed_report_literal_value(&element, element_type.as_ref())
             })
             .collect::<Option<_>>()?;
         if matches!(
@@ -639,9 +706,10 @@ fn typed_literal_dynamic(
         let base = declared
             .map(|value| value.base.rsplit("::").next().unwrap_or(&value.base))
             .unwrap_or_default();
+        let element_type = sysml_element_type(declared);
         let values: Vec<Dynamic> = elements
             .iter()
-            .map(|element| typed_literal_dynamic(element, None))
+            .map(|element| typed_literal_dynamic(element, element_type.as_ref()))
             .collect::<Option<_>>()?;
         if matches!(base, "Vec3" | "Position" | "Direction" | "Dimensions") && values.len() == 3 {
             let coordinates = values
