@@ -69,7 +69,7 @@ pub mod diagnostics;
 pub mod domain_engine;
 pub mod refindex;
 
-pub use diagnostics::{status_json, DocDiagnostics};
+pub use diagnostics::{document_status, DiagnosticStatus, DocDiagnostics, DocStatus};
 pub use domain_engine::{
     line_col_to_offset, offset_to_line_col, CompileState, Diagnostic, DiagnosticSeverity,
     DomainEngine, DomainEngineError, NodeId, ResolvedRef, SymbolRef, TextRange,

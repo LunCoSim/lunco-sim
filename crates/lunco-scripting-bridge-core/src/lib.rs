@@ -9,20 +9,19 @@
 //! Rhai and Python are thin bindings over it rather than parallel
 //! reimplementations.
 //!
-//! # Native, not JSON-everywhere
+//! # Typed values, not JSON in the bridge
 //!
-//! Two kinds of boundary, only one inherently JSON:
+//! Reads and command/query calls use typed values throughout this crate:
 //!
 //! - **Reads** ([`get_field`], resource fields, and hierarchy) read
 //!   live reflect data. They build the *native* value in ONE hop via the
 //!   [`ValueBuilder`] trait — `reflect → Dynamic` for rhai, `reflect → PyObject`
-//!   for Python — never through an intermediate `serde_json::Value`. The
+//!   for Python — never through an intermediate wire value. The
 //!   reflect-walker ([`build_from_reflect`]) is written once and monomorphized
 //!   per language.
-//! - **`cmd` / `query`** route through `ApiCommandEvent` / `ApiQueryRegistry`,
-//!   whose params and results are *defined* as `serde_json::Value`. JSON there
-//!   is the API's own contract, not a transform we add; results still land in
-//!   native values in one pass via [`build_from_json`].
+//! - **`cmd` / `query`** route through typed [`lunco_hooks::HookValue`] values.
+//!   The API crate owns the one explicit adapter to external JSON/reflection
+//!   contracts; this bridge never depends on or constructs JSON.
 //!
 //! # Execution context
 //!
@@ -41,21 +40,22 @@ use std::{
 
 use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
-    ApiCommandEvent, authz_target_gid, command_result_json, validate_command_params,
+    ApiCommandEvent, authz_target_gid_value, command_result_value, validate_command_params_value,
 };
-use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
+use lunco_api::queries::{ApiVisibility, execute_query_value};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::schema::ApiResponse;
+use lunco_api_core::{ApiValue, api_value_from_u64};
 use lunco_command_contracts::{OpId, SessionId};
 use lunco_core::{CommandResults, DTransform, GlobalEntityId};
 use lunco_core_session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
+use lunco_hooks::HookValue;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
 // ── Native value construction ──────────────────────────────────────────────
 
 /// How a scripting backend constructs its native values. Implemented once per
 /// language (`RhaiBuilder` → `Dynamic`, `PyBuilder` → `PyObject`); the shared
-/// reflect/JSON walkers below are generic over it, so each backend builds
+/// reflect/value walkers below are generic over it, so each backend builds
 /// natives directly with no intermediate value type.
 pub trait ValueBuilder {
     /// The backend's native value type.
@@ -74,7 +74,6 @@ pub trait ValueBuilder {
     fn array(&self, items: Vec<Self::Value>) -> Self::Value;
     /// A string-keyed map (object).
     fn map(&self, entries: Vec<(String, Self::Value)>) -> Self::Value;
-
     /// A native semantic vector when the backend supports one.  The default
     /// keeps wire/serialization builders compatible without forcing them to
     /// know the scripting backend's concrete vector type.
@@ -118,6 +117,8 @@ pub trait ValueBuilder {
             ),
         ])
     }
+    /// An owned byte buffer.
+    fn bytes(&self, bytes: &[u8]) -> Self::Value;
 }
 
 /// Whether a person can interact with the current scripted run.
@@ -296,36 +297,27 @@ pub fn build_from_reflect<B: ValueBuilder>(
     }
 }
 
-/// Convert a `serde_json::Value` (a `cmd`/`query` result, or telemetry payload)
-/// into a backend-native value in one pass. Integers stay integers.
-pub fn build_from_json<B: ValueBuilder>(b: &B, v: &serde_json::Value) -> B::Value {
-    use serde_json::Value as J;
-    match v {
-        J::Null => b.unit(),
-        J::Bool(x) => b.bool(*x),
-        J::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                b.int(i)
-            } else if let Some(u) = n.as_u64() {
-                // JSON can represent the full unsigned 64-bit range. Keep
-                // values outside the backend's signed integer range as text
-                // rather than converting through f64 and losing bits.
-                if u <= i64::MAX as u64 {
-                    b.int(u as i64)
-                } else {
-                    b.string(&u.to_string())
-                }
-            } else {
-                b.float(n.as_f64().unwrap_or(0.0))
-            }
-        }
-        J::String(s) => b.string(s),
-        J::Array(a) => b.array(a.iter().map(|x| build_from_json(b, x)).collect()),
-        J::Object(o) => b.map(
-            o.iter()
-                .map(|(k, x)| (k.clone(), build_from_json(b, x)))
+/// Convert a typed in-process value into a backend-native value in one pass.
+pub fn build_from_value<B: ValueBuilder>(b: &B, value: &ApiValue) -> B::Value {
+    match value {
+        HookValue::Unit => b.unit(),
+        HookValue::Int(value) => b.int(*value),
+        HookValue::Float(value) => b.float(*value),
+        HookValue::Bool(value) => b.bool(*value),
+        HookValue::Str(value) => b.string(value),
+        HookValue::Array(values) => b.array(
+            values
+                .iter()
+                .map(|value| build_from_value(b, value))
                 .collect(),
         ),
+        HookValue::Map(values) => b.map(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), build_from_value(b, value)))
+                .collect(),
+        ),
+        HookValue::Bytes(value) => b.bytes(value),
     }
 }
 
@@ -334,41 +326,35 @@ pub fn vec3_value<B: ValueBuilder>(b: &B, x: f64, y: f64, z: f64) -> B::Value {
     b.vec3(x, y, z)
 }
 
-/// The canonical *serialization* [`ValueBuilder`]: constructs `serde_json::Value`.
-///
-/// Native backends (`RhaiBuilder` → `Dynamic`, future `PyBuilder` → `PyObject`)
-/// build their own value types directly; this one is for *output* seams — the
-/// HTTP/MCP API, introspection queries — where JSON is the wire format. Building
-/// through it keeps the rule "JSON only at the serialization boundary": producers
-/// stay generic over `B::Value`, and JSON appears solely because the API layer
-/// hands them a `JsonBuilder`. Non-finite floats (NaN/±∞), which JSON can't
-/// represent, degrade to `null`.
-pub struct JsonBuilder;
+/// Builder for the API-owned typed value used by generic introspection.
+pub struct ApiValueBuilder;
 
-impl ValueBuilder for JsonBuilder {
-    type Value = serde_json::Value;
-    fn unit(&self) -> serde_json::Value {
-        serde_json::Value::Null
+impl ValueBuilder for ApiValueBuilder {
+    type Value = ApiValue;
+
+    fn unit(&self) -> Self::Value {
+        HookValue::Unit
     }
-    fn float(&self, f: f64) -> serde_json::Value {
-        serde_json::Number::from_f64(f)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null)
+    fn float(&self, value: f64) -> Self::Value {
+        HookValue::Float(value)
     }
-    fn int(&self, i: i64) -> serde_json::Value {
-        serde_json::Value::Number(i.into())
+    fn int(&self, value: i64) -> Self::Value {
+        HookValue::Int(value)
     }
-    fn bool(&self, b: bool) -> serde_json::Value {
-        serde_json::Value::Bool(b)
+    fn bool(&self, value: bool) -> Self::Value {
+        HookValue::Bool(value)
     }
-    fn string(&self, s: &str) -> serde_json::Value {
-        serde_json::Value::String(s.to_string())
+    fn string(&self, value: &str) -> Self::Value {
+        HookValue::Str(value.to_owned())
     }
-    fn array(&self, items: Vec<serde_json::Value>) -> serde_json::Value {
-        serde_json::Value::Array(items)
+    fn array(&self, values: Vec<Self::Value>) -> Self::Value {
+        HookValue::Array(values)
     }
-    fn map(&self, entries: Vec<(String, serde_json::Value)>) -> serde_json::Value {
-        serde_json::Value::Object(entries.into_iter().collect())
+    fn map(&self, values: Vec<(String, Self::Value)>) -> Self::Value {
+        HookValue::Map(values)
+    }
+    fn bytes(&self, bytes: &[u8]) -> Self::Value {
+        HookValue::Bytes(bytes.to_vec())
     }
 }
 
@@ -396,7 +382,7 @@ thread_local! {
     static SCRIPT_CLIENT_LOCAL: Cell<bool> = const { Cell::new(false) };
 
     /// Names of authoritative commands a client-scoped scenario tried to issue
-    /// and were dropped this hook (see [`cmd_raw`]). The scenario driver drains
+    /// and were dropped this hook (see [`cmd_value`]). The scenario driver drains
     /// this per-entity via [`take_script_rejects`] and folds it into that
     /// scenario's *diagnostics* — the drop surfaces once in the editor as an
     /// authoring warning, not as a per-tick server log line. Deduped; reset with
@@ -551,14 +537,16 @@ pub fn enforce_script_authority(
 }
 
 /// The `#[authz_target]` gid a command authorizes against, read from the
-/// (global-gid) script `params` via its reflect schema. `None` for a target-less
-/// command (or an unknown name).
-fn command_target_gid(world: &World, name: &str, params: &serde_json::Value) -> Option<u64> {
+/// typed script params via its reflect schema. `None` for a target-less command
+/// (or an unknown name).
+fn command_target_gid(world: &World, name: &str, params: &ApiValue) -> Result<Option<u64>, String> {
     let app_reg = world.resource::<AppTypeRegistry>();
     let type_reg = app_reg.read();
-    type_reg
+    Ok(type_reg
         .get_with_short_type_path(name)
-        .and_then(|r| authz_target_gid(params, r.type_id(), &type_reg))
+        .map(|r| authz_target_gid_value(params, r.type_id(), &type_reg))
+        .transpose()?
+        .flatten())
 }
 
 /// Run `f` with the scoped World, or return `None` outside a script evaluation.
@@ -622,19 +610,44 @@ pub fn controller_role(gid: u64) -> Option<String> {
 
 // ── Verbs: write (cmd) ──────────────────────────────────────────────────────
 
-/// Fire a command by name through `ApiCommandEvent` (the same entry point the
-/// HTTP API / MCP use) and return its `{ id, ok, status, data?, error? }` result
-/// as JSON. `params` is the JSON the API contract expects. The bridge drains a
-/// bounded number of command queues; genuinely asynchronous work returns
-/// `status = "pending"` and can be checked with [`command_result_raw`].
-pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
+fn command_result_error(id: u64, status: &str, error: impl Into<String>) -> ApiValue {
+    HookValue::map([
+        ("id", api_value_from_u64(id)),
+        ("ok", HookValue::Bool(false)),
+        ("status", HookValue::Str(status.to_owned())),
+        ("error", HookValue::Str(error.into())),
+    ])
+}
+
+fn insert_map_value(value: &mut ApiValue, key: &str, replacement: ApiValue) -> bool {
+    let HookValue::Map(entries) = value else {
+        return false;
+    };
+    if let Some((_, value)) = entries.iter_mut().find(|(name, _)| name == key) {
+        *value = replacement;
+    } else {
+        entries.push((key.to_owned(), replacement));
+    }
+    true
+}
+
+/// Fire a typed command through `ApiCommandEvent` (the same entry point the
+/// HTTP API / MCP use) and return its typed `{ id, ok, status, data?, error? }`
+/// result. The bridge drains a bounded number of command queues; genuinely
+/// asynchronous work returns `status = "pending"` and can be checked with
+/// [`command_result`].
+pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
     let id = OpId::new().0;
     with_world(|world| {
         if world
             .get_resource::<IgnoredScenarioCommands>()
             .is_some_and(|commands| commands.accepts(name))
         {
-            return serde_json::json!({ "id": id, "ok": true, "status": "applied" });
+            return HookValue::map([
+                ("id", api_value_from_u64(id)),
+                ("ok", HookValue::Bool(true)),
+                ("status", HookValue::Str("applied".into())),
+            ]);
         }
 
         // Rhai is an in-process transport, but it still uses the same public
@@ -649,33 +662,23 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
         let registration = match find_api_command(&type_reg, name, visibility) {
             Ok(registration) => registration,
             Err(error) => {
-                return serde_json::json!({
-                    "id": id,
-                    "ok": false,
-                    "status": "rejected",
-                    "error": error.message(name),
-                });
+                return command_result_error(id, "rejected", error.message(name));
             }
         };
         let Some(entity_registry) = world.get_resource::<ApiEntityRegistry>() else {
-            return serde_json::json!({
-                "id": id,
-                "ok": false,
-                "status": "failed",
-                "error": "API entity registry is unavailable",
-            });
+            return command_result_error(id, "failed", "API entity registry is unavailable");
         };
         if let Err(error) =
-            validate_command_params(name, &params, registration, &type_reg, entity_registry)
+            validate_command_params_value(name, &params, registration, &type_reg, entity_registry)
         {
-            return serde_json::json!({
-                "id": id,
-                "ok": false,
-                "status": "rejected",
-                "error": error,
-            });
+            return command_result_error(id, "rejected", error);
         }
         drop(type_reg);
+
+        let target_gid = match command_target_gid(world, name, &params) {
+            Ok(target_gid) => target_gid,
+            Err(error) => return command_result_error(id, "rejected", error),
+        };
 
         // Client-scoped scenario on a predicting client: allow ONLY the
         // client-local surface (HUD / notifications / camera). Anything else is
@@ -702,7 +705,7 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
                     .get_resource::<CommandPolicyRegistry>()
                     .is_some_and(|reg| reg.policy_for(name).ownership_gated)
                 && match (
-                    command_target_gid(world, name, &params),
+                    target_gid,
                     world.get_resource::<lunco_core_session::LocalSession>(),
                     world.get_resource::<SessionRegistry>(),
                 ) {
@@ -719,10 +722,11 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
                         v.push(name.to_string());
                     }
                 });
-                return serde_json::json!({
-                    "id": id, "ok": false, "status": "rejected",
-                    "error": format!("`{name}` is not permitted from a client-scoped script"),
-                });
+                return command_result_error(
+                    id,
+                    "rejected",
+                    format!("`{name}` is not permitted from a client-scoped script"),
+                );
             }
             // Thread a real `seq`/`tick` for a client-owned control command so it
             // engages the PREDICT-OWN path the same way keyboard input does
@@ -735,7 +739,7 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
             // `capture_command` serializes the command for the wire — means the
             // client and host agree on the seq the reconcile acks against.
             if owns_target && name == "SetPorts" {
-                if let Some(gid) = command_target_gid(world, name, &params) {
+                if let Some(gid) = target_gid {
                     let tick = world
                         .get_resource::<lunco_core_runtime::SimTick>()
                         .map_or(0, |t| t.0);
@@ -746,9 +750,9 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
                             entry.next_seq = entry.next_seq.wrapping_add(1); // seq 0 reserved
                             entry.next_seq
                         });
-                    if let (Some(seq), Some(obj)) = (seq, params.as_object_mut()) {
-                        obj.insert("seq".into(), serde_json::json!(seq));
-                        obj.insert("tick".into(), serde_json::json!(tick));
+                    if let Some(seq) = seq {
+                        insert_map_value(&mut params, "seq", api_value_from_u64(seq.into()));
+                        insert_map_value(&mut params, "tick", api_value_from_u64(tick));
                     }
                 }
             }
@@ -759,14 +763,8 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
         // unset authority (local / host-trusted launch) stays ungated after the
         // shared public-command schema gate above.
         if script_authority().is_some() {
-            let target_gid = command_target_gid(world, name, &params);
             if let Err(error) = enforce_script_authority(world, name, target_gid) {
-                return serde_json::json!({
-                    "id": id,
-                    "ok": false,
-                    "status": "rejected",
-                    "error": error,
-                });
+                return command_result_error(id, "rejected", error);
             }
         }
         world.trigger(ApiCommandEvent {
@@ -793,85 +791,60 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
         let outcome = world
             .get_resource::<CommandResults>()
             .and_then(|r| r.get(id).cloned());
-        command_result_json(id, outcome.as_ref())
+        command_result_value(id, outcome.as_ref())
     })
-    .unwrap_or_else(|| {
-        serde_json::json!({
-            "id": -1,
-            "ok": false,
-            "status": "failed",
-            "error": "no world in scope",
-        })
-    })
+    .unwrap_or_else(|| command_result_error(id, "failed", "no world in scope"))
 }
 
-/// `cmd` as a native value: fire, then convert the JSON result in one pass.
-pub fn cmd<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B::Value {
-    build_from_json(b, &cmd_raw(name, params))
+/// `cmd` as a native value: fire a typed command and lower the typed result.
+pub fn cmd<B: ValueBuilder>(b: &B, name: &str, params: ApiValue) -> B::Value {
+    build_from_value(b, &cmd_value(name, params))
 }
 
 /// Read the terminal state of a command issued by `cmd()`. Deferred handlers
 /// may finish on a later world flush; exposing the shared command-result store
 /// lets Rhai tests and tools wait for that result without treating acceptance
 /// as success.
-pub fn command_result_raw(id: u64) -> serde_json::Value {
+pub fn command_result_value_for_id(id: u64) -> ApiValue {
     with_world(|world| {
         let outcome = world
             .get_resource::<CommandResults>()
             .and_then(|results| results.get(id));
-        command_result_json(id, outcome)
+        command_result_value(id, outcome)
     })
-    .unwrap_or_else(|| {
-        serde_json::json!({
-            "id": id,
-            "ok": false,
-            "status": "failed",
-            "error": "no world in scope",
-        })
-    })
+    .unwrap_or_else(|| command_result_error(id, "failed", "no world in scope"))
 }
 
-/// Native-value wrapper for [`command_result_raw`].
+/// Native-value wrapper for [`command_result_value_for_id`].
 pub fn command_result<B: ValueBuilder>(b: &B, id: u64) -> B::Value {
-    build_from_json(b, &command_result_raw(id))
+    build_from_value(b, &command_result_value_for_id(id))
 }
 
 // ── Verbs: query ────────────────────────────────────────────────────────────
 
-/// Invoke a registered `ApiQueryProvider` by name.
+/// Invoke a registered query by name using typed in-process values.
 ///
 /// `Ok(None)` is a successful provider response with no data. Missing providers
 /// and provider errors are `Err`, so callers can distinguish an empty answer
 /// from a broken or unavailable query surface.
-pub fn query_raw(
-    name: &str,
-    params: serde_json::Value,
-) -> Result<Option<serde_json::Value>, String> {
-    with_world(|world| {
-        let provider = world
-            .get_resource::<ApiQueryRegistry>()
-            .and_then(|reg| reg.get(name))
-            .ok_or_else(|| format!("query '{name}' is not registered"))?;
-        match provider.execute(world, &params) {
-            ApiResponse::Ok { data } => Ok(data),
-            ApiResponse::Error { code, message } => {
-                Err(format!("query '{name}' failed ({code}): {message}"))
-            }
-            _ => Err(format!(
-                "query '{name}' returned an unsupported response kind"
-            )),
-        }
-    })
-    .ok_or_else(|| "no world in scope".to_string())?
+pub fn query_value(name: &str, params: ApiValue) -> Result<Option<ApiValue>, String> {
+    with_world(|world| execute_query_value(world, name, &params))
+        .ok_or_else(|| "no world in scope".to_string())?
+        .map_err(|error| {
+            format!(
+                "query '{name}' failed ({}): {}",
+                error.code as u16, error.message
+            )
+        })
 }
 
 /// `query` as a native value. Successful data remains the provider's native
 /// value; a successful no-data response is unit. Errors become an explicit
 /// `#{ ok: false, error: "..." }` value so a script can branch without losing
 /// the provider's diagnostic.
-pub fn query<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B::Value {
-    match query_raw(name, params) {
-        Ok(Some(data)) => build_from_json(b, &data),
+pub fn query<B: ValueBuilder>(b: &B, name: &str, params: ApiValue) -> B::Value {
+    match query_value(name, params) {
+        Ok(Some(data)) => build_from_value(b, &data),
         Ok(None) => b.unit(),
         Err(error) => b.map(vec![
             ("ok".to_string(), b.bool(false)),
@@ -1501,8 +1474,17 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_api::queries::ApiQueryProvider;
     use lunco_core_session::{AuthorityRole, CommandPolicy, UserSession};
+
+    fn map_value<'a>(value: &'a ApiValue, key: &str) -> Option<&'a HookValue> {
+        match value {
+            HookValue::Map(entries) => entries
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value),
+            _ => None,
+        }
+    }
 
     /// §3.4: a `cmd()` from a script launched by a remote session is
     /// re-authorized against that session (same gate as the networked path);
@@ -1547,22 +1529,17 @@ mod tests {
         // valid command, so it dispatches as a fire-and-forget no-op and reports
         // ok; command resolution itself still succeeds.
         set_script_authority(None);
-        let r = cmd_raw("ScriptOwnedCommand", serde_json::json!({ "target": 1 }));
-        assert_eq!(
-            r["ok"],
-            serde_json::json!(true),
-            "local launch must be ungated"
+        let r = cmd_value(
+            "ScriptOwnedCommand",
+            HookValue::map([("target", HookValue::Int(1))]),
         );
+        assert_eq!(map_value(&r, "ok"), Some(&HookValue::Bool(true)));
 
         // (2) Authenticated Observer + an OPEN command (not in the policy base)
         // → allowed.
         set_script_authority(Some(SessionId(7)));
-        let r = cmd_raw("ScriptOpenCommand", serde_json::json!({}));
-        assert_eq!(
-            r["ok"],
-            serde_json::json!(true),
-            "OPEN command passes for an authed session"
-        );
+        let r = cmd_value("ScriptOpenCommand", HookValue::Map(Vec::new()));
+        assert_eq!(map_value(&r, "ok"), Some(&HookValue::Bool(true)));
 
         // (3) Same Observer + an OWNED_CONTROL command on a target it does NOT
         // own → demands Operator → rejected BEFORE dispatch.
@@ -1570,22 +1547,17 @@ mod tests {
         world
             .resource_mut::<CommandPolicyRegistry>()
             .register("ScriptOwnedCommand", CommandPolicy::OWNED_CONTROL);
-        let r = cmd_raw("ScriptOwnedCommand", serde_json::json!({ "target": 1 }));
-        assert_eq!(
-            r["ok"],
-            serde_json::json!(false),
-            "unowned OWNED_CONTROL must be rejected"
+        let r = cmd_value(
+            "ScriptOwnedCommand",
+            HookValue::map([("target", HookValue::Int(1))]),
         );
-        assert!(r["error"].is_string());
+        assert_eq!(map_value(&r, "ok"), Some(&HookValue::Bool(false)));
+        assert!(matches!(map_value(&r, "error"), Some(HookValue::Str(_))));
 
         // (4) Unknown / unauthenticated session → denied even for an OPEN command.
         set_script_authority(Some(SessionId(999)));
-        let r = cmd_raw("ScriptOpenCommand", serde_json::json!({}));
-        assert_eq!(
-            r["ok"],
-            serde_json::json!(false),
-            "unknown session denied even for OPEN"
-        );
+        let r = cmd_value("ScriptOpenCommand", HookValue::Map(Vec::new()));
+        assert_eq!(map_value(&r, "ok"), Some(&HookValue::Bool(false)));
     }
 
     #[test]
@@ -1611,9 +1583,16 @@ mod tests {
         set_script_authority(None);
 
         for name in ["MissingCommand", "InternalEvent", "HiddenCommand"] {
-            let result = cmd_raw(name, serde_json::json!({}));
-            assert_eq!(result["ok"], serde_json::json!(false), "{name}: {result}");
-            assert!(result["error"].is_string(), "{name}: {result}");
+            let result = cmd_value(name, HookValue::Map(Vec::new()));
+            assert_eq!(
+                map_value(&result, "ok"),
+                Some(&HookValue::Bool(false)),
+                "{name}"
+            );
+            assert!(
+                matches!(map_value(&result, "error"), Some(HookValue::Str(_))),
+                "{name}"
+            );
         }
     }
 
@@ -1676,34 +1655,5 @@ mod tests {
         }
 
         assert!(script_is_client_local());
-    }
-
-    #[test]
-    fn structured_queries_use_the_read_channel() {
-        struct ReadProvider;
-        impl ApiQueryProvider for ReadProvider {
-            fn name(&self) -> &'static str {
-                "ReadProbe"
-            }
-
-            fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
-                ApiResponse::ok(serde_json::json!({ "value": 7 }))
-            }
-        }
-
-        let mut world = World::new();
-        let mut registry = ApiQueryRegistry::default();
-        registry.register(ReadProvider);
-        world.insert_resource(registry);
-        let _scope = WorldScope::enter(&mut world);
-
-        assert_eq!(
-            query_raw("ReadProbe", serde_json::json!({}))
-                .expect("read provider execution")
-                .expect("read provider result")["value"],
-            7
-        );
-        let error = query_raw("MissingProbe", serde_json::json!({})).expect_err("missing query");
-        assert!(error.contains("not registered"), "{error}");
     }
 }

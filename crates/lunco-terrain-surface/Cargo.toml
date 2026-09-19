@@ -47,6 +47,7 @@ lunco-render = { path = "../lunco-render" }
 # We use only the query/registry/schema types. Native HTTP and browser bindings
 # belong to the application root.
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 # Reuse the existing height-surface machinery instead of duplicating it: the DEM
 # loader fills `field::HeightGrid` (bilinear `height_at`, `to_mesh_data`,
 # `to_avian_heights` → `Collider::heightfield`) — the same grid the procedural

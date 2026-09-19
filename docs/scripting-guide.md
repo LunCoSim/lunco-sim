@@ -1254,7 +1254,7 @@ production contract is exercised by
   the program; `parent(me)` refers to the scene hierarchy above that owner and is not
   a replacement for the program host.
 - **Tool libraries → files:** `<twin>/tools/*.rhai` (see [§E](#e-tools-shared-libraries)).
-- **Timelines → files:** `RegisterTimeline { name, timeline }` stores to `<twin>/timelines/<name>.json`; reloaded on Twin open. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`.
+- **Timelines → files:** `RegisterTimeline { name, timeline: #{ steps: [...] } }` stores typed step data to `<twin>/timelines/<name>.json`; reloaded on Twin open. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`. The command passes native structured values to Rhai, not a JSON string.
 - **Model events → USD:** express the condition in Modelica as a 0/1 output, then connect
   it to a `def LunCoEvent` prim through `inputs:trigger.connect`. The prim supplies only
   the bus-facing `lunco:event:name` and `lunco:event:severity`; scripts receive its rising

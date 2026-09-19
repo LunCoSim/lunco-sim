@@ -894,7 +894,7 @@ pub fn on_reload_shader(
     );
     Ok(lunco_command_contracts::Ack::with_data(
         lunco_command_contracts::OpId::new(),
-        serde_json::json!({
+        lunco_api_core::api_value!({
             "accepted": true,
             "requested": requested,
             "queued_paths": paths,
@@ -948,7 +948,7 @@ pub fn on_set_shader_source(
     );
     Ok(lunco_command_contracts::Ack::with_data(
         lunco_command_contracts::OpId::new(),
-        serde_json::json!({
+        lunco_api_core::api_value!({
             "accepted": true,
             "requested": requested,
             "applied_paths": paths,

@@ -400,6 +400,14 @@ asserted by `assets/scenes/tests/shader_asset_contracts.usda` with its Rhai
 observer. Rust keeps only inline `ParamSchema`/packing tests that do not name a
 repository asset.
 
+Public USD document query contracts are exercised through the production
+`usd_query_api` scene gate: `InspectUsdDocument`, `ResolveUsdTarget`, and
+`SyncUsdDocument` read an authored fixture and observe actual journal-backed
+edits, reference composition, cursor rejection, and history-window recovery.
+`InspectUsdEditSession` is covered by the assembly proposal lifecycle gate.
+This keeps document/query behavior in the same authored USD/Rhai path used by
+the application instead of constructing a second provider-only world in Rust.
+
 ### USD simulation boundary
 
 The authored production scenarios own public USD simulation outcomes: composed

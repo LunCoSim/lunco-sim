@@ -11,6 +11,7 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 avian3d = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
@@ -27,7 +28,6 @@ lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

@@ -13,7 +13,8 @@ use avian3d::prelude::{
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{api_param_u64, ApiQueryError, ApiQueryResult};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_core::{GlobalEntityId, PhysicsStatePending, PhysicsStateReady};
 use lunco_physics::{
     PhysicsSupportFootprint, PhysicsSupportState, PhysicsWheelContact, PhysicsWheelRaycastFilter,
@@ -39,13 +40,13 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
         "PhysicsPerformance"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let Some(timing) = world.get_resource::<avian3d::diagnostics::PhysicsTotalDiagnostics>()
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "PhysicsPerformance: Avian total diagnostics are not installed".to_string(),
-            );
+                "PhysicsPerformance: Avian total diagnostics are not installed",
+            ));
         };
 
         let mut bodies = 0usize;
@@ -111,14 +112,14 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
         let Some(joint_graph) =
             world.get_resource::<avian3d::dynamics::solver::joint_graph::JointGraph>()
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "PhysicsPerformance: Avian joint graph is not installed".to_string(),
-            );
+                "PhysicsPerformance: Avian joint graph is not installed",
+            ));
         };
         let joint_graph_edges = joint_graph.graph().edge_count();
 
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "step_number": timing.step_number,
             "step_time_ms": timing.step_time.as_secs_f64() * 1000.0,
             "entities": entities,
@@ -134,7 +135,7 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
             "detach_requests": detach_requests,
             "detach_sets": detach_sets,
             "detached_joint_paths": detached_joint_paths,
-        }))
+        })))
     }
 }
 
@@ -143,21 +144,21 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
         "QueryPhysicsState"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw) = params.get("id").and_then(serde_json::Value::as_u64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(raw) = api_param_u64(params, "id") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "QueryPhysicsState: `id` (entity id) required".to_string(),
-            );
+                "QueryPhysicsState: `id` (entity id) required",
+            ));
         };
         let Some(entity) = world
             .get_resource::<ApiEntityRegistry>()
             .and_then(|r| r.resolve(&GlobalEntityId::from_raw(raw)))
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("Entity {raw} not found"),
-            );
+            ));
         };
         // The API registry has already resolved this id against the live World.
         // Keep the guard so a stale registry entry is still reported as a
@@ -166,10 +167,10 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
         // access metadata on the hot path; these are immutable component reads
         // and do not need a system query at all.
         if world.get_entity(entity).is_err() {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("Entity {raw} not found"),
-            );
+            ));
         }
         let body = world.get::<RigidBody>(entity);
         let linear = world.get::<LinearVelocity>(entity);
@@ -199,23 +200,23 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                     .0
                     .iter()
                     .map(|contact| {
-                        serde_json::json!({
-                            "local_offset": [
+                        api_value!({
+                            "local_offset": api_value!([
                                 contact.local_offset.x,
                                 contact.local_offset.y,
                                 contact.local_offset.z
-                            ],
+                            ]),
                             "radius_m": contact.radius,
-                            "probe_origin": [
+                            "probe_origin": api_value!([
                                 contact.probe_origin.x,
                                 contact.probe_origin.y,
                                 contact.probe_origin.z
-                            ],
-                            "probe_direction": [
+                            ]),
+                            "probe_direction": api_value!([
                                 contact.probe_direction.x,
                                 contact.probe_direction.y,
                                 contact.probe_direction.z
-                            ],
+                            ]),
                             "probe_length_m": contact.probe_length,
                         })
                     })
@@ -264,7 +265,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                                 let usd_prim_path = world
                                     .get::<UsdPrimPath>(*excluded)
                                     .map(|path| path.path.as_str().to_owned());
-                                serde_json::json!({
+                                api_value!({
                                     "api_id_available": api_id.is_some(),
                                     "api_id": api_id.unwrap_or(0),
                                     "usd_prim_path_available": usd_prim_path.is_some(),
@@ -274,7 +275,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                Some(serde_json::json!({
+                Some(api_value!({
                     "wheel_api_id": wheel_id,
                     "wheel_usd_prim_path": wheel_path,
                     "contact_valid": contact.contact_valid,
@@ -290,26 +291,26 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                     "hit_usd_prim_path": hit_path.unwrap_or_default(),
                     "distance_available": contact.distance_m.is_some(),
                     "distance_m": contact.distance_m.unwrap_or(0.0),
-                    "normal": [contact.normal.x, contact.normal.y, contact.normal.z],
+                    "normal": api_value!([contact.normal.x, contact.normal.y, contact.normal.z]),
                     "normal_force_n": contact.normal_force_n,
                     "suspension_rest_length_m": contact.suspension_rest_length_m,
                     "suspension_compression_m": contact.suspension_compression_m,
-                    "tire_force_n": [
+                    "tire_force_n": api_value!([
                         contact.tire_force.x,
                         contact.tire_force.y,
                         contact.tire_force.z
-                    ],
+                    ]),
                     "ray_hit_count": contact.ray_hit_count,
                     "valid_ray_hit_count": contact.valid_ray_hit_count,
                     "raycast_filter_excluded_entity_count": contact.raycast_filter_excluded_entity_count,
                     "raycast_filter_exclusions_available": filter.is_some(),
                     "raycast_filter_exclusions": filter_exclusions,
-                    "ray_origin": [contact.ray_origin.x, contact.ray_origin.y, contact.ray_origin.z],
-                    "ray_direction": [
+                    "ray_origin": api_value!([contact.ray_origin.x, contact.ray_origin.y, contact.ray_origin.z]),
+                    "ray_direction": api_value!([
                         contact.ray_direction.x,
                         contact.ray_direction.y,
                         contact.ray_direction.z
-                    ],
+                    ]),
                     "ray_max_distance_m": contact.ray_max_distance_m,
                     "sample_tick": contact.sample_tick,
                 }))
@@ -317,21 +318,21 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             .collect::<Vec<_>>();
         wheel_contacts.sort_by(|left, right| {
             left.get("wheel_usd_prim_path")
-                .and_then(serde_json::Value::as_str)
+                .and_then(ApiValue::as_str)
                 .unwrap_or("")
                 .cmp(
                     right
                         .get("wheel_usd_prim_path")
-                        .and_then(serde_json::Value::as_str)
+                        .and_then(ApiValue::as_str)
                         .unwrap_or(""),
                 )
         });
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "api_id": raw,
             "usd_prim_path": prim_path.map(|path| path.path.as_str()),
             "body_mode": body_mode,
-            "linear_velocity_mps": linear.map(|velocity| [velocity.0.x, velocity.0.y, velocity.0.z]),
-            "angular_velocity_radps": angular.map(|velocity| [velocity.0.x, velocity.0.y, velocity.0.z]),
+            "linear_velocity_mps": linear.map(|velocity| api_value!([velocity.0.x, velocity.0.y, velocity.0.z])),
+            "angular_velocity_radps": angular.map(|velocity| api_value!([velocity.0.x, velocity.0.y, velocity.0.z])),
             "sleeping": sleeping,
             "physics_state_ready": ready,
             "physics_state_pending": pending,
@@ -340,10 +341,10 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "collider_present": collider,
             "mass_kg": mass.map(|mass| mass.value()),
             "center_of_mass_m": center_of_mass
-                .map(|center| [center.0.x, center.0.y, center.0.z]),
+                .map(|center| api_value!([center.0.x, center.0.y, center.0.z])),
             "inertia_principal_kgm2": inertia.map(|inertia| {
                 let (principal, _) = inertia.principal_angular_inertia_with_local_frame();
-                [principal.x, principal.y, principal.z]
+                api_value!([principal.x, principal.y, principal.z])
             }),
             // A footprint is authored support geometry; a contact count is a
             // live result from the owning physics realization. Keep them
@@ -355,7 +356,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "support_sample_tick": support_state.map(|state| state.sample_tick),
             "support_contacts": support_contacts,
             "wheel_contacts": wheel_contacts,
-        }))
+        })))
     }
 }
 

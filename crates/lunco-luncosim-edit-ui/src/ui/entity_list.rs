@@ -18,10 +18,10 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_camera_core::camera_display_labels;
 use lunco_render::SceneCamera;
 use lunco_scene_selection::{SelectEntityTarget, SelectionIntent};
 use lunco_settings::SettingsSection;
-use lunco_usd_bevy_camera::camera_switch::camera_display_labels;
 use lunco_usd_core::runtime::{runtime_persistence_for_twin, RUNTIME_PERSISTENCE_SETTING};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workspace::{SetTwinSetting, TwinClosed, TwinSettingInput, WorkspaceResource};

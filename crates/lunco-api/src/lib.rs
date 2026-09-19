@@ -1,8 +1,8 @@
 //! # lunco-api — Transport-Agnostic API Core
 //!
-//! Exposes LunCoSim's simulation state and command system via a unified API contract.
-//! All transports (HTTP, ROS2, IPC, DDS, WebSocket) map to the same `ApiRequest`/`ApiResponse`
-//! types, so adding a new transport is just serialization — no simulation logic changes.
+//! ECS runtime for reflected commands, discovery, entity identity, and
+//! telemetry subscriptions. Typed contracts live in `lunco-api-core`, query
+//! providers in `lunco-api::queries`, and JSON conversion in the transport codec.
 //!
 //! ## Architecture
 //!
@@ -15,8 +15,7 @@
 //! │  ApiDiscovery  — schema introspection via TypeRegistry         │
 //! │  ApiTelemetry  — telemetry subscription + broadcast            │
 //! │                                                                │
-//! │  ApiRequest    — ExecuteCommand, ListEntities, Subscribe…      │
-//! │  ApiResponse   — Ok, Error, TelemetryEvent                     │
+//! │  Typed API runtime; no wire-format values cross this boundary   │
 //! └────────────────────────┬───────────────────────────────────────┘
 //!                          │
 //!                          ▼
@@ -33,8 +32,8 @@
 //!   arbitrary reflected internal events are not.
 //! - **No hardcoded entity types**: entity identity comes from the runtime
 //!   registry; domain-specific reads expose their own typed query providers.
-//! - **Transport-independent**: the core types and executor know nothing about
-//!   HTTP, sockets, or browser bindings. Those live in `lunco-api-transport`.
+//! - **Typed boundary**: execution and in-process providers use `ApiValue`;
+//!   JSON conversion lives in the transport codec.
 //! - **Headless-compatible**: No rendering dependencies. Runs on server-only builds.
 
 use bevy::prelude::*;
@@ -43,7 +42,6 @@ pub mod discovery;
 pub mod executor;
 pub mod queries;
 pub mod registry;
-pub mod schema;
 pub mod session;
 pub mod subscription;
 
@@ -52,7 +50,6 @@ pub use discovery::*;
 pub use executor::*;
 pub use queries::*;
 pub use registry::*;
-pub use schema::*;
 pub use subscription::*;
 
 /// Add `plugin` only if a plugin of the same type isn't already present.

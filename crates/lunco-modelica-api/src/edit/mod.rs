@@ -512,7 +512,7 @@ pub fn on_apply_modelica_ops(
     });
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "queued": true, "operations": count }),
+        lunco_api_core::api_value!({ "queued": true, "operations": count }),
     ))
 }
 

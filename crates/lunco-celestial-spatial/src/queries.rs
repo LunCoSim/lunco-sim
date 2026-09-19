@@ -13,7 +13,8 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{api_param_u64, ApiQueryError, ApiQueryResult};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_core::GlobalEntityId;
 use lunco_time::WorldTime;
 
@@ -25,9 +26,9 @@ use lunco_celestial::CelestialBodyRegistry;
 use lunco_celestial_spatial_core::{LinkNode, LinkState, WifiNode, WifiState};
 
 /// Read a `[x,y,z]` array or `{x,y,z}` map into a solar-frame [`DVec3`].
-fn parse_point(v: Option<&serde_json::Value>) -> Option<DVec3> {
+fn parse_point(v: Option<&ApiValue>) -> Option<DVec3> {
     let v = v?;
-    if let Some(a) = v.as_array() {
+    if let ApiValue::Array(a) = v {
         if a.len() < 3 {
             return None;
         }
@@ -55,25 +56,33 @@ impl ApiQueryProvider for OccultationProvider {
         "Occultation"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let (Some(o), Some(t)) = (
             parse_point(params.get("origin")),
             parse_point(params.get("target")),
         ) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "Occultation: `origin` and `target` [x,y,z] required".to_string(),
-            );
+                "Occultation: `origin` and `target` [x,y,z] required",
+            ));
         };
-        let clear = || ApiResponse::ok(serde_json::json!({ "occluded": false, "by": null }));
         let Some(jd) = world.get_resource::<WorldTime>().map(|w| w.epoch_jd) else {
-            return clear();
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "Occultation: WorldTime is not installed",
+            ));
         };
-        let (Some(eph), Some(reg)) = (
-            world.get_resource::<EphemerisResource>(),
-            world.get_resource::<CelestialBodyRegistry>(),
-        ) else {
-            return clear();
+        let Some(eph) = world.get_resource::<EphemerisResource>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "Occultation: ephemeris is not installed",
+            ));
+        };
+        let Some(reg) = world.get_resource::<CelestialBodyRegistry>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "Occultation: celestial body registry is not installed",
+            ));
         };
         let mut by: Option<String> = None;
         for b in reg.bodies.iter().filter(|b| b.radius_m > 0.0) {
@@ -87,7 +96,7 @@ impl ApiQueryProvider for OccultationProvider {
                 break;
             }
         }
-        ApiResponse::ok(serde_json::json!({ "occluded": by.is_some(), "by": by }))
+        Ok(Some(api_value!({ "occluded": by.is_some(), "by": by })))
     }
 }
 
@@ -103,41 +112,54 @@ impl ApiQueryProvider for BodyPositionProvider {
         "BodyPosition"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(naif) = params.get("body").and_then(serde_json::Value::as_i64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(naif) = params.get("body").and_then(ApiValue::as_i64) else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "BodyPosition: `body` (NAIF id) required".to_string(),
-            );
+                "BodyPosition: `body` (NAIF id) required",
+            ));
         };
-        let naif = naif as i32;
+        let Ok(naif) = i32::try_from(naif) else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "BodyPosition: `body` must fit a signed 32-bit NAIF identifier",
+            ));
+        };
         let Some(jd) = world.get_resource::<WorldTime>().map(|w| w.epoch_jd) else {
-            return ApiResponse::ok(serde_json::json!({ "found": false }));
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "BodyPosition: WorldTime is not installed",
+            ));
         };
         let Some(eph) = world.get_resource::<EphemerisResource>() else {
-            return ApiResponse::ok(serde_json::json!({ "found": false }));
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "BodyPosition: ephemeris is not installed",
+            ));
         };
-        let radius = world
-            .get_resource::<CelestialBodyRegistry>()
-            .and_then(|r| {
-                r.bodies
-                    .iter()
-                    .find(|b| b.ephemeris_id == naif)
-                    .map(|b| b.radius_m)
-            })
-            .unwrap_or(0.0);
+        let Some(radius) = world.get_resource::<CelestialBodyRegistry>().and_then(|r| {
+            r.bodies
+                .iter()
+                .find(|b| b.ephemeris_id == naif)
+                .map(|b| b.radius_m)
+        }) else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
+                format!("BodyPosition: NAIF {naif} is not in the celestial body registry"),
+            ));
+        };
         let Some(p) = eph.provider.global_position(naif, jd) else {
-            return ApiResponse::error(
-                lunco_api::schema::ApiErrorCode::EntityNotFound,
+            return Err(ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
                 format!("no ephemeris for NAIF {naif}"),
-            );
+            ));
         };
         let p = ecliptic_to_bevy(p).raw();
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "found": true,
-            "pos": [p.x, p.y, p.z],
+            "pos": api_value!([p.x, p.y, p.z]),
             "radius": radius,
-        }))
+        })))
     }
 }
 
@@ -162,17 +184,17 @@ impl ApiQueryProvider for SolarPoseProvider {
         "SolarPose"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(gid) = params.get("entity").and_then(serde_json::Value::as_i64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(gid) = api_param_u64(params, "entity") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "SolarPose: `entity` (gid) required".to_string(),
-            );
+                "SolarPose: `entity` (gid) required",
+            ));
         };
-        let not_found = || ApiResponse::ok(serde_json::json!({ "found": false }));
+        let not_found = || Ok(Some(api_value!({ "found": false })));
         let Some(target) = world
             .get_resource::<ApiEntityRegistry>()
-            .and_then(|r| r.resolve(&GlobalEntityId::from_raw(gid as u64)))
+            .and_then(|r| r.resolve(&GlobalEntityId::from_raw(gid)))
         else {
             return not_found();
         };
@@ -185,23 +207,23 @@ impl ApiQueryProvider for SolarPoseProvider {
             // could mistake for a direction.
             let (kind, up) = match p.horizon {
                 crate::pose::Horizon::Surface { up, .. } => {
-                    ("surface", serde_json::json!([up.x, up.y, up.z]))
+                    ("surface", api_value!([up.x, up.y, up.z]))
                 }
-                crate::pose::Horizon::Free { .. } => ("orbit", serde_json::Value::Null),
+                crate::pose::Horizon::Free { .. } => ("orbit", ApiValue::Unit),
             };
-            return ApiResponse::ok(serde_json::json!({
+            return Ok(Some(api_value!({
                 "found": true,
                 "kind": kind,
                 "body": p.body(),
-                "pos": [p.pos.x, p.pos.y, p.pos.z],
-                "local": [p.local.x, p.local.y, p.local.z],
+                "pos": api_value!([p.pos.x, p.pos.y, p.pos.z]),
+                "local": api_value!([p.local.x, p.local.y, p.local.z]),
                 "up": up,
-            }));
+            })));
         }
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "found": false,
             "reason": "pose_unavailable",
-        }))
+        })))
     }
 }
 
@@ -248,10 +270,10 @@ impl ApiQueryProvider for LinksProvider {
         "Links"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let mut nodes: Vec<serde_json::Value> = Vec::new();
-        let mut adj = serde_json::Map::new();
-        let mut edges: Vec<serde_json::Value> = Vec::new();
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let mut nodes: Vec<ApiValue> = Vec::new();
+        let mut adj = Vec::new();
+        let mut edges: Vec<ApiValue> = Vec::new();
         // class → the GIDs that carry it, so a role stays routable now that
         // identity is per-node (see the type doc).
         let mut groups: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
@@ -266,10 +288,10 @@ impl ApiQueryProvider for LinksProvider {
             &LinkState,
             &GlobalEntityId,
         )>::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "Links: ECS query is unavailable".to_string(),
-            );
+                "Links: ECS query is unavailable",
+            ));
         };
         for (e, name, node, state, gid) in q.iter(world) {
             let id = gid.get();
@@ -285,7 +307,7 @@ impl ApiQueryProvider for LinksProvider {
                 }
                 // Dedup the undirected edge (each pair is listed from both sides).
                 if id <= peer.peer {
-                    edges.push(serde_json::json!({
+                    edges.push(api_value!({
                         "a": id, "b": peer.peer, "range_m": peer.range_m,
                         "light_time_s": peer.light_time_s,
                     }));
@@ -293,8 +315,8 @@ impl ApiQueryProvider for LinksProvider {
             }
             // JSON object keys are strings, so the adjacency is keyed by the GID
             // stringified; `links.rhai` converts once, in `neighbours()`.
-            adj.insert(id.to_string(), serde_json::json!(peers));
-            nodes.push(serde_json::json!({
+            adj.push((id.to_string(), api_value!(peers)));
+            nodes.push(api_value!({
                 "id": id,
                 "name": label,
                 "class": node.class.clone().unwrap_or_default(),
@@ -314,10 +336,21 @@ impl ApiQueryProvider for LinksProvider {
                 cur = parent;
             }
         }
-        ApiResponse::ok(serde_json::json!({
-            "nodes": nodes, "adj": adj, "edges": edges,
-            "groups": groups, "owners": owners,
-        }))
+        let groups = groups
+            .into_iter()
+            .map(|(class, ids)| (class, api_value!(ids)))
+            .collect::<Vec<_>>();
+        let owners = owners
+            .into_iter()
+            .map(|(owner, ids)| (owner, api_value!(ids)))
+            .collect::<Vec<_>>();
+        Ok(Some(api_value!({
+            "nodes": nodes,
+            "adj": ApiValue::map(adj),
+            "edges": edges,
+            "groups": ApiValue::map(groups),
+            "owners": ApiValue::map(owners),
+        })))
     }
 }
 
@@ -330,17 +363,17 @@ impl ApiQueryProvider for WifiLinksProvider {
         "WifiLinks"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let mut nodes = Vec::new();
-        let mut adj = serde_json::Map::new();
+        let mut adj = Vec::new();
         let mut edges = Vec::new();
         let Some(mut q) =
             QueryState::<(&GlobalEntityId, &WifiNode, &WifiState, Option<&Name>)>::try_new(world)
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "WifiLinks: ECS query is unavailable".to_string(),
-            );
+                "WifiLinks: ECS query is unavailable",
+            ));
         };
         for (gid, wifi, state, name) in q.iter(world) {
             let id = gid.get();
@@ -352,7 +385,7 @@ impl ApiQueryProvider for WifiLinksProvider {
                 .collect();
             for peer in state.peers.iter().filter(|peer| peer.connected) {
                 if id <= peer.peer {
-                    edges.push(serde_json::json!({
+                    edges.push(api_value!({
                         "a": id,
                         "b": peer.peer,
                         "range_m": peer.range_m,
@@ -360,18 +393,18 @@ impl ApiQueryProvider for WifiLinksProvider {
                     }));
                 }
             }
-            adj.insert(id.to_string(), serde_json::json!(peers));
-            nodes.push(serde_json::json!({
+            adj.push((id.to_string(), api_value!(peers)));
+            nodes.push(api_value!({
                 "id": id,
                 "name": name.map(|name| name.as_str()).unwrap_or_default(),
                 "max_range_m": wifi.max_range_m,
             }));
         }
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "nodes": nodes,
-            "adj": adj,
+            "adj": ApiValue::map(adj),
             "edges": edges,
-        }))
+        })))
     }
 }
 

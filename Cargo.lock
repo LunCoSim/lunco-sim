@@ -7054,6 +7054,7 @@ name = "lunco-api"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-api-core",
  "lunco-celestial",
  "lunco-command-contracts",
  "lunco-control-core",
@@ -7065,7 +7066,6 @@ dependencies = [
  "lunco-readiness",
  "lunco-telemetry-core",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -7078,11 +7078,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-api-codec"
+version = "0.1.0-dev"
+dependencies = [
+ "lunco-api-core",
+ "serde_json",
+]
+
+[[package]]
 name = "lunco-api-contracts"
 version = "0.1.0-dev"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-api-core"
+version = "0.1.0-dev"
+dependencies = [
+ "lunco-hooks",
+ "lunco-telemetry-core",
+ "serde",
 ]
 
 [[package]]
@@ -7093,7 +7110,9 @@ dependencies = [
  "base64",
  "bevy",
  "lunco-api",
+ "lunco-api-codec",
  "lunco-api-contracts",
+ "lunco-api-core",
  "lunco-storage",
  "serde_json",
  "tempfile",
@@ -7185,7 +7204,6 @@ dependencies = [
  "image",
  "lunco-assets-datasets",
  "lunco-celestial-data",
- "lunco-core",
  "lunco-geotiff",
  "lunco-storage",
  "resvg",
@@ -7400,6 +7418,7 @@ dependencies = [
  "bevy",
  "image",
  "lunco-api",
+ "lunco-api-core",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-render",
@@ -7407,7 +7426,6 @@ dependencies = [
  "lunco-storage",
  "lunco-tools-bevy",
  "lunco-viewport-core",
- "serde_json",
  "web-time",
 ]
 
@@ -7455,7 +7473,6 @@ dependencies = [
  "lunco-render",
  "lunco-spatial",
  "lunco-time",
- "serde",
 ]
 
 [[package]]
@@ -7464,10 +7481,10 @@ version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
- "bevy_mesh",
  "big_space",
  "futures-lite",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-datasets",
  "lunco-assets-runtime",
  "lunco-celestial",
@@ -7492,7 +7509,6 @@ dependencies = [
  "lunco-time",
  "lunco-viewport-core",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -7509,9 +7525,9 @@ dependencies = [
 name = "lunco-command-contracts"
 version = "0.1.0-dev"
 dependencies = [
+ "lunco-hooks",
  "lunco-id",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -7546,6 +7562,7 @@ dependencies = [
  "lunco-core-session",
  "lunco-cosim",
  "lunco-cosim-core",
+ "lunco-hooks",
  "lunco-input-core",
  "lunco-port-core",
  "lunco-telemetry-core",
@@ -7619,7 +7636,6 @@ dependencies = [
  "lunco-command-contracts",
  "lunco-id",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -7715,6 +7731,7 @@ name = "lunco-hooks"
 version = "0.1.0"
 dependencies = [
  "inventory",
+ "serde",
 ]
 
 [[package]]
@@ -7890,6 +7907,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-luncosim-edit-inspector-core"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-camera-core",
+ "lunco-cosim-core",
+ "lunco-environment",
+ "lunco-physics",
+ "lunco-port-core",
+ "lunco-render",
+ "lunco-scene-selection",
+ "lunco-usd-bevy-scene",
+ "lunco-viewport-core",
+]
+
+[[package]]
 name = "lunco-luncosim-edit-inspector-ui"
 version = "0.1.0"
 dependencies = [
@@ -7903,12 +7936,12 @@ dependencies = [
  "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
- "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-embodiment-core",
  "lunco-environment",
  "lunco-interaction-core",
+ "lunco-luncosim-edit-inspector-core",
  "lunco-materials",
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
@@ -7924,7 +7957,6 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-time",
  "lunco-usd-authoring",
- "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
@@ -7947,10 +7979,10 @@ dependencies = [
  "bevy_egui",
  "big_space",
  "lunco-api",
+ "lunco-api-core",
  "lunco-camera-core",
  "lunco-canvas",
  "lunco-celestial-presentation",
- "lunco-celestial-spatial",
  "lunco-celestial-spatial-core",
  "lunco-command-contracts",
  "lunco-control-core",
@@ -7998,11 +8030,11 @@ dependencies = [
  "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workbench-help-ui",
+ "lunco-workbench-perf-ui",
  "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -8012,6 +8044,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
+ "lunco-camera-core",
  "lunco-celestial",
  "lunco-celestial-spatial-core",
  "lunco-command-contracts",
@@ -8270,6 +8303,7 @@ dependencies = [
  "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workbench-guided-ui",
+ "lunco-workbench-perf-ui",
  "lunco-workbench-runtime-ui",
  "lunco-workbench-state",
  "lunco-workbench-widgets",
@@ -8300,6 +8334,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-control-core",
  "lunco-core",
  "lunco-core-runtime",
@@ -8310,7 +8345,6 @@ dependencies = [
  "lunco-spatial",
  "lunco-telemetry-core",
  "lunco-time",
- "serde_json",
 ]
 
 [[package]]
@@ -8320,6 +8354,7 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-command-contracts",
@@ -8337,7 +8372,6 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-workspace",
  "serde",
- "serde_json",
  "uuid",
  "web-time",
 ]
@@ -8407,6 +8441,7 @@ dependencies = [
  "getrandom 0.3.4",
  "log",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-path",
  "lunco-assets-runtime",
@@ -8416,6 +8451,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
+ "lunco-hooks",
  "lunco-modelica-ast",
  "lunco-modelica-document",
  "lunco-modelica-index",
@@ -8828,6 +8864,8 @@ dependencies = [
  "crossbeam-channel",
  "leafwing-input-manager",
  "lunco-api",
+ "lunco-api-codec",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-path",
  "lunco-assets-runtime",
@@ -8895,6 +8933,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-api",
+ "lunco-api-core",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-hooks",
@@ -8902,7 +8941,6 @@ dependencies = [
  "lunco-spatial",
  "lunco-telemetry-core",
  "lunco-time",
- "serde_json",
 ]
 
 [[package]]
@@ -8991,6 +9029,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-command-contracts",
  "lunco-core",
@@ -9011,7 +9050,6 @@ dependencies = [
  "lunco-workspace",
  "openusd",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -9038,6 +9076,7 @@ dependencies = [
  "crossbeam-channel",
  "futures-lite",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-path",
  "lunco-assets-runtime",
@@ -9050,7 +9089,6 @@ dependencies = [
  "lunco-storage",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
- "serde_json",
  "tempfile",
  "wasm-bindgen-futures",
 ]
@@ -9096,6 +9134,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-celestial",
  "lunco-control-core",
  "lunco-core",
@@ -9110,7 +9149,6 @@ dependencies = [
  "lunco-usd-bevy-twin",
  "lunco-usd-document",
  "openusd",
- "serde_json",
 ]
 
 [[package]]
@@ -9157,9 +9195,9 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-core",
  "lunco-signal",
- "serde_json",
 ]
 
 [[package]]
@@ -9168,6 +9206,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-path",
  "lunco-assets-runtime",
@@ -9218,6 +9257,7 @@ dependencies = [
  "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-hooks",
  "lunco-readiness",
  "lunco-scripting-bridge-core",
  "lunco-telemetry-core",
@@ -9234,16 +9274,17 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-command-contracts",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-core-session",
  "lunco-exposure-core",
+ "lunco-hooks",
  "lunco-port-core",
  "lunco-telemetry-core",
  "lunco-time",
  "lunco-workspace",
- "serde_json",
 ]
 
 [[package]]
@@ -9296,6 +9337,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-datasets",
  "lunco-assets-runtime",
  "lunco-core",
@@ -9305,10 +9347,10 @@ dependencies = [
  "lunco-hooks-rhai",
  "lunco-scripting",
  "lunco-scripting-bridge-core",
+ "lunco-scripting-rhai-core",
  "lunco-scripting-rhai-world",
  "lunco-tools",
  "rhai",
- "serde_json",
 ]
 
 [[package]]
@@ -9319,6 +9361,8 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-behavior",
  "lunco-core",
+ "lunco-hooks",
+ "lunco-hooks-rhai",
  "lunco-telemetry-core",
  "rhai",
 ]
@@ -9329,6 +9373,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-command-contracts",
@@ -9346,7 +9391,6 @@ dependencies = [
  "lunco-tools",
  "lunco-twin-journal",
  "lunco-workspace",
- "rhai",
  "serde",
  "serde_json",
  "tempfile",
@@ -9359,6 +9403,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-command-contracts",
@@ -9386,7 +9431,7 @@ dependencies = [
  "lunco-workspace",
  "rhai",
  "serde",
- "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -9453,6 +9498,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-command-contracts",
@@ -9464,7 +9510,6 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-workspace",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -9497,8 +9542,6 @@ dependencies = [
  "lunco-scripting-rhai-core",
  "lunco-sysml-ast",
  "rhai",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -9507,6 +9550,7 @@ version = "0.6.0-dev"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-port-core",
@@ -9571,6 +9615,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-core",
  "lunco-environment",
@@ -10098,6 +10143,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-command-contracts",
@@ -10190,10 +10236,10 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "egui",
+ "lunco-camera-core",
  "lunco-core",
  "lunco-render",
  "lunco-scene-selection",
- "lunco-usd-bevy-camera",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
  "lunco-usd-viewport-core",
@@ -10208,6 +10254,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-usd-authoring",
@@ -10218,7 +10265,6 @@ dependencies = [
  "lunco-usd-data",
  "lunco-usd-document",
  "openusd",
- "serde_json",
 ]
 
 [[package]]
@@ -10334,6 +10380,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-control-core",
  "lunco-core",
  "lunco-core-runtime",
@@ -10352,7 +10399,6 @@ dependencies = [
  "lunco-usd-bevy-stage",
  "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
- "serde_json",
 ]
 
 [[package]]
@@ -10391,9 +10437,9 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-modelica-runtime",
  "lunco-usd-sim-domain",
- "serde_json",
 ]
 
 [[package]]
@@ -10509,6 +10555,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "lunco-api",
+ "lunco-api-core",
  "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-command-contracts",
@@ -10528,11 +10575,9 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-document",
  "lunco-usd-viewport-core",
- "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workspace",
  "openusd",
- "serde_json",
  "tempfile",
 ]
 
@@ -10542,8 +10587,11 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "egui",
+ "lunco-api",
+ "lunco-api-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-usd-bevy-stage",
  "lunco-usd-document",
  "lunco-usd-viewport-core",
  "lunco-usd-viewport-runtime",
@@ -10624,6 +10672,7 @@ dependencies = [
  "lunco-workbench-file-ops",
  "lunco-workbench-help-ui",
  "lunco-workbench-layout",
+ "lunco-workbench-perf-ui",
  "lunco-workbench-state",
  "lunco-workbench-text-editor",
  "lunco-workbench-widgets",
@@ -10742,6 +10791,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-workbench-perf-ui"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-core",
+ "lunco-settings",
+ "lunco-workbench-core",
+ "serde",
+]
+
+[[package]]
 name = "lunco-workbench-runtime-ui"
 version = "0.1.0-dev"
 dependencies = [
@@ -10848,10 +10909,10 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-api",
+ "lunco-api-core",
  "lunco-doc",
  "lunco-twin",
  "lunco-workspace",
- "serde_json",
 ]
 
 [[package]]

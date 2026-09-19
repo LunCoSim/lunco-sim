@@ -13,7 +13,8 @@ use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{api_param_u64, ApiQueryError, ApiQueryResult};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_celestial::CelestialBody;
 use lunco_core::{CatalogEntryId, GlobalEntityId, UsdPrimKind};
 use lunco_scene_catalog::catalog::SpawnCatalog;
@@ -27,21 +28,21 @@ impl ApiQueryProvider for QueryEntityProvider {
         "QueryEntity"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw) = params.get("id").and_then(serde_json::Value::as_u64) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(raw) = api_param_u64(params, "id") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "QueryEntity: `id` (entity id) required".to_string(),
-            );
+                "QueryEntity: `id` (entity id) required",
+            ));
         };
         let Some(entity) = world
             .get_resource::<ApiEntityRegistry>()
             .and_then(|r| r.resolve(&GlobalEntityId::from_raw(raw)))
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("Entity {raw} not found"),
-            );
+            ));
         };
 
         let Some(mut q_meta) = QueryState::<(
@@ -54,16 +55,16 @@ impl ApiQueryProvider for QueryEntityProvider {
             Option<&UsdPrimKind>,
             Option<&UsdPrimPath>,
         )>::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "QueryEntity: world state unavailable".to_string(),
-            );
+                "QueryEntity: world state unavailable",
+            ));
         };
         let Some(mut poses) = lunco_physics::SimulationPoseReadState::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "QueryEntity: active physics frame unavailable".to_string(),
-            );
+                "QueryEntity: active physics frame unavailable",
+            ));
         };
 
         let (name, callsign, accepts_commands, body, transform, catalog_id, usd_kind, prim_path) =
@@ -80,10 +81,10 @@ impl ApiQueryProvider for QueryEntityProvider {
             .map(|entry| entry.origin.as_api_value());
 
         let Some((pos, rot)) = poses.pose(world, entity) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 format!("QueryEntity: entity {raw} is not connected to the active physics frame"),
-            );
+            ));
         };
         let pos = pos.0;
         let rot = rot.0.as_quat();
@@ -93,7 +94,7 @@ impl ApiQueryProvider for QueryEntityProvider {
         // Euler YXZ (yaw, pitch, roll) — matches the sun / steering authoring
         // convention, handier than a quat.
         let (yaw, pitch, roll) = rot.to_euler(EulerRot::YXZ);
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "api_id": raw,
             "name": lunco_core::entity_display_name(name, callsign, catalog_id),
             "type": kind,
@@ -102,14 +103,14 @@ impl ApiQueryProvider for QueryEntityProvider {
             "catalog_id": catalog_id.map(|id| id.0.as_str()),
             "origin": origin,
             "usd_prim_path": prim_path.map(|path| path.path.as_str()),
-            "position": [pos.x, pos.y, pos.z],
+            "position": api_value!([pos.x, pos.y, pos.z]),
             // The frame `position` is in, named on the wire: a client holding a
             // bare triple has no way to know whether it may hand it back.
             "position_frame": "active_physics",
-            "rotation": [rot.x, rot.y, rot.z, rot.w],
-            "euler": [yaw, pitch, roll],
-            "scale": [scale.x, scale.y, scale.z],
-        }))
+            "rotation": api_value!([rot.x, rot.y, rot.z, rot.w]),
+            "euler": api_value!([yaw, pitch, roll]),
+            "scale": api_value!([scale.x, scale.y, scale.z]),
+        })))
     }
 }
 

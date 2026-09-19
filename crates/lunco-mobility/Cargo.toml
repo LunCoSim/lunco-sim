@@ -24,7 +24,7 @@ lunco-time = { path = "../lunco-time" }
 # Expose physics-backed spatial queries (Raycast/GroundHeight) through the
 # transport-free API query registry.
 lunco-api = { path = "../lunco-api" }
-serde_json = { workspace = true }
+lunco-api-core = { path = "../lunco-api-core" }
 
 [lints]
 workspace = true

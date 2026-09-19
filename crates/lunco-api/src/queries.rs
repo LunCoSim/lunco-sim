@@ -1,116 +1,141 @@
-//! API query providers — extension point for domain crates to expose
-//! read endpoints without `lunco-api` taking direct dependencies on their
-//! domains.
-//!
-//! ## Why
-//!
-//! `lunco-api` already has built-in query variants (`ListEntities` and
-//! `DiscoverSchema`) that read ECS state and return JSON
-//! synchronously. Adding bundled-model / Twin / source library listing the same way
-//! would require `lunco-api` to depend on `lunco-modelica-core` and
-//! `lunco-workspace` — a layering inversion (those crates already depend
-//! on `lunco-api` for the executor plugin).
-//!
-//! Instead, domain crates register an [`ApiQueryProvider`] at startup.
-//! When an `ExecuteCommand` request arrives whose `command` matches a
-//! registered provider name, the executor calls the provider with immutable
-//! `&World` access and returns its `ApiResponse` to the transport.
-//! Reflect-registered commands are the mutation and operation channel. Query
-//! providers are deliberately read-only; this keeps one authoritative command
-//! contract for every state change.
-//!
-//! ## Provider semantics
-//!
-//! - **Returns data**, unlike ordinary Reflect Event commands which return an
-//!   acknowledgement. Use this trait when the caller needs a structured
-//!   response.
-//! - **Has `&World` access** — providers can read any resource and run any
-//!   query they need, while the type system prevents a read provider from
-//!   mutating simulation state.
-//! - **Runs read-only**. The HTTP executor invokes providers from a deferred
-//!   command queue so the response can be correlated with the request; the
-//!   in-process scripting bridge may invoke the same provider directly.
-//!
-//! ## Example
-//!
-//! ```ignore
-//! struct ListBundledProvider;
-//! impl ApiQueryProvider for ListBundledProvider {
-//!     fn name(&self) -> &'static str { "ListBundled" }
-//!     fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
-//!         let bundled = lunco_modelica_core::bundled_models();
-//!         ApiResponse::ok(serde_json::json!({ "bundled": bundled }))
-//!     }
-//! }
-//!
-//! // In a domain crate's plugin build:
-//! app.world_mut()
-//!     .resource_mut::<ApiQueryRegistry>()
-//!     .register(ListBundledProvider);
-//! ```
-
+use crate::registry::ApiEntityRegistry;
 use bevy::prelude::*;
+use lunco_api_core::{
+    api_value_from_serializable, api_value_from_u64, ApiErrorCode, ApiResponse, ApiValue,
+    ApiValueError, IntoApiValue,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::registry::ApiEntityRegistry;
-use crate::schema::ApiResponse;
+/// Typed result from a read-only API query provider.
+pub type ApiQueryResult = Result<Option<ApiValue>, ApiQueryError>;
 
-/// One read-only structured provider — answers a typed request with data.
-///
-/// See module docs for the design rationale.
-pub trait ApiQueryProvider: Send + Sync + 'static {
-    /// Stable name matched against the `command` field of incoming
-    /// `ExecuteCommand` requests. Convention: PascalCase verb-prefixed,
-    /// e.g. `"ListBundled"`, `"LibraryStatus"`, `"ListOpenDocuments"`.
-    fn name(&self) -> &'static str;
-
-    /// Run the query against the ECS world. Returning an
-    /// [`ApiResponse::Error`] is the right move when params don't
-    /// validate or required state is missing.
-    ///
-    /// Providers MUST NOT block for long. The HTTP caller is waiting on a
-    /// deferred response, while in-process callers run the provider directly.
-    /// Cap any blocking work at a few hundred milliseconds and prefer returning
-    /// a "not ready yet" response over blocking on a background task.
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse;
+/// A provider rejection or failure before external serialization.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApiQueryError {
+    pub code: ApiErrorCode,
+    pub message: String,
 }
 
-/// Registry of named read-only providers. Domain crates push impls here at
-/// startup via [`Self::register`]; the executor consults it when an
-/// `ExecuteCommand` request arrives.
-///
-/// Stored as Bevy `Resource` so domain plugins can mutate it during
-/// `App::build`.
+impl ApiQueryError {
+    /// Create a typed provider error.
+    pub fn new(code: ApiErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<ApiValueError> for ApiQueryError {
+    fn from(error: ApiValueError) -> Self {
+        Self::new(ApiErrorCode::InternalError, error.to_string())
+    }
+}
+
+/// Read-only structured provider for one named API query.
+pub trait ApiQueryProvider: Send + Sync + 'static {
+    /// Stable name matched against the command field of `ExecuteCommand`.
+    fn name(&self) -> &'static str;
+
+    /// Execute against an immutable ECS world using typed parameters.
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult;
+}
+
+/// Registry of named read-only providers.
 #[derive(Resource, Default)]
 pub struct ApiQueryRegistry {
     providers: HashMap<String, Arc<dyn ApiQueryProvider>>,
 }
 
 impl ApiQueryRegistry {
-    /// Register a read-only provider.
-    ///
-    /// Provider names are public API identifiers. A duplicate is a startup
-    /// configuration error, not an override point, so registration fails
-    /// visibly instead of depending on plugin order.
+    /// Register a provider; duplicate public names are startup errors.
     pub fn register<P: ApiQueryProvider>(&mut self, provider: P) {
         let name = provider.name();
-        if self.providers.contains_key(name) {
-            panic!("duplicate API query provider registration: {name}");
-        }
-        self.providers.insert(name.to_string(), Arc::new(provider));
+        assert!(
+            !self.providers.contains_key(name),
+            "duplicate API query provider registration: {name}"
+        );
+        self.providers.insert(name.to_owned(), Arc::new(provider));
     }
 
-    /// Look up a provider by name. Returns an `Arc` so the caller can
-    /// drop the registry borrow before invoking `execute`.
+    /// Look up a provider by its public name.
     pub fn get(&self, name: &str) -> Option<Arc<dyn ApiQueryProvider>> {
         self.providers.get(name).cloned()
     }
 
-    /// Names of every registered provider. Useful for debug-dumping the
-    /// available query surface.
+    /// Iterate the registered public names.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.providers.keys().map(String::as_str)
+    }
+}
+
+/// Execute a provider for an in-process caller.
+pub fn execute_query_value(world: &World, name: &str, params: &ApiValue) -> ApiQueryResult {
+    let provider = world
+        .get_resource::<ApiQueryRegistry>()
+        .and_then(|registry| registry.get(name))
+        .ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::CommandNotFound,
+                format!("query '{name}' is not registered"),
+            )
+        })?;
+    provider.execute(world, params)
+}
+
+/// Adapt a provider result to the typed API response channel.
+pub fn execute_query_response(
+    provider: &dyn ApiQueryProvider,
+    world: &World,
+    params: &ApiValue,
+) -> ApiResponse {
+    match provider.execute(world, params) {
+        Ok(value) => ApiResponse::Ok { data: value },
+        Err(error) => ApiResponse::error(error.code, error.message),
+    }
+}
+
+/// Read a required unsigned integer parameter.
+pub fn api_param_u64(params: &ApiValue, name: &str) -> Option<u64> {
+    params
+        .get(name)
+        .and_then(ApiValue::as_i64)
+        .and_then(|value| u64::try_from(value).ok())
+}
+
+/// Read an unsigned integer parameter that also accepts decimal text.
+pub fn api_param_u64_or_string(params: &ApiValue, name: &str) -> Option<u64> {
+    match params.get(name)? {
+        ApiValue::Int(value) => u64::try_from(*value).ok(),
+        ApiValue::Str(value) => value.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Read a floating-point parameter from either signed integers or floats.
+pub fn api_param_f64(params: &ApiValue, name: &str) -> Option<f64> {
+    params.get(name).and_then(ApiValue::as_f64)
+}
+
+/// Read a string parameter without coercing another value type.
+pub fn api_param_str<'a>(params: &'a ApiValue, name: &str) -> Option<&'a str> {
+    params.get(name).and_then(ApiValue::as_str)
+}
+
+/// Read a boolean parameter without coercing an integer.
+pub fn api_param_bool(params: &ApiValue, name: &str) -> Option<bool> {
+    match params.get(name)? {
+        ApiValue::Bool(value) => Some(*value),
+        _ => None,
+    }
+}
+
+/// Read an array parameter.
+pub fn api_param_array<'a>(params: &'a ApiValue, name: &str) -> Option<&'a [ApiValue]> {
+    match params.get(name)? {
+        ApiValue::Array(values) => Some(values),
+        _ => None,
     }
 }
 
@@ -125,7 +150,6 @@ impl Plugin for ApiQueryRegistryPlugin {
     }
 }
 
-use crate::schema::ApiErrorCode;
 /// `ReadPorts` — every exposed port on an entity (model I/O, physics velocity,
 /// sensors, joints), by `api_id`. A one-shot read of the same `PortRegistry`
 /// backends the telemetry stream samples — the direct alternative to subscribing.
@@ -133,30 +157,40 @@ use crate::schema::ApiErrorCode;
 /// `{ api_id, ports: [{ name, value, direction, metadata }] }`
 pub struct ReadPortsProvider;
 
-fn port_info_to_json(port: &lunco_port_core::ports::PortInfo) -> serde_json::Value {
+fn port_info_to_api_value(
+    port: &lunco_port_core::ports::PortInfo,
+) -> Result<ApiValue, ApiValueError> {
     let range = match (port.metadata.min, port.metadata.max) {
-        (Some(min), Some(max)) => serde_json::json!({ "min": min, "max": max }),
-        (Some(min), None) => serde_json::json!({ "min": min }),
-        (None, Some(max)) => serde_json::json!({ "max": max }),
-        (None, None) => serde_json::Value::Null,
+        (Some(min), Some(max)) => {
+            ApiValue::map([("min", ApiValue::Float(min)), ("max", ApiValue::Float(max))])
+        }
+        (Some(min), None) => ApiValue::map([("min", ApiValue::Float(min))]),
+        (None, Some(max)) => ApiValue::map([("max", ApiValue::Float(max))]),
+        (None, None) => ApiValue::Unit,
     };
-    serde_json::json!({
-        "name": port.name,
-        "value": port.value,
-        "direction": match port.direction {
-            lunco_port_core::ports::PortDirection::In => "in",
-            lunco_port_core::ports::PortDirection::Out => "out",
-            lunco_port_core::ports::PortDirection::InOut => "inout",
-        },
-        "metadata": {
-            "type": port.metadata.value_type,
-            "unit": port.metadata.unit,
-            "range": range,
-            "source": port.metadata.source,
-            "authority": port.metadata.authority,
-            "writable": port.metadata.writable,
-        },
-    })
+    Ok(ApiValue::map([
+        ("name", ApiValue::str(port.name.clone())),
+        ("value", api_value_from_serializable(&port.value)?),
+        (
+            "direction",
+            ApiValue::str(match port.direction {
+                lunco_port_core::ports::PortDirection::In => "in",
+                lunco_port_core::ports::PortDirection::Out => "out",
+                lunco_port_core::ports::PortDirection::InOut => "inout",
+            }),
+        ),
+        (
+            "metadata",
+            ApiValue::map([
+                ("type", ApiValue::str(port.metadata.value_type)),
+                ("unit", port.metadata.unit.clone().into_api_value()),
+                ("range", range),
+                ("source", ApiValue::str(port.metadata.source.clone())),
+                ("authority", ApiValue::str(port.metadata.authority.clone())),
+                ("writable", ApiValue::Bool(port.metadata.writable)),
+            ]),
+        ),
+    ]))
 }
 
 impl ApiQueryProvider for ReadPortsProvider {
@@ -164,22 +198,19 @@ impl ApiQueryProvider for ReadPortsProvider {
         "ReadPorts"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(api_id) = params.get("api_id").and_then(|v| {
-            v.as_u64()
-                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-        }) else {
-            return ApiResponse::error(
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(api_id) = api_param_u64_or_string(params, "api_id") else {
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "ReadPorts: `api_id` (u64) required".to_string(),
-            );
+                "ReadPorts: `api_id` (u64) required",
+            ));
         };
         let gid = lunco_core::GlobalEntityId::from_raw(api_id);
         let Some(entity) = world.resource::<ApiEntityRegistry>().resolve(&gid) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("ReadPorts: no entity for api_id {api_id}"),
-            );
+            ));
         };
         // `PortRegistry` is `Clone` (a Vec of `'static` backends), so clone it out
         // to release the immutable world borrow before `entity_ports` reborrows
@@ -188,17 +219,20 @@ impl ApiQueryProvider for ReadPortsProvider {
             .get_resource::<lunco_port_core::ports::PortRegistry>()
             .cloned()
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "ReadPorts: PortRegistry not present (no cosim plugin)".to_string(),
-            );
+            ));
         };
         let ports = registry.entity_port_infos(world, entity);
-        let arr: Vec<_> = ports
+        let ports = ports
             .into_iter()
-            .map(|port| port_info_to_json(&port))
-            .collect();
-        ApiResponse::ok(serde_json::json!({ "api_id": api_id, "ports": arr }))
+            .map(|port| port_info_to_api_value(&port))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some(ApiValue::map([
+            ("api_id", api_value_from_u64(api_id)),
+            ("ports", ApiValue::Array(ports)),
+        ])))
     }
 }
 
@@ -221,7 +255,7 @@ impl ApiQueryProvider for ReadinessProvider {
         "GetReadiness"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         use lunco_readiness::{ReadinessRegistry, ReadinessState, Subject};
         let registry = world.get_resource::<ReadinessRegistry>();
         let fault = world
@@ -230,42 +264,47 @@ impl ApiQueryProvider for ReadinessProvider {
         let world_hold = world
             .get_resource::<ReadinessState>()
             .is_some_and(|s| s.world_hold);
-        let pending: Vec<serde_json::Value> = registry
+        let pending: Vec<ApiValue> = registry
             .map(|r| {
                 r.pending()
                     .map(|item| {
                         let subject = match item.subject {
-                            Subject::World => serde_json::json!("world"),
+                            Subject::World => ApiValue::str("world"),
                             // Entity bits are stable within the session; the
                             // richer `api_id` isn't worth a second registry lookup
                             // for a transient wait.
-                            Subject::Entity(e) => serde_json::json!({ "entity_bits": e.to_bits() }),
+                            Subject::Entity(e) => {
+                                ApiValue::map([("entity_bits", api_value_from_u64(e.to_bits()))])
+                            }
                         };
-                        serde_json::json!({
-                            "kind": item.kind,
-                            "subject": subject,
-                            "label": item.label,
-                            "elapsed_s": item.elapsed_s,
-                            "action": item.action.name(),
-                        })
+                        ApiValue::map([
+                            ("kind", ApiValue::str(item.kind)),
+                            ("subject", subject),
+                            ("label", ApiValue::str(item.label.clone())),
+                            ("elapsed_s", ApiValue::Float(item.elapsed_s)),
+                            ("action", ApiValue::str(item.action.name())),
+                        ])
                     })
                     .collect()
             })
             .unwrap_or_default();
         let ready = registry.is_some() && pending.is_empty() && !world_hold && fault.is_none();
-        ApiResponse::ok(serde_json::json!({
-            "ready": ready,
-            "world_hold": world_hold,
-            "faulted": fault.is_some(),
-            "fault": fault.map(|fault| serde_json::json!({
-                "kind": fault.kind,
-                "subject": fault.subject,
-                "detail": fault.detail,
-            })),
-            "readiness_tracked": registry.is_some(),
-            "pending_count": pending.len(),
-            "pending": pending,
-        }))
+        let fault = fault.map(|fault| {
+            ApiValue::map([
+                ("kind", ApiValue::str(fault.kind)),
+                ("subject", ApiValue::str(fault.subject.clone())),
+                ("detail", ApiValue::str(fault.detail.clone())),
+            ])
+        });
+        Ok(Some(ApiValue::map([
+            ("ready", ApiValue::Bool(ready)),
+            ("world_hold", ApiValue::Bool(world_hold)),
+            ("faulted", ApiValue::Bool(fault.is_some())),
+            ("fault", fault.into_api_value()),
+            ("readiness_tracked", ApiValue::Bool(registry.is_some())),
+            ("pending_count", ApiValue::Int(pending.len() as i64)),
+            ("pending", ApiValue::Array(pending)),
+        ])))
     }
 }
 
@@ -285,23 +324,23 @@ impl ApiQueryProvider for ReadExposuresProvider {
         "ReadExposures"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let surface_filter = match params.get("surface") {
-            None | Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::String(name)) => Some(name.as_str()),
+            None | Some(ApiValue::Unit) => None,
+            Some(ApiValue::Str(name)) => Some(name.as_str()),
             Some(_) => {
-                return ApiResponse::error(
+                return Err(ApiQueryError::new(
                     ApiErrorCode::DeserializationError,
                     "ReadExposures: `surface` must be a string",
-                );
+                ));
             }
         };
 
         let Some(exposures) = world.get_resource::<lunco_exposure_core::EngineExposures>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "ReadExposures: EngineExposures resource is not present",
-            );
+            ));
         };
 
         let surfaces = exposures
@@ -312,39 +351,40 @@ impl ApiQueryProvider for ReadExposuresProvider {
                 let properties = surface
                     .properties
                     .iter()
-                    .map(|(key, value)| (key.clone(), exposure_value_to_json(value)))
-                    .collect::<serde_json::Map<_, _>>();
+                    .map(|(key, value)| (key.clone(), exposure_value_to_api_value(value)))
+                    .collect::<Vec<_>>();
                 (
                     name.clone(),
-                    serde_json::json!({
-                        "visible": surface.visible,
-                        "properties": properties,
-                    }),
+                    ApiValue::map([
+                        ("visible", ApiValue::Bool(surface.visible)),
+                        ("properties", ApiValue::Map(properties)),
+                    ]),
                 )
             })
-            .collect::<serde_json::Map<_, _>>();
+            .collect::<Vec<_>>();
 
-        ApiResponse::ok(serde_json::json!({
-            "revision": exposures.revision,
-            "surfaces": surfaces,
-        }))
+        Ok(Some(ApiValue::map([
+            ("revision", api_value_from_u64(exposures.revision)),
+            ("surfaces", ApiValue::Map(surfaces)),
+        ])))
     }
 }
 
-fn exposure_value_to_json(value: &lunco_exposure_core::ExposureValue) -> serde_json::Value {
+fn exposure_value_to_api_value(value: &lunco_exposure_core::ExposureValue) -> ApiValue {
     match value {
-        lunco_exposure_core::ExposureValue::Text(value) => serde_json::json!(value),
-        lunco_exposure_core::ExposureValue::Bool(value) => serde_json::json!(*value),
-        lunco_exposure_core::ExposureValue::Number(value) => serde_json::Number::from_f64(*value)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        lunco_exposure_core::ExposureValue::Array(values) => {
-            serde_json::Value::Array(values.iter().map(exposure_value_to_json).collect())
+        lunco_exposure_core::ExposureValue::Text(value) => ApiValue::str(value.clone()),
+        lunco_exposure_core::ExposureValue::Bool(value) => ApiValue::Bool(*value),
+        lunco_exposure_core::ExposureValue::Number(value) if value.is_finite() => {
+            ApiValue::Float(*value)
         }
-        lunco_exposure_core::ExposureValue::Map(values) => serde_json::Value::Object(
+        lunco_exposure_core::ExposureValue::Number(_) => ApiValue::Unit,
+        lunco_exposure_core::ExposureValue::Array(values) => {
+            ApiValue::Array(values.iter().map(exposure_value_to_api_value).collect())
+        }
+        lunco_exposure_core::ExposureValue::Map(values) => ApiValue::Map(
             values
                 .iter()
-                .map(|(key, value)| (key.clone(), exposure_value_to_json(value)))
+                .map(|(key, value)| (key.clone(), exposure_value_to_api_value(value)))
                 .collect(),
         ),
     }
@@ -454,18 +494,29 @@ mod tests {
         let revision = exposures.revision;
         world.insert_resource(exposures);
 
-        let response = ReadExposuresProvider.execute(&world, &serde_json::json!({}));
-        let ApiResponse::Ok {
-            data: Some(data), ..
-        } = response
-        else {
-            panic!("ReadExposures did not return data");
-        };
-        assert_eq!(data["revision"], revision);
-        assert_eq!(data["surfaces"]["hud"]["visible"], true);
-        assert_eq!(data["surfaces"]["hud"]["properties"]["label"], "Rover");
-        assert_eq!(data["surfaces"]["hud"]["properties"]["speed"], 1.5);
-        assert_eq!(data["surfaces"]["hud"]["properties"]["active"], true);
+        let data = ReadExposuresProvider
+            .execute(&world, &ApiValue::Unit)
+            .expect("ReadExposures query succeeds")
+            .expect("ReadExposures returns data");
+        assert_eq!(data.get("revision"), Some(&api_value_from_u64(revision)));
+        let surface = data.get("surfaces").and_then(|value| value.get("hud"));
+        assert_eq!(
+            surface.and_then(|value| value.get("visible")),
+            Some(&ApiValue::Bool(true))
+        );
+        let properties = surface.and_then(|value| value.get("properties"));
+        assert_eq!(
+            properties.and_then(|value| value.get("label")),
+            Some(&ApiValue::str("Rover"))
+        );
+        assert_eq!(
+            properties.and_then(|value| value.get("speed")),
+            Some(&ApiValue::Float(1.5))
+        );
+        assert_eq!(
+            properties.and_then(|value| value.get("active")),
+            Some(&ApiValue::Bool(true))
+        );
     }
 
     #[test]
@@ -476,16 +527,14 @@ mod tests {
         exposures.writer("telemetry").visible(true);
         world.insert_resource(exposures);
 
-        let response =
-            ReadExposuresProvider.execute(&world, &serde_json::json!({ "surface": "hud" }));
-        let ApiResponse::Ok {
-            data: Some(data), ..
-        } = response
-        else {
-            panic!("ReadExposures did not return data");
-        };
-        assert!(data["surfaces"].get("hud").is_some());
-        assert!(data["surfaces"].get("telemetry").is_none());
+        let params = ApiValue::map([("surface", ApiValue::str("hud"))]);
+        let data = ReadExposuresProvider
+            .execute(&world, &params)
+            .expect("ReadExposures query succeeds")
+            .expect("ReadExposures returns data");
+        let surfaces = data.get("surfaces").expect("surfaces map is present");
+        assert!(surfaces.get("hud").is_some());
+        assert!(surfaces.get("telemetry").is_none());
     }
 
     #[test]
@@ -496,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn read_ports_json_preserves_owner_metadata() {
+    fn port_projection_preserves_owner_metadata_as_typed_values() {
         let port = lunco_port_core::ports::PortInfo {
             name: "throttle".into(),
             direction: lunco_port_core::ports::PortDirection::In,
@@ -512,14 +561,31 @@ mod tests {
             ),
         };
 
-        let json = port_info_to_json(&port);
-        assert_eq!(json["direction"], "in");
-        assert_eq!(json["metadata"]["type"], "scalar");
-        assert_eq!(json["metadata"]["unit"], "m/s");
-        assert_eq!(json["metadata"]["range"]["min"], -1.0);
-        assert_eq!(json["metadata"]["range"]["max"], 1.0);
-        assert_eq!(json["metadata"]["source"], "control surface");
-        assert_eq!(json["metadata"]["authority"], "operator");
-        assert_eq!(json["metadata"]["writable"], true);
+        let value = port_info_to_api_value(&port).expect("port projects to an API value");
+        let metadata = value.get("metadata").expect("metadata is present");
+        let range = metadata.get("range").expect("range is present");
+        assert_eq!(
+            value.get("direction").and_then(ApiValue::as_str),
+            Some("in")
+        );
+        assert_eq!(
+            metadata.get("type").and_then(ApiValue::as_str),
+            Some("scalar")
+        );
+        assert_eq!(metadata.get("unit").and_then(ApiValue::as_str), Some("m/s"));
+        assert_eq!(range.get("min").and_then(ApiValue::as_f64), Some(-1.0));
+        assert_eq!(range.get("max").and_then(ApiValue::as_f64), Some(1.0));
+        assert_eq!(
+            metadata.get("source").and_then(ApiValue::as_str),
+            Some("control surface")
+        );
+        assert_eq!(
+            metadata.get("authority").and_then(ApiValue::as_str),
+            Some("operator")
+        );
+        assert_eq!(
+            metadata.get("writable").and_then(ApiValue::as_bool),
+            Some(true)
+        );
     }
 }

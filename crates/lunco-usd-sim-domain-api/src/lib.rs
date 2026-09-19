@@ -1,11 +1,12 @@
 //! API query providers for the USD Modelica domain projection.
 //!
 //! The domain runtime publishes generated-network facts; this package owns the
-//! optional JSON/API read surface for those facts so API serialization changes do
+//! optional typed API read surface for those facts so API serialization changes do
 //! not rebuild the projection engine.
 
 use bevy::prelude::*;
-use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
+use lunco_api::{api_param_str, ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_usd_sim_domain::GeneratedModelicaSource;
 
@@ -30,21 +31,30 @@ impl ApiQueryProvider for GeneratedSourceProvider {
         "GeneratedModelicaSource"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let wanted = params
             .get("network_root")
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
+            .map(|_| {
+                api_param_str(params, "network_root")
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        ApiQueryError::new(
+                            ApiErrorCode::DeserializationError,
+                            "GeneratedModelicaSource: `network_root` must be a string",
+                        )
+                    })
+            })
+            .transpose()?;
         let Some(mut query) = bevy::ecs::query::QueryState::<(
             &GeneratedModelicaSource,
             Option<&ModelicaModel>,
         )>::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "GeneratedModelicaSource: ECS query is unavailable",
-            );
+            ));
         };
-        let networks: Vec<serde_json::Value> = query
+        let networks: Vec<ApiValue> = query
             .iter(world)
             .filter(|(generated, _)| {
                 wanted
@@ -52,32 +62,34 @@ impl ApiQueryProvider for GeneratedSourceProvider {
                     .is_none_or(|root| root == generated.network_root)
             })
             .map(|(generated, model)| {
-                serde_json::json!({
-                    "network_root": generated.network_root,
+                api_value!({
+                    "network_root": generated.network_root.clone(),
                     "model_name": model.map(|model| model.model_name.clone()).unwrap_or_default(),
-                    "doc_uri": generated.doc_uri,
-                    "projection_error": generated.projection_error,
-                    "boundary_inputs": generated.boundary_inputs,
-                    "boundary_outputs": generated.boundary_outputs,
-                    "member_output_aliases": generated.member_output_aliases,
-                    "components": generated.component_paths,
+                    "doc_uri": generated.doc_uri.clone(),
+                    "projection_error": generated.projection_error.clone(),
+                    "boundary_inputs": generated.boundary_inputs.clone(),
+                    "boundary_outputs": generated.boundary_outputs.clone(),
+                    "member_output_aliases": generated.member_output_aliases.iter().map(|(member, output, alias)| {
+                        api_value!([member.clone(), output.clone(), alias.clone()])
+                    }).collect::<Vec<_>>(),
+                    "components": generated.component_paths.clone(),
                     "members": generated
                         .members
                         .iter()
-                        .map(|(prim, asset, class)| serde_json::json!({
-                            "prim": prim, "source_asset": asset, "class": class,
+                        .map(|(prim, asset, class)| api_value!({
+                            "prim": prim.clone(), "source_asset": asset.clone(), "class": class.clone(),
                         }))
                         .collect::<Vec<_>>(),
-                    "source_roots": generated.source_roots,
+                    "source_roots": generated.source_roots.clone(),
                     "units": generated
                         .units
                         .iter()
-                        .map(|unit| serde_json::json!({
-                            "name": unit.name,
-                            "instance": unit.instance,
-                            "components": unit.component_paths,
-                            "inputs": unit.inputs,
-                            "outputs": unit.outputs,
+                        .map(|unit| api_value!({
+                            "name": unit.name.clone(),
+                            "instance": unit.instance.clone(),
+                            "components": unit.component_paths.clone(),
+                            "inputs": unit.inputs.iter().cloned().collect::<Vec<_>>(),
+                            "outputs": unit.outputs.iter().cloned().collect::<Vec<_>>(),
                         }))
                         .collect::<Vec<_>>(),
                     "layout": {
@@ -85,23 +97,23 @@ impl ApiQueryProvider for GeneratedSourceProvider {
                             .layout
                             .unit_positions
                             .iter()
-                            .map(|(name, (x, y))| serde_json::json!({
-                                "name": name, "x": x, "y": y,
+                            .map(|(name, (x, y))| api_value!({
+                                "name": name.clone(), "x": *x, "y": *y,
                             }))
                             .collect::<Vec<_>>(),
                         "members": generated
                             .layout
                             .member_positions
                             .iter()
-                            .map(|(path, (x, y))| serde_json::json!({
-                                "path": path, "x": x, "y": y,
+                            .map(|(path, (x, y))| api_value!({
+                                "path": path.clone(), "x": *x, "y": *y,
                             }))
                             .collect::<Vec<_>>(),
                     },
-                    "source": generated.source,
+                    "source": generated.source.clone(),
                 })
             })
             .collect();
-        ApiResponse::ok(serde_json::json!({ "networks": networks }))
+        Ok(Some(api_value!({ "networks": networks })))
     }
 }

@@ -43,7 +43,7 @@ impl Plugin for SceneEditInspectorUiPlugin {
         app.register_panel(inspector::Inspector)
             .register_panel(inspector::EnvironmentPanel);
 
-        app.init_resource::<inspector::InspectorView>()
+        app.init_resource::<lunco_luncosim_edit_inspector_core::InspectorView>()
             .init_resource::<inspector::ShaderSchemaCache>();
         app.add_observer(inspector::on_inspector_component_edit)
             .add_observer(inspector::on_projection_edit_requested)
@@ -60,8 +60,8 @@ impl Plugin for SceneEditInspectorUiPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.add_observer(inspector::on_attach_at_socket_requested);
         app.add_view_model(
-            inspector::populate_inspector_view,
-            inspector::inspector_inputs_changed,
+            lunco_luncosim_edit_inspector_core::populate_inspector_view,
+            lunco_luncosim_edit_inspector_core::inspector_inputs_changed,
         );
 
         app.init_resource::<usd_params::UsdParamView>()

@@ -4,8 +4,8 @@
 //! [`DocDiagnostics`] is one document's compile state plus its diagnostics; it
 //! has no Bevy dependency, so it lives here in `lunco-doc`. The ECS `Resource`
 //! that stores these per [`crate::DocumentId`] lives in `lunco-doc-bevy`
-//! (`DocumentDiagnostics`). [`status_json`] is the one JSON shape every domain's
-//! status query returns.
+//! (`DocumentDiagnostics`). [`document_status`] is the shared typed projection
+//! used by domain status queries.
 
 use crate::{CompileState, Diagnostic, DiagnosticSeverity};
 
@@ -35,33 +35,84 @@ impl DocDiagnostics {
     }
 }
 
-/// The canonical status JSON every domain's status query returns:
-/// `{ state, ok, diagnostics: [{ severity, message, line, col }] }`
-/// (`line`/`col` 1-based, null when the diagnostic is unlocated).
-pub fn status_json(entry: Option<&DocDiagnostics>) -> serde_json::Value {
-    let state = entry.map(|e| e.state).unwrap_or(CompileState::Idle);
-    let diags: Vec<serde_json::Value> = entry
-        .map(|e| e.diagnostics.iter().map(diagnostic_json).collect())
-        .unwrap_or_default();
-    serde_json::json!({
-        "state": state.as_str(),
-        "ok": state == CompileState::Ready,
-        "diagnostics": diags,
-    })
+/// One diagnostic projected for a document-status query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticStatus {
+    /// Stable lowercase severity tag.
+    pub severity: &'static str,
+    /// Human-readable diagnostic message.
+    pub message: String,
+    /// 1-based source line, if located.
+    pub line: Option<u32>,
+    /// 1-based source column, if located.
+    pub col: Option<u32>,
 }
 
-/// Serialise one diagnostic.
-fn diagnostic_json(d: &Diagnostic) -> serde_json::Value {
-    let severity = match d.severity {
-        DiagnosticSeverity::Error => "error",
-        DiagnosticSeverity::Warning => "warning",
-        DiagnosticSeverity::Info => "info",
-        DiagnosticSeverity::Hint => "hint",
-    };
-    serde_json::json!({
-        "severity": severity,
-        "message": d.message,
-        "line": d.line,
-        "col": d.col,
-    })
+/// Shared typed status projection for document compile queries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocStatus {
+    /// Stable lowercase compile-state tag.
+    pub state: &'static str,
+    /// Whether compilation is ready without errors.
+    pub ok: bool,
+    /// Diagnostics from the latest compile result.
+    pub diagnostics: Vec<DiagnosticStatus>,
+}
+
+/// Project optional diagnostics into the shared typed status contract.
+pub fn document_status(entry: Option<&DocDiagnostics>) -> DocStatus {
+    let state = entry.map(|e| e.state).unwrap_or(CompileState::Idle);
+    let diagnostics = entry
+        .map(|e| {
+            e.diagnostics
+                .iter()
+                .map(|diagnostic| DiagnosticStatus {
+                    severity: diagnostic.severity.as_str(),
+                    message: diagnostic.message.clone(),
+                    line: diagnostic.line,
+                    col: diagnostic.col,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    DocStatus {
+        state: state.as_str(),
+        ok: state == CompileState::Ready,
+        diagnostics,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_status_projects_state_and_diagnostics_without_transport_values() {
+        let diagnostics = DocDiagnostics {
+            state: CompileState::Error,
+            diagnostics: vec![Diagnostic::error("parse failed", Some(4), None)],
+        };
+
+        assert_eq!(
+            document_status(Some(&diagnostics)),
+            DocStatus {
+                state: "error",
+                ok: false,
+                diagnostics: vec![DiagnosticStatus {
+                    severity: "error",
+                    message: "parse failed".to_owned(),
+                    line: Some(4),
+                    col: None,
+                }],
+            }
+        );
+        assert_eq!(
+            document_status(None),
+            DocStatus {
+                state: "idle",
+                ok: false,
+                diagnostics: Vec::new(),
+            }
+        );
+    }
 }

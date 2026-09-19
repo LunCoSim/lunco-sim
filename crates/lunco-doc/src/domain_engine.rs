@@ -103,6 +103,18 @@ pub enum DiagnosticSeverity {
     Hint,
 }
 
+impl DiagnosticSeverity {
+    /// Stable lowercase label used by document-diagnostics consumers.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "info",
+            Self::Hint => "hint",
+        }
+    }
+}
+
 /// One diagnostic produced by a domain (Modelica, scripting, …) for a document.
 ///
 /// Location is 1-based `line`/`col` — the form every producer (rumoca, rhai)

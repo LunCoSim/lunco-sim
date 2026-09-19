@@ -59,8 +59,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
 use lunco_api::executor::{PendingApiRequest, finish_command_result};
-use lunco_api::queries::ApiQueryProvider;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api_core::ApiErrorCode;
 use lunco_assets_core::twin_source::TwinRoots;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{ActiveCommandId, on_command, register_commands};
@@ -83,11 +82,11 @@ use lunco_usd_viewport_core::{
     ResetUsdPreviewView, SaveUsdInspectionPreset, SetUsdPreviewProjection, SetUsdPreviewTextLayer,
     SetUsdPreviewViewMode, UsdInspectionPreset, UsdInspectionSettings, UsdPreviewExplodeAction,
     UsdPreviewExplodeState, UsdPreviewExplodedPart, UsdPreviewId, UsdPreviewProjection,
-    UsdPreviewSession, UsdPreviewView, UsdPreviewViewId, UsdViewportState, ZoomUsdPreviewView,
+    UsdPreviewSession, UsdPreviewView, UsdPreviewViewId, UsdPreviewViewMeasured,
+    UsdViewportMeasured, UsdViewportOrbitInput, UsdViewportState, ZoomUsdPreviewView,
 };
 #[cfg(test)]
 use lunco_usd_viewport_core::{UsdPreviewTextLayer, UsdPreviewViewMode};
-use lunco_viewport_core::PanelRect;
 use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::PanelRects;
 use lunco_workbench_core::{
@@ -111,138 +110,6 @@ pub const USD_VIEWPORT_PANEL_ID: PanelId = PanelId("usd::viewport");
 /// Instance-panel kind for additional views over an existing USD preview
 /// session. The instance value is [`UsdPreviewViewId::0`].
 pub const USD_PREVIEW_VIEW_PANEL_ID: PanelId = PanelId("usd::preview_view");
-
-/// Read-only query for the exact USD presentation state currently open in the
-/// Assembly Editor.
-///
-/// Unlike document inspection, this query is session-scoped: it reports every
-/// explicit preview lease and its independent presentation views, plus the
-/// focused preview/view pair. It never infers a document from a tab title, a
-/// filesystem name, or the live simulation scene.
-pub struct InspectUsdViewportProvider;
-
-impl ApiQueryProvider for InspectUsdViewportProvider {
-    fn name(&self) -> &'static str {
-        "InspectUsdViewport"
-    }
-
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let Some(viewport) = world.get_resource::<UsdViewportState>() else {
-            return ApiResponse::error(
-                ApiErrorCode::InternalError,
-                "InspectUsdViewport requires UsdViewportPlugin",
-            );
-        };
-
-        let mut previews: Vec<_> = viewport
-            .sessions()
-            .map(|session| {
-                let (stage_asset_path, recipe_layers) = world
-                    .get_resource::<Assets<UsdStageAsset>>()
-                    .and_then(|assets| assets.get(session.stage_handle()))
-                    .map(|asset| {
-                        let mut layers = asset
-                            .recipe
-                            .as_ref()
-                            .map(|recipe| recipe.bytes.keys().cloned().collect::<Vec<_>>())
-                            .unwrap_or_default();
-                        layers.sort();
-                        let path = world
-                            .get_resource::<AssetServer>()
-                            .and_then(|server| server.get_path(session.stage_handle().id()))
-                            .map(|path| path.path().to_string_lossy().into_owned());
-                        (path, layers)
-                    })
-                    .unwrap_or((None, Vec::new()));
-                let mut views: Vec<_> = viewport
-                    .views()
-                    .filter(|view| view.preview() == session.id())
-                    .map(|view| {
-                        serde_json::json!({
-                            "view": view.id().0,
-                            "focused": viewport.focused_view_id() == Some(view.id()),
-                            "mode": view.mode().as_str(),
-                            "text_layer": view.text_layer().as_str(),
-                            "projection": view.projection().as_str(),
-                            "target": view.orbit().target.to_array(),
-                            "distance": view.orbit().distance,
-                            "orthographic_scale": view.orthographic_scale(),
-                            "active_preset": view.active_preset.as_deref(),
-                        })
-                    })
-                    .collect();
-                views.sort_by_key(|view| {
-                    view.get("view")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or_default()
-                });
-                serde_json::json!({
-                    "preview": session.id().0,
-                    "doc_id": session.doc(),
-                    "edit_target": session.edit_target().as_str(),
-                    "stage_asset_id": format!("{:?}", session.stage_handle().id()),
-                    "stage_asset_path": stage_asset_path,
-                    "recipe_layers": recipe_layers,
-                    "projected_generation": session.projected_generation(),
-                    "projection_ready": session.projection_ready(),
-                    "text_ready": session.text_ready(),
-                    "explode": session.explode.as_ref().map(|explode| {
-                        serde_json::json!({
-                            "assembly": explode.assembly,
-                            "parts": explode.parts.iter().map(|part| &part.path).collect::<Vec<_>>(),
-                            "axis": explode.axis.as_str(),
-                            "spacing": explode.spacing,
-                        })
-                    }),
-                    "focused": viewport.focused_preview_id() == Some(session.id()),
-                    "views": views,
-                })
-            })
-            .collect();
-        previews.sort_by_key(|preview| {
-            preview
-                .get("preview")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or_default()
-        });
-
-        ApiResponse::ok(serde_json::json!({
-            "focused_preview": viewport.focused_preview_id().map(|id| id.0),
-            "focused_view": viewport.focused_view_id().map(|id| id.0),
-            "previews": previews,
-            "preview_count": viewport.session_count(),
-            "view_count": viewport.view_count(),
-        }))
-    }
-}
-
-/// Read-only query for the persisted USD inspection preset names.
-pub struct InspectUsdInspectionPresetsProvider;
-
-impl ApiQueryProvider for InspectUsdInspectionPresetsProvider {
-    fn name(&self) -> &'static str {
-        "InspectUsdInspectionPresets"
-    }
-
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let presets = world
-            .get_resource::<UsdInspectionSettings>()
-            .map(|settings| {
-                settings
-                    .presets
-                    .iter()
-                    .map(|preset| {
-                        serde_json::json!({
-                            "name": preset.name,
-                            "projection": preset.projection.as_str(),
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        ApiResponse::ok(serde_json::json!({ "presets": presets }))
-    }
-}
 
 /// Initial placeholder dimensions for the offscreen render target.
 /// Tiny on purpose: `resize_viewport_image` resizes the asset to the
@@ -360,12 +227,6 @@ impl Plugin for UsdViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UsdViewportState>();
         app.register_settings_section::<UsdInspectionSettings>();
-        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
-        let mut query_registry = app
-            .world_mut()
-            .resource_mut::<lunco_api::queries::ApiQueryRegistry>();
-        query_registry.register(InspectUsdViewportProvider);
-        query_registry.register(InspectUsdInspectionPresetsProvider);
         app.init_resource::<PendingUsdPreviewTextReads>();
         app.init_resource::<UsdPreviewRenderTargets>();
         app.init_resource::<UsdPreviewRenderBudget>();
@@ -611,51 +472,6 @@ fn on_usd_document_ready(
     });
 }
 
-/// UI measurement emitted by the viewport panel after egui lays out its body.
-/// The observer owns the workbench interaction resources; the panel only
-/// publishes this narrow fact.
-#[derive(Event, Clone, Copy, Debug)]
-pub struct UsdViewportMeasured {
-    /// View whose offscreen target was laid out.
-    pub view: UsdPreviewViewId,
-    /// Whether the pointer is over the rendered image.
-    pub over_scene: bool,
-    /// Whether the image is visible in the current panel pass.
-    pub visible: bool,
-    /// Physical-pixel rectangle occupied by the rendered image.
-    pub image_rect: Option<PanelRect>,
-}
-
-/// Measurement emitted by an instance preview panel. The workbench owns the
-/// chrome pick gate; this event records the view-specific scene hit and render
-/// target footprint, then marks that camera visible for the current frame.
-#[derive(Event, Clone, Copy, Debug)]
-pub struct UsdPreviewViewMeasured {
-    /// View whose offscreen target was laid out.
-    pub view: UsdPreviewViewId,
-    /// Whether the pointer is over the rendered image.
-    pub over_scene: bool,
-    /// Whether the image is visible in the current panel pass.
-    pub visible: bool,
-    /// Physical-pixel rectangle occupied by the rendered image.
-    pub image_rect: Option<PanelRect>,
-}
-
-/// A primary click in one visible USD preview image.
-///
-/// The image is an egui surface over an offscreen camera, so it cannot travel
-/// through the main window's Bevy picking ray. The event carries image-local
-/// coordinates and the modifier intent across that presentation boundary;
-/// editor selection owns the corresponding preview ray cast.
-#[derive(Event, Clone, Copy, Debug)]
-pub struct UsdViewportClick {
-    pub view: UsdPreviewViewId,
-    pub position: Vec2,
-    pub viewport_size: Vec2,
-    pub shift: bool,
-    pub ctrl: bool,
-}
-
 /// Return true when a preview's authoritative USD projection inputs changed.
 ///
 /// The readiness reconciler is not a render-loop scan. It wakes for session
@@ -789,39 +605,6 @@ fn reconcile_preview_projection_state(
     }
 }
 
-/// Pointer input emitted by the viewport panel. Camera state and the camera
-/// entity are updated by the observer, outside the egui paint borrow.
-#[derive(Event, Clone, Copy, Debug)]
-pub struct UsdViewportOrbitInput {
-    /// View receiving the navigation input.
-    pub view: UsdPreviewViewId,
-    /// Orbit drag in egui points.
-    pub drag: egui::Vec2,
-    /// Pan drag in egui points.
-    pub pan: egui::Vec2,
-    /// Painted viewport size in egui points.
-    pub viewport_size: egui::Vec2,
-    /// Scroll delta used for zoom.
-    pub scroll_y: f32,
-}
-
-/// Resolve the preview's pointer buttons into the shared View interaction
-/// contract: left/middle drag pans and right drag orbits. A captured primary
-/// drag belongs to the editor gizmo, not the preview camera. Shift keeps the
-/// explicit pan chord available when the secondary button is used.
-/// Resolve preview pointer buttons into the shared camera interaction contract.
-pub fn preview_drag_channels(
-    primary: bool,
-    middle: bool,
-    secondary: bool,
-    shift: bool,
-    gizmo_pointer_capture: bool,
-) -> (bool, bool) {
-    let pan = (primary && !gizmo_pointer_capture) || middle || (secondary && shift);
-    let orbit = secondary && !pan;
-    (orbit, pan)
-}
-
 fn on_viewport_measured(
     trigger: On<UsdViewportMeasured>,
     rects: Res<PanelRects>,
@@ -924,7 +707,7 @@ fn on_viewport_orbit_input(
     mut cameras: Query<(&mut Transform, &mut Projection)>,
 ) {
     let input = trigger.event();
-    if input.drag == egui::Vec2::ZERO && input.pan == egui::Vec2::ZERO && input.scroll_y == 0.0 {
+    if input.drag == Vec2::ZERO && input.pan == Vec2::ZERO && input.scroll_y == 0.0 {
         return;
     }
     let Some(camera) = state.view(input.view).map(|view| view.camera) else {
@@ -941,7 +724,7 @@ fn on_viewport_orbit_input(
         Projection::Orthographic(_) => None,
         Projection::Custom(_) => None,
     };
-    if input.pan != egui::Vec2::ZERO
+    if input.pan != Vec2::ZERO
         && !view.orbit.apply_pan(
             [input.pan.x, input.pan.y],
             Vec2::new(input.viewport_size.x, input.viewport_size.y),
@@ -952,7 +735,7 @@ fn on_viewport_orbit_input(
     {
         return;
     }
-    if input.drag != egui::Vec2::ZERO {
+    if input.drag != Vec2::ZERO {
         view.orbit.apply_drag([input.drag.x, input.drag.y]);
     }
     if input.scroll_y != 0.0 {
@@ -2647,9 +2430,9 @@ fn execute_explode_usd_preview(
         }
         return Ok(Ack::with_data(
             OpId::new(),
-            serde_json::json!({
+            lunco_api_core::api_value!({
                 "preview": command.preview.0,
-            "doc_id": command.doc_id,
+                "doc_id": command.doc_id.raw(),
                 "action": command.action.as_str(),
                 "assembly": assembly_path,
                 "parts": part_paths,
@@ -2721,8 +2504,8 @@ fn execute_explode_usd_preview(
             ));
         }
         applied.push((part.entity, transform));
-        offsets.push(serde_json::json!({
-            "path": part.path,
+        offsets.push(lunco_api_core::api_value!({
+            "path": part.path.clone(),
             "assembly_delta": assembly_delta.to_array(),
             "parent_local_delta": local_delta.to_array(),
             "order": index + 1,
@@ -2756,9 +2539,9 @@ fn execute_explode_usd_preview(
     }
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({
+        lunco_api_core::api_value!({
             "preview": command.preview.0,
-                "doc_id": command.doc_id,
+            "doc_id": command.doc_id.raw(),
             "action": command.action.as_str(),
             "assembly": assembly_path,
             "parts": part_paths,
@@ -3464,9 +3247,11 @@ mod tests {
             ),
         )
         .expect("valid assembly explode enables");
+        let expected_parts =
+            lunco_api_core::api_value!(["/Scene/Assembly/Group/PartB", "/Scene/Assembly/PartA",]);
         assert_eq!(
-            enabled.data.as_ref().unwrap()["parts"],
-            serde_json::json!(["/Scene/Assembly/Group/PartB", "/Scene/Assembly/PartA"])
+            enabled.data.as_ref().and_then(|data| data.get("parts")),
+            Some(&expected_parts)
         );
         assert_eq!(
             app.world().get::<Transform>(part_a).unwrap().translation,
@@ -4023,70 +3808,6 @@ mod tests {
     }
 
     #[test]
-    fn viewport_query_reports_explicit_focus_and_view_handles() {
-        let mut app = App::new();
-        app.init_resource::<Assets<Image>>();
-        let session = create_preview_session(
-            app.world_mut(),
-            UsdPreviewId(1),
-            DocumentId::new(7),
-            LayerId::root(),
-            Handle::default(),
-            FIRST_PREVIEW_RENDER_LAYER,
-            UsdPreviewViewId(1),
-        )
-        .expect("session resources are available");
-        let layer = session.render_layer();
-        let profile = RenderingQualitySettings::default()
-            .validated_profile()
-            .expect("default quality is valid");
-        let (first_view, _) = create_preview_view(
-            app.world_mut(),
-            UsdPreviewId(1),
-            UsdPreviewViewId(1),
-            layer,
-            profile,
-        )
-        .expect("first view resources are available");
-        let (second_view, _) = create_preview_view(
-            app.world_mut(),
-            UsdPreviewId(1),
-            UsdPreviewViewId(2),
-            layer,
-            profile,
-        )
-        .expect("second view resources are available");
-        let mut state = UsdViewportState::default();
-        state.insert(session);
-        assert!(state.insert_view(first_view).is_ok());
-        assert!(state.insert_view(second_view).is_ok());
-        assert!(state.focus_view(UsdPreviewViewId(2)));
-        app.insert_resource(state);
-
-        let response = InspectUsdViewportProvider.execute(app.world(), &serde_json::json!({}));
-        let ApiResponse::Ok { data: Some(data) } = response else {
-            panic!("viewport query must return presentation data");
-        };
-        assert_eq!(data["focused_preview"], serde_json::json!(1));
-        assert_eq!(data["focused_view"], serde_json::json!(2));
-        assert_eq!(data["preview_count"], serde_json::json!(1));
-        assert_eq!(data["view_count"], serde_json::json!(2));
-        assert_eq!(data["previews"][0]["doc_id"], serde_json::json!(7));
-        assert_eq!(
-            data["previews"][0]["views"][0]["view"],
-            serde_json::json!(1)
-        );
-        assert_eq!(
-            data["previews"][0]["views"][1]["view"],
-            serde_json::json!(2)
-        );
-        assert_eq!(
-            data["previews"][0]["views"][1]["focused"],
-            serde_json::json!(true)
-        );
-    }
-
-    #[test]
     fn preview_budget_bounds_dimensions_and_pixels() {
         let budget = UsdPreviewRenderBudget::default();
         let target = bounded_view_size(UVec2::new(8192, 4096), &budget)
@@ -4109,6 +3830,8 @@ mod tests {
 
     #[test]
     fn preview_pointer_buttons_match_view_navigation_contract() {
+        use lunco_usd_viewport_core::preview_drag_channels;
+
         assert_eq!(
             preview_drag_channels(true, false, false, false, false),
             (false, true)

@@ -7,8 +7,8 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
-use lunco_api::schema::{ApiRequest, ApiResponse};
 use lunco_api_contracts::ApiRequestEnvelope;
+use lunco_api_core::{ApiErrorCode, ApiRequest, ApiResponse, ApiValue};
 
 pub async fn handle_api_commands(
     State(bridge): State<HttpBridge>,
@@ -20,7 +20,7 @@ pub async fn handle_api_commands(
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(encode_response(ApiResponse::error(
-                    lunco_api::schema::ApiErrorCode::DeserializationError,
+                    ApiErrorCode::DeserializationError,
                     error,
                 ))),
             )
@@ -55,7 +55,7 @@ pub async fn handle_ready(State(bridge): State<HttpBridge>) -> impl IntoResponse
         bridge,
         ApiRequest::ExecuteCommand {
             command: "GetReadiness".to_string(),
-            params: serde_json::json!({}),
+            params: ApiValue::Map(Vec::new()),
         },
     )
     .await
@@ -72,7 +72,7 @@ pub async fn handle_diagnostics(State(bridge): State<HttpBridge>) -> impl IntoRe
         bridge,
         ApiRequest::ExecuteCommand {
             command: "GetBrokenConnections".to_string(),
-            params: serde_json::json!({}),
+            params: ApiValue::Map(Vec::new()),
         },
     )
     .await

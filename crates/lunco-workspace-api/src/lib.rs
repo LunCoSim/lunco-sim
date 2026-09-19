@@ -6,7 +6,10 @@
 //! simulation backend.
 
 use bevy::prelude::*;
-use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
+use lunco_api::api_param_u64;
+use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult};
+use lunco_api_core::api_value;
+use lunco_api_core::{ApiErrorCode, ApiValue};
 use lunco_doc::DocumentOrigin;
 use lunco_twin::{DocumentKindId, FileEntry, FileKind};
 use lunco_workspace::WorkspaceResource;
@@ -31,35 +34,36 @@ impl ApiQueryProvider for ListOpenDocumentsProvider {
         "ListOpenDocuments"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let Some(ws) = world.get_resource::<WorkspaceResource>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "ListOpenDocuments requires WorkspacePlugin".to_string(),
-            );
+                "ListOpenDocuments requires WorkspacePlugin",
+            ));
         };
         let active = ws.active_document;
-        let items: Vec<serde_json::Value> = ws
+        let items: Vec<ApiValue> = ws
             .documents()
             .iter()
             .map(|entry| {
-                serde_json::json!({
+                api_value!({
                     "doc_id": entry.id.raw(),
-                    "title": entry.title,
+                    "title": entry.title.clone(),
                     "kind": entry.kind.to_string(),
-                    "origin": origin_to_json(&entry.origin),
+                    "origin": origin_to_api_value(&entry.origin),
                     "dirty": entry.dirty,
                     "active": Some(entry.id) == active,
                     "context_twin": entry.context_twin.map(|t| t.raw()),
                 })
             })
             .collect();
+        let count = items.len();
 
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "open_documents": items,
-            "count": items.len(),
+            "count": count,
             "active_doc_id": active.map(|d| d.raw()),
-        }))
+        })))
     }
 }
 
@@ -70,21 +74,21 @@ impl ApiQueryProvider for ListRecentFilesProvider {
         "ListRecentFiles"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let Some(ws) = world.get_resource::<WorkspaceResource>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "ListRecentFiles requires WorkspacePlugin".to_string(),
-            );
+                "ListRecentFiles requires WorkspacePlugin",
+            ));
         };
 
-        fn entry(path: &std::path::Path) -> serde_json::Value {
+        fn entry(path: &std::path::Path) -> ApiValue {
             let modified_secs = std::fs::metadata(path)
                 .and_then(|m| m.modified())
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs());
-            serde_json::json!({
+            api_value!({
                 "path": path.display().to_string(),
                 "name": path
                     .file_name()
@@ -97,11 +101,12 @@ impl ApiQueryProvider for ListRecentFilesProvider {
 
         let files: Vec<_> = ws.recents.loose_paths.iter().map(|p| entry(p)).collect();
         let twins: Vec<_> = ws.recents.twin_paths.iter().map(|p| entry(p)).collect();
-        ApiResponse::ok(serde_json::json!({
+        let count = files.len();
+        Ok(Some(api_value!({
             "recent_files": files,
             "recent_twins": twins,
-            "count": files.len(),
-        }))
+            "count": count,
+        })))
     }
 }
 
@@ -112,24 +117,37 @@ impl ApiQueryProvider for ListTwinProvider {
         "ListTwin"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let offset = params.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-        let limit = params
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize);
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let offset = match params.get("offset") {
+            None => 0,
+            Some(_) => api_param_u64(params, "offset").ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "ListTwin: `offset` must be an unsigned integer",
+                )
+            })? as usize,
+        };
+        let limit = match params.get("limit") {
+            None => None,
+            Some(_) => Some(api_param_u64(params, "limit").ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "ListTwin: `limit` must be an unsigned integer",
+                )
+            })? as usize),
+        };
 
         let Some(ws) = world.get_resource::<WorkspaceResource>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "ListTwin requires WorkspacePlugin".to_string(),
-            );
+                "ListTwin requires WorkspacePlugin",
+            ));
         };
         let Some(twin_id) = ws.active_twin else {
-            return ApiResponse::ok(serde_json::json!({ "open": false }));
+            return Ok(Some(api_value!({ "open": false })));
         };
         let Some(twin) = ws.twin(twin_id) else {
-            return ApiResponse::ok(serde_json::json!({ "open": false }));
+            return Ok(Some(api_value!({ "open": false })));
         };
 
         let all = twin.files();
@@ -143,24 +161,24 @@ impl ApiQueryProvider for ListTwinProvider {
         let root = twin.root_handle().as_file_path().map(|p| p.to_path_buf());
         let items: Vec<_> = slice
             .iter()
-            .map(|file| file_entry_to_json(file, root.as_deref()))
+            .map(|file| file_entry_to_api_value(file, root.as_deref()))
             .collect();
 
-        ApiResponse::ok(serde_json::json!({
+        Ok(Some(api_value!({
             "open": true,
             "root": root.as_ref().map(|p| p.to_string_lossy().into_owned()),
             "files": items,
             "total": total,
             "offset": offset,
             "limit": limit,
-        }))
+        })))
     }
 }
 
-fn file_entry_to_json(file: &FileEntry, root: Option<&std::path::Path>) -> serde_json::Value {
+fn file_entry_to_api_value(file: &FileEntry, root: Option<&std::path::Path>) -> ApiValue {
     let abs = root.map(|r| r.join(&file.relative_path));
-    serde_json::json!({
-        "relative_path": file.relative_path.to_string_lossy(),
+    api_value!({
+        "relative_path": file.relative_path.to_string_lossy().into_owned(),
         "absolute_path": abs.as_ref().map(|p| p.to_string_lossy().into_owned()),
         "kind": file_kind_label(&file.kind),
     })
@@ -178,20 +196,20 @@ fn document_kind_label(kind: &DocumentKindId) -> String {
     kind.to_string()
 }
 
-fn origin_to_json(origin: &DocumentOrigin) -> serde_json::Value {
+fn origin_to_api_value(origin: &DocumentOrigin) -> ApiValue {
     match origin {
-        DocumentOrigin::Untitled { name } => serde_json::json!({
+        DocumentOrigin::Untitled { name } => api_value!({
             "kind": "untitled",
             "name": name,
         }),
-        DocumentOrigin::Bundled { filename } => serde_json::json!({
+        DocumentOrigin::Bundled { filename } => api_value!({
             "kind": "bundled",
             "filename": filename,
         }),
-        DocumentOrigin::File { path, writable } => serde_json::json!({
+        DocumentOrigin::File { path, writable } => api_value!({
             "kind": "file",
-            "path": path.to_string_lossy(),
-            "writable": writable,
+            "path": path.to_string_lossy().into_owned(),
+            "writable": *writable,
         }),
     }
 }

@@ -49,6 +49,7 @@ use lunco_control_core::{
     ensure_control_plugin, ControlBinding, InteractionControlSet, UserIntent,
 };
 use lunco_core::{on_command, register_commands, Command};
+use lunco_hooks::HookValue;
 use lunco_input_core::InputBindingsSettings;
 use serde::{Deserialize, Serialize};
 
@@ -235,7 +236,7 @@ fn on_inject_window_input(
     pending.write(PendingWindowInput(cmd.event.clone()));
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({"queued": true}),
+        HookValue::map([("queued", HookValue::Bool(true))]),
     ))
 }
 
@@ -447,11 +448,11 @@ fn on_simulate_intent_edge(
     });
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({
-            "target": format!("{:?}", cmd.target),
-            "intent": cmd.intent,
-            "edge": kind.as_str(),
-        }),
+        HookValue::map([
+            ("target", HookValue::str(format!("{:?}", cmd.target))),
+            ("intent", HookValue::str(cmd.intent.clone())),
+            ("edge", HookValue::str(kind.as_str())),
+        ]),
     ))
 }
 

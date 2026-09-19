@@ -8,9 +8,9 @@ description = "API query providers for USD Modelica domain projections"
 [dependencies]
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

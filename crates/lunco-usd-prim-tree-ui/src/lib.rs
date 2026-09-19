@@ -25,9 +25,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use bevy::prelude::*;
 use egui;
+use lunco_camera_core::camera_display_labels;
 use lunco_render::SceneCamera;
 use lunco_scene_selection::{SelectEntityTarget, SelectionIntent};
-use lunco_usd_bevy_camera::camera_switch::camera_display_labels;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::is_preview_entity;
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};

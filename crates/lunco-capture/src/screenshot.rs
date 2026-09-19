@@ -53,7 +53,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use lunco_api::executor::{ApiResponseEvent, DeferredCommandAppExt, PendingApiRequest};
-use lunco_api::schema::ApiResponse;
+use lunco_api_core::ApiResponse;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_render::SceneCamera;
 use lunco_tools_bevy::{register_closure_tool, ToolResult};
@@ -241,7 +241,7 @@ fn on_capture_screenshot(
                 commands.trigger(ApiResponseEvent {
                     correlation_id: pending_request.correlation_id,
                     response: ApiResponse::error(
-                        lunco_api::schema::ApiErrorCode::InternalError,
+                        lunco_api_core::ApiErrorCode::InternalError,
                         error,
                     ),
                 });
@@ -256,7 +256,7 @@ fn on_capture_screenshot(
         // cosmetic bug: the caller would hang until the HTTP timeout.
         commands.trigger(ApiResponseEvent {
             correlation_id: pending_request.correlation_id,
-            response: ApiResponse::ok(serde_json::json!({ "path": path })),
+            response: ApiResponse::ok(lunco_api_core::api_value!({ "path": &path })),
         });
 
         PendingCapture {
@@ -384,7 +384,7 @@ fn deliver_screenshot(
             commands.trigger(ApiResponseEvent {
                 correlation_id: cid,
                 response: ApiResponse::error(
-                    lunco_api::schema::ApiErrorCode::InternalError,
+                    lunco_api_core::ApiErrorCode::InternalError,
                     "captured image could not be converted",
                 ),
             });
@@ -415,7 +415,7 @@ fn deliver_screenshot(
                 commands.trigger(ApiResponseEvent {
                     correlation_id: cid,
                     response: ApiResponse::error(
-                        lunco_api::schema::ApiErrorCode::InternalError,
+                        lunco_api_core::ApiErrorCode::InternalError,
                         format!("failed to save screenshot to '{path}': {e}"),
                     ),
                 });
@@ -423,7 +423,7 @@ fn deliver_screenshot(
         } else if let Some(cid) = completion_correlation_id {
             commands.trigger(ApiResponseEvent {
                 correlation_id: cid,
-                response: ApiResponse::ok(serde_json::json!({ "path": path })),
+                response: ApiResponse::ok(lunco_api_core::api_value!({ "path": &path })),
             });
         }
     } else if let Some(cid) = correlation_id {
@@ -625,7 +625,7 @@ fn report_capture_failure(
     if let Some(correlation_id) = correlation_id {
         commands.trigger(ApiResponseEvent {
             correlation_id,
-            response: ApiResponse::error(lunco_api::schema::ApiErrorCode::InternalError, message),
+            response: ApiResponse::error(lunco_api_core::ApiErrorCode::InternalError, message),
         });
     }
 }
@@ -1960,13 +1960,13 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
     fn execute(
         &self,
         world: &World,
-        _params: &serde_json::Value,
-    ) -> lunco_api::schema::ApiResponse {
+        _params: &lunco_api_core::ApiValue,
+    ) -> lunco_api::ApiQueryResult {
         let state = world.resource::<OfflineRecordingState>();
-        lunco_api::schema::ApiResponse::ok(serde_json::json!({
+        Ok(Some(lunco_api_core::api_value!({
             "active": state.active,
             "frame_index": state.frame_index,
             "is_waiting_for_frame": state.is_waiting_for_frame,
-        }))
+        })))
     }
 }

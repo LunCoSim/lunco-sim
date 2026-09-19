@@ -14,6 +14,7 @@ lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 big_space.workspace = true
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-core = { path = "../lunco-core" }
@@ -23,7 +24,6 @@ lunco-materials = { path = "../lunco-materials" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
-serde_json = { workspace = true }
 crossbeam-channel = { workspace = true }
 futures-lite = { workspace = true }
 

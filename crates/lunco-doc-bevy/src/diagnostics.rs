@@ -4,7 +4,8 @@
 //! pure data in `lunco-doc`; this module adds only the Bevy `Resource` that
 //! stores them per [`DocumentId`], plus compile-timing bookkeeping. Every domain
 //! that compiles documents — Modelica, rhai scripting, future languages —
-//! reports through this ONE resource and reads back via [`lunco_doc::status_json`].
+//! reports through this ONE resource and projects status via
+//! [`lunco_doc::document_status`].
 
 use std::collections::HashMap;
 use std::time::Duration;

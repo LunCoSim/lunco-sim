@@ -25,6 +25,7 @@ lunco-signal = { path = "../lunco-signal" }
 # This crate needs only the transport-free query/schema surface; native HTTP
 # and browser bindings belong to the application root.
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

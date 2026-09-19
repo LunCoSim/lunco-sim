@@ -1,10 +1,10 @@
 //! Schema discovery — tells API clients what commands exist.
 
 use crate::queries::{ApiQueryRegistry, ApiVisibility};
-use crate::schema::{ApiSchema, CommandSchema, FieldSchema, HookParameterSchema, HookSchema};
 use bevy::prelude::*;
 use bevy::reflect::std_traits::ReflectDefault;
 use bevy::reflect::{TypeInfo, TypeRegistration, TypeRegistry};
+use lunco_api_core::{ApiSchema, CommandSchema, FieldSchema, HookParameterSchema, HookSchema};
 use std::collections::HashMap;
 
 /// Why a command name could not be resolved to one public typed command.

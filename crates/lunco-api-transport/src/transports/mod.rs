@@ -54,8 +54,8 @@ pub struct HttpServerStartupError {
 
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 pub struct BridgeMessage {
-    pub request: lunco_api::schema::ApiRequest,
-    pub reply: tokio::sync::oneshot::Sender<lunco_api::schema::ApiResponse>,
+    pub request: lunco_api_core::ApiRequest,
+    pub reply: tokio::sync::oneshot::Sender<lunco_api_core::ApiResponse>,
 }
 
 /// Wakes the host event loop after pushing a message into the
@@ -121,8 +121,8 @@ impl HttpBridge {
 
     pub async fn execute(
         &self,
-        request: lunco_api::schema::ApiRequest,
-    ) -> Result<lunco_api::schema::ApiResponse, ()> {
+        request: lunco_api_core::ApiRequest,
+    ) -> Result<lunco_api_core::ApiResponse, ()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         // AWAIT a full queue rather than dropping. This is the command funnel: a
         // dropped request is an unattributable failure — the caller sees a timeout

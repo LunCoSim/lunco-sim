@@ -1,8 +1,8 @@
 //! Read-only Rhai reporting for SysML v2 analysis.
 //!
 //! Rhai owns test/report policy in LunCoSim. This adapter only exposes a
-//! serialized semantic snapshot; it never parses source or mutates a
-//! document, keeping the language boundary small and deterministic.
+//! native semantic snapshot; it never parses source or mutates a document,
+//! keeping the language boundary small and deterministic.
 
 use std::sync::Arc;
 
@@ -36,123 +36,6 @@ fn record_value(record: &mut SysmlRecordValue, name: &str) -> Dynamic {
 
 fn record_has_field(record: &mut SysmlRecordValue, name: &str) -> bool {
     record.inner.fields.iter().any(|field| field.name == name)
-}
-
-/// A requirement declaration/usage projected for a Rhai test report.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SysmlRequirement {
-    /// Root-qualified requirement name.
-    pub qualified_name: String,
-    /// Logical source file containing the requirement.
-    pub file: String,
-    /// Declaration byte-range start.
-    pub start: u32,
-    /// Declaration byte-range end.
-    pub end: u32,
-    /// Upstream metamodel kind.
-    pub kind: String,
-    /// Documentation blocks owned by the requirement.
-    pub documentation: Vec<String>,
-    /// Requirement subjects.
-    pub subjects: Vec<SysmlSubject>,
-    /// Authored attributes and their literal values.
-    pub attributes: Vec<SysmlAttribute>,
-    /// Requirements named by `verify` memberships.
-    pub verifies: Vec<String>,
-    /// Written satisfaction targets.
-    pub satisfies: Vec<String>,
-    /// Written realization targets.
-    pub realizations: Vec<String>,
-}
-
-/// A verification case projected for a Rhai test report.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SysmlVerification {
-    /// Root-qualified verification case name.
-    pub qualified_name: String,
-    /// Logical source file containing the case.
-    pub file: String,
-    /// Declaration byte-range start.
-    pub start: u32,
-    /// Declaration byte-range end.
-    pub end: u32,
-    /// Upstream metamodel kind.
-    pub kind: String,
-    /// Documentation blocks owned by the case.
-    pub documentation: Vec<String>,
-    /// Verification subjects.
-    pub subjects: Vec<SysmlSubject>,
-    /// Requirements named by `verify` memberships.
-    pub verifies: Vec<String>,
-    /// Written realization targets.
-    pub realizations: Vec<String>,
-}
-
-/// Compact, deterministic requirement report consumed by authored Rhai tests.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SysmlRequirementReport {
-    /// Source generation tested.
-    pub source_revision: u64,
-    /// Logical files included in the resolved source set.
-    pub source_files: Vec<String>,
-    /// Typed attributes retained for requirement thresholds and units.
-    pub attributes: Vec<SysmlAttribute>,
-    /// Requirements found in project files.
-    pub requirements: Vec<SysmlRequirement>,
-    /// Verification-case definitions/usages in the source set.
-    pub verifications: Vec<SysmlVerification>,
-    /// Parser/resolution diagnostics that a test may gate on.
-    pub diagnostics: Vec<SysmlDiagnostic>,
-}
-
-/// Produce a stable JSON report for a SysML analysis snapshot.
-pub fn report_json(analysis: &SysmlAnalysis) -> String {
-    serde_json::to_string(analysis).expect("SysML analysis projection is serializable")
-}
-
-/// Extract requirement declarations/usages from an immutable analysis.
-pub fn requirements(analysis: &SysmlAnalysis) -> Vec<SysmlRequirement> {
-    analysis
-        .requirements()
-        .iter()
-        .map(requirement_from_record)
-        .collect()
-}
-
-/// Extract verification cases from an immutable analysis.
-pub fn verifications(analysis: &SysmlAnalysis) -> Vec<SysmlVerification> {
-    analysis
-        .verifications()
-        .iter()
-        .map(|record| SysmlVerification {
-            qualified_name: record.element.qualified_name.clone(),
-            file: record.element.file.clone(),
-            start: record.element.start,
-            end: record.element.end,
-            kind: record.element.kind.clone(),
-            documentation: record.documentation.clone(),
-            subjects: record.subjects.clone(),
-            verifies: record.verifies.clone(),
-            realizations: record.realizations.clone(),
-        })
-        .collect()
-}
-
-/// Produce the compact requirement/test input report as JSON.
-pub fn requirement_report_json(analysis: &SysmlAnalysis) -> String {
-    let report = SysmlRequirementReport {
-        source_revision: analysis.source_revision(),
-        source_files: analysis
-            .files()
-            .iter()
-            .map(|file| file.name.clone())
-            .collect(),
-        attributes: analysis.attributes().to_vec(),
-        requirements: requirements(analysis),
-        verifications: verifications(analysis),
-        diagnostics: analysis.diagnostics().to_vec(),
-    };
-    serde_json::to_string(&report).expect("SysML requirement report is serializable")
 }
 
 /// Produce a native Rhai map for a complete immutable SysML snapshot.
@@ -382,24 +265,18 @@ pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     Dynamic::from_map(report)
 }
 
-/// Register the read-only `sysml_report_json()` function in a Rhai engine.
+/// Register read-only native report functions in a Rhai engine.
 ///
 /// A snapshot is captured by `Arc`, so script execution does not borrow a
 /// Bevy world or a live document. Callers can create a fresh registration when
 /// a `DocumentChanged` event publishes a newer generation.
 pub fn register_sysml_report(engine: &mut rhai::Engine, analysis: Arc<SysmlAnalysis>) {
     register_sysml_types(engine);
-    let json_report = Arc::clone(&analysis);
     let dynamic_report = Arc::clone(&analysis);
     let compact_report = Arc::clone(&analysis);
-    let json_compact_report = Arc::clone(&analysis);
     engine.register_fn("sysml_report", move || report_dynamic(&dynamic_report));
     engine.register_fn("sysml_requirement_report", move || {
         requirement_report_dynamic(&compact_report)
-    });
-    engine.register_fn("sysml_report_json", move || report_json(&json_report));
-    engine.register_fn("sysml_requirement_report_json", move || {
-        requirement_report_json(&json_compact_report)
     });
 }
 
@@ -1104,23 +981,6 @@ fn diagnostic_dynamic(diagnostic: &SysmlDiagnostic) -> Dynamic {
     Dynamic::from_map(value)
 }
 
-fn requirement_from_record(record: &lunco_sysml_ast::SysmlRequirementRecord) -> SysmlRequirement {
-    let element: &SysmlElement = &record.element;
-    SysmlRequirement {
-        qualified_name: element.qualified_name.clone(),
-        file: element.file.clone(),
-        start: element.start,
-        end: element.end,
-        kind: element.kind.clone(),
-        documentation: record.documentation.clone(),
-        subjects: record.subjects.clone(),
-        attributes: record.attributes.clone(),
-        verifies: record.verifies.clone(),
-        satisfies: record.satisfies.clone(),
-        realizations: record.realizations.clone(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1137,10 +997,21 @@ mod tests {
         let native: Dynamic = engine.eval("sysml_requirement_report()").unwrap();
         let native = native.cast::<Map>();
         assert!(native.contains_key("requirements"));
-        let json: String = engine.eval("sysml_report_json()").unwrap();
-        assert!(json.contains("example.sysml"));
-        let requirements: String = engine.eval("sysml_requirement_report_json()").unwrap();
-        assert!(requirements.contains("MassRequirement"));
+        let report: Map = engine.eval("sysml_report()").unwrap();
+        let files = report
+            .get("files")
+            .cloned()
+            .expect("source files report")
+            .cast::<rhai::Array>();
+        let file = files[0].clone().cast::<Map>();
+        assert_eq!(
+            file.get("name")
+                .cloned()
+                .expect("file name")
+                .into_immutable_string()
+                .unwrap(),
+            "example.sysml"
+        );
     }
 
     #[test]

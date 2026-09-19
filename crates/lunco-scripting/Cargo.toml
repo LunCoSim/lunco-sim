@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 lunco-command-contracts = { path = "../lunco-command-contracts", optional = true }
+lunco-hooks = { path = "../lunco-hooks", optional = true }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
@@ -44,6 +45,7 @@ default = []
 window-audience = ["bevy/bevy_window"]
 rhai = [
     "dep:serde_json",
+    "dep:lunco-hooks",
     "dep:lunco-api",
     "dep:lunco-command-contracts",
     "dep:lunco-core",
@@ -58,6 +60,7 @@ python = [
     "dep:pyo3",
     "dep:libloading",
     "dep:serde_json",
+    "dep:lunco-hooks",
     "dep:lunco-api",
     "dep:lunco-command-contracts",
     "dep:lunco-core",

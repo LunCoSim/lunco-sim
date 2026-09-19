@@ -24,8 +24,47 @@
 use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::prelude::*;
 use bevy::reflect::TypeInfo;
-use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry, ApiVisibility};
-use lunco_api::schema::ApiResponse;
+use lunco_api::queries::{
+    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, ApiVisibility,
+};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value, api_value_from_serializable};
+
+fn query_ok(value: ApiValue) -> ApiQueryResult {
+    Ok(Some(value))
+}
+
+fn query_error(code: ApiErrorCode, message: impl Into<String>) -> ApiQueryResult {
+    Err(ApiQueryError::new(code, message))
+}
+
+fn required_field<'a>(value: &'a ApiValue, name: &str) -> Result<&'a ApiValue, ApiQueryError> {
+    value.get(name).ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::InternalError,
+            format!("scripting catalog entry is missing `{name}`"),
+        )
+    })
+}
+
+fn required_str<'a>(value: &'a ApiValue, name: &str) -> Result<&'a str, ApiQueryError> {
+    required_field(value, name)?.as_str().ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::InternalError,
+            format!("scripting catalog field `{name}` is not a string"),
+        )
+    })
+}
+
+fn push_completion(
+    candidates: &mut Vec<(String, ApiValue)>,
+    prefix: &str,
+    label: String,
+    value: ApiValue,
+) {
+    if label.to_ascii_lowercase().starts_with(prefix) {
+        candidates.push((label, value));
+    }
+}
 
 /// World-bridge built-in verbs: `(name, signature, returns, doc)`. Hand-kept in
 /// step with the registrations in `world_bridge::build_world_engine` (and the
@@ -42,18 +81,6 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "command_result(id)",
         "#{ id, ok, status, data, error }",
         "READ. Get the shared terminal result of a prior cmd() call. Deferred commands remain status=pending until their owner records applied, rejected, or failed; do not treat acceptance as applied.",
-    ),
-    (
-        "to_json",
-        "to_json(#{value})",
-        "string",
-        "Serialize a Rhai map/array into JSON for commands whose contract carries a JSON string.",
-    ),
-    (
-        "from_json",
-        "from_json(string)",
-        "value | ()",
-        "Parse a JSON string into native Rhai maps/arrays/scalars; () for malformed input.",
     ),
     (
         "get",
@@ -466,7 +493,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
-fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
+fn reflected_surface(world: &World) -> Vec<ApiValue> {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
     let mut entries = registry
@@ -486,11 +513,11 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
                         .iter()
                         .map(|field| {
                             let field_writable =
-                                lunco_scripting_rhai_world::world_bridge::dynamic_write_supported(
+                                lunco_scripting_rhai_core::values::dynamic_write_supported(
                                     field.type_path(),
                                 );
                             writable |= field_writable;
-                            serde_json::json!({
+                            api_value!({
                                 "name": field.name(),
                                 "type": field.type_path(),
                                 "readable": true,
@@ -503,8 +530,8 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
                 _ => (Vec::new(), false),
             };
             let type_writable =
-                lunco_scripting_rhai_world::world_bridge::dynamic_write_supported(short_type);
-            Some(serde_json::json!({
+                lunco_scripting_rhai_core::values::dynamic_write_supported(short_type);
+            Some(api_value!({
                 "type": short_type,
                 "kind": if is_resource { "resource" } else { "component" },
                 "readable": true,
@@ -513,11 +540,15 @@ fn reflected_surface(world: &World) -> Vec<serde_json::Value> {
             }))
         })
         .collect::<Vec<_>>();
-    entries.sort_unstable_by(|a, b| a["type"].as_str().cmp(&b["type"].as_str()));
+    entries.sort_unstable_by(|a, b| {
+        a.get("type")
+            .and_then(ApiValue::as_str)
+            .cmp(&b.get("type").and_then(ApiValue::as_str))
+    });
     entries
 }
 
-fn prelude_surface(world: &World) -> Vec<serde_json::Value> {
+fn prelude_surface(world: &World) -> Vec<ApiValue> {
     let mut engine = rhai::Engine::new();
     // This engine only introspects prelude text already admitted by the shared
     // asset registry. Keep imports fail-closed: completion must not read
@@ -537,26 +568,30 @@ fn prelude_surface(world: &World) -> Vec<serde_json::Value> {
             .ok()
         })
         .map(|ast| {
-            let mut functions: Vec<serde_json::Value> = ast
+            let mut functions: Vec<ApiValue> = ast
                 .iter_functions()
                 .map(|function| {
-                    serde_json::json!({
+                    api_value!({
                         "name": function.name,
                         "params": function.params,
                     })
                 })
                 .collect();
-            functions.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+            functions.sort_by(|a, b| {
+                a.get("name")
+                    .and_then(ApiValue::as_str)
+                    .cmp(&b.get("name").and_then(ApiValue::as_str))
+            });
             functions
         })
         .unwrap_or_default()
 }
 
-fn tool_surface() -> Vec<serde_json::Value> {
+fn tool_surface() -> Vec<ApiValue> {
     lunco_tools::index()
         .into_iter()
         .map(|info| {
-            serde_json::json!({
+            api_value!({
                 "name": info.name,
                 "backend": info.backend,
                 "functions": info.functions,
@@ -565,16 +600,16 @@ fn tool_surface() -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn hook_surface() -> Vec<serde_json::Value> {
+fn hook_surface() -> Vec<ApiValue> {
     lunco_hooks::catalog()
         .into_iter()
         .map(|hook| {
-            serde_json::json!({
+            api_value!({
                 "id": hook.id,
                 "owner": hook.owner,
                 "description": hook.description,
                 "parameters": hook.parameters.into_iter().map(|parameter| {
-                    serde_json::json!({
+                    api_value!({
                         "name": parameter.name,
                         "type": parameter.value_type.as_str(),
                     })
@@ -601,118 +636,178 @@ impl ApiQueryProvider for ScriptCompleteProvider {
         "ScriptComplete"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let prefix = params
-            .get("prefix")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let limit = params
-            .get("limit")
-            .and_then(|value| value.as_u64())
-            .unwrap_or(50)
-            .clamp(1, 200) as usize;
-        let mut candidates = VERBS
-            .iter()
-            .map(|(name, signature, _, doc)| {
-                serde_json::json!({
-                    "label": name,
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let prefix = match params.get("prefix") {
+            None => String::new(),
+            Some(ApiValue::Str(prefix)) => prefix.to_ascii_lowercase(),
+            Some(_) => {
+                return query_error(
+                    ApiErrorCode::DeserializationError,
+                    "ScriptComplete: `prefix` must be a string",
+                );
+            }
+        };
+        let limit = match params.get("limit") {
+            None => 50,
+            Some(ApiValue::Int(limit)) if *limit >= 0 => (*limit as usize).clamp(1, 200),
+            Some(_) => {
+                return query_error(
+                    ApiErrorCode::DeserializationError,
+                    "ScriptComplete: `limit` must be an unsigned integer",
+                );
+            }
+        };
+        let mut candidates: Vec<(String, ApiValue)> = Vec::new();
+        for (name, signature, _, doc) in VERBS {
+            push_completion(
+                &mut candidates,
+                &prefix,
+                (*name).to_owned(),
+                api_value!({
+                    "label": *name,
                     "kind": "verb",
-                    "detail": signature,
-                    "documentation": doc,
+                    "detail": *signature,
+                    "documentation": *doc,
+                }),
+            );
+        }
+        for (name, doc) in HOOKS {
+            push_completion(
+                &mut candidates,
+                &prefix,
+                (*name).to_owned(),
+                api_value!({ "label": *name, "kind": "hook", "detail": *doc }),
+            );
+        }
+        for function in prelude_surface(world) {
+            let name = required_str(&function, "name")?.to_owned();
+            let params = required_field(&function, "params")?.clone();
+            push_completion(
+                &mut candidates,
+                &prefix,
+                name.clone(),
+                api_value!({ "label": name, "kind": "prelude", "detail": params }),
+            );
+        }
+        for hook in hook_surface() {
+            let name = required_str(&hook, "id")?.to_owned();
+            let parameters = match required_field(&hook, "parameters")? {
+                ApiValue::Array(parameters) => parameters,
+                _ => {
+                    return query_error(
+                        ApiErrorCode::InternalError,
+                        "scripting hook parameter catalog is not an array",
+                    );
+                }
+            };
+            let parameters = parameters
+                .iter()
+                .map(|parameter| {
+                    Ok(format!(
+                        "{}: {}",
+                        required_str(parameter, "name")?,
+                        required_str(parameter, "type")?,
+                    ))
                 })
-            })
-            .chain(HOOKS.iter().map(
-                |(name, doc)| serde_json::json!({ "label": name, "kind": "hook", "detail": doc }),
-            ))
-            .collect::<Vec<_>>();
-        candidates.extend(prelude_surface(world).into_iter().map(|function| {
-            serde_json::json!({
-                "label": function["name"],
-                "kind": "prelude",
-                "detail": function["params"],
-            })
-        }));
-        candidates.extend(hook_surface().into_iter().map(|hook| {
-            serde_json::json!({
-                "label": hook["id"],
-                "kind": "policy-hook",
-                "detail": format!(
-                    "({}) -> {}",
-                    hook["parameters"]
-                        .as_array()
-                        .map(|parameters| {
-                            parameters
-                                .iter()
-                                .map(|parameter| {
-                                    format!(
-                                        "{}: {}",
-                                        parameter["name"].as_str().unwrap_or("_"),
-                                        parameter["type"].as_str().unwrap_or("any"),
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        })
-                        .unwrap_or_default(),
-                    hook["output"].as_str().unwrap_or("undeclared"),
-                ),
-                "documentation": hook["description"],
-            })
-        }));
-        candidates.extend(tool_surface().into_iter().flat_map(|tool| {
-            let namespace = tool["name"].as_str().unwrap_or_default().to_owned();
-            let backend = tool["backend"].as_str().unwrap_or_default().to_owned();
-            let functions = tool["functions"].as_array().cloned().unwrap_or_default();
-            functions.into_iter().filter_map(move |function| {
-                let signature = function.as_str()?;
+                .collect::<Result<Vec<_>, ApiQueryError>>()?
+                .join(", ");
+            let detail = format!("({parameters}) -> {}", required_str(&hook, "output")?);
+            let documentation = required_field(&hook, "description")?.clone();
+            push_completion(
+                &mut candidates,
+                &prefix,
+                name.clone(),
+                api_value!({
+                    "label": name,
+                    "kind": "policy-hook",
+                    "detail": detail,
+                    "documentation": documentation,
+                }),
+            );
+        }
+        for tool in tool_surface() {
+            let namespace = required_str(&tool, "name")?.to_owned();
+            let backend = required_str(&tool, "backend")?.to_owned();
+            let functions = match required_field(&tool, "functions")? {
+                ApiValue::Array(functions) => functions,
+                _ => {
+                    return query_error(
+                        ApiErrorCode::InternalError,
+                        "scripting tool function catalog is not an array",
+                    );
+                }
+            };
+            for function in functions {
+                let Some(signature) = function.as_str() else {
+                    return query_error(
+                        ApiErrorCode::InternalError,
+                        "scripting tool function signature is not a string",
+                    );
+                };
                 let function_name = signature.split('/').next().unwrap_or(signature);
-                Some(serde_json::json!({
-                    "label": format!("{namespace}::{function_name}"),
-                    "kind": "tool",
-                    "detail": format!("{backend} {signature}"),
-                }))
-            })
-        }));
+                let label = format!("{namespace}::{function_name}");
+                push_completion(
+                    &mut candidates,
+                    &prefix,
+                    label.clone(),
+                    api_value!({
+                        "label": label,
+                        "kind": "tool",
+                        "detail": format!("{backend} {signature}"),
+                    }),
+                );
+            }
+        }
         let type_registry = world.resource::<AppTypeRegistry>().clone();
         let commands = {
             let registry = type_registry.read();
             let visibility = world.get_resource::<ApiVisibility>();
             lunco_api::discover_commands(&registry, visibility)
         };
-        candidates.extend(commands.into_iter().map(|command| {
-            serde_json::json!({
-                "label": command.name,
-                "kind": "command",
-                "detail": command.fields.iter().map(|field| field.name.clone()).collect::<Vec<_>>().join(", "),
-            })
-        }));
-        candidates.extend(
-            lunco_api::discover_queries(world.get_resource::<ApiQueryRegistry>())
-                .into_iter()
-                .map(|query| {
-                    serde_json::json!({
-                        "label": query,
-                        "kind": "query",
-                        "detail": "read-only structured provider",
-                    })
+        for command in commands {
+            let name = command.name.clone();
+            let detail = command
+                .fields
+                .iter()
+                .map(|field| field.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            push_completion(
+                &mut candidates,
+                &prefix,
+                name.clone(),
+                api_value!({ "label": name, "kind": "command", "detail": detail }),
+            );
+        }
+        for query in lunco_api::discover_queries(world.get_resource::<ApiQueryRegistry>()) {
+            push_completion(
+                &mut candidates,
+                &prefix,
+                query.clone(),
+                api_value!({
+                    "label": query,
+                    "kind": "query",
+                    "detail": "read-only structured provider",
                 }),
-        );
-        candidates.extend(reflected_surface(world).into_iter().map(|entry| {
-            serde_json::json!({
-                "label": entry["type"],
-                "kind": entry["kind"],
-                "detail": "reflected type",
-            })
-        }));
-        candidates.retain(|candidate| {
-            candidate["label"]
-                .as_str()
-                .is_some_and(|label| label.to_ascii_lowercase().starts_with(&prefix))
-        });
-        candidates.sort_unstable_by(|a, b| a["label"].as_str().cmp(&b["label"].as_str()));
+            );
+        }
+        for entry in reflected_surface(world) {
+            let name = required_str(&entry, "type")?.to_owned();
+            let kind = required_field(&entry, "kind")?.clone();
+            push_completion(
+                &mut candidates,
+                &prefix,
+                name.clone(),
+                api_value!({ "label": name, "kind": kind, "detail": "reflected type" }),
+            );
+        }
+        candidates.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         candidates.truncate(limit);
-        ApiResponse::ok(serde_json::json!({ "prefix": prefix, "candidates": candidates }))
+        let candidates = candidates
+            .into_iter()
+            .map(|(_, candidate)| candidate)
+            .collect::<Vec<_>>();
+        query_ok(api_value!({ "prefix": prefix, "candidates": candidates }))
     }
 }
 
@@ -752,17 +847,17 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
         "ScriptingCatalog"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         // Built-in verbs + hooks (static).
-        let verbs: Vec<serde_json::Value> = VERBS
+        let verbs: Vec<ApiValue> = VERBS
             .iter()
             .map(|(name, signature, returns, doc)| {
-                serde_json::json!({ "name": name, "signature": signature, "returns": returns, "doc": doc })
+                api_value!({ "name": *name, "signature": *signature, "returns": *returns, "doc": *doc })
             })
             .collect();
-        let hooks: Vec<serde_json::Value> = HOOKS
+        let hooks: Vec<ApiValue> = HOOKS
             .iter()
-            .map(|(name, doc)| serde_json::json!({ "name": name, "doc": doc }))
+            .map(|(name, doc)| api_value!({ "name": *name, "doc": *doc }))
             .collect();
         let policy_hooks = hook_surface();
 
@@ -780,21 +875,21 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
             let visibility = world.get_resource::<ApiVisibility>();
             lunco_api::discover_commands(&reg, visibility)
         };
-        let commands = serde_json::to_value(&commands).unwrap_or_default();
+        let commands = api_value_from_serializable(&commands)?;
 
         // Registered read-only providers (query targets), from the same
         // registry the runtime executes.
-        let queries = serde_json::to_value(lunco_api::discover_queries(Some(
+        let queries = api_value!(lunco_api::discover_queries(Some(
             world.resource::<ApiQueryRegistry>(),
-        )))
-        .unwrap_or_default();
+        )));
         let reflection = reflected_surface(world);
+        let policy_status = lunco_scripting_rhai_world::world_bridge::policy_status_value(world);
 
-        ApiResponse::ok(serde_json::json!({
+        query_ok(api_value!({
             "verbs": verbs,
             "hooks": hooks,
             "policy_hooks": policy_hooks,
-            "policy_status": lunco_scripting_rhai_world::world_bridge::policy_status_json(world),
+            "policy_status": policy_status,
             "prelude": prelude,
             "tools": tools,
             "commands": commands,

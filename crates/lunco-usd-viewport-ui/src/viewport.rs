@@ -6,15 +6,15 @@ use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_document::document::UsdDocument;
 use lunco_usd_viewport_core::{
-    ApplyUsdInspectionPreset, CloseUsdPreviewView, DeleteUsdInspectionPreset, FocusUsdPreviewView,
-    FrameUsdPreviewView, OpenUsdPreviewView, ResetUsdPreviewView, SaveUsdInspectionPreset,
-    SetUsdPreviewProjection, SetUsdPreviewTextLayer, SetUsdPreviewViewMode, UsdInspectionSettings,
-    UsdPreviewId, UsdPreviewProjection, UsdPreviewTextLayer, UsdPreviewViewId, UsdPreviewViewMode,
-    UsdViewportState,
+    preview_drag_channels, ApplyUsdInspectionPreset, CloseUsdPreviewView,
+    DeleteUsdInspectionPreset, FocusUsdPreviewView, FrameUsdPreviewView, OpenUsdPreviewView,
+    ResetUsdPreviewView, SaveUsdInspectionPreset, SetUsdPreviewProjection, SetUsdPreviewTextLayer,
+    SetUsdPreviewViewMode, UsdInspectionSettings, UsdPreviewId, UsdPreviewProjection,
+    UsdPreviewTextLayer, UsdPreviewViewId, UsdPreviewViewMeasured, UsdPreviewViewMode,
+    UsdViewportClick, UsdViewportMeasured, UsdViewportOrbitInput, UsdViewportState,
 };
 use lunco_usd_viewport_runtime::{
-    preview_drag_channels, UsdPreviewRenderTargets, UsdPreviewViewMeasured, UsdViewportClick,
-    UsdViewportMeasured, UsdViewportOrbitInput, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
+    UsdPreviewRenderTargets, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
 use lunco_viewport_core::PanelRect;
 use lunco_workbench_core::scene_pick::ScenePickGate;
@@ -354,9 +354,9 @@ fn render_preview_view(
     if drag != egui::Vec2::ZERO || pan != egui::Vec2::ZERO || scroll_y != 0.0 {
         ctx.trigger(UsdViewportOrbitInput {
             view: view_id,
-            drag,
-            pan,
-            viewport_size: response.rect.size(),
+            drag: bevy::math::Vec2::new(drag.x, drag.y),
+            pan: bevy::math::Vec2::new(pan.x, pan.y),
+            viewport_size: bevy::math::Vec2::new(response.rect.width(), response.rect.height()),
             scroll_y,
         });
     }

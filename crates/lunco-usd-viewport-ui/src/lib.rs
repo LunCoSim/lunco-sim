@@ -8,6 +8,7 @@
 use bevy::prelude::{App, Plugin};
 use lunco_workbench_core::WorkbenchPanelAppExt;
 
+mod query;
 mod viewport;
 
 /// Install the USD preview workbench panels.
@@ -18,6 +19,7 @@ pub struct UsdViewportUiPlugin;
 
 impl Plugin for UsdViewportUiPlugin {
     fn build(&self, app: &mut App) {
+        query::register_api_queries(app);
         app.register_panel(viewport::UsdViewportPanel)
             .register_instance_panel(viewport::UsdPreviewViewPanel);
     }

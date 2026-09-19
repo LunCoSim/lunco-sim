@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
+use lunco_hooks::HookValue;
 
 #[cfg(feature = "python")]
 #[Command(default)]
@@ -31,7 +32,7 @@ fn on_run_python(_t: On<RunPython>, backends: Res<ScriptBackends>) -> Result<Ack
     let stdout = backend.eval(&cmd.code)?;
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "stdout": stdout }),
+        HookValue::map([("stdout", HookValue::Str(stdout))]),
     ))
 }
 
@@ -115,7 +116,7 @@ fn on_set_scenario_paused(
     model.paused = cmd.paused;
     Ok(Ack::with_data(
         OpId::new(),
-        serde_json::json!({ "paused": cmd.paused }),
+        HookValue::map([("paused", HookValue::Bool(cmd.paused))]),
     ))
 }
 

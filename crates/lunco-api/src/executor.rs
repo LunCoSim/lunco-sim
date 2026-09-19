@@ -2,24 +2,28 @@
 //!
 //! Uses Bevy's `AppTypeRegistry` to discover all marked typed commands
 //! for schema discovery. Commands are triggered as `ApiCommandEvent` which carries
-//! the command name and JSON params.
+//! the command name and typed in-process parameters.
 //!
 //! Domain observers can observe both:
 //! - `On<SetPorts>` for internal triggers
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
+use crate::queries::{execute_query_response, ApiQueryRegistry};
 use crate::{
     discovery::{
         discover_commands, discover_hooks, discover_queries, find_api_command,
         ApiCommandLookupError,
     },
-    queries::{ApiQueryRegistry, ApiVisibility},
+    queries::ApiVisibility,
     registry::ApiEntityRegistry,
-    schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
     subscription::TelemetrySubscriptions,
 };
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
+use lunco_api_core::{
+    api_value, api_value_from_serializable, api_value_from_u64, validate_reflection_value,
+    ApiErrorCode, ApiRequest, ApiResponse, ApiSchema, ApiValue, ApiValueDeserializer,
+};
 use lunco_celestial::CelestialBody;
 
 /// Events that transport adapters send to request API operations.
@@ -36,14 +40,14 @@ pub struct ApiResponseEvent {
     pub correlation_id: u64,
 }
 
-/// A deserialized command from the API, carrying the command name and raw JSON params.
+/// A command ready for in-process dispatch, carrying typed parameters.
 ///
 /// This is used internally by the API layer to bridge requests into simulation events.
 #[derive(Event, Debug, Clone, Reflect)]
 pub struct ApiCommandEvent {
     pub command: String,
     #[reflect(ignore)]
-    pub params: serde_json::Value,
+    pub params: ApiValue,
     /// Internal outcome key used by result-reporting handlers.
     pub id: u64,
     /// The transport request waiting for this command's result, if any.
@@ -140,9 +144,13 @@ pub fn api_request_observer(
 /// This mirrors exactly what `api_command_dispatcher` does, deliberately: the
 /// dispatcher stays authoritative (it also serves in-process triggers), and this
 /// is the synchronous gate in front of it.
-pub fn validate_command_params(
+/// Validate typed in-process command parameters at the API reflection edge.
+///
+/// A typed-value deserializer feeds Bevy reflection directly, keeping JSON out
+/// of in-process command validation and dispatch.
+pub fn validate_command_params_value(
     command: &str,
-    params: &serde_json::Value,
+    params: &ApiValue,
     registration: &bevy::reflect::TypeRegistration,
     type_reg: &TypeRegistry,
     entities: &ApiEntityRegistry,
@@ -150,20 +158,19 @@ pub fn validate_command_params(
     use serde::de::DeserializeSeed;
 
     let mut resolved = params.clone();
-    // Unit-struct commands (`Exit`, `Ping`) arrive with no `params` at all.
-    if resolved.is_null() {
-        resolved = serde_json::Value::Object(serde_json::Map::new());
+    if matches!(resolved, ApiValue::Unit) {
+        resolved = ApiValue::Map(Vec::new());
     }
-    resolve_command_ids(&mut resolved, registration.type_id(), type_reg, entities);
+    validate_reflection_value(&resolved)?;
+    resolve_command_ids_value(&mut resolved, registration.type_id(), type_reg, entities)?;
 
-    let de = bevy::reflect::serde::TypedReflectDeserializer::new(registration, type_reg);
-    let reflected = de
-        .deserialize(resolved)
-        .map_err(|e| format!("Command '{command}': invalid params: {e}"))?;
-
+    let deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, type_reg);
+    let reflected = deserializer
+        .deserialize(ApiValueDeserializer::new(resolved))
+        .map_err(|error| format!("Command '{command}': invalid params: {error}"))?;
     let constructible = registration
         .data::<bevy::reflect::ReflectFromReflect>()
-        .is_some_and(|fr| fr.from_reflect(reflected.as_ref()).is_some());
+        .is_some_and(|from_reflect| from_reflect.from_reflect(reflected.as_ref()).is_some());
     if !constructible {
         return Err(format!(
             "Command '{command}': params are not constructible into the command type (a required field is missing or invalid)"
@@ -186,7 +193,7 @@ fn record_rejected_command(
 }
 
 struct NormalizedCommandResult {
-    data: Option<serde_json::Value>,
+    data: Option<ApiValue>,
     error: Option<(ApiErrorCode, String)>,
 }
 
@@ -213,12 +220,9 @@ fn normalize_command_result(
     }
 }
 
-/// Convert the command outcome into the transport-neutral JSON shape used by
-/// in-process scripts: `{ id, ok, status, data?, error? }`.
-pub fn command_result_json(
-    id: u64,
-    outcome: Option<&lunco_core::CommandOutcome>,
-) -> serde_json::Value {
+/// Convert the command-result contract to the typed in-process value used by
+/// scripting bridges.
+pub fn command_result_value(id: u64, outcome: Option<&lunco_core::CommandOutcome>) -> ApiValue {
     let result = normalize_command_result(outcome);
     let status = match outcome {
         Some(lunco_core::CommandOutcome::Succeeded(_)) => "applied",
@@ -226,22 +230,22 @@ pub fn command_result_json(
         Some(lunco_core::CommandOutcome::Failed(_)) => "failed",
         Some(lunco_core::CommandOutcome::Pending) | None => "pending",
     };
-    let mut response = serde_json::json!({
-        "id": id,
-        "ok": result.error.is_none(),
-        "status": status,
-    });
+    let mut entries = vec![
+        ("id".into(), api_value_from_u64(id)),
+        ("ok".into(), ApiValue::Bool(result.error.is_none())),
+        ("status".into(), ApiValue::Str(status.into())),
+    ];
     if let Some(data) = result.data {
-        response["data"] = data;
+        entries.push(("data".into(), data));
     }
     if let Some((_, error)) = result.error {
-        response["error"] = serde_json::Value::String(error);
+        entries.push(("error".into(), ApiValue::Str(error)));
     }
-    response
+    ApiValue::Map(entries)
 }
 
 /// Convert the same normalized result into the transport response envelope.
-/// Keeping this beside [`command_result_json`] prevents HTTP, wasm, and Rhai
+/// Keeping this beside [`command_result_value`] prevents HTTP and scripting
 /// from inventing separate Ack/data handling.
 fn command_response(outcome: Option<&lunco_core::CommandOutcome>) -> ApiResponse {
     command_response_from_normalized(normalize_command_result(outcome))
@@ -250,10 +254,10 @@ fn command_response(outcome: Option<&lunco_core::CommandOutcome>) -> ApiResponse
 fn command_response_from_normalized(result: NormalizedCommandResult) -> ApiResponse {
     match result.error {
         Some((code, message)) => ApiResponse::error(code, message),
-        None => result
-            .data
-            .map(ApiResponse::ok)
-            .unwrap_or_else(ApiResponse::accepted),
+        None => match result.data {
+            Some(data) => ApiResponse::ok(data),
+            None => ApiResponse::accepted(),
+        },
     }
 }
 
@@ -307,6 +311,18 @@ pub fn finish_command_result(
     }
 }
 
+/// Build a successful acknowledgement with a typed string field.
+pub fn ack_with_string_field(
+    op_id: lunco_command_contracts::OpId,
+    field: &str,
+    value: impl Into<String>,
+) -> lunco_command_contracts::Ack {
+    lunco_command_contracts::Ack::with_data(
+        op_id,
+        ApiValue::map([(field, ApiValue::Str(value.into()))]),
+    )
+}
+
 fn emit_command_response(world: &mut World, correlation_id: Option<u64>, id: u64) {
     let Some(correlation_id) = correlation_id else {
         return;
@@ -352,29 +368,42 @@ pub fn api_command_dispatcher(
         }
     };
 
-    // 2. Resolve IDs: recursively find fields that should be Entities and look them up in the registry
+    // 2. Resolve typed entity identities, then deserialize the typed value into
+    // the reflected command. Internal command events do not use JSON.
     let mut resolved_params = event.params.clone();
-    // Coerce absent/null params to an empty object. Unit-struct commands
-    // (e.g. `Exit`, `Ping`) and commands whose fields are all defaulted are
-    // may omit `params`; TypedReflectDeserializer rejects a bare `null`.
-    // An empty map deserializes fine — missing fields fall back to their
-    // reflect/serde defaults.
-    if resolved_params.is_null() {
-        resolved_params = serde_json::Value::Object(serde_json::Map::new());
+    if matches!(resolved_params, ApiValue::Unit) {
+        resolved_params = ApiValue::Map(Vec::new());
     }
-    resolve_command_ids(
+    if let Err(error) = validate_reflection_value(&resolved_params) {
+        let id = event.id;
+        let correlation_id = event.correlation_id;
+        let message = format!("Command '{}': invalid typed params: {error}", event.command);
+        commands.queue(move |world: &mut World| {
+            record_rejected_command(world, id, message, correlation_id);
+        });
+        return;
+    }
+    if let Err(error) = resolve_command_ids_value(
         &mut resolved_params,
         registration.type_id(),
         &type_reg,
         &registry,
-    );
+    ) {
+        let id = event.id;
+        let correlation_id = event.correlation_id;
+        let message = format!("Command '{}': invalid typed params: {error}", event.command);
+        commands.queue(move |world: &mut World| {
+            record_rejected_command(world, id, message, correlation_id);
+        });
+        return;
+    }
 
-    // 3. Deserialize JSON into reflected struct
+    // 3. Deserialize the typed value into the reflected struct.
     let reflect_deserializer =
         bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
 
     use serde::de::DeserializeSeed;
-    match reflect_deserializer.deserialize(resolved_params.clone()) {
+    match reflect_deserializer.deserialize(ApiValueDeserializer::new(resolved_params.clone())) {
         Ok(_reflected) => {
             // 4. Trigger the event dynamically via commands.queue to access World
             let cmd_name = event.command.clone();
@@ -403,7 +432,9 @@ pub fn api_command_dispatcher(
 
                 // Re-deserialize inside the world queue where we have access to everything
                 let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
-                let reflected = match reflect_deserializer.deserialize(resolved_params) {
+                let reflected = match reflect_deserializer
+                    .deserialize(ApiValueDeserializer::new(resolved_params))
+                {
                     Ok(r) => r,
                     Err(e) => {
                         let msg = format!("command '{cmd_name}': invalid params: {e}");
@@ -469,243 +500,333 @@ pub fn api_command_dispatcher(
 
 // ── Entity-id conversion (schema-driven) ──────────────────────────────────
 //
-// Walk the command's reflect `TypeInfo` alongside its JSON and convert every
-// leaf whose declared type is `Entity` — name-independent, so renamed/new entity fields,
-// `Vec<Entity>`, `Option<Entity>`, and nested structs/enums all convert, while
-// a same-named non-entity field (`parent: String`, `target: f64`) is left
-// alone. See `crates/lunco-networking/PH2_ID_CODEC.md`.
+// One reflection walk handles local/global conversion in the typed API ABI.
+// Network wire encoding is owned by lunco-api-codec at the network boundary.
 
-/// Incoming: wire `GlobalEntityId` (u64 or numeric string) → local
-/// `Entity::to_bits()` (generation-preserving), in place, before deserialize.
-/// `type_id` is the command struct's type id (`registration.type_id()`).
-pub fn resolve_command_ids(
-    value: &mut serde_json::Value,
+/// Resolve global entity IDs in typed command parameters before reflection.
+pub fn resolve_command_ids_value(
+    value: &mut ApiValue,
     type_id: std::any::TypeId,
     reg: &bevy::reflect::TypeRegistry,
     entities: &ApiEntityRegistry,
-) {
-    convert_node(value, type_id, reg, IdDir::Resolve, entities, false);
+) -> Result<(), String> {
+    convert_value_node(
+        value,
+        type_id,
+        reg,
+        entities,
+        EntityIdDirection::Resolve,
+        false,
+    )
 }
 
-/// Outgoing/capture: local `Entity::to_bits()` → wire `GlobalEntityId` u64. A
-/// field tagged `#[sync_local]` (the `SyncLocal` reflect attribute) is replaced
-/// with `Entity::PLACEHOLDER` instead, so a peer's local-only references never
-/// leak onto the wire.
-pub fn globalize_command_ids(
-    value: &mut serde_json::Value,
+/// Convert local entity identities to global IDs before a command is sent to peers.
+pub fn globalize_command_ids_value(
+    value: &mut ApiValue,
     type_id: std::any::TypeId,
     reg: &bevy::reflect::TypeRegistry,
     entities: &ApiEntityRegistry,
-) {
-    convert_node(value, type_id, reg, IdDir::Globalize, entities, false);
+) -> Result<(), String> {
+    convert_value_node(
+        value,
+        type_id,
+        reg,
+        entities,
+        EntityIdDirection::Globalize,
+        false,
+    )
 }
 
-/// The global entity id a networked command authorizes against: the u64 value
-/// of the top-level field tagged `#[authz_target]` (`AuthzTarget` reflect
-/// attribute) in the command's schema. Runs on RAW wire params (global gids,
-/// pre-resolve); `None` when the command has no such field (the host then
-/// treats it as target-less). Replaces a hardcoded `params["target"]` lookup —
-/// authorization no longer depends on a field being literally named `target`.
-pub fn authz_target_gid(
-    params: &serde_json::Value,
+/// Read the global ID of the field marked `#[authz_target]`.
+pub fn authz_target_gid_value(
+    params: &ApiValue,
     type_id: std::any::TypeId,
     reg: &bevy::reflect::TypeRegistry,
-) -> Option<u64> {
+) -> Result<Option<u64>, String> {
     use bevy::reflect::TypeInfo;
-    let TypeInfo::Struct(s) = reg.get_type_info(type_id)? else {
-        return None;
+
+    let Some(type_info) = reg.get_type_info(type_id) else {
+        return Ok(None);
     };
-    for i in 0..s.field_len() {
-        let f = s.field_at(i)?;
-        if f.has_attribute::<lunco_core::AuthzTarget>() {
-            return params.get(f.name()).and_then(|v| {
-                v.as_u64()
-                    .or_else(|| v.as_str().and_then(|x| x.parse::<u64>().ok()))
-            });
-        }
-    }
-    None
+    let TypeInfo::Struct(struct_info) = type_info else {
+        return Ok(None);
+    };
+    let Some(field) = (0..struct_info.field_len())
+        .filter_map(|index| struct_info.field_at(index))
+        .find(|field| field.has_attribute::<lunco_core::AuthzTarget>())
+    else {
+        return Ok(None);
+    };
+    let value = params
+        .get(field.name())
+        .ok_or_else(|| format!("authorization target field '{}' is missing", field.name()))?;
+    api_value_u64(value).map(Some).ok_or_else(|| {
+        format!(
+            "authorization target field '{}' must be an unsigned ID",
+            field.name()
+        )
+    })
 }
 
 #[derive(Clone, Copy)]
-enum IdDir {
+enum EntityIdDirection {
     Resolve,
     Globalize,
 }
 
-/// Recursively convert `Entity` leaves in `value`, using `type_id`'s reflect
-/// schema to find them. `sync_local` is set when the parent struct field
-/// carried the `SyncLocal` attribute (only acted on for a direct `Entity` leaf
-/// on the `Globalize` path).
-fn convert_node(
-    value: &mut serde_json::Value,
+fn api_value_u64(value: &ApiValue) -> Option<u64> {
+    match value {
+        ApiValue::Int(value) => u64::try_from(*value).ok(),
+        ApiValue::Str(value) => value.parse().ok(),
+        _ => None,
+    }
+}
+
+fn convert_value_node(
+    value: &mut ApiValue,
     type_id: std::any::TypeId,
     reg: &bevy::reflect::TypeRegistry,
-    dir: IdDir,
     entities: &ApiEntityRegistry,
+    direction: EntityIdDirection,
     sync_local: bool,
-) {
+) -> Result<(), String> {
     use bevy::reflect::{enums::VariantInfo, TypeInfo};
     use std::any::TypeId;
 
-    // Leaf: the declared type IS Entity → convert the scalar.
     if type_id == TypeId::of::<Entity>() {
-        convert_leaf(value, dir, entities, sync_local);
-        return;
-    }
-
-    // Need the field type's schema to recurse. Unregistered (primitive like
-    // f64/String, or simply not in the registry) → cannot contain an Entity
-    // we can locate; leave it untouched.
-    let Some(info) = reg.get_type_info(type_id) else {
-        return;
-    };
-
-    match info {
-        TypeInfo::Struct(s) => {
-            let Some(map) = value.as_object_mut() else {
-                return;
-            };
-            for i in 0..s.field_len() {
-                let Some(f) = s.field_at(i) else { continue };
-                if let Some(child) = map.get_mut(f.name()) {
-                    let wl = f.has_attribute::<lunco_core::SyncLocal>();
-                    convert_node(child, f.type_id(), reg, dir, entities, wl);
-                }
-            }
-        }
-        TypeInfo::TupleStruct(ts) => match value {
-            serde_json::Value::Array(arr) => {
-                for i in 0..ts.field_len() {
-                    if let (Some(f), Some(child)) = (ts.field_at(i), arr.get_mut(i)) {
-                        convert_node(child, f.type_id(), reg, dir, entities, false);
+        match direction {
+            EntityIdDirection::Resolve => {
+                if let Some(gid) = api_value_u64(value) {
+                    if let Some(entity) =
+                        entities.resolve(&lunco_core::GlobalEntityId::from_raw(gid))
+                    {
+                        *value = api_value_from_u64(entity.to_bits());
                     }
                 }
             }
-            // A 1-field tuple struct serializes as the bare inner value.
-            other if ts.field_len() == 1 => {
-                if let Some(f) = ts.field_at(0) {
-                    convert_node(other, f.type_id(), reg, dir, entities, false);
+            EntityIdDirection::Globalize if sync_local => {
+                *value = api_value_from_u64(Entity::PLACEHOLDER.to_bits());
+            }
+            EntityIdDirection::Globalize => {
+                if let Some(bits) = api_value_u64(value) {
+                    if let Some(entity) = Entity::try_from_bits(bits) {
+                        if let Some(gid) = entities.api_id_for(entity) {
+                            *value = api_value_from_u64(gid.get());
+                        }
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let Some(info) = reg.get_type_info(type_id) else {
+        return Ok(());
+    };
+    match info {
+        TypeInfo::Struct(struct_info) => {
+            let ApiValue::Map(entries) = value else {
+                return Ok(());
+            };
+            for index in 0..struct_info.field_len() {
+                let Some(field) = struct_info.field_at(index) else {
+                    continue;
+                };
+                if let Some((_, child)) = entries.iter_mut().find(|(name, _)| name == field.name())
+                {
+                    convert_value_node(
+                        child,
+                        field.type_id(),
+                        reg,
+                        entities,
+                        direction,
+                        field.has_attribute::<lunco_core::SyncLocal>(),
+                    )?;
+                }
+            }
+        }
+        TypeInfo::TupleStruct(tuple_info) => match value {
+            ApiValue::Array(values) => {
+                for index in 0..tuple_info.field_len() {
+                    if let (Some(field), Some(child)) =
+                        (tuple_info.field_at(index), values.get_mut(index))
+                    {
+                        convert_value_node(
+                            child,
+                            field.type_id(),
+                            reg,
+                            entities,
+                            direction,
+                            false,
+                        )?;
+                    }
+                }
+            }
+            child if tuple_info.field_len() == 1 => {
+                if let Some(field) = tuple_info.field_at(0) {
+                    convert_value_node(child, field.type_id(), reg, entities, direction, false)?;
                 }
             }
             _ => {}
         },
-        TypeInfo::List(l) => {
-            if let Some(arr) = value.as_array_mut() {
-                let item = l.item_ty().id();
-                for child in arr.iter_mut() {
-                    convert_node(child, item, reg, dir, entities, false);
-                }
-            }
-        }
-        TypeInfo::Array(a) => {
-            if let Some(arr) = value.as_array_mut() {
-                let item = a.item_ty().id();
-                for child in arr.iter_mut() {
-                    convert_node(child, item, reg, dir, entities, false);
-                }
-            }
-        }
-        TypeInfo::Map(m) => {
-            // bevy reflect serializes maps as a JSON array of [k, v] pairs
-            // (some paths emit an object); convert values only.
-            let vty = m.value_ty().id();
-            if let Some(arr) = value.as_array_mut() {
-                for pair in arr.iter_mut() {
-                    if let Some(child) = pair.as_array_mut().and_then(|p| p.get_mut(1)) {
-                        convert_node(child, vty, reg, dir, entities, false);
+        TypeInfo::Tuple(tuple_info) => {
+            if let ApiValue::Array(values) = value {
+                for index in 0..tuple_info.field_len() {
+                    if let (Some(field), Some(child)) =
+                        (tuple_info.field_at(index), values.get_mut(index))
+                    {
+                        convert_value_node(
+                            child,
+                            field.type_id(),
+                            reg,
+                            entities,
+                            direction,
+                            false,
+                        )?;
                     }
                 }
-            } else if let Some(obj) = value.as_object_mut() {
-                for (_, child) in obj.iter_mut() {
-                    convert_node(child, vty, reg, dir, entities, false);
+            }
+        }
+        TypeInfo::List(list_info) => {
+            if let ApiValue::Array(values) = value {
+                for child in values {
+                    convert_value_node(
+                        child,
+                        list_info.item_ty().id(),
+                        reg,
+                        entities,
+                        direction,
+                        false,
+                    )?;
                 }
             }
         }
-        TypeInfo::Enum(e) => {
-            // unit variant → bare string (no payload); data variant →
-            // single-key object `{"Variant": payload}`.
-            let serde_json::Value::Object(map) = value else {
-                return;
-            };
-            let Some((vname, payload)) = map.iter_mut().next() else {
-                return;
-            };
-            let Some(var) = e.variant(vname) else { return };
-            match var {
-                VariantInfo::Struct(sv) => {
-                    if let Some(pobj) = payload.as_object_mut() {
-                        for i in 0..sv.field_len() {
-                            if let Some(f) = sv.field_at(i) {
-                                if let Some(child) = pobj.get_mut(f.name()) {
-                                    convert_node(child, f.type_id(), reg, dir, entities, false);
+        TypeInfo::Array(array_info) => {
+            if let ApiValue::Array(values) = value {
+                for child in values {
+                    convert_value_node(
+                        child,
+                        array_info.item_ty().id(),
+                        reg,
+                        entities,
+                        direction,
+                        false,
+                    )?;
+                }
+            }
+        }
+        TypeInfo::Map(map_info) => match value {
+            ApiValue::Map(entries) => {
+                for (_, child) in entries {
+                    convert_value_node(
+                        child,
+                        map_info.value_ty().id(),
+                        reg,
+                        entities,
+                        direction,
+                        false,
+                    )?;
+                }
+            }
+            ApiValue::Array(entries) => {
+                for pair in entries {
+                    if let ApiValue::Array(pair) = pair {
+                        if let Some(child) = pair.get_mut(1) {
+                            convert_value_node(
+                                child,
+                                map_info.value_ty().id(),
+                                reg,
+                                entities,
+                                direction,
+                                false,
+                            )?;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        },
+        TypeInfo::Enum(enum_info) => match value {
+            ApiValue::Map(entries) if entries.len() == 1 => {
+                let (variant_name, payload) = &mut entries[0];
+                let Some(variant) = enum_info.variant(variant_name) else {
+                    return Ok(());
+                };
+                match variant {
+                    VariantInfo::Struct(struct_info) => {
+                        if let ApiValue::Map(fields) = payload {
+                            for index in 0..struct_info.field_len() {
+                                if let Some(field) = struct_info.field_at(index) {
+                                    if let Some((_, child)) =
+                                        fields.iter_mut().find(|(name, _)| name == field.name())
+                                    {
+                                        convert_value_node(
+                                            child,
+                                            field.type_id(),
+                                            reg,
+                                            entities,
+                                            direction,
+                                            field.has_attribute::<lunco_core::SyncLocal>(),
+                                        )?;
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                VariantInfo::Tuple(tv) if tv.field_len() == 1 => {
-                    if let Some(f) = tv.field_at(0) {
-                        // Propagate `sync_local` into the single-field payload so
-                        // an `Option<Entity>` (the `Some` variant) tagged
-                        // `#[sync_local]` — e.g. `AcquireControl::source` — still
-                        // nulls its inner local bits on the wire.
-                        convert_node(payload, f.type_id(), reg, dir, entities, sync_local);
+                    VariantInfo::Tuple(tuple_info) if tuple_info.field_len() == 1 => {
+                        if let Some(field) = tuple_info.field_at(0) {
+                            convert_value_node(
+                                payload,
+                                field.type_id(),
+                                reg,
+                                entities,
+                                direction,
+                                sync_local,
+                            )?;
+                        }
                     }
-                }
-                VariantInfo::Tuple(tv) => {
-                    if let Some(arr) = payload.as_array_mut() {
-                        for i in 0..tv.field_len() {
-                            if let (Some(f), Some(child)) = (tv.field_at(i), arr.get_mut(i)) {
-                                convert_node(child, f.type_id(), reg, dir, entities, false);
+                    VariantInfo::Tuple(tuple_info) => {
+                        if let ApiValue::Array(values) = payload {
+                            for index in 0..tuple_info.field_len() {
+                                if let (Some(field), Some(child)) =
+                                    (tuple_info.field_at(index), values.get_mut(index))
+                                {
+                                    convert_value_node(
+                                        child,
+                                        field.type_id(),
+                                        reg,
+                                        entities,
+                                        direction,
+                                        field.has_attribute::<lunco_core::SyncLocal>(),
+                                    )?;
+                                }
                             }
                         }
                     }
-                }
-                VariantInfo::Unit(_) => {}
-            }
-        }
-        _ => {} // Tuple, Set, Opaque — no Entity leaves in commands.
-    }
-}
-
-fn convert_leaf(
-    value: &mut serde_json::Value,
-    dir: IdDir,
-    entities: &ApiEntityRegistry,
-    sync_local: bool,
-) {
-    use lunco_core::GlobalEntityId;
-    match dir {
-        IdDir::Resolve => {
-            // wire gid (u64 or numeric string) → local Entity::to_bits().
-            let gid = value
-                .as_u64()
-                .or_else(|| value.as_str().and_then(|s| s.parse::<u64>().ok()));
-            if let Some(g) = gid {
-                if let Some(entity) = entities.resolve(&GlobalEntityId::from_raw(g)) {
-                    // to_bits() keeps index+generation so the deserialized
-                    // Entity matches a live query (index() alone would not).
-                    *value = serde_json::json!(entity.to_bits());
+                    VariantInfo::Unit(_) => {}
                 }
             }
-        }
-        IdDir::Globalize => {
-            // Local-only field (for example a local control producer): never put
-            // local bits on the wire.
-            if sync_local {
-                *value = serde_json::json!(Entity::PLACEHOLDER.to_bits());
-                return;
-            }
-            if let Some(bits) = value.as_u64() {
-                if let Some(entity) = Entity::try_from_bits(bits) {
-                    if let Some(gid) = entities.api_id_for(entity) {
-                        *value = serde_json::json!(gid.get());
+            ApiValue::Unit | ApiValue::Str(_) => {}
+            child => {
+                if let Some(VariantInfo::Tuple(tuple_info)) = enum_info.variant("Some") {
+                    if tuple_info.field_len() == 1 {
+                        if let Some(field) = tuple_info.field_at(0) {
+                            convert_value_node(
+                                child,
+                                field.type_id(),
+                                reg,
+                                entities,
+                                direction,
+                                sync_local,
+                            )?;
+                        }
                     }
                 }
             }
-        }
+        },
+        _ => {}
     }
+    Ok(())
 }
 
 /// Execute a single API request against the ECS world.
@@ -771,9 +892,10 @@ fn execute_request(
             // when the queue flushes.
             if !is_public_command {
                 if let Some(provider) = query_registry.get(command) {
-                    let params = params.clone();
+                    let typed_params = params.clone();
                     commands.queue(move |world: &mut World| {
-                        let response = provider.execute(world, &params);
+                        let response =
+                            execute_query_response(provider.as_ref(), world, &typed_params);
                         world.commands().trigger(ApiResponseEvent {
                             response,
                             correlation_id,
@@ -790,6 +912,8 @@ fn execute_request(
                 ));
             }
 
+            let typed_params = params.clone();
+
             // Validate the params synchronously, here, while the registry is in
             // hand. A typo'd param must be rejected at the request boundary,
             // rather than being dropped later by the reflected dispatcher. This
@@ -800,9 +924,13 @@ fn execute_request(
             // be triggered in-process too), so this is a gate, not the only
             // check.
             if let Some(registration) = registration {
-                if let Err(msg) =
-                    validate_command_params(command, params, registration, type_registry, registry)
-                {
+                if let Err(msg) = validate_command_params_value(
+                    command,
+                    &typed_params,
+                    registration,
+                    type_registry,
+                    registry,
+                ) {
                     return Some(ApiResponse::error(ApiErrorCode::DeserializationError, msg));
                 }
             }
@@ -818,7 +946,7 @@ fn execute_request(
                 commands.insert_resource(PendingApiRequest { correlation_id });
                 commands.trigger(ApiCommandEvent {
                     command: command.clone(),
-                    params: params.clone(),
+                    params: typed_params.clone(),
                     id: id_counter.next_id(),
                     correlation_id: None,
                 });
@@ -832,7 +960,7 @@ fn execute_request(
             let command_id = id_counter.next_id();
             commands.trigger(ApiCommandEvent {
                 command: command.clone(),
-                params: params.clone(),
+                params: typed_params,
                 id: command_id,
                 correlation_id: Some(correlation_id),
             });
@@ -840,7 +968,7 @@ fn execute_request(
             None
         }
         ApiRequest::ListEntities => {
-            let entities: Vec<serde_json::Value> = registry
+            let entities: Vec<ApiValue> = registry
                 .entities()
                 .into_iter()
                 .map(|(api_id, entity)| {
@@ -848,47 +976,59 @@ fn execute_request(
                         .get(entity)
                         .unwrap_or((None, None, None, false, None, None));
                     let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
-                    serde_json::json!({
-                        "api_id": api_id,
-                        "name": lunco_core::entity_display_name(name, callsign, catalog_id),
-                        "type": kind,
-                        "control_bound": accepts_commands,
-                        "celestial_body": body.is_some(),
-                    })
+                    ApiValue::map([
+                        ("api_id", api_value_from_u64(api_id.get())),
+                        (
+                            "name",
+                            ApiValue::str(lunco_core::entity_display_name(
+                                name, callsign, catalog_id,
+                            )),
+                        ),
+                        ("type", ApiValue::str(kind)),
+                        ("control_bound", ApiValue::Bool(accepts_commands)),
+                        ("celestial_body", ApiValue::Bool(body.is_some())),
+                    ])
                 })
                 .collect();
-            Some(ApiResponse::ok(
-                serde_json::json!({ "entities": entities, "count": entities.len() }),
-            ))
+            let count = api_value_from_u64(entities.len() as u64);
+            Some(ApiResponse::ok(ApiValue::map([
+                ("entities", ApiValue::Array(entities)),
+                ("count", count),
+            ])))
         }
         ApiRequest::DiscoverSchema => {
             let cmds = discover_commands(type_registry, Some(visibility));
             let queries = discover_queries(Some(query_registry));
             let hooks = discover_hooks();
-            Some(ApiResponse::ok(
-                serde_json::to_value(&ApiSchema {
-                    commands: cmds,
-                    queries,
-                    hooks,
-                })
-                .unwrap_or_default(),
-            ))
+            match api_value_from_serializable(&ApiSchema {
+                commands: cmds,
+                queries,
+                hooks,
+            }) {
+                Ok(schema) => Some(ApiResponse::ok(schema)),
+                Err(error) => Some(ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    format!("API schema could not be represented as typed values: {error}"),
+                )),
+            }
         }
         ApiRequest::SubscribeTelemetry { filter } => {
             // Register the subscription so the telemetry observers actually
             // stream matching events (incl. script `emit()`s) back to this
             // client. Previously a no-op that lied "Subscription created".
             let id = subscriptions.subscribe(filter.clone());
-            Some(ApiResponse::ok(
-                serde_json::json!({ "subscription_id": id }),
-            ))
+            Some(ApiResponse::ok(api_value!({
+                "subscription_id": api_value_from_u64(id)
+            })))
         }
         ApiRequest::UnsubscribeTelemetry { id } => {
             // `unsubscribe` has existed since the beginning with NOTHING able to call
             // it — subscriptions leaked for the life of the process, and a client that
             // reconnected piled up a new one every time.
             subscriptions.unsubscribe(*id);
-            Some(ApiResponse::ok(serde_json::json!({ "unsubscribed": id })))
+            Some(ApiResponse::ok(api_value!({
+                "unsubscribed": api_value_from_u64(*id)
+            })))
         }
     }
 }
@@ -1051,7 +1191,7 @@ mod tests {
         } else {
             Ok(Ack::with_data(
                 OpId::new(),
-                serde_json::json!({ "answer": 42 }),
+                lunco_api_core::api_value!({ "answer": 42 }),
             ))
         }
     }
@@ -1076,7 +1216,7 @@ mod tests {
         app.world_mut().trigger(ApiRequestEvent {
             request: ApiRequest::ExecuteCommand {
                 command: "TestEcho".into(),
-                params: serde_json::json!({ "fail": false }),
+                params: api_value!({ "fail": false }),
             },
             correlation_id: 42,
         });
@@ -1087,7 +1227,7 @@ mod tests {
             responses.as_slice(),
             [ApiResponse::Ok {
                 data: Some(data)
-            }] if data["answer"] == 42
+            }] if data.get("answer").and_then(ApiValue::as_i64) == Some(42)
         ));
     }
 
@@ -1110,7 +1250,7 @@ mod tests {
             Some(42),
             Ok(Ack::with_data(
                 OpId::new(),
-                serde_json::json!({ "answer": 42 }),
+                lunco_api_core::api_value!({ "answer": 42 }),
             )),
             ApiErrorCode::InternalError,
         );
@@ -1119,14 +1259,14 @@ mod tests {
         assert!(matches!(
             app.world().resource::<CommandResults>().get(7),
             Some(CommandOutcome::Succeeded(ack))
-                if ack.data.as_ref().is_some_and(|data| data["answer"] == 42)
+                if ack.data.as_ref().and_then(|data| data.get("answer")).and_then(ApiValue::as_i64) == Some(42)
         ));
         let responses = responses.lock().unwrap();
         assert!(matches!(
             responses.as_slice(),
             [ApiResponse::Ok {
                 data: Some(data)
-            }] if data["answer"] == 42
+            }] if data.get("answer").and_then(ApiValue::as_i64) == Some(42)
         ));
     }
 
@@ -1181,9 +1321,9 @@ mod tests {
         let mut reg = bevy::reflect::TypeRegistry::new();
         reg.register::<NoConstructor>();
         let registration = reg.get_with_short_type_path("NoConstructor").unwrap();
-        let err = validate_command_params(
+        let err = validate_command_params_value(
             "NoConstructor",
-            &serde_json::json!({ "fail": true }),
+            &api_value!({ "fail": true }),
             registration,
             &reg,
             &ApiEntityRegistry::default(),
@@ -1196,9 +1336,9 @@ mod tests {
     fn valid_params_pass_validation() {
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        assert!(validate_command_params(
+        assert!(validate_command_params_value(
             "TestEcho",
-            &serde_json::json!({ "fail": true }),
+            &api_value!({ "fail": true }),
             registration,
             &reg,
             &ApiEntityRegistry::default(),
@@ -1212,9 +1352,9 @@ mod tests {
         // All fields default, so this is legitimately valid.
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        assert!(validate_command_params(
+        assert!(validate_command_params_value(
             "TestEcho",
-            &serde_json::Value::Null,
+            &ApiValue::Unit,
             registration,
             &reg,
             &ApiEntityRegistry::default(),
@@ -1226,9 +1366,9 @@ mod tests {
     fn wrong_field_type_fails_validation() {
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        let err = validate_command_params(
+        let err = validate_command_params_value(
             "TestEcho",
-            &serde_json::json!({ "fail": "not-a-bool" }),
+            &api_value!({ "fail": "not-a-bool" }),
             registration,
             &reg,
             &ApiEntityRegistry::default(),
@@ -1242,9 +1382,9 @@ mod tests {
         // The headline case: a typo'd param name. This used to return 200 OK.
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        assert!(validate_command_params(
+        assert!(validate_command_params_value(
             "TestEcho",
-            &serde_json::json!({ "nope": true }),
+            &api_value!({ "nope": true }),
             registration,
             &reg,
             &ApiEntityRegistry::default(),
@@ -1255,12 +1395,12 @@ mod tests {
 
 #[cfg(test)]
 mod id_codec_tests {
-    use super::{authz_target_gid, globalize_command_ids, resolve_command_ids};
+    use super::{authz_target_gid_value, globalize_command_ids_value, resolve_command_ids_value};
     use crate::registry::ApiEntityRegistry;
     use bevy::prelude::*;
     use bevy::reflect::TypeRegistry;
+    use lunco_api_core::{api_value_from_u64, ApiValue};
     use lunco_core::GlobalEntityId;
-    use serde_json::json;
     use std::any::TypeId;
 
     // Test command shapes. `#[reflect(@..)]` is exactly what the `#[Command]`
@@ -1270,17 +1410,6 @@ mod id_codec_tests {
     struct TDrive {
         target: Entity,
         forward: f64,
-    }
-    #[derive(Reflect)]
-    struct TVessel {
-        // A differently named entity field is converted from its declared type.
-        vessel: Entity,
-    }
-    #[derive(Reflect)]
-    struct TNonEntity {
-        // Entity-shaped names with non-entity types must remain untouched.
-        parent: String,
-        target: f64,
     }
     #[derive(Reflect)]
     struct TInner {
@@ -1299,14 +1428,6 @@ mod id_codec_tests {
         #[reflect(@lunco_core::AuthzTarget)]
         target: Entity,
     }
-    #[derive(Reflect)]
-    struct TControlOpt {
-        #[reflect(@lunco_core::SyncLocal)]
-        source: Option<Entity>,
-        #[reflect(@lunco_core::AuthzTarget)]
-        target: Entity,
-    }
-
     fn setup() -> (TypeRegistry, ApiEntityRegistry, Entity, GlobalEntityId) {
         // A real Entity (valid index+generation bits) we control the mapping of.
         let mut world = World::new();
@@ -1317,12 +1438,9 @@ mod id_codec_tests {
 
         let mut reg = TypeRegistry::new();
         reg.register::<TDrive>();
-        reg.register::<TVessel>();
-        reg.register::<TNonEntity>();
         reg.register::<TColl>();
         reg.register::<TInner>();
         reg.register::<TControl>();
-        reg.register::<TControlOpt>();
         reg.register::<Entity>();
         reg.register::<Vec<Entity>>();
         reg.register::<Option<Entity>>();
@@ -1330,92 +1448,75 @@ mod id_codec_tests {
     }
 
     #[test]
-    fn resolve_converts_entity_field_by_type_not_name() {
+    fn typed_resolver_descends_into_vec_option_and_nested_struct() {
         let (reg, ent, e, gid) = setup();
-        let mut v = json!({ "target": gid.get(), "forward": 1.5 });
-        resolve_command_ids(&mut v, TypeId::of::<TDrive>(), &reg, &ent);
-        assert_eq!(v["target"], json!(e.to_bits())); // gid → local bits
-        assert_eq!(v["forward"], json!(1.5)); // non-entity untouched
-    }
+        let gid = api_value_from_u64(gid.get());
+        let mut value = ApiValue::map([
+            ("many", ApiValue::Array(vec![gid.clone(), gid.clone()])),
+            ("maybe", ApiValue::map([("Some", gid.clone())])),
+            ("inner", ApiValue::map([("body", gid)])),
+        ]);
 
-    #[test]
-    fn resolve_handles_entity_typed_vessel_field() {
-        let (reg, ent, e, gid) = setup();
-        let mut v = json!({ "vessel": gid.get() });
-        resolve_command_ids(&mut v, TypeId::of::<TVessel>(), &reg, &ent);
-        assert_eq!(v["vessel"], json!(e.to_bits()));
-    }
+        resolve_command_ids_value(&mut value, TypeId::of::<TColl>(), &reg, &ent)
+            .expect("typed entity identities resolve");
 
-    #[test]
-    fn resolve_skips_same_named_non_entity_fields() {
-        let (reg, ent, _e, _gid) = setup();
-        let mut v = json!({ "parent": "123", "target": 99 });
-        let before = v.clone();
-        resolve_command_ids(&mut v, TypeId::of::<TNonEntity>(), &reg, &ent);
-        assert_eq!(v, before); // String/f64 left alone despite the names
-    }
-
-    #[test]
-    fn resolve_descends_into_vec_option_and_nested_struct() {
-        let (reg, ent, e, gid) = setup();
-        let mut v = json!({
-            "many": [gid.get(), gid.get()],
-            "maybe": { "Some": gid.get() },
-            "inner": { "body": gid.get() }
-        });
-        resolve_command_ids(&mut v, TypeId::of::<TColl>(), &reg, &ent);
-        assert_eq!(v["many"], json!([e.to_bits(), e.to_bits()]));
-        assert_eq!(v["maybe"], json!({ "Some": e.to_bits() }));
-        assert_eq!(v["inner"]["body"], json!(e.to_bits()));
-    }
-
-    #[test]
-    fn resolve_leaves_unmapped_gid_untouched() {
-        let (reg, ent, _e, _gid) = setup();
-        let mut v = json!({ "target": 999_999, "forward": 0.0 });
-        resolve_command_ids(&mut v, TypeId::of::<TDrive>(), &reg, &ent);
-        assert_eq!(v["target"], json!(999_999u64)); // no mapping → unchanged
-    }
-
-    #[test]
-    fn globalize_inverts_resolve_and_strips_wire_local() {
-        let (reg, ent, e, gid) = setup();
-        let mut v = json!({ "source": e.to_bits(), "target": e.to_bits() });
-        globalize_command_ids(&mut v, TypeId::of::<TControl>(), &reg, &ent);
-        assert_eq!(v["target"], json!(gid.get())); // local bits → gid
-                                                   // sync_local field never carries real local bits onto the wire.
-        assert_eq!(v["source"], json!(Entity::PLACEHOLDER.to_bits()));
-    }
-
-    #[test]
-    fn globalize_strips_wire_local_inside_option() {
-        // `AcquireControl::source` is `Option<Entity>` + `#[sync_local]`. The
-        // strip must reach the inner `Entity` of the `Some` payload, not just a
-        // bare-`Entity` field — otherwise a possessing client leaks its local
-        // camera bits onto the wire.
-        let (reg, ent, e, _gid) = setup();
-        let mut v = json!({ "source": { "Some": e.to_bits() }, "target": e.to_bits() });
-        globalize_command_ids(&mut v, TypeId::of::<TControlOpt>(), &reg, &ent);
+        let local = api_value_from_u64(e.to_bits());
         assert_eq!(
-            v["source"],
-            json!({ "Some": Entity::PLACEHOLDER.to_bits() })
+            value.get("many"),
+            Some(&ApiValue::Array(vec![local.clone(), local.clone()]))
+        );
+        assert_eq!(
+            value.get("maybe"),
+            Some(&ApiValue::map([("Some", local.clone())]))
+        );
+        assert_eq!(value.get("inner"), Some(&ApiValue::map([("body", local)])));
+    }
+
+    #[test]
+    fn globalize_and_resolve_use_the_same_typed_contract() {
+        let (reg, ent, e, gid) = setup();
+        let mut value = ApiValue::map([
+            ("source", api_value_from_u64(e.to_bits())),
+            ("target", api_value_from_u64(e.to_bits())),
+        ]);
+        globalize_command_ids_value(&mut value, TypeId::of::<TControl>(), &reg, &ent)
+            .expect("entity ids globalize");
+        assert_eq!(value.get("target"), Some(&api_value_from_u64(gid.get())));
+        assert_eq!(
+            value.get("source"),
+            Some(&api_value_from_u64(Entity::PLACEHOLDER.to_bits()))
         );
     }
 
     #[test]
-    fn authz_target_reads_tagged_field_by_type() {
+    fn authz_target_is_reflected_from_typed_parameters() {
         let (reg, _ent, _e, gid) = setup();
-        // Raw wire params carry the GLOBAL gid in the #[authz_target] field.
-        let tagged = json!({ "source": 5, "target": gid.get() });
+        let params = ApiValue::map([("target", api_value_from_u64(gid.get()))]);
         assert_eq!(
-            authz_target_gid(&tagged, TypeId::of::<TControl>(), &reg),
-            Some(gid.get())
+            authz_target_gid_value(&params, TypeId::of::<TControl>(), &reg),
+            Ok(Some(gid.get()))
         );
-        // A command with no #[authz_target] field → None (target-less).
-        let untagged = json!({ "target": 5, "forward": 1.0 });
         assert_eq!(
-            authz_target_gid(&untagged, TypeId::of::<TDrive>(), &reg),
-            None
+            authz_target_gid_value(&params, TypeId::of::<TDrive>(), &reg),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn malformed_authorization_target_is_reported() {
+        let (reg, _entities, _entity, _gid) = setup();
+        let missing = ApiValue::Map(Vec::new());
+        assert!(
+            authz_target_gid_value(&missing, TypeId::of::<TControl>(), &reg)
+                .expect_err("required target must not be treated as targetless")
+                .contains("target field 'target' is missing")
+        );
+
+        let invalid = ApiValue::map([("target", ApiValue::str("not-an-id"))]);
+        assert!(
+            authz_target_gid_value(&invalid, TypeId::of::<TControl>(), &reg)
+                .expect_err("invalid target must not be treated as targetless")
+                .contains("target field 'target' must be an unsigned ID")
         );
     }
 }

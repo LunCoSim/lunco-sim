@@ -1,13 +1,13 @@
-//! Transport-agnostic API request/response types.
+//! Typed API request/response contracts shared by in-process callers.
 //!
-//! This module defines the core API contract that all transports (HTTP, ROS2, IPC, DDS, etc.)
-//! must map to. The API layer knows nothing about HTTP — it only understands `ApiRequest`
-//! and produces `ApiResponse`.
+//! These typed contracts are shared by in-process callers. Each external
+//! transport owns its wire envelope and converts only at that boundary.
 //!
 //! Commands are discovered via reflection. The API scans `AppTypeRegistry` for
 //! reflected events carrying the `ApiCommandMarker` emitted by `#[Command]`.
 //! This keeps arbitrary internal reflected events off the public API surface.
 
+use crate::{api_value, value::ApiValue};
 use serde::{Deserialize, Serialize};
 
 /// Telemetry subscription filter.
@@ -30,17 +30,17 @@ pub struct TelemetryFilter {
     pub rate_hz: Option<f64>,
 }
 
-/// Transport-agnostic API request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Typed API request. Wire envelopes are decoded by their transport adapter.
+#[derive(Debug, Clone)]
 pub enum ApiRequest {
     /// Execute a typed command by name.
     /// The `command` field matches the short type name (e.g. "SetPorts").
-    /// The `params` field is a JSON object with field values for the command struct.
+    /// Typed parameters for the reflected command or query provider.
     /// Entity fields (like `target`) take a numeric `api_id` (as returned by
     /// `ListEntities`) and are resolved to the live entity automatically.
     ExecuteCommand {
         command: String,
-        params: serde_json::Value,
+        params: ApiValue,
     },
     // There is no generic entity-query variant. Reading an entity's pose requires
     // a coordinate-frame contract owned by the scene-verb crate, not by the
@@ -74,11 +74,11 @@ pub enum ApiErrorCode {
     InternalError = 500,
 }
 
-/// Transport-agnostic API response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Typed API response shared by in-process callers.
+#[derive(Debug, Clone)]
 pub enum ApiResponse {
     Ok {
-        data: Option<serde_json::Value>,
+        data: Option<ApiValue>,
     },
     Error {
         code: u16,
@@ -86,21 +86,20 @@ pub enum ApiResponse {
     },
     TelemetryEvent(TelemetryResponse),
     /// Raw screenshot PNG bytes — returned directly by the HTTP transport.
-    #[serde(skip)]
     Screenshot {
         png_bytes: Vec<u8>,
     },
 }
 
 impl ApiResponse {
-    pub fn ok(data: serde_json::Value) -> Self {
+    pub fn ok(data: ApiValue) -> Self {
         Self::Ok { data: Some(data) }
     }
 
     /// A typed command was validated and dispatched. Deferred commands return
     /// their actual result through the same request/response channel.
     pub fn accepted() -> Self {
-        Self::ok(serde_json::json!({ "accepted": true }))
+        Self::ok(api_value!({ "accepted": true }))
     }
     pub fn error(code: ApiErrorCode, message: impl Into<String>) -> Self {
         Self::Error {
@@ -111,10 +110,10 @@ impl ApiResponse {
 }
 
 /// A telemetry event pushed to a subscriber.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TelemetryResponse {
     pub name: String,
-    pub value: serde_json::Value,
+    pub value: ApiValue,
     pub unit: String,
     /// Absolute TDB epoch (Julian Date) — for wall-clock labelling and ephemeris
     /// correlation. **Not a Δt timebase**: at JD magnitudes an `f64` has ~86 µs of
@@ -124,12 +123,10 @@ pub struct TelemetryResponse {
     /// Seconds on the sample's own time domain — starts near zero, keeps full `f64`
     /// precision. **This is the field to plot against and to difference.** `None` for
     /// discrete `TelemetryEvent`s, which are not sampled on a clock.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sim_secs: Option<f64>,
     /// The `api_id` of the entity that owns the channel. Parameter names are **not**
     /// unique — two rovers both report `"motor_current"` — so a subscriber needs this
     /// to tell them apart. `None` when the source entity has no global id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<u64>,
 }
 
@@ -142,7 +139,7 @@ impl TelemetryResponse {
     ) -> Self {
         Self {
             name: param.name.clone(),
-            value: telemetry_value_to_json(&param.value),
+            value: telemetry_value_to_api_value(&param.value),
             unit: param.unit.clone(),
             timestamp: param.timestamp,
             sim_secs: Some(param.sim_secs),
@@ -152,7 +149,7 @@ impl TelemetryResponse {
     pub fn from_event(event: &lunco_telemetry_core::TelemetryEvent) -> Self {
         Self {
             name: event.name.clone(),
-            value: telemetry_value_to_json(&event.data),
+            value: telemetry_value_to_api_value(&event.data),
             unit: String::new(),
             timestamp: event.timestamp,
             // A discrete event isn't sampled on a clock and has no domain time.
@@ -163,18 +160,18 @@ impl TelemetryResponse {
     }
 }
 
-fn telemetry_value_to_json(value: &lunco_telemetry_core::TelemetryValue) -> serde_json::Value {
+fn telemetry_value_to_api_value(value: &lunco_telemetry_core::TelemetryValue) -> ApiValue {
     match value {
-        lunco_telemetry_core::TelemetryValue::F64(v) => serde_json::json!(*v),
-        lunco_telemetry_core::TelemetryValue::I64(v) => serde_json::json!(*v),
-        lunco_telemetry_core::TelemetryValue::Bool(v) => serde_json::json!(*v),
-        lunco_telemetry_core::TelemetryValue::String(v) => serde_json::json!(v),
+        lunco_telemetry_core::TelemetryValue::F64(v) => ApiValue::Float(*v),
+        lunco_telemetry_core::TelemetryValue::I64(v) => ApiValue::Int(*v),
+        lunco_telemetry_core::TelemetryValue::Bool(v) => ApiValue::Bool(*v),
+        lunco_telemetry_core::TelemetryValue::String(v) => ApiValue::Str(v.clone()),
         lunco_telemetry_core::TelemetryValue::Array(v) => {
-            serde_json::Value::Array(v.iter().map(telemetry_value_to_json).collect())
+            ApiValue::Array(v.iter().map(telemetry_value_to_api_value).collect())
         }
-        lunco_telemetry_core::TelemetryValue::Map(v) => serde_json::Value::Object(
+        lunco_telemetry_core::TelemetryValue::Map(v) => ApiValue::Map(
             v.iter()
-                .map(|(key, value)| (key.clone(), telemetry_value_to_json(value)))
+                .map(|(key, value)| (key.clone(), telemetry_value_to_api_value(value)))
                 .collect(),
         ),
     }

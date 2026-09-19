@@ -1,12 +1,14 @@
 //! Conversion between the pure API wire envelope and the ECS API runtime.
 
-use lunco_api::schema::{ApiRequest, ApiResponse};
+use lunco_api_codec::{value_from_json, value_to_json};
 use lunco_api_contracts::{ApiRequestEnvelope, ApiResponseEnvelope};
+use lunco_api_core::{api_value, ApiErrorCode, ApiRequest, ApiResponse};
 
 /// Decode a transport request into the API runtime's semantic request.
 pub(crate) fn decode_request(envelope: ApiRequestEnvelope) -> Result<ApiRequest, String> {
     match envelope {
         ApiRequestEnvelope::ExecuteCommand { command, params } => {
+            let params = value_from_json(&params)?;
             Ok(ApiRequest::ExecuteCommand { command, params })
         }
         ApiRequestEnvelope::DiscoverSchema => Ok(ApiRequest::DiscoverSchema),
@@ -27,33 +29,49 @@ pub(crate) fn decode_request(envelope: ApiRequestEnvelope) -> Result<ApiRequest,
 /// Convert an internal API response to the response envelope shared by all
 /// outward transports.
 pub(crate) fn encode_response(response: ApiResponse) -> ApiResponseEnvelope {
-    match response {
-        ApiResponse::Ok { data } => ApiResponseEnvelope {
-            data,
-            error: None,
-            error_code: None,
-        },
-        ApiResponse::Error { code, message } => ApiResponseEnvelope {
+    let result = match response {
+        ApiResponse::Ok { data } => {
+            data.as_ref()
+                .map(value_to_json)
+                .transpose()
+                .map(|data| ApiResponseEnvelope {
+                    data,
+                    error: None,
+                    error_code: None,
+                })
+        }
+        ApiResponse::Error { code, message } => Ok(ApiResponseEnvelope {
             data: None,
             error: Some(message),
             error_code: Some(code),
-        },
-        ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope {
-            data: Some(serde_json::json!(event)),
+        }),
+        ApiResponse::TelemetryEvent(event) => value_to_json(&api_value!({
+            "name": event.name,
+            "value": event.value,
+            "unit": event.unit,
+            "timestamp": event.timestamp,
+            "sim_secs": event.sim_secs,
+            "source": event.source,
+        }))
+        .map(|data| ApiResponseEnvelope {
+            data: Some(data),
             error: None,
             error_code: None,
-        },
-        ApiResponse::Screenshot { .. } => ApiResponseEnvelope {
-            data: None,
-            error: Some("unexpected screenshot response".into()),
-            error_code: Some(lunco_api::schema::ApiErrorCode::InternalError as u16),
-        },
-    }
+        }),
+        ApiResponse::Screenshot { .. } => Err("unexpected screenshot response".to_string()),
+    };
+
+    result.unwrap_or_else(|message| ApiResponseEnvelope {
+        data: None,
+        error: Some(format!("API response cannot be encoded: {message}")),
+        error_code: Some(ApiErrorCode::InternalError as u16),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_api_core::ApiValue;
 
     #[test]
     fn command_envelope_decodes_without_transport_details() {
@@ -66,6 +84,9 @@ mod tests {
             panic!("expected an execute-command request");
         };
         assert_eq!(command, "RunRhai");
-        assert_eq!(params["code"], "print(1)");
+        assert_eq!(
+            params.get("code").and_then(ApiValue::as_str),
+            Some("print(1)")
+        );
     }
 }

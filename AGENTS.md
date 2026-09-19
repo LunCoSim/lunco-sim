@@ -90,6 +90,16 @@ package checks after changing skill metadata or packaging.
   tutorial flow belongs in Rhai. Add Rust behavior only when it is an
   authoritative engine mechanism that cannot be expressed by composing the
   existing Rhai-facing API.
+- Internal application data must cross crate, ECS, scripting, hook, and domain
+  boundaries through typed Rust contracts, reflection, or the shared
+  `HookValue`/equivalent value ABI. Do not use `serde_json::Value` to pass data
+  inside the application. JSON is permitted only at an explicit external wire,
+  persistence, or reflection-adapter boundary owned by the transport/API layer;
+  the boundary must convert once and must not leak JSON into internal bridges.
+  Do not expose generic Rhai `to_json`/`from_json` helpers for internal values;
+  authored commands, queries, tools, hooks, and reports must stay typed. New
+  APIs should make the typed path unavoidable. Any exception must name the
+  external boundary and its owning adapter in the design review.
 - Treat hook candidacy as a required design review. Before adding or retaining
   Rust code for a changeable lifecycle decision, routing/selection rule,
   presentation choice, permission, scenario rule, or Twin-specific behavior,

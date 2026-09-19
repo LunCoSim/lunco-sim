@@ -15,6 +15,7 @@
 
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::JournalResource;
+use lunco_scripting::ScenarioParameters;
 use lunco_twin_journal::{AuthorTag, DomainKind, OpPayload};
 use serde::{Deserialize, Serialize};
 
@@ -31,11 +32,14 @@ impl OpPayload for ToolLibraryOp {
     }
 }
 
-/// A journaled mission-timeline registration (`RegisterTimeline`). Full snapshot
-/// (name + timeline JSON); replay stores it in the `TimelineStore`.
+/// A journaled mission-timeline registration (`RegisterTimeline`). Full typed
+/// snapshot; replay stores it in the `TimelineStore`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TimelineOp {
-    Register { name: String, timeline: String },
+    Register {
+        name: String,
+        timeline: ScenarioParameters,
+    },
 }
 
 impl OpPayload for TimelineOp {
@@ -74,10 +78,10 @@ pub fn record_tool_library(journal: &JournalResource, name: &str, source: &str) 
 
 /// Record a `RegisterTimeline` into the journal under the name's derived doc id.
 /// Self-inverse, same rationale as [`record_tool_library`].
-pub fn record_timeline(journal: &JournalResource, name: &str, timeline: &str) {
+pub fn record_timeline(journal: &JournalResource, name: &str, timeline: &ScenarioParameters) {
     let op = TimelineOp::Register {
         name: name.to_string(),
-        timeline: timeline.to_string(),
+        timeline: timeline.clone(),
     };
     journal.with_write(|j| {
         if let Err(e) = j.record_op(AuthorTag::local_user(), doc_id_for(name), &op, &op, None) {
@@ -100,7 +104,7 @@ pub fn replay_tool_library(op_json: &serde_json::Value) -> Option<(String, Strin
 
 /// Decode a replayed timeline op → `(name, timeline)`. `None` (logged) if the
 /// payload isn't a `TimelineOp`. Replay entry point — does **not** record.
-pub fn replay_timeline(op_json: &serde_json::Value) -> Option<(String, String)> {
+pub fn replay_timeline(op_json: &serde_json::Value) -> Option<(String, ScenarioParameters)> {
     match serde_json::from_value::<TimelineOp>(op_json.clone()) {
         Ok(TimelineOp::Register { name, timeline }) => Some((name, timeline)),
         Err(e) => {
@@ -129,15 +133,17 @@ mod tests {
 
     #[test]
     fn timeline_round_trips_and_declares_domain() {
+        let timeline =
+            serde_json::from_str(r#"{"steps":[{"wait":1.0}]}"#).expect("typed timeline fixture");
         let op = TimelineOp::Register {
             name: "descent".into(),
-            timeline: "[]".into(),
+            timeline,
         };
         assert_eq!(op.domain(), DomainKind::Timeline);
         let json = serde_json::to_value(&op).unwrap();
         let (name, timeline) = replay_timeline(&json).expect("decodes");
         assert_eq!(name, "descent");
-        assert_eq!(timeline, "[]");
+        assert!(timeline.as_map().contains_key("steps"));
     }
 
     #[test]

@@ -149,6 +149,7 @@ fn on_tick(me, ctx) {
         let timeline = compile_timeline([#{ wait: 1.0 }]);
         failures.push(t_true(timeline != () && timeline.len() == 1,
             "the authored timeline policy did not lower one explicit operation"));
+
         let albedo = assembly_builder::lunar_albedo_material_plan(
             "runtime", "/Looks/Terrain/Surface",
             "twin://terrain/materials/textures/albedo.png",

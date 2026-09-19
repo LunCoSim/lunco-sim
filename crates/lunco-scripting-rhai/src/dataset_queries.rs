@@ -6,7 +6,8 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::{ApiErrorCode, ApiResponse};
+use lunco_api::{ApiQueryError, ApiQueryResult};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 
 /// `ListDatasets` — list declared engine and Twin datasets without exposing
 /// machine-local paths. Requests use each returned `id` with `RequestDataset`
@@ -22,22 +23,22 @@ impl ApiQueryProvider for ListDatasetsProvider {
         "ListDatasets"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let filter = match params.get("scope") {
-            None | Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::String(scope)) => Some(scope.as_str()),
+            None | Some(ApiValue::Unit) => None,
+            Some(ApiValue::Str(scope)) => Some(scope.as_str()),
             Some(_) => {
-                return ApiResponse::error(
+                return Err(ApiQueryError::new(
                     ApiErrorCode::DeserializationError,
                     "ListDatasets: `scope` must be a string",
-                );
+                ));
             }
         };
         let Some(registry) = world.get_resource::<lunco_assets_datasets::DatasetRegistry>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "ListDatasets: dataset registry is not installed",
-            );
+            ));
         };
         let datasets = registry
             .entries()
@@ -46,47 +47,48 @@ impl ApiQueryProvider for ListDatasetsProvider {
             .map(|entry| {
                 let state = match &entry.state {
                     lunco_assets_datasets::DatasetState::Missing => {
-                        serde_json::json!({ "kind": "missing" })
+                        api_value!({ "kind": "missing" })
                     }
                     lunco_assets_datasets::DatasetState::Downloading {
                         bytes_done,
                         bytes_total,
-                    } => serde_json::json!({
+                    } => api_value!({
                         "kind": "downloading",
-                        "bytes_done": bytes_done,
-                        "bytes_total": bytes_total,
+                        "bytes_done": *bytes_done,
+                        "bytes_total": *bytes_total,
                     }),
                     lunco_assets_datasets::DatasetState::Processing { kind } => {
-                        serde_json::json!({ "kind": "processing", "process": kind })
+                        api_value!({ "kind": "processing", "process": kind.clone() })
                     }
                     lunco_assets_datasets::DatasetState::Cancelling => {
-                        serde_json::json!({ "kind": "cancelling" })
+                        api_value!({ "kind": "cancelling" })
                     }
                     lunco_assets_datasets::DatasetState::Installed => {
-                        serde_json::json!({ "kind": "installed" })
+                        api_value!({ "kind": "installed" })
                     }
                     lunco_assets_datasets::DatasetState::Cancelled => {
-                        serde_json::json!({ "kind": "cancelled" })
+                        api_value!({ "kind": "cancelled" })
                     }
                     lunco_assets_datasets::DatasetState::Failed(error) => {
-                        serde_json::json!({ "kind": "failed", "error": error })
+                        api_value!({ "kind": "failed", "error": error.clone() })
                     }
                 };
-                serde_json::json!({
-                    "id": entry.id,
-                    "key": entry.key,
-                    "group": entry.group,
+                let metadata = lunco_api_core::api_value_from_serializable(&entry.spec.extra)?;
+                Ok(api_value!({
+                    "id": entry.id.clone(),
+                    "key": entry.key.clone(),
+                    "group": entry.group.clone(),
                     "scope": entry.scope.label(),
-                    "name": entry.name,
+                    "name": entry.name.clone(),
                     "state": state,
                     "processed": entry.spec.process.is_some(),
                     "recommended": entry.recommended,
                     "artifact_uri": entry.artifact_uri(),
-                    "metadata": &entry.spec.extra,
-                })
+                    "metadata": metadata,
+                }))
             })
-            .collect::<Vec<_>>();
-        ApiResponse::ok(serde_json::json!({ "datasets": datasets }))
+            .collect::<Result<Vec<_>, ApiQueryError>>()?;
+        Ok(Some(api_value!({ "datasets": datasets })))
     }
 }
 

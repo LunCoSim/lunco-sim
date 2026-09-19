@@ -4,6 +4,7 @@
 //! egui dock, menus, status presentation, and graphics/settings rendering.
 
 use super::*;
+use lunco_workbench_perf_ui::{frame_history, frame_ms_stats, PerfHudSettings, PerfStats};
 
 #[derive(Resource)]
 pub(crate) struct WorkbenchVisualsCache {
@@ -1117,14 +1118,14 @@ pub(crate) fn render_status_bar_inner(
         history.sort_by_key(|(_, event)| event.at);
         (latest, history)
     };
-    let perf_stats = world.resource::<perf_hud::PerfStats>().clone();
+    let perf_stats = world.resource::<PerfStats>().clone();
     // Raw frame times straight out of Bevy's own `Diagnostic` ring buffer — `PerfStats`
     // no longer shadows it with a second `VecDeque` holding the same values.
     let frame_history: Vec<f32> = world
         .get_resource::<bevy::diagnostic::DiagnosticsStore>()
-        .map(perf_hud::frame_history)
+        .map(frame_history)
         .unwrap_or_default();
-    let perf_enabled = world.resource::<perf_hud::PerfHudSettings>().enabled;
+    let perf_enabled = world.resource::<PerfHudSettings>().enabled;
     // The networking chip only paints when not standalone; reserve room
     // for it on the right so the clickable status region doesn't overlap.
     let net_active = world
@@ -1314,7 +1315,7 @@ pub(crate) fn render_status_bar_inner(
         if perf_enabled {
             let perf_width = status_bar_perf_width(ui.available_width(), right_widths.perf);
             if perf_width > 0.0 {
-                let p99 = perf_hud::frame_ms_stats(&frame_history).map(|(_, _, p99)| p99);
+                let p99 = frame_ms_stats(&frame_history).map(|(_, _, p99)| p99);
                 let (required_text, perf_text) = perf_hud_text(
                     perf_stats.fps,
                     perf_stats.frame_ms,
@@ -2027,7 +2028,7 @@ fn draw_frame_time_sparkline(
     );
 
     let n = frame_history.len();
-    let step = rect.width() / (perf_hud::FRAME_HISTORY_LEN - 1).max(1) as f32;
+    let step = rect.width() / (lunco_workbench_perf_ui::FRAME_HISTORY_LEN - 1).max(1) as f32;
     let mut prev: Option<egui::Pos2> = None;
     for (i, ms) in frame_history.iter().enumerate() {
         let x = rect.left() + i as f32 * step;

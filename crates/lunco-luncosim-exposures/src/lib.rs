@@ -2512,7 +2512,7 @@ fn publish_camera_exposure(
     // derive one deterministic identity label for compact status surfaces.
     // Selection policy remains in Rhai/the typed camera command path.
     let active_name = status.active_name.as_deref().unwrap_or("");
-    let labels = lunco_usd_bevy_camera::camera_switch::camera_display_labels(&status.cameras);
+    let labels = lunco_camera_core::camera_display_labels(&status.cameras);
     let active_label = status
         .active_name
         .as_ref()

@@ -3,7 +3,8 @@
 //
 //! This crate deliberately contains no ECS or Bevy runtime. It owns the
 //! serializable envelope and result types; command reflection and ECS result
-//! storage remain in the runtime core.
+//! storage remain in the runtime core. Acknowledgement data uses the shared
+//! typed `HookValue` ABI rather than a transport-specific JSON value.
 
 use lunco_id::make_id_53;
 use serde::{Deserialize, Serialize};
@@ -193,12 +194,13 @@ pub struct Ack {
     /// New domain generation after the apply, when the receiving
     /// document has one. `None` for stateless / ephemeral commands.
     pub new_gen: Option<u64>,
-    /// Optional command-specific result data. The command owns the shape of
+    /// Optional typed command-specific result data. The command owns the shape of
     /// this value; common examples are an allocated entity id, queued status,
-    /// generated source, or captured stdout. Continuous simulation values do
-    /// not belong here — they remain authored `outputs:*` ports.
+    /// generated source, or captured stdout. API transports convert it only at
+    /// their explicit response boundary. Continuous simulation values do not
+    /// belong here — they remain authored `outputs:*` ports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
+    pub data: Option<lunco_hooks::HookValue>,
 }
 
 impl Ack {
@@ -210,8 +212,8 @@ impl Ack {
         }
     }
 
-    /// Build a successful acknowledgement carrying command-specific result data.
-    pub fn with_data(op_id: OpId, data: serde_json::Value) -> Self {
+    /// Build a successful acknowledgement carrying typed command-specific result data.
+    pub fn with_data(op_id: OpId, data: lunco_hooks::HookValue) -> Self {
         Self {
             op_id,
             new_gen: None,

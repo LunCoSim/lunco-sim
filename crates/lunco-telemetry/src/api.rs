@@ -37,7 +37,11 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::ApiQueryProvider;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{
+    api_param_array, api_param_f64, api_param_str, api_param_u64, ApiQueryError, ApiQueryResult,
+};
+use lunco_api_core::ApiErrorCode;
+use lunco_api_core::{api_value, ApiValue};
 use lunco_core::GlobalEntityId;
 use lunco_signal::{SignalRef, SignalRegistry};
 
@@ -103,24 +107,27 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
         "ListTelemetryChannels"
     }
 
-    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let signals = world.resource::<SignalRegistry>();
 
-        let mut channels: Vec<serde_json::Value> = signals
+        let mut channels: Vec<ApiValue> = signals
             .iter_scalar()
             .map(|(sig, history)| {
                 let owner = channel_owner(world, signals, sig);
                 let meta = signals.meta(sig);
-                serde_json::json!({
+                let presentation = meta
+                    .map(|meta| lunco_api_core::api_value_from_serializable(&meta.presentation))
+                    .transpose()?;
+                Ok(api_value!({
                     "key": channel_key(owner, &sig.path),
-                    "name": sig.path,
+                    "name": sig.path.clone(),
                     "source": owner.api_id(),
                     "owner": match owner {
-                        ChannelOwner::Api(id) => serde_json::json!({
+                        ChannelOwner::Api(id) => api_value!({
                             "kind": "api",
                             "api_id": id.get(),
                         }),
-                        ChannelOwner::Session(entity) => serde_json::json!({
+                        ChannelOwner::Session(entity) => api_value!({
                             "kind": "session",
                             "entity_bits": entity.to_bits(),
                         }),
@@ -133,7 +140,7 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
                     "model_variable": meta.and_then(|m| m.model_variable.clone()),
                     "source_asset": meta.and_then(|m| m.source_asset.clone()),
                     "canonical_name": meta.and_then(|m| m.canonical_name.clone()),
-                    "presentation": meta.map(|m| &m.presentation),
+                    "presentation": presentation,
                     "exposure": meta.map(|m| match m.exposure {
                         lunco_signal::SignalExposure::Public => "public",
                         lunco_signal::SignalExposure::Internal => "internal",
@@ -143,22 +150,22 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
                     // how far back a history query can usefully reach.
                     "samples": history.len(),
                     "retention": history.capacity,
-                })
+                }))
             })
-            .collect();
+            .collect::<Result<Vec<_>, ApiQueryError>>()?;
 
         // Stable order: a dictionary that reshuffles every poll makes a useless tree.
         channels.sort_by(|a, b| {
-            a["key"]
-                .as_str()
-                .unwrap_or("")
-                .cmp(b["key"].as_str().unwrap_or(""))
+            a.get("key")
+                .and_then(ApiValue::as_str)
+                .cmp(&b.get("key").and_then(ApiValue::as_str))
         });
 
-        ApiResponse::ok(serde_json::json!({
+        let count = channels.len();
+        Ok(Some(api_value!({
             "channels": channels,
-            "count": channels.len(),
-        }))
+            "count": count,
+        })))
     }
 }
 
@@ -178,15 +185,18 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
         "QueryTelemetryHistory"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(key) = params.get("key").and_then(|v| v.as_str()) else {
-            return ApiResponse::error(ApiErrorCode::DeserializationError, "missing field 'key'");
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(key) = api_param_str(params, "key") else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "missing field 'key'",
+            ));
         };
         let Some((owner, name)) = parse_channel_key(key) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 format!("malformed channel key '{key}' — expected '<owner>:<name>'"),
-            );
+            ));
         };
 
         // Resolve the key against the retained registry that backs the native telemetry
@@ -202,26 +212,17 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
                 })
                 .cloned()
             else {
-                return ApiResponse::error(
+                return Err(ApiQueryError::new(
                     ApiErrorCode::EntityNotFound,
                     format!("no retained telemetry channel '{key}'"),
-                );
+                ));
             };
             signal
         };
 
-        let start = params
-            .get("start")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(f64::NEG_INFINITY);
-        let end = params
-            .get("end")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(f64::INFINITY);
-        let limit = params
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize);
+        let start = optional_f64(params, "start", f64::NEG_INFINITY, "QueryTelemetryHistory")?;
+        let end = optional_f64(params, "end", f64::INFINITY, "QueryTelemetryHistory")?;
+        let limit = optional_limit(params, "limit", "QueryTelemetryHistory")?;
 
         let epoch_jd = world.resource::<lunco_time::WorldTime>().epoch_jd;
 
@@ -230,10 +231,10 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
             .scalar_history(&signal)
             .expect("signal came from the retained registry");
 
-        let mut samples: Vec<serde_json::Value> = history
+        let mut samples: Vec<ApiValue> = history
             .iter()
             .filter(|s| s.time >= start && s.time <= end)
-            .map(|s| serde_json::json!({ "t": s.time, "v": s.value }))
+            .map(|s| api_value!({ "t": s.time, "v": s.value }))
             .collect();
 
         if let Some(limit) = limit {
@@ -243,14 +244,15 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
             }
         }
 
-        ApiResponse::ok(serde_json::json!({
+        let count = samples.len();
+        Ok(Some(api_value!({
             "key": key,
-            "count": samples.len(),
+            "count": count,
             // `t` is sim_secs (precise). `epoch_jd` is the absolute frame for a client
             // that wants wall-clock labels — see the module docs on why they are separate.
             "epoch_jd": epoch_jd,
             "samples": samples,
-        }))
+        })))
     }
 }
 
@@ -287,20 +289,37 @@ impl ApiQueryProvider for ExportTelemetryRecordingProvider {
         "ExportTelemetryRecording"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let start = params
-            .get("start")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(f64::NEG_INFINITY);
-        let end = params
-            .get("end")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(f64::INFINITY);
-        let wanted: Option<Vec<String>> = params.get("keys").and_then(|v| v.as_array()).map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        });
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let start = optional_f64(
+            params,
+            "start",
+            f64::NEG_INFINITY,
+            "ExportTelemetryRecording",
+        )?;
+        let end = optional_f64(params, "end", f64::INFINITY, "ExportTelemetryRecording")?;
+        let wanted: Option<Vec<String>> = match params.get("keys") {
+            None | Some(ApiValue::Unit) => None,
+            Some(value) => {
+                let Some(keys) = api_param_array(params, "keys") else {
+                    return Err(ApiQueryError::new(
+                        ApiErrorCode::DeserializationError,
+                        "ExportTelemetryRecording: `keys` must be an array of strings",
+                    ));
+                };
+                let mut parsed = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let ApiValue::Str(key) = key else {
+                        return Err(ApiQueryError::new(
+                            ApiErrorCode::DeserializationError,
+                            "ExportTelemetryRecording: `keys` must contain only strings",
+                        ));
+                    };
+                    parsed.push(key.clone());
+                }
+                let _ = value;
+                Some(parsed)
+            }
+        };
 
         let signals = world.resource::<SignalRegistry>();
         let channels: Vec<(String, SignalRef)> = signals
@@ -337,28 +356,65 @@ impl ApiQueryProvider for ExportTelemetryRecordingProvider {
         times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         times.dedup();
 
-        let mut series = serde_json::Map::new();
+        let mut series = Vec::new();
         for (key, pts) in &per_key {
-            let mut col: Vec<serde_json::Value> = Vec::with_capacity(times.len());
+            let mut col: Vec<ApiValue> = Vec::with_capacity(times.len());
             let mut i = 0usize;
             for t in &times {
                 // `pts` is time-ordered (a ring buffer is), so one pass walks both.
                 if i < pts.len() && pts[i].0 == *t {
-                    col.push(serde_json::json!(pts[i].1));
+                    col.push(ApiValue::Float(pts[i].1));
                     i += 1;
                 } else {
                     // Never sampled at this instant. `null`, not an interpolation.
-                    col.push(serde_json::Value::Null);
+                    col.push(ApiValue::Unit);
                 }
             }
-            series.insert(key.clone(), serde_json::Value::Array(col));
+            series.push((key.clone(), ApiValue::Array(col)));
         }
 
-        ApiResponse::ok(serde_json::json!({
+        let count = times.len();
+        Ok(Some(api_value!({
             "times": times,
-            "series": series,
-            "count": times.len(),
-        }))
+            "series": ApiValue::map(series),
+            "count": count,
+        })))
+    }
+}
+
+fn optional_f64(
+    params: &ApiValue,
+    name: &str,
+    default: f64,
+    query: &str,
+) -> Result<f64, ApiQueryError> {
+    match params.get(name) {
+        None => Ok(default),
+        Some(_) => api_param_f64(params, name).ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("{query}: `{name}` must be a number"),
+            )
+        }),
+    }
+}
+
+fn optional_limit(
+    params: &ApiValue,
+    name: &str,
+    query: &str,
+) -> Result<Option<usize>, ApiQueryError> {
+    match params.get(name) {
+        None => Ok(None),
+        Some(_) => api_param_u64(params, name)
+            .and_then(|value| usize::try_from(value).ok())
+            .map(Some)
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("{query}: `{name}` must be a platform-sized unsigned integer"),
+                )
+            }),
     }
 }
 
@@ -433,18 +489,20 @@ mod tests {
         registry.push_scalar(SignalRef::new(right, "contact"), 0.0, 0.0);
         world.insert_resource(registry);
 
-        let response = ListTelemetryChannelsProvider.execute(&world, &serde_json::Value::Null);
-        let ApiResponse::Ok {
-            data: Some(data), ..
-        } = response
-        else {
+        let Ok(Some(data)) = ListTelemetryChannelsProvider.execute(&world, &ApiValue::Unit) else {
             panic!("list provider must return a catalog");
         };
-        let keys: Vec<&str> = data["channels"]
-            .as_array()
-            .expect("channels array")
+        let Some(ApiValue::Array(channels)) = data.get("channels") else {
+            panic!("channels array");
+        };
+        let keys: Vec<&str> = channels
             .iter()
-            .map(|channel| channel["key"].as_str().expect("channel key"))
+            .map(|channel| {
+                channel
+                    .get("key")
+                    .and_then(ApiValue::as_str)
+                    .expect("channel key")
+            })
             .collect();
         assert_eq!(keys.len(), 2);
         assert_ne!(keys[0], keys[1]);
@@ -475,26 +533,49 @@ mod tests {
         );
         world.insert_resource(registry);
 
-        let response = ListTelemetryChannelsProvider.execute(&world, &serde_json::Value::Null);
-        let ApiResponse::Ok {
-            data: Some(data), ..
-        } = response
-        else {
+        let Ok(Some(data)) = ListTelemetryChannelsProvider.execute(&world, &ApiValue::Unit) else {
             panic!("list provider must return a catalog");
         };
-        let channel = &data["channels"][0];
-        assert_eq!(channel["model_class"], "LunCo.Electrical.CameraPayload");
-        assert_eq!(channel["model_variable"], "power_draw_w");
+        let Some(ApiValue::Array(channels)) = data.get("channels") else {
+            panic!("channels array");
+        };
+        let channel = &channels[0];
         assert_eq!(
-            channel["source_asset"],
-            "lunco://models/LunCo/Electrical/CameraPayload.mo"
+            channel.get("model_class").and_then(ApiValue::as_str),
+            Some("LunCo.Electrical.CameraPayload")
         );
-        assert_eq!(channel["canonical_name"], "science_power");
-        assert_eq!(channel["presentation"]["kind"], "summary");
-        assert_eq!(channel["presentation"]["group"], "power");
         assert_eq!(
-            channel["presentation"]["formula"],
-            "sum of measured channels"
+            channel.get("model_variable").and_then(ApiValue::as_str),
+            Some("power_draw_w")
+        );
+        assert_eq!(
+            channel.get("source_asset").and_then(ApiValue::as_str),
+            Some("lunco://models/LunCo/Electrical/CameraPayload.mo")
+        );
+        assert_eq!(
+            channel.get("canonical_name").and_then(ApiValue::as_str),
+            Some("science_power")
+        );
+        assert_eq!(
+            channel
+                .get("presentation")
+                .and_then(|value| value.get("kind"))
+                .and_then(ApiValue::as_str),
+            Some("summary")
+        );
+        assert_eq!(
+            channel
+                .get("presentation")
+                .and_then(|value| value.get("group"))
+                .and_then(ApiValue::as_str),
+            Some("power")
+        );
+        assert_eq!(
+            channel
+                .get("presentation")
+                .and_then(|value| value.get("formula"))
+                .and_then(ApiValue::as_str),
+            Some("sum of measured channels")
         );
     }
 
@@ -511,38 +592,44 @@ mod tests {
         world.insert_resource(registry);
         world.despawn(entity);
 
-        let list = ListTelemetryChannelsProvider.execute(&world, &serde_json::Value::Null);
-        let ApiResponse::Ok {
-            data: Some(data), ..
-        } = list
-        else {
+        let Ok(Some(data)) = ListTelemetryChannelsProvider.execute(&world, &ApiValue::Unit) else {
             panic!("list provider must return archived channels");
         };
-        assert_eq!(data["channels"][0]["key"], "api/42:motor_current");
-        assert_eq!(data["channels"][0]["active"], false);
+        let Some(ApiValue::Array(channels)) = data.get("channels") else {
+            panic!("channels array");
+        };
+        assert_eq!(
+            channels[0].get("key").and_then(ApiValue::as_str),
+            Some("api/42:motor_current")
+        );
+        assert_eq!(channels[0].get("active"), Some(&ApiValue::Bool(false)));
 
         let history = QueryTelemetryHistoryProvider
-            .execute(&world, &serde_json::json!({"key": "api/42:motor_current"}));
-        let ApiResponse::Ok {
-            data: Some(data), ..
-        } = history
-        else {
+            .execute(&world, &api_value!({ "key": "api/42:motor_current" }));
+        let Ok(Some(data)) = history else {
             panic!("archived API channel history must remain queryable");
         };
-        assert_eq!(data["samples"][0]["t"], 12.0);
-        assert_eq!(data["samples"][0]["v"], 3.5);
+        let Some(ApiValue::Array(samples)) = data.get("samples") else {
+            panic!("history samples must be an array");
+        };
+        assert_eq!(samples[0].get("t").and_then(ApiValue::as_f64), Some(12.0));
+        assert_eq!(samples[0].get("v").and_then(ApiValue::as_f64), Some(3.5));
 
-        let recording = ExportTelemetryRecordingProvider.execute(
-            &world,
-            &serde_json::json!({"keys": ["api/42:motor_current"]}),
-        );
-        let ApiResponse::Ok {
-            data: Some(data), ..
-        } = recording
-        else {
+        let recording = ExportTelemetryRecordingProvider
+            .execute(&world, &api_value!({ "keys": ["api/42:motor_current"] }));
+        let Ok(Some(data)) = recording else {
             panic!("archived API channel export must remain addressable");
         };
-        assert_eq!(data["series"]["api/42:motor_current"][0], 3.5);
+        let Some(ApiValue::Array(series)) = data.get("series").and_then(|value| match value {
+            ApiValue::Map(entries) => entries
+                .iter()
+                .find(|(key, _)| key == "api/42:motor_current")
+                .map(|(_, value)| value),
+            _ => None,
+        }) else {
+            panic!("recording series must have one array for the selected key");
+        };
+        assert_eq!(series[0].as_f64(), Some(3.5));
     }
 
     #[test]

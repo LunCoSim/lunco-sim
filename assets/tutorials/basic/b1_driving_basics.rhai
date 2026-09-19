@@ -69,7 +69,7 @@ fn on_event(me, evt, ctx) {
 // first_drive.rhai). A windowed session has a student in it, so they drive.
 //
 // The drive is authored as pure DATA (a timeline) and lowered with
-// `compile_timeline` — the same steps `RegisterTimeline` stores in the Twin.
+// `compile_timeline` — the same steps stored in a typed Twin timeline.
 // `subject` drives the rover from the scenario host.
 fn task(me, ctx) {
     if !is_unattended() { return; }

@@ -41,6 +41,7 @@
 //! give each invocation a fresh state (no cross-call carry). Authorization and
 //! other local-only hooks carry no such requirement.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -53,7 +54,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 /// rule) and deliberately owned (an object-safe `dyn ScriptHook` can't be generic
 /// over a `ValueBuilder`). Each language binding converts to/from its native value
 /// (`HookValue ↔ rhai::Dynamic`, later `↔ PyObject`).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum HookValue {
     /// The unit / nothing value (rhai `()`, Python `None`).
     Unit,
@@ -75,6 +76,12 @@ pub enum HookValue {
     /// bounded metadata whenever a provider can read the authoritative asset
     /// through its host rather than copying a large raster through the script.
     Bytes(Vec<u8>),
+}
+
+impl Default for HookValue {
+    fn default() -> Self {
+        Self::Unit
+    }
 }
 
 impl HookValue {

@@ -12,7 +12,8 @@ use std::collections::HashSet;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::ApiQueryProvider;
-use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_api::{ApiQueryError, ApiQueryResult};
+use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_core::markers::Callsign;
 use lunco_core::{entity_display_name, CatalogEntryId};
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -32,19 +33,21 @@ struct SelectionEntity {
     assembly_path: Option<String>,
 }
 
-fn preview_id(params: &serde_json::Value) -> Result<Option<UsdPreviewId>, Box<ApiResponse>> {
+fn preview_id(params: &ApiValue) -> Result<Option<UsdPreviewId>, ApiQueryError> {
     let Some(value) = params.get("preview") else {
         return Ok(None);
     };
-    let id = value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
-        .ok_or_else(|| {
-            Box::new(ApiResponse::error(
-                ApiErrorCode::DeserializationError,
-                "InspectUsdSelection: `preview` must be a u64",
-            ))
-        })?;
+    let id = match value {
+        ApiValue::Int(value) => u64::try_from(*value).ok(),
+        ApiValue::Str(value) => value.parse().ok(),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            "InspectUsdSelection: `preview` must be a u64",
+        )
+    })?;
     Ok(Some(UsdPreviewId(id)))
 }
 
@@ -103,45 +106,41 @@ fn enrich_selection(
     Some(selection)
 }
 
-fn supported_operations(
-    type_name: &str,
-    kind: Option<&str>,
-    variant_sets: bool,
-) -> Vec<serde_json::Value> {
+fn supported_operations(type_name: &str, kind: Option<&str>, variant_sets: bool) -> Vec<ApiValue> {
     // These are the existing typed public edit surfaces. The path is always
     // supplied separately by the caller; no operation is addressed by a
     // display name or an inferred entity.
     let mut supported_operations = vec![
-        serde_json::json!({
+        api_value!({
             "command": "SelectUsdPrim",
             "rhai": "assembly_ui::select_prim",
         }),
-        serde_json::json!({
+        api_value!({
             "command": "QueryUsdPrim",
             "rhai": "assembly_audit::query_prim",
         }),
-        serde_json::json!({
+        api_value!({
             "command": "ApplyUsdOps",
             "rhai": "assembly_edit::transform",
         }),
-        serde_json::json!({
+        api_value!({
             "command": "ApplyUsdOp",
             "rhai": "assembly_edit::attribute",
         }),
     ];
     if type_name == "Xform" && kind.is_some_and(|kind| kind.eq_ignore_ascii_case("component")) {
-        supported_operations.push(serde_json::json!({
+        supported_operations.push(api_value!({
             "operation": "UpdateComponent",
             "rhai": "component_editor::update_plan",
             "planner": "assembly_builder::component_bundle_update_plan",
             "mode": "dry_plan",
-            "requires": ["explicit component bundle recipe", "optional bindings"],
-            "preserves": ["component topology", "existing material bindings", "unowned children"],
+            "requires": api_value!(["explicit component bundle recipe", "optional bindings"]),
+            "preserves": api_value!(["component topology", "existing material bindings", "unowned children"]),
             "commit": "assembly_edit::propose -> review_session -> commit_proposal",
         }));
     }
     if variant_sets {
-        supported_operations.push(serde_json::json!({
+        supported_operations.push(api_value!({
             "command": "ApplyUsdOp",
             "rhai": "assembly_edit::variant",
         }));
@@ -156,7 +155,7 @@ fn selection_item(
     preview: UsdPreviewId,
     edit_target: &str,
     variant_sets: bool,
-) -> Option<serde_json::Value> {
+) -> Option<ApiValue> {
     let sdf = SdfPath::new(&selection.path).ok()?;
     let type_name = view.type_name(&sdf)?;
     let kind = view.kind(&sdf);
@@ -164,19 +163,19 @@ fn selection_item(
     let supported_operations =
         supported_operations(type_name.as_str(), kind.as_deref(), variant_sets);
 
-    Some(serde_json::json!({
+    Some(api_value!({
         "identity": {
             "preview": preview.0,
-            "doc_id": doc,
-            "path": selection.path,
+            "doc_id": doc.raw(),
+            "path": selection.path.clone(),
         },
-        "path": selection.path,
-        "name": selection.display_name,
-        "type_name": type_name,
+        "path": selection.path.clone(),
+        "name": selection.display_name.clone(),
+        "type_name": type_name.to_string(),
         "kind": kind,
         "parent_path": parent_path(&selection.path),
-        "assembly_path": selection.assembly_path,
-        "edit_target": edit_target,
+        "assembly_path": selection.assembly_path.clone(),
+        "edit_target": edit_target.to_string(),
         "supported_operations": supported_operations,
     }))
 }
@@ -186,40 +185,40 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         "InspectUsdSelection"
     }
 
-    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let Some(viewport) = world.get_resource::<UsdViewportState>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "InspectUsdSelection requires the Assembly Editor viewport",
-            );
+            ));
         };
         let requested_preview = match preview_id(params) {
             Ok(preview) => preview,
-            Err(error) => return *error,
+            Err(error) => return Err(error),
         };
         let preview = requested_preview.or_else(|| viewport.focused_preview_id());
 
         let Some(preview) = preview else {
-            return ApiResponse::ok(serde_json::json!({
-                "preview": serde_json::Value::Null,
-                "doc_id": serde_json::Value::Null,
-                "edit_target": serde_json::Value::Null,
+            return Ok(Some(api_value!({
+                "preview": null,
+                "doc_id": null,
+                "edit_target": null,
                 "focused": false,
                 "selection_state": "no_preview",
                 "selection_mode": "none",
                 "requires_single_target": true,
                 "selected": [],
-                "primary": serde_json::Value::Null,
-                "inspector_target": serde_json::Value::Null,
+                "primary": null,
+                "inspector_target": null,
                 "stale_selection_count": 0,
                 "ambiguous_paths": [],
-            }));
+            })));
         };
         let Some(session) = viewport.session(preview) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::EntityNotFound,
                 format!("InspectUsdSelection: preview {} is not open", preview.0),
-            );
+            ));
         };
         let doc = session.doc();
         let edit_target = session.edit_target().as_str().to_string();
@@ -233,18 +232,18 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         let (selected_paths, target_path) = if focused {
             let Some(selected) = world.get_resource::<lunco_scene_selection::SelectedEntities>()
             else {
-                return ApiResponse::error(
+                return Err(ApiQueryError::new(
                     ApiErrorCode::InternalError,
                     "InspectUsdSelection: SelectedEntities resource is not present",
-                );
+                ));
             };
             (SelectedPaths::Entities(selected.entities.clone()), None)
         } else {
             let Some(sessions) = world.get_resource::<EditorSessionSelections>() else {
-                return ApiResponse::error(
+                return Err(ApiQueryError::new(
                     ApiErrorCode::InternalError,
                     "InspectUsdSelection: editor selection state is not present",
-                );
+                ));
             };
             let paths = sessions.sessions.get(&preview).cloned().unwrap_or_default();
             (SelectedPaths::Paths(paths.paths), paths.target_path)
@@ -252,10 +251,10 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
 
         let Some(inspector_target) = world.get_resource::<lunco_scene_selection::SelectionTarget>()
         else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "InspectUsdSelection: SelectionTarget resource is not present",
-            );
+            ));
         };
 
         let query = QueryState::<(
@@ -266,16 +265,16 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
             Option<&CatalogEntryId>,
         )>::try_new(world);
         let Some(mut q_paths) = query else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "InspectUsdSelection: USD prim query is unavailable",
-            );
+            ));
         };
         let Some(mut q_parents) = QueryState::<&ChildOf>::try_new(world) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "InspectUsdSelection: hierarchy query is unavailable",
-            );
+            ));
         };
 
         let (paths, mut stale_selection_count) =
@@ -334,36 +333,36 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         }
 
         if paths.is_empty() && !stale_target {
-            return ApiResponse::ok(serde_json::json!({
+            return Ok(Some(api_value!({
                 "preview": preview.0,
-                "doc_id": doc,
-                "edit_target": edit_target,
+                "doc_id": doc.raw(),
+                "edit_target": edit_target.clone(),
                 "focused": focused,
                 "selection_state": "no_selection",
                 "selection_mode": "none",
                 "requires_single_target": true,
                 "selected": [],
-                "primary": serde_json::Value::Null,
-                "inspector_target": serde_json::Value::Null,
+                "primary": null,
+                "inspector_target": null,
                 "stale_selection_count": stale_selection_count,
                 "ambiguous_paths": [],
-            }));
+            })));
         }
 
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "InspectUsdSelection: canonical USD stages are unavailable",
-            );
+            ));
         };
         let Some(canonical) = stages.get(stage_id) else {
-            return ApiResponse::error(
+            return Err(ApiQueryError::new(
                 ApiErrorCode::CommandRejected,
                 format!(
                     "InspectUsdSelection: preview {} has no ready composed USD stage",
                     preview.0
                 ),
-            );
+            ));
         };
         let view = canonical.view();
         let stage = canonical.stage();
@@ -425,21 +424,23 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
             1 => "single",
             _ => "multiple",
         };
-        let primary = selected.last().cloned().unwrap_or(serde_json::Value::Null);
-        ApiResponse::ok(serde_json::json!({
+        let primary = selected.last().cloned().unwrap_or(ApiValue::Unit);
+        let requires_single_target = selected.len() != 1;
+        let stale_count = stale_selection_count + usize::from(stale_target);
+        Ok(Some(api_value!({
             "preview": preview.0,
-            "doc_id": doc,
+            "doc_id": doc.raw(),
             "edit_target": edit_target,
             "focused": focused,
             "selection_state": selection_mode,
             "selection_mode": selection_mode,
-            "requires_single_target": selected.len() != 1,
+            "requires_single_target": requires_single_target,
             "selected": selected,
             "primary": primary,
-            "inspector_target": inspector_item.unwrap_or(serde_json::Value::Null),
-            "stale_selection_count": stale_selection_count + usize::from(stale_target),
+            "inspector_target": inspector_item.unwrap_or(ApiValue::Unit),
+            "stale_selection_count": stale_count,
             "ambiguous_paths": ambiguous_paths,
-        }))
+        })))
     }
 }
 
@@ -522,11 +523,14 @@ mod tests {
     fn no_focused_preview_is_explicit_empty_context() {
         let mut world = World::new();
         world.insert_resource(UsdViewportState::default());
-        let response = InspectUsdSelectionProvider.execute(&world, &serde_json::json!({}));
-        let ApiResponse::Ok { data: Some(data) } = response else {
+        let response = InspectUsdSelectionProvider.execute(&world, &ApiValue::Map(Vec::new()));
+        let Ok(Some(data)) = response else {
             panic!("expected an empty selection context");
         };
-        assert_eq!(data["selection_state"], "no_preview");
-        assert!(data["selected"].as_array().unwrap().is_empty());
+        assert_eq!(
+            data.get("selection_state").and_then(ApiValue::as_str),
+            Some("no_preview")
+        );
+        assert_eq!(data.get("selected"), Some(&ApiValue::Array(Vec::new())));
     }
 }

@@ -11,8 +11,8 @@ lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
-serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
@@ -33,6 +33,7 @@ lunco-workspace = { path = "../lunco-workspace" }
 [dev-dependencies]
 lunco-usd-queries = { path = "../lunco-usd-queries" }
 tempfile = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

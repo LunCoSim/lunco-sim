@@ -1049,18 +1049,19 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `RegisterTimeline`
 
  Save a named mission **timeline** to the Twin — the storage counterpart of
- `RunTimeline` (which runs an inline one). Validates the JSON parses as a
- timeline, stores it in `lunco_scripting_rhai_runtime::timelines::TimelineStore`, and mirrors it
- to `<twin>/timelines/<name>.json` so it survives a restart (reloaded by the
+ `RunTimeline` (which runs an inline one). Validates the structured timeline,
+ stores it in `lunco_scripting_rhai_runtime::timelines::TimelineStore`, and
+ persists its file representation to `<twin>/timelines/<name>.json` (reloaded by the
  `TwinAdded` observer). Discover with `ListTimelines`/`GetTimeline`, run with
- `RunStoredTimeline`. Idempotent (re-registering a name replaces it).
+ `RunStoredTimeline`. The command carries typed fields; JSON is not nested
+ inside a string or passed to Rhai. Idempotent (re-registering a name replaces it).
 
 - *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `name` | `String` |   |
-| `timeline` | `String` |  JSON: a steps array, or an object with a `steps` array (and optional `name`). |
+| `timeline` | `ScenarioParameters` |  Structured map with required `steps` array and optional `name`. |
 
 #### `RegisterToolLibrary`
 
@@ -1185,13 +1186,12 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `RunTimeline`
 
  Run a declarative **mission timeline** on an entity — Layer 2 of the
- sequencer. The timeline is pure DATA (`timeline` is a JSON string: either a
- `[ ...steps ]` array or `{ "name": ..., "steps": [ ... ] }`), so a mission is
- authorable/storable/shippable without writing rhai. The handler lowers it to
- a generated `task(me, ctx)` source that calls the prelude's `compile_timeline`
- and hands the resulting tree to the native behavior kernel. It attaches via
- the same path as `RunScenario` — so hot-reload, per-entity state, and
- `TASK_COMPLETE`/`TASK_FAILED` telemetry all come from the native task driver.
+ sequencer. The timeline is typed data in `ctx` with a required `steps` array
+ and optional `name`, so a mission is authorable/storable/shippable without
+ embedding data in generated source. A fixed executor calls the prelude's
+ `compile_timeline` and hands the resulting tree to the native behavior kernel.
+ It attaches via the same path as `RunScenario` — so hot-reload, per-entity
+ state, and `TASK_COMPLETE`/`TASK_FAILED` telemetry all come from the native task driver.
 
  Step vocabulary (see prelude `timeline_step`): `{move_to,speed,radius}`,
  `{move_to_entity,speed,radius}`, `{possess}`, `{brake,secs}`,
@@ -1204,7 +1204,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `target` | `Entity` |   |
-| `timeline` | `String` |  JSON: a steps array, or an object with a `steps` array (and optional `name`). |
+| `timeline` | `ScenarioParameters` |  Structured map with required `steps` array and optional `name`. |
 
 #### `SetScenarioPaused`
 

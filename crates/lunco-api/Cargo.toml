@@ -16,9 +16,9 @@ lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-readiness = { path = "../lunco-readiness" }
 lunco-hooks = { path = "../lunco-hooks" }
+lunco-api-core = { path = "../lunco-api-core" }
 bevy = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

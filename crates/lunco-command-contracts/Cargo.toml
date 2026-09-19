@@ -7,8 +7,8 @@ description = "Pure mutation, session, acknowledgement, and rejection contracts"
 
 [dependencies]
 lunco-id = { path = "../lunco-id" }
+lunco-hooks = { path = "../lunco-hooks" }
 serde = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "lunco-api-codec"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "JSON wire codec for typed LunCoSim API values"
+
+[dependencies]
+lunco-api-core = { path = "../lunco-api-core" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
