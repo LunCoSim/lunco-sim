@@ -374,6 +374,20 @@ fn attribute(doc, edit_target, path, name, type_name, value, parent_gen) {
     })
 }
 
+/// Remove one attribute opinion from an explicit authored layer, revealing
+/// any weaker composed value. Undo/redo remain owned by the USD document.
+fn remove_attribute(doc, edit_target, path, name, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc_id: doc,
+        parent_gen: parent_gen,
+        op: #{ RemoveAttribute: #{
+            edit_target: edit_target,
+            path: path,
+            name: name,
+        }},
+    })
+}
+
 /// Author one USD time sample through the existing reversible keyframe op.
 /// `time` is a USD time code and `value` is a literal in `type_name`'s USD
 /// syntax. For xform channels, the document owner also maintains

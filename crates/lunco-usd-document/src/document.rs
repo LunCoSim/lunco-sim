@@ -311,6 +311,17 @@ pub enum UsdOp {
         /// `None` means the xform order belonged to a weaker composed layer.
         restore_order: Option<Vec<String>>,
     },
+    /// Remove one attribute opinion from the selected edit layer, revealing
+    /// any weaker composed value. The inverse is a source snapshot because a
+    /// newly-authored attribute must be removed again on undo.
+    RemoveAttribute {
+        /// Layer to write.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose attribute opinion to clear.
+        path: String,
+        /// Attribute name, including any namespace separators.
+        name: String,
+    },
     /// Restore a standard xform operation and the target-layer order captured
     /// by `RemoveXformOp`. This remains a typed document operation so redo is
     /// incremental and does not fall back to `ReplaceSource`.
@@ -629,6 +640,7 @@ impl UsdOp {
             | Self::SetTranslate { edit_target, .. }
             | Self::RemoveXformOp { edit_target, .. }
             | Self::RestoreXformOp { edit_target, .. }
+            | Self::RemoveAttribute { edit_target, .. }
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
@@ -666,6 +678,7 @@ impl UsdOp {
             | Self::SetTranslate { path, .. }
             | Self::RemoveXformOp { path, .. }
             | Self::RestoreXformOp { path, .. }
+            | Self::RemoveAttribute { path, .. }
             | Self::SetRotate { path, .. }
             | Self::SetScale { path, .. }
             | Self::SetAttribute { path, .. }
@@ -1744,6 +1757,7 @@ impl Document for UsdDocument {
             | UsdOp::SetTranslate { edit_target, .. }
             | UsdOp::RemoveXformOp { edit_target, .. }
             | UsdOp::RestoreXformOp { edit_target, .. }
+            | UsdOp::RemoveAttribute { edit_target, .. }
             | UsdOp::SetRotate { edit_target, .. }
             | UsdOp::SetScale { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
@@ -2045,6 +2059,57 @@ impl Document for UsdDocument {
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::RemoveAttribute { path, name, .. } => {
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) => prim,
+                    Err(error) => {
+                        let prim = parse_prim_path(&path)?;
+                        if !self.path_is_under_composed_arc_path(&prim) {
+                            return Err(error);
+                        }
+                        prim
+                    }
+                };
+                let property = prim_sdf.append_property(&name).map_err(|error| {
+                    DocumentError::ValidationFailed(format!(
+                        "RemoveAttribute `{path}.{name}` has an invalid property name: {error}"
+                    ))
+                })?;
+                match self.layer(target).spec(&property).map(|spec| spec.ty) {
+                    None => {
+                        // Clearing an opinion that this layer does not own is
+                        // an idempotent no-op; it must not erase a weaker
+                        // component asset's authored value.
+                        return Ok(UsdOp::RemoveAttribute {
+                            edit_target: id,
+                            path,
+                            name,
+                        });
+                    }
+                    Some(sdf::SpecType::Attribute) => {}
+                    Some(_) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "RemoveAttribute `{path}.{name}` targets a non-attribute property"
+                        )));
+                    }
+                }
+
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(&prim_sdf).map_err(author_err)?;
+                stage.remove_property(property).map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let inverse = self.coarse_inverse(target, &id);
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: name,
+                    },
+                );
                 Ok(inverse)
             }
 

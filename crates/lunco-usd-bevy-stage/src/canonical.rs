@@ -267,6 +267,16 @@ impl CanonicalStage {
         Ok(())
     }
 
+    /// Remove one locally-authored property opinion from the live stage and
+    /// reveal any weaker composed value. The document layer remains the
+    /// authority; this is only the incremental projection of `RemoveAttribute`.
+    pub(crate) fn remove_attribute(&self, path: &SdfPath, name: &str) -> anyhow::Result<()> {
+        self.stage
+            .remove_property(format!("{path}.{name}"))
+            .map_err(|error| anyhow::anyhow!("remove attribute {path}.{name}: {error}"))?;
+        Ok(())
+    }
+
     /// Restore one standard xform operation and, when supplied, its exact local
     /// `xformOpOrder` captured by the document history inverse.
     pub(crate) fn restore_xform_op(
@@ -800,6 +810,11 @@ impl StageProjector<'_> {
     /// Replay a `RemoveXformOp` history op.
     pub fn remove_xform_op(&self, path: &SdfPath, name: &str) -> anyhow::Result<()> {
         self.0.remove_xform_op(path, name)
+    }
+
+    /// Replay a `RemoveAttribute` history operation.
+    pub fn remove_attribute(&self, path: &SdfPath, name: &str) -> anyhow::Result<()> {
+        self.0.remove_attribute(path, name)
     }
 
     /// Replay a `RestoreXformOp` history op.

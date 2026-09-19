@@ -1130,6 +1130,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
         | UsdOp::SetTranslate { path, .. }
         | UsdOp::RemoveXformOp { path, .. }
         | UsdOp::RestoreXformOp { path, .. }
+        | UsdOp::RemoveAttribute { path, .. }
         | UsdOp::SetRotate { path, .. }
         | UsdOp::SetScale { path, .. }
         | UsdOp::SetAttribute { path, .. }
@@ -1293,6 +1294,20 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                         channel,
                     );
                 }
+            }
+        }
+        UsdOp::RemoveAttribute { path, name, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let removed = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|stages| stages.get(scene_id))
+                .map(|stage| stage.projector().remove_attribute(&sp, name));
+            match removed {
+                Some(Ok(())) => refresh_prim_subtree(world, scene_id, path),
+                Some(Err(error)) => warn!("[twin] remove attribute {path}.{name}: {error}"),
+                None => {}
             }
         }
         UsdOp::SetAttribute {
