@@ -1,0 +1,12 @@
+[package]
+name = "lunco-geometry-core"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Precision-preserving geometry kernels shared by authored tools and scene projection"
+
+[dependencies]
+bevy_math = { workspace = true }
+
+[lints]
+workspace = true

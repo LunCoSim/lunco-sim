@@ -122,7 +122,7 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`usd-source-of-truth.md`](usd-source-of-truth.md) | **USD is the truth; ECS is a projection of it.** The rule every edit path obeys |
 | [`rhai-integration.md`](rhai-integration.md) | Why rhai, and the as-built scripting surface. The *how-to* is [`../scripting-guide.md`](../scripting-guide.md) |
 | [`hook-policies.md`](hook-policies.md) | Function-shaped policy seams: owner-side macro declarations, link-time reflection, dynamic application/Twin policy loading, typed Rhai/API binding, and failure semantics |
-| [`rhai-test-strategy.md`](rhai-test-strategy.md) | Test ownership, the Rust/Rhai migration boundary, and no-build/live-suite commands |
+| [`rhai-test-strategy.md`](rhai-test-strategy.md) | Test ownership, the Rust/Rhai boundary, and production verification commands |
 | [`waypoints-in-usd.md`](waypoints-in-usd.md) | Routes and waypoints as authored USD, not runtime-only state |
 | [`tutorial-autopilot-and-port-contracts.md`](tutorial-autopilot-and-port-contracts.md) | Same control path for human/autopilot tutorial tests; declared cosim topology versus live samples |
 

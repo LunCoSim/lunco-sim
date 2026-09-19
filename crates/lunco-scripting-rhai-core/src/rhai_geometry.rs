@@ -5,8 +5,9 @@
 //! explicitly lowers these types at the stage boundary.
 
 use bevy::math::{DQuat, DVec2, DVec3};
-use lunco_core::{Bounds3, BoundsRelation, DTransform, OrientedBounds3};
-use lunco_usd_geometry::profile_extrusion::{
+use lunco_core::DTransform;
+use lunco_geometry_core::bounds::{Bounds3, BoundsRelation, OrientedBounds3};
+use lunco_geometry_core::profile_extrusion::{
     ProfileExtrusionError, ProfileMeshData, ProfilePlane, extrude_profile,
 };
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Position};
@@ -34,8 +35,20 @@ fn oriented_bounds_from_local(
     local: Bounds3,
     pose: DTransform,
 ) -> Result<OrientedBounds3, Box<EvalAltResult>> {
-    OrientedBounds3::from_local(local, pose)
-        .ok_or_else(|| runtime_error("local bounds cannot be transformed by this pose"))
+    if !pose.is_finite() {
+        return Err(runtime_error(
+            "local bounds cannot be transformed by this pose",
+        ));
+    }
+    let center = pose
+        .transform_point(local.center())
+        .ok_or_else(|| runtime_error("local bounds center cannot be transformed by this pose"))?;
+    OrientedBounds3::new(
+        center,
+        local.half_extents() * pose.scale.abs(),
+        pose.rotation,
+    )
+    .ok_or_else(|| runtime_error("local bounds cannot be transformed by this pose"))
 }
 
 fn profile_points(values: Array) -> Result<Vec<DVec2>, Box<EvalAltResult>> {

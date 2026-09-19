@@ -196,10 +196,9 @@ impl Eq for SysmlNumber {}
 
 /// The semantic category of a SysML/KerML type.
 ///
-/// This is deliberately independent of the syntax spelling.  A user-defined
-/// `Position` value type and a standard-library geometry type can therefore be
-/// mapped to the same runtime category without turning the source model into
-/// a collection of string conventions.
+/// This is deliberately independent of the syntax spelling. User-defined
+/// value types and standard-library geometry types can map to the same runtime
+/// category without turning the source model into string conventions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SysmlTypeCategory {
     Primitive,
@@ -410,7 +409,6 @@ fn is_structured_type_name(name: &str) -> bool {
             | "ThreeVectorValue"
             | "CartesianTwoVectorValue"
             | "CartesianThreeVectorValue"
-            | "Position"
             | "Direction"
             | "Quaternion"
             | "Quat"
@@ -438,7 +436,7 @@ fn primitive_type(name: &str) -> Option<SysmlPrimitiveType> {
 
 fn quantity_kind(name: &str) -> Option<&'static str> {
     Some(match name {
-        "Length" | "Distance" | "Position" => "Length",
+        "Length" | "Distance" => "Length",
         "Angle" => "Angle",
         "Mass" => "Mass",
         "Time" | "Duration" => "Time",
@@ -1677,7 +1675,6 @@ mod tests {
             r#"package Example {
                 enum def Pose { Transport; Landed; }
                 part def Lander {
-                    attribute body : Position;
                     attribute stations : Real[7];
                     attribute mass : Mass = 1200 [kg];
                     attribute pose : Pose = "Landed";
@@ -1725,12 +1722,9 @@ mod tests {
     }
 
     #[test]
-    fn semantic_geometry_names_are_not_inferred_from_generic_real_arrays() {
+    fn numeric_real_arrays_are_not_inferred_as_geometry_vectors() {
         let vector = SysmlType::parse("Real[3]").expect("numeric collection");
         assert_eq!(vector.category, SysmlTypeCategory::Collection);
-        let position = SysmlType::parse("Position").expect("semantic position");
-        assert_eq!(position.category, SysmlTypeCategory::Structured);
-        assert_eq!(position.quantity_kind.as_deref(), Some("Length"));
     }
 
     #[test]

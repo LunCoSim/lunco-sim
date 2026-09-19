@@ -1,6 +1,6 @@
-> Status: Active · Audience: contributors moving simulation tests between Rust and Rhai
+> Status: Active · Audience: contributors choosing and maintaining test ownership
 
-# Test ownership and migration boundary
+# Test ownership and language boundary
 
 Rhai tests are the production acceptance layer for authored policy and
 observable behavior. Rust tests remain the mechanism layer. The boundary is not
@@ -24,7 +24,7 @@ the authored fixture supplies entity paths and thresholds. Rust remains the
 owner of the solver and low-level telemetry, so a Rhai acceptance helper never
 changes collision policy or becomes a second physics model.
 
-## SysML v2 migration boundary
+## SysML requirements and authored verification
 
 The target architecture separates three things that are currently mixed in
 many Rhai files:
@@ -35,21 +35,20 @@ many Rhai files:
 | Traceability | `satisfy`, `verify`, and standard realization references | Resolves USD prims, Modelica participants and source revisions |
 | Verification intent | `verification def`/usage, subject and verified requirement | Selects the existing scene/backend and declares required observations |
 | Measurement and actuation | Not a second simulator | Public USD queries, commands, telemetry, Modelica ports and physics facts |
-| Verdict | `VerificationCases::VerdictKind` projection | Executes and records `pass`, `fail`, `inconclusive`, or `error` |
+| Verdict | Supplies requirement intent, not runtime verdict execution | The mapped Rhai observer emits the production verdict and evidence |
 
-The SysML source is the portable contract. A run result is a separate
-versioned artifact (and eventually a journal record), never an edit to the
-requirement file. The `lunco-sysml-rhai` crate is a read-only
-snapshot/report adapter: it exposes typed requirement and verification records,
-while the production `ValidateSysml` query discovers a manifest-declared Twin
-source set. The shared Rhai verdict adapter emits structured evidence and the
-production runner retains its stable verdict envelope. See
+The SysML source is the portable requirement contract. A run result is
+separate evidence, never an edit to the requirement file. The
+`lunco-sysml-rhai` crate is a read-only snapshot/report adapter; the production
+`ValidateSysml` query discovers the manifest-declared Twin source set. The
+Rhai observer emits structured evidence through the production verdict
+envelope. See
 [`24-domain-sysml.md`](24-domain-sysml.md#sysml-v2-requirement-and-verification-contract)
 for the source shape and implementation gates.
 
-### Implemented integration surface
+### Current production surface
 
-The current runtime provides the required bounded migration surface:
+The current runtime provides this bounded integration:
 
 1. `lunco-sysml-ast` projects requirements, verification cases, subjects,
    typed scalar attributes, `satisfy`/`verify` links, source spans and a
@@ -67,28 +66,18 @@ The current runtime provides the required bounded migration surface:
 Full KerML expression/constraint execution and automatic requirement-to-USD
 projection remain outside the bounded integration.
 
-### Staged conversion of an existing Rhai test
+### Test and requirement ownership
 
-1. Classify every assertion as a normative requirement, a runtime observation,
-   or a mechanism test. Keep mechanism tests in Rust.
-2. Add the SysML requirement and verification definition beside the unchanged
-   USD fixture and Rhai observer. Use the qualified SysML name as the stable
-   key; keep any human `GR-xxx` label in `doc` until a standard metadata
-   projection exists.
-3. Run the legacy Rhai gate and the SysML-selected gate in shadow mode. Compare
-   verdict, source revision, measured values, and evidence paths; do not accept
-   a green result caused by missing subjects, zero samples, or an unresolved
-   mapping.
-4. Move thresholds and acceptance prose into SysML attributes/constraints when
-   the parser preserves them. Leave command sequencing, sampling, USD/Modelica
-   reads, and anti-trivial movement guards in the Rhai backend.
-5. Make the typed SysML verdict the gate only after positive and negative
-   fixtures, stale-generation rejection, evidence capture, and production
-   readiness all pass. Remove the duplicate Rhai assertion in the same change.
+Keep requirement intent, identifiers, units, and authored limits in standard
+SysML. Keep executable observations, command sequencing, runtime queries,
+policy, and verdict logic in the Twin's Rhai observer. This avoids turning
+SysML into a second simulator and keeps checks editable without a Rust rebuild.
 
-Do not wrap an existing Rust test in Rhai, copy a threshold into both files,
-or let a missing verification mapping silently pass. This migration changes
-the ownership of the contract, not merely the spelling of the test.
+Use Rust tests only for generic mechanisms the production Rhai/API surface
+cannot observe, such as parser lowering, serialization, schema composition,
+and lifecycle invariants. Do not duplicate an observable behavior assertion in
+Rust merely because its implementation is Rust. Do not wrap a Rust test in a
+Rhai string and execute it from a Rust harness.
 
 The authored test shape is Rhai, with SysML as its input contract. Use the
 generic evaluator so a numeric limit is read from SysML rather than copied into
@@ -360,7 +349,7 @@ renderer-selected active-camera exposure; that presentation fact belongs to a
 GPU-backed visual acceptance pass, while the authored camera track and spawned
 camera remain observable here.
 
-## Migration decision table
+## Test ownership decision table
 
 Move to Rhai when all of these are true:
 
@@ -431,10 +420,10 @@ projection target. If a future public query exposes one of these mechanism
 claims end-to-end, move that exact assertion to an authored scene and remove
 the Rust duplicate in the same change.
 
-## Remaining migration work
+## Mechanism tests that remain in Rust
 
-The following are intentionally not deleted until their production replacements
-exist:
+Keep Rust coverage for these implementation-owned boundaries until an existing
+production surface can prove the exact contract without a test-only API:
 
 - `lunco-usd-sim` synthesizer tests for malformed policy result shapes and
   boundary validation; Rust owns the ABI firewall, while policy-specific
@@ -444,11 +433,7 @@ exist:
   these protect generic coupling, parser and solver mechanisms, not authored
   mission policy;
 - render-to-physics writeback tests and USD projection tests whose public
-  surfaces do not expose the exact frame or lifecycle fact they assert. The
-  retired avatar rotation/grid, surface-math, and teleport targets were
-  duplicate hand-built workflows; authoritative surface math remains in
-  `lunco-camera-core`, and runtime camera behavior belongs in authored scene
-  tests;
+  surfaces do not expose the exact frame or lifecycle fact they assert;
 - orphan or externally-targeted scenario assets, such as
   `assets/scenarios/tests/wheel_sinking_parity.rhai`, until a matching authored
   scene exists. They are not silently counted as production gates.

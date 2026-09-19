@@ -10,10 +10,10 @@ lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true }
 lunco-behavior = { path = "../lunco-behavior" }
 lunco-core = { path = "../lunco-core" }
+lunco-geometry-core = { path = "../lunco-geometry-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
-lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 rhai = { workspace = true }
 
 [lints]

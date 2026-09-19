@@ -1,10 +1,6 @@
-//! Precision-preserving bounds shared by authored geometry and verification.
-//!
-//! These values stay in `f64` through SysML, Rhai, and geometry verification.
-//! Adapters lower them only when the target USD schema or renderer requires it.
+//! Precision-preserving bounds and oriented-box relations.
 
-use crate::DTransform;
-use bevy::math::{DQuat, DVec3};
+use bevy_math::{DQuat, DVec3};
 
 /// An axis-aligned box in one explicitly shared coordinate frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,18 +85,6 @@ impl OrientedBounds3 {
             half_extents,
             rotation,
         })
-    }
-
-    /// Transform local axis-aligned bounds into a world-oriented box.
-    pub fn from_local(bounds: Bounds3, pose: DTransform) -> Option<Self> {
-        if !pose.is_finite() {
-            return None;
-        }
-        Self::new(
-            pose.transform_point(bounds.center())?,
-            bounds.half_extents() * pose.scale.abs(),
-            pose.rotation,
-        )
     }
 
     /// World-space center.
@@ -207,46 +191,4 @@ fn projected_radius(bounds: OrientedBounds3, axis: DVec3) -> f64 {
     bounds.half_extents.x * axis.dot(local_axes[0]).abs()
         + bounds.half_extents.y * axis.dot(local_axes[1]).abs()
         + bounds.half_extents.z * axis.dot(local_axes[2]).abs()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn oriented_bounds_preserve_f64_translation_and_detect_axis_separation() {
-        let a = OrientedBounds3::new(
-            DVec3::new(1.0e8, 0.0, 0.0),
-            DVec3::splat(0.5),
-            DQuat::IDENTITY,
-        )
-        .unwrap();
-        let b = OrientedBounds3::new(
-            DVec3::new(1.0e8 + 1.25, 0.0, 0.0),
-            DVec3::splat(0.5),
-            DQuat::IDENTITY,
-        )
-        .unwrap();
-
-        let relation = a.relation(b);
-        assert!(relation.separated);
-        assert!((relation.greatest_axis_margin - 0.25).abs() < 1.0e-9);
-        assert_eq!(relation.axis_from_a_to_b, DVec3::X);
-    }
-
-    #[test]
-    fn oriented_bounds_detect_a_rotated_intersection() {
-        let a =
-            OrientedBounds3::new(DVec3::ZERO, DVec3::new(1.0, 0.2, 0.2), DQuat::IDENTITY).unwrap();
-        let b = OrientedBounds3::new(
-            DVec3::new(0.0, 0.0, 0.1),
-            DVec3::new(1.0, 0.2, 0.2),
-            DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2),
-        )
-        .unwrap();
-
-        let relation = a.relation(b);
-        assert!(!relation.separated);
-        assert!(relation.greatest_axis_margin < 0.0);
-    }
 }

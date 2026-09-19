@@ -148,6 +148,15 @@ fn _resolve_indexed_identity(index, expected, kind) {
     #{ok: true, name: found}
 }
 
+fn _report_error(report, fallback) {
+    if type_of(report) != "map" { return fallback; }
+    if report.error != () && report.error != "" { return report.error; }
+    if report.errors != () && report.errors.len() > 0 {
+        return report.errors[0];
+    }
+    fallback
+}
+
 fn _resolve_check_identities(checks, indexes) {
     for check in checks {
         if check == () || check.requirement == () || check.verification == () {
@@ -175,8 +184,9 @@ fn _resolve_check_identities(checks, indexes) {
 // `binding.component`/`binding.verification` while keeping identity in
 // twin.toml and SysML.
 fn component_binding(report, component_name) {
-    if report == () || report.ok != true {
-        return #{ok: false, error: "SysML/Twin source report is unavailable"};
+    if type_of(report) != "map" || report.ok != true {
+        return #{ok: false,
+            error: _report_error(report, "SysML/Twin source report is unavailable")};
     }
     if component_name == () || component_name == "" {
         return #{ok: false, error: "Twin component name is missing"};
@@ -226,11 +236,23 @@ fn component_binding(report, component_name) {
 }
 
 fn _lazy_attribute(report, name) {
-    if report == () || report.path == () || report.path == "" { return (); }
+    if report == () || report.path == () || report.path == "" {
+        return #{ok: false, error: "SysML source report has no resolvable path"};
+    }
     let selected = query("ValidateSysml", #{path: report.path,
         compact: true, attributes: [name]});
-    if selected == () || selected.ok != true
-        || selected.attributes_qualified == () { return (); }
+    if selected == () {
+        return #{ok: false, error: "ValidateSysml returned no selected attribute report"};
+    }
+    if selected.ok != true {
+        let message = if selected.error != () { selected.error }
+            else if selected.errors != () && selected.errors.len() > 0 { selected.errors[0] }
+            else { "ValidateSysml rejected the source while selecting " + name };
+        return #{ok: false, error: message};
+    }
+    if selected.attributes_qualified == () {
+        return #{ok: false, error: "ValidateSysml omitted its qualified-attribute table"};
+    }
     let found = ();
     // `attributes_qualified` is an identity-preserving Rhai map, not an
     // array.  Iterate its keys so the bridge remains valid for both exact
@@ -238,18 +260,21 @@ fn _lazy_attribute(report, name) {
     for qualified in selected.attributes_qualified.keys() {
         let entry = selected.attributes_qualified[qualified];
         if qualified == name || qualified.ends_with("::" + name) {
-            if found != () { throw("ambiguous SysML attribute `" + name + "`"); }
+            if found != () {
+                return #{ok: false,
+                    error: "ambiguous SysML attribute `" + name + "`; use a qualified name"};
+            }
             found = entry;
         }
     }
-    found
+    #{ok: true, record: found}
 }
 
 // Resolve one typed SysML attribute without silently choosing a colliding
 // short name. Qualified names are the stable contract; a local name is only
 // accepted when the validator proved it unique.
 fn attribute(report, name) {
-    if report == () || name == () || name == "" {
+    if type_of(report) != "map" || name == () || name == "" {
         return #{ok: false, error: "SysML attribute name is missing"};
     }
     if name.contains("::") {
@@ -257,7 +282,8 @@ fn attribute(report, name) {
             return #{ok: true, record: report.attributes_qualified[name]};
         }
         let lazy = _lazy_attribute(report, name);
-        if lazy != () { return #{ok: true, record: lazy}; }
+        if lazy.ok != true { return lazy; }
+        if lazy.record != () { return #{ok: true, record: lazy.record}; }
         return #{ok: false, error: "qualified SysML attribute is missing: " + name};
     }
     if report.attribute_collisions != () {
@@ -275,7 +301,8 @@ fn attribute(report, name) {
         // default: a missing or ambiguous name still returns an explicit
         // failure to the caller.
         let lazy = _lazy_attribute(report, name);
-        if lazy != () { return #{ok: true, record: lazy}; }
+        if lazy.ok != true { return lazy; }
+        if lazy.record != () { return #{ok: true, record: lazy.record}; }
         return #{ok: false, error: "SysML attribute is missing: " + name};
     }
     #{ok: true, record: report.attributes[name]}
@@ -287,23 +314,30 @@ fn attribute(report, name) {
 // values without reparsing source text or converting through JSON strings.
 fn native_value(report, name) {
     let resolved = attribute(report, name);
-    if resolved.ok != true || resolved.record == () { return (); }
+    if resolved.ok != true { return resolved; }
+    if resolved.record == () {
+        return #{ok: false, error: "SysML attribute is missing: " + name};
+    }
     let qualified = if resolved.record.qualified_name != () {
         resolved.record.qualified_name
     } else {
         name
     };
     let value = sysml_value_from_report(report, qualified);
-    if value != () { return value; }
-    if report.path == () || report.path == "" { return (); }
-    sysml_value(report.path, qualified)
+    if value.ok != true { return value; }
+    if value.found == true { return value.value; }
+    if report.path == () || report.path == "" {
+        return #{ok: false, error: "SysML source report has no resolvable path"};
+    }
+    let selected = sysml_value(report.path, qualified);
+    if selected.ok != true { return selected; }
+    selected.value
 }
 
 fn number(report, name) {
     let resolved = attribute(report, name);
-    if resolved.ok != true || resolved.record.value == () {
-        return ();
-    }
+    if resolved.ok != true { return resolved; }
+    if resolved.record.value == () { return (); }
     if resolved.record.value.number_value != () { return resolved.record.value.number_value; }
     ()
 }
@@ -313,8 +347,8 @@ fn number(report, name) {
 // through JSON. A non-numeric vector is rejected as a typed-source error.
 fn vector(report, name) {
     let resolved = attribute(report, name);
-    if resolved.ok != true || resolved.record.value == ()
-        || resolved.record.value.kind != "vector"
+    if resolved.ok != true { return resolved; }
+    if resolved.record.value == () || resolved.record.value.kind != "vector"
         || resolved.record.value.elements == () {
         return ();
     }
@@ -341,7 +375,8 @@ fn vector(report, name) {
 // this helper is retained for actual prose/text collections only.
 fn string_vector(report, name) {
     let resolved = attribute(report, name);
-    if resolved.ok != true || resolved.record.value == ()
+    if resolved.ok != true { return resolved; }
+    if resolved.record.value == ()
         || resolved.record.value.kind != "vector"
         || resolved.record.value.elements == ()
         || resolved.record.declared_type == ()
@@ -365,7 +400,8 @@ fn string_vector(report, name) {
 
 fn text(report, name) {
     let resolved = attribute(report, name);
-    if resolved.ok != true || resolved.record.value == () { return (); }
+    if resolved.ok != true { return resolved; }
+    if resolved.record.value == () { return (); }
     _text(resolved.record.value.literal)
 }
 
@@ -461,19 +497,17 @@ fn _indexed_coverage(indexes, requirement, verification_name) {
 }
 
 fn _expected(report, check) {
-    if check.expected_attr == () { return check.expected; }
+    if check.expected_attr == () { return #{ok: true, value: check.expected}; }
     let resolved = attribute(report, check.expected_attr);
-    if resolved.ok != true || resolved.record.value == () { return (); }
-    if resolved.record.value.number_value != () { return resolved.record.value.number_value; }
-    _text(resolved.record.value.literal)
-}
-
-fn _expected_error(report, check) {
-    if check.expected_attr == () { return ""; }
-    let resolved = attribute(report, check.expected_attr);
-    if resolved.ok != true { return resolved.error; }
-    if resolved.record.value == () { return "SysML attribute has no literal value: " + check.expected_attr; }
-    ""
+    if resolved.ok != true { return resolved; }
+    if resolved.record.value == () {
+        return #{ok: false,
+            error: "SysML attribute has no literal value: " + check.expected_attr};
+    }
+    if resolved.record.value.number_value != () {
+        return #{ok: true, value: resolved.record.value.number_value};
+    }
+    #{ok: true, value: _text(resolved.record.value.literal)}
 }
 
 fn _failure(check, message) {
@@ -493,8 +527,10 @@ fn _check_one(report, check, indexes) {
     if !_indexed_coverage(indexes, check.requirement, check.verification) {
         return _failure(check, "no SysML verification case covers this requirement");
     }
-    let expected_error = _expected_error(report, check);
-    if expected_error != "" { return _failure(check, expected_error); }
+    let expected_result = _expected(report, check);
+    if expected_result.ok != true {
+        return _failure(check, expected_result.error);
+    }
     if check.kind == "coverage" { return #{ok: true, id: check.id, component: check.component, requirement: check.requirement}; }
 
     // Compare a typed SysML collection with its declared count. This is a
@@ -506,19 +542,24 @@ fn _check_one(report, check, indexes) {
             return _failure(check, "SysML identity list attribute is missing");
         }
         let resolved = attribute(report, check.list_attr);
-        if resolved.ok != true || resolved.record.value == () {
+        if resolved.ok != true {
+            return _failure(check, resolved.error);
+        }
+        if resolved.record.value == () {
             return _failure(check, "SysML identity list is missing");
         }
-        // Use the native typed projection for every collection kind.  This
-        // preserves enum and value-type arrays (for example
-        // LandingLegInstanceName[] and Position[]) instead of forcing their
-        // members through a String/numeric-vector compatibility decoder.
+        // Use the native typed projection for every collection kind. It
+        // preserves the source-declared member type instead of forcing the
+        // values through a String/numeric-vector compatibility decoder.
         let values = native_value(report, check.list_attr);
+        if type_of(values) == "map" && values.ok == false {
+            return _failure(check, values.error);
+        }
         if values == () || type_of(values) != "array" {
             return _failure(check, "SysML collection is not a typed array value");
         }
         let actual = values.len();
-        let expected = _expected(report, check);
+        let expected = expected_result.value;
         if expected == () { return _failure(check, "SysML expected count is missing"); }
         if actual.to_float() != expected.to_float() {
             return #{ok: false, id: check.id, component: check.component,
@@ -586,7 +627,7 @@ fn _check_one(report, check, indexes) {
             return _failure(check, "USD attribute " + check.attr + " is missing");
         }
         let actual = actual_record.attrs[check.attr];
-        let expected = _expected(report, check);
+        let expected = expected_result.value;
         if expected == () { return _failure(check, "SysML expected attribute is missing"); }
         let tolerance = if check.tolerance == () { 0.001 } else { check.tolerance };
         let matches = false;
@@ -615,7 +656,7 @@ fn _check_one(report, check, indexes) {
         }
         let vector = actual_record.attrs[check.attr];
         if check.index == () || vector.len() <= check.index { return _failure(check, "USD vector component is missing"); }
-        let expected = _expected(report, check);
+        let expected = expected_result.value;
         let tolerance = if check.tolerance == () { 0.001 } else { check.tolerance };
         if !_close(vector[check.index], expected, tolerance) { return _failure(check, "USD vector component disagrees with SysML expected value"); }
         return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, actual: vector[check.index], expected: expected};
@@ -630,7 +671,7 @@ fn _check_one(report, check, indexes) {
         if check.index == () || scale.len() <= check.index { return _failure(check, "USD extent vector component is missing"); }
         let multiplier = if check.multiplier == () { 1.0 } else { check.multiplier };
         let actual = actual_record.attrs["size"] * scale[check.index] * multiplier;
-        let expected = _expected(report, check);
+        let expected = expected_result.value;
         let tolerance = if check.tolerance == () { 0.001 } else { check.tolerance };
         if !_close(actual, expected, tolerance) {
             return #{ok: false, id: check.id, component: check.component,
@@ -652,7 +693,7 @@ fn _check_one(report, check, indexes) {
         }
         let multiplier = if check.multiplier == () { 1.0 } else { check.multiplier };
         let actual = bounds.half_extents[check.index] * multiplier;
-        let expected = _expected(report, check);
+        let expected = expected_result.value;
         if expected == () { return _failure(check, "SysML expected attribute is missing"); }
         let tolerance = if check.tolerance == () { 0.001 } else { check.tolerance };
         if !_close(actual, expected, tolerance) {
@@ -668,7 +709,7 @@ fn _check_one(report, check, indexes) {
         let actual_record = _query(check.path, [check.attr]);
         if !_ok(actual_record) || actual_record.attrs[check.attr] == () { return _failure(check, "USD attribute is missing"); }
         let actual = actual_record.attrs[check.attr];
-        let expected = if check.expected_attr == () { check.expected } else { _expected(report, check) };
+        let expected = expected_result.value;
         // QueryUsdPrim preserves the canonical quoted literal for some
         // authored string opinions.  Compare string content, not the literal
         // delimiters, while keeping numeric/bool equality exact.
@@ -721,8 +762,9 @@ fn evaluate(source_report, checks) {
     let failures = [];
     let failure_chunks = [];
     let failure_chunk = [];
-    if source_report == () || source_report.ok != true {
-        return #{ok: false, results: [], failures: ["SysML source report is unavailable"]};
+    if type_of(source_report) != "map" || source_report.ok != true {
+        let message = _report_error(source_report, "SysML source report is unavailable");
+        return #{ok: false, results: [], failures: [message], error: message};
     }
     let indexes = _indexes(source_report);
     let identities = _resolve_check_identities(checks, indexes);
@@ -814,8 +856,9 @@ fn evaluate(source_report, checks) {
 // no aggregate result array is constructed, yet every typed observation is
 // available to the same evidence channel as a small evaluation.
 fn evaluate_stream(source_report, checks, channel, title) {
-    if source_report == () || source_report.ok != true {
-        return #{ok: false, results: [], failures: ["SysML source report is unavailable"],
+    if type_of(source_report) != "map" || source_report.ok != true {
+        let message = _report_error(source_report, "SysML source report is unavailable");
+        return #{ok: false, results: [], failures: [message], error: message,
             check_count: 0, requirement_count: 0, failure_count: 1,
             streamed: true};
     }
@@ -929,8 +972,9 @@ fn source_with_attributes(names) {
 // The caller receives source reference, rationale, optional status, and the
 // exact SysML source span as structured data rather than a comment string.
 fn provenance(report, requirement_id) {
-    if report == () || report.path == () || report.path == "" {
-        return #{ok: false, error: "SysML source report is unavailable"};
+    if type_of(report) != "map" || report.path == () || report.path == "" {
+        return #{ok: false,
+            error: _report_error(report, "SysML source report is unavailable")};
     }
     if requirement_id == () || requirement_id == "" {
         return #{ok: false, error: "SysML provenance requirement ID is missing"};
@@ -941,8 +985,11 @@ fn provenance(report, requirement_id) {
         attributes: [],
         provenance_ids: [requirement_id]
     });
-    if selected == () || selected.ok != true
-        || selected.provenance_records == () {
+    if selected == () || selected.ok != true {
+        return #{ok: false,
+            error: _report_error(selected, "SysML provenance projection is unavailable")};
+    }
+    if selected.provenance_records == () {
         return #{ok: false, error: "SysML provenance projection is unavailable"};
     }
     if selected.provenance_records.len() == 0 {

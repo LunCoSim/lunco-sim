@@ -10,6 +10,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-core`** | Stable ECS engine facts: identity/provenance, shared markers, typed scene requests, runtime diagnostics/fault contracts, state markers, and small ECS utilities. Reconciliation, exposure storage, synchronization helpers, pacing, and domain composition have their own owners. |
+| **`lunco-geometry-core`** | Precision-preserving, renderer-independent geometry kernels: finite f64 AABB/OBB relations and convex profile extrusion. Shared by authored geometry tools without depending on ECS or USD mesh evaluators. |
 | **`lunco-core-runtime`** | Bevy runtime owner for core contracts: fixed simulation ticks, rollback/netcode schedule anchors, pacing/barriers, gate instrumentation, subsystem toggles, recoverable synchronization helpers, and the runtime plugin that installs those mechanisms. |
 | **`lunco-exposure-core`** | Renderer-independent typed exposure registry (`EngineExposures`, `ExposureValue`, and refresh state). It has no application projection or UI policy; `lunco-luncosim-exposures` supplies the production projection. |
 | **`lunco-command-contracts`** | Pure mutation, session, acknowledgement, rejection, and synchronization-channel contracts shared by document, transport, networking, and runtime adapters without ECS. `Ack.data` uses the shared typed `HookValue` ABI; API JSON is created only at the external adapter. |
@@ -310,6 +311,13 @@ semantics.
 
 **`lunco-core-runtime`**
 The Bevy runtime owner for `lunco-core` contracts. It installs the fixed simulation tick, rollback/netcode schedule anchors, pacing/barriers, gate instrumentation, subsystem toggles, and recoverable synchronization helpers. Contract-only consumers can depend on `lunco-core` without compiling this package.
+
+**`lunco-geometry-core`**
+Owns reusable f64 bounds/SAT and convex-profile mesh kernels. It depends only on
+`bevy_math`; Rhai's authored geometry tools use it directly, while USD curve
+and NURBS evaluators stay in `lunco-usd-geometry`. This keeps geometry edits
+out of the broad `lunco-core` invalidation fan-out and prevents the scripting
+packages from acquiring USD's Truck/NURBS dependency solely for extrusion.
 
 **`lunco-exposure-core`**
 The dependency-light typed exposure store. `EngineExposures` and its value

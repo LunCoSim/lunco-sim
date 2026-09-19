@@ -438,7 +438,6 @@ fn semantic_category_for_element(base: &str) -> &'static str {
         | "ThreeVectorValue"
         | "CartesianTwoVectorValue"
         | "CartesianThreeVectorValue"
-        | "Position"
         | "Direction"
         | "Quaternion"
         | "Quat"
@@ -511,7 +510,6 @@ fn typed_report_literal_value(literal: &Map, declared: Option<&Map>) -> Option<D
         if matches!(
             base,
             "Vec3"
-                | "Position"
                 | "Direction"
                 | "Dimensions"
                 | "CartesianThreeVectorValue"
@@ -639,7 +637,6 @@ fn typed_literal_dynamic(
         if matches!(
             base,
             "Vec3"
-                | "Position"
                 | "Direction"
                 | "Dimensions"
                 | "CartesianThreeVectorValue"
@@ -1052,7 +1049,6 @@ fn diagnostic_dynamic(diagnostic: &SysmlDiagnostic) -> Dynamic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::math::DVec3;
 
     #[test]
     fn report_is_consumable_by_rhai() {
@@ -1094,29 +1090,6 @@ mod tests {
             .eval("sysml_report().attributes[0].value.number_value")
             .expect("native numeric projection");
         assert_eq!(value, 2.5);
-    }
-
-    #[test]
-    fn rhai_report_exposes_semantic_position_as_shared_f64_vec3() {
-        let analysis = Arc::new(SysmlAnalysis::from_files_without_stdlib([(
-            "position.sysml",
-            "part def Lander { attribute station : Position = (1.25, -2.0, 3.5); }",
-        )]));
-        let mut engine = rhai::Engine::new();
-        engine
-            .register_type_with_name::<DVec3>("Vec3")
-            .register_get("x", |value: &mut DVec3| value.x)
-            .register_get("y", |value: &mut DVec3| value.y)
-            .register_get("z", |value: &mut DVec3| value.z);
-        register_sysml_report(&mut engine, analysis);
-        let coordinates: rhai::Array = engine
-            .eval("let p = sysml_report().attributes[0].typed_value; [p.x, p.y, p.z]")
-            .expect("Rhai typed position projection");
-        let values: Vec<f64> = coordinates
-            .into_iter()
-            .map(|value| value.as_float().expect("f64 coordinate"))
-            .collect();
-        assert_eq!(values, [1.25, -2.0, 3.5]);
     }
 
     #[test]

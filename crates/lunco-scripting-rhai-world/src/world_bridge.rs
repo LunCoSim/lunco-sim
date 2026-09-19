@@ -400,14 +400,17 @@ pub fn policy_status_value(world: &World) -> HookValue {
 /// typed in-process call; external transports serialize their response at the
 /// API boundary instead of making JSON a scripting value.
 fn sysml_report_value(path: &str, compact: bool) -> Dynamic {
-    bridge_core::query(
+    let report = bridge_core::query(
         &RhaiBuilder,
         "ValidateSysml",
         HookValue::map([
             ("path", HookValue::Str(path.to_owned())),
             ("compact", HookValue::Bool(compact)),
         ]),
-    )
+    );
+    let issue = sysml_report_issue(&report, "ValidateSysml");
+    publish_sysml_warning(path, None, issue.as_deref());
+    report
 }
 
 #[cfg(feature = "sysml")]
@@ -427,39 +430,182 @@ fn sysml_typed_value(path: &str, qualified_name: &str) -> Dynamic {
             ),
         ]),
     );
+    if let Some(issue) = sysml_report_issue(&report, "ValidateSysml") {
+        return sysml_value_error(path, qualified_name, issue);
+    }
     let Some(report) = report.clone().try_cast::<Map>() else {
-        return Dynamic::UNIT;
+        return sysml_value_error(
+            path,
+            qualified_name,
+            "ValidateSysml returned a non-map report",
+        );
     };
     let Some(attributes) = report
         .get("attributes_qualified")
         .and_then(|value| value.clone().try_cast::<Map>())
     else {
-        return Dynamic::UNIT;
+        return sysml_value_error(
+            path,
+            qualified_name,
+            "ValidateSysml report omitted its qualified-attribute table",
+        );
     };
     let Some(record) = attributes
         .get(qualified_name)
         .and_then(|value| value.clone().try_cast::<Map>())
     else {
-        return Dynamic::UNIT;
+        return sysml_value_error(
+            path,
+            qualified_name,
+            format!("SysML attribute is missing: {qualified_name}"),
+        );
     };
-    lunco_sysml_rhai::typed_report_attribute_value(&record).unwrap_or(Dynamic::UNIT)
+    let Some(value) = lunco_sysml_rhai::typed_report_attribute_value(&record) else {
+        return sysml_value_error(
+            path,
+            qualified_name,
+            format!("SysML attribute has no supported native literal: {qualified_name}"),
+        );
+    };
+    sysml_value_success(path, qualified_name, value)
 }
 
 #[cfg(feature = "sysml")]
 fn sysml_typed_value_from_report(report: &Map, qualified_name: &str) -> Dynamic {
+    let path = report
+        .get("path")
+        .and_then(|value| value.clone().into_string().ok())
+        .unwrap_or_else(|| "<report>".into());
+    if let Some(issue) = sysml_map_issue(report, "ValidateSysml") {
+        return sysml_value_error(&path, qualified_name, issue);
+    }
     let Some(attributes) = report
         .get("attributes_qualified")
         .and_then(|value| value.clone().try_cast::<Map>())
     else {
-        return Dynamic::UNIT;
+        return sysml_value_error(
+            &path,
+            qualified_name,
+            "ValidateSysml report omitted its qualified-attribute table",
+        );
     };
     let Some(record) = attributes
         .get(qualified_name)
         .and_then(|value| value.clone().try_cast::<Map>())
     else {
-        return Dynamic::UNIT;
+        let selected = report
+            .get("attribute_projection")
+            .and_then(|value| value.clone().into_string().ok())
+            .is_some_and(|projection| projection == "selected");
+        if selected {
+            return sysml_value_not_projected(&path, qualified_name);
+        }
+        return sysml_value_error(
+            &path,
+            qualified_name,
+            format!("SysML attribute is missing: {qualified_name}"),
+        );
     };
-    lunco_sysml_rhai::typed_report_attribute_value(&record).unwrap_or(Dynamic::UNIT)
+    let Some(value) = lunco_sysml_rhai::typed_report_attribute_value(&record) else {
+        return sysml_value_error(
+            &path,
+            qualified_name,
+            format!("SysML attribute has no supported native literal: {qualified_name}"),
+        );
+    };
+    sysml_value_success(&path, qualified_name, value)
+}
+
+fn sysml_report_issue(report: &Dynamic, operation: &str) -> Option<String> {
+    let Some(report) = report.clone().try_cast::<Map>() else {
+        return Some(format!("{operation} did not return a structured report"));
+    };
+    sysml_map_issue(&report, operation)
+}
+
+fn sysml_map_issue(report: &Map, operation: &str) -> Option<String> {
+    match report.get("ok").and_then(|value| value.as_bool().ok()) {
+        Some(true) => None,
+        Some(false) => {
+            if let Some(message) = report
+                .get("error")
+                .and_then(|value| value.clone().into_string().ok())
+            {
+                return Some(message);
+            }
+            let errors = report
+                .get("errors")
+                .and_then(|value| value.clone().try_cast::<rhai::Array>())
+                .map(|errors| {
+                    errors
+                        .into_iter()
+                        .filter_map(|value| value.into_string().ok())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
+                .filter(|errors| !errors.is_empty());
+            Some(errors.unwrap_or_else(|| format!("{operation} rejected the SysML source")))
+        }
+        None => Some(format!("{operation} report omitted its `ok` status")),
+    }
+}
+
+#[cfg(feature = "sysml")]
+fn sysml_value_error(path: &str, qualified_name: &str, message: impl Into<String>) -> Dynamic {
+    let message = message.into();
+    publish_sysml_warning(path, Some(qualified_name), Some(&message));
+    let mut result = Map::new();
+    result.insert("ok".into(), Dynamic::from_bool(false));
+    result.insert("found".into(), Dynamic::from_bool(false));
+    result.insert("error".into(), Dynamic::from(message));
+    Dynamic::from_map(result)
+}
+
+#[cfg(feature = "sysml")]
+fn sysml_value_success(path: &str, qualified_name: &str, value: Dynamic) -> Dynamic {
+    publish_sysml_warning(path, Some(qualified_name), None);
+    let mut result = Map::new();
+    result.insert("ok".into(), Dynamic::from_bool(true));
+    result.insert("found".into(), Dynamic::from_bool(true));
+    result.insert("value".into(), value);
+    Dynamic::from_map(result)
+}
+
+#[cfg(feature = "sysml")]
+fn sysml_value_not_projected(path: &str, qualified_name: &str) -> Dynamic {
+    publish_sysml_warning(path, Some(qualified_name), None);
+    let mut result = Map::new();
+    result.insert("ok".into(), Dynamic::from_bool(true));
+    result.insert("found".into(), Dynamic::from_bool(false));
+    Dynamic::from_map(result)
+}
+
+fn publish_sysml_warning(path: &str, qualified_name: Option<&str>, issue: Option<&str>) {
+    let subject = path.to_owned();
+    let _ = bridge_core::with_world(|world| {
+        let Some(mut diagnostics) = world.get_resource_mut::<lunco_core::RuntimeDiagnostics>()
+        else {
+            return;
+        };
+        diagnostics.findings.retain(|finding| {
+            finding.producer != "rhai-sysml"
+                || finding.code != "sysml-query"
+                || finding.subject != subject
+        });
+        if let Some(message) = issue {
+            let message = match qualified_name {
+                Some(name) => format!("{message} (attribute `{name}`)"),
+                None => message.to_owned(),
+            };
+            diagnostics.findings.push(lunco_core::RuntimeDiagnostic {
+                code: "sysml-query".into(),
+                severity: lunco_core::DiagnosticSeverity::Warning,
+                producer: "rhai-sysml".into(),
+                subject,
+                message,
+            });
+        }
+    });
 }
 
 /// Map a rhai value to the engine-wide TelemetryValue for emit. Scalars, arrays,

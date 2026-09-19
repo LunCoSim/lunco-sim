@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/lunco-core",
+    "crates/lunco-geometry-core",
     "crates/lunco-exposure-core",
     "crates/lunco-core-runtime",
     "crates/lunco-id",

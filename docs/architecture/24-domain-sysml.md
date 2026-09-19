@@ -1,10 +1,14 @@
 # 24 — SysML Domain
 
-> Status: Foundation + Twin source/document loading + typed semantic values implemented · Audience: contributors extending SysML v2 structure & requirements
+> Status: Bounded SysML v2 source/document loading, typed semantic values, and Rhai-owned requirement verification implemented · Audience: contributors extending SysML v2 structure & requirements
 >
-SysML v2 is the source of truth for **system structure and
-requirements** — a peer domain inside a Twin, co-equal with Modelica
-(behavior) and USD (geometry). Not the Twin container itself; see
+SysML v2 is the portable source for **logical system structure, requirements,
+and verification intent** — a peer domain inside a Twin alongside Modelica and
+USD. The implemented runtime loads and resolves a bounded SysML subset and
+exposes typed facts to Rhai. SysML does not own executable prim identity,
+composed scene topology, spatial geometry, or physics; those remain USD facts.
+Modelica owns continuous equations and state, while Rhai owns runtime policy,
+observations, and verdicts. SysML is not the Twin container itself; see
 [`13-twin-and-workflow.md`](13-twin-and-workflow.md) for the two-file
 strategy.
 
@@ -79,29 +83,16 @@ package LunarBaseAlpha {
 
 ## 4. Relationship to the Document System
 
-Under [`10-document-system.md`](10-document-system.md) terms:
+`lunco-sysml` owns the source-backed `SysmlDocument` and reversible
+`SysmlOp::{ReplaceSource, EditText}` operations. The document retains its
+source, origin, generation and refreshed `lunco-sysml-ast` analysis; generic
+document hosting supplies journaling, undo/redo and save lifecycle. The
+`InspectSysmlDocument` query exposes the current source identity and
+diagnostics, while document commands apply source edits through that host.
 
-```rust
-pub struct SysmlDocument {
-    // Serializable projection from lunco-sysml-ast
-    analysis: Arc<SysmlAnalysis>,
-    source: String,
-    generation: u64,
-}
-
-pub enum SysmlOp {
-    ReplaceSource { new: String },
-    EditText { range: Range<usize>, replacement: String },
-}
-```
-
-Views observing a `SysmlDocument`:
-
-- **BDD panel** — Block Definition Diagram (parts + types)
-- **IBD panel** — Internal Block Diagram (composition + connections)
-- **Requirements panel** — flat list / tree of requirements with traceability
-- **SysML text editor** — direct textual editing with syntax highlighting
-- **Parts tree** — hierarchical navigator in the Scene Tree dock
+This document lifecycle is not a claim that SysML has dedicated BDD, IBD,
+requirements-tree or text-editor UI. The production surface is the generic
+document API, typed reports, and Rhai verification described below.
 
 ## 5. Parser strategy
 
@@ -124,38 +115,37 @@ Griffin component model:
   enumerations, and structured values.
 
 Spatial values do not use a second vector implementation. The Rhai adapter
-lowers semantic `Position`/`Vec3` values to the existing f64 Bevy/glam
+lowers the standard `CartesianThreeVectorValue` to the existing f64 Bevy/glam
 `DVec3`, and quaternions to `DQuat`, which are already registered by the
 shared Rhai math bridge. Bevy f32 render transforms remain a later projection
 boundary, never the SysML requirement representation.
 
-**Supported subset (initial):**
+The parser and source projection retain the declared elements and resolved
+relationships from the selected files. The specialized typed records cover
+parts, items, ports, attributes, requirements, verification cases, and opaque
+constraint expressions. Other parsed metamodel elements remain available as
+source-backed generic elements rather than being assigned invented runtime
+semantics.
 
-- `package` declarations with attributes, imports
-- `part def` and `part` instances with attributes, nested parts
-- `port` declarations with type references
-- `connection` statements
-- `requirement def` with ID, doc, attributes
-- `satisfy` relationships
-- Standard `@"path"::"selector"` external references
-- Comments and doc-strings
+This is not a SysML/KerML execution engine. Constraint expressions, general
+derived-feature evaluation, N-dimensional non-Real collections, full quantity
+conversion, redefinition/subsetting semantics, and state/behavior execution
+are not evaluated by the runtime. Rhai owns verification policy and consumes
+the typed facts that the current projection can establish; unresolved values
+remain explicit instead of being guessed from source text.
 
-**Not yet supported (Phase 2+):**
-
-- `interface def`
-- Parametric constraints
-- `state def` (state machines)
-- Full expression language
-- Behavior definitions (activities, actions)
-- Allocations, refinements
-- Analysis/verification execution
-
-The typed value layer is intentionally not a claim that all of SysML v2 or
-KerML is executed. Constraint expressions, general derived-feature
-evaluation, N-dimensional non-Real collections, full quantity conversion,
-redefinition/subsetting semantics, and behavior execution still need an
-owning semantic engine. The current boundary reports these as typed
-unresolved values rather than guessing from strings.
+The Rhai functions `sysml_value(path, qualified_name)` and
+`sysml_value_from_report(report, qualified_name)` return a tagged result map.
+Successful reads carry the native value in `value`; an intentionally omitted
+attribute in a selected compact report is reported as `found: false` so the
+Rhai helper can issue a selected query. Invalid reports, missing attributes,
+and unsupported literals return `ok: false` with an error message. The
+non-fatal failure also appears as a scene-scoped `RuntimeDiagnostics` warning;
+scripts receive the structured result and the application remains running. A
+successful read clears only the `sysml-query` warning for that same source
+path, preserving diagnostics from other sources.
+`sysml_requirements::native_value` unwraps successful native values and
+preserves failed results for the owning verification to report.
 
 The runtime accepts source-level replace/range edits through the
 `ApplySysmlOps { doc_id, ops, parent_generation? }` command. The command uses
@@ -186,12 +176,13 @@ shipped acceptance assets or assertions.
 
 ## 6. SysML v2 requirement and verification contract
 
-SysML becomes the normative home for a test's *intent*; it does not become a
-second physics engine or a replacement for the production scene runner. A
-requirement is a standard SysML definition/usage, and a verification case is a
-standard SysML verification definition/usage that names the requirement it
-answers. `satisfy`, `verify`, and realization references carry the traceability
-that is currently implicit in Rhai filenames and comments.
+SysML is the normative home for a requirement's *intent*; it is not a second
+physics engine or a replacement for the production scene runner. A requirement
+is a standard SysML definition/usage, and a verification case is a standard
+SysML verification definition/usage that names the requirement it answers.
+`satisfy`, `verify`, and realization references carry traceability. Rhai reads
+these typed records, observes the composed USD/Modelica runtime, and owns the
+verification procedure and verdict.
 
 ### Requirement quality
 
@@ -283,24 +274,19 @@ execution, a full SysML editor, and a SysML-to-USD projection are not part of
 this integration. `SysmlPlugin` opens the checked Twin source set after
 `TwinAssetMounted`; a full source browser remains a UI concern.
 
-### Migration rules
+### Verification ownership
 
-- Inventory each current Rhai assertion as a requirement, a verification
-  observation, or a mechanism test. Only the first two move to SysML.
-- Create SysML definitions/usages and a verification case beside the existing
-  USD fixture and Rhai observer. Run both in shadow mode and compare verdicts
-  before changing the gate.
-- Move thresholds and acceptance text into SysML attributes/constraints where
-  the selected parser can preserve them. Keep measurement, command sequencing,
-  and runtime reads in the Rhai backend; it consumes the SysML case and emits
-  observations rather than redefining the requirement. This is a Rhai test
-  migration, not a new Rust test framework.
-- Switch the production gate to the typed SysML verdict only after positive,
-  negative, anti-trivial-motion, stale-generation, and evidence-path checks
-  pass. Then remove duplicate Rhai assertions in the same change.
-- Leave parser, USD schema, Modelica solver, Avian mechanics, command,
-  lifecycle, and authority tests in Rust. SysML is not a wrapper around a Rust
-  test, and a Rhai string executed by Rust is not a production migration.
+- State requirement intent, units, limits, and traceability in standard SysML.
+- Map a qualified verification case to its production scene and Rhai observer
+  in the Twin manifest. Keep component ownership there as well when used.
+- Let the Rhai observer read typed SysML facts, inspect the composed USD and
+  live simulation through public queries, and emit the verdict and evidence.
+  Do not duplicate those observable behavior assertions in Rust tests.
+- Keep Rust tests for mechanisms that the production Rhai/API surface cannot
+  observe, such as parser lowering, serialization, schema composition, and
+  generic lifecycle invariants.
+- A parser/preflight result is not runtime acceptance. Run the mapped
+  production scene test and inspect its authored verdict channel.
 
 ## 7. Status
 
@@ -330,7 +316,7 @@ Explicit non-goals, to avoid scope creep:
 
 - [`00-overview.md`](00-overview.md) — three-tier architecture
 - [`01-ontology.md`](01-ontology.md) — Port, Connection, Attribute definitions (SysML-aligned)
-- [`10-document-system.md`](10-document-system.md) — the editing pattern SysML will adopt
+- [`10-document-system.md`](10-document-system.md) — the shared document editing pattern
 - [`13-twin-and-workflow.md`](13-twin-and-workflow.md) — two-file strategy, Twin structure
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica as the behavior realization
 - [`21-domain-usd.md`](21-domain-usd.md) — USD as the geometric realization

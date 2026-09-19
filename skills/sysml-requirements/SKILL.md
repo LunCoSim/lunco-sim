@@ -56,8 +56,6 @@ Relevant implementation and design references:
   boundary and supported subset.
 - [`sysml-requirement-verification.md`](../../docs/architecture/sysml-requirement-verification.md)
   — current Rhai bridge and verification contract.
-- [`sysmlv2-embedding-and-asset-resolution.md`](../../docs/reviews/sysmlv2-embedding-and-asset-resolution.md)
-  — source-set, resolution, registry and evidence review.
 - [`crates/lunco-twin/src/manifest.rs`](../../crates/lunco-twin/src/manifest.rs)
   — `[sysml]` and `[verification]` manifest ownership.
 - [`assets/scripting/tools/sysml_requirements.rhai`](../../assets/scripting/tools/sysml_requirements.rhai)
@@ -157,8 +155,16 @@ The current supported subset is source-backed and deterministic:
 - a Twin-owned verification registry mapping a qualified SysML verification
   name to one scene, one Rhai observer, and an optional verdict channel;
 - native Rhai maps from `sysml_report()` and
-  `sysml_requirement_report()`; JSON forms are compatibility output for logs
-  and external clients;
+  `sysml_requirement_report()`; external clients are serialized only at the
+  API boundary;
+- `sysml_value(path, qualified_name)` and
+  `sysml_value_from_report(report, qualified_name)` return tagged typed
+  outcomes. Successful values remain native (`Vec3`, `Quat`, Transform,
+  quantity, enumeration, or array); failed lookups return `ok: false` with an
+  error and add a scene-scoped warning to `RuntimeDiagnostics`. A compact
+  report can explicitly say a value was not projected; the Rhai helper then
+  requests only that qualified value. A successful read clears only the
+  warning for the same source path;
 - the read-only `ValidateSysml` query and the
   `luncosim test --verification QUALIFIED_NAME` selector; and
 - structured per-check evidence emitted by `report_structured_verdict`.  The
@@ -179,12 +185,13 @@ package-prefix guess or a second registry.  Use
 `sysml_requirements::verification_name(report, id)` when a canonical identity
 is needed before constructing additional evidence.
 
-It does not provide a full SysML/KerML execution engine. Do not promise or
-silently emulate interface definitions, arbitrary expressions and constraints,
-parametrics, state machines, behaviors, allocations/refinements, a full SysML
-editor, full UI source-set browsing, or a SysML-to-USD projection. If a
-request needs one of those, report the exact bounded gap after checking the
-current owner and dependencies.
+It does not provide a full SysML/KerML execution engine. Parsed generic
+elements and relationships are source facts, not a claim that their behavior
+is executed. Constraint/parametric expressions, state and behavior execution,
+full quantity conversion, a dedicated SysML editor, full UI source-set
+browsing, and automatic SysML-to-USD projection are outside the current
+runtime. If a request needs one of those, report the exact bounded gap after
+checking the current owner and dependencies.
 
 ## Source organization
 

@@ -42,6 +42,25 @@ let separated = bounds_relation(a, b);
 checks.push(t_true(separated.separated && separated.greatest_axis_margin > 1.0,
     "native OBB SAT reports a positive signed separation margin"));
 
+let precision_a = oriented_bounds3(vec3(100000000.0, 0.0, 0.0), vec3(0.5, 0.5, 0.5),
+    quat_identity());
+let precision_b = oriented_bounds3(vec3(100000001.25, 0.0, 0.0), vec3(0.5, 0.5, 0.5),
+    quat_identity());
+let precision_relation = bounds_relation(precision_a, precision_b);
+checks.push(t_true(precision_relation.separated
+    && abs(precision_relation.greatest_axis_margin - 0.25) < 0.000000001
+    && precision_relation.axis_from_a_to_b.x == 1.0,
+    "OBB SAT preserves f64 separation at large world coordinates"));
+
+let overlap_a = oriented_bounds3(vec3(0.0, 0.0, 0.0), vec3(1.0, 0.2, 0.2),
+    quat_identity());
+let overlap_b = oriented_bounds3(vec3(0.0, 0.0, 0.1), vec3(1.0, 0.2, 0.2),
+    quat_from_euler_xyz_deg(vec3(0.0, 90.0, 0.0)));
+let overlap_relation = bounds_relation(overlap_a, overlap_b);
+checks.push(t_true(!overlap_relation.separated
+    && overlap_relation.greatest_axis_margin < 0.0,
+    "OBB SAT detects a rotated intersection"));
+
 let pair = assembly_audit::oriented_box_clearance("panel-to-equipment",
     vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 0.2), quat_identity(),
     vec3(0.0, 0.0, 1.5), vec3(1.0, 1.0, 0.2), quat_identity(),

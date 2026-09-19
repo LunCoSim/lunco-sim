@@ -90,8 +90,8 @@ impl std::error::Error for ProfileExtrusionError {}
 /// Build a closed prism from a simple, strictly convex 2D profile.
 ///
 /// The profile may be supplied clockwise or counter-clockwise; the output is
-/// normalized to one right-handed convention. Dimensions remain `f64`; USD's
-/// `point3f[]` lowering is performed by the authoring adapter.
+/// normalized to one right-handed convention. Dimensions remain `f64`; any
+/// eventual USD schema lowering belongs to the consuming authoring adapter.
 pub fn extrude_profile(
     profile: &[DVec2],
     length: f64,
@@ -249,42 +249,5 @@ fn map_profile(plane: ProfilePlane, point: DVec2, distance: f64) -> DVec3 {
         // X and -Z form a right-handed basis whose normal is +Y.
         ProfilePlane::XZ => DVec3::new(point.x, distance, -point.y),
         ProfilePlane::YZ => DVec3::new(distance, point.x, point.y),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hexagonal_profile_has_closed_outward_single_sided_topology() {
-        // Profile coordinates are (x, -z), which map to +Y extrusion and
-        // reconstruct the conventional Griffin X/Z frame without a mirror.
-        let profile = [
-            DVec2::new(0.0, -2.25),
-            DVec2::new(2.25, -1.125),
-            DVec2::new(2.25, 1.125),
-            DVec2::new(0.0, 2.25),
-            DVec2::new(-2.25, 1.125),
-            DVec2::new(-2.25, -1.125),
-        ];
-        let mesh = extrude_profile(&profile, 0.16, ProfilePlane::XZ).unwrap();
-
-        assert_eq!(mesh.vertex_count(), 6);
-        assert_eq!(mesh.face_count(), 8);
-        assert_eq!(mesh.points.len(), 12);
-        assert_eq!(mesh.face_vertex_counts, [6, 6, 4, 4, 4, 4, 4, 4]);
-        assert_eq!(mesh.face_vertex_indices.len(), 36);
-        assert_eq!(mesh.face_varying_normals.len(), 36);
-        assert!(mesh
-            .face_varying_normals
-            .iter()
-            .all(|normal| normal.is_finite()));
-        assert!(mesh.face_varying_normals[6..12]
-            .iter()
-            .all(|normal| *normal == DVec3::Y));
-        assert!(mesh.face_varying_normals[12..]
-            .iter()
-            .all(|normal| normal.y == 0.0));
     }
 }

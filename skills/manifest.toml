@@ -42,6 +42,13 @@ defer_to = ["capability-discovery", "usd-projection"]
 evidence = "docs/architecture/"
 
 [[skills]]
+name = "rust-rhai-modelica-boundary"
+category = "architecture"
+primary_for = ["Rust, Rhai, Modelica and USD ownership"]
+defer_to = ["luncosim-architecture", "author-rhai-tests"]
+evidence = "skills/rust-rhai-modelica-boundary/SKILL.md"
+
+[[skills]]
 name = "coordinate-frames"
 category = "architecture"
 primary_for = ["BigSpace", "reference frames", "pose precision"]
@@ -75,6 +82,13 @@ category = "authoring"
 primary_for = ["dynamic Rhai tool"]
 defer_to = ["validate-assets", "test-via-api"]
 evidence = "skills/author-rhai-tool/SKILL.md"
+
+[[skills]]
+name = "author-hook-policy"
+category = "authoring"
+primary_for = ["authoring Rhai hook policies"]
+defer_to = ["author-rhai-tests", "luncosim-architecture"]
+evidence = "skills/author-hook-policy/SKILL.md"
 
 [[skills]]
 name = "build-vehicle"
@@ -173,6 +187,13 @@ category = "verify"
 primary_for = ["end-to-end API test"]
 defer_to = ["validate-assets", "inspect-simulation"]
 evidence = "skills/test-via-api/SKILL.md"
+
+[[skills]]
+name = "author-rhai-tests"
+category = "verify"
+primary_for = ["behavioral tests in Rhai"]
+defer_to = ["test-via-api", "luncosim-architecture"]
+evidence = "skills/author-rhai-tests/SKILL.md"
 
 [[skills]]
 name = "debug-ui-interactions"

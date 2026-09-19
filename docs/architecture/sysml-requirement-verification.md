@@ -46,6 +46,18 @@ the lossless authored text, while `value.number_value` is the validated native
 finite number used by requirement policy. Consumers must use `number_value`;
 reparsing the text in Rhai is not part of the bridge contract.
 
+For one native typed literal, `sysml_value(path, qualified_name)` and
+`sysml_value_from_report(report, qualified_name)` return a tagged map:
+`{ok: true, found: true, value: <native value>}` on success and
+`{ok: false, found: false, error: <message>}` on failure. A compact report
+that intentionally omitted a selected attribute returns `ok: true,
+found: false`; `sysml_requirements::native_value` then performs the selected
+typed query. Missing attributes and failed source resolution remain explicit
+errors. The bridge records a scene-scoped `RuntimeDiagnostics` warning, while
+the script receives the structured result and can produce a failed check
+without terminating the application. A successful read clears only that
+source path's query warning; warnings for other sources remain visible.
+
 External clients receive serialized reports from the API boundary; Rhai keeps
 the report native and typed. A Twin declares the execution binding separately
 in `twin.toml`:

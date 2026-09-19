@@ -16,11 +16,14 @@ that contains USD, Modelica, Rhai, and configuration files, each in its native
 format; USD composition is the projection boundary that turns those artifacts
 into one running system.
 
-SysML v2 remains the planned federation and requirements domain. Its structural
-model is not currently read by the runtime and must not be described as an
-executable source of truth until the SysML-to-USD projection exists. **Modelica**
-owns continuous equations and state, **Rhai** owns scenario policy and event
-orchestration, and **twin.toml** owns Twin configuration (paths and settings).
+SysML v2 is the portable source for logical system structure and requirements;
+the production runtime loads its indexed sources and exposes typed semantic
+reports and verification facts. It does not define executable scene topology
+or automatically project model elements into the scene. The composed **USD**
+stage owns executable prim identity, hierarchy, geometry, and physical facts;
+**Modelica** owns continuous equations and state; **Rhai** owns scenario policy,
+observations, and event orchestration; and **twin.toml** owns Twin configuration
+(paths and settings).
 
 **Interop principle:** Each domain file MUST use only that domain's standard syntax, with no LunCoSim-specific extensions. This guarantees that a SysML engineer can open our `.sysml` files in Cameo, a controls engineer can open our `.mo` files in Dymola, and a USD artist can open our `.usda` files in Omniverse — without lossy round-trips. Tool-specific configuration lives in separate tool-manifest files (`twin.toml`) that external tools are not expected to understand.
 
@@ -35,7 +38,7 @@ Despite the technical depth, the user experience is paramount. Our UI must be in
 
 ### VII. Extensibility & Open Standards
 The simulator is built to be extended. We prioritize open standards (USD,
-Modelica, and the planned SysML federation) so researchers and engineers can
+Modelica, and SysML) so researchers and engineers can
 plug in their own models and missions without a Rust rebuild for authored policy.
 
 ### VIII. Headless-First Architecture (Non-Negotiable)
@@ -62,9 +65,10 @@ Undocumented code is considered technical debt. All modules, functions, structs,
 
 ### State Persistence
 - Persistent executable state must be representable in the Twin's USD layers,
-  Modelica sources, Rhai sources, and manifest-owned settings. Future SysML
-  federation will add a structural interchange projection rather than silently
-  replacing the current USD authoring contract.
+  Modelica sources, Rhai sources, and manifest-owned settings. SysML sources
+  author logical structure and requirements; any mapping from that structure
+  into executable USD topology must be explicit and must not replace the
+  composed USD scene contract implicitly.
 
 ### Quality Gates
 - 100% test coverage for math and logic modules.
