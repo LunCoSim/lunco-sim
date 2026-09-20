@@ -52,8 +52,11 @@ The reusable route marker is a translucent, unlit, shadowless annotation. Its
 unvisited colour is bright green and its visited colour is gray in standard
 `primvars:displayColor`; `route_follow` applies the visited colour through
 `waypoint_editor`'s transient USD view operation when the generic sensor event
-reaches the point. This is presentation state, not a vessel component or a
-second route fact.
+reaches the point. Route progress is keyed by USD point path and survives
+autopilot stop/start; if the rover is already inside the initial route sensor,
+the start transaction marks that occupied prefix visited before sensor events
+drive later progression. This is presentation state, not a vessel component or
+a second route fact.
 
 Script source edits made by a user go through the `ScriptDocument` host, so
 undo, redo, and the Twin journal see the same typed `ScriptOp`. A file-backed

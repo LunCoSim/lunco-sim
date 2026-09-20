@@ -119,6 +119,13 @@ route-level `route_point_reached` event for mission policy, and advances its
 local route cursor. Physics reports the sensor event; it does not publish a route-specific
 “target reached” fact and it does not decide mission progression.
 
+Route progress is keyed by canonical USD point path and survives disabling and
+re-enabling the program. Each start resumes at the first unvisited point. The
+start transaction also marks a consecutive visited prefix from sensor enters
+observed while disabled and a one-time occupancy read for a rover already
+inside a route sensor; those paths receive the same visited marker state. After
+that snapshot, Avian sensor events remain the arrival authority.
+
 The route task remains live while the scene is running. Editing point placement,
 point order, or the subject relationship is observed through the normal USD
 projection path. Those edits update route facts and presentation only; they do

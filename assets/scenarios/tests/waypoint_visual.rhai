@@ -120,6 +120,21 @@ fn route_point_uses_unvisited_color() {
         && (color[0][2] - 0.22).abs() < 0.000001
 }
 
+fn rendered_marker_color(path) {
+    let entity = find_path(path);
+    if entity < 0 { return (); }
+    let look = get(entity, "PbrLook");
+    if look == () || look.base_color == () { return (); }
+    [look.base_color.red, look.base_color.green, look.base_color.blue]
+}
+
+fn color_is(actual, expected) {
+    actual != () && actual.len() == 3
+        && (actual[0] - expected[0]).abs() < 0.000001
+        && (actual[1] - expected[1]).abs() < 0.000001
+        && (actual[2] - expected[2]).abs() < 0.000001
+}
+
 fn landing_location_uses_annotation_material() {
     let dome = query("QueryUsdPrim", #{
         path: LANDING_LOCATION + "/Dome",
@@ -153,32 +168,82 @@ fn on_start(me, ctx) {
     this.landing = find(LANDING_LOCATION);
     this.predicted = find(PREDICTED_LANDING);
     this.done = false;
+    this.phase = 0;
     this.t = 0.0;
+    this.doc = -1;
+    this.checks = [];
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.t += dt();
     if this.t < 0.5 { return; }
-    this.done = true;
     let checks = [];
-    checks.push(t_true(this.rover >= 0,
-        "six-wheel rover is missing from the waypoint review scene"));
-    checks.push(t_true(this.marker >= 0,
-        "reusable route-point marker is missing from the review scene"));
-    checks.push(t_true(this.landing >= 0 && this.predicted >= 0,
-        "reusable landing annotations are missing from the review scene"));
-    checks.push(t_true(sky_uses_shader_defaults(),
-        "waypoint review authors a redundant procedural-sky input override"));
-    checks.push(t_true(route_point_uses_shared_billboard_contract(),
-        "route-point marker does not expose the shared bounded-label contract"));
-    checks.push(t_true(route_point_uses_annotation_material(),
-        "route point does not expose the translucent unlit shadowless annotation material"));
-    checks.push(t_true(route_point_uses_unvisited_color(),
-        "route point does not expose its green unvisited-state colour"));
-    checks.push(t_true(landing_location_uses_annotation_material(),
-        "landing location does not expose the emissive shadowless annotation material"));
-    checks.push(t_true(predicted_landing_uses_annotation_material(),
-        "predicted landing does not expose the emissive shadowless annotation material"));
-    report_verdict(checks, "WAYPOINT VISUAL", "WAYPOINT_VISUAL");
+    if this.phase == 0 {
+        checks.push(t_true(this.rover >= 0,
+            "six-wheel rover is missing from the waypoint review scene"));
+        checks.push(t_true(this.marker >= 0,
+            "reusable route-point marker is missing from the review scene"));
+        checks.push(t_true(this.landing >= 0 && this.predicted >= 0,
+            "reusable landing annotations are missing from the review scene"));
+        checks.push(t_true(sky_uses_shader_defaults(),
+            "waypoint review authors a redundant procedural-sky input override"));
+        checks.push(t_true(route_point_uses_shared_billboard_contract(),
+            "route-point marker does not expose the shared bounded-label contract"));
+        checks.push(t_true(route_point_uses_annotation_material(),
+            "route point does not expose the translucent unlit shadowless annotation material"));
+        checks.push(t_true(route_point_uses_unvisited_color(),
+            "route point does not expose its green unvisited-state colour"));
+        checks.push(t_true(landing_location_uses_annotation_material(),
+            "landing location does not expose the emissive shadowless annotation material"));
+        checks.push(t_true(predicted_landing_uses_annotation_material(),
+            "predicted landing does not expose the emissive shadowless annotation material"));
+
+        let route = query("QueryUsdPrim", #{ path: "/WaypointVisual", children: true });
+        if route == () || route.ok == false || route.doc_id == () {
+            checks.push(t_true(false, "waypoint review document is unavailable"));
+            this.done = true;
+            report_verdict(checks, "WAYPOINT VISUAL", "WAYPOINT_VISUAL");
+            return;
+        }
+        this.doc = route.doc_id;
+        let starts_green = color_is(
+            rendered_marker_color(ROUTE_POINT + "/Dome"), [0.10, 0.95, 0.22]);
+        checks.push(t_true(starts_green,
+            "the unvisited waypoint sphere renders green"));
+        if !starts_green {
+            this.done = true;
+            report_verdict(checks, "WAYPOINT VISUAL", "WAYPOINT_VISUAL");
+            return;
+        }
+
+        this.checks = checks;
+        let visited = #{};
+        visited[ROUTE_POINT] = true;
+        let updated = waypoint_editor::sync_marker_states(
+            this.doc, "/WaypointVisual", visited);
+        if updated == () || updated.ok != true {
+            this.checks.push(t_true(false,
+                "visited waypoint display state could not be applied"));
+            this.done = true;
+            report_verdict(this.checks, "WAYPOINT VISUAL", "WAYPOINT_VISUAL");
+            return;
+        }
+        this.phase = 1;
+        return;
+    }
+
+    let turns_gray = color_is(
+        rendered_marker_color(ROUTE_POINT + "/Dome"), [0.55, 0.55, 0.55]);
+    if turns_gray {
+        this.checks.push(t_true(true,
+            "the visited waypoint sphere renders gray"));
+        this.done = true;
+        report_verdict(this.checks, "WAYPOINT VISUAL", "WAYPOINT_VISUAL");
+    } else if this.t > 10.0 {
+        this.checks.push(t_true(false,
+            "the visited waypoint display color did not reach the rendered sphere"));
+        this.done = true;
+        report_verdict(this.checks, "WAYPOINT VISUAL", "WAYPOINT_VISUAL");
+    }
 }

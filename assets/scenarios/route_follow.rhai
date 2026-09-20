@@ -404,14 +404,22 @@ fn route_entrant_matches(subject, entrant) {
     false
 }
 
-fn route_start_index(me, state) {
+fn route_start_progress(me, state) {
     let points = route_children_for(me, state);
-    if points == () || points.len() == 0 { return 0; }
+    let visited = if state.visited_points == () { #{} } else { state.visited_points };
+    if points == () || points.len() == 0 {
+        return #{ index: 0, visited_points: visited };
+    }
     let subject = route_subject_for(me, state);
     let index = 0;
     while index < points.len() {
+        let point = points[index];
+        if visited[point] == true {
+            index += 1;
+            continue;
+        }
         let zone = query("QueryUsdPrim", #{
-            path: points[index] + "/Trigger",
+            path: point + "/Trigger",
             attrs: ["lunco:triggerZone", "radius"],
         });
         let entered = false;
@@ -428,7 +436,7 @@ fn route_start_index(me, state) {
         if !entered && subject >= 0 && zone != () && zone.ok != false
             && zone.attrs != () && zone.attrs["radius"] != () {
             let subject_position = world_pos(subject);
-            let point_position = world_pos(find_path(points[index]));
+            let point_position = world_pos(find_path(point));
             if subject_position != () && point_position != () {
                 let dx = subject_position[0] - point_position[0];
                 let dz = subject_position[2] - point_position[2];
@@ -437,9 +445,10 @@ fn route_start_index(me, state) {
             }
         }
         if !entered && !occupied { break; }
+        visited[point] = true;
         index += 1;
     }
-    index
+    #{ index: index, visited_points: visited }
 }
 
 fn drive_current_point(me, state) {
@@ -689,26 +698,32 @@ fn start_route(me, state) {
     #{ ok: true, subject: subject, claimed_here: false }
 }
 
+fn begin_route_run(me, state, started) {
+    let progress = route_start_progress(me, state);
+    state.selected = true;
+    state.enabled = true;
+    state.claimed_here = started.claimed_here == true;
+    state.safe_stopped = false;
+    state.route_index = progress.index;
+    state.current_path = ();
+    state.commanded_path = ();
+    state.commanded_revision = ();
+    state.commanded_view_key = ();
+    state.completed = false;
+    state.visited_points = progress.visited_points;
+    state.marker_sync_pending = true;
+    state.sensor_entered = #{};
+    state.route_error = "";
+    state.start_requested = false;
+    emit("route_started");
+    state
+}
+
 fn apply_toggle_transition(me, state, enabled) {
     if enabled {
         let started = start_route(me, state);
         if started.ok == true {
-            state.selected = true;
-            state.enabled = true;
-            state.claimed_here = started.claimed_here == true;
-            state.safe_stopped = false;
-            state.route_index = route_start_index(me, state);
-            state.current_path = ();
-            state.commanded_path = ();
-            state.commanded_revision = ();
-            state.commanded_view_key = ();
-            state.completed = false;
-            state.visited_points = #{};
-            state.marker_sync_pending = true;
-            state.sensor_entered = #{};
-            state.route_error = "";
-            state.start_requested = false;
-            emit("route_started");
+            return begin_route_run(me, state, started);
         } else if started.retryable == true {
             state.start_requested = true;
         } else if state.route_error != started.error {
@@ -830,21 +845,7 @@ fn on_event(me, evt, ctx) {
     } else if transition.kind == "start" {
         let started = start_route(me, this);
         if started.ok == true {
-            this.enabled = true;
-            this.claimed_here = started.claimed_here == true;
-            this.safe_stopped = false;
-            this.route_index = route_start_index(me, this);
-            this.current_path = ();
-            this.commanded_path = ();
-            this.commanded_revision = ();
-            this.commanded_view_key = ();
-            this.completed = false;
-            this.visited_points = #{};
-            this.marker_sync_pending = true;
-            this.sensor_entered = #{};
-            this.route_error = "";
-            this.start_requested = false;
-            emit("route_started");
+            this = begin_route_run(me, this, started);
         } else if started.retryable == true {
             this.start_requested = true;
         } else if this.route_error != started.error {
@@ -897,19 +898,7 @@ fn route_task_tick(m) {
         if !this.selected { return false; }
         let started = start_route(m, this);
         if started.ok != true { return false; }
-        this.enabled = true;
-        this.claimed_here = started.claimed_here == true;
-        this.route_index = route_start_index(m, this);
-        this.current_path = ();
-        this.commanded_path = ();
-        this.commanded_revision = ();
-        this.completed = false;
-        this.visited_points = #{};
-        this.marker_sync_pending = true;
-        this.sensor_entered = #{};
-        this.route_error = "";
-        this.start_requested = false;
-        emit("route_started");
+        this = begin_route_run(m, this, started);
     }
     // The ribbon is a presentation of the authored program, not the
     // control authority. Keep it synchronized for every live program so
