@@ -95,7 +95,7 @@ use lunco_usd_authoring::author::{
 use lunco_usd_compose::recipe::StageRecipe;
 use lunco_usd_data::units::{ConventionTransform, StageMetrics, UpAxis};
 use lunco_usd_data::usd_data::UsdDataExt;
-use openusd::sdf::{self, Path as SdfPath, SpecType};
+use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecType};
 
 /// How many recent changes to keep in the per-document ring buffer.
 ///
@@ -2818,28 +2818,28 @@ impl Document for UsdDocument {
                     _ => self.coarse_inverse(target, &id),
                 };
 
-                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                let root_id = stage.root_layer().identifier().to_owned();
-                let mut layer = stage
-                    .layer_mut(&root_id)
-                    .ok_or_else(|| author_err("document stage has no root layer"))?;
-                layer
-                    .edit(|edit| {
-                        let root = SdfPath::abs_root();
-                        edit.data_mut().set_field(
-                            &root,
-                            "metersPerUnit",
-                            sdf::Value::Double(metrics.meters_per_unit),
-                        );
-                        edit.data_mut().set_field(
-                            &root,
-                            "upAxis",
-                            sdf::Value::Token(metrics.up_axis.as_token().into()),
-                        );
-                        Ok(())
-                    })
-                    .map_err(author_err)?;
-                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                // These are Sdf pseudo-root fields, not prim properties. Edit
+                // the document's canonical layer data directly: mutating a
+                // `Stage::layer_mut` layer and then committing its pending
+                // stage change would re-enter the stage's layer RefCell and
+                // panic in `process_pending`.
+                let root = SdfPath::abs_root();
+                let mut new_data = self.layer(target).clone();
+                if !new_data.has_spec(&root) {
+                    return Err(DocumentError::ValidationFailed(
+                        "SetStageMetrics requires an authored USD pseudo-root".into(),
+                    ));
+                }
+                new_data.set_field(
+                    &root,
+                    "metersPerUnit",
+                    sdf::Value::Double(metrics.meters_per_unit),
+                );
+                new_data.set_field(
+                    &root,
+                    "upAxis",
+                    sdf::Value::Token(metrics.up_axis.as_token().into()),
+                );
                 self.commit(target, new_data, UsdChange::Resync { path: "/".into() });
                 Ok(inverse)
             }
