@@ -17,9 +17,11 @@ pipeline into the slim web / Modelica binaries.
   split + shadow-map atlas + depth/normal biases). Shared by the sandbox,
   celestial, and USD render paths; callers construct it from the authoritative
   Graphics profile and may then apply authored scene overrides.
-- The render backend samples those cascades with a crisp hardware 2x2 comparison
-  filter; the physical sun angle remains an authored USD/horizon-shadow concern,
-  not a renderer-wide blur setting.
+- Shadow filtering follows the Graphics preset: `Low` uses Bevy's fast
+  `Hardware2x2` filter, while `Balanced` and `High` use its Gaussian filter for
+  better edge quality when temporal anti-aliasing is off. The physical sun angle
+  remains an authored USD/horizon-shadow concern, not a renderer-wide blur
+  setting.
 - **`RenderingQualitySettings`** — the persisted Graphics section and its
   `RenderingQuality::{Low, Balanced, High}` presets. Fresh settings default to
   `High`; `Low` is available in the Graphics menu for lower-end machines.

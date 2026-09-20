@@ -66,10 +66,10 @@ impl RenderingQuality {
     pub const fn profile(self) -> RenderQualityProfile {
         match self {
             Self::Balanced => RenderQualityProfile {
-                directional_shadow_map_size: 1024,
+                directional_shadow_map_size: 2048,
                 point_shadow_map_size: 1024,
-                directional_cascades: 2,
-                shadow_filtering_quality: ShadowFilteringQuality::Hardware2x2,
+                directional_cascades: 3,
+                shadow_filtering_quality: ShadowFilteringQuality::Gaussian,
                 max_directional_shadow_casters: 1,
                 max_point_shadow_casters: 4,
                 max_spot_shadow_casters: 4,
