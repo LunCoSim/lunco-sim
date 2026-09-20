@@ -21,10 +21,12 @@ pipeline into the slim web / Modelica binaries.
   filter; the physical sun angle remains an authored USD/horizon-shadow concern,
   not a renderer-wide blur setting.
 - **`RenderingQualitySettings`** — the persisted Graphics section and its
-  `RenderingQuality::{Low, Balanced, High}` presets. `High` is the highest
-  shipped renderer budget: it covers shadow maps and casters, the horizon-shadow
-  cache, camera MSAA/bloom, sky cubemap resolution, lunar terrain caches/LOD,
-  rock density, and geometric tessellation. Its interactive CDLOD terrain
+  `RenderingQuality::{Low, Balanced, High}` presets. Fresh settings default to
+  `High`; `Low` is available in the Graphics menu for lower-end machines.
+  `High` is the highest shipped renderer budget: it covers shadow maps and
+  casters, the horizon-shadow cache, camera MSAA/bloom, sky cubemap resolution,
+  lunar terrain caches/LOD, rock density, and geometric tessellation. Its
+  interactive CDLOD terrain
   envelope is intentionally the same bounded envelope as `Balanced`; the extra
   High budget is spent on lighting, derived maps, rocks, and tessellation so
   terrain geometry cannot consume the frame. The settings are consumed by the

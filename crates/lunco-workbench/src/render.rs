@@ -2140,7 +2140,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
         if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
             let mut settings = *current;
             let current_preset = settings.preset();
-            let mut selected_preset = current_preset.unwrap_or(lunco_render::RenderingQuality::Balanced);
+            let mut selected_preset = current_preset.unwrap_or(lunco_render::RenderingQuality::High);
             let preset_label = current_preset.map_or("Custom", |preset| preset.label());
             let preset_changed = settings_choice_menu(
                 ui,

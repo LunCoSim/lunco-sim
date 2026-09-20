@@ -13,9 +13,9 @@ pub enum RenderingQuality {
     /// Suggested low-cost shadow and lighting preset.
     Low,
     /// Suggested balanced shadow and lighting preset.
-    #[default]
     Balanced,
-    /// Suggested high-detail shadow and lighting preset.
+    /// Suggested high-detail shadow and lighting preset and fresh-settings default.
+    #[default]
     High,
 }
 
@@ -588,280 +588,280 @@ pub struct RenderingQualitySettings {
     pub curve_radial_segments: usize,
 }
 
-const fn balanced_profile() -> RenderQualityProfile {
-    RenderingQuality::Balanced.profile()
+const fn default_profile() -> RenderQualityProfile {
+    RenderingQuality::High.profile()
 }
 
 const fn default_directional_shadow_map_size() -> u32 {
-    balanced_profile().directional_shadow_map_size
+    default_profile().directional_shadow_map_size
 }
 
 const fn default_point_shadow_map_size() -> u32 {
-    balanced_profile().point_shadow_map_size
+    default_profile().point_shadow_map_size
 }
 
 const fn default_directional_cascades() -> usize {
-    balanced_profile().directional_cascades
+    default_profile().directional_cascades
 }
 
 const fn default_max_directional_shadow_casters() -> usize {
-    balanced_profile().max_directional_shadow_casters
+    default_profile().max_directional_shadow_casters
 }
 
 const fn default_max_point_shadow_casters() -> usize {
-    balanced_profile().max_point_shadow_casters
+    default_profile().max_point_shadow_casters
 }
 
 const fn default_max_spot_shadow_casters() -> usize {
-    balanced_profile().max_spot_shadow_casters
+    default_profile().max_spot_shadow_casters
 }
 
 const fn default_shadow_budget_bytes() -> u64 {
-    balanced_profile().shadow_budget_bytes
+    default_profile().shadow_budget_bytes
 }
 
 const fn default_horizon_shadow_cache_enabled() -> bool {
-    balanced_profile().horizon_shadow_cache_enabled
+    default_profile().horizon_shadow_cache_enabled
 }
 
 const fn default_horizon_shadow_cache_sun_threshold_deg() -> f32 {
-    balanced_profile().horizon_shadow_cache_sun_threshold_deg
+    default_profile().horizon_shadow_cache_sun_threshold_deg
 }
 
 const fn default_horizon_march_steps() -> usize {
-    balanced_profile().horizon_march_steps
+    default_profile().horizon_march_steps
 }
 
 const fn default_horizon_cache_samples_per_axis() -> usize {
-    balanced_profile().horizon_cache_samples_per_axis
+    default_profile().horizon_cache_samples_per_axis
 }
 
 const fn default_shadow_minimum_distance() -> f32 {
-    balanced_profile().shadow_minimum_distance
+    default_profile().shadow_minimum_distance
 }
 
 const fn default_shadow_first_cascade_far_bound() -> f32 {
-    balanced_profile().shadow_first_cascade_far_bound
+    default_profile().shadow_first_cascade_far_bound
 }
 
 const fn default_shadow_maximum_distance() -> f32 {
-    balanced_profile().shadow_maximum_distance
+    default_profile().shadow_maximum_distance
 }
 
 const fn default_shadow_cascade_overlap() -> f32 {
-    balanced_profile().shadow_cascade_overlap
+    default_profile().shadow_cascade_overlap
 }
 
 const fn default_terrain_mesh_cache_bytes() -> u64 {
-    balanced_profile().terrain_mesh_cache_bytes
+    default_profile().terrain_mesh_cache_bytes
 }
 
 const fn default_terrain_derived_map_resolution() -> usize {
-    balanced_profile().terrain_derived_map_resolution
+    default_profile().terrain_derived_map_resolution
 }
 
 const fn default_terrain_derived_ao_directions() -> usize {
-    balanced_profile().terrain_derived_ao_directions
+    default_profile().terrain_derived_ao_directions
 }
 
 const fn default_terrain_derived_ao_steps() -> usize {
-    balanced_profile().terrain_derived_ao_steps
+    default_profile().terrain_derived_ao_steps
 }
 
 const fn default_terrain_derived_ao_radius_fraction() -> f64 {
-    balanced_profile().terrain_derived_ao_radius_fraction
+    default_profile().terrain_derived_ao_radius_fraction
 }
 
 const fn default_terrain_derived_roughness_base() -> f32 {
-    balanced_profile().terrain_derived_roughness_base
+    default_profile().terrain_derived_roughness_base
 }
 
 const fn default_terrain_derived_roughness_saturation_radians() -> f32 {
-    balanced_profile().terrain_derived_roughness_saturation_radians
+    default_profile().terrain_derived_roughness_saturation_radians
 }
 
 const fn default_terrain_derived_texture_anisotropy() -> u16 {
-    balanced_profile().terrain_derived_texture_anisotropy
+    default_profile().terrain_derived_texture_anisotropy
 }
 
 const fn default_terrain_rock_max_instances() -> usize {
-    balanced_profile().terrain_rock_max_instances
+    default_profile().terrain_rock_max_instances
 }
 
 const fn default_terrain_rock_mesh_buckets() -> usize {
-    balanced_profile().terrain_rock_mesh_buckets
+    default_profile().terrain_rock_mesh_buckets
 }
 
 const fn default_terrain_rock_mesh_cube_count() -> usize {
-    balanced_profile().terrain_rock_mesh_cube_count
+    default_profile().terrain_rock_mesh_cube_count
 }
 
 const fn default_terrain_rock_lod_start_distance() -> f32 {
-    balanced_profile().terrain_rock_lod_start_distance
+    default_profile().terrain_rock_lod_start_distance
 }
 
 const fn default_terrain_rock_lod_fade_distance() -> f32 {
-    balanced_profile().terrain_rock_lod_fade_distance
+    default_profile().terrain_rock_lod_fade_distance
 }
 
 const fn default_shadow_depth_bias() -> f32 {
-    balanced_profile().shadow_depth_bias
+    default_profile().shadow_depth_bias
 }
 
 const fn default_shadow_normal_bias() -> f32 {
-    balanced_profile().shadow_normal_bias
+    default_profile().shadow_normal_bias
 }
 
 const fn default_local_light_default_range() -> f32 {
-    balanced_profile().local_light_default_range
+    default_profile().local_light_default_range
 }
 
 const fn default_distant_light_default_illuminance() -> f32 {
-    balanced_profile().distant_light_default_illuminance
+    default_profile().distant_light_default_illuminance
 }
 
 const fn default_local_light_default_intensity() -> f32 {
-    balanced_profile().local_light_default_intensity
+    default_profile().local_light_default_intensity
 }
 
 const fn default_rect_light_default_intensity() -> f32 {
-    balanced_profile().rect_light_default_intensity
+    default_profile().rect_light_default_intensity
 }
 
 const fn default_local_shadow_map_near_z() -> f32 {
-    balanced_profile().local_shadow_map_near_z
+    default_profile().local_shadow_map_near_z
 }
 
 const fn default_dome_default_intensity() -> f32 {
-    balanced_profile().dome_default_intensity
+    default_profile().dome_default_intensity
 }
 
 const fn default_dome_cubemap_face_size() -> u32 {
-    balanced_profile().dome_cubemap_face_size
+    default_profile().dome_cubemap_face_size
 }
 
 const fn default_primitive_sphere_longitudes() -> u32 {
-    balanced_profile().primitive_sphere_longitudes
+    default_profile().primitive_sphere_longitudes
 }
 
 const fn default_primitive_sphere_latitudes() -> u32 {
-    balanced_profile().primitive_sphere_latitudes
+    default_profile().primitive_sphere_latitudes
 }
 
 const fn default_primitive_radial_segments() -> u32 {
-    balanced_profile().primitive_radial_segments
+    default_profile().primitive_radial_segments
 }
 
 const fn default_primitive_capsule_longitudes() -> u32 {
-    balanced_profile().primitive_capsule_longitudes
+    default_profile().primitive_capsule_longitudes
 }
 
 const fn default_primitive_capsule_latitudes() -> u32 {
-    balanced_profile().primitive_capsule_latitudes
+    default_profile().primitive_capsule_latitudes
 }
 
 const fn default_camera_tone_map() -> ToneMap {
-    balanced_profile().camera_tone_map
+    default_profile().camera_tone_map
 }
 
 const fn default_camera_msaa() -> MsaaLevel {
-    balanced_profile().camera_msaa
+    default_profile().camera_msaa
 }
 
 const fn default_camera_exposure_ev100() -> f32 {
-    balanced_profile().camera_exposure_ev100
+    default_profile().camera_exposure_ev100
 }
 
 const fn default_render_failure_quiet_period_secs() -> f64 {
-    balanced_profile().render_failure_quiet_period_secs
+    default_profile().render_failure_quiet_period_secs
 }
 
 const fn default_render_failure_give_up_after_secs() -> f64 {
-    balanced_profile().render_failure_give_up_after_secs
+    default_profile().render_failure_give_up_after_secs
 }
 
 const fn default_camera_bloom_intensity() -> f32 {
-    balanced_profile().camera_bloom_intensity
+    default_profile().camera_bloom_intensity
 }
 
 const fn default_camera_bloom_low_frequency_boost() -> f32 {
-    balanced_profile().camera_bloom_low_frequency_boost
+    default_profile().camera_bloom_low_frequency_boost
 }
 
 const fn default_terrain_lod_tile_resolution() -> usize {
-    balanced_profile().terrain_lod_tile_resolution
+    default_profile().terrain_lod_tile_resolution
 }
 
 const fn default_terrain_lod_cinematic_resolution() -> usize {
-    balanced_profile().terrain_lod_cinematic_resolution
+    default_profile().terrain_lod_cinematic_resolution
 }
 
 const fn default_terrain_lod_pixel_error() -> f64 {
-    balanced_profile().terrain_lod_pixel_error
+    default_profile().terrain_lod_pixel_error
 }
 
 const fn default_terrain_lod_max_depth() -> u8 {
-    balanced_profile().terrain_lod_max_depth
+    default_profile().terrain_lod_max_depth
 }
 
 const fn default_terrain_lod_probe_resolution() -> usize {
-    balanced_profile().terrain_lod_probe_resolution
+    default_profile().terrain_lod_probe_resolution
 }
 
 const fn default_terrain_lod_bakes_per_frame() -> usize {
-    balanced_profile().terrain_lod_bakes_per_frame
+    default_profile().terrain_lod_bakes_per_frame
 }
 
 const fn default_terrain_lod_max_inflight_bakes() -> usize {
-    balanced_profile().terrain_lod_max_inflight_bakes
+    default_profile().terrain_lod_max_inflight_bakes
 }
 
 const fn default_terrain_lod_tile_budget() -> usize {
-    balanced_profile().terrain_lod_tile_budget
+    default_profile().terrain_lod_tile_budget
 }
 
 const fn default_terrain_lod_cover_edits_per_frame() -> usize {
-    balanced_profile().terrain_lod_cover_edits_per_frame
+    default_profile().terrain_lod_cover_edits_per_frame
 }
 
 const fn default_terrain_lod_hysteresis_ratio() -> f64 {
-    balanced_profile().terrain_lod_hysteresis_ratio
+    default_profile().terrain_lod_hysteresis_ratio
 }
 
 const fn default_terrain_lod_morph_start_ratio() -> f64 {
-    balanced_profile().terrain_lod_morph_start_ratio
+    default_profile().terrain_lod_morph_start_ratio
 }
 
 const fn default_nurbs_surface_samples_per_control_span() -> usize {
-    balanced_profile().nurbs_surface_samples_per_control_span
+    default_profile().nurbs_surface_samples_per_control_span
 }
 
 const fn default_nurbs_surface_minimum_subdivisions() -> usize {
-    balanced_profile().nurbs_surface_minimum_subdivisions
+    default_profile().nurbs_surface_minimum_subdivisions
 }
 
 const fn default_nurbs_surface_maximum_subdivisions() -> usize {
-    balanced_profile().nurbs_surface_maximum_subdivisions
+    default_profile().nurbs_surface_maximum_subdivisions
 }
 
 const fn default_nurbs_trim_curve_samples() -> usize {
-    balanced_profile().nurbs_trim_curve_samples
+    default_profile().nurbs_trim_curve_samples
 }
 
 const fn default_nurbs_trim_minimum_subdivisions() -> usize {
-    balanced_profile().nurbs_trim_minimum_subdivisions
+    default_profile().nurbs_trim_minimum_subdivisions
 }
 
 const fn default_nurbs_trim_maximum_subdivisions() -> usize {
-    balanced_profile().nurbs_trim_maximum_subdivisions
+    default_profile().nurbs_trim_maximum_subdivisions
 }
 
 const fn default_curve_samples_per_segment() -> usize {
-    balanced_profile().curve_samples_per_segment
+    default_profile().curve_samples_per_segment
 }
 
 const fn default_curve_radial_segments() -> usize {
-    balanced_profile().curve_radial_segments
+    default_profile().curve_radial_segments
 }
 
 impl RenderingQualitySettings {
@@ -1308,7 +1308,7 @@ impl RenderingQualitySettings {
 
 impl Default for RenderingQualitySettings {
     fn default() -> Self {
-        let profile = balanced_profile();
+        let profile = default_profile();
         Self {
             directional_shadow_map_size: profile.directional_shadow_map_size,
             point_shadow_map_size: profile.point_shadow_map_size,
@@ -1491,6 +1491,16 @@ mod tests {
     }
 
     #[test]
+    fn fresh_rendering_quality_defaults_to_high_and_keeps_low_selectable() {
+        assert_eq!(RenderingQuality::default(), RenderingQuality::High);
+        assert_eq!(
+            RenderingQualitySettings::default().profile(),
+            RenderingQuality::High.profile()
+        );
+        assert!(RenderingQuality::all().contains(&RenderingQuality::Low));
+    }
+
+    #[test]
     fn requested_profile_is_not_replaced_by_a_budget() {
         let mut settings = RenderingQualitySettings::default();
         settings.apply_preset(RenderingQuality::High);
@@ -1557,8 +1567,8 @@ mod tests {
     #[test]
     fn horizon_shadow_quality_is_explicit_and_validated() {
         let mut settings = RenderingQualitySettings::default();
-        assert_eq!(settings.profile().horizon_march_steps, 48);
-        assert_eq!(settings.profile().horizon_cache_samples_per_axis, 2);
+        assert_eq!(settings.profile().horizon_march_steps, 96);
+        assert_eq!(settings.profile().horizon_cache_samples_per_axis, 3);
         assert!(settings.validate().is_ok());
 
         settings.horizon_march_steps = 0;
@@ -1567,14 +1577,14 @@ mod tests {
             Err("horizon march steps must be between 1 and 4096")
         );
 
-        settings.horizon_march_steps = 48;
+        settings.horizon_march_steps = 96;
         settings.horizon_cache_samples_per_axis = 9;
         assert_eq!(
             settings.validate(),
             Err("horizon cache samples per axis must be between 1 and 8")
         );
 
-        settings.horizon_cache_samples_per_axis = 2;
+        settings.horizon_cache_samples_per_axis = 3;
         settings.horizon_shadow_cache_sun_threshold_deg = 180.0;
         assert_eq!(
             settings.validate(),
@@ -1637,9 +1647,7 @@ mod tests {
         let mut settings = RenderingQualitySettings::default();
         assert_eq!(
             settings.profile().primitive_sphere_longitudes,
-            RenderingQuality::Balanced
-                .profile()
-                .primitive_sphere_longitudes
+            RenderingQuality::High.profile().primitive_sphere_longitudes
         );
         assert!(settings.validate().is_ok());
 
@@ -1653,8 +1661,8 @@ mod tests {
     #[test]
     fn curve_tessellation_is_explicit_and_validated() {
         let mut settings = RenderingQualitySettings::default();
-        assert_eq!(settings.profile().curve_samples_per_segment, 8);
-        assert_eq!(settings.profile().curve_radial_segments, 12);
+        assert_eq!(settings.profile().curve_samples_per_segment, 16);
+        assert_eq!(settings.profile().curve_radial_segments, 24);
         assert!(settings.validate().is_ok());
 
         settings.curve_radial_segments = 2;
@@ -1668,10 +1676,10 @@ mod tests {
     fn terrain_quality_is_authoritative_and_validated() {
         let mut settings = RenderingQualitySettings::default();
         assert!(settings.validate().is_ok());
-        assert_eq!(settings.profile().terrain_derived_map_resolution, 1024);
-        assert_eq!(settings.profile().terrain_derived_ao_directions, 8);
-        assert_eq!(settings.profile().terrain_derived_ao_steps, 8);
-        assert_eq!(settings.profile().terrain_derived_ao_radius_fraction, 0.15);
+        assert_eq!(settings.profile().terrain_derived_map_resolution, 2048);
+        assert_eq!(settings.profile().terrain_derived_ao_directions, 16);
+        assert_eq!(settings.profile().terrain_derived_ao_steps, 16);
+        assert_eq!(settings.profile().terrain_derived_ao_radius_fraction, 0.2);
         assert_eq!(settings.profile().terrain_derived_roughness_base, 0.6);
         assert_eq!(
             settings
@@ -1679,12 +1687,12 @@ mod tests {
                 .terrain_derived_roughness_saturation_radians,
             0.6
         );
-        assert_eq!(settings.profile().terrain_derived_texture_anisotropy, 4);
-        assert_eq!(settings.profile().terrain_rock_max_instances, 6_000);
-        assert_eq!(settings.profile().terrain_rock_mesh_buckets, 6);
-        assert_eq!(settings.profile().terrain_rock_mesh_cube_count, 4);
-        assert_eq!(settings.profile().terrain_rock_lod_start_distance, 2_500.0);
-        assert_eq!(settings.profile().terrain_rock_lod_fade_distance, 500.0);
+        assert_eq!(settings.profile().terrain_derived_texture_anisotropy, 8);
+        assert_eq!(settings.profile().terrain_rock_max_instances, 12_000);
+        assert_eq!(settings.profile().terrain_rock_mesh_buckets, 12);
+        assert_eq!(settings.profile().terrain_rock_mesh_cube_count, 8);
+        assert_eq!(settings.profile().terrain_rock_lod_start_distance, 4_000.0);
+        assert_eq!(settings.profile().terrain_rock_lod_fade_distance, 800.0);
         assert_eq!(
             settings.profile().terrain_lod_tile_resolution,
             RenderingQuality::Balanced
