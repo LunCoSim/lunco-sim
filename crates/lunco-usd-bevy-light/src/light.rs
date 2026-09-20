@@ -1659,7 +1659,10 @@ def Xform "World"
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
             .expect("stage builds");
         let view = stage.view();
-        let quality = lunco_render::RenderingQuality::High.profile();
+        let quality = lunco_render::RenderQualityProfile {
+            dome_default_intensity: 1_000.0,
+            ..Default::default()
+        };
 
         assert_eq!(
             read_dome_intensity(&view, &SdfPath::new("/World/Ambient").unwrap(), quality),

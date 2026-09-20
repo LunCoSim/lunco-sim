@@ -220,6 +220,17 @@ path. Fast mode deliberately does not attach the standard PBR shadow filter.
 The shadow portions of the Graphics presets balance range and caster memory as
 follows:
 
+The concrete Low, Balanced, and High profile maps are authored by the
+deterministic `render.quality_profile` policy in
+[`assets/scripting/policy/render_quality_profiles.rhai`](../../assets/scripting/policy/render_quality_profiles.rhai).
+The same source authors `render.default_quality_profile`, which selects the
+initial profile for fresh settings. `lunco-render` declares both typed hook
+contracts; Rhai policies load in `PreStartup`, and render recovery loads and
+validates all three maps before the first update. CLI requests are applied from
+the same catalog, and saved custom Graphics values are preserved. Rust owns
+field conversion, range and memory checks, and applying validated values; it
+does not contain a second Low/Balanced/High settings table or default choice.
+
 | Preset | Directional map · cascades · near split · range | Point map · caster caps (directional / point / spot) | Filter | Estimated depth maps / ceiling |
 | --- | --- | --- | --- | --- |
 | Low | 512 px · 1 · 20 m · 600 m | 512 px · 1 / 2 / 2 | Hardware2x2 | 15 / 32 MiB |

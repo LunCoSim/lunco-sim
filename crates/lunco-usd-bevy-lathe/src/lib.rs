@@ -635,6 +635,19 @@ pub fn retessellate_patch_meshes_on_quality_change(
 mod tests {
     use super::*;
 
+    fn nurbs_profile(
+        samples: usize,
+        minimum: usize,
+        maximum: usize,
+    ) -> lunco_render::RenderQualityProfile {
+        lunco_render::RenderQualityProfile {
+            nurbs_surface_samples_per_control_span: samples,
+            nurbs_surface_minimum_subdivisions: minimum,
+            nurbs_surface_maximum_subdivisions: maximum,
+            ..Default::default()
+        }
+    }
+
     /// The dish the lander actually ships, regenerated from its parameters, must
     /// reproduce the control net that was hand-authored for it. This is the
     /// "identical unless a parameter changed" guarantee, as a number.
@@ -696,7 +709,7 @@ mod tests {
         .surface()
         .expect("valid lathe");
         let mesh = surface
-            .mesh(lunco_render::RenderingQuality::Balanced.profile())
+            .mesh(nurbs_profile(6, 8, 128))
             .expect("valid reflector mesh");
         let positions = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
@@ -748,10 +761,10 @@ mod tests {
         .surface()
         .expect("valid lathe");
         let low = surface
-            .mesh(lunco_render::RenderingQuality::Low.profile())
+            .mesh(nurbs_profile(3, 6, 64))
             .expect("low-quality reflector mesh");
         let high = surface
-            .mesh(lunco_render::RenderingQuality::High.profile())
+            .mesh(nurbs_profile(10, 12, 256))
             .expect("high-quality reflector mesh");
         assert!(
             high.count_vertices() > low.count_vertices(),

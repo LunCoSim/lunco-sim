@@ -1,11 +1,111 @@
-//! Persisted render-quality intent and the conservative shadow allocation
-//! policy shared by the scene projectors and the workbench.
+//! Persisted render-quality intent, the typed authored-profile boundary, and
+//! the conservative shadow-allocation mechanism.
 
 use bevy::prelude::{Component, Resource};
 use lunco_settings::SettingsSection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::camera::{MsaaLevel, ToneMap};
+
+/// Authored policy that supplies the concrete values for each quality choice.
+pub const RENDER_QUALITY_PROFILE_HOOK: &str = "render.quality_profile";
+/// Authored policy selecting the initial profile for fresh settings.
+pub const RENDER_DEFAULT_QUALITY_PROFILE_HOOK: &str = "render.default_quality_profile";
+
+lunco_hooks::declare_hook! {
+    id: RENDER_QUALITY_PROFILE_HOOK,
+    owner: "lunco-render",
+    description: "Supply the concrete settings for a named rendering-quality profile.",
+    signature: [id: String],
+    output: Map,
+    deterministic: true,
+    required: true,
+    installable: true,
+}
+
+lunco_hooks::declare_hook! {
+    id: RENDER_DEFAULT_QUALITY_PROFILE_HOOK,
+    owner: "lunco-render",
+    description: "Select the initial rendering-quality profile for fresh settings.",
+    signature: [],
+    output: String,
+    deterministic: true,
+    required: true,
+    installable: true,
+}
+
+const PROFILE_FIELD_NAMES: [&str; 69] = [
+    "directional_shadow_map_size",
+    "point_shadow_map_size",
+    "directional_cascades",
+    "shadow_filtering_quality",
+    "max_directional_shadow_casters",
+    "max_point_shadow_casters",
+    "max_spot_shadow_casters",
+    "shadow_budget_bytes",
+    "horizon_shadow_cache_enabled",
+    "horizon_shadow_cache_sun_threshold_deg",
+    "horizon_march_steps",
+    "horizon_cache_samples_per_axis",
+    "shadow_minimum_distance",
+    "shadow_first_cascade_far_bound",
+    "shadow_maximum_distance",
+    "shadow_cascade_overlap",
+    "shadow_depth_bias",
+    "shadow_normal_bias",
+    "camera_tone_map",
+    "camera_msaa",
+    "camera_exposure_ev100",
+    "render_failure_quiet_period_secs",
+    "render_failure_give_up_after_secs",
+    "camera_bloom_intensity",
+    "camera_bloom_low_frequency_boost",
+    "distant_light_default_illuminance",
+    "local_light_default_intensity",
+    "rect_light_default_intensity",
+    "dome_default_intensity",
+    "local_light_default_range",
+    "local_shadow_map_near_z",
+    "dome_cubemap_face_size",
+    "primitive_sphere_longitudes",
+    "primitive_sphere_latitudes",
+    "primitive_radial_segments",
+    "primitive_capsule_longitudes",
+    "primitive_capsule_latitudes",
+    "terrain_mesh_cache_bytes",
+    "terrain_derived_map_resolution",
+    "terrain_derived_ao_directions",
+    "terrain_derived_ao_steps",
+    "terrain_derived_ao_radius_fraction",
+    "terrain_derived_roughness_base",
+    "terrain_derived_roughness_saturation_radians",
+    "terrain_derived_texture_anisotropy",
+    "terrain_rock_max_instances",
+    "terrain_rock_mesh_buckets",
+    "terrain_rock_mesh_cube_count",
+    "terrain_rock_lod_start_distance",
+    "terrain_rock_lod_fade_distance",
+    "terrain_lod_tile_resolution",
+    "terrain_lod_cinematic_resolution",
+    "terrain_lod_pixel_error",
+    "terrain_lod_max_depth",
+    "terrain_lod_probe_resolution",
+    "terrain_lod_bakes_per_frame",
+    "terrain_lod_max_inflight_bakes",
+    "terrain_lod_tile_budget",
+    "terrain_lod_cover_edits_per_frame",
+    "terrain_lod_hysteresis_ratio",
+    "terrain_lod_morph_start_ratio",
+    "nurbs_surface_samples_per_control_span",
+    "nurbs_surface_minimum_subdivisions",
+    "nurbs_surface_maximum_subdivisions",
+    "nurbs_trim_curve_samples",
+    "nurbs_trim_minimum_subdivisions",
+    "nurbs_trim_maximum_subdivisions",
+    "curve_samples_per_segment",
+    "curve_radial_segments",
+];
 
 /// Shadow-map sampling quality selected by the Graphics settings.
 ///
@@ -36,14 +136,13 @@ impl ShadowFilteringQuality {
 }
 
 /// The user-facing rendering-quality choices.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RenderingQuality {
     /// Suggested low-cost shadow and lighting preset.
     Low,
     /// Suggested balanced shadow and lighting preset.
     Balanced,
-    /// Suggested high-detail shadow and lighting preset and fresh-settings default.
-    #[default]
+    /// Suggested high-detail shadow and lighting preset.
     High,
 }
 
@@ -62,236 +161,29 @@ impl RenderingQuality {
         [Self::Low, Self::Balanced, Self::High]
     }
 
-    /// The suggested concrete settings for this preset.
-    pub const fn profile(self) -> RenderQualityProfile {
+    /// Stable authored-policy key for this preset.
+    pub const fn id(self) -> &'static str {
         match self {
-            Self::Balanced => RenderQualityProfile {
-                directional_shadow_map_size: 2048,
-                point_shadow_map_size: 1024,
-                directional_cascades: 3,
-                shadow_filtering_quality: ShadowFilteringQuality::Gaussian,
-                max_directional_shadow_casters: 1,
-                max_point_shadow_casters: 4,
-                max_spot_shadow_casters: 4,
-                shadow_budget_bytes: 256 * 1024 * 1024,
-                horizon_shadow_cache_enabled: true,
-                horizon_shadow_cache_sun_threshold_deg: 0.05,
-                horizon_march_steps: 48,
-                horizon_cache_samples_per_axis: 2,
-                shadow_minimum_distance: 0.1,
-                shadow_first_cascade_far_bound: 40.0,
-                shadow_maximum_distance: 1500.0,
-                shadow_cascade_overlap: 0.1,
-                shadow_depth_bias: 0.06,
-                shadow_normal_bias: 2.5,
-                camera_tone_map: ToneMap::AgX,
-                camera_msaa: MsaaLevel::X2,
-                camera_exposure_ev100: 16.0,
-                render_failure_quiet_period_secs: 0.5,
-                render_failure_give_up_after_secs: 5.0,
-                camera_bloom_intensity: 0.15,
-                camera_bloom_low_frequency_boost: 0.7,
-                distant_light_default_illuminance: 128_000.0,
-                local_light_default_intensity: 1_000.0,
-                rect_light_default_intensity: 10_000.0,
-                dome_default_intensity: 1_000.0,
-                local_light_default_range: 30.0,
-                local_shadow_map_near_z: 0.1,
-                dome_cubemap_face_size: 1024,
-                primitive_sphere_longitudes: 48,
-                primitive_sphere_latitudes: 32,
-                primitive_radial_segments: 64,
-                primitive_capsule_longitudes: 32,
-                primitive_capsule_latitudes: 16,
-                terrain_mesh_cache_bytes: 640 * 1024 * 1024,
-                terrain_derived_map_resolution: 1024,
-                terrain_derived_ao_directions: 8,
-                terrain_derived_ao_steps: 8,
-                terrain_derived_ao_radius_fraction: 0.15,
-                terrain_derived_roughness_base: 0.6,
-                terrain_derived_roughness_saturation_radians: 0.6,
-                terrain_derived_texture_anisotropy: 4,
-                terrain_rock_max_instances: 6_000,
-                terrain_rock_mesh_buckets: 6,
-                terrain_rock_mesh_cube_count: 4,
-                terrain_rock_lod_start_distance: 2_500.0,
-                terrain_rock_lod_fade_distance: 500.0,
-                terrain_lod_tile_resolution: 49,
-                terrain_lod_cinematic_resolution: 2049,
-                terrain_lod_pixel_error: 2.0,
-                terrain_lod_max_depth: 8,
-                terrain_lod_probe_resolution: 9,
-                terrain_lod_bakes_per_frame: 24,
-                terrain_lod_max_inflight_bakes: 64,
-                terrain_lod_tile_budget: 768,
-                terrain_lod_cover_edits_per_frame: 64,
-                terrain_lod_hysteresis_ratio: 1.30,
-                terrain_lod_morph_start_ratio: 0.55,
-                nurbs_surface_samples_per_control_span: 6,
-                nurbs_surface_minimum_subdivisions: 8,
-                nurbs_surface_maximum_subdivisions: 128,
-                nurbs_trim_curve_samples: 24,
-                nurbs_trim_minimum_subdivisions: 12,
-                nurbs_trim_maximum_subdivisions: 96,
-                curve_samples_per_segment: 8,
-                curve_radial_segments: 12,
-            },
-            Self::Low => RenderQualityProfile {
-                directional_shadow_map_size: 512,
-                point_shadow_map_size: 512,
-                directional_cascades: 1,
-                shadow_filtering_quality: ShadowFilteringQuality::Hardware2x2,
-                max_directional_shadow_casters: 1,
-                max_point_shadow_casters: 2,
-                max_spot_shadow_casters: 2,
-                shadow_budget_bytes: 32 * 1024 * 1024,
-                horizon_shadow_cache_enabled: false,
-                horizon_shadow_cache_sun_threshold_deg: 0.2,
-                horizon_march_steps: 24,
-                horizon_cache_samples_per_axis: 1,
-                shadow_minimum_distance: 0.1,
-                shadow_first_cascade_far_bound: 20.0,
-                shadow_maximum_distance: 600.0,
-                shadow_cascade_overlap: 0.1,
-                shadow_depth_bias: 0.1,
-                shadow_normal_bias: 4.0,
-                camera_tone_map: ToneMap::AgX,
-                camera_msaa: MsaaLevel::Off,
-                camera_exposure_ev100: 16.0,
-                render_failure_quiet_period_secs: 0.5,
-                render_failure_give_up_after_secs: 5.0,
-                camera_bloom_intensity: 0.0,
-                camera_bloom_low_frequency_boost: 0.0,
-                distant_light_default_illuminance: 128_000.0,
-                local_light_default_intensity: 1_000.0,
-                rect_light_default_intensity: 10_000.0,
-                dome_default_intensity: 1_000.0,
-                local_light_default_range: 20.0,
-                local_shadow_map_near_z: 0.2,
-                dome_cubemap_face_size: 512,
-                primitive_sphere_longitudes: 24,
-                primitive_sphere_latitudes: 16,
-                primitive_radial_segments: 32,
-                primitive_capsule_longitudes: 16,
-                primitive_capsule_latitudes: 8,
-                terrain_mesh_cache_bytes: 256 * 1024 * 1024,
-                terrain_derived_map_resolution: 512,
-                terrain_derived_ao_directions: 4,
-                terrain_derived_ao_steps: 4,
-                terrain_derived_ao_radius_fraction: 0.1,
-                terrain_derived_roughness_base: 0.6,
-                terrain_derived_roughness_saturation_radians: 0.6,
-                terrain_derived_texture_anisotropy: 1,
-                terrain_rock_max_instances: 2_000,
-                terrain_rock_mesh_buckets: 3,
-                terrain_rock_mesh_cube_count: 2,
-                terrain_rock_lod_start_distance: 1_500.0,
-                terrain_rock_lod_fade_distance: 300.0,
-                terrain_lod_tile_resolution: 33,
-                terrain_lod_cinematic_resolution: 1025,
-                terrain_lod_pixel_error: 4.0,
-                terrain_lod_max_depth: 6,
-                terrain_lod_probe_resolution: 5,
-                terrain_lod_bakes_per_frame: 8,
-                terrain_lod_max_inflight_bakes: 16,
-                terrain_lod_tile_budget: 256,
-                terrain_lod_cover_edits_per_frame: 16,
-                terrain_lod_hysteresis_ratio: 1.20,
-                terrain_lod_morph_start_ratio: 0.45,
-                nurbs_surface_samples_per_control_span: 3,
-                nurbs_surface_minimum_subdivisions: 6,
-                nurbs_surface_maximum_subdivisions: 64,
-                nurbs_trim_curve_samples: 12,
-                nurbs_trim_minimum_subdivisions: 8,
-                nurbs_trim_maximum_subdivisions: 48,
-                curve_samples_per_segment: 4,
-                curve_radial_segments: 6,
-            },
-            Self::High => RenderQualityProfile {
-                directional_shadow_map_size: 4096,
-                point_shadow_map_size: 2048,
-                directional_cascades: 4,
-                shadow_filtering_quality: ShadowFilteringQuality::Gaussian,
-                max_directional_shadow_casters: 2,
-                max_point_shadow_casters: 8,
-                max_spot_shadow_casters: 8,
-                shadow_budget_bytes: 2 * 1024 * 1024 * 1024,
-                horizon_shadow_cache_enabled: true,
-                horizon_shadow_cache_sun_threshold_deg: 0.02,
-                horizon_march_steps: 96,
-                horizon_cache_samples_per_axis: 3,
-                shadow_minimum_distance: 0.1,
-                shadow_first_cascade_far_bound: 80.0,
-                shadow_maximum_distance: 3000.0,
-                shadow_cascade_overlap: 0.1,
-                shadow_depth_bias: 0.03,
-                shadow_normal_bias: 1.5,
-                camera_tone_map: ToneMap::AgX,
-                // Keep the highest profile on the stable offscreen path: X4 made the
-                // large streamed Summer Space School terrain capture render black on
-                // the supported RTX 5060, while the rest of this profile remains above
-                // Balanced for shadows, sky, terrain, and geometry.
-                camera_msaa: MsaaLevel::X2,
-                camera_exposure_ev100: 16.0,
-                render_failure_quiet_period_secs: 0.5,
-                render_failure_give_up_after_secs: 5.0,
-                camera_bloom_intensity: 0.15,
-                camera_bloom_low_frequency_boost: 0.7,
-                distant_light_default_illuminance: 128_000.0,
-                local_light_default_intensity: 1_000.0,
-                rect_light_default_intensity: 10_000.0,
-                dome_default_intensity: 1_000.0,
-                local_light_default_range: 50.0,
-                local_shadow_map_near_z: 0.05,
-                dome_cubemap_face_size: 2048,
-                primitive_sphere_longitudes: 96,
-                primitive_sphere_latitudes: 64,
-                primitive_radial_segments: 128,
-                primitive_capsule_longitudes: 64,
-                primitive_capsule_latitudes: 32,
-                terrain_mesh_cache_bytes: 1024 * 1024 * 1024,
-                terrain_derived_map_resolution: 2048,
-                terrain_derived_ao_directions: 16,
-                terrain_derived_ao_steps: 16,
-                terrain_derived_ao_radius_fraction: 0.2,
-                terrain_derived_roughness_base: 0.6,
-                terrain_derived_roughness_saturation_radians: 0.6,
-                terrain_derived_texture_anisotropy: 8,
-                terrain_rock_max_instances: 12_000,
-                terrain_rock_mesh_buckets: 12,
-                terrain_rock_mesh_cube_count: 8,
-                terrain_rock_lod_start_distance: 4_000.0,
-                terrain_rock_lod_fade_distance: 800.0,
-                // Keep High on the proven interactive terrain envelope. High still
-                // raises lighting, derived-map, rock, and mesh budgets, but doubling
-                // the CDLOD cover made terrain geometry dominate the frame and did
-                // not improve the authored surface contract.
-                terrain_lod_tile_resolution: 49,
-                terrain_lod_cinematic_resolution: 2049,
-                terrain_lod_pixel_error: 2.0,
-                terrain_lod_max_depth: 8,
-                terrain_lod_probe_resolution: 9,
-                terrain_lod_bakes_per_frame: 24,
-                terrain_lod_max_inflight_bakes: 64,
-                terrain_lod_tile_budget: 768,
-                terrain_lod_cover_edits_per_frame: 64,
-                terrain_lod_hysteresis_ratio: 1.30,
-                terrain_lod_morph_start_ratio: 0.55,
-                nurbs_surface_samples_per_control_span: 10,
-                nurbs_surface_minimum_subdivisions: 12,
-                nurbs_surface_maximum_subdivisions: 256,
-                nurbs_trim_curve_samples: 48,
-                nurbs_trim_minimum_subdivisions: 16,
-                nurbs_trim_maximum_subdivisions: 192,
-                curve_samples_per_segment: 16,
-                curve_radial_segments: 24,
-            },
+            Self::Low => "low",
+            Self::Balanced => "balanced",
+            Self::High => "high",
+        }
+    }
+
+    /// Parse a stable authored-policy key.
+    pub fn parse_id(value: &str) -> Option<Self> {
+        match value {
+            "low" => Some(Self::Low),
+            "balanced" => Some(Self::Balanced),
+            "high" => Some(Self::High),
+            _ => None,
         }
     }
 }
 
-/// The concrete shadow-map parameters selected by [`RenderingQuality`].
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// Concrete render settings supplied by the authored [`RenderingQuality`]
+/// policy.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct RenderQualityProfile {
     pub directional_shadow_map_size: u32,
     pub point_shadow_map_size: u32,
@@ -438,6 +330,233 @@ pub struct RenderQualityProfile {
 }
 
 impl RenderQualityProfile {
+    /// Read one profile from the typed authored-policy boundary.
+    pub fn from_policy_value(value: &lunco_hooks::HookValue) -> Result<Self, String> {
+        let lunco_hooks::HookValue::Map(entries) = value else {
+            return Err(format!(
+                "render profile policy returned {}, expected map",
+                value.type_name()
+            ));
+        };
+
+        let mut seen = HashSet::with_capacity(entries.len());
+        for (key, _) in entries {
+            if !PROFILE_FIELD_NAMES.contains(&key.as_str()) {
+                return Err(format!(
+                    "render profile policy returned unknown field '{key}'"
+                ));
+            }
+            if !seen.insert(key.as_str()) {
+                return Err(format!(
+                    "render profile policy returned duplicate field '{key}'"
+                ));
+            }
+        }
+        for field in PROFILE_FIELD_NAMES {
+            if !seen.contains(field) {
+                return Err(format!(
+                    "render profile policy omitted required field '{field}'"
+                ));
+            }
+        }
+
+        macro_rules! unsigned {
+            ($field:ident, $ty:ty) => {
+                <$ty>::try_from(profile_integer(entries, stringify!($field))?).map_err(|_| {
+                    format!(
+                        "render profile field '{}' is out of range",
+                        stringify!($field)
+                    )
+                })?
+            };
+        }
+
+        Ok(Self {
+            directional_shadow_map_size: unsigned!(directional_shadow_map_size, u32),
+            point_shadow_map_size: unsigned!(point_shadow_map_size, u32),
+            directional_cascades: unsigned!(directional_cascades, usize),
+            shadow_filtering_quality: match profile_string(entries, "shadow_filtering_quality")? {
+                "hardware2x2" => ShadowFilteringQuality::Hardware2x2,
+                "gaussian" => ShadowFilteringQuality::Gaussian,
+                value => {
+                    return Err(format!(
+                        "render profile field 'shadow_filtering_quality' has unknown value '{value}'"
+                    ));
+                }
+            },
+            max_directional_shadow_casters: unsigned!(max_directional_shadow_casters, usize),
+            max_point_shadow_casters: unsigned!(max_point_shadow_casters, usize),
+            max_spot_shadow_casters: unsigned!(max_spot_shadow_casters, usize),
+            shadow_budget_bytes: unsigned!(shadow_budget_bytes, u64),
+            horizon_shadow_cache_enabled: profile_bool(entries, "horizon_shadow_cache_enabled")?,
+            horizon_shadow_cache_sun_threshold_deg: profile_f32(
+                entries,
+                "horizon_shadow_cache_sun_threshold_deg",
+            )?,
+            horizon_march_steps: unsigned!(horizon_march_steps, usize),
+            horizon_cache_samples_per_axis: unsigned!(horizon_cache_samples_per_axis, usize),
+            shadow_minimum_distance: profile_f32(entries, "shadow_minimum_distance")?,
+            shadow_first_cascade_far_bound: profile_f32(entries, "shadow_first_cascade_far_bound")?,
+            shadow_maximum_distance: profile_f32(entries, "shadow_maximum_distance")?,
+            shadow_cascade_overlap: profile_f32(entries, "shadow_cascade_overlap")?,
+            shadow_depth_bias: profile_f32(entries, "shadow_depth_bias")?,
+            shadow_normal_bias: profile_f32(entries, "shadow_normal_bias")?,
+            camera_tone_map: match profile_string(entries, "camera_tone_map")? {
+                "none" => ToneMap::None,
+                "tony_mc_mapface" => ToneMap::TonyMcMapface,
+                "agx" => ToneMap::AgX,
+                "aces_fitted" => ToneMap::AcesFitted,
+                "reinhard" => ToneMap::Reinhard,
+                value => {
+                    return Err(format!(
+                        "render profile field 'camera_tone_map' has unknown value '{value}'"
+                    ));
+                }
+            },
+            camera_msaa: match profile_string(entries, "camera_msaa")? {
+                "off" => MsaaLevel::Off,
+                "x2" => MsaaLevel::X2,
+                "x4" => MsaaLevel::X4,
+                value => {
+                    return Err(format!(
+                        "render profile field 'camera_msaa' has unknown value '{value}'"
+                    ));
+                }
+            },
+            camera_exposure_ev100: profile_f32(entries, "camera_exposure_ev100")?,
+            render_failure_quiet_period_secs: profile_f64(
+                entries,
+                "render_failure_quiet_period_secs",
+            )?,
+            render_failure_give_up_after_secs: profile_f64(
+                entries,
+                "render_failure_give_up_after_secs",
+            )?,
+            camera_bloom_intensity: profile_f32(entries, "camera_bloom_intensity")?,
+            camera_bloom_low_frequency_boost: profile_f32(
+                entries,
+                "camera_bloom_low_frequency_boost",
+            )?,
+            distant_light_default_illuminance: profile_f32(
+                entries,
+                "distant_light_default_illuminance",
+            )?,
+            local_light_default_intensity: profile_f32(entries, "local_light_default_intensity")?,
+            rect_light_default_intensity: profile_f32(entries, "rect_light_default_intensity")?,
+            dome_default_intensity: profile_f32(entries, "dome_default_intensity")?,
+            local_light_default_range: profile_f32(entries, "local_light_default_range")?,
+            local_shadow_map_near_z: profile_f32(entries, "local_shadow_map_near_z")?,
+            dome_cubemap_face_size: unsigned!(dome_cubemap_face_size, u32),
+            primitive_sphere_longitudes: unsigned!(primitive_sphere_longitudes, u32),
+            primitive_sphere_latitudes: unsigned!(primitive_sphere_latitudes, u32),
+            primitive_radial_segments: unsigned!(primitive_radial_segments, u32),
+            primitive_capsule_longitudes: unsigned!(primitive_capsule_longitudes, u32),
+            primitive_capsule_latitudes: unsigned!(primitive_capsule_latitudes, u32),
+            terrain_mesh_cache_bytes: unsigned!(terrain_mesh_cache_bytes, u64),
+            terrain_derived_map_resolution: unsigned!(terrain_derived_map_resolution, usize),
+            terrain_derived_ao_directions: unsigned!(terrain_derived_ao_directions, usize),
+            terrain_derived_ao_steps: unsigned!(terrain_derived_ao_steps, usize),
+            terrain_derived_ao_radius_fraction: profile_f64(
+                entries,
+                "terrain_derived_ao_radius_fraction",
+            )?,
+            terrain_derived_roughness_base: profile_f32(entries, "terrain_derived_roughness_base")?,
+            terrain_derived_roughness_saturation_radians: profile_f32(
+                entries,
+                "terrain_derived_roughness_saturation_radians",
+            )?,
+            terrain_derived_texture_anisotropy: unsigned!(terrain_derived_texture_anisotropy, u16),
+            terrain_rock_max_instances: unsigned!(terrain_rock_max_instances, usize),
+            terrain_rock_mesh_buckets: unsigned!(terrain_rock_mesh_buckets, usize),
+            terrain_rock_mesh_cube_count: unsigned!(terrain_rock_mesh_cube_count, usize),
+            terrain_rock_lod_start_distance: profile_f32(
+                entries,
+                "terrain_rock_lod_start_distance",
+            )?,
+            terrain_rock_lod_fade_distance: profile_f32(entries, "terrain_rock_lod_fade_distance")?,
+            terrain_lod_tile_resolution: unsigned!(terrain_lod_tile_resolution, usize),
+            terrain_lod_cinematic_resolution: unsigned!(terrain_lod_cinematic_resolution, usize),
+            terrain_lod_pixel_error: profile_f64(entries, "terrain_lod_pixel_error")?,
+            terrain_lod_max_depth: unsigned!(terrain_lod_max_depth, u8),
+            terrain_lod_probe_resolution: unsigned!(terrain_lod_probe_resolution, usize),
+            terrain_lod_bakes_per_frame: unsigned!(terrain_lod_bakes_per_frame, usize),
+            terrain_lod_max_inflight_bakes: unsigned!(terrain_lod_max_inflight_bakes, usize),
+            terrain_lod_tile_budget: unsigned!(terrain_lod_tile_budget, usize),
+            terrain_lod_cover_edits_per_frame: unsigned!(terrain_lod_cover_edits_per_frame, usize),
+            terrain_lod_hysteresis_ratio: profile_f64(entries, "terrain_lod_hysteresis_ratio")?,
+            terrain_lod_morph_start_ratio: profile_f64(entries, "terrain_lod_morph_start_ratio")?,
+            nurbs_surface_samples_per_control_span: unsigned!(
+                nurbs_surface_samples_per_control_span,
+                usize
+            ),
+            nurbs_surface_minimum_subdivisions: unsigned!(
+                nurbs_surface_minimum_subdivisions,
+                usize
+            ),
+            nurbs_surface_maximum_subdivisions: unsigned!(
+                nurbs_surface_maximum_subdivisions,
+                usize
+            ),
+            nurbs_trim_curve_samples: unsigned!(nurbs_trim_curve_samples, usize),
+            nurbs_trim_minimum_subdivisions: unsigned!(nurbs_trim_minimum_subdivisions, usize),
+            nurbs_trim_maximum_subdivisions: unsigned!(nurbs_trim_maximum_subdivisions, usize),
+            curve_samples_per_segment: unsigned!(curve_samples_per_segment, usize),
+            curve_radial_segments: unsigned!(curve_radial_segments, usize),
+        })
+    }
+}
+
+fn profile_value<'a>(
+    entries: &'a [(String, lunco_hooks::HookValue)],
+    key: &str,
+) -> Result<&'a lunco_hooks::HookValue, String> {
+    entries
+        .iter()
+        .find_map(|(name, value)| (name == key).then_some(value))
+        .ok_or_else(|| format!("render profile policy omitted required field '{key}'"))
+}
+
+fn profile_integer(entries: &[(String, lunco_hooks::HookValue)], key: &str) -> Result<i64, String> {
+    profile_value(entries, key)?
+        .as_i64()
+        .ok_or_else(|| format!("render profile field '{key}' must be an integer"))
+}
+
+fn profile_f64(entries: &[(String, lunco_hooks::HookValue)], key: &str) -> Result<f64, String> {
+    let value = profile_value(entries, key)?
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| format!("render profile field '{key}' must be a finite number"))?;
+    Ok(value)
+}
+
+fn profile_f32(entries: &[(String, lunco_hooks::HookValue)], key: &str) -> Result<f32, String> {
+    let value = profile_f64(entries, key)?;
+    if value.abs() > f32::MAX as f64 {
+        return Err(format!(
+            "render profile field '{key}' is outside the f32 range"
+        ));
+    }
+    Ok(value as f32)
+}
+
+fn profile_bool(entries: &[(String, lunco_hooks::HookValue)], key: &str) -> Result<bool, String> {
+    match profile_value(entries, key)? {
+        lunco_hooks::HookValue::Bool(value) => Ok(*value),
+        _ => Err(format!("render profile field '{key}' must be a boolean")),
+    }
+}
+
+fn profile_string<'a>(
+    entries: &'a [(String, lunco_hooks::HookValue)],
+    key: &str,
+) -> Result<&'a str, String> {
+    profile_value(entries, key)?
+        .as_str()
+        .ok_or_else(|| format!("render profile field '{key}' must be a string"))
+}
+
+impl RenderQualityProfile {
     /// Conservative allocation required when all configured caster limits are
     /// admitted at this profile's map sizes and cascade count.
     pub fn maximum_shadow_allocation_bytes(self) -> u64 {
@@ -477,430 +596,157 @@ impl RenderQualityProfile {
 
 /// Persisted user settings for shadow and light presentation quality.
 ///
-/// [`RenderingQuality`] supplies suggested values only. Once a preset is
-/// selected, these fields are the authoritative values used by the renderer;
-/// the runtime never silently replaces them with a lower preset because a
-/// scene or adapter cannot satisfy the request.
+/// The authored quality-profile policy supplies suggested values only. Once a
+/// profile is selected, these persisted fields are authoritative; the runtime
+/// never silently replaces them with a lower profile because a scene or adapter
+/// cannot satisfy the request.
 #[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct RenderingQualitySettings {
-    #[serde(default = "default_directional_shadow_map_size")]
     pub directional_shadow_map_size: u32,
-    #[serde(default = "default_point_shadow_map_size")]
     pub point_shadow_map_size: u32,
-    #[serde(default = "default_directional_cascades")]
     pub directional_cascades: usize,
-    #[serde(default = "default_shadow_filtering_quality")]
     pub shadow_filtering_quality: ShadowFilteringQuality,
-    #[serde(default = "default_max_directional_shadow_casters")]
     pub max_directional_shadow_casters: usize,
-    #[serde(default = "default_max_point_shadow_casters")]
     pub max_point_shadow_casters: usize,
-    #[serde(default = "default_max_spot_shadow_casters")]
     pub max_spot_shadow_casters: usize,
-    #[serde(default = "default_shadow_budget_bytes")]
     pub shadow_budget_bytes: u64,
-    #[serde(default = "default_horizon_shadow_cache_enabled")]
     pub horizon_shadow_cache_enabled: bool,
-    #[serde(default = "default_horizon_shadow_cache_sun_threshold_deg")]
     pub horizon_shadow_cache_sun_threshold_deg: f32,
-    #[serde(default = "default_horizon_march_steps")]
     pub horizon_march_steps: usize,
-    #[serde(default = "default_horizon_cache_samples_per_axis")]
     pub horizon_cache_samples_per_axis: usize,
-    #[serde(default = "default_shadow_minimum_distance")]
     pub shadow_minimum_distance: f32,
-    #[serde(default = "default_shadow_first_cascade_far_bound")]
     pub shadow_first_cascade_far_bound: f32,
-    #[serde(default = "default_shadow_maximum_distance")]
     pub shadow_maximum_distance: f32,
-    #[serde(default = "default_shadow_cascade_overlap")]
     pub shadow_cascade_overlap: f32,
-    #[serde(default = "default_shadow_depth_bias")]
     pub shadow_depth_bias: f32,
-    #[serde(default = "default_shadow_normal_bias")]
     pub shadow_normal_bias: f32,
-    #[serde(default = "default_camera_tone_map")]
     pub camera_tone_map: ToneMap,
-    #[serde(default = "default_camera_msaa")]
     pub camera_msaa: MsaaLevel,
-    #[serde(default = "default_camera_exposure_ev100")]
     pub camera_exposure_ev100: f32,
-    #[serde(default = "default_render_failure_quiet_period_secs")]
     pub render_failure_quiet_period_secs: f64,
-    #[serde(default = "default_render_failure_give_up_after_secs")]
     pub render_failure_give_up_after_secs: f64,
-    #[serde(default = "default_camera_bloom_intensity")]
     pub camera_bloom_intensity: f32,
-    #[serde(default = "default_camera_bloom_low_frequency_boost")]
     pub camera_bloom_low_frequency_boost: f32,
-    #[serde(default = "default_distant_light_default_illuminance")]
     pub distant_light_default_illuminance: f32,
-    #[serde(default = "default_local_light_default_intensity")]
     pub local_light_default_intensity: f32,
-    #[serde(default = "default_rect_light_default_intensity")]
     pub rect_light_default_intensity: f32,
-    #[serde(default = "default_dome_default_intensity")]
     pub dome_default_intensity: f32,
-    #[serde(default = "default_local_light_default_range")]
     pub local_light_default_range: f32,
-    #[serde(default = "default_local_shadow_map_near_z")]
     pub local_shadow_map_near_z: f32,
-    #[serde(default = "default_dome_cubemap_face_size")]
     pub dome_cubemap_face_size: u32,
-    #[serde(default = "default_primitive_sphere_longitudes")]
     pub primitive_sphere_longitudes: u32,
-    #[serde(default = "default_primitive_sphere_latitudes")]
     pub primitive_sphere_latitudes: u32,
-    #[serde(default = "default_primitive_radial_segments")]
     pub primitive_radial_segments: u32,
-    #[serde(default = "default_primitive_capsule_longitudes")]
     pub primitive_capsule_longitudes: u32,
-    #[serde(default = "default_primitive_capsule_latitudes")]
     pub primitive_capsule_latitudes: u32,
-    #[serde(default = "default_terrain_mesh_cache_bytes")]
     pub terrain_mesh_cache_bytes: u64,
-    #[serde(default = "default_terrain_derived_map_resolution")]
     pub terrain_derived_map_resolution: usize,
-    #[serde(default = "default_terrain_derived_ao_directions")]
     pub terrain_derived_ao_directions: usize,
-    #[serde(default = "default_terrain_derived_ao_steps")]
     pub terrain_derived_ao_steps: usize,
-    #[serde(default = "default_terrain_derived_ao_radius_fraction")]
     pub terrain_derived_ao_radius_fraction: f64,
-    #[serde(default = "default_terrain_derived_roughness_base")]
     pub terrain_derived_roughness_base: f32,
-    #[serde(default = "default_terrain_derived_roughness_saturation_radians")]
     pub terrain_derived_roughness_saturation_radians: f32,
-    #[serde(default = "default_terrain_derived_texture_anisotropy")]
     pub terrain_derived_texture_anisotropy: u16,
-    #[serde(default = "default_terrain_rock_max_instances")]
     pub terrain_rock_max_instances: usize,
-    #[serde(default = "default_terrain_rock_mesh_buckets")]
     pub terrain_rock_mesh_buckets: usize,
-    #[serde(default = "default_terrain_rock_mesh_cube_count")]
     pub terrain_rock_mesh_cube_count: usize,
-    #[serde(default = "default_terrain_rock_lod_start_distance")]
     pub terrain_rock_lod_start_distance: f32,
-    #[serde(default = "default_terrain_rock_lod_fade_distance")]
     pub terrain_rock_lod_fade_distance: f32,
-    #[serde(default = "default_terrain_lod_tile_resolution")]
     pub terrain_lod_tile_resolution: usize,
-    #[serde(default = "default_terrain_lod_cinematic_resolution")]
     pub terrain_lod_cinematic_resolution: usize,
-    #[serde(default = "default_terrain_lod_pixel_error")]
     pub terrain_lod_pixel_error: f64,
-    #[serde(default = "default_terrain_lod_max_depth")]
     pub terrain_lod_max_depth: u8,
-    #[serde(default = "default_terrain_lod_probe_resolution")]
     pub terrain_lod_probe_resolution: usize,
-    #[serde(default = "default_terrain_lod_bakes_per_frame")]
     pub terrain_lod_bakes_per_frame: usize,
-    #[serde(default = "default_terrain_lod_max_inflight_bakes")]
     pub terrain_lod_max_inflight_bakes: usize,
-    #[serde(default = "default_terrain_lod_tile_budget")]
     pub terrain_lod_tile_budget: usize,
-    #[serde(default = "default_terrain_lod_cover_edits_per_frame")]
     pub terrain_lod_cover_edits_per_frame: usize,
-    #[serde(default = "default_terrain_lod_hysteresis_ratio")]
     pub terrain_lod_hysteresis_ratio: f64,
-    #[serde(default = "default_terrain_lod_morph_start_ratio")]
     pub terrain_lod_morph_start_ratio: f64,
-    #[serde(default = "default_nurbs_surface_samples_per_control_span")]
     pub nurbs_surface_samples_per_control_span: usize,
-    #[serde(default = "default_nurbs_surface_minimum_subdivisions")]
     pub nurbs_surface_minimum_subdivisions: usize,
-    #[serde(default = "default_nurbs_surface_maximum_subdivisions")]
     pub nurbs_surface_maximum_subdivisions: usize,
-    #[serde(default = "default_nurbs_trim_curve_samples")]
     pub nurbs_trim_curve_samples: usize,
-    #[serde(default = "default_nurbs_trim_minimum_subdivisions")]
     pub nurbs_trim_minimum_subdivisions: usize,
-    #[serde(default = "default_nurbs_trim_maximum_subdivisions")]
     pub nurbs_trim_maximum_subdivisions: usize,
-    #[serde(default = "default_curve_samples_per_segment")]
     pub curve_samples_per_segment: usize,
-    #[serde(default = "default_curve_radial_segments")]
     pub curve_radial_segments: usize,
-}
-
-const fn default_profile() -> RenderQualityProfile {
-    RenderingQuality::High.profile()
-}
-
-const fn default_directional_shadow_map_size() -> u32 {
-    default_profile().directional_shadow_map_size
-}
-
-const fn default_point_shadow_map_size() -> u32 {
-    default_profile().point_shadow_map_size
-}
-
-const fn default_directional_cascades() -> usize {
-    default_profile().directional_cascades
-}
-
-const fn default_shadow_filtering_quality() -> ShadowFilteringQuality {
-    default_profile().shadow_filtering_quality
-}
-
-const fn default_max_directional_shadow_casters() -> usize {
-    default_profile().max_directional_shadow_casters
-}
-
-const fn default_max_point_shadow_casters() -> usize {
-    default_profile().max_point_shadow_casters
-}
-
-const fn default_max_spot_shadow_casters() -> usize {
-    default_profile().max_spot_shadow_casters
-}
-
-const fn default_shadow_budget_bytes() -> u64 {
-    default_profile().shadow_budget_bytes
-}
-
-const fn default_horizon_shadow_cache_enabled() -> bool {
-    default_profile().horizon_shadow_cache_enabled
-}
-
-const fn default_horizon_shadow_cache_sun_threshold_deg() -> f32 {
-    default_profile().horizon_shadow_cache_sun_threshold_deg
-}
-
-const fn default_horizon_march_steps() -> usize {
-    default_profile().horizon_march_steps
-}
-
-const fn default_horizon_cache_samples_per_axis() -> usize {
-    default_profile().horizon_cache_samples_per_axis
-}
-
-const fn default_shadow_minimum_distance() -> f32 {
-    default_profile().shadow_minimum_distance
-}
-
-const fn default_shadow_first_cascade_far_bound() -> f32 {
-    default_profile().shadow_first_cascade_far_bound
-}
-
-const fn default_shadow_maximum_distance() -> f32 {
-    default_profile().shadow_maximum_distance
-}
-
-const fn default_shadow_cascade_overlap() -> f32 {
-    default_profile().shadow_cascade_overlap
-}
-
-const fn default_terrain_mesh_cache_bytes() -> u64 {
-    default_profile().terrain_mesh_cache_bytes
-}
-
-const fn default_terrain_derived_map_resolution() -> usize {
-    default_profile().terrain_derived_map_resolution
-}
-
-const fn default_terrain_derived_ao_directions() -> usize {
-    default_profile().terrain_derived_ao_directions
-}
-
-const fn default_terrain_derived_ao_steps() -> usize {
-    default_profile().terrain_derived_ao_steps
-}
-
-const fn default_terrain_derived_ao_radius_fraction() -> f64 {
-    default_profile().terrain_derived_ao_radius_fraction
-}
-
-const fn default_terrain_derived_roughness_base() -> f32 {
-    default_profile().terrain_derived_roughness_base
-}
-
-const fn default_terrain_derived_roughness_saturation_radians() -> f32 {
-    default_profile().terrain_derived_roughness_saturation_radians
-}
-
-const fn default_terrain_derived_texture_anisotropy() -> u16 {
-    default_profile().terrain_derived_texture_anisotropy
-}
-
-const fn default_terrain_rock_max_instances() -> usize {
-    default_profile().terrain_rock_max_instances
-}
-
-const fn default_terrain_rock_mesh_buckets() -> usize {
-    default_profile().terrain_rock_mesh_buckets
-}
-
-const fn default_terrain_rock_mesh_cube_count() -> usize {
-    default_profile().terrain_rock_mesh_cube_count
-}
-
-const fn default_terrain_rock_lod_start_distance() -> f32 {
-    default_profile().terrain_rock_lod_start_distance
-}
-
-const fn default_terrain_rock_lod_fade_distance() -> f32 {
-    default_profile().terrain_rock_lod_fade_distance
-}
-
-const fn default_shadow_depth_bias() -> f32 {
-    default_profile().shadow_depth_bias
-}
-
-const fn default_shadow_normal_bias() -> f32 {
-    default_profile().shadow_normal_bias
-}
-
-const fn default_local_light_default_range() -> f32 {
-    default_profile().local_light_default_range
-}
-
-const fn default_distant_light_default_illuminance() -> f32 {
-    default_profile().distant_light_default_illuminance
-}
-
-const fn default_local_light_default_intensity() -> f32 {
-    default_profile().local_light_default_intensity
-}
-
-const fn default_rect_light_default_intensity() -> f32 {
-    default_profile().rect_light_default_intensity
-}
-
-const fn default_local_shadow_map_near_z() -> f32 {
-    default_profile().local_shadow_map_near_z
-}
-
-const fn default_dome_default_intensity() -> f32 {
-    default_profile().dome_default_intensity
-}
-
-const fn default_dome_cubemap_face_size() -> u32 {
-    default_profile().dome_cubemap_face_size
-}
-
-const fn default_primitive_sphere_longitudes() -> u32 {
-    default_profile().primitive_sphere_longitudes
-}
-
-const fn default_primitive_sphere_latitudes() -> u32 {
-    default_profile().primitive_sphere_latitudes
-}
-
-const fn default_primitive_radial_segments() -> u32 {
-    default_profile().primitive_radial_segments
-}
-
-const fn default_primitive_capsule_longitudes() -> u32 {
-    default_profile().primitive_capsule_longitudes
-}
-
-const fn default_primitive_capsule_latitudes() -> u32 {
-    default_profile().primitive_capsule_latitudes
-}
-
-const fn default_camera_tone_map() -> ToneMap {
-    default_profile().camera_tone_map
-}
-
-const fn default_camera_msaa() -> MsaaLevel {
-    default_profile().camera_msaa
-}
-
-const fn default_camera_exposure_ev100() -> f32 {
-    default_profile().camera_exposure_ev100
-}
-
-const fn default_render_failure_quiet_period_secs() -> f64 {
-    default_profile().render_failure_quiet_period_secs
-}
-
-const fn default_render_failure_give_up_after_secs() -> f64 {
-    default_profile().render_failure_give_up_after_secs
-}
-
-const fn default_camera_bloom_intensity() -> f32 {
-    default_profile().camera_bloom_intensity
-}
-
-const fn default_camera_bloom_low_frequency_boost() -> f32 {
-    default_profile().camera_bloom_low_frequency_boost
-}
-
-const fn default_terrain_lod_tile_resolution() -> usize {
-    default_profile().terrain_lod_tile_resolution
-}
-
-const fn default_terrain_lod_cinematic_resolution() -> usize {
-    default_profile().terrain_lod_cinematic_resolution
-}
-
-const fn default_terrain_lod_pixel_error() -> f64 {
-    default_profile().terrain_lod_pixel_error
-}
-
-const fn default_terrain_lod_max_depth() -> u8 {
-    default_profile().terrain_lod_max_depth
-}
-
-const fn default_terrain_lod_probe_resolution() -> usize {
-    default_profile().terrain_lod_probe_resolution
-}
-
-const fn default_terrain_lod_bakes_per_frame() -> usize {
-    default_profile().terrain_lod_bakes_per_frame
-}
-
-const fn default_terrain_lod_max_inflight_bakes() -> usize {
-    default_profile().terrain_lod_max_inflight_bakes
-}
-
-const fn default_terrain_lod_tile_budget() -> usize {
-    default_profile().terrain_lod_tile_budget
-}
-
-const fn default_terrain_lod_cover_edits_per_frame() -> usize {
-    default_profile().terrain_lod_cover_edits_per_frame
-}
-
-const fn default_terrain_lod_hysteresis_ratio() -> f64 {
-    default_profile().terrain_lod_hysteresis_ratio
-}
-
-const fn default_terrain_lod_morph_start_ratio() -> f64 {
-    default_profile().terrain_lod_morph_start_ratio
-}
-
-const fn default_nurbs_surface_samples_per_control_span() -> usize {
-    default_profile().nurbs_surface_samples_per_control_span
-}
-
-const fn default_nurbs_surface_minimum_subdivisions() -> usize {
-    default_profile().nurbs_surface_minimum_subdivisions
-}
-
-const fn default_nurbs_surface_maximum_subdivisions() -> usize {
-    default_profile().nurbs_surface_maximum_subdivisions
-}
-
-const fn default_nurbs_trim_curve_samples() -> usize {
-    default_profile().nurbs_trim_curve_samples
-}
-
-const fn default_nurbs_trim_minimum_subdivisions() -> usize {
-    default_profile().nurbs_trim_minimum_subdivisions
-}
-
-const fn default_nurbs_trim_maximum_subdivisions() -> usize {
-    default_profile().nurbs_trim_maximum_subdivisions
-}
-
-const fn default_curve_samples_per_segment() -> usize {
-    default_profile().curve_samples_per_segment
-}
-
-const fn default_curve_radial_segments() -> usize {
-    default_profile().curve_radial_segments
+    /// Fresh settings wait for the authored default profile during startup.
+    #[serde(skip)]
+    profile_uninitialized: bool,
+    /// Process-level override queued before the policy catalog is loaded.
+    #[serde(skip)]
+    requested_profile: Option<RenderingQuality>,
+}
+
+/// Validated profile values supplied by the authored application policy.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct RenderingQualityProfiles {
+    profiles: Vec<(RenderingQuality, RenderQualityProfile)>,
+    default_quality: Option<RenderingQuality>,
+    error: Option<String>,
+    generation: Option<u64>,
+}
+
+impl RenderingQualityProfiles {
+    /// Read the validated values for a stable profile id.
+    pub fn get(&self, quality: RenderingQuality) -> Option<RenderQualityProfile> {
+        self.profiles
+            .iter()
+            .find_map(|(id, profile)| (*id == quality).then_some(*profile))
+    }
+
+    /// Read the fresh-settings choice supplied by the authored policy.
+    pub fn default_quality(&self) -> Option<RenderingQuality> {
+        self.default_quality
+    }
+
+    /// Whether all shipped profile data was accepted.
+    pub fn is_available(&self) -> bool {
+        self.error.is_none() && self.profiles.len() == RenderingQuality::all().len()
+    }
+
+    /// Explain why no usable catalog is installed.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// Whether the hook registry has changed since this catalog was resolved.
+    pub fn is_stale(&self) -> bool {
+        self.generation != Some(lunco_hooks::generation())
+    }
+
+    /// Replace the complete catalog after the owner has validated every entry.
+    pub fn install(
+        &mut self,
+        profiles: Vec<(RenderingQuality, RenderQualityProfile)>,
+        default_quality: RenderingQuality,
+        generation: u64,
+    ) -> Result<(), String> {
+        if profiles.len() != RenderingQuality::all().len()
+            || RenderingQuality::all()
+                .into_iter()
+                .any(|quality| profiles.iter().filter(|(id, _)| *id == quality).count() != 1)
+        {
+            return Err("profile catalog must contain each stable quality id exactly once".into());
+        }
+        if !profiles.iter().any(|(id, _)| *id == default_quality) {
+            return Err("default profile id is not present in the profile catalog".into());
+        }
+        self.profiles = profiles;
+        self.default_quality = Some(default_quality);
+        self.error = None;
+        self.generation = Some(generation);
+        Ok(())
+    }
+
+    /// Retain a visible error when the authored policy cannot be loaded.
+    pub fn mark_unavailable(&mut self, error: impl Into<String>, generation: u64) {
+        self.profiles.clear();
+        self.default_quality = None;
+        self.error = Some(error.into());
+        self.generation = Some(generation);
+    }
 }
 
 impl RenderingQualitySettings {
@@ -984,20 +830,24 @@ impl RenderingQualitySettings {
     /// its runtime consumers. Runtime systems must use this boundary instead
     /// of turning an invalid setting into a different quality profile.
     pub fn validated_profile(self) -> Result<RenderQualityProfile, &'static str> {
+        if self.profile_uninitialized {
+            return Err("authored rendering-quality profiles have not loaded yet");
+        }
         self.validate().map(|()| self.profile())
     }
 
     /// Identify whether the current values still equal one of the suggestions.
-    pub fn preset(self) -> Option<RenderingQuality> {
+    pub fn preset(self, profiles: &RenderingQualityProfiles) -> Option<RenderingQuality> {
+        if self.profile_uninitialized {
+            return None;
+        }
         RenderingQuality::all()
             .into_iter()
-            .find(|quality| quality.profile() == self.profile())
+            .find(|quality| profiles.get(*quality) == Some(self.profile()))
     }
 
-    /// Apply a preset as an explicit user action. Runtime systems do not call
-    /// this in response to adapter memory or scene contents.
-    pub fn apply_preset(&mut self, quality: RenderingQuality) {
-        let profile = quality.profile();
+    /// Apply validated values chosen by the authored profile policy.
+    pub fn apply_profile(&mut self, profile: RenderQualityProfile) {
         self.directional_shadow_map_size = profile.directional_shadow_map_size;
         self.point_shadow_map_size = profile.point_shadow_map_size;
         self.directional_cascades = profile.directional_cascades;
@@ -1070,10 +920,57 @@ impl RenderingQualitySettings {
         self.nurbs_trim_maximum_subdivisions = profile.nurbs_trim_maximum_subdivisions;
         self.curve_samples_per_segment = profile.curve_samples_per_segment;
         self.curve_radial_segments = profile.curve_radial_segments;
+        self.profile_uninitialized = false;
+        self.requested_profile = None;
+    }
+
+    /// Queue a process-level preset request until authored profiles are loaded.
+    pub fn request_profile(&mut self, quality: RenderingQuality) {
+        self.requested_profile = Some(quality);
+    }
+
+    /// Whether the runtime still needs its first policy-backed profile.
+    pub fn is_profile_initialized(&self) -> bool {
+        !self.profile_uninitialized
+    }
+
+    /// Whether an explicit process-level profile is waiting to be applied.
+    pub fn has_requested_profile(&self) -> bool {
+        self.requested_profile.is_some()
+    }
+
+    /// Initialize fresh settings or apply a queued process-level choice.
+    pub fn initialize_profile(
+        &mut self,
+        profiles: &RenderingQualityProfiles,
+    ) -> Result<(), String> {
+        let requested = self.requested_profile.or_else(|| {
+            self.profile_uninitialized
+                .then(|| profiles.default_quality())
+                .flatten()
+        });
+        let Some(quality) = requested else {
+            return if self.profile_uninitialized || self.requested_profile.is_some() {
+                Err("authored default rendering-quality profile is unavailable".into())
+            } else {
+                Ok(())
+            };
+        };
+        let profile = profiles.get(quality).ok_or_else(|| {
+            format!(
+                "authored rendering-quality profile '{}' is unavailable",
+                quality.id()
+            )
+        })?;
+        self.apply_profile(profile);
+        Ok(())
     }
 
     /// Validate persisted or UI-edited settings before they reach Bevy.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self.profile_uninitialized {
+            return Err("authored rendering-quality profiles have not loaded yet");
+        }
         let profile = self.profile();
         if profile.directional_shadow_map_size == 0
             || !profile.directional_shadow_map_size.is_power_of_two()
@@ -1349,7 +1246,7 @@ impl RenderingQualitySettings {
 
 impl Default for RenderingQualitySettings {
     fn default() -> Self {
-        let profile = default_profile();
+        let profile = RenderQualityProfile::default();
         Self {
             directional_shadow_map_size: profile.directional_shadow_map_size,
             point_shadow_map_size: profile.point_shadow_map_size,
@@ -1421,6 +1318,8 @@ impl Default for RenderingQualitySettings {
             nurbs_trim_maximum_subdivisions: profile.nurbs_trim_maximum_subdivisions,
             curve_samples_per_segment: profile.curve_samples_per_segment,
             curve_radial_segments: profile.curve_radial_segments,
+            profile_uninitialized: true,
+            requested_profile: None,
         }
     }
 }
@@ -1459,10 +1358,9 @@ pub struct LightGraphicsDefaults {
 
 /// Conservative estimate for directional shadow textures and their views.
 pub fn estimate_directional_shadow_bytes(
-    quality: RenderingQuality,
+    profile: RenderQualityProfile,
     directional_light_count: usize,
 ) -> u64 {
-    let profile = quality.profile();
     estimate_shadow_allocation_bytes(
         profile.directional_shadow_map_size as usize,
         profile.point_shadow_map_size as usize,
@@ -1519,386 +1417,211 @@ pub fn estimate_shadow_allocation_bytes(
 mod tests {
     use super::*;
 
-    #[test]
-    fn preset_is_only_a_suggestion_until_explicitly_applied() {
-        let mut settings = RenderingQualitySettings {
-            directional_shadow_map_size: 4096,
-            shadow_budget_bytes: 256 * 1024 * 1024,
-            ..Default::default()
-        };
-        assert!(settings.preset().is_none());
-        settings.apply_preset(RenderingQuality::Low);
-        assert_eq!(settings.preset(), Some(RenderingQuality::Low));
-        assert_eq!(settings.profile(), RenderingQuality::Low.profile());
+    fn valid_profile() -> RenderQualityProfile {
+        RenderQualityProfile {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            directional_cascades: 2,
+            shadow_filtering_quality: ShadowFilteringQuality::Hardware2x2,
+            max_directional_shadow_casters: 1,
+            max_point_shadow_casters: 1,
+            max_spot_shadow_casters: 1,
+            shadow_budget_bytes: 1024 * 1024 * 1024,
+            horizon_shadow_cache_enabled: false,
+            horizon_shadow_cache_sun_threshold_deg: 0.2,
+            horizon_march_steps: 24,
+            horizon_cache_samples_per_axis: 1,
+            shadow_minimum_distance: 0.1,
+            shadow_first_cascade_far_bound: 20.0,
+            shadow_maximum_distance: 600.0,
+            shadow_cascade_overlap: 0.1,
+            shadow_depth_bias: 0.1,
+            shadow_normal_bias: 4.0,
+            camera_tone_map: ToneMap::AgX,
+            camera_msaa: MsaaLevel::Off,
+            camera_exposure_ev100: 16.0,
+            render_failure_quiet_period_secs: 0.5,
+            render_failure_give_up_after_secs: 5.0,
+            camera_bloom_intensity: 0.0,
+            camera_bloom_low_frequency_boost: 0.0,
+            distant_light_default_illuminance: 128_000.0,
+            local_light_default_intensity: 1_000.0,
+            rect_light_default_intensity: 10_000.0,
+            dome_default_intensity: 1_000.0,
+            local_light_default_range: 20.0,
+            local_shadow_map_near_z: 0.2,
+            dome_cubemap_face_size: 512,
+            primitive_sphere_longitudes: 24,
+            primitive_sphere_latitudes: 16,
+            primitive_radial_segments: 32,
+            primitive_capsule_longitudes: 16,
+            primitive_capsule_latitudes: 8,
+            terrain_mesh_cache_bytes: 256 * 1024 * 1024,
+            terrain_derived_map_resolution: 512,
+            terrain_derived_ao_directions: 4,
+            terrain_derived_ao_steps: 4,
+            terrain_derived_ao_radius_fraction: 0.1,
+            terrain_derived_roughness_base: 0.6,
+            terrain_derived_roughness_saturation_radians: 0.6,
+            terrain_derived_texture_anisotropy: 1,
+            terrain_rock_max_instances: 2_000,
+            terrain_rock_mesh_buckets: 3,
+            terrain_rock_mesh_cube_count: 2,
+            terrain_rock_lod_start_distance: 1_500.0,
+            terrain_rock_lod_fade_distance: 300.0,
+            terrain_lod_tile_resolution: 33,
+            terrain_lod_cinematic_resolution: 1025,
+            terrain_lod_pixel_error: 4.0,
+            terrain_lod_max_depth: 6,
+            terrain_lod_probe_resolution: 5,
+            terrain_lod_bakes_per_frame: 8,
+            terrain_lod_max_inflight_bakes: 16,
+            terrain_lod_tile_budget: 256,
+            terrain_lod_cover_edits_per_frame: 16,
+            terrain_lod_hysteresis_ratio: 1.2,
+            terrain_lod_morph_start_ratio: 0.45,
+            nurbs_surface_samples_per_control_span: 3,
+            nurbs_surface_minimum_subdivisions: 6,
+            nurbs_surface_maximum_subdivisions: 64,
+            nurbs_trim_curve_samples: 12,
+            nurbs_trim_minimum_subdivisions: 8,
+            nurbs_trim_maximum_subdivisions: 48,
+            curve_samples_per_segment: 4,
+            curve_radial_segments: 6,
+        }
     }
 
-    #[test]
-    fn fresh_rendering_quality_defaults_to_high_and_keeps_low_selectable() {
-        assert_eq!(RenderingQuality::default(), RenderingQuality::High);
-        assert_eq!(
-            RenderingQualitySettings::default().profile(),
-            RenderingQuality::High.profile()
-        );
-        assert!(RenderingQuality::all().contains(&RenderingQuality::Low));
-    }
-
-    #[test]
-    fn requested_profile_is_not_replaced_by_a_budget() {
+    fn valid_settings() -> RenderingQualitySettings {
         let mut settings = RenderingQualitySettings::default();
-        settings.apply_preset(RenderingQuality::High);
-        assert_eq!(settings.profile().directional_shadow_map_size, 4096);
-        assert_eq!(settings.profile().directional_cascades, 4);
-        assert_eq!(
-            settings.profile().shadow_filtering_quality,
-            ShadowFilteringQuality::Gaussian
-        );
-        assert_eq!(
-            settings.profile().shadow_budget_bytes,
-            2 * 1024 * 1024 * 1024
-        );
-        assert!(estimate_directional_shadow_bytes(RenderingQuality::High, 1) > 0);
+        settings.apply_profile(valid_profile());
+        settings
     }
 
     #[test]
-    fn shadow_allocation_estimate_saturates_instead_of_wrapping() {
+    fn quality_ids_are_stable_policy_keys() {
+        assert_eq!(RenderingQuality::Low.id(), "low");
+        assert_eq!(RenderingQuality::Balanced.id(), "balanced");
+        assert_eq!(
+            RenderingQuality::parse_id("high"),
+            Some(RenderingQuality::High)
+        );
+        assert_eq!(RenderingQuality::parse_id("turbo"), None);
+    }
+
+    #[test]
+    fn fresh_settings_wait_for_the_authored_catalog() {
+        let mut settings = RenderingQualitySettings::default();
+        assert!(settings.validated_profile().is_err());
+        assert_eq!(
+            settings.validated_profile(),
+            Err("authored rendering-quality profiles have not loaded yet")
+        );
+        settings.request_profile(RenderingQuality::Balanced);
+        assert!(settings.has_requested_profile());
+    }
+
+    #[test]
+    fn validated_catalog_applies_and_identifies_selected_values() {
+        let base = valid_profile();
+        let mut low = base;
+        low.directional_shadow_map_size = 512;
+        let mut high = base;
+        high.directional_shadow_map_size = 4096;
+        let mut profiles = RenderingQualityProfiles::default();
+        profiles
+            .install(
+                vec![
+                    (RenderingQuality::Low, low),
+                    (RenderingQuality::Balanced, base),
+                    (RenderingQuality::High, high),
+                ],
+                RenderingQuality::High,
+                lunco_hooks::generation(),
+            )
+            .unwrap();
+        assert!(profiles.is_available());
+        assert_eq!(profiles.default_quality(), Some(RenderingQuality::High));
+
+        let mut fresh_settings = RenderingQualitySettings::default();
+        fresh_settings.initialize_profile(&profiles).unwrap();
+        assert_eq!(
+            fresh_settings.preset(&profiles),
+            Some(RenderingQuality::High)
+        );
+
+        let mut settings = valid_settings();
+        settings.apply_profile(profiles.get(RenderingQuality::Balanced).unwrap());
+        assert_eq!(settings.preset(&profiles), Some(RenderingQuality::Balanced));
+        assert_eq!(settings.profile().directional_shadow_map_size, 1024);
+        settings.directional_shadow_map_size = 2048;
+        assert_eq!(settings.preset(&profiles), None);
+    }
+
+    #[test]
+    fn catalog_rejects_duplicate_or_missing_profile_ids() {
+        let mut profiles = RenderingQualityProfiles::default();
+        assert!(profiles
+            .install(
+                vec![
+                    (RenderingQuality::Low, valid_profile()),
+                    (RenderingQuality::Low, valid_profile()),
+                    (RenderingQuality::High, valid_profile()),
+                ],
+                RenderingQuality::High,
+                lunco_hooks::generation(),
+            )
+            .is_err());
+        assert!(!profiles.is_available());
+    }
+
+    #[test]
+    fn profile_parser_rejects_a_non_map_policy_result() {
+        assert!(
+            RenderQualityProfile::from_policy_value(&lunco_hooks::HookValue::Bool(false))
+                .unwrap_err()
+                .contains("expected map")
+        );
+    }
+
+    #[test]
+    fn shadow_allocation_estimate_saturates_and_counts_all_classes() {
         assert_eq!(
             estimate_shadow_allocation_bytes(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0, 0),
             u64::MAX
         );
+        assert_eq!(
+            estimate_shadow_allocation_bytes(1024, 512, 2, 1, 1, 1),
+            18 * 1024 * 1024
+        );
     }
 
     #[test]
-    fn every_suggested_profile_covers_its_configured_shadow_maximum() {
-        for quality in RenderingQuality::all() {
-            let mut settings = RenderingQualitySettings::default();
-            settings.apply_preset(quality);
-            let profile = settings.profile();
-            assert!(
-                profile.shadow_budget_bytes >= profile.maximum_shadow_allocation_bytes(),
-                "{quality:?} profile exceeds its explicit shadow ceiling"
-            );
-            assert!(
-                settings.validate().is_ok(),
-                "{quality:?} profile is invalid"
-            );
-        }
-    }
+    fn settings_validate_profile_ranges_before_render_use() {
+        let mut settings = valid_settings();
+        assert!(settings.validate().is_ok());
 
-    #[test]
-    fn a_shadow_ceiling_below_configured_maximum_is_rejected() {
-        let settings = RenderingQualitySettings {
-            shadow_budget_bytes: 1,
-            ..Default::default()
-        };
+        settings.shadow_budget_bytes = 1;
         assert_eq!(
             settings.validate(),
             Err("shadow byte ceiling is below the configured maximum shadow allocation")
         );
-    }
-
-    #[test]
-    fn validated_profile_never_exposes_invalid_quality_to_runtime() {
-        let valid = RenderingQualitySettings::default();
-        assert_eq!(valid.validated_profile(), Ok(valid.profile()));
-
-        let invalid = RenderingQualitySettings {
-            primitive_radial_segments: 2,
-            ..valid
-        };
-        assert_eq!(
-            invalid.validated_profile(),
-            Err("primitive mesh tessellation values are below their minimum")
-        );
-    }
-
-    #[test]
-    fn horizon_shadow_quality_is_explicit_and_validated() {
-        let mut settings = RenderingQualitySettings::default();
-        assert_eq!(settings.profile().horizon_march_steps, 96);
-        assert_eq!(settings.profile().horizon_cache_samples_per_axis, 3);
-        assert!(settings.validate().is_ok());
+        settings.shadow_budget_bytes = 1024 * 1024 * 1024;
 
         settings.horizon_march_steps = 0;
         assert_eq!(
             settings.validate(),
             Err("horizon march steps must be between 1 and 4096")
         );
-
-        settings.horizon_march_steps = 96;
-        settings.horizon_cache_samples_per_axis = 9;
-        assert_eq!(
-            settings.validate(),
-            Err("horizon cache samples per axis must be between 1 and 8")
-        );
-
-        settings.horizon_cache_samples_per_axis = 3;
-        settings.horizon_shadow_cache_sun_threshold_deg = 180.0;
-        assert_eq!(
-            settings.validate(),
-            Err("horizon cache sun threshold must be finite and in (0, 180) degrees")
-        );
-    }
-
-    #[test]
-    fn light_defaults_are_authoritative_settings_and_are_validated() {
-        let mut settings = RenderingQualitySettings {
-            distant_light_default_illuminance: 90_000.0,
-            local_light_default_intensity: 700.0,
-            rect_light_default_intensity: 4_000.0,
-            ..Default::default()
-        };
-        assert_eq!(
-            settings.profile().distant_light_default_illuminance,
-            90_000.0
-        );
-        assert_eq!(settings.profile().local_light_default_intensity, 700.0);
-        assert_eq!(settings.profile().rect_light_default_intensity, 4_000.0);
-        assert_eq!(settings.profile().dome_default_intensity, 1_000.0);
-        assert!(settings.validate().is_ok());
-
-        settings.local_light_default_intensity = 0.0;
-        assert_eq!(
-            settings.validate(),
-            Err("local-light default intensity must be finite and greater than zero")
-        );
-
-        settings.local_light_default_intensity = 700.0;
-        settings.dome_default_intensity = f32::NAN;
-        assert_eq!(
-            settings.validate(),
-            Err("dome default intensity must be finite and non-negative")
-        );
-    }
-
-    #[test]
-    fn dome_face_size_is_explicit_and_validated() {
-        let mut settings = RenderingQualitySettings::default();
-        assert!(settings.dome_cubemap_face_size.is_power_of_two());
-        assert!(settings.validate().is_ok());
-
-        settings.dome_cubemap_face_size = 1000;
-        assert_eq!(
-            settings.validate(),
-            Err("dome cubemap face size must be a power of two between 1 and 4096")
-        );
-
-        settings.dome_cubemap_face_size = 8192;
-        assert_eq!(
-            settings.validate(),
-            Err("dome cubemap face size must be a power of two between 1 and 4096")
-        );
-    }
-
-    #[test]
-    fn primitive_mesh_quality_is_explicit_and_validated() {
-        let mut settings = RenderingQualitySettings::default();
-        assert_eq!(
-            settings.profile().primitive_sphere_longitudes,
-            RenderingQuality::High.profile().primitive_sphere_longitudes
-        );
-        assert!(settings.validate().is_ok());
+        settings.horizon_march_steps = 24;
 
         settings.primitive_radial_segments = 2;
         assert_eq!(
             settings.validate(),
             Err("primitive mesh tessellation values are below their minimum")
         );
-    }
+        settings.primitive_radial_segments = 32;
 
-    #[test]
-    fn curve_tessellation_is_explicit_and_validated() {
-        let mut settings = RenderingQualitySettings::default();
-        assert_eq!(settings.profile().curve_samples_per_segment, 16);
-        assert_eq!(settings.profile().curve_radial_segments, 24);
-        assert!(settings.validate().is_ok());
-
-        settings.curve_radial_segments = 2;
-        assert_eq!(
-            settings.validate(),
-            Err("curve radial segments must be at least three")
-        );
-    }
-
-    #[test]
-    fn terrain_quality_is_authoritative_and_validated() {
-        let mut settings = RenderingQualitySettings::default();
-        assert!(settings.validate().is_ok());
-        assert_eq!(settings.profile().terrain_derived_map_resolution, 2048);
-        assert_eq!(settings.profile().terrain_derived_ao_directions, 16);
-        assert_eq!(settings.profile().terrain_derived_ao_steps, 16);
-        assert_eq!(settings.profile().terrain_derived_ao_radius_fraction, 0.2);
-        assert_eq!(settings.profile().terrain_derived_roughness_base, 0.6);
-        assert_eq!(
-            settings
-                .profile()
-                .terrain_derived_roughness_saturation_radians,
-            0.6
-        );
-        assert_eq!(settings.profile().terrain_derived_texture_anisotropy, 8);
-        assert_eq!(settings.profile().terrain_rock_max_instances, 12_000);
-        assert_eq!(settings.profile().terrain_rock_mesh_buckets, 12);
-        assert_eq!(settings.profile().terrain_rock_mesh_cube_count, 8);
-        assert_eq!(settings.profile().terrain_rock_lod_start_distance, 4_000.0);
-        assert_eq!(settings.profile().terrain_rock_lod_fade_distance, 800.0);
-        assert_eq!(
-            settings.profile().terrain_lod_tile_resolution,
-            RenderingQuality::Balanced
-                .profile()
-                .terrain_lod_tile_resolution
-        );
-        assert_eq!(settings.profile().terrain_lod_cover_edits_per_frame, 64);
-        assert_eq!(settings.profile().terrain_lod_hysteresis_ratio, 1.30);
-        assert_eq!(settings.profile().terrain_lod_morph_start_ratio, 0.55);
-        let high = RenderingQuality::High.profile();
-        let balanced = RenderingQuality::Balanced.profile();
-        assert_eq!(
-            high.terrain_lod_tile_resolution,
-            balanced.terrain_lod_tile_resolution
-        );
-        assert_eq!(
-            high.terrain_lod_cinematic_resolution,
-            balanced.terrain_lod_cinematic_resolution
-        );
-        assert_eq!(
-            high.terrain_lod_pixel_error,
-            balanced.terrain_lod_pixel_error
-        );
-        assert_eq!(high.terrain_lod_max_depth, balanced.terrain_lod_max_depth);
-        assert_eq!(
-            high.terrain_lod_probe_resolution,
-            balanced.terrain_lod_probe_resolution
-        );
-        assert_eq!(
-            high.terrain_lod_bakes_per_frame,
-            balanced.terrain_lod_bakes_per_frame
-        );
-        assert_eq!(
-            high.terrain_lod_max_inflight_bakes,
-            balanced.terrain_lod_max_inflight_bakes
-        );
-        assert_eq!(
-            high.terrain_lod_tile_budget,
-            balanced.terrain_lod_tile_budget
-        );
-        assert_eq!(
-            high.terrain_lod_cover_edits_per_frame,
-            balanced.terrain_lod_cover_edits_per_frame
-        );
-        assert_eq!(
-            high.terrain_lod_hysteresis_ratio,
-            balanced.terrain_lod_hysteresis_ratio
-        );
-        assert_eq!(
-            high.terrain_lod_morph_start_ratio,
-            balanced.terrain_lod_morph_start_ratio
-        );
-
-        settings.terrain_lod_tile_resolution = 2;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain tile resolution must be between 3 and 4097")
-        );
-
-        settings.terrain_lod_tile_resolution = 49;
-        settings.terrain_lod_pixel_error = 0.05;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain LOD pixel error must be finite and in [0.1, 32]")
-        );
-
-        settings.terrain_lod_pixel_error = 33.0;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain LOD pixel error must be finite and in [0.1, 32]")
-        );
-
-        settings.terrain_lod_pixel_error = 2.0;
-        settings.terrain_derived_map_resolution = 1000;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain derived-map resolution must be a power of two between 1 and 4096")
-        );
-
-        settings.terrain_derived_map_resolution = 1024;
-        settings.terrain_derived_ao_steps = 65;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain derived ambient-occlusion samples must be between 1 and 64")
-        );
-
-        settings.terrain_derived_ao_steps = 8;
-        settings.terrain_derived_ao_radius_fraction = 0.0;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain derived ambient-occlusion radius fraction must be finite and in (0, 1]")
-        );
-
-        settings.terrain_derived_ao_radius_fraction = 0.15;
-        settings.terrain_derived_texture_anisotropy = 17;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain derived texture anisotropy must be between 1 and 16")
-        );
-
-        settings.terrain_derived_texture_anisotropy = 4;
-        settings.terrain_rock_mesh_buckets = 1;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain rock mesh buckets must be between 2 and 64")
-        );
-
-        settings.terrain_rock_mesh_buckets = 6;
-        settings.terrain_rock_lod_fade_distance = 0.0;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain rock LOD fade distance must be finite and greater than zero")
-        );
-
-        settings.terrain_rock_lod_fade_distance = 500.0;
-        settings.terrain_lod_cover_edits_per_frame = 0;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain LOD cover edits per frame must be between 1 and 4096")
-        );
-
-        settings.terrain_lod_cover_edits_per_frame = 64;
-        settings.terrain_lod_hysteresis_ratio = 1.0;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain LOD hysteresis ratio must be finite and in (1, 4]")
-        );
-
-        settings.terrain_lod_hysteresis_ratio = 1.30;
-        settings.terrain_lod_morph_start_ratio = 1.0;
-        assert_eq!(
-            settings.validate(),
-            Err("terrain LOD morph start ratio must be finite and in [0, 1)")
-        );
-    }
-
-    #[test]
-    fn camera_quality_is_explicit_and_preset_only() {
-        let mut settings = RenderingQualitySettings::default();
-        assert_eq!(settings.profile().camera_tone_map, ToneMap::AgX);
-        assert_eq!(settings.profile().camera_exposure_ev100, 16.0);
-        assert!(settings.profile().camera_bloom_intensity > 0.0);
-
-        settings.camera_bloom_intensity = 0.0;
-        assert!(settings.validate().is_ok());
-        assert!(settings.preset().is_none());
-
-        settings.apply_preset(RenderingQuality::Low);
-        assert_eq!(settings.profile().camera_bloom_intensity, 0.0);
-        assert_eq!(settings.profile().camera_msaa, MsaaLevel::Off);
-        assert_eq!(settings.preset(), Some(RenderingQuality::Low));
-    }
-
-    #[test]
-    fn camera_exposure_rejects_non_finite_values_without_normalization() {
-        let settings = RenderingQualitySettings {
-            camera_exposure_ev100: f32::NAN,
-            ..Default::default()
-        };
+        settings.camera_exposure_ev100 = f32::NAN;
         assert_eq!(
             settings.validate(),
             Err("camera exposure EV100 must be finite")
@@ -1906,67 +1629,9 @@ mod tests {
     }
 
     #[test]
-    fn render_recovery_timings_are_explicit_and_ordered() {
-        let mut settings = RenderingQualitySettings {
-            render_failure_quiet_period_secs: 0.75,
-            render_failure_give_up_after_secs: 12.0,
-            ..Default::default()
-        };
-        assert!(settings.validate().is_ok());
-
-        settings.render_failure_give_up_after_secs = 0.75;
-        assert_eq!(
-            settings.validate(),
-            Err("render failure give-up period must be finite and greater than the quiet period")
-        );
-    }
-
-    #[test]
-    fn camera_bloom_rejects_invalid_values_without_clamping() {
-        let mut settings = RenderingQualitySettings {
-            camera_bloom_intensity: f32::NAN,
-            ..Default::default()
-        };
-        assert_eq!(
-            settings.validate(),
-            Err("camera bloom intensity must be finite and non-negative")
-        );
-
-        settings.camera_bloom_intensity = -1.0;
-        assert_eq!(
-            settings.validate(),
-            Err("camera bloom intensity must be finite and non-negative")
-        );
-    }
-
-    #[test]
-    fn nurbs_tessellation_is_explicit_and_validated() {
-        let balanced = RenderingQuality::Balanced.profile();
-        assert_eq!(balanced.nurbs_surface_subdivisions(9), 54);
-        assert_eq!(balanced.nurbs_trim_subdivisions(9), 54);
-
-        let mut settings = RenderingQualitySettings {
-            nurbs_surface_samples_per_control_span: 2,
-            nurbs_surface_minimum_subdivisions: 16,
-            nurbs_surface_maximum_subdivisions: 20,
-            ..Default::default()
-        };
-        assert_eq!(settings.profile().nurbs_surface_subdivisions(4), 16);
-        assert_eq!(settings.profile().nurbs_surface_subdivisions(20), 20);
-        assert!(settings.validate().is_ok());
-
-        settings.nurbs_surface_maximum_subdivisions = 8;
-        assert_eq!(
-            settings.validate(),
-            Err("NURBS surface subdivision minimum must not exceed its maximum")
-        );
-    }
-
-    #[test]
-    fn all_shadow_classes_share_one_logical_allocation_estimate() {
-        assert_eq!(
-            estimate_shadow_allocation_bytes(1024, 512, 2, 1, 1, 1),
-            18 * 1024 * 1024
-        );
+    fn nurbs_sample_resolution_uses_the_generic_profile_values() {
+        let profile = valid_profile();
+        assert_eq!(profile.nurbs_surface_subdivisions(9), 27);
+        assert_eq!(profile.nurbs_trim_subdivisions(9), 27);
     }
 }

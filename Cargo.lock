@@ -8986,6 +8986,7 @@ name = "lunco-render"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-hooks",
  "lunco-settings",
  "serde",
 ]

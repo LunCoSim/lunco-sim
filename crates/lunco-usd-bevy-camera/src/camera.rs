@@ -797,7 +797,7 @@ mod tests {
                 Some(tokens::T_CAMERA),
                 &mut commands,
                 entity.0,
-                lunco_render::RenderingQuality::Balanced.profile(),
+                lunco_render::RenderQualityProfile::default(),
             ),
             CameraProjectionOutcome::Rejected
         );

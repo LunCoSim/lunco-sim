@@ -1409,7 +1409,7 @@ mod tests {
                 Camera::default(),
                 lunco_render::scene_camera_look_with_profile(
                     None,
-                    lunco_render::RenderingQuality::Balanced.profile(),
+                    lunco_render::RenderQualityProfile::default(),
                 ),
                 lunco_embodiment_core::roles::Embodiment,
                 LocalEmbodiment,
@@ -1432,7 +1432,7 @@ mod tests {
                 Camera::default(),
                 lunco_render::scene_camera_look_with_profile(
                     None,
-                    lunco_render::RenderingQuality::Balanced.profile(),
+                    lunco_render::RenderQualityProfile::default(),
                 ),
                 lunco_embodiment_core::roles::Embodiment,
                 LocalEmbodiment,

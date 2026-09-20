@@ -51,7 +51,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         #[cfg(feature = "native-plugins")]
         app.init_resource::<lunco_scripting_rhai_world::native_plugins::NativeTwinPlugins>();
         app.add_systems(
-            Startup,
+            PreStartup,
             lunco_scripting_rhai_world::policy::load_application_policies_on_startup,
         )
         .add_observer(lunco_scripting_rhai_world::policy::sync_policies_on_twin_added)

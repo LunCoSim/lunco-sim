@@ -169,7 +169,7 @@ fn project_env_settings(
                     // the studio default.
                     authored.exposure_ev100 = Some(ev);
                     if let Some(sun) = lunar_sun.as_mut() {
-                        sun.exposure_ev100 = ev;
+                        sun.exposure_ev100 = Some(ev);
                     }
                 } else {
                     warn!("ignoring invalid authored lunco:env:exposureEv100 on {prim}");

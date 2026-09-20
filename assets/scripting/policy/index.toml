@@ -1,9 +1,9 @@
 # Application policy bindings. The hook id and Rhai entry point are authored
 # here so changing policy selection does not require a Rust rebuild.
 #
-# Every entry is optional. A hook owner decides whether an absent policy is a
-# valid unconfigured state; `required = true` is reserved for seams that cannot
-# operate safely without an implementation.
+# Entries default to optional. A hook owner decides whether an absent policy is
+# a valid unconfigured state; `required = true` marks seams that need an authored
+# implementation before they can operate safely.
 
 kind = "lunco.policy.v1"
 
@@ -26,6 +26,20 @@ deterministic = true
 hook = "assets.provision"
 source = "dataset_provisioning.rhai"
 entry = "dataset_provisioning"
+
+[[policies]]
+hook = "render.quality_profile"
+source = "render_quality_profiles.rhai"
+entry = "render_quality_profile"
+deterministic = true
+required = true
+
+[[policies]]
+hook = "render.default_quality_profile"
+source = "render_quality_profiles.rhai"
+entry = "default_render_quality_profile"
+deterministic = true
+required = true
 
 [[policies]]
 hook = "render.shadow_quality"

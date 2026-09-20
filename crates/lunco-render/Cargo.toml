@@ -11,6 +11,7 @@ description = "Shared render-look configuration for LunCoSim: lunar sun shadows,
 # stays cheap and can sit below every 3D crate without dragging in rendering.
 bevy = { workspace = true, features = ["bevy_light"] }
 lunco-settings = { path = "../lunco-settings" }
+lunco-hooks = { path = "../lunco-hooks" }
 serde = { workspace = true }
 
 [lints]

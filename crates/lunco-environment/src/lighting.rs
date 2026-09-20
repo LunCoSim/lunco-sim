@@ -39,11 +39,9 @@ use bevy::prelude::*;
 
 /// The Sun as seen from the lunar surface (Sol) — the hard key light.
 ///
-/// Also the one active-scene **`Resource`**: the sun spawn and every camera's
-/// [`Exposure`](bevy::camera::Exposure) read it, so illuminance (lux) and
-/// exposure (EV100) always move together. A scene that dims the sun therefore
-/// cannot leave a camera over-/under-exposed — that exact mismatch produced a
-/// black viewport (a 10 klx sandbox sun under a 128 klx-tuned EV16 camera).
+/// Also the one active-scene **`Resource`** for physical sun calibration. An
+/// authored environment exposure is carried alongside the illuminance; when
+/// absent, camera presentation uses the active Graphics profile.
 /// [`Default`] is the canonical lunar calibration; a non-lunar scene (the
 /// sandbox) `insert_resource`s its own studio values before plugins are added.
 #[derive(Debug, Clone, Copy, PartialEq, Resource)]
@@ -59,14 +57,9 @@ pub struct LunarSun {
     /// Moon — essentially identical to the view from Earth). Sets the
     /// soft-shadow penumbra width in the horizon ray-march.
     pub angular_diameter_deg: f32,
-    /// Camera exposure (**EV100**) matched to [`illuminance_lux`](Self::illuminance_lux).
-    /// Bevy renders physically (final pixel ≈ luminance ÷ 2^ev100), so exposure
-    /// and key-light lux **must move together** — that is why the matched value
-    /// is stored alongside the lux rather than hard-coded at each camera. The
-    /// balanced Graphics profile's default lands 0.13-albedo regolith at
-    /// mid-gray under the ~128 k lx Sun; raise it to darken the image, lower it
-    /// to brighten.
-    pub exposure_ev100: f32,
+    /// Optional authored camera exposure (**EV100**). `None` leaves unauthored
+    /// cameras to the active Graphics profile.
+    pub exposure_ev100: Option<f32>,
 }
 
 impl Default for LunarSun {
@@ -77,12 +70,7 @@ impl Default for LunarSun {
             // replaces it with the active Graphics profile before spawning
             // cameras and the corresponding sun.
             angular_diameter_deg: lunco_core::SOLAR_ANGULAR_DIAMETER_DEG,
-            // The balanced Graphics profile owns the unauthored camera
-            // exposure. A live scene may replace it with an authored
-            // environment/camera opinion through the normal command path.
-            exposure_ev100: lunco_render::RenderingQuality::Balanced
-                .profile()
-                .camera_exposure_ev100,
+            exposure_ev100: None,
         }
     }
 }

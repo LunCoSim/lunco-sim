@@ -436,7 +436,7 @@ pub fn setup_big_space_hierarchy(
     // is recreated with the scene; carrying the prior `LunarSun` resource here
     // would leak one scenario's grade into the next.
     let ls = lunco_environment::LunarSun {
-        exposure_ev100: sun_profile.camera_exposure_ev100,
+        exposure_ev100: Some(sun_profile.camera_exposure_ev100),
         ..Default::default()
     };
     // Physical sun identity is environmental state. Camera exposure remains
@@ -816,7 +816,7 @@ pub fn setup_big_space_hierarchy(
             // camera uses (`lunco_render::scene_camera_look_with_profile`), paired with the
             // canonical sun illuminance (single source of truth —
             // lunco_environment::LunarSun).
-            lunco_render::scene_camera_look_with_profile(Some(ls.exposure_ev100), sun_profile),
+            lunco_render::scene_camera_look_with_profile(ls.exposure_ev100, sun_profile),
             lunco_render::GraphicsCameraDefaults,
             Projection::Perspective(PerspectiveProjection {
                 near: 1.0,

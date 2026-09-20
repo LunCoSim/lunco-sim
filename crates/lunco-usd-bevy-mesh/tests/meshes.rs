@@ -12,6 +12,14 @@ use openusd::sdf::Path as SdfPath;
 mod curve_mesh_quality_tests {
     use super::*;
 
+    fn curve_profile(samples: usize, radial: usize) -> lunco_render::RenderQualityProfile {
+        lunco_render::RenderQualityProfile {
+            curve_samples_per_segment: samples,
+            curve_radial_segments: radial,
+            ..Default::default()
+        }
+    }
+
     fn stage(source: &str) -> CanonicalStage {
         CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
             "curve.usda",
@@ -39,18 +47,10 @@ def BasisCurves "Tube"
         );
         let reader = stage.view();
         let path = SdfPath::new("/Tube").unwrap();
-        let low = build_usd_curve_mesh(
-            &reader,
-            &path,
-            lunco_render::RenderingQuality::Low.profile(),
-        )
-        .expect("low curve mesh");
-        let high = build_usd_curve_mesh(
-            &reader,
-            &path,
-            lunco_render::RenderingQuality::High.profile(),
-        )
-        .expect("high curve mesh");
+        let low =
+            build_usd_curve_mesh(&reader, &path, curve_profile(2, 4)).expect("low curve mesh");
+        let high =
+            build_usd_curve_mesh(&reader, &path, curve_profile(16, 24)).expect("high curve mesh");
         assert!(high.count_vertices() > low.count_vertices());
     }
 
@@ -79,13 +79,13 @@ def BasisCurves "WrongBasis"
         assert!(build_usd_curve_mesh(
             &reader,
             &SdfPath::new("/MissingKnots").unwrap(),
-            lunco_render::RenderingQuality::Balanced.profile(),
+            curve_profile(8, 12),
         )
         .is_none());
         assert!(build_usd_curve_mesh(
             &reader,
             &SdfPath::new("/WrongBasis").unwrap(),
-            lunco_render::RenderingQuality::Balanced.profile(),
+            curve_profile(8, 12),
         )
         .is_none());
     }
@@ -118,12 +118,9 @@ def NurbsCurves "FeedArm"
         );
         let reader = stage.view();
         for path in ["/MagnetometerBoom", "/FeedArm"] {
-            let mesh = build_usd_curve_mesh(
-                &reader,
-                &SdfPath::new(path).unwrap(),
-                lunco_render::RenderingQuality::Balanced.profile(),
-            )
-            .unwrap_or_else(|| panic!("authored rover curve {path} must produce a tube"));
+            let mesh =
+                build_usd_curve_mesh(&reader, &SdfPath::new(path).unwrap(), curve_profile(8, 12))
+                    .unwrap_or_else(|| panic!("authored rover curve {path} must produce a tube"));
             assert!(mesh.count_vertices() > 0);
             assert!(mesh.indices().is_some(), "tube must have triangle indices");
         }
@@ -133,12 +130,23 @@ def NurbsCurves "FeedArm"
 mod primitive_mesh_quality_tests {
     use super::*;
 
+    fn primitive_profile(longitudes: u32, latitudes: u32) -> lunco_render::RenderQualityProfile {
+        lunco_render::RenderQualityProfile {
+            primitive_sphere_longitudes: longitudes,
+            primitive_sphere_latitudes: latitudes,
+            primitive_radial_segments: longitudes,
+            primitive_capsule_longitudes: longitudes,
+            primitive_capsule_latitudes: latitudes,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn primitive_mesh_density_follows_graphics_quality() {
         let shape = ShapeDims::Sphere { radius: 1.0 };
-        let low = build_primitive_mesh(shape, lunco_render::RenderingQuality::Low.profile())
-            .expect("low-quality sphere mesh");
-        let high = build_primitive_mesh(shape, lunco_render::RenderingQuality::High.profile())
+        let low =
+            build_primitive_mesh(shape, primitive_profile(8, 4)).expect("low-quality sphere mesh");
+        let high = build_primitive_mesh(shape, primitive_profile(64, 32))
             .expect("high-quality sphere mesh");
         assert!(
             high.count_vertices() > low.count_vertices(),
@@ -148,7 +156,7 @@ mod primitive_mesh_quality_tests {
 
     #[test]
     fn invalid_primitive_mesh_quality_is_rejected() {
-        let mut quality = lunco_render::RenderingQuality::Balanced.profile();
+        let mut quality = primitive_profile(48, 32);
         quality.primitive_radial_segments = 2;
         assert!(build_primitive_mesh(
             ShapeDims::Cylinder {
@@ -308,7 +316,12 @@ def NurbsPatch "Patch"
             build_usd_nurbs_patch_mesh(
                 &stage.view(),
                 &path,
-                lunco_render::RenderingQuality::Balanced.profile()
+                lunco_render::RenderQualityProfile {
+                    nurbs_trim_curve_samples: 24,
+                    nurbs_trim_minimum_subdivisions: 12,
+                    nurbs_trim_maximum_subdivisions: 96,
+                    ..Default::default()
+                }
             )
             .is_none(),
             "partial authored trim data must refuse the patch instead of restoring its hole"

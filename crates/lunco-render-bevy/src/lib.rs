@@ -473,8 +473,10 @@ mod tests {
     #[test]
     fn graphics_selects_shadow_filtering_for_standard_cameras() {
         let mut app = App::new();
+        let mut settings = lunco_render::RenderingQualitySettings::default();
+        settings.shadow_filtering_quality = lunco_render::ShadowFilteringQuality::Gaussian;
         app.init_resource::<RenderProfile>()
-            .init_resource::<lunco_render::RenderingQualitySettings>()
+            .insert_resource(settings)
             .add_observer(ensure_lunar_shadow_filtering);
         app.add_systems(
             Update,
@@ -488,7 +490,7 @@ mod tests {
         assert_eq!(
             app.world().entity(camera).get::<ShadowFilteringMethod>(),
             Some(&ShadowFilteringMethod::Gaussian),
-            "the High Graphics preset uses Gaussian shadow filtering"
+            "the selected Graphics filter is applied to new standard cameras"
         );
 
         app.world_mut()

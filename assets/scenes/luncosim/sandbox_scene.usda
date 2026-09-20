@@ -57,13 +57,6 @@ def Xform "SandboxScene" (
         }
     }
 
-    # The arena is 4 km across. Keep the standard near cascade for rover contact
-    # detail, while extending the authored UsdLux shadow range across the plot.
-    over "Sun"
-    {
-        float inputs:shadow:distance = 3000.0
-    }
-
     # ── Sky ────────────────────────────────────────────────────────────────
     #
     # The Moon has no atmosphere, so the sky is the star field itself. It is a
