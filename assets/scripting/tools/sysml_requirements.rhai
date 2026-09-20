@@ -928,9 +928,11 @@ fn source_with_attributes(names) {
 /// Select only the attributes, requirement usages and verification cases
 /// needed by one policy pass. The Rust SysML projection performs the table
 /// filtering against a single immutable source snapshot before Rhai receives
-/// it, keeping large Twins within Rhai's bounded value budget.
+/// it, keeping large Twins within Rhai's bounded value budget. This narrowly
+/// selected report intentionally omits the Twin-wide component/verification
+/// registry; the selected SysML identities are evaluated directly below.
 fn source_with_selection(attributes, requirements, verifications) {
-    _source_projection(attributes, requirements, verifications, false, true)
+    _source_projection(attributes, requirements, verifications, false, false)
 }
 
 /// Select the constraint graph for the geometry/Modelica policy.
