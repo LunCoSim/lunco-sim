@@ -49,9 +49,12 @@ ui = [
 # separate feature on `lunco-api-transport`; its wasm bridge is target-selected.
 api = [
     "dep:lunco-api",
+    "dep:lunco-api-core",
     "dep:lunco-api-transport",
     "dep:lunco-modelica-api",
     "dep:lunco-workspace-api",
+    "dep:lunco-command-contracts",
+    "dep:lunco-hooks",
     "lunco-modelica-core/api",
 ]
 # Native HTTP server for the `lunica --api` entry point. The browser uses the
@@ -160,7 +163,10 @@ rumoca-tool-lint = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api", optional = true }
+lunco-api-core = { path = "../lunco-api-core", optional = true }
 lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
+lunco-command-contracts = { path = "../lunco-command-contracts", optional = true }
+lunco-hooks = { path = "../lunco-hooks", optional = true }
 # In-app rhai scripting runtime (RunScenario/hot-reload + the `cmd()`/prelude
 # world-bridge). Optional behind the `scripting` feature. Its default `rhai`
 # backend is wasm-clean, and it pulls `lunco-api` only default-features=false

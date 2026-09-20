@@ -1,7 +1,7 @@
 // Generic SysML v2 -> USD requirement evaluator.
 //
 // SysML remains the normative source: a check names a requirement usage and
-// reads expected values through `expected_attr` from ValidateSysml.  The check
+// reads expected values through `expected_attr` from AnalyzeSysml. The check
 // table is authored by a Twin, while this evaluator is reusable by any Twin.
 // It deliberately supports only typed, read-only observations; it never edits
 // USD and never embeds a vehicle name or domain assumption.
@@ -177,8 +177,8 @@ fn _resolve_check_identities(checks, indexes) {
     #{ok: true}
 }
 
-// Resolve a Twin component and its verification case from the native
-// ValidateSysml projection.  Ownership and mapping are manifest data, so this
+// Resolve a Twin component and its verification case from the composed Rhai
+// policy report. Ownership and mapping are manifest data, so this
 // helper deliberately rejects registry errors, missing names, and duplicate
 // matches instead of guessing a scene or script.  Authored tests can then use
 // `binding.component`/`binding.verification` while keeping identity in
@@ -239,27 +239,15 @@ fn _lazy_attribute(report, name) {
     if report == () || report.path == () || report.path == "" {
         return #{ok: false, error: "SysML source report has no resolvable path"};
     }
-    let selected = query("ValidateSysml", #{path: report.path,
-        compact: true, attributes: [name]});
-    if selected == () {
-        return #{ok: false, error: "ValidateSysml returned no selected attribute report"};
-    }
-    if selected.ok != true {
-        let message = if selected.error != () { selected.error }
-            else if selected.errors != () && selected.errors.len() > 0 { selected.errors[0] }
-            else { "ValidateSysml rejected the source while selecting " + name };
-        return #{ok: false, error: message};
-    }
-    if selected.attributes_qualified == () {
-        return #{ok: false, error: "ValidateSysml omitted its qualified-attribute table"};
+    let selected = query("AnalyzeSysml", #{path: report.path,
+        tables: ["attributes"], attribute_names: [name]});
+    if selected == () || selected.analysis == () {
+        return #{ok: false, error: _report_error(selected,
+            "AnalyzeSysml returned no selected attribute facts")};
     }
     let found = ();
-    // `attributes_qualified` is an identity-preserving Rhai map, not an
-    // array.  Iterate its keys so the bridge remains valid for both exact
-    // qualified requests and short-name projections.
-    for qualified in selected.attributes_qualified.keys() {
-        let entry = selected.attributes_qualified[qualified];
-        if qualified == name || qualified.ends_with("::" + name) {
+    for entry in selected.analysis.attributes {
+        if entry.qualified_name == name || entry.name == name {
             if found != () {
                 return #{ok: false,
                     error: "ambiguous SysML attribute `" + name + "`; use a qualified name"};
@@ -294,12 +282,9 @@ fn attribute(report, name) {
         }
     }
     if report.attributes == () || report.attributes[name] == () {
-        // The compact source snapshot is intentionally bounded.  When it was
-        // requested with `attributes: []`, resolve one literal through the
-        // same ValidateSysml provider instead of moving the entire source set
-        // across the Rhai value boundary.  This is a projection, not a
-        // default: a missing or ambiguous name still returns an explicit
-        // failure to the caller.
+        // The source summary leaves large attribute tables unloaded. Fetch a
+        // narrow typed record from the same generic analysis API; ambiguity
+        // remains visible and is rejected here in the requirements policy.
         let lazy = _lazy_attribute(report, name);
         if lazy.ok != true { return lazy; }
         if lazy.record != () { return #{ok: true, record: lazy.record}; }
@@ -928,30 +913,27 @@ fn evaluate_stream(source_report, checks, channel, title) {
       source_files: source_report.source_files}
 }
 
-/// Build the canonical source report for the active Twin. A test can pass the
-/// result directly to `evaluate`, avoiding duplicated ValidateSysml calls.
+/// Build the canonical source report for the active Twin. Parsing and typed
+/// facts come from Rust; this Rhai policy joins manifest ownership with
+/// source-backed requirement and verification identities.
 fn source() {
-    let name = twin_name();
-    if name == "" { return #{ok: false, error: "active Twin is unavailable"}; }
-    // Keep the source snapshot bounded independently of Twin size.  Typed
-    // literals are fetched lazily by `attribute()` through the same provider,
-    // so adding another subsystem cannot make every Rhai test exceed the
-    // engine's value budget.
-    query("ValidateSysml", #{path: "twin://" + name, compact: true, attributes: []})
+    _source_projection([], false, true)
 }
 
-/// Build one bounded source projection for a group of literals.
-///
-/// Callers that need several parameters should use this once and then pass the
-/// returned report to `number`/`text`.  Sending one `ValidateSysml` request per
-/// literal is both slower and needlessly repeats Twin source-set validation.
-/// The selector is deliberately forwarded unchanged: qualified names preserve
-/// ownership, while a short name that maps to multiple definitions remains
-/// visible through `attribute_collisions` and is rejected by `attribute`.
+/// Select only the typed values needed by a requirement-policy pass.
 fn source_with_attributes(names) {
+    _source_projection(names, false, true)
+}
+
+/// Select the constraint graph for the geometry/Modelica policy.
+fn source_with_constraints(names) {
+    _source_projection(names, true, false)
+}
+
+fn _source_projection(names, include_constraints, include_twin_contract) {
     let name = twin_name();
     if name == "" { return #{ok: false, error: "active Twin is unavailable"}; }
-    if names == () || type_of(names) != "array" {
+    if type_of(names) != "array" {
         return #{ok: false, error: "SysML attribute selector must be an array"};
     }
     let selected = [];
@@ -961,16 +943,100 @@ fn source_with_attributes(names) {
         }
         if !selected.contains(literal) { selected.push(literal); }
     }
-    query("ValidateSysml", #{path: "twin://" + name,
-        compact: true, attributes: selected})
+    let tables = ["requirements", "verifications"];
+    if selected.len() > 0 { tables.push("attributes"); }
+    if include_constraints {
+        tables.push("constraints");
+        tables.push("relationships");
+        tables.push("references");
+    }
+    let request = #{path: "twin://" + name, tables: tables};
+    if selected.len() > 0 { request.attribute_names = selected; }
+    let analyzed = query("AnalyzeSysml", request);
+    if analyzed == () || analyzed.analysis == () {
+        return #{ok: false, error: _report_error(analyzed,
+            "AnalyzeSysml could not resolve the Twin SysML source set")};
+    }
+
+    let report = #{path: analyzed.path, kind: analyzed.kind,
+        ok: analyzed.ok, errors: analyzed.errors, warnings: analyzed.warnings,
+        source_files: analyzed.analysis.source_files,
+        source_revision_hex: analyzed.analysis.source_revision_hex,
+        requirement_records: analyzed.analysis.requirements,
+        verification_records: analyzed.analysis.verifications,
+        attributes: #{}, attributes_qualified: #{}, attribute_collisions: [],
+        constraints: if analyzed.analysis.constraints == () { [] } else { analyzed.analysis.constraints },
+        relationships: if analyzed.analysis.relationships == () { [] } else { analyzed.analysis.relationships },
+        references: if analyzed.analysis.references == () { [] } else { analyzed.analysis.references }};
+
+    if analyzed.analysis.attributes != () {
+        let short_names = #{};
+        for attribute in analyzed.analysis.attributes {
+            let qualified = attribute.qualified_name;
+            let short = attribute.name;
+            report.attributes_qualified[qualified] = attribute;
+            if short_names[short] == () {
+                short_names[short] = [qualified];
+            } else {
+                short_names[short].push(qualified);
+            }
+        }
+        for short in short_names.keys() {
+            if short_names[short].len() > 1 {
+                report.attribute_collisions.push(#{name: short,
+                    qualified_names: short_names[short]});
+            }
+        }
+    }
+
+    if !include_twin_contract { return report; }
+    let contract = query("ReadActiveTwinContract", #{});
+    if contract == () || contract.open != true {
+        report.ok = false;
+        report.errors.push(_report_error(contract,
+            "active Twin contract is unavailable"));
+        report.components = [];
+        report.component_registry_errors = ["active Twin contract is unavailable"];
+        report.verification_registry = [];
+        report.verification_registry_errors = ["active Twin contract is unavailable"];
+        return report;
+    }
+    report.components = contract.components;
+    report.component_registry_errors = contract.component_errors;
+    report.verification_registry = contract.verification_cases;
+    report.verification_registry_errors = contract.verification_errors;
+    for error in contract.sysml_source_errors {
+        let message = "Twin SysML source set: " + error;
+        report.errors.push(message);
+    }
+    for error in report.component_registry_errors {
+        report.errors.push("Twin component registry: " + error);
+    }
+    for candidate_case in report.verification_registry {
+        let resolved = verification_name(report, candidate_case.name);
+        if resolved.ok != true {
+            report.verification_registry_errors.push(resolved.error);
+        }
+    }
+    for error in report.verification_registry_errors {
+        report.errors.push("Twin verification registry: " + error);
+    }
+    report.ok = report.ok == true && report.errors.len() == 0
+        && report.component_registry_errors.len() == 0
+        && report.verification_registry_errors.len() == 0;
+    report
 }
 
-// Read one typed requirement-evidence record from the Twin's standard SysML
-// provenance catalog.  The native ValidateSysml provider groups evidence by
-// semantic requirementId and returns only the selected record, so a large
-// Twin does not move its complete attribute table across the Rhai boundary.
-// The caller receives source reference, rationale, optional status, and the
-// exact SysML source span as structured data rather than a comment string.
+fn _literal_text(attribute) {
+    if attribute == () || attribute.value == () { return (); }
+    if attribute.value.string_value != () { return attribute.value.string_value; }
+    if attribute.value.literal_kind == "string" { return attribute.value.literal; }
+    ()
+}
+
+// Read evidence from typed SysML attributes and group it by its owning
+// semantic element. This is a requirements-policy projection, not a Rust
+// report format or a comment-string convention.
 fn provenance(report, requirement_id) {
     if type_of(report) != "map" || report.path == () || report.path == "" {
         return #{ok: false,
@@ -979,29 +1045,63 @@ fn provenance(report, requirement_id) {
     if requirement_id == () || requirement_id == "" {
         return #{ok: false, error: "SysML provenance requirement ID is missing"};
     }
-    let selected = query("ValidateSysml", #{
-        path: report.path,
-        compact: true,
-        attributes: [],
-        provenance_ids: [requirement_id]
+    let selected = query("AnalyzeSysml", #{
+        path: report.path, tables: ["attributes"],
+        attribute_names: ["requirementId", "qualifiedRequirement",
+            "sourceReference", "rationale", "status"]
     });
-    if selected == () || selected.ok != true {
+    if selected == () || selected.analysis == () {
         return #{ok: false,
-            error: _report_error(selected, "SysML provenance projection is unavailable")};
+            error: _report_error(selected, "SysML provenance source is unavailable")};
     }
-    if selected.provenance_records == () {
-        return #{ok: false, error: "SysML provenance projection is unavailable"};
+    let owners = #{};
+    for attribute in selected.analysis.attributes {
+        if owners[attribute.owner] == () { owners[attribute.owner] = #{}; }
+        owners[attribute.owner][attribute.name] = attribute;
     }
-    if selected.provenance_records.len() == 0 {
+    let found = ();
+    for owner in owners.keys() {
+        let fields = owners[owner];
+        let id = _literal_text(fields.requirementId);
+        let qualified = _literal_text(fields.qualifiedRequirement);
+        if id == requirement_id || qualified == requirement_id {
+            if found != () {
+                return #{ok: false,
+                    error: "ambiguous SysML provenance record: " + requirement_id};
+            }
+            let source_records = [];
+            for field_name in fields.keys() { source_records.push(fields[field_name]); }
+            if source_records.len() == 0 { continue; }
+            let source_start = source_records[0].start;
+            let source_end = source_records[0].end;
+            let source_file = source_records[0].file;
+            for record in source_records {
+                if record.start < source_start { source_start = record.start; }
+                if record.end > source_end { source_end = record.end; }
+            }
+            let evidence = #{owner: owner, requirement_id: id,
+                qualified_requirement: qualified,
+                source_span: #{file: source_file, start: source_start, end: source_end}};
+            let source_reference = _literal_text(fields.sourceReference);
+            let rationale = _literal_text(fields.rationale);
+            let status = _literal_text(fields.status);
+            if source_reference != () { evidence.source_reference = source_reference; }
+            if rationale != () { evidence.rationale = rationale; }
+            if status != () { evidence.status = status; }
+            found = evidence;
+        }
+    }
+    if found == () {
         return #{ok: false,
             error: "SysML provenance record is missing: " + requirement_id};
     }
-    if selected.provenance_records.len() != 1 {
-        return #{ok: false,
-            error: "ambiguous SysML provenance record: " + requirement_id};
+    let revision = report.source_revision_hex;
+    let files = report.source_files;
+    if report.analysis != () {
+        if revision == () { revision = report.analysis.source_revision_hex; }
+        if files == () { files = report.analysis.source_files; }
     }
-    #{ok: true, evidence: selected.provenance_records[0],
-      source_revision: selected.source_revision,
-      source_revision_hex: selected.source_revision_hex,
-      source_files: selected.source_files}
+    #{ok: true, evidence: found,
+      source_revision: revision, source_revision_hex: revision,
+      source_files: files}
 }

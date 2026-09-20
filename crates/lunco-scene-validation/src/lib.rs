@@ -10,6 +10,8 @@
 //! the same validation plugin and CLI entry point.
 
 pub mod lint_command;
+/// Typed, policy-neutral semantic SysML snapshot for authored Rhai tools.
+pub mod sysml_analysis;
 /// Static discovery of authored scene tests and their execution kind.
 /// The scene supplies the USD program binding; the Rhai test source supplies
 /// the execution domain and whether a GPU test consumes pixels or diagnostics.
@@ -24,6 +26,7 @@ pub struct SceneValidationPlugin;
 impl bevy::prelude::Plugin for SceneValidationPlugin {
     fn build(&self, app: &mut bevy::prelude::App) {
         validate::register(app);
+        sysml_analysis::register(app);
         lint_command::register_all_commands(app);
         lint_command::register(app);
     }

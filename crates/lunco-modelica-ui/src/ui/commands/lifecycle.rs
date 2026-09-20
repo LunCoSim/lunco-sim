@@ -17,6 +17,13 @@ use crate::ui::duplicate::{
 use crate::ui::workbench_state::WorkbenchState;
 use crate::ui::MODEL_VIEW_KIND;
 
+#[cfg(feature = "api")]
+use lunco_command_contracts::{Ack, OpId};
+#[cfg(feature = "api")]
+use lunco_core::ActiveCommandId;
+#[cfg(feature = "api")]
+use lunco_hooks::HookValue;
+
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
 /// Request to create a new untitled Modelica model and open its tab.
@@ -26,6 +33,8 @@ use crate::ui::MODEL_VIEW_KIND;
 /// loader (`crate::model_share`) fires this with `source`/`name`
 /// populated so a shared model reuses this exact creation + tab-open
 /// path instead of duplicating it.
+/// Programmatic calls receive the allocated `doc_id` in the command result;
+/// opening the corresponding workbench tab remains queued on the UI thread.
 #[Command(default)]
 pub struct CreateNewScratchModel {
     /// Initial source. `None` → a minimal `model <name> end <name>;` stub.
@@ -387,18 +396,17 @@ fn close_model_tab(world: &mut World, tab_id: u64) {
 
 // ─── Observers ───────────────────────────────────────────────────────────────
 
-#[on_command(CreateNewScratchModel)]
-pub fn on_create_new_scratch_model(
-    trigger: On<CreateNewScratchModel>,
-    mut registry: ResMut<ModelicaDocuments>,
-    mut cache: ResMut<PackageTreeCache>,
-    mut model_tabs: ResMut<ModelTabs>,
-    mut workbench: ResMut<WorkbenchState>,
-    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
-    mut commands: Commands,
-) {
-    let req_source = trigger.event().source.clone();
-    let req_name = trigger.event().name.clone();
+fn create_new_scratch_model(
+    request: &CreateNewScratchModel,
+    registry: &mut ModelicaDocuments,
+    cache: &mut PackageTreeCache,
+    model_tabs: &mut ModelTabs,
+    workbench: &mut WorkbenchState,
+    workspace: &mut lunco_workspace::WorkspaceResource,
+    commands: &mut Commands,
+) -> DocumentId {
+    let req_source = request.source.clone();
+    let req_name = request.name.clone();
 
     // Base name: explicit request name → else the model name parsed from
     // the supplied source → else "Untitled". Then dedup with a numeric
@@ -438,6 +446,64 @@ pub fn on_create_new_scratch_model(
         kind: MODEL_VIEW_KIND,
         instance: tab_id,
     });
+    doc_id
+}
+
+#[cfg(feature = "api")]
+#[on_command(CreateNewScratchModel)]
+pub fn on_create_new_scratch_model(
+    trigger: On<CreateNewScratchModel>,
+    mut registry: ResMut<ModelicaDocuments>,
+    mut cache: ResMut<PackageTreeCache>,
+    mut model_tabs: ResMut<ModelTabs>,
+    mut workbench: ResMut<WorkbenchState>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    results: Option<ResMut<lunco_core::CommandResults>>,
+) {
+    let doc_id = create_new_scratch_model(
+        trigger.event(),
+        &mut registry,
+        &mut cache,
+        &mut model_tabs,
+        &mut workbench,
+        &mut workspace,
+        &mut commands,
+    );
+    if let (Some(command_id), Some(mut results)) =
+        (active_id.as_ref().and_then(|active| active.get()), results)
+    {
+        results.record(
+            command_id,
+            Ok(Ack::with_data(
+                OpId::new(),
+                HookValue::map([("doc_id", HookValue::Int(doc_id.raw() as i64))]),
+            )),
+        );
+    }
+}
+
+#[cfg(not(feature = "api"))]
+#[on_command(CreateNewScratchModel)]
+pub fn on_create_new_scratch_model(
+    trigger: On<CreateNewScratchModel>,
+    mut registry: ResMut<ModelicaDocuments>,
+    mut cache: ResMut<PackageTreeCache>,
+    mut model_tabs: ResMut<ModelTabs>,
+    mut workbench: ResMut<WorkbenchState>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
+    mut commands: Commands,
+) {
+    create_new_scratch_model(
+        trigger.event(),
+        &mut registry,
+        &mut cache,
+        &mut model_tabs,
+        &mut workbench,
+        &mut workspace,
+        &mut commands,
+    );
 }
 
 #[on_command(DuplicateModelFromReadOnly)]

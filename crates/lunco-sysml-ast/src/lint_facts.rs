@@ -11,6 +11,155 @@ use crate::{
     SysmlVerificationRecord,
 };
 use lunco_hooks::HookValue as H;
+use std::collections::BTreeSet;
+
+/// A source-neutral SysML fact table that can be requested by a policy.
+///
+/// This selector controls transport volume only. It does not encode domain
+/// interpretation: the caller still decides what records mean and how they
+/// are checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SysmlFactTable {
+    Elements,
+    References,
+    Relationships,
+    Constraints,
+    Attributes,
+    Requirements,
+    Verifications,
+    Diagnostics,
+}
+
+impl SysmlFactTable {
+    /// Parse one stable API table name.
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "elements" => Self::Elements,
+            "references" => Self::References,
+            "relationships" => Self::Relationships,
+            "constraints" => Self::Constraints,
+            "attributes" => Self::Attributes,
+            "requirements" => Self::Requirements,
+            "verifications" => Self::Verifications,
+            "diagnostics" => Self::Diagnostics,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Elements => "elements",
+            Self::References => "references",
+            Self::Relationships => "relationships",
+            Self::Constraints => "constraints",
+            Self::Attributes => "attributes",
+            Self::Requirements => "requirements",
+            Self::Verifications => "verifications",
+            Self::Diagnostics => "diagnostics",
+        }
+    }
+}
+
+/// Generic table/name selection for a typed SysML snapshot.
+///
+/// `tables: None` returns the full fact set. `attribute_names` selects by
+/// exact qualified identity or local attribute name and intentionally returns
+/// every match; callers such as requirement policies own ambiguity handling.
+#[derive(Debug, Clone, Default)]
+pub struct SysmlFactSelection {
+    pub tables: Option<BTreeSet<SysmlFactTable>>,
+    pub attribute_names: Option<BTreeSet<String>>,
+}
+
+/// Project only requested tables from one immutable analysis. Source identity
+/// metadata is always present so policy results can cite their inputs.
+pub fn selected_sysml_facts(analysis: &SysmlAnalysis, selection: &SysmlFactSelection) -> H {
+    let mut facts = vec![
+        (
+            "source_revision_hex",
+            H::str(format!("0x{:016x}", analysis.source_revision())),
+        ),
+        ("stdlib", H::Bool(analysis.includes_stdlib())),
+        (
+            "source_files",
+            H::Array(
+                analysis
+                    .files()
+                    .iter()
+                    .map(|file| H::str(file.name.clone()))
+                    .collect(),
+            ),
+        ),
+    ];
+
+    let includes = |table| {
+        selection
+            .tables
+            .as_ref()
+            .map_or(true, |tables| tables.contains(&table))
+    };
+
+    if includes(SysmlFactTable::Elements) {
+        facts.push((
+            "elements",
+            H::Array(analysis.elements().iter().map(element).collect()),
+        ));
+    }
+    if includes(SysmlFactTable::References) {
+        facts.push((
+            "references",
+            H::Array(analysis.references().iter().map(reference).collect()),
+        ));
+    }
+    if includes(SysmlFactTable::Relationships) {
+        facts.push((
+            "relationships",
+            H::Array(analysis.relationships().iter().map(relationship).collect()),
+        ));
+    }
+    if includes(SysmlFactTable::Constraints) {
+        facts.push((
+            "constraints",
+            H::Array(analysis.constraints().iter().map(constraint).collect()),
+        ));
+    }
+    if includes(SysmlFactTable::Attributes) {
+        facts.push((
+            "attributes",
+            H::Array(
+                analysis
+                    .attributes()
+                    .iter()
+                    .filter(|record| {
+                        selection.attribute_names.as_ref().map_or(true, |names| {
+                            names.contains(&record.qualified_name) || names.contains(&record.name)
+                        })
+                    })
+                    .map(attribute)
+                    .collect(),
+            ),
+        ));
+    }
+    if includes(SysmlFactTable::Requirements) {
+        facts.push((
+            "requirements",
+            H::Array(analysis.requirements().iter().map(requirement).collect()),
+        ));
+    }
+    if includes(SysmlFactTable::Verifications) {
+        facts.push((
+            "verifications",
+            H::Array(analysis.verifications().iter().map(verification).collect()),
+        ));
+    }
+    if includes(SysmlFactTable::Diagnostics) {
+        facts.push((
+            "diagnostics",
+            H::Array(analysis.diagnostics().iter().map(diagnostic).collect()),
+        ));
+    }
+    H::map(facts)
+}
 
 /// Project one resolved SysML snapshot into top-level lint facts.
 ///

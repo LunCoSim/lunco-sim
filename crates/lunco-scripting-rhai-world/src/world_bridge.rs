@@ -58,7 +58,7 @@ fn first_set_failure(id: u64, path: &str) -> bool {
         .insert((id, path.to_string()))
 }
 
-use rhai::{AST, Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext};
+use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext, AST};
 
 use lunco_doc::Diagnostic;
 use lunco_hooks::HookValue;
@@ -400,60 +400,80 @@ pub fn policy_status_value(world: &World) -> HookValue {
 /// typed in-process call; external transports serialize their response at the
 /// API boundary instead of making JSON a scripting value.
 fn sysml_report_value(path: &str, compact: bool) -> Dynamic {
-    let report = bridge_core::query(
-        &RhaiBuilder,
-        "ValidateSysml",
-        HookValue::map([
-            ("path", HookValue::Str(path.to_owned())),
-            ("compact", HookValue::Bool(compact)),
-        ]),
-    );
-    let issue = sysml_report_issue(&report, "ValidateSysml");
+    let mut params = vec![("path", HookValue::Str(path.to_owned()))];
+    if compact {
+        params.push((
+            "tables",
+            HookValue::Array(vec![
+                HookValue::str("requirements"),
+                HookValue::str("verifications"),
+            ]),
+        ));
+    }
+    let report = bridge_core::query(&RhaiBuilder, "AnalyzeSysml", HookValue::map(params));
+    let issue = sysml_report_issue(&report, "AnalyzeSysml");
     publish_sysml_warning(path, None, issue.as_deref());
     report
 }
 
 #[cfg(feature = "sysml")]
 fn sysml_typed_value(path: &str, qualified_name: &str) -> Dynamic {
-    // Select one literal from the compact SysML projection.  Loading the full
-    // source/attribute report for a single typed read needlessly duplicates
-    // large Twin snapshots across the Rhai boundary.
+    // Select one typed source record. The generic analysis API performs only
+    // table/name selection; it does not decide how the value is interpreted.
     let report = bridge_core::query(
         &RhaiBuilder,
-        "ValidateSysml",
+        "AnalyzeSysml",
         HookValue::map([
             ("path", HookValue::Str(path.to_owned())),
-            ("compact", HookValue::Bool(true)),
             (
-                "attributes",
+                "tables",
+                HookValue::Array(vec![HookValue::str("attributes")]),
+            ),
+            (
+                "attribute_names",
                 HookValue::Array(vec![HookValue::Str(qualified_name.to_owned())]),
             ),
         ]),
     );
-    if let Some(issue) = sysml_report_issue(&report, "ValidateSysml") {
+    if let Some(issue) = sysml_report_issue(&report, "AnalyzeSysml") {
         return sysml_value_error(path, qualified_name, issue);
     }
     let Some(report) = report.clone().try_cast::<Map>() else {
         return sysml_value_error(
             path,
             qualified_name,
-            "ValidateSysml returned a non-map report",
+            "AnalyzeSysml returned a non-map report",
         );
     };
-    let Some(attributes) = report
-        .get("attributes_qualified")
+    let Some(analysis) = report
+        .get("analysis")
         .and_then(|value| value.clone().try_cast::<Map>())
     else {
         return sysml_value_error(
             path,
             qualified_name,
-            "ValidateSysml report omitted its qualified-attribute table",
+            "AnalyzeSysml report omitted its analysis snapshot",
         );
     };
-    let Some(record) = attributes
-        .get(qualified_name)
-        .and_then(|value| value.clone().try_cast::<Map>())
+    let Some(attributes) = analysis
+        .get("attributes")
+        .and_then(|value| value.clone().try_cast::<rhai::Array>())
     else {
+        return sysml_value_error(
+            path,
+            qualified_name,
+            "AnalyzeSysml report omitted its selected attribute table",
+        );
+    };
+    let record = attributes.into_iter().find_map(|attribute| {
+        let attribute = attribute.try_cast::<Map>()?;
+        let matches = attribute
+            .get("qualified_name")
+            .and_then(|value| value.clone().into_string().ok())
+            .is_some_and(|name| name == qualified_name);
+        matches.then_some(attribute)
+    });
+    let Some(record) = record else {
         return sysml_value_error(
             path,
             qualified_name,
@@ -476,30 +496,34 @@ fn sysml_typed_value_from_report(report: &Map, qualified_name: &str) -> Dynamic 
         .get("path")
         .and_then(|value| value.clone().into_string().ok())
         .unwrap_or_else(|| "<report>".into());
-    if let Some(issue) = sysml_map_issue(report, "ValidateSysml") {
+    if let Some(issue) = sysml_map_issue(report, "AnalyzeSysml") {
         return sysml_value_error(&path, qualified_name, issue);
     }
-    let Some(attributes) = report
-        .get("attributes_qualified")
+    let Some(analysis) = report
+        .get("analysis")
         .and_then(|value| value.clone().try_cast::<Map>())
     else {
         return sysml_value_error(
             &path,
             qualified_name,
-            "ValidateSysml report omitted its qualified-attribute table",
+            "AnalyzeSysml report omitted its analysis snapshot",
         );
     };
-    let Some(record) = attributes
-        .get(qualified_name)
-        .and_then(|value| value.clone().try_cast::<Map>())
+    let Some(attributes) = analysis
+        .get("attributes")
+        .and_then(|value| value.clone().try_cast::<rhai::Array>())
     else {
-        let selected = report
-            .get("attribute_projection")
+        return sysml_value_not_projected(&path, qualified_name);
+    };
+    let record = attributes.into_iter().find_map(|attribute| {
+        let attribute = attribute.try_cast::<Map>()?;
+        let matches = attribute
+            .get("qualified_name")
             .and_then(|value| value.clone().into_string().ok())
-            .is_some_and(|projection| projection == "selected");
-        if selected {
-            return sysml_value_not_projected(&path, qualified_name);
-        }
+            .is_some_and(|name| name == qualified_name);
+        matches.then_some(attribute)
+    });
+    let Some(record) = record else {
         return sysml_value_error(
             &path,
             qualified_name,
@@ -2843,22 +2867,18 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         // script's id and the prelude's absence of one does no harm.
                         let ast = self.prelude_ast.merge(&ast);
                         let mask = ProgramMask::from_ast(&ast);
-                        let imports_ast = match build_hoisted_ast(
-                            &self.engine,
-                            source,
-                            &ast,
-                            asset_id,
-                        ) {
-                            Ok(ast) => ast,
-                            Err(e) => {
-                                error!(
+                        let imports_ast =
+                            match build_hoisted_ast(&self.engine, source, &ast, asset_id) {
+                                Ok(ast) => ast,
+                                Err(e) => {
+                                    error!(
                                     "[rhai] entity {entity:?} generated import scope failed: {e}"
                                 );
-                                let d = rhai_diagnostic(e.to_string(), e.position());
-                                self.compiled.insert(key, CacheEntry::Err(d.clone()));
-                                return CompileOutcome::Failed(d);
-                            }
-                        };
+                                    let d = rhai_diagnostic(e.to_string(), e.position());
+                                    self.compiled.insert(key, CacheEntry::Err(d.clone()));
+                                    return CompileOutcome::Failed(d);
+                                }
+                            };
                         let task_ast = build_task_ast(&ast, imports_ast.as_ref(), asset_id);
                         let p = Arc::new(CompiledProgram {
                             ast,
@@ -4269,11 +4289,9 @@ mod tests {
         let engine = super::build_world_engine_base(Default::default());
         let src = "fn on_tick(me, ctx) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
-        assert!(
-            super::build_hoisted_ast(&engine, src, &full, None)
-                .unwrap()
-                .is_none()
-        );
+        assert!(super::build_hoisted_ast(&engine, src, &full, None)
+            .unwrap()
+            .is_none());
     }
 
     /// Two closures over one outer local SHARE it when either mutates it.

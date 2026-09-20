@@ -164,50 +164,43 @@ asset/tool package:
 
 | Binary | Target | Description |
 |--------|--------|-------------|
-| `modelica_tester` | CLI | Standalone tester for Modelica compilation |
+| `modelica_tester` | `lunco-modelica-execution` CLI | Standalone tester for Modelica compilation |
 | `modelica_library_indexer` | CLI | `lunco-modelica-assets` tool that builds `library_index.json`; with `--warm` also full-compiles explicitly selected classes so rumoca's semantic-summary cache is hot before the workbench opens |
-| `modelica_run` | CLI | Headless: compile a `.mo`, step it for a fixed duration, optionally dump per-step CSV |
+| `modelica_run` | `lunco-modelica-execution` CLI | Headless: compile a `.mo`, step it for a fixed duration, optionally dump per-step CSV |
+| Modelica API | Headless workbench | Compile and run Modelica sources without a window; query experiment results through the API |
 
 ### CLI workflow — warm cache, then run headless
 
-The two CLI binaries compose:
-
 ```bash
-# 1. (one-time per cache wipe) Warm the rumoca semantic-summary cache for
-#    every bundled asset model + any explicitly requested source classes.
-#    Takes ~7 min cold, ~30s if the parse cache from a prior run is intact.
+# Warm the library index/cache (optional for correctness).
 LUNCOSIM_WARM_DIRS="$(pwd)/assets/models" \
   cargo run --release -p lunco-modelica-assets --bin modelica_library_indexer -- --warm
 
-# 2. Run AnnotatedRocketStage.RocketStage for 10s, dump per-step telemetry
-#    to CSV. After the warm pass above, compile is ~ms instead of minutes.
-cargo run --release -p lunco-modelica-core --bin modelica_run -- \
+# Compile and step through the shared Modelica compiler/solver path.
+cargo run --release -p lunco-modelica-execution --bin modelica_run -- \
     assets/models/AnnotatedRocketStage.mo \
     AnnotatedRocketStage.RocketStage \
-    --duration 10 \
-    --input valve_opening=1.0 \
+    --duration 10 --input valve_opening=1.0 \
     --record time,engine.thrust,airframe.altitude,airframe.velocity,tank.m \
     --output /tmp/rocket.csv
 ```
 
-Both binaries share the same compile path the workbench uses, so the
-warm cache benefits all three. `modelica_run` prints 1-second progress
-ticks (sim-time, RTF, ETA) and a 5-second compile heartbeat — there's
-no silent stall regardless of model size.
-
-`modelica_library_indexer` flags:
-- `--warm` — full-compile the explicitly configured warm targets after indexing
-- `--warm-only NAME[,NAME…]` — explicit list of qualified names and `.mo` paths
-- `LUNCOSIM_WARM_DIRS=path1:path2` — env var, scans each dir for `.mo` files and warms every top-level model
-- `-v, --verbose` — per-file scan logging
+Use the API-enabled workbench instead when a run needs Twin-indexed source
+roots, Editor documents, or scene composition.
 
 `modelica_run` flags:
 - `<FILE.mo> <CLASS>` — required positional args
 - `-d, --duration SECS` (default 10), `-t, --dt SECS` (default 0.01)
 - `--output PATH` — write per-step CSV
 - `--input N=V` — set runtime input (repeatable; warns on unknown name)
-- `--record VAR,VAR` — comma-separated subset (default: all observables)
+- `--record VAR,VAR` — comma-separated variables to record (default: all observables)
 - `-v, --verbose` — per-step logging (otherwise 1-second wall-clock ticks)
+
+`modelica_library_indexer` flags:
+- `--warm` — full-compile the explicitly configured warm targets after indexing
+- `--warm-only NAME[,NAME…]` — explicit list of qualified names and `.mo` paths
+- `LUNCOSIM_WARM_DIRS=path1:path2` — env var, scans each dir for `.mo` files and warms every top-level model
+- `-v, --verbose` — per-file scan logging
 
 ## Key Dependencies
 

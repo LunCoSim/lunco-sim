@@ -29,7 +29,15 @@ use lunco_modelica_runtime::{
 };
 use std::collections::{BTreeSet, HashMap};
 
+#[cfg(feature = "api")]
+use lunco_api::{executor::PendingApiRequest, DeferredCommandAppExt};
+#[cfg(feature = "api")]
+use lunco_command_contracts::{Ack, OpId};
+#[cfg(feature = "api")]
+use lunco_core::ActiveCommandId;
 use lunco_core::{on_command, register_commands, Command};
+#[cfg(feature = "api")]
+use lunco_hooks::HookValue;
 
 use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::workbench_state::WorkbenchState;
@@ -2088,8 +2096,10 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
 /// inputs, and bounds — the programmatic counterpart to the Experiments
 /// panel. Unlike `FastRunActiveModel`, overrides come from the command (not
 /// the UI draft), so an agent can sweep parameters without touching source.
-/// Discover the resulting `experiment_id` via `ListRuns` (newest, or by
-/// `label`); read the trajectory with `GetExperimentResult`.
+/// API callers receive a deferred acknowledgement containing the exact
+/// `experiment_id` once the run has been registered. The numerical solve stays
+/// asynchronous; observe it through `RunStatus` and read it with
+/// `GetExperimentResult`.
 #[Command(default)]
 pub struct RunExperiment {
     /// Target document. Unassigned → the active document.
@@ -2123,6 +2133,69 @@ pub struct RunExperiment {
     pub label: Option<String>,
 }
 
+#[cfg(feature = "api")]
+#[on_command(RunExperiment)]
+pub fn on_run_experiment(
+    trigger: On<RunExperiment>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
+    let command = trigger.event();
+    let raw = command.doc_id;
+    let explicit_class = command.class.clone();
+    let overrides = param_map_from_mods(&command.overrides);
+    let inputs = param_map_from_mods(&command.inputs);
+    let solver = parse_solver_arg(command.solver.as_deref());
+    let cmd_bounds = BoundsOverride {
+        t_start: command.t_start,
+        t_end: command.t_end,
+        dt: command.dt,
+        n_intervals: command.n_intervals,
+        tolerance: command.tolerance,
+        solver: None,
+        h0: command.h0,
+    };
+    let label = command.label.clone();
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .as_ref()
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+
+    commands.queue(move |world: &mut World| {
+        let result = solver.and_then(|solver| {
+            let bounds = BoundsOverride {
+                solver,
+                ..cmd_bounds
+            };
+            let experiment_id =
+                dispatch_experiment(world, raw, explicit_class, overrides, inputs, bounds, label)
+                    .ok_or_else(|| {
+                    "RunExperiment could not dispatch; check the explicit document and class"
+                        .to_string()
+                })?;
+
+            Ok(Ack::with_data(
+                OpId::new(),
+                HookValue::map([
+                    ("experiment_id", HookValue::Str(experiment_id.0.to_string())),
+                    ("state", HookValue::Str("dispatched".to_string())),
+                ]),
+            ))
+        });
+
+        lunco_api::executor::finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            result,
+            lunco_api_core::ApiErrorCode::CommandRejected,
+        );
+    });
+}
+
+#[cfg(not(feature = "api"))]
 #[on_command(RunExperiment)]
 pub fn on_run_experiment(trigger: On<RunExperiment>, mut commands: Commands) {
     let ev = trigger.event();
@@ -2374,6 +2447,8 @@ impl Plugin for CompileCommandsPlugin {
                     .in_set(lunco_workbench_core::ApplicationOverlayRenderSet),
             );
         register_all_commands(app);
+        #[cfg(feature = "api")]
+        app.register_deferred_command::<RunExperiment>();
     }
 }
 

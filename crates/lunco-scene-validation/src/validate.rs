@@ -70,6 +70,10 @@ pub struct ValidationReport {
     /// taken (not cloned) when the rules run.
     #[serde(skip)]
     pub(crate) lint_facts: Option<H>,
+    /// The immutable semantic snapshot backing this report. Kept in-process
+    /// for typed query projections; never serialized through `info`/JSON.
+    #[serde(skip)]
+    pub(crate) sysml_analysis: Option<std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>>,
 }
 
 impl ValidationReport {
@@ -82,6 +86,7 @@ impl ValidationReport {
             warnings: Vec::new(),
             info: json!({}),
             lint_facts: None,
+            sysml_analysis: None,
         }
     }
 
@@ -124,6 +129,10 @@ fn resolve(reference: &str) -> Result<PathBuf, String> {
 /// Validate one asset file, dispatching on its extension. Pure: reads the
 /// file (and, for `.usda`, its referenced layers) and nothing else.
 pub fn validate_asset(reference: &str) -> ValidationReport {
+    validate_asset_with_policy(reference, true)
+}
+
+fn validate_asset_with_policy(reference: &str, apply_authored_policy: bool) -> ValidationReport {
     let path = match resolve(reference) {
         Ok(p) => p,
         Err(e) => return ValidationReport::new(reference, "unknown").error(e),
@@ -150,7 +159,11 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
             "unsupported extension `.{other}` — supported: .mo, .usda, .sysml, .kerml, .wgsl, .rhai"
         )),
     };
-    apply_lint_policy(report, &text)
+    if apply_authored_policy {
+        apply_lint_policy(report, &text)
+    } else {
+        report
+    }
 }
 
 // ─── .sysml / .kerml ───────────────────────────────────────────────────────
@@ -159,17 +172,17 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
 /// used by the runtime document. Standard-library diagnostics are excluded from
 /// the report because this pre-flight call concerns only the supplied file.
 fn validate_sysml(reference: &str, path: &Path, text: &str) -> ValidationReport {
-    let analysis = lunco_sysml_ast::SysmlAnalysis::build(
+    let analysis = std::sync::Arc::new(lunco_sysml_ast::SysmlAnalysis::build(
         [(path.to_string_lossy().to_string(), text.to_owned())],
         true,
         lunco_hash::fnv1a64(text.as_bytes()),
-    );
-    finish_sysml_report(reference, &analysis)
+    ));
+    finish_sysml_report(reference, analysis)
 }
 
 fn finish_sysml_report(
     reference: &str,
-    analysis: &lunco_sysml_ast::SysmlAnalysis,
+    analysis: std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>,
 ) -> ValidationReport {
     let mut report = ValidationReport::new(reference, "sysml");
     for diagnostic in analysis.diagnostics() {
@@ -178,43 +191,15 @@ fn finish_sysml_report(
             diagnostic.file, diagnostic.start, diagnostic.end, diagnostic.message
         ));
     }
-    report.info = json!({
-        "source_files": analysis
-            .files()
-            .iter()
-            .map(|file| file.name.clone())
-            .collect::<Vec<_>>(),
-        "elements": analysis.elements(),
-        "references": analysis.references(),
-        // Expose the typed semantic projection. Rhai tests consume this
-        // snapshot without walking source text or reimplementing parsing.
-        "attributes": lunco_sysml_report::attributes(&analysis),
-        // The short-name map is convenient for authored Twin contracts.  The
-        // qualified projection is the lossless lookup for workspaces where
-        // two definitions intentionally reuse a local attribute name.
-        "attributes_qualified": lunco_sysml_report::attributes_qualified(&analysis),
-        "attribute_collisions": lunco_sysml_report::attribute_collisions(&analysis),
-        "attribute_records": analysis.attributes(),
-        "requirement_records": analysis.requirements(),
-        "verification_cases": analysis.verifications(),
-        // A filesystem/Twin caller may attach the manifest-owned registry
-        // below.  Keeping an empty value on the single-file path makes the
-        // response shape stable for generic Rhai consumers.
-        "verification_registry": json!([]),
-        "verification_registry_errors": json!([]),
-        "components": json!([]),
-        "component_registry_errors": json!([]),
-        "source_revision": analysis.source_revision(),
-        // Keep a lossless textual form alongside the JSON number. Rhai's
-        // bounded value bridge represents JSON numbers as f64, which is not
-        // sufficient to round-trip every u64 content hash.
-        "source_revision_hex": format!("0x{:016x}", analysis.source_revision()),
-        "stdlib": analysis.includes_stdlib(),
-    });
-    // Keep the policy input on the same immutable analysis snapshot as the
-    // report. `ValidateAsset` and `ValidateSysml` must not silently diverge:
-    // both paths run the same typed SysML facts through `lint.sysml`.
-    report.lint_facts = Some(lunco_sysml_ast::lint_facts::sysml_facts(analysis));
+    // The validated report intentionally contains no second, JSON-shaped copy
+    // of the semantic AST. `sysml_analysis` is the typed in-process snapshot;
+    // the generic AnalyzeSysml query projects only the tables a caller asks
+    // for, and Rhai policies own interpretation.
+    // Keep structural lint facts on the same immutable snapshot. Validation
+    // callers can run `lint.sysml`; policy-neutral analysis callers consume
+    // `sysml_analysis` without making their result depend on lint findings.
+    report.lint_facts = Some(lunco_sysml_ast::lint_facts::sysml_facts(&analysis));
+    report.sysml_analysis = Some(analysis);
     report.finish()
 }
 
@@ -702,13 +687,9 @@ impl ApiQueryProvider for ValidateAssetProvider {
     }
 }
 
-/// Compact SysML requirement projection for authored Rhai tests.
-///
-/// `ValidateAsset` intentionally returns the complete semantic element list
-/// for tooling. That payload is too large for the bounded Rhai value surface,
-/// so this read-only provider reuses the same validator and returns only
-/// requirement/verification names, scalar literals, diagnostics, and the
-/// source revision.
+/// SysML source validation and structural `lint.sysml` policy. Semantic fact
+/// selection is provided separately by policy-neutral `AnalyzeSysml`;
+/// workflow-specific interpretation belongs to Rhai policies.
 struct ValidateSysmlProvider;
 
 impl ApiQueryProvider for ValidateSysmlProvider {
@@ -723,423 +704,44 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 "ValidateSysml requires params.path (string): a filesystem path or twin:// URI",
             ));
         };
-        let report = validate_sysml_reference(world, path);
-        let requirements = qualified_names(report.info.get("requirement_records"));
-        let verification_cases = qualified_names(report.info.get("verification_cases"));
-        // Rhai has a deliberately bounded string/value surface.  The normal
-        // ValidateAsset report keeps full AST records for IDE tooling, but a
-        // test only needs names, scalar values, and verification coverage.
-        // `compact=true` therefore projects the same validated snapshot into
-        // a small deterministic record set instead of serializing the whole
-        // AST through the scripting bridge.
-        let compact = optional_bool(params, "compact", "ValidateSysml")?.unwrap_or(false);
-        let selected_attributes = optional_string_set(params, "attributes", "ValidateSysml")?;
-        let selected_provenance = optional_string_set(params, "provenance_ids", "ValidateSysml")?;
-        let provenance_requested = selected_provenance.is_some()
-            || optional_bool(params, "provenance", "ValidateSysml")?.unwrap_or(false);
-        let source_files =
-            api_info_value(report.info.get("source_files"), ApiValue::Array(Vec::new()))?;
-        let verification_registry = api_info_value(
-            report.info.get("verification_registry"),
-            ApiValue::Array(Vec::new()),
-        )?;
-        let verification_registry_errors = api_info_value(
-            report.info.get("verification_registry_errors"),
-            ApiValue::Array(Vec::new()),
-        )?;
-        let components =
-            api_info_value(report.info.get("components"), ApiValue::Array(Vec::new()))?;
-        let component_registry_errors = api_info_value(
-            report.info.get("component_registry_errors"),
-            ApiValue::Array(Vec::new()),
-        )?;
-        let source_revision = api_info_value(report.info.get("source_revision"), ApiValue::Int(0))?;
-        let source_revision_hex = api_info_value(
-            report.info.get("source_revision_hex"),
-            ApiValue::str("0x0000000000000000"),
-        )?;
-        let value = if compact {
-            api_value!({
-                "path": report.path.clone(),
-                "kind": report.kind.clone(),
-                "ok": report.ok,
-                "errors": report.errors.clone(),
-                "warnings": report.warnings.clone(),
-                "source_files": source_files,
-                "requirements": requirements,
-                // Keep one compact, lossless qualified-name table. A short-name
-                // table cannot represent collisions (for example each
-                // component's `namesSource`) and silently drops owners. The
-                // Rhai bridge resolves qualified names directly; no duplicate
-                // short/qualified maps are serialized through its bounded
-                // value budget.
-                "attributes": ApiValue::Map(Vec::new()),
-                // Rhai tests normally use the lazy projection (`attributes: []`)
-                // and request only the qualified literals they need.  A caller
-                // asking for a selection receives exactly that selection; an
-                // omitted selector retains the complete compact report for
-                // non-Rhai tooling.
-                "attribute_projection": if selected_attributes.is_some() { "selected" } else { "complete" },
-                "attributes_qualified": lunco_api_core::api_value_from_serializable(&compact_sysml_attributes(report.info.get("attributes_qualified"), selected_attributes.as_ref()))?,
-                "attribute_collisions": lunco_api_core::api_value_from_serializable(&compact_sysml_attribute_collisions(
-                    report.info.get("attribute_collisions"),
-                    selected_attributes.as_ref(),
-                ))?,
-                "requirement_records": lunco_api_core::api_value_from_serializable(&compact_requirement_records(report.info.get("requirement_records")))?,
-                "verification_cases": verification_cases,
-                "verification_records": lunco_api_core::api_value_from_serializable(&compact_verification_records(report.info.get("verification_cases")))?,
-                "provenance_projection": if provenance_requested { "selected" } else { "none" },
-                "provenance_records": if provenance_requested {
-                    lunco_api_core::api_value_from_serializable(&compact_sysml_provenance(
-                        report.info.get("attributes_qualified"),
-                        selected_provenance.as_ref(),
-                    ))?
-                } else {
-                    ApiValue::Array(Vec::new())
-                },
-                "verification_registry": verification_registry,
-                "verification_registry_errors": verification_registry_errors,
-                "components": components,
-                "component_registry_errors": component_registry_errors,
-                "source_revision": source_revision,
-                "source_revision_hex": source_revision_hex,
-            })
-        } else {
-            api_value!({
-                "path": report.path.clone(),
-                "kind": report.kind.clone(),
-                "ok": report.ok,
-                "errors": report.errors.clone(),
-                "warnings": report.warnings.clone(),
-                "source_files": source_files,
-                "requirements": requirements,
-                "attributes": api_info_value(report.info.get("attributes"), ApiValue::Map(Vec::new()))?,
-                "attributes_qualified": api_info_value(report.info.get("attributes_qualified"), ApiValue::Map(Vec::new()))?,
-                "attribute_collisions": api_info_value(report.info.get("attribute_collisions"), ApiValue::Array(Vec::new()))?,
-                "attribute_records": api_info_value(report.info.get("attribute_records"), ApiValue::Array(Vec::new()))?,
-                "requirement_records": api_info_value(report.info.get("requirement_records"), ApiValue::Array(Vec::new()))?,
-                "verification_cases": verification_cases,
-                "verification_records": api_info_value(report.info.get("verification_cases"), ApiValue::Array(Vec::new()))?,
-                "verification_registry": verification_registry,
-                "verification_registry_errors": verification_registry_errors,
-                "components": components,
-                "component_registry_errors": component_registry_errors,
-                "source_revision": source_revision,
-                "source_revision_hex": source_revision_hex,
-            })
-        };
-        Ok(Some(value))
+        let report = validate_sysml_reference(world, path, true);
+        let analysis = report.sysml_analysis.as_deref();
+        let source_files: Vec<_> = analysis
+            .into_iter()
+            .flat_map(|analysis| analysis.files())
+            .map(|file| ApiValue::str(file.name.clone()))
+            .collect();
+        let source_revision_hex = analysis
+            .map(|analysis| ApiValue::str(format!("0x{:016x}", analysis.source_revision())))
+            .unwrap_or(ApiValue::Unit);
+        Ok(Some(api_value!({
+            "path": report.path,
+            "kind": report.kind,
+            "ok": report.ok,
+            "errors": report.errors,
+            "warnings": report.warnings,
+            "source_files": ApiValue::Array(source_files),
+            "source_revision_hex": source_revision_hex,
+        })))
     }
 }
 
-fn optional_bool(
-    params: &ApiValue,
-    name: &str,
-    query: &str,
-) -> Result<Option<bool>, ApiQueryError> {
-    match params.get(name) {
-        None | Some(ApiValue::Unit) => Ok(None),
-        Some(ApiValue::Bool(value)) => Ok(Some(*value)),
-        Some(_) => Err(ApiQueryError::new(
-            ApiErrorCode::DeserializationError,
-            format!("{query}: `{name}` must be a boolean"),
-        )),
-    }
-}
-
-fn optional_string_set<'a>(
-    params: &'a ApiValue,
-    name: &str,
-    query: &str,
-) -> Result<Option<std::collections::BTreeSet<&'a str>>, ApiQueryError> {
-    match params.get(name) {
-        None | Some(ApiValue::Unit) => Ok(None),
-        Some(ApiValue::Array(values)) => {
-            let mut selected = std::collections::BTreeSet::new();
-            for value in values {
-                let ApiValue::Str(value) = value else {
-                    return Err(ApiQueryError::new(
-                        ApiErrorCode::DeserializationError,
-                        format!("{query}: `{name}` must contain only strings"),
-                    ));
-                };
-                selected.insert(value.as_str());
-            }
-            Ok(Some(selected))
-        }
-        Some(_) => Err(ApiQueryError::new(
-            ApiErrorCode::DeserializationError,
-            format!("{query}: `{name}` must be an array of strings"),
-        )),
-    }
-}
-
-fn api_info_value(
-    value: Option<&serde_json::Value>,
-    default: ApiValue,
-) -> Result<ApiValue, ApiQueryError> {
-    value
-        .map(lunco_api_core::api_value_from_serializable)
-        .transpose()?
-        .map_or(Ok(default), Ok)
-}
-
-fn compact_sysml_attributes(
-    value: Option<&serde_json::Value>,
-    selected: Option<&std::collections::BTreeSet<&str>>,
-) -> serde_json::Value {
-    // Preserve the qualified identity in every compact record; Rhai uses it
-    // to resolve cross-package source references without short-name guessing.
-    let mut output = serde_json::Map::new();
-    let Some(serde_json::Value::Object(attributes)) = value else {
-        return serde_json::Value::Object(output);
-    };
-    for (name, record) in attributes {
-        if let Some(selected) = selected {
-            let short = name.rsplit("::").next().unwrap_or(name);
-            if !selected.contains(name.as_str()) && !selected.contains(short) {
-                continue;
-            }
-        }
-        // Keep only the identity and typed literal needed by the Rhai
-        // requirement bridge.  The full ValidateAsset report remains the
-        // source-span/IDE projection; duplicating type/file metadata for every
-        // attribute can exceed Rhai's 64 KiB value budget as a Twin grows.
-        // `attribute_collisions` still prevents an ambiguous short name from
-        // being used accidentally.  The compact boundary is intentionally a
-        // projection, not a truncation: a caller that needs source spans must
-        // use the full ValidateSysml report or the source viewer.
-        let value = record
-            .get("value")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        output.insert(
-            name.clone(),
-            json!({
-                "qualified_name": record
-                    .get("qualified_name")
-                    .cloned()
-                    .unwrap_or_else(|| json!(name)),
-                "type_name": record.get("type_name").cloned().unwrap_or(serde_json::Value::Null),
-                "declared_type": record.get("declared_type").cloned().unwrap_or(serde_json::Value::Null),
-                "value": value,
-            }),
-        );
-    }
-    serde_json::Value::Object(output)
-}
-
-/// Project typed provenance usages without shipping the complete attribute
-/// table over the Rhai boundary.  A provenance usage is identified by the
-/// semantic pair `requirementId` + `qualifiedRequirement`; the catalog's
-/// owner name is not treated as a contract, so this remains reusable for
-/// other Twin evidence catalogs.
-fn compact_sysml_provenance(
-    value: Option<&serde_json::Value>,
-    selected_ids: Option<&std::collections::BTreeSet<&str>>,
-) -> serde_json::Value {
-    use std::collections::BTreeMap;
-
-    let Some(serde_json::Value::Object(attributes)) = value else {
-        return json!([]);
-    };
-    let mut owners = BTreeMap::<String, BTreeMap<String, &serde_json::Value>>::new();
-    for (qualified_name, record) in attributes {
-        let Some(owner) = record
-            .get("owner")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| qualified_name.rsplit_once("::").map(|(owner, _)| owner))
-        else {
-            continue;
-        };
-        let Some(attribute_name) = record
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| qualified_name.rsplit_once("::").map(|(_, name)| name))
-        else {
-            continue;
-        };
-        owners
-            .entry(owner.to_owned())
-            .or_default()
-            .insert(attribute_name.to_owned(), record);
-    }
-
-    let mut output = Vec::new();
-    for (owner, fields) in owners {
-        let Some(requirement_id) = provenance_literal(fields.get("requirementId")) else {
-            continue;
-        };
-        let Some(qualified_requirement) = provenance_literal(fields.get("qualifiedRequirement"))
-        else {
-            continue;
-        };
-        if let Some(selected) = selected_ids {
-            if !selected.contains(requirement_id.as_str())
-                && !selected.contains(qualified_requirement.as_str())
-            {
-                continue;
-            }
-        }
-
-        let source_records = fields.values().copied().collect::<Vec<_>>();
-        let source_file = source_records
-            .iter()
-            .find_map(|record| record.get("file").and_then(serde_json::Value::as_str))
-            .unwrap_or_default();
-        let source_start = source_records
-            .iter()
-            .filter_map(|record| record.get("start").and_then(serde_json::Value::as_u64))
-            .min()
-            .unwrap_or_default();
-        let source_end = source_records
-            .iter()
-            .filter_map(|record| record.get("end").and_then(serde_json::Value::as_u64))
-            .max()
-            .unwrap_or(source_start);
-
-        let mut projected = json!({
-            "owner": owner,
-            "requirement_id": requirement_id,
-            "qualified_requirement": qualified_requirement,
-            "source_span": {
-                "file": source_file,
-                "start": source_start,
-                "end": source_end,
-            },
-        });
-        for (attribute_name, output_name) in [
-            ("sourceReference", "source_reference"),
-            ("rationale", "rationale"),
-            ("status", "status"),
-        ] {
-            if let Some(literal) = provenance_literal(fields.get(attribute_name)) {
-                projected[output_name] = json!(literal);
-            }
-        }
-        output.push(projected);
-    }
-    output.sort_by(|left, right| {
-        left["requirement_id"]
-            .as_str()
-            .cmp(&right["requirement_id"].as_str())
-    });
-    json!(output)
-}
-
-/// Decode a source-backed SysML literal while retaining a usable string at
-/// the API boundary.  The authored literal remains available in the full
-/// attribute projection; provenance consumers need the semantic string only.
-fn provenance_literal(record: Option<&&serde_json::Value>) -> Option<String> {
-    let literal = record?.get("value")?.get("literal")?.as_str()?.trim();
-    if literal.len() >= 2 && literal.starts_with('"') && literal.ends_with('"') {
-        serde_json::from_str::<String>(literal)
-            .ok()
-            .or_else(|| Some(literal[1..literal.len() - 1].to_owned()))
-    } else {
-        Some(literal.to_owned())
-    }
-}
-
-fn compact_sysml_attribute_collisions(
-    value: Option<&serde_json::Value>,
-    selected: Option<&std::collections::BTreeSet<&str>>,
-) -> serde_json::Value {
-    let Some(selected) = selected else {
-        return value.cloned().unwrap_or_else(|| json!([]));
-    };
-    // An empty selector is the lazy Rhai source request.  It intentionally
-    // carries no literal or collision payload; callers that need one value
-    // ask for it by qualified name and receive only the relevant projection.
-    if selected.is_empty() {
-        return json!([]);
-    }
-    let Some(serde_json::Value::Array(collisions)) = value else {
-        return json!([]);
-    };
-    serde_json::Value::Array(
-        collisions
-            .iter()
-            .filter(|collision| {
-                collision
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|name| selected.contains(name))
-            })
-            .cloned()
-            .collect(),
-    )
-}
-
-fn compact_requirement_records(value: Option<&serde_json::Value>) -> serde_json::Value {
-    let records = value
-        .and_then(serde_json::Value::as_array)
-        .map(|records| {
-            records
-                .iter()
-                .filter_map(|record| {
-                    let name = record
-                        .get("element")
-                        .and_then(|element| element.get("qualified_name"))
-                        .or_else(|| record.get("qualified_name"))
-                        .cloned()?;
-                    Some(json!({"qualified_name": name}))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    serde_json::Value::Array(records)
-}
-
-fn compact_verification_records(value: Option<&serde_json::Value>) -> serde_json::Value {
-    let records = value
-        .and_then(serde_json::Value::as_array)
-        .map(|records| {
-            records
-                .iter()
-                .filter_map(|record| {
-                    let name = record
-                        .get("element")
-                        .and_then(|element| element.get("qualified_name"))
-                        .or_else(|| record.get("qualified_name"))
-                        .cloned()?;
-                    let verifies = record.get("verifies").cloned().unwrap_or_else(|| json!([]));
-                    Some(json!({"qualified_name": name, "verifies": verifies}))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    serde_json::Value::Array(records)
-}
-
-fn qualified_names(value: Option<&serde_json::Value>) -> Vec<String> {
-    value
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|record| {
-            record
-                .get("element")
-                .and_then(|element| element.get("qualified_name"))
-                .or_else(|| record.get("qualified_name"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect()
-}
-
-fn validate_sysml_reference(world: &World, reference: &str) -> ValidationReport {
+pub(crate) fn validate_sysml_reference(
+    world: &World,
+    reference: &str,
+    apply_structural_policy: bool,
+) -> ValidationReport {
     if let Some(name) = reference.strip_prefix("twin://") {
         if !name.is_empty() && !name.contains('/') && !name.contains('\\') {
-            return validate_sysml_twin(world, name, reference);
+            return validate_sysml_twin(world, name, reference, apply_structural_policy);
         }
     }
     let Some((name, relative)) = lunco_assets_core::parse_twin_uri(reference) else {
-        return validate_asset(reference);
+        return validate_asset_with_policy(reference, apply_structural_policy);
     };
     let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
         return ValidationReport::new(reference, "sysml")
-            .error("ValidateSysml twin:// requires the TwinRoots asset registry");
+            .error("SysML twin:// source query requires the TwinRoots asset registry");
     };
     let path = match roots.resolve_file(name, Path::new(relative)) {
         Ok(Some(path)) => path,
@@ -1165,21 +767,30 @@ fn validate_sysml_reference(world: &World, reference: &str) -> ValidationReport 
         .unwrap_or_default();
     if !matches!(kind.to_ascii_lowercase().as_str(), "sysml" | "kerml") {
         return ValidationReport::new(reference, "unknown")
-            .error("ValidateSysml twin:// path must end in .sysml or .kerml");
+            .error("SysML twin:// source path must end in .sysml or .kerml");
     }
     let report = validate_sysml(reference, &path, &text);
-    apply_lint_policy(report, &text)
+    if apply_structural_policy {
+        apply_lint_policy(report, &text)
+    } else {
+        report
+    }
 }
 
-fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> ValidationReport {
+fn validate_sysml_twin(
+    world: &World,
+    name: &str,
+    reference: &str,
+    apply_structural_policy: bool,
+) -> ValidationReport {
     let Some(workspace) = world.get_resource::<lunco_workspace::WorkspaceResource>() else {
         return ValidationReport::new(reference, "sysml").error(
-            "ValidateSysml twin:// requires the mounted WorkspaceResource; open the Twin before validating it",
+            "SysML twin:// source query requires the mounted WorkspaceResource; open the Twin first",
         );
     };
     let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
         return ValidationReport::new(reference, "sysml")
-            .error("ValidateSysml twin:// requires the TwinRoots asset registry");
+            .error("SysML twin:// source query requires the TwinRoots asset registry");
     };
     let root = match roots.root_of(name) {
         Ok(Some(root)) => root,
@@ -1268,43 +879,12 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
         true,
         lunco_hash::fnv1a64(&revision_input),
     );
-    let mut report = finish_sysml_report(reference, &analysis);
-    let registry_errors = twin.verification_registry_errors();
-    let component_errors = twin.component_registry_errors();
-    let component_errors_for_info = component_errors.clone();
-    let verification_names = qualified_names(report.info.get("verification_cases"));
-    let mut binding_errors = registry_errors.clone();
-    binding_errors.extend(component_errors);
-    for case in twin.verification_cases() {
-        if !verification_names.iter().any(|name| name == &case.name) {
-            binding_errors.push(format!(
-                "verification `{}` is not declared by the Twin SysML source set",
-                case.name
-            ));
-        }
+    let report = finish_sysml_report(reference, analysis);
+    if apply_structural_policy {
+        apply_lint_policy(report, &policy_source)
+    } else {
+        report
     }
-    if let Some(info) = report.info.as_object_mut() {
-        info.insert(
-            "verification_registry".to_owned(),
-            json!(twin.verification_cases()),
-        );
-        info.insert(
-            "verification_registry_errors".to_owned(),
-            json!(binding_errors),
-        );
-        info.insert("components".to_owned(), json!(twin.components()));
-        info.insert(
-            "component_registry_errors".to_owned(),
-            json!(component_errors_for_info),
-        );
-        info.insert("source_origin".to_owned(), json!("workspace_twin_index"));
-        info.insert("source_resolver".to_owned(), json!("TwinRoots"));
-    }
-    if !binding_errors.is_empty() {
-        report.errors.extend(binding_errors);
-        report.ok = false;
-    }
-    apply_lint_policy(report, &policy_source)
 }
 
 /// `ValidateTwin { path, policy? }` → [`TwinValidationReport`].
@@ -1366,13 +946,6 @@ mod tests {
         (dir, path)
     }
 
-    fn temp_sysml(name: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join(name);
-        lunco_storage::write_file_sync(&path, body.as_bytes()).expect("write temp sysml");
-        (dir, path)
-    }
-
     #[test]
     fn external_twin_scene_resolves_lunco_references_for_preflight() {
         let (_dir, path) = temp_usda(
@@ -1394,170 +967,5 @@ def Xform \"Battery\" (\n\
     fn unknown_extension_lists_supported() {
         let report = validate_asset("no/such/file.xyz");
         assert!(!report.ok);
-    }
-
-    #[test]
-    fn valid_sysml_produces_elements_and_no_diagnostics() {
-        let (_dir, path) = temp_sysml(
-            "example.sysml",
-            "package Example { requirement def MassRequirement {} }",
-        );
-        let report = validate_asset(path.to_str().unwrap());
-        assert!(report.ok, "{:?}", report.errors);
-        assert_eq!(report.kind, "sysml");
-        assert!(report.info["elements"]
-            .as_array()
-            .is_some_and(|elements| !elements.is_empty()));
-    }
-
-    #[test]
-    fn sysml_attribute_projection_keeps_qualified_names_and_collisions() {
-        let (_dir, path) = temp_sysml(
-            "qualified_attributes.sysml",
-            "package Example {
-                private import ScalarValues::Real;
-                part def Lander { attribute mass : Real = 1.0; }
-                part def Rover { attribute mass : Real = 2.0; }
-            }",
-        );
-        let report = validate_asset(path.to_str().unwrap());
-        assert!(report.ok, "{:?}", report.errors);
-        assert!(report.info["attributes_qualified"]
-            .get("Example::Lander::mass")
-            .is_some());
-        assert!(report.info["attributes_qualified"]
-            .get("Example::Rover::mass")
-            .is_some());
-        let collisions = report.info["attribute_collisions"]
-            .as_array()
-            .expect("collision array");
-        assert_eq!(collisions.len(), 1, "{:?}", report.info);
-        assert_eq!(collisions[0]["name"], "mass");
-    }
-
-    #[test]
-    fn compact_sysml_projection_keeps_typed_source_identity() {
-        let (_dir, path) = temp_sysml(
-            "compact_attributes.sysml",
-            "package Example {
-                private import ScalarValues::Real;
-                part def Lander { attribute mass : Real = 1.0; }
-            }",
-        );
-        let report = validate_asset(path.to_str().unwrap());
-        assert!(report.ok, "{:?}", report.errors);
-        let compact = compact_sysml_attributes(report.info.get("attributes_qualified"), None);
-        let mass = &compact["Example::Lander::mass"];
-        assert_eq!(mass["qualified_name"], "Example::Lander::mass");
-        assert_eq!(mass["value"]["kind"], "real");
-        assert!(mass.get("file").is_none());
-    }
-
-    #[test]
-    fn compact_sysml_projection_does_not_duplicate_short_attribute_map() {
-        let (_dir, path) = temp_sysml(
-            "compact_colliding_attributes.sysml",
-            "package Example {
-                private import ScalarValues::Real;
-                part def Lander { attribute mass : Real = 1.0; }
-                part def Rover { attribute mass : Real = 2.0; }
-            }",
-        );
-        let report = validate_asset(path.to_str().unwrap());
-        assert!(report.ok, "{:?}", report.errors);
-
-        // The compact bridge has one identity-preserving table. Short names
-        // are intentionally empty: emitting both maps doubles every record
-        // and cannot represent colliding component attributes.
-        let compact = compact_sysml_attributes(report.info.get("attributes_qualified"), None);
-        assert!(compact["Example::Lander::mass"].is_object());
-        assert!(compact["Example::Rover::mass"].is_object());
-        assert!(compact.get("mass").is_none());
-    }
-
-    #[test]
-    fn compact_sysml_projection_can_select_one_qualified_literal() {
-        let (_dir, path) = temp_sysml(
-            "selected_attributes.sysml",
-            "package Example {
-                private import ScalarValues::Real;
-                part def Lander { attribute mass : Real = 1.0; attribute height : Real = 2.0; }
-            }",
-        );
-        let report = validate_asset(path.to_str().unwrap());
-        assert!(report.ok, "{:?}", report.errors);
-        let selected = std::collections::BTreeSet::from(["Example::Lander::mass"]);
-        let compact =
-            compact_sysml_attributes(report.info.get("attributes_qualified"), Some(&selected));
-        assert!(compact.get("Example::Lander::mass").is_some());
-        assert!(compact.get("Example::Lander::height").is_none());
-    }
-
-    #[test]
-    fn compact_sysml_provenance_groups_typed_evidence_by_requirement_id() {
-        let attributes = json!({
-            "Evidence::evidence_gr_001::requirementId": {
-                "owner": "Evidence::evidence_gr_001", "name": "requirementId",
-                "value": {"literal": "\"GR-001\""},
-                "file": "requirements/evidence.sysml", "start": 10, "end": 42
-            },
-            "Evidence::evidence_gr_001::qualifiedRequirement": {
-                "owner": "Evidence::evidence_gr_001", "name": "qualifiedRequirement",
-                "value": {"literal": "\"Griffin::GR001\""},
-                "file": "requirements/evidence.sysml", "start": 43, "end": 91
-            },
-            "Evidence::evidence_gr_001::sourceReference": {
-                "owner": "Evidence::evidence_gr_001", "name": "sourceReference",
-                "value": {"literal": "\"https://example.invalid/source\""},
-                "file": "requirements/evidence.sysml", "start": 92, "end": 140
-            },
-            "Evidence::evidence_gr_001::rationale": {
-                "owner": "Evidence::evidence_gr_001", "name": "rationale",
-                "value": {"literal": "\"keeps the datum reviewable\""},
-                "file": "requirements/evidence.sysml", "start": 141, "end": 185
-            },
-            "Evidence::evidence_gr_001::status": {
-                "owner": "Evidence::evidence_gr_001", "name": "status",
-                "value": {"literal": "\"study_assumption\""},
-                "file": "requirements/evidence.sysml", "start": 186, "end": 225
-            }
-        });
-        let selected = std::collections::BTreeSet::from(["GR-001"]);
-        let projected = compact_sysml_provenance(Some(&attributes), Some(&selected));
-        assert_eq!(projected.as_array().unwrap().len(), 1);
-        let record = &projected[0];
-        assert_eq!(record["requirement_id"], "GR-001");
-        assert_eq!(record["qualified_requirement"], "Griffin::GR001");
-        assert_eq!(record["source_reference"], "https://example.invalid/source");
-        assert_eq!(record["rationale"], "keeps the datum reviewable");
-        assert_eq!(record["status"], "study_assumption");
-        assert_eq!(record["source_span"]["start"], 10);
-        assert_eq!(record["source_span"]["end"], 225);
-    }
-
-    #[test]
-    fn compact_sysml_collision_projection_follows_selector() {
-        let collisions = json!([
-            {
-                "name": "mass",
-                "qualified_names": ["Example::Lander::mass", "Example::Rover::mass"]
-            },
-            {
-                "name": "height",
-                "qualified_names": ["Example::Lander::height", "Example::Rover::height"]
-            }
-        ]);
-        let empty = std::collections::BTreeSet::new();
-        assert_eq!(
-            compact_sysml_attribute_collisions(Some(&collisions), Some(&empty))
-                .as_array()
-                .expect("collision array")
-                .len(),
-            0
-        );
-        let selected = std::collections::BTreeSet::from(["mass"]);
-        let projected = compact_sysml_attribute_collisions(Some(&collisions), Some(&selected));
-        assert_eq!(projected.as_array().expect("collision array").len(), 1);
-        assert_eq!(projected[0]["name"], "mass");
     }
 }

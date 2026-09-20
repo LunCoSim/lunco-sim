@@ -24,6 +24,7 @@ impl Plugin for WorkspaceApiQueriesPlugin {
         registry.register(ListOpenDocumentsProvider);
         registry.register(ListRecentFilesProvider);
         registry.register(ListTwinProvider);
+        registry.register(ReadActiveTwinContractProvider);
     }
 }
 
@@ -171,6 +172,76 @@ impl ApiQueryProvider for ListTwinProvider {
             "total": total,
             "offset": offset,
             "limit": limit,
+        })))
+    }
+}
+
+/// Read typed Twin-owned policy inputs for Rhai workflows without routing
+/// them through the asset validator's report projection.
+struct ReadActiveTwinContractProvider;
+
+impl ApiQueryProvider for ReadActiveTwinContractProvider {
+    fn name(&self) -> &'static str {
+        "ReadActiveTwinContract"
+    }
+
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let Some(ws) = world.get_resource::<WorkspaceResource>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "ReadActiveTwinContract requires WorkspacePlugin",
+            ));
+        };
+        let Some(twin_id) = ws.active_twin else {
+            return Ok(Some(api_value!({ "open": false })));
+        };
+        let Some(twin) = ws.twin(twin_id) else {
+            return Ok(Some(api_value!({ "open": false })));
+        };
+
+        // Paths remain native PathBuf values in Twin; their textual form is
+        // created only for this API/Rhai addressing boundary.
+        let components: Vec<_> = twin
+            .components()
+            .iter()
+            .map(|component| {
+                api_value!({
+                    "name": component.name.clone(),
+                    "requirements": component.requirements.to_string_lossy().into_owned(),
+                    "verification": component.verification.clone(),
+                    "usd_path": component.usd_path.clone(),
+                })
+            })
+            .collect();
+        let verification_cases: Vec<_> = twin
+            .verification_cases()
+            .iter()
+            .map(|case| {
+                api_value!({
+                    "name": case.name.clone(),
+                    "scene": case.scene.to_string_lossy().into_owned(),
+                    "script": case.script.to_string_lossy().into_owned(),
+                    "verdict_channel": case.verdict_channel.clone(),
+                })
+            })
+            .collect();
+        let sysml_source_errors = twin
+            .discover_sysml_sources_checked()
+            .err()
+            .unwrap_or_default();
+
+        Ok(Some(api_value!({
+            "open": true,
+            "name": twin
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.name.clone())
+                .unwrap_or_else(|| twin.root.file_name().unwrap_or_default().to_string_lossy().into_owned()),
+            "components": components,
+            "component_errors": twin.component_registry_errors(),
+            "verification_cases": verification_cases,
+            "verification_errors": twin.verification_registry_errors(),
+            "sysml_source_errors": sysml_source_errors,
         })))
     }
 }

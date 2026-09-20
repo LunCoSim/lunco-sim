@@ -426,26 +426,10 @@ fn report_element_type(declared: Option<&Map>) -> Option<Map> {
 }
 
 fn semantic_category_for_element(base: &str) -> &'static str {
-    match base.rsplit("::").next().unwrap_or(base) {
-        "Boolean" | "Integer" | "Natural" | "Rational" | "Real" | "Complex" | "String" => {
-            "Primitive"
-        }
-        "Vec2"
-        | "Vec3"
-        | "VectorValue"
-        | "NumericalVectorValue"
-        | "CartesianVectorValue"
-        | "ThreeVectorValue"
-        | "CartesianTwoVectorValue"
-        | "CartesianThreeVectorValue"
-        | "Direction"
-        | "Quaternion"
-        | "Quat"
-        | "Transform"
-        | "Dimensions"
-        | "Bounds" => "Structured",
-        "Length" | "Distance" | "Angle" | "Mass" | "Time" | "Duration" | "Velocity" | "Speed"
-        | "Acceleration" | "Force" | "Power" | "Energy" | "Temperature" => "Quantity",
+    match SysmlType::parse(base).map(|sysml_type| sysml_type.category) {
+        Some(SysmlTypeCategory::Primitive) => "Primitive",
+        Some(SysmlTypeCategory::Quantity) => "Quantity",
+        Some(SysmlTypeCategory::Structured) => "Structured",
         _ => "Unknown",
     }
 }

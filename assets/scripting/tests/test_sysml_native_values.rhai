@@ -23,13 +23,14 @@ checks.push(t_true(from_report.ok == true && from_report.found == true
     && from_report.value.x == direct.value.x,
     "full reports expose the same typed value without a second conversion path"));
 
-let compact = query("ValidateSysml", #{path: path, compact: true, attributes: []});
-let unprojected = sysml_value_from_report(compact, qualified_position_attribute);
+let summary = query("AnalyzeSysml", #{path: path,
+    tables: ["requirements", "verifications"]});
+let unprojected = sysml_value_from_report(summary, qualified_position_attribute);
 checks.push(t_true(unprojected.ok == true && unprojected.found == false,
-    "an intentionally omitted compact projection is distinct from a failed lookup"));
-let lazy = sysml_requirements::native_value(compact, qualified_position_attribute);
+    "an intentionally omitted fact table is distinct from a failed lookup"));
+let lazy = sysml_requirements::native_value(summary, qualified_position_attribute);
 checks.push(t_true(type_of(lazy) == "Vec3" && lazy.x == direct.value.x,
-    "Rhai resolves an unprojected value through the typed selected query"));
+    "Rhai resolves an unloaded value through the typed selected query"));
 
 let missing = sysml_value(path, "NativeValues::Lander::missing");
 checks.push(t_true(missing.ok == false && missing.found == false

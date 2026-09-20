@@ -1,10 +1,7 @@
 // SysML lint policy self-test. The data and expected rules are authored in
 // Rhai so this is the same shape a Twin requirement test uses at runtime.
 
-fn require(condition, message) {
-    if !condition { throw message; }
-}
-
+let checks = [];
 let facts = #{
     requirements: [#{
         qualified_name: "Example::r1",
@@ -19,19 +16,23 @@ let facts = #{
     }]
 };
 
-let findings = lint_sysml(facts);
-require(findings.len() == 4, "all structural SysML faults must be reported");
+let linted = invoke_hook("lint.sysml", [facts]);
+checks.push(t_true(linted.ok == true,
+    "the structural SysML policy is installed through its named hook"));
+let findings = linted.value;
+checks.push(t_true(findings.len() == 4,
+    "the structural policy reports all authored traceability findings"));
 
 let rules = [];
 for finding in findings { rules.push(finding.rule); }
-require(rules.contains("sysml-requirement-usage-missing-subject"),
-    "missing requirement subject must be reported");
-require(rules.contains("sysml-verification-missing-subject"),
-    "missing verification subject must be reported");
-require(rules.contains("sysml-verification-target-unresolved"),
-    "unresolved verification target must be reported");
-require(rules.contains("sysml-requirement-usage-unverified"),
-    "unverified requirement usage must be reported");
+checks.push(t_true(rules.contains("sysml-requirement-usage-missing-subject"),
+    "the structural policy identifies an unbound requirement subject"));
+checks.push(t_true(rules.contains("sysml-verification-missing-subject"),
+    "the structural policy identifies a verification without a subject"));
+checks.push(t_true(rules.contains("sysml-verification-target-unresolved"),
+    "the structural policy identifies an unresolved verification target"));
+checks.push(t_true(rules.contains("sysml-requirement-usage-unverified"),
+    "the structural policy identifies an uncovered requirement usage"));
 
 let clean = #{
     requirements: [#{
@@ -46,5 +47,7 @@ let clean = #{
         verifies: ["r1"]
     }]
 };
-require(lint_sysml(clean).is_empty(), "a fully traced requirement must lint clean");
-print("SYSML_LINT_SELFTEST PASS");
+let clean_lint = invoke_hook("lint.sysml", [clean]);
+checks.push(t_true(clean_lint.ok == true && clean_lint.value.is_empty(),
+    "a fully traced requirement is accepted by the same structural policy"));
+t_report(checks);

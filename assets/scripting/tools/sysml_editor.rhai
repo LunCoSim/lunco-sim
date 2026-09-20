@@ -40,7 +40,7 @@ fn save_as(doc, path) {
 }
 
 /// Read source, generation, origin and parser/resolver diagnostics for one
-/// explicit document. Semantic requirement records remain in `ValidateSysml`.
+/// explicit document. Semantic requirement records come from `AnalyzeSysml`.
 fn inspect(doc) {
     let valid = _doc_required(doc, "inspect");
     if !valid.ok { return valid; }
@@ -120,7 +120,7 @@ fn verify(doc) {
     if report != () && report.ok == false {
         return #{ ok: false, domain: "sysml", stage: "validation",
             retryable: false, inspection: inspection, report: report,
-            error: "ValidateSysml rejected the source" };
+            error: "AnalyzeSysml rejected the source" };
     }
     #{ ok: true, domain: "sysml", stage: "verified", retryable: false,
        inspection: inspection, report: report,

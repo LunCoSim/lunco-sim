@@ -436,16 +436,16 @@ fn primitive_type(name: &str) -> Option<SysmlPrimitiveType> {
 
 fn quantity_kind(name: &str) -> Option<&'static str> {
     Some(match name {
-        "Length" | "Distance" => "Length",
-        "Angle" => "Angle",
-        "Mass" => "Mass",
-        "Time" | "Duration" => "Time",
-        "Velocity" | "Speed" => "Velocity",
-        "Acceleration" => "Acceleration",
-        "Force" => "Force",
-        "Power" => "Power",
-        "Energy" => "Energy",
-        "Temperature" => "Temperature",
+        "Length" | "LengthValue" | "Distance" | "DistanceValue" => "Length",
+        "Angle" | "AngleValue" => "Angle",
+        "Mass" | "MassValue" => "Mass",
+        "Time" | "TimeValue" | "Duration" | "DurationValue" => "Time",
+        "Velocity" | "VelocityValue" | "Speed" | "SpeedValue" => "Velocity",
+        "Acceleration" | "AccelerationValue" => "Acceleration",
+        "Force" | "ForceValue" => "Force",
+        "Power" | "PowerValue" => "Power",
+        "Energy" | "EnergyValue" => "Energy",
+        "Temperature" | "TemperatureValue" => "Temperature",
         _ => return None,
     })
 }
