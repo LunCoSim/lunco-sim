@@ -68,8 +68,15 @@ impl SysmlFactTable {
 #[derive(Debug, Clone, Default)]
 pub struct SysmlFactSelection {
     pub tables: Option<BTreeSet<SysmlFactTable>>,
+    /// Attribute names: exact qualified identities or local names.
     pub attribute_names: Option<BTreeSet<String>>,
+    /// Exact qualified attribute owners.
+    pub attribute_owners: Option<BTreeSet<String>>,
+    /// Exact values of typed SysML string literals.
+    pub attribute_string_values: Option<BTreeSet<String>>,
+    /// Requirement identities: exact qualified identities or local names.
     pub requirement_names: Option<BTreeSet<String>>,
+    /// Verification identities: exact qualified identities or local names.
     pub verification_names: Option<BTreeSet<String>>,
 }
 
@@ -140,9 +147,21 @@ pub fn selected_sysml_facts(analysis: &SysmlAnalysis, selection: &SysmlFactSelec
                     .attributes()
                     .iter()
                     .filter(|record| {
-                        selection.attribute_names.as_ref().map_or(true, |names| {
-                            names.contains(&record.qualified_name) || names.contains(&record.name)
-                        })
+                        selected_identity(&selection.attribute_names, &record.qualified_name)
+                            && selection
+                                .attribute_owners
+                                .as_ref()
+                                .map_or(true, |owners| owners.contains(&record.owner))
+                            && selection
+                                .attribute_string_values
+                                .as_ref()
+                                .map_or(true, |values| {
+                                    record
+                                        .value
+                                        .as_ref()
+                                        .and_then(|value| value.string_value.as_ref())
+                                        .is_some_and(|value| values.contains(value))
+                                })
                     })
                     .map(attribute)
                     .collect(),

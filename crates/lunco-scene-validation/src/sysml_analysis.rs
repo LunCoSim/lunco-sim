@@ -43,6 +43,8 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
         let selection = SysmlFactSelection {
             tables: parse_tables(params)?,
             attribute_names: parse_attribute_names(params)?,
+            attribute_owners: parse_name_selection(params, "attribute_owners")?,
+            attribute_string_values: parse_name_selection(params, "attribute_string_values")?,
             requirement_names: parse_name_selection(params, "requirement_names")?,
             verification_names: parse_name_selection(params, "verification_names")?,
         };

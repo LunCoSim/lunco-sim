@@ -1056,10 +1056,32 @@ fn provenance(report, requirement_id) {
     if requirement_id == () || requirement_id == "" {
         return #{ok: false, error: "SysML provenance requirement ID is missing"};
     }
+    // Resolve exactly one evidence owner by the typed requirement ID, then
+    // fetch only that owner's evidence fields. A Twin-wide query for common
+    // local names such as `rationale` needlessly returns hundreds of records
+    // and can exceed Rhai's bounded value budget.
+    let identity = query("AnalyzeSysml", #{
+        path: report.path, tables: ["attributes"],
+        attribute_names: ["requirementId"],
+        attribute_string_values: [requirement_id]
+    });
+    if identity == () || identity.analysis == ()
+        || identity.analysis.attributes == () {
+        return #{ok: false,
+            error: _report_error(identity, "SysML provenance owner is unavailable")};
+    }
+    if identity.analysis.attributes.len() != 1 {
+        return #{ok: false, error: if identity.analysis.attributes.len() == 0 {
+            "SysML provenance record is missing: " + requirement_id
+        } else { "ambiguous SysML provenance record: " + requirement_id }};
+    }
+    let owner = identity.analysis.attributes[0].owner;
     let selected = query("AnalyzeSysml", #{
         path: report.path, tables: ["attributes"],
-        attribute_names: ["requirementId", "qualifiedRequirement",
-            "sourceReference", "rationale", "status"]
+        attribute_names: [owner + "::requirementId",
+            owner + "::qualifiedRequirement", owner + "::sourceReference",
+            owner + "::rationale", owner + "::status"],
+        attribute_owners: [owner]
     });
     if selected == () || selected.analysis == () {
         return #{ok: false,
