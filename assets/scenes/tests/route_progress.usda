@@ -1,0 +1,33 @@
+#usda 1.0
+(
+    defaultPrim = "RouteProgress"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Route start/resume acceptance using the production rover, Avian trigger,
+# generic route policy, and authored Rhai test listener.
+def Xform "RouteProgress" (
+    prepend references = @lunco://scenes/base/route_lifecycle_source.usda@</RouteLifecycleSource>
+)
+{
+    over "Route"
+    {
+        over "P0"
+        {
+            # The rover begins inside P0's Avian trigger volume.
+            double3 xformOp:translate = (0.0, 1.0, 0.0)
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/route_progress.rhai@
+        }
+    }
+}
