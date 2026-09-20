@@ -178,6 +178,8 @@ fn report_structured_verdict(report, title, channel) {
     let source_files = [];
     let source_revision_hex = "";
     let metrics = #{};
+    let evidence_result_events = ();
+    let evidence_channels = ();
     let failure_count = 0;
     if report != () {
         if report.source_revision != () { source_revision = report.source_revision; }
@@ -188,6 +190,10 @@ fn report_structured_verdict(report, title, channel) {
         }
         if report.source_files != () { source_files = report.source_files; }
         if report.metrics != () { metrics = report.metrics; }
+        if report.evidence_result_events != () {
+            evidence_result_events = report.evidence_result_events;
+        }
+        if report.evidence_channels != () { evidence_channels = report.evidence_channels; }
         if report.results != () {
             result_count = report.results.len();
             // Preserve the complete typed observation table.  The legacy
@@ -247,6 +253,9 @@ fn report_structured_verdict(report, title, channel) {
     // on (channel, source_revision) and ordering by result_index.
     let chunked_results = result_chunks.len() > 1 || check_count > 64;
     let inline_results = !chunked_results && result_count <= 64;
+    // Partitioned observers can send detail records to bounded companion
+    // channels and report those channels here instead of falsely claiming
+    // those records were emitted on this summary channel.
     let evidence = #{schema_version: 1, ok: ok, title: title, channel: channel,
         verdict: if ok { "pass" } else { "fail" },
         verification: verification, requirement_count: requirement_count,
@@ -255,9 +264,12 @@ fn report_structured_verdict(report, title, channel) {
         source_revision: source_revision, source_revision_hex: source_revision_hex,
         source_files: source_files, result_count: result_count,
         failure_count: failure_count, evidence_chunked: !inline_results,
-        evidence_result_events: if inline_results { 0 } else { check_count },
+        evidence_result_events: if evidence_result_events != () {
+            evidence_result_events
+        } else if inline_results { 0 } else { check_count },
         results: if inline_results { results } else { [] },
         failures: if inline_results { raw_failures } else { [] }, metrics: metrics};
+    if evidence_channels != () { evidence.evidence_channels = evidence_channels; }
     emit(channel + "_EVIDENCE", evidence);
     if !inline_results {
         let result_index = 0;
