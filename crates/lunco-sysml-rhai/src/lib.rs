@@ -494,6 +494,7 @@ fn typed_report_literal_value(literal: &Map, declared: Option<&Map>) -> Option<D
         if matches!(
             base,
             "Vec3"
+                | "Position"
                 | "Direction"
                 | "Dimensions"
                 | "CartesianThreeVectorValue"
@@ -621,6 +622,7 @@ fn typed_literal_dynamic(
         if matches!(
             base,
             "Vec3"
+                | "Position"
                 | "Direction"
                 | "Dimensions"
                 | "CartesianThreeVectorValue"

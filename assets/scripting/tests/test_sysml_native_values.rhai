@@ -17,6 +17,21 @@ checks.push(t_true(direct.ok == true && direct.found == true
     && direct.value.y == -2.0 && direct.value.z == 3.5,
     "standard Cartesian three-vector is preserved as a native f64 Vec3"));
 
+let position_alias = sysml_value(path, "NativeValues::Lander::positionAlias");
+checks.push(t_true(position_alias.ok == true && position_alias.found == true
+    && type_of(position_alias.value) == "Vec3"
+    && position_alias.value.x == 4.5 && position_alias.value.y == -6.0
+    && position_alias.value.z == 7.25,
+    "a SysML Position specialization of CartesianThreeVectorValue uses native Vec3"));
+
+let position_stations = sysml_value(path, "NativeValues::Lander::positionStations");
+checks.push(t_true(position_stations.ok == true && position_stations.found == true
+    && type_of(position_stations.value) == "array"
+    && type_of(position_stations.value[0]) == "Vec3"
+    && position_stations.value[0].x == 1.0
+    && position_stations.value[1].y == 5.0,
+    "a fixed SysML Position collection retains native Vec3 station values"));
+
 let from_report = sysml_value_from_report(report, qualified_position_attribute);
 checks.push(t_true(from_report.ok == true && from_report.found == true
     && type_of(from_report.value) == "Vec3"
