@@ -136,6 +136,10 @@ remains persistent UI state.
 
 Project-owned settings are not user-global settings: read the active Twin's
 manifest through the workspace resource and emit a typed event for changes.
+Workbench hot-exit documents, tabs, and dock windows are scoped to the active
+Twin. With no active Twin, use the host's startup layout and skip workspace
+state load/save; do not restore loose Editor or Modelica tabs from an
+app-global no-folder session.
 For the missing-asset consent flow, the popup's unchecked negative checkbox
 means "show next time" and persists through `twin.toml [downloads]`; do not
 add a second global settings key for it.
