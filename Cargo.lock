@@ -10629,6 +10629,7 @@ dependencies = [
  "lunco-core",
  "lunco-settings",
  "lunco-signal",
+ "lunco-telemetry",
  "lunco-theme",
  "lunco-usd-bevy-scene",
  "lunco-viz-core",

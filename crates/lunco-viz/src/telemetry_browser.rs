@@ -1222,6 +1222,35 @@ impl Panel for TelemetryBrowserPanel {
             return;
         };
         let subdued = theme.tokens.text_subdued;
+        let telemetry_enabled = ctx
+            .resource::<lunco_telemetry::TelemetrySettings>()
+            .map(|settings| settings.enabled);
+        if telemetry_enabled == Some(false) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Telemetry is off. Turn it on to collect and show channels.",
+                    )
+                    .color(theme.tokens.warning),
+                );
+                if ui.button("Turn telemetry on").clicked() {
+                    ctx.trigger(lunco_telemetry::ControlTelemetry {
+                        channel: None,
+                        entity: None,
+                        port: None,
+                        reflect: None,
+                        unit: None,
+                        enabled: Some(true),
+                        rate_hz: None,
+                        retention: None,
+                        atol: None,
+                        rtol: None,
+                        deadband: None,
+                    });
+                }
+            });
+            ui.separator();
+        }
         let stored_display_settings = ctx.resource_expect::<TelemetryDisplaySettings>().clone();
         let mut display_settings = stored_display_settings.clone();
 
@@ -1391,12 +1420,14 @@ impl Panel for TelemetryBrowserPanel {
         }
 
         if self.catalog.root.children.is_empty() {
-            ui.label(
-                egui::RichText::new(
-                    "No telemetry channels yet — run a simulation to populate the registry.",
-                )
-                .color(subdued),
-            );
+            if telemetry_enabled != Some(false) {
+                ui.label(
+                    egui::RichText::new(
+                        "No telemetry channels yet — run a simulation to populate the registry.",
+                    )
+                    .color(subdued),
+                );
+            }
             return;
         }
 
