@@ -50,6 +50,72 @@ validation (does the verified product serve the intended ConOps in a realistic
 scenario?). A simulation result supports a claim only at the fidelity and
 conditions it actually exercised.
 
+### Physical materials and engineering properties
+
+For every component whose structural, pressure, thermal, electrical, mass, or
+contact behaviour depends on material, record a typed material selection and
+only the properties needed by the declared analysis. A reusable material record
+should distinguish alloy/product form/temper or composite layup and direction
+(for example AA6061-T6 and AA7075-T73 are different catalogue records, not one
+generic "aluminum" entry);
+include units, temperature/environment range, source/revision, applicability,
+and whether each value is reference data, a derived value, or a study
+assumption. Suitable properties may include density, elastic and shear
+moduli, Poisson ratio, yield/ultimate allowables, thermal expansion,
+conductivity, heat capacity, electrical resistivity, and optical surface
+properties. Composite overwraps require directional properties and layup or
+winding information; an isotropic generic "carbon fiber" value is not enough
+for structural sizing.
+
+Use one reusable typed material catalogue and typed component references to
+it. The intended engineering source is one SysML material package in the
+indexed source set; a component refers to the material definition by a typed
+SysML usage, not by a string name. Do not repeat a material's numeric
+properties in each component or maintain a second hand-edited table in
+Modelica. Modelica and other physics consumers should receive the same source
+values through a typed adapter, with units and applicability preserved until
+the domain boundary. Keep visual appearance in `UsdShade`, contact friction and
+restitution in `UsdPhysicsMaterialAPI`, and engineering constitutive properties
+in the material record; one must not be inferred from another. USD mass,
+collision, and model equations remain explicit owners of their respective
+runtime facts. If a shared cross-Twin SysML library or typed resolver is not
+available, keep one catalog source in the Twin and record the library/binding
+gap; do not invent an external-path resolver.
+
+Treat a material definition, its assignment to a component role, and the
+component's geometry/model parameters as separate typed facts. A catalogue
+entry should capture canonical grade and product form/temper (or composite
+layup and orientation), and give every property its unit, applicable
+temperature/environment, source identifier/revision, and status as sourced,
+derived, or assumed. Cite properties at the entry/property level; a general
+material citation is not evidence that a specific strength allowable applies
+to this product form, direction, process, temperature, or fluid exposure. Keep
+unselected candidates distinct from the selected material and never treat an
+assumption as a qualified design allowable. Modelica generation should map
+only the properties required by its constitutive equations from this source;
+unsupported property types or missing unit-preserving projections are explicit
+tool gaps, not invitations to copy constants into `.mo` files.
+
+For pressure vessels, model the external envelope separately from the actual
+pressure boundary. A COPV contract identifies liner and overwrap materials,
+MEOP and operating conditions, geometry, wall/layup definition, interfaces, and
+the qualification/design basis. Standards govern selection, analysis,
+qualification, and verification—not one universal alloy, operating pressure,
+or wall thickness. Source assumptions from an applicable spacecraft materials
+standard, pressure-vessel standard, material allowables, and compatible
+propellant/environment data; mark a study analog as such. Do not assign a
+flight material, proof/burst pressure, or liner/overwrap thickness when those
+inputs and qualified analysis are absent.
+
+Current LunCoSim material handling is not yet a cross-domain engineering
+catalogue: `lunco-materials` is render/shader appearance intent, while
+`UsdPhysicsMaterialAPI` supplies contact behaviour; the component authoring
+contract explicitly notes that `physics:density` is not consumed. SysML can
+project typed literals and quantities, but a generic material-record resolver
+and shared SysML-to-Modelica/USD/physics binding are not established. Confirm
+the current API before use; if that binding is missing, record it as one generic
+feature gap rather than duplicating material data per subsystem.
+
 ## 3. Control interfaces before detail
 
 Treat every physical, data, and operational interface as an explicit contract.
@@ -139,6 +205,9 @@ These are the primary references used to shape the gates above (accessed
 - [NASA Systems Engineering Handbook](https://www.nasa.gov/reference/system-engineering-handbook/): requirements quality, product-tree decomposition, verification versus validation, technical reviews, and operational transition.
 - [NASA stakeholder expectations and ConOps guidance](https://www.nasa.gov/reference/4-1-stakeholder-expectations-definition/): mission phases, nominal/off-nominal scenarios, human/system allocation, fault response, and command/data concepts.
 - [NASA Fault Management Handbook (NASA-HDBK-1002)](https://www.nasa.gov/wp-content/uploads/2015/04/636372main_NASA-HDBK-1002_Draft.pdf): detect, isolate, diagnose, respond, and test fault-management behaviour.
+- [NASA-STD-6016C w/Change 1](https://standards.nasa.gov/node/259): spacecraft materials and processes control; it is a material-selection/qualification basis, not a universal numeric property table.
+- [NASA MAPTIS](https://maptis.nasa.gov/): NASA's materials properties information system; use a source record with material condition and environmental applicability, where access permits.
+- [ANSI/AIAA S-081B-2018 COPV summary](https://www.nasa.gov/centers-and-facilities/white-sands/space-systems-composite-overwrapped-pressure-vessels-ansi-aiaa-s-081b-2018/): design, analysis, fabrication, test, inspection, operation, and maintenance of metal-lined carbon-fiber/polymer COPVs.
 - [ECSS-E-ST-10-24C Rev.1 — Interface management](https://ecss.nl/standard/ecss-e-st-10-24c-rev-1-interface-management-15-november-2024/): identify, specify, approve, control, implement, verify, and validate interfaces through the product tree.
 - [ECSS-E-ST-10-02C Rev.1 — Verification](https://ecss.nl/standard/ecss-e-st-10-02c-rev-1-verification-1-february-2018/) and [ECSS-E-ST-10-03C Rev.1 — Testing](https://ecss.nl/standard/ecss-e-st-10-03c-rev-1-testing-31-may-2022/): tailored verification methods, test planning, and evidence.
 - [ECSS-E-ST-70C — Ground systems and operations](https://ecss.nl/standard/ecss-e-st-70c-ground-systems-and-operations/): mission-operations engineering, preparation, execution, evaluation, and post-operational work.

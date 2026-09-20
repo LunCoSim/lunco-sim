@@ -34,6 +34,16 @@ public contract fit; add a new mission/vehicle model only when the equation or
 interface is genuinely absent. An isolated Modelica compile proves neither USD
 wiring nor runtime physics.
 
+For material-dependent equations, use the component's typed SysML material
+assignment and property source described in the
+[mission engineering material gate](../interactive-component-authoring/references/mission-engineering-quality.md#physical-materials-and-engineering-properties).
+Keep values and units typed until the Modelica-source emission boundary, and
+derive generated parameter literals from that source rather than maintaining a
+second hand-edited material table in `.mo`. The shared material catalogue and
+generic cross-domain binding are not yet established; if the current bridge
+cannot provide a required property with its unit and applicability, report that
+generic gap instead of substituting a copied constant.
+
 | App | Launch | Modelica surface |
 |---|---|---|
 | **`lunica`** | `"$LUNICA_BIN" --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |

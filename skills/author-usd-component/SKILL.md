@@ -54,6 +54,15 @@ mesh. Before authoring, state its local frame, mount datum, required
 topology/types, dimensional envelope, mass/inertia owner, collision policy,
 parameters/units, public provenance, and any deployment or operating limits.
 Keep public/reference-backed facts separate from Twin study assumptions.
+For material-dependent parts, record a typed SysML material reference and the
+condition-specific properties required by the analysis; the USD material
+assignment/runtime facts remain standard authored USD and must be an explicit
+projection of that same selection, not a second manual source. Keep this
+distinct from `UsdShade` appearance and `UsdPhysicsMaterialAPI` contact
+coefficients.
+Use the [SysML material-property gate](../interactive-component-authoring/references/mission-engineering-quality.md#physical-materials-and-engineering-properties)
+for the single-source catalogue rule. Do not author `physics:density` expecting
+it to affect runtime mass: this component path consumes explicit `physics:mass`.
 
 Before authoring any component, use the repository-wide five-phase workflow in
 [`interactive-component-authoring`](../interactive-component-authoring/SKILL.md):
