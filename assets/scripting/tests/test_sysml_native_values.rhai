@@ -43,6 +43,19 @@ let summary = query("AnalyzeSysml", #{path: path,
 let unprojected = sysml_value_from_report(summary, qualified_position_attribute);
 checks.push(t_true(unprojected.ok == true && unprojected.found == false,
     "an intentionally omitted fact table is distinct from a failed lookup"));
+let selected_attributes = query("AnalyzeSysml", #{path: path,
+    tables: ["attributes"], attribute_names: [qualified_position_attribute]});
+let selected_value = sysml_value_from_report(selected_attributes,
+    qualified_position_attribute);
+checks.push(t_true(selected_attributes.ok == true
+    && selected_attributes.analysis.attributes.len() == 1
+    && selected_attributes.analysis.attributes[0].qualified_name == qualified_position_attribute
+    && selected_value.ok == true && selected_value.found == true
+    && type_of(selected_value.value) == "Vec3"
+    && selected_value.value.x == direct.value.x
+    && selected_value.value.y == direct.value.y
+    && selected_value.value.z == direct.value.z,
+    "an attributes-only Rhai projection returns the selected native value and source identity"));
 let lazy = sysml_requirements::native_value(summary, qualified_position_attribute);
 checks.push(t_true(type_of(lazy) == "Vec3" && lazy.x == direct.value.x,
     "Rhai resolves an unloaded value through the typed selected query"));

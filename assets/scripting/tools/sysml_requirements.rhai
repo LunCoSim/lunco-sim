@@ -928,7 +928,11 @@ fn source() {
 
 /// Select only the typed values needed by a requirement-policy pass.
 fn source_with_attributes(names) {
-    _source_projection(names, [], [], false, true)
+    // Numeric/typed consumers do not need the Twin-wide requirement and
+    // verification registries. Keep this projection proportional to the
+    // caller's selected attributes; callers that need identities use
+    // source_with_selection, and full contract audits use source().
+    _source_projection(names, [], [], false, false)
 }
 
 /// Select only the attributes, requirement usages and verification cases
@@ -960,7 +964,13 @@ fn _source_projection(names, requirement_names, verification_names,
         }
         if !selected.contains(literal) { selected.push(literal); }
     }
-    let tables = ["requirements", "verifications"];
+    let tables = [];
+    if include_twin_contract || requirement_names.len() > 0 {
+        tables.push("requirements");
+    }
+    if include_twin_contract || verification_names.len() > 0 {
+        tables.push("verifications");
+    }
     if selected.len() > 0 { tables.push("attributes"); }
     if include_constraints {
         tables.push("constraints");
