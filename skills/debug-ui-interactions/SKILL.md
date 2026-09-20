@@ -45,6 +45,10 @@ Use `KeyF` for the default action binding only after checking the active
 pointer event for context menus. Do not combine press and release events in
 one same-frame script step when testing focus, modifier state, or picking.
 
+A route-point secondary click opens its authored context menu without changing
+scene selection. Selecting the point is a separate menu action; the context
+gesture itself must not enable the transform gizmo.
+
 Coordinates are logical primary-window pixels. Obtain them from a current
 screenshot and record the window geometry used for the run. A coordinate is
 test input, not domain state: never use it to infer a USD position or replace

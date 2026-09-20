@@ -524,9 +524,15 @@ fn on_tick(me, ctx) {
         secondary.button = "secondary";
         secondary.modifiers = #{ alt: false, shift: false, ctrl: false };
         secondary.pointer_intents = ["route.context"];
+        if !is_unattended() {
+            let selection = query("InspectSelection", #{});
+            this.selection_before_context = if selection != () && selection.ok != false {
+                selection.primary
+            } else { () };
+        }
         let pointer = waypoint_editor::on_pointer(secondary);
-        this.checks.push(t_true(pointer.ok == true,
-            "generic pointer policy accepts secondary-click context"));
+        this.checks.push(t_true(pointer.ok == true && pointer.selected == false,
+            "secondary-click opens waypoint context without selecting it"));
         this.phase = 20;
         return;
     }
@@ -539,10 +545,10 @@ fn on_tick(me, ctx) {
             return;
         }
         let selection = query("InspectSelection", #{});
-        let expected = find_path(this.new_point);
-        if selection == () || selection.ok == false || selection.primary != expected { return; }
+        if selection == () || selection.ok == false
+            || selection.primary != this.selection_before_context { return; }
         this.checks.push(t_true(true,
-            "secondary-click routes through the generic scene pointer policy"));
+            "secondary-click preserves the existing scene selection"));
         this.phase = 21;
         return;
     }
@@ -552,7 +558,7 @@ fn on_tick(me, ctx) {
             context(this.doc, this.new_point, ()), ROUTE,
         );
         this.checks.push(t_true(selected == this.new_point,
-            "secondary-click policy selects the direct route point"));
+            "secondary-click policy resolves the direct route point independently of selection"));
         if find_path(this.new_point) < 0 { return; }
         let nested = context(this.doc, this.new_point + "/Dome", ());
         nested.target_path = this.new_point + "/Dome";

@@ -1005,8 +1005,9 @@ fn on_select(context) {
     #{ ok: true, path: point }
 }
 
-// Secondary pointer context opens a generic authored menu. The editor owns
-// only popup placement and dispatch; labels and actions are authored here.
+// Secondary pointer context opens a generic authored menu without changing
+// scene selection. Selection remains an explicit menu action, so opening the
+// menu cannot also activate the transform gizmo.
 fn on_context(context) {
     if context == () || context.doc_id == () {
         return failure("context click has no active document");
@@ -1015,8 +1016,6 @@ fn on_context(context) {
     let point = context_route_point(context, route);
     if point == () { return failure("context target is not a direct route point"); }
     if is_unattended() { return #{ ok: true, path: point, selected: false }; }
-    let selected = on_select(context);
-    if selected.ok != true { return selected; }
     if context.screen_position == () {
         return failure("context click has no screen position");
     }
@@ -1035,5 +1034,5 @@ fn on_context(context) {
         },
     ]);
     if !opened { return failure("the scene context-menu host is unavailable"); }
-    #{ ok: true, path: point, menu: true }
+    #{ ok: true, path: point, menu: true, selected: false }
 }

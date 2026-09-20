@@ -826,6 +826,31 @@ fn on_event(me, evt, ctx) {
         this = runtime_program_action(me, evt.value, this);
         return;
     }
+    if evt.name == "cmd:ReleaseControl" && this.enabled {
+        // The generic release command hard-stops every input port, including
+        // the cached waypoint setpoint. If possession released the authority,
+        // transfer it to the active route before publishing guidance again.
+        let subject = route_subject_for(me, this);
+        let owner = if subject >= 0 { owner_of(subject) } else { () };
+        let local = local_session_id();
+        if subject >= 0 && owner == () {
+            let claimed = claim_control(subject);
+            if claimed == () || claimed.ok != true {
+                let error = "the active route could not retain control after possession ended";
+                if this.route_error != error { notify_kind("Route program stopped: " + error, "error"); }
+                this.route_error = error;
+                this.enabled = false;
+                return;
+            }
+            this.claimed_here = true;
+        }
+        if subject < 0 || owner == () || (local != () && owner == local) {
+            this.commanded_path = ();
+            this.commanded_revision = ();
+            this.commanded_view_key = ();
+        }
+        return;
+    }
     // Avian owns zone occupancy. Keep route-zone enter pulses in the program's
     // live state even while disabled so starting from the initial point targets
     // the next point. This is runtime state only; no occupancy is written to

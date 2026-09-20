@@ -159,6 +159,15 @@ unavailable. The popup host only renders authored menu items and dispatches
 their typed tool hooks, so adding another route action does not require an
 editor-specific Rust branch.
 
+The `route.context` intent opens the authored waypoint menu without changing
+scene selection. Only its explicit “Select route point” action selects the
+point and enables its transform gizmo; delete and move resolve the point from
+the original pointer context. Selection and context-menu listeners therefore
+own separate gestures. While route autopilot is enabled, a generic
+`cmd:ReleaseControl` safe-stop transfers control to the active route when no
+session owns the rover, then invalidates the cached setpoint so the route
+publishes its current waypoint again after manual possession ends.
+
 ## Presentation
 
 The marker's dome is translucent, unlit, and shadowless. Its authored unvisited colour

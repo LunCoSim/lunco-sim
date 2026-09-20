@@ -57,6 +57,11 @@ autopilot stop/start; if the rover is already inside the initial route sensor,
 the start transaction marks that occupied prefix visited before sensor events
 drive later progression. This is presentation state, not a vessel component or
 a second route fact.
+The route context gesture opens its authored menu without selecting the point;
+selection and gizmo activation require the menu's explicit select action. A
+generic control-release safe-stop clears the controller ports; an enabled route
+claims the unowned rover and republishes its cached waypoint after manual
+possession ends.
 
 Script source edits made by a user go through the `ScriptDocument` host, so
 undo, redo, and the Twin journal see the same typed `ScriptOp`. A file-backed
