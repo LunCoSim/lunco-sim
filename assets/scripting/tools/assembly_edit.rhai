@@ -526,6 +526,23 @@ fn default_prim(doc, edit_target, path, parent_gen) {
     })
 }
 
+/// Set a document's stage-wide length scale and up-axis using the shared
+/// `StageMetrics`/`UpAxis` Rust types. `up_axis` is the enum's Y/Z variant at
+/// the Rhai-to-Rust boundary, not free-form authored text.
+fn stage_metrics(doc, edit_target, meters_per_unit, up_axis, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc_id: doc,
+        parent_gen: parent_gen,
+        op: #{ SetStageMetrics: #{
+            edit_target: edit_target,
+            metrics: #{
+                meters_per_unit: meters_per_unit,
+                up_axis: up_axis,
+            },
+        }},
+    })
+}
+
 /// Set the standard USD kind metadata on one prim. Pass () to clear only the
 /// selected layer's opinion and reveal any weaker kind.
 fn prim_kind(doc, edit_target, path, kind, parent_gen) {

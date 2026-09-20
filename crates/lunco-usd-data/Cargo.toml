@@ -8,6 +8,7 @@ description = "Reusable authored USD data, metadata, and stage-convention contra
 [dependencies]
 bevy = { workspace = true }
 openusd = { workspace = true }
+serde = { workspace = true }
 
 [lints]
 workspace = true

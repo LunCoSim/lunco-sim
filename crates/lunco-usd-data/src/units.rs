@@ -61,10 +61,13 @@ use std::f32::consts::FRAC_PI_2;
 use bevy::log::warn_once;
 use bevy::math::{DQuat, DVec3, EulerRot, Quat, Vec3};
 use bevy::prelude::Transform;
+use bevy::reflect::Reflect;
 
 /// The stage's declared up axis. USD's default is `Y` (AOUSD); DCC/robotics
 /// stages (Omniverse, Isaac Sim, Blender, ROS) overwhelmingly author `Z`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize,
+)]
 pub enum UpAxis {
     /// `upAxis = "Y"` — the USD default, and our canonical frame ⇒ no rotation.
     #[default]
@@ -73,10 +76,29 @@ pub enum UpAxis {
     Z,
 }
 
+impl UpAxis {
+    /// USD token used at the file-format boundary.
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::Y => "Y",
+            Self::Z => "Z",
+        }
+    }
+
+    /// Interpret the standard USD axis token as the shared core enum.
+    pub fn from_token(value: &str) -> Option<Self> {
+        match value {
+            "Y" => Some(Self::Y),
+            "Z" => Some(Self::Z),
+            _ => None,
+        }
+    }
+}
+
 /// A stage's declared metrics, as read from its pseudo-root metadata. The
 /// **only** place these two tokens are interpreted (doc 41's "one choke point
 /// per format").
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]
 pub struct StageMetrics {
     /// `metersPerUnit` — SI metres per authored linear unit. `1.0` = metres
     /// (ours; every shipped asset authors it), `0.01` = centimetres — the USD
@@ -144,8 +166,7 @@ impl StageMetrics {
         let up_axis = match reader.stage_metadata_value("upAxis") {
             None => UpAxis::Y,
             Some(value) => match value.as_str().map(str::to_string).as_deref() {
-                Some("Y") => UpAxis::Y,
-                Some("Z") => UpAxis::Z,
+                Some(value) if let Some(axis) = UpAxis::from_token(value) => axis,
                 Some(other) => {
                     return Err(StageMetricsError::InvalidUpAxis(other.to_string()));
                 }

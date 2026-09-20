@@ -684,6 +684,13 @@ Use the smallest existing typed intent that expresses the change:
   prim; pass `()` to clear that layer's opinion. Inspect
   `metadata.defaultPrim` and `prim.metadata.kind` for root/runtime,
   document-composed, and canonical-stage values with their source labels.
+- `assembly_edit::stage_metrics(doc, edit_target, meters_per_unit, up_axis,
+  parent_gen)` authors the shared typed `StageMetrics`/`UpAxis` values at the
+  stage root. Use the exact source convention from inspection or its owning
+  requirement; the scale must be finite and positive. This is a document-wide
+  coordinate interpretation change and triggers a whole-stage projection
+  rebuild. Correct a missing/wrong stage unit here instead of compensating with
+  per-component scale or translation edits.
 - `assembly_edit::attach_component` and `assembly_edit::detach_component` use
   the existing mount, socket, joint, frame, ownership, and occupancy
   validators. Supply exact paths in the

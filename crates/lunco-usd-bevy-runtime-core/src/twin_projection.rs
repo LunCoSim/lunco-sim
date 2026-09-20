@@ -1085,6 +1085,9 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
             | UsdOp::SetPayload { .. }
             | UsdOp::SetReferenceArcs { .. }
             | UsdOp::SetDefaultPrim { .. }
+            // Stage metrics affect every canonical transform and require the
+            // composed stage and all projected spatial state to be rebuilt.
+            | UsdOp::SetStageMetrics { .. }
     )
 }
 

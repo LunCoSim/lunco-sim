@@ -436,8 +436,16 @@ either operation clears only that layer's opinion, so weaker metadata remains
 visible through composition. `InspectUsdDocument` reports root/runtime,
 document-composed, and (when mounted) canonical-stage values with their source
 labels. Invalid paths, invalid kind identifiers, composed-only prims, and stale
-generations fail before journaling; both edits trigger a composed projection
-resync.
+generations fail before journaling; each metadata edit triggers the required
+composed projection refresh.
+
+`UsdOp::SetStageMetrics` authors the shared `StageMetrics` and `UpAxis` core
+types (`meters_per_unit` and Y/Z axis) as stage-root metadata in the selected
+layer. The scale must be finite and positive. Because these values change the
+canonical interpretation of every position, the operation is journalled and
+causes a whole-stage projection rebuild; it is exposed to Rhai through
+`assembly_edit::stage_metrics`. The USD token spelling is created only at this
+format boundary, not used as a stored string-valued design parameter.
 
 Modelica runtime admission respects the same `UsdPreviewOnly` ancestry as the
 simulation projector. Domain member discovery, synthesis, and asynchronous

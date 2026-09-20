@@ -93,7 +93,7 @@ use lunco_usd_authoring::author::{
     self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
 };
 use lunco_usd_compose::recipe::StageRecipe;
-use lunco_usd_data::units::{ConventionTransform, StageMetrics};
+use lunco_usd_data::units::{ConventionTransform, StageMetrics, UpAxis};
 use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{self, Path as SdfPath, SpecType};
 
@@ -496,6 +496,17 @@ pub enum UsdOp {
         /// clear this layer's opinion.
         default_prim: Option<String>,
     },
+    /// Author the stage's SI scale and up-axis convention in the selected layer.
+    ///
+    /// `StageMetrics` and `UpAxis` are the shared core types used by stage
+    /// conversion and Rhai command deserialization; USD tokens are only formed
+    /// here at the serialization boundary.
+    SetStageMetrics {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Positive finite metres per authored unit, plus the typed up axis.
+        metrics: StageMetrics,
+    },
     /// Author the standard USD `kind` metadata on an existing prim.
     ///
     /// `None` removes the selected layer's opinion and lets composition reveal
@@ -649,6 +660,7 @@ impl UsdOp {
             | Self::SetRelationship { edit_target, .. }
             | Self::SetConnection { edit_target, .. }
             | Self::SetDefaultPrim { edit_target, .. }
+            | Self::SetStageMetrics { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
@@ -696,7 +708,9 @@ impl UsdOp {
             Self::MovePrim {
                 from_path, to_path, ..
             } => vec![from_path.clone(), to_path.clone()],
-            Self::SetDefaultPrim { .. } => vec!["/".to_owned()],
+            Self::SetDefaultPrim { .. } | Self::SetStageMetrics { .. } => {
+                vec!["/".to_owned()]
+            }
         }
     }
 }
@@ -1766,6 +1780,7 @@ impl Document for UsdDocument {
             | UsdOp::SetRelationship { edit_target, .. }
             | UsdOp::SetConnection { edit_target, .. }
             | UsdOp::SetDefaultPrim { edit_target, .. }
+            | UsdOp::SetStageMetrics { edit_target, .. }
             | UsdOp::SetPrimKind { edit_target, .. }
             | UsdOp::MovePrim { edit_target, .. }
             | UsdOp::SetApiSchemas { edit_target, .. }
@@ -2102,14 +2117,7 @@ impl Document for UsdDocument {
                 stage.remove_property(property).map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 let inverse = self.coarse_inverse(target, &id);
-                self.commit(
-                    target,
-                    new_data,
-                    UsdChange::InfoOnly {
-                        path,
-                        attr: name,
-                    },
-                );
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
             }
 
@@ -2775,6 +2783,62 @@ impl Document for UsdDocument {
                         .edit(|edit| edit.clear_default_prim())
                         .map_err(author_err)?;
                 }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path: "/".into() });
+                Ok(inverse)
+            }
+
+            UsdOp::SetStageMetrics { metrics, .. } => {
+                if !metrics.meters_per_unit.is_finite() || metrics.meters_per_unit <= 0.0 {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "SetStageMetrics meters_per_unit must be finite and positive, got {}",
+                        metrics.meters_per_unit
+                    )));
+                }
+
+                let root = SdfPath::abs_root();
+                let prior_meters_per_unit =
+                    self.layer(target).field(&root, "metersPerUnit").cloned();
+                let prior_up_axis = self.layer(target).field(&root, "upAxis").cloned();
+                let inverse = match (prior_meters_per_unit, prior_up_axis) {
+                    (Some(sdf::Value::Double(meters_per_unit)), Some(sdf::Value::Token(axis)))
+                        if meters_per_unit.is_finite() && meters_per_unit > 0.0 =>
+                    {
+                        match UpAxis::from_token(axis.as_str()) {
+                            Some(up_axis) => UsdOp::SetStageMetrics {
+                                edit_target: id.clone(),
+                                metrics: StageMetrics {
+                                    meters_per_unit,
+                                    up_axis,
+                                },
+                            },
+                            None => self.coarse_inverse(target, &id),
+                        }
+                    }
+                    _ => self.coarse_inverse(target, &id),
+                };
+
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let root_id = stage.root_layer().identifier().to_owned();
+                let mut layer = stage
+                    .layer_mut(&root_id)
+                    .ok_or_else(|| author_err("document stage has no root layer"))?;
+                layer
+                    .edit(|edit| {
+                        let root = SdfPath::abs_root();
+                        edit.data_mut().set_field(
+                            &root,
+                            "metersPerUnit",
+                            sdf::Value::Double(metrics.meters_per_unit),
+                        );
+                        edit.data_mut().set_field(
+                            &root,
+                            "upAxis",
+                            sdf::Value::Token(metrics.up_axis.as_token().into()),
+                        );
+                        Ok(())
+                    })
+                    .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path: "/".into() });
                 Ok(inverse)
