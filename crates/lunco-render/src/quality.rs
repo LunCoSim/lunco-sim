@@ -7,6 +7,34 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::{MsaaLevel, ToneMap};
 
+/// Shadow-map sampling quality selected by the Graphics settings.
+///
+/// `Gaussian` uses Bevy's nine-sample filter and is the highest-quality mode
+/// without temporal anti-aliasing. `Hardware2x2` is the lower-cost option.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ShadowFilteringQuality {
+    /// Four comparison samples with hardware filtering.
+    Hardware2x2,
+    /// A Gaussian filter with a wider nine-sample footprint.
+    #[default]
+    Gaussian,
+}
+
+impl ShadowFilteringQuality {
+    /// Stable label used by the Graphics settings menu.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Hardware2x2 => "Hardware 2×2 (fast)",
+            Self::Gaussian => "Gaussian 5×5 (high quality)",
+        }
+    }
+
+    /// Every selectable filter in menu order.
+    pub const fn all() -> [Self; 2] {
+        [Self::Hardware2x2, Self::Gaussian]
+    }
+}
+
 /// The user-facing rendering-quality choices.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RenderingQuality {
@@ -41,6 +69,7 @@ impl RenderingQuality {
                 directional_shadow_map_size: 1024,
                 point_shadow_map_size: 1024,
                 directional_cascades: 2,
+                shadow_filtering_quality: ShadowFilteringQuality::Hardware2x2,
                 max_directional_shadow_casters: 1,
                 max_point_shadow_casters: 4,
                 max_spot_shadow_casters: 4,
@@ -111,6 +140,7 @@ impl RenderingQuality {
                 directional_shadow_map_size: 512,
                 point_shadow_map_size: 512,
                 directional_cascades: 1,
+                shadow_filtering_quality: ShadowFilteringQuality::Hardware2x2,
                 max_directional_shadow_casters: 1,
                 max_point_shadow_casters: 2,
                 max_spot_shadow_casters: 2,
@@ -178,9 +208,10 @@ impl RenderingQuality {
                 curve_radial_segments: 6,
             },
             Self::High => RenderQualityProfile {
-                directional_shadow_map_size: 2048,
+                directional_shadow_map_size: 4096,
                 point_shadow_map_size: 2048,
-                directional_cascades: 2,
+                directional_cascades: 4,
+                shadow_filtering_quality: ShadowFilteringQuality::Gaussian,
                 max_directional_shadow_casters: 2,
                 max_point_shadow_casters: 8,
                 max_spot_shadow_casters: 8,
@@ -265,6 +296,8 @@ pub struct RenderQualityProfile {
     pub directional_shadow_map_size: u32,
     pub point_shadow_map_size: u32,
     pub directional_cascades: usize,
+    /// Sampling method used to smooth shadow-map edges.
+    pub shadow_filtering_quality: ShadowFilteringQuality,
     pub max_directional_shadow_casters: usize,
     pub max_point_shadow_casters: usize,
     pub max_spot_shadow_casters: usize,
@@ -456,6 +489,8 @@ pub struct RenderingQualitySettings {
     pub point_shadow_map_size: u32,
     #[serde(default = "default_directional_cascades")]
     pub directional_cascades: usize,
+    #[serde(default = "default_shadow_filtering_quality")]
+    pub shadow_filtering_quality: ShadowFilteringQuality,
     #[serde(default = "default_max_directional_shadow_casters")]
     pub max_directional_shadow_casters: usize,
     #[serde(default = "default_max_point_shadow_casters")]
@@ -602,6 +637,10 @@ const fn default_point_shadow_map_size() -> u32 {
 
 const fn default_directional_cascades() -> usize {
     default_profile().directional_cascades
+}
+
+const fn default_shadow_filtering_quality() -> ShadowFilteringQuality {
+    default_profile().shadow_filtering_quality
 }
 
 const fn default_max_directional_shadow_casters() -> usize {
@@ -871,6 +910,7 @@ impl RenderingQualitySettings {
             directional_shadow_map_size: self.directional_shadow_map_size,
             point_shadow_map_size: self.point_shadow_map_size,
             directional_cascades: self.directional_cascades,
+            shadow_filtering_quality: self.shadow_filtering_quality,
             max_directional_shadow_casters: self.max_directional_shadow_casters,
             max_point_shadow_casters: self.max_point_shadow_casters,
             max_spot_shadow_casters: self.max_spot_shadow_casters,
@@ -961,6 +1001,7 @@ impl RenderingQualitySettings {
         self.directional_shadow_map_size = profile.directional_shadow_map_size;
         self.point_shadow_map_size = profile.point_shadow_map_size;
         self.directional_cascades = profile.directional_cascades;
+        self.shadow_filtering_quality = profile.shadow_filtering_quality;
         self.max_directional_shadow_casters = profile.max_directional_shadow_casters;
         self.max_point_shadow_casters = profile.max_point_shadow_casters;
         self.max_spot_shadow_casters = profile.max_spot_shadow_casters;
@@ -1313,6 +1354,7 @@ impl Default for RenderingQualitySettings {
             directional_shadow_map_size: profile.directional_shadow_map_size,
             point_shadow_map_size: profile.point_shadow_map_size,
             directional_cascades: profile.directional_cascades,
+            shadow_filtering_quality: profile.shadow_filtering_quality,
             max_directional_shadow_casters: profile.max_directional_shadow_casters,
             max_point_shadow_casters: profile.max_point_shadow_casters,
             max_spot_shadow_casters: profile.max_spot_shadow_casters,
@@ -1504,7 +1546,12 @@ mod tests {
     fn requested_profile_is_not_replaced_by_a_budget() {
         let mut settings = RenderingQualitySettings::default();
         settings.apply_preset(RenderingQuality::High);
-        assert_eq!(settings.profile().directional_shadow_map_size, 2048);
+        assert_eq!(settings.profile().directional_shadow_map_size, 4096);
+        assert_eq!(settings.profile().directional_cascades, 4);
+        assert_eq!(
+            settings.profile().shadow_filtering_quality,
+            ShadowFilteringQuality::Gaussian
+        );
         assert_eq!(
             settings.profile().shadow_budget_bytes,
             2 * 1024 * 1024 * 1024

@@ -209,11 +209,13 @@ would let a look reflect like diamond and refract like glass, and would need to 
 
 `lunco-render-bevy` owns the backend choice for sampling the cascaded shadow maps.
 Every non-fast `Camera3d`, including one projected asynchronously from USD, receives
-Bevy's `Hardware2x2` comparison filter. This keeps the authored lunar sun's contact
-shadows crisp; the physical `UsdLuxDistantLight.inputs:angle` remains owned by USD
-and the horizon-shadow path. Do not replace this with a wider Gaussian/PCSS filter
-or change authored light range, cascades, bias, or caster policy to compensate for
-soft edges. Fast mode deliberately does not attach the standard PBR shadow filter.
+the selected Graphics shadow filter unless its owner already supplied one. The
+`High` profile uses Bevy's Gaussian filter for smoother map edges; `Hardware2x2`
+remains available as a lower-cost, sharper option. Graphics edits update only filters
+that Graphics supplied. Temporal filtering is not offered because scene cameras do not
+use temporal anti-aliasing, and PCSS remains behind Bevy's experimental feature. The
+physical `UsdLuxDistantLight.inputs:angle` remains owned by USD and the horizon-shadow
+path. Fast mode deliberately does not attach the standard PBR shadow filter.
 
 `ProceduralSkybox` is a render-free scene intent owned by `lunco-render` that may accompany `ShaderLook` from `lunco-materials`.
 The USD projection reads the authored `lunco:surface:skybox` flag once on its

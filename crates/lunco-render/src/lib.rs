@@ -25,7 +25,8 @@ pub use camera::{
 };
 pub use quality::{
     estimate_directional_shadow_bytes, estimate_shadow_allocation_bytes, LightGraphicsDefaults,
-    RenderQualityProfile, RenderingQuality, RenderingQualitySettings, ShadowRangeAuthorship,
+    RenderQualityProfile, RenderingQuality, RenderingQualitySettings, ShadowFilteringQuality,
+    ShadowRangeAuthorship,
 };
 pub use sun::LunarSunShadow;
 

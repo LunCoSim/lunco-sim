@@ -2170,6 +2170,26 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                 .weak()
                 .small(),
             );
+            ui.collapsing("Shadow edge filtering", |ui| {
+                settings_choice_menu(
+                    ui,
+                    format!(
+                        "Shadow filter: {}",
+                        settings.shadow_filtering_quality.label()
+                    ),
+                    &mut settings.shadow_filtering_quality,
+                    lunco_render::ShadowFilteringQuality::all()
+                        .into_iter()
+                        .map(|quality| (quality, quality.label().to_owned())),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Gaussian smooths shadow-map edges with a wider filter; Hardware 2×2 is faster and sharper.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
             ui.collapsing("Shadow allocation", |ui| {
                 if let Some(sizes) = shadow_map_sizes.as_deref() {
                     settings_choice_menu(
