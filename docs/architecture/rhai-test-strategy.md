@@ -26,8 +26,7 @@ changes collision policy or becomes a second physics model.
 
 ## SysML requirements and authored verification
 
-The target architecture separates three things that are currently mixed in
-many Rhai files:
+The architecture keeps source facts, policy, and runtime observation separate:
 
 | Concern | SysML v2 | Rhai / production runtime |
 |---|---|---|
@@ -38,9 +37,11 @@ many Rhai files:
 | Verdict | Supplies requirement intent, not runtime verdict execution | The mapped Rhai observer emits the production verdict and evidence |
 
 The SysML source is the portable requirement contract. A run result is
-separate evidence, never an edit to the requirement file. The
-`lunco-sysml-rhai` crate is a read-only snapshot/report adapter; the production
-`ValidateSysml` query discovers the manifest-declared Twin source set. The
+separate evidence, never an edit to the requirement file. Rust exposes
+`ValidateSysml` for source validation and `AnalyzeSysml` for selectable typed
+facts; `ReadActiveTwinContract` supplies the active Twin's component and
+verification bindings. Separate Rhai policies own structural lint,
+requirement/provenance verification, and geometry-constraint selection. The
 Rhai observer emits structured evidence through the production verdict
 envelope. See
 [`24-domain-sysml.md`](24-domain-sysml.md#sysml-v2-requirement-and-verification-contract)
@@ -50,18 +51,25 @@ for the source shape and implementation gates.
 
 The current runtime provides this bounded integration:
 
-1. `lunco-sysml-ast` projects requirements, verification cases, subjects,
-   typed scalar attributes, `satisfy`/`verify` links, source spans and a
-   source-set revision.
-2. `ValidateSysml` resolves the Twin-indexed `.sysml`/`.kerml` source set
-   through existing asset identities and `[sysml]` roots.
-3. The Twin-owned verification registry maps qualified SysML names to
-   existing scenes and Rhai observers; missing mappings fail loudly.
-4. Native Rhai reports and `report_structured_verdict` carry verification and
-   requirement identity, revision, observations, evidence and diagnostics,
-   while the stable `TESTS_OK`/`TESTS_FAIL` envelope remains available.
-5. The production `--verification` selector validates one mapped case and its
-   scene before the run; JSON reports remain available for external clients.
+1. `lunco-sysml-ast` parses and resolves indexed `.sysml`/`.kerml` sources into
+   source-backed elements, references, typed attributes, requirements,
+   verifications, constraints, diagnostics and a source-set revision.
+2. `ValidateSysml` reports validation status, structural `lint.sysml`
+   findings, source diagnostics and identity. `AnalyzeSysml` returns selected
+   typed fact tables; it does not assign project-specific meaning to
+   constraints or requirement attributes.
+3. `ReadActiveTwinContract` exposes Twin-owned component and verification
+   records. `sysml_requirements.rhai` joins these to source identities and
+   applies requirement/provenance policy.
+4. `lint.sysml` applies structural source-quality policy; the independent
+   `sysml_modelica_constraints.rhai` tool selects geometry constraint facts
+   and assembles Modelica. Other policies can consume the same generic facts
+   without adding Rust-side rules.
+5. `report_structured_verdict` carries requirement identity, source revision,
+   observations and evidence while the stable `TESTS_OK`/`TESTS_FAIL` envelope
+   remains available. The production `--verification` selector validates one
+   mapped case before the run; external clients serialize only at the API
+   boundary.
 
 Full KerML expression/constraint execution and automatic requirement-to-USD
 projection remain outside the bounded integration.
@@ -101,18 +109,21 @@ and reuse of the existing Rhai scene runner and result protocol. No
 requirement-specific Rust test module, Rust-side threshold, or second runner
 should be introduced.
 
-The current compact bridge is `query("ValidateSysml", #{path: ...})`. It uses
-the same `lunco-scene-validation` parser/resolver as `ValidateAsset`; a
-`twin://name` path uses the indexed Twin source set and manifest `[sysml]`
-roots. The bounded result contains typed attributes, requirement and
-verification records, source files, diagnostics, and `source_revision`. Its
-compact attribute table is keyed only by the qualified SysML name; the
-short-name projection is deliberately empty so colliding component literals
-are never duplicated or silently overwritten. Rhai therefore reads the
-canonical SysML source through the existing asset path without copying the
-full element graph or walking the Twin filesystem a second time. The full
-`ValidateAsset` report remains available for IDE/source-span tooling and may
-include short-name collisions.
+Use `ValidateSysml` for parse/source validation and `AnalyzeSysml` when a
+policy needs semantic facts. `AnalyzeSysml` accepts an optional `tables` list
+(`elements`, `references`, `relationships`, `constraints`, `attributes`,
+`requirements`, `verifications`, or `diagnostics`) and optional
+`attribute_names` selection. It uses the existing Twin-indexed source set and
+manifest `[sysml]` roots rather than a second filesystem walker. Tables and
+values cross the in-process boundary as typed `HookValue` structures; no JSON
+copy is used inside Rust/Rhai. Qualified names remain authoritative, while
+policies explicitly handle ambiguous short names.
+
+`sysml_requirements::source()` requests requirement and verification facts,
+then joins them with `ReadActiveTwinContract`. Its selected-attribute and
+constraint-source variants request only the needed tables. `lint.sysml`,
+`sysml_requirements.rhai`, and `sysml_modelica_constraints.rhai` are distinct
+policy layers over these shared facts, not parallel Rust projections.
 
 For component-level suites, `sysml_requirements::evaluate(source, checks)`
 returns one structured result per check. The shared

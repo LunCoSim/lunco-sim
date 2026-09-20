@@ -551,7 +551,8 @@ actually call, with the fields the deserializer actually accepts. See the
  (File ▸ New, the package browser, the welcome screen). The URL-share
  loader (`crate::model_share`) fires this with `source`/`name`
  populated so a shared model reuses this exact creation + tab-open
- path instead of duplicating it.
+ path instead of duplicating it. Programmatic calls receive the allocated
+ `doc_id` in command result `data`; tab opening remains queued on the UI thread.
 
 - *defined in:* `crates/lunco-modelica-ui/src/ui/commands/lifecycle.rs`
 
@@ -829,8 +830,9 @@ actually call, with the fields the deserializer actually accepts. See the
  inputs, and bounds — the programmatic counterpart to the Experiments
  panel. Unlike `FastRunActiveModel`, overrides come from the command (not
  the UI draft), so an agent can sweep parameters without touching source.
- Discover the resulting `experiment_id` via `ListRuns` (newest, or by
- `label`); read the trajectory with `GetExperimentResult`.
+ API and Rhai callers receive the exact `experiment_id` in the command
+ acknowledgement once registration completes; the solve itself remains
+ asynchronous and is observed through `RunStatus` / `GetExperimentResult`.
 
 - *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 

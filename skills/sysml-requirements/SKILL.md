@@ -147,26 +147,30 @@ The current supported subset is source-backed and deterministic:
   definitions/usages with documentation and attributes;
 - standard external references plus `satisfy` and verification `verify`
   memberships;
-- qualified names, typed scalar literal projections (`value.number_value` is a
-  native finite Rhai number while `value.number` preserves authored text), source spans, diagnostics,
-  source files, and a deterministic `source_revision`;
+- qualified names, typed scalar/vector/array literal projections, source spans,
+  diagnostics, source files, and a deterministic `source_revision`; numeric
+  literals expose a validated native finite `number_value` alongside source
+  identity;
 - Twin-indexed source-set discovery through the existing asset manifest, with
   `SysmlPlugin` opening the checked set automatically after `TwinAssetMounted`;
 - a Twin-owned verification registry mapping a qualified SysML verification
   name to one scene, one Rhai observer, and an optional verdict channel;
-- native Rhai maps from `sysml_report()` and
-  `sysml_requirement_report()`; external clients are serialized only at the
-  API boundary;
+- three generic Rust query boundaries: `ValidateSysml` for source status,
+  diagnostics, and the structural `lint.sysml` pass; `AnalyzeSysml` for
+  policy-neutral selectable typed facts; and
+  `ReadActiveTwinContract` for active-Twin component/verification bindings;
+- Rhai policy layers that consume those same facts independently: `lint.sysml`
+  for structural quality, `sysml_requirements.rhai` for requirement/source
+  provenance and verification, and `sysml_modelica_constraints.rhai` for
+  geometry-constraint selection and Modelica source assembly;
 - `sysml_value(path, qualified_name)` and
   `sysml_value_from_report(report, qualified_name)` return tagged typed
   outcomes. Successful values remain native (`Vec3`, `Quat`, Transform,
   quantity, enumeration, or array); failed lookups return `ok: false` with an
-  error and add a scene-scoped warning to `RuntimeDiagnostics`. A compact
-  report can explicitly say a value was not projected; the Rhai helper then
-  requests only that qualified value. A successful read clears only the
-  warning for the same source path;
-- the read-only `ValidateSysml` query and the
-  `luncosim test --verification QUALIFIED_NAME` selector; and
+  error and add a scene-scoped warning to `RuntimeDiagnostics`. A policy may
+  request selected attributes through `AnalyzeSysml`; a successful read clears
+  only the warning for the same source path;
+- the `luncosim test --verification QUALIFIED_NAME` selector; and
 - structured per-check evidence emitted by `report_structured_verdict`.  The
   summary event keeps small reports inline; larger reports emit one bounded
   `*_EVIDENCE_RESULT` event per observation with a stable `result_index`.
@@ -185,13 +189,27 @@ package-prefix guess or a second registry.  Use
 `sysml_requirements::verification_name(report, id)` when a canonical identity
 is needed before constructing additional evidence.
 
+Unit-bearing vector components are preserved as arrays of native `Quantity`
+values. A geometry policy must validate the declared quantity kind, fixed
+cardinality, and each component's unit before lowering them to the shared
+`Vec3`; never read only `number_value` and drop unit metadata. The current
+SysML-to-Modelica geometry adapter accepts `LengthValue[3]` in metres and
+reports other units as unsupported rather than guessing a conversion.
+
 It does not provide a full SysML/KerML execution engine. Parsed generic
-elements and relationships are source facts, not a claim that their behavior
-is executed. Constraint/parametric expressions, state and behavior execution,
-full quantity conversion, a dedicated SysML editor, full UI source-set
-browsing, and automatic SysML-to-USD projection are outside the current
-runtime. If a request needs one of those, report the exact bounded gap after
-checking the current owner and dependencies.
+elements, references, constraints, and relationships are source facts, not a
+claim that their behavior is executed. Rhai may select a supported geometry
+policy and assemble Modelica from typed facts. The current
+`CoincidentPointTranslation` policy can run a bounded asynchronous Modelica
+solve, read native finite `f64` results by exact experiment identity, and
+produce a generation-bound typed USD placement plan. The plan remains dry and
+requires Editor review/commit; no result is applied automatically. This is a
+specific policy, not arbitrary SysML constraint execution.
+General constraint/parametric execution, state and behavior execution, full
+quantity conversion, a dedicated SysML editor, full UI source-set browsing,
+and automatic SysML-to-USD projection remain outside the current runtime. If a
+request needs one of those, report the exact bounded gap after checking the
+current owner and dependencies.
 
 ## Source organization
 
@@ -245,18 +263,32 @@ The same command accepts `.kerml` and can validate several assets in one call.
 It parses and resolves the supplied source without constructing a window,
 scene, physics world, or GPU. A successful pre-flight is not runtime proof.
 
-For the complete Twin source set, use `ValidateSysml` so the manifest roots,
-indexed files, verification registry and source revision are checked together.
-Against a running production session:
+For a Twin source set, `ValidateSysml` reports source validation status,
+structural `lint.sysml` findings, diagnostics, indexed source files, and source
+revision. Use `AnalyzeSysml` when a policy needs semantic facts; that query is
+independent of structural-lint findings. Use `ReadActiveTwinContract` for the
+active Twin's component/verification bindings. Rhai joins these inputs where
+policy requires it. Against a running production session, the generic fact
+query can be called from Rhai:
 
-```bash
-curl -s -X POST http://127.0.0.1:4101/api/commands \
-  -H 'content-type: application/json' \
-  -d '{"type":"ExecuteCommand","command":"ValidateSysml","params":{"path":"twin://my_twin","compact":true}}'
+```rhai
+let facts = query("AnalyzeSysml", #{
+    path: "twin://my_twin",
+    tables: ["requirements", "verifications"]
+});
+if facts.ok != true { throw(facts.errors); }
 ```
 
-`ValidateSysml` accepts either a filesystem path or a `twin://` URI. For an
-active Twin, the generic tool uses:
+`ValidateSysml` and `AnalyzeSysml` accept either a filesystem path or a
+`twin://` URI. `AnalyzeSysml` supports `elements`, `references`,
+`relationships`, `constraints`, `attributes`, `requirements`, `verifications`,
+and `diagnostics` tables. `attribute_names` narrows the attribute table to
+qualified or local names; ambiguous local names remain visible to the policy
+for explicit handling. Omit selectors only when the caller genuinely needs the
+full analysis.
+
+For the active Twin, the requirements policy composes source facts and the Twin
+contract through:
 
 ```rhai
 let source = sysml_requirements::source();
@@ -274,31 +306,19 @@ let mass = sysml_requirements::number(source, "Project::Vehicle::massKg");
 let radius = sysml_requirements::number(source, "Project::Vehicle::wheelRadiusM");
 ```
 
-This avoids one source-set validation and JSON projection per literal. Keep the
-report local to the evaluation or task-construction boundary; do not turn it
-into a mutable global cache. Qualified selectors are preferred, and ambiguous
-short selectors remain an explicit error.
+This requests the source-backed attributes once and reuses that typed Rhai
+report. Keep it local to the evaluation or task-construction boundary; do not
+turn it into a mutable global cache. Qualified selectors are preferred, and
+ambiguous short selectors remain an explicit error.
 
-That call is read-only. It fails visibly when there is no active Twin, no
-indexed SysML source, a parser diagnostic, a registry error, or a registry
-verification name that does not exist in the source set. Do not add a fallback
-that lets a test run against copied requirements.
-
-The compact report includes `requirements`, `attributes` (an intentionally
-empty compatibility slot), `attributes_qualified` (the identity-preserving
-map keyed by each qualified SysML name), `attribute_collisions`,
-`requirement_records`, `verification_cases`, `verification_records`,
-`verification_registry`, `verification_registry_errors`, `source_files`,
-`source_revision`, and `source_revision_hex`. Use native report maps in Rhai;
-use JSON only at an external/logging boundary. `attributes: []` is a bounded
-selection request: it carries no literal or collision table. The generic
-`sysml_requirements::attribute` helper resolves the requested qualified literal
-through the same validated provider and fails on ambiguity or absence. Callers
-that need several literals should request them together through the provider's
-`attributes` selector; a selected short name retains only its relevant
-collision record, while a qualified selector receives its exact typed value.
-Never reconstruct a short-name map, because colliding component attributes
-must remain distinct.
+`sysml_requirements::source()` is read-only. It fails visibly when there is no
+active Twin, no indexed SysML source, a parser diagnostic, a registry error, or
+a verification name that does not resolve in the source set. It joins the
+`AnalyzeSysml` result with `ReadActiveTwinContract` in Rhai; neither generic
+query implements that policy. Use native typed Rhai maps inside the workflow;
+JSON is reserved for explicit external transport/logging boundaries. Never
+reconstruct a short-name map that could silently collapse colliding component
+attributes.
 
 For a component-owned observer, resolve the manifest binding through the
 generic helper instead of repeating scene/script or qualified-verification
@@ -368,10 +388,9 @@ Available generic check kinds are:
 | `relationship` | authored relationship has the required target | `path`, `relationship`, `target` |
 
 For numeric limits, use `expected_attr` to read the literal from the
-authoritative SysML report. The current compact evaluator resolves that field
-by the source attribute's short name; if the full report shows a collision,
-use a unique authored attribute name or extend the authoritative bridge before
-using the check. Do not silently choose between colliding attributes.
+authoritative SysML source. Prefer a qualified attribute name; a short name is
+accepted only when the selected source facts make it unique. Ambiguous names
+are explicit failures, never a first-match choice.
 `attribute_equals` is for direct equality such as strings or booleans and uses
 its explicit `expected` value. Do not copy a threshold into Rhai, TOML, a UI
 label, or a Rust constant. Do not infer a requirement from a screenshot or
@@ -410,10 +429,12 @@ checks that:
 
 The selector does not execute SysML constraints for you. The mapped Rhai
 observer still has to call `sysml_requirements::evaluate` and emit the verdict.
-Run one positive and one deliberately failing observation through the
-production scene-test binary. Add an unavailable/stale-source case when the
-contract needs to prove fail-closed behavior. `--validate` alone cannot prove
-any of these runtime facts.
+Make positive conformance evidence the default: run the authored requirement
+observer through the production scene-test binary and prove the required
+component/value/relationship. Add a failing or unavailable-source case only
+when rejection or fail-closed behavior is itself an explicit contract (for
+example, stale-source rejection or a safety-critical missing relationship).
+`--validate` alone cannot prove any of these runtime facts.
 
 ## Development cycle
 
@@ -452,8 +473,8 @@ this skill, do not rebuild Rust unless the validation path itself changed.
 | `ValidateSysml` is unknown | Check that the production binary/session is current and that the validation plugin is registered; do not conclude SysML is absent from one source file. |
 | `sysml_requirements::source()` is unavailable | Check the active Twin, the Rhai tool library, and the `sysml` feature; report the exact unwired boundary if one remains. |
 | No requirements are returned | Check the Twin index, `[sysml].paths`, source extension and parser diagnostics; do not create a duplicate requirements file in Rhai. |
-| Verification registry fails | Inspect `Twin::verification_registry_errors()` and the exact Twin-relative scene/script paths; fix the manifest or indexed files. |
-| A short attribute name collides | Inspect `attribute_collisions`; use a unique authored attribute name or extend the authoritative bridge before evaluating it. Do not let a new lookup rule choose silently. |
+| Verification registry fails | Inspect the active Twin contract and exact Twin-relative scene/script paths; fix the manifest or indexed files. `ValidateSysml` reports source validation, not manifest policy. |
+| A short attribute name collides | Use a qualified attribute identity or resolve the ambiguous source fact explicitly. Do not let a new lookup rule choose silently. |
 | The selected case passes without evidence | Confirm the observer emitted structured evidence and that the result was not an empty/unavailable report; `--verification` only selects and validates the mapping. |
 | A request needs arbitrary KerML constraints or a full editor | State that this is outside the implemented subset after citing the domain review; do not emulate it with a hidden Rhai parser. |
 | A request mentions Python | Treat Python as optional integration only. Use `--features python` and the Python-specific contract if explicitly requested; keep normal examples in Rhai/Modelica. |

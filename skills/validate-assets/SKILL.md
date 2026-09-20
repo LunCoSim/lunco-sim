@@ -151,9 +151,11 @@ the stage, or silently save. See the [model-authoring guide](../../docs/scriptin
 Extension gate is literal: **`.usda` only** — `.usd` and `.usdc` are rejected as
 unsupported, not parsed.
 
-For a complete Twin source set, use the read-only `ValidateSysml` query rather
-than validating a single file and assuming the manifest/registry is correct:
-see [`sysml-requirements`](../sysml-requirements/SKILL.md).
+For a Twin source set, use `ValidateSysml` for source status, diagnostics, and
+source identity; use `AnalyzeSysml` when a policy needs typed semantic facts.
+Manifest bindings are a separate active-Twin contract read and are joined with
+SysML identities by Rhai policy. See
+[`sysml-requirements`](../sysml-requirements/SKILL.md).
 
 ### `.mo` — the branch-free policy is the point
 

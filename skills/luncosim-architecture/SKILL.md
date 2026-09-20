@@ -575,7 +575,10 @@ current default.
 
 When a mechanism is wrong, perform a clean cutover:
 
-1. Identify the authoritative replacement and write the negative test first.
+1. Identify the authoritative replacement and write a positive test proving
+   the replacement contract first. Add a negative case only when rejection or
+   safe failure is itself a public contract (for example, the removed spelling
+   must be rejected at the public schema boundary).
 2. Update source assets, schema source, reader, projection, commands, and docs
    together.
 3. Delete the superseded property, alias, compatibility branch, fallback reader,

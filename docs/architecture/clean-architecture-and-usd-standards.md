@@ -61,8 +61,11 @@ When a custom property overlaps a standard property, do a clean cutover:
 1. Author the standard property in every asset.
 2. Change every reader, projection, command, test, and document to the standard.
 3. Delete the custom property and its reader branch in the same change.
-4. Regenerate schema artifacts and add a negative test proving the old spelling
-   is not accepted as a second source of truth.
+4. Regenerate schema artifacts and add a positive test proving the standard
+   property is read as the source of truth. Add a rejection test for the old
+   spelling only when rejecting it is itself a required public contract; do not
+   add a negative test merely to restate that the old implementation was
+   removed.
 
 Do not retain aliases, dual reads, compatibility branches, shims, or fallback
 search paths. A default is valid only when the authoritative standard schema

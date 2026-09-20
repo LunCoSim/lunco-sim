@@ -38,15 +38,17 @@ package checks after changing skill metadata or packaging.
   implemented-but-unwired, present on another branch/version, not found in the
   searched scope, or externally blocked. Reserve “impossible” for a demonstrated
   contract, dependency, platform, or permission limit.
-- **SysML capability boundary.** SysML v2 requirements and system-structure
-  support is present behind the opt-in `sysml` feature: standard `.sysml`/
-  `.kerml` parsing and resolution, Twin source-set discovery, qualified
-  requirement/verification projections, `ValidateSysml`, the Twin
-  `[verification]` registry, and `luncosim test --verification`. The generic
-  runtime observer is Rhai, which is the default scenario backend. Python is
-  a separate opt-in `python` feature and is not used by the normal workflow.
-  Full KerML expression/constraint execution, a full SysML editor, and
-  automatic SysML-to-USD projection are outside the implemented subset. Read
+- **SysML capability boundary.** SysML v2 support is present behind the
+  `sysml` feature: standard `.sysml`/`.kerml` parsing and resolution, Twin
+  source-set discovery, typed `AnalyzeSysml` facts, `ValidateSysml` source
+  diagnostics, `ReadActiveTwinContract`, and the Twin `[verification]` registry
+  plus `luncosim test --verification`. Keep changeable rules in separate Rhai
+  policies: `lint.sysml` for structural quality,
+  `sysml_requirements.rhai` for requirement/provenance verification, and
+  `sysml_modelica_constraints.rhai` for geometry-constraint selection and
+  Modelica assembly. Rust supplies generic mechanisms, not those decisions.
+  Full KerML constraint execution, a full SysML editor, and automatic
+  SysML-to-USD projection are outside the implemented subset. Read
   [`skills/sysml-requirements/SKILL.md`](skills/sysml-requirements/SKILL.md)
   before declaring a SysML capability absent.
 - Read the owning source before accepting a bug claim. Check OpenUSD, Modelica,

@@ -62,18 +62,21 @@ curl -s -X POST http://127.0.0.1:4101/api/commands -H "Content-Type: application
   `Exit` it** — reuse it. Killing it destroys the user's open tabs/state. Only
   restart when the user says so or the binary is verifiably stale after a rebuild.
 
-### No-API alternative: the `modelica_run` CLI
-For a one-shot compile→step→CSV with **no server at all** (CI, quick numeric
-check), skip the API entirely:
+### No-API alternative
+The standalone runner is owned by `lunco-modelica-execution`, not
+`lunco-modelica-core`. For a one-shot current-source compile and fixed-step
+solve with CSV output:
 
 ```bash
-cargo run -p lunco-modelica-core --bin modelica_run -- \
+cargo run -p lunco-modelica-execution --bin modelica_run -- \
   assets/models/AnnotatedRocketStage.mo AnnotatedRocketStage.RocketStage \
   --duration 30 --dt 0.001 --input valve_command=0.7 \
   --record altitude,velocity --output /tmp/run.csv
 ```
-Fixed-step only, one run, no sweeps/plots. For parameter sweeps, comparison, or
-live interaction use the API (§4–6).
+
+This runner uses the shared compiler and solver path, but it is not a substitute
+for the active Twin/API test when the source depends on Twin-indexed packages,
+Editor state, or scene composition.
 
 Wait for readiness with an `until` loop (never chained `sleep`s):
 
@@ -211,8 +214,11 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 Two kinds of `command` share this envelope:
 
 - **Commands** (fire-and-forget mutations): return `{"data":{"accepted":true}}`; result-returning commands put their command-specific payload in the same `data` envelope.
-  Invalid parameters return HTTP 422; deferred commands return their completed
-  result on the same request.
+  Invalid parameters return HTTP 422. A deferred command may complete its
+  command acknowledgement later on the same request; that acknowledgement is
+  not necessarily completion of the domain work. In particular,
+  `RunExperiment` returns its exact `experiment_id` once the run is registered,
+  while the numerical solve continues asynchronously.
 - **Query providers** (return data): return the payload directly, e.g.
   `{"runs":[...]}`. `ListRuns`, `GetExperimentResult`, `DescribeModel`,
   `SnapshotVariables`, `CompileStatus`, `ListCompileCandidates`,
@@ -271,8 +277,11 @@ just unpauses (no recompile). `CompileModel` compiles only (stays paused);
 
 `RunExperiment` is the agent-facing sweep verb: overrides come from the
 **command**, not the UI, so you can sweep parameters without touching source.
-Each run is stored as an `Experiment`; read its trajectory back with
-`GetExperimentResult`.
+Each run is stored as an `Experiment`. Its command acknowledgement contains
+the exact `experiment_id` after registration; the acknowledgement is not a
+completed numeric result. Retain that id, poll `RunStatus` with it, and read the
+trajectory with `GetExperimentResult` using the same id. Do not identify a run
+by its label or by whichever run is newest.
 
 ```bash
 # One run with a parameter override + custom bounds + a label:
@@ -316,6 +325,16 @@ runtime input variables.
 "Simulation Setup" draft instead of the command — prefer `RunExperiment` for
 scripted/agent runs so everything is explicit.
 
+For Rhai callers, `cmd("RunExperiment", ...)` can return a pending command
+record while the deferred acknowledgement is being assembled. Poll
+`command_result(command_id)` only until that acknowledgement supplies the
+`experiment_id`; then poll `RunStatus` by that exact experiment id. The
+`modelica_editor::experiment_ticket` / `poll_experiment_ticket` helpers wrap
+both phases in a bounded, non-blocking caller-owned ticket. Keep the returned
+ticket across ticks, and do not block the Editor/Rhai thread in a wait loop.
+The ticket also binds readback to the explicit Modelica document and source
+generation so a changed model cannot be mistaken for the solved source.
+
 ## 5. Recipe C — read experiment results
 
 ```bash
@@ -325,14 +344,25 @@ scripted/agent runs so everything is explicit.
 post '{"type":"ExecuteCommand","command":"ListRuns","params":{}}'
 
 # Pull a full trajectory: times + series (dotted Modelica path -> samples).
-# Target by experiment_id, OR by doc (its latest run). Filter + downsample:
+# For an explicit RunExperiment, always use its exact experiment_id:
 post '{"type":"ExecuteCommand","command":"GetExperimentResult","params":{
-  "doc_id":0, "variables":["altitude","velocity"], "max_points":500
+  "experiment_id":"<id returned by RunExperiment>",
+  "variables":["altitude","velocity"], "max_points":500
 }}'
 # max_points = strided downsample, final sample always kept. Omit = uncapped.
 # Returns {state:"Done", times:[...], series:{"altitude":[...], ...}} or an
 # error if the run is not Done (Pending/Running/Failed-without-partial).
 ```
+
+`RunStatus` is the query provider for one run's progress and terminal state:
+
+```bash
+post '{"type":"ExecuteCommand","command":"RunStatus","params":{"experiment_id":"<exact id>"}}'
+```
+
+Poll until `done`, `failed`, or `cancelled`; only request the trajectory after
+`done`. `ListRuns` is useful for discovery and UI review, not as a substitute
+for retaining the id returned by the dispatch you just made.
 
 Cancel / clean up:
 ```bash
@@ -399,6 +429,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 | command | params | returns / effect |
 |---|---|---|
 | `Ping` | `{}` | readiness check |
+| `CreateNewScratchModel` | `{source, name}` | create a Modelica Editor document and return its exact `doc_id` |
 | `ListBundled` | `{}` | embedded example models (`bundled://` URIs) |
 | `FindModel` | `{query, limit?}` | fuzzy search examples/Twin/source libraries/open docs → URIs |
 | `Open` | `{uri}` | open bundled/source-library/path/mem into a tab |
@@ -415,7 +446,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 | `PauseActiveModel` / `ResumeActiveModel` / `ResetActiveModel` | `{doc}` | live stepping control |
 | `RestartActiveModel` | `{doc}` | reset t=0 then run |
 | `FastRunActiveModel` | `{doc, class?, t_end?, dt?, n_intervals?, tolerance?, solver?, h0?}` | batch, bounds from UI draft |
-| `RunExperiment` | `{doc, class?, overrides[], inputs[], t_start?, t_end?, dt?, n_intervals?, tolerance?, solver?, h0?, label?}` | batch sweep, overrides from command |
+| `RunExperiment` | `{doc, class?, overrides[], inputs[], t_start?, t_end?, dt?, n_intervals?, tolerance?, solver?, h0?, label?}` | dispatch a batch run; acknowledgement returns exact `experiment_id` |
 | `SetModelInput` | `{doc, name, value}` | push live input value |
 | `ConfirmClassPicker` | `{qualified?, cancel?}` | only if a picker modal opened in the GUI |
 
@@ -424,6 +455,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 |---|---|---|
 | `SnapshotVariables` | `{doc, names?}` | one-shot live `{t, parameters, inputs, variables}` |
 | `ListRuns` | `{doc?}` | experiment rows (newest first) |
+| `RunStatus` | `{experiment_id}` | one run's progress/terminal state |
 | `GetExperimentResult` | `{experiment_id? \| doc, variables?, max_points?}` | full trajectory `{times, series}` |
 | `CancelExperiment` / `DeleteExperiment` / `RenameExperiment` | see §5 | run lifecycle |
 | `NewPlotPanel` / `AddSignalToPlot` | see §6 | plotting |

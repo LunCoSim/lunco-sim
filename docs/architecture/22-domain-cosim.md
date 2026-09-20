@@ -280,6 +280,14 @@ The **control plane** is typed commands (see AGENTS.md § 4.2 and
 | **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | the **`ControlStream`** channel ([`01-ontology.md`](01-ontology.md)), applied through the shared port command observer. The receiver latches each named vehicle command until replacement or explicit `ReleasePort`/`ReleaseControl`; the reflected command is the same path for API, Rhai, UI, and network input. |
 | **Modelica input injection** — discrete | `SetModelInput` | the reflected Modelica command, registered by the UI-free Modelica core and applied through the shared input helper. |
 
+For a batch `RunExperiment`, the deferred command acknowledgement contains the
+exact `experiment_id` after registration; it does not wait for numerical
+completion. Retain that identity and query `RunStatus`/`GetExperimentResult`
+against the same run. Rhai may poll its deferred command result only to obtain
+that acknowledgement, then polls domain state asynchronously. This preserves
+the control-plane result correlation without adding per-tick results to the
+command store.
+
 Rule of thumb: **commands start/stop/configure a run and one-shot actions;
 the simulation runs directly once started; live continuous inputs ride
 ControlStream.** The result/request correlation machinery (the original deferred response,

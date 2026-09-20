@@ -10,6 +10,35 @@ The generic `sysml_requirements` Rhai tool provides the small bridge. It reads
 the active Twin's indexed SysML source set through `sysml_requirements::source()`;
 it does not embed a second copy of requirements in the test:
 
+The bridge is split by responsibility. `ValidateSysml` performs source
+validation, runs the structural `lint.sysml` policy, and returns diagnostics
+plus source identity. It does not evaluate Twin-manifest binding policy or
+runtime requirement observations. `AnalyzeSysml` exposes
+the parser's typed, source-backed fact tables, with optional table and
+attribute-name selection. `ReadActiveTwinContract` exposes the active Twin's
+component and verification bindings. These are generic Rust mechanisms; Rhai
+policies decide what the facts mean and join Twin bindings to SysML identities.
+The current policy layers are deliberately independent:
+
+- `lint.sysml` checks structural quality of requirements and verification
+  relationships;
+- `sysml_requirements.rhai` applies requirement, source-provenance, and
+  verification policy; and
+- `sysml_modelica_constraints.rhai` selects geometry constraints and assembles
+  Modelica source from typed SysML values.
+
+Each policy requests only the fact tables it needs. A different Twin can add a
+separate Rhai policy without adding project rules to Rust or changing the
+generic SysML projection. The geometry tool currently demonstrates selection
+and source assembly. Its supported `CoincidentPointTranslation` path can also
+replace an explicit scratch Modelica document, dispatch one bounded async
+solve, poll the deferred acknowledgement and run by their exact identities,
+and validate native finite `f64` readback against the SysML-bound relation.
+The result is a source-revision-bound, generation-checked typed USD placement
+plan and proposal; it does not auto-commit a Griffin edit or claim that a
+visual/runtime acceptance gate has passed. Arbitrary SysML constraint
+execution remains out of scope.
+
 ```rhai
 let source = sysml_requirements::source();
 let result = sysml_requirements::evaluate(source, [
@@ -41,16 +70,15 @@ let report = sysml_requirement_report();
 let all_declarations = sysml_report();
 ```
 
-Numeric literals in those maps carry both representations: `value.number` is
-the lossless authored text, while `value.number_value` is the validated native
-finite number used by requirement policy. Consumers must use `number_value`;
-reparsing the text in Rhai is not part of the bridge contract.
+Numeric literals in those maps retain authored source identity and provide a
+validated native finite `number_value` for policy. Consumers use that typed
+number rather than reparsing literal text in Rhai.
 
 For one native typed literal, `sysml_value(path, qualified_name)` and
 `sysml_value_from_report(report, qualified_name)` return a tagged map:
 `{ok: true, found: true, value: <native value>}` on success and
-`{ok: false, found: false, error: <message>}` on failure. A compact report
-that intentionally omitted a selected attribute returns `ok: true,
+`{ok: false, found: false, error: <message>}` on failure. A source report
+that intentionally omitted an attribute returns `ok: true,
 found: false`; `sysml_requirements::native_value` then performs the selected
 typed query. Missing attributes and failed source resolution remain explicit
 errors. The bridge records a scene-scoped `RuntimeDiagnostics` warning, while
@@ -88,9 +116,9 @@ The generic `sysml_requirements::component_binding(report, name)` helper
 exposes this same manifest selection to Rhai observers. It returns the exact
 component and verification records only when both registries are valid and the
 name is unique; unavailable, unknown, duplicate, or unregistered selections
-are explicit failures. Rust's `Twin::component_verification` is the shared
-low-level selector used by CLI/runtime callers, so no caller needs a second
-lookup path.
+are explicit failures. Its Rhai source policy joins `AnalyzeSysml` facts with
+`ReadActiveTwinContract`; neither query makes a project-specific binding
+decision.
 
 `luncosim test --scene tests/visual.usda --verification Project::VerifyVisual`
 checks this registry mapping (qualified SysML name, Twin-relative scene and
@@ -102,15 +130,12 @@ Supported observations are `assert`, `exists`, `children`, `attribute`,
 `attribute_component`, `extent_component`, `bounds_component`,
 `attribute_equals`, `relationship`, and `coverage`. `expected_attr` reads a
 literal SysML attribute by its qualified source name, so numeric limits are not
-copied into a Rhai script. The compact bridge exposes one qualified attribute
-map and intentionally omits a duplicate short-name map; every collision is
-therefore explicit rather than silently selecting one component's literal. For
-`attributes: []`, it also omits the collision table; for a selected short name
-it returns only that name's collision record. Thus the lazy source request
-stays bounded while an ambiguous short selector remains an explicit failure
-rather than silently selecting one component's literal.
-Every check carries a component and requirement ID, producing a per-component
-evidence record with the source revision and exact USD path.
+copied into a Rhai script. `AnalyzeSysml` can select only required fact tables
+and, when attributes are requested, only named attributes. The requirements
+policy preserves qualified identity and reports ambiguous short names instead
+of silently selecting one component's literal. Every check carries a component
+and requirement ID, producing a per-component evidence record with the source
+revision and exact USD path.
 
 Check tables may use either a qualified requirement/verification name or a
 short local identity. Before the first observation, `evaluate` resolves both

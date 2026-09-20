@@ -120,6 +120,12 @@ lowers the standard `CartesianThreeVectorValue` to the existing f64 Bevy/glam
 shared Rhai math bridge. Bevy f32 render transforms remain a later projection
 boundary, never the SysML requirement representation.
 
+Unit-bearing coordinates remain arrays of typed scalar `Quantity` values in
+the generic SysML-to-Rhai bridge. A geometry policy may lower a
+`LengthValue[3]` to `DVec3` only after it verifies each component's unit; the
+current Modelica geometry adapter accepts metres and does not infer unit
+conversion. This keeps numeric vectors and dimensioned positions distinct.
+
 The parser and source projection retain the declared elements and resolved
 relationships from the selected files. The specialized typed records cover
 parts, items, ports, attributes, requirements, verification cases, and opaque
@@ -137,7 +143,7 @@ remain explicit instead of being guessed from source text.
 The Rhai functions `sysml_value(path, qualified_name)` and
 `sysml_value_from_report(report, qualified_name)` return a tagged result map.
 Successful reads carry the native value in `value`; an intentionally omitted
-attribute in a selected compact report is reported as `found: false` so the
+attribute in a selected source report is reported as `found: false` so the
 Rhai helper can issue a selected query. Invalid reports, missing attributes,
 and unsupported literals return `ok: false` with an error message. The
 non-fatal failure also appears as a scene-scoped `RuntimeDiagnostics` warning;
@@ -152,22 +158,26 @@ The runtime accepts source-level replace/range edits through the
 the generic document host, so one reviewed batch is atomic, journaled and one
 undo group; stale generations, invalid UTF-8 ranges and read-only origins are
 returned as explicit errors. `InspectSysmlDocument` supplies source identity,
-generation, origin and diagnostics for the Editor. Structured
-requirement/part operations and verification execution remain follow-up work;
-the Rhai adapter reports requirements and owns verification policy without
-mutating the semantic model directly. For production checks, the
-scene-validation plugin registers the compact `ValidateSysml { path }` query. A
-filesystem path or `twin://name/relative` validates one source; `twin://name`
-loads the manifest-declared, indexed Twin
-source set. The query returns typed attributes, requirement/verification
-records, source files, diagnostics, and a deterministic source revision. The
-compact Rhai projection uses one lossless map keyed by qualified SysML names;
-it does not duplicate a short-name map that could overwrite colliding
-component literals. Short-name collisions remain available in the full
-validation report for tooling, while a requirement script must use the
-qualified key. The shared `lunco-sysml-report` crate owns this transport shape,
-keeping the Rhai/API boundary bounded without a second filesystem walker or
-product-specific Rust projection.
+generation, origin and diagnostics for the Editor. For production checks,
+`ValidateSysml` reports source validation status, structural `lint.sysml`
+findings, source files and revision; it does not evaluate Twin manifest
+bindings or requirement observations. `AnalyzeSysml` exposes selected typed
+semantic fact tables. The latter accepts table and attribute-name selectors and returns the existing
+source-backed values through the in-process `HookValue` ABI. It does not build
+a second JSON-shaped semantic graph or interpret project rules. A filesystem
+path or `twin://name/relative` selects one source; `twin://name` loads the
+manifest-declared, indexed Twin source set.
+
+`ReadActiveTwinContract` exposes the active Twin's component and verification
+records. The policies join these generic inputs at the Rhai boundary:
+`lint.sysml` checks structural source quality,
+`sysml_requirements.rhai` handles source provenance and requirement
+verification, and `sysml_modelica_constraints.rhai` selects geometry
+constraints and assembles Modelica source. These policies keep their own
+selection and rules while sharing the same typed SysML facts. The requirement
+policy preserves qualified attribute identity and reports collisions rather
+than silently choosing one. It can request selected attributes instead of
+projecting every literal on each pass.
 
 Acceptance remains Twin-authored: each Twin keeps its SysML requirements, USD
 fixture, and Rhai scenario together. Core runtime code contains only this
@@ -254,16 +264,16 @@ authored runtime verdict:
    source and one qualified verification case. Shared requirement sources,
    scenes, scripts, missing mappings, and unsafe USD prim roots are rejected;
    the case supplies the component's Twin-local USD fixture and Rhai observer.
-5. **Read-only Rhai bridge and lint.** `ValidateSysml`,
-   `sysml_requirements::source()` and the native report helpers expose the
-   resolved requirement/verification snapshot and source revision. The generic
-   `sysml_requirements::evaluate` tool observes the composed USD stage and
-   `report_structured_verdict` emits machine-readable evidence plus the normal
-   test verdict envelope. The explicit `ValidateAsset`/`ValidateSysml` paths
-   also run `lint.sysml` from `assets/scripting/policy/lint_sysml.rhai` over
-   typed AST facts, so missing subjects, empty verification cases, unresolved
-   verification targets, and uncovered requirement usages are reported by
-   reloadable Rhai policy. No requirement-specific Rust assertion is added.
+5. **Read-only typed bridge and independent policies.** `ValidateSysml`
+   reports source status and runs the structural `lint.sysml` policy;
+   `AnalyzeSysml` selects typed facts; and
+   `ReadActiveTwinContract` exposes active Twin bindings. `lint.sysml` checks
+   structural quality, `sysml_requirements.rhai` handles provenance and
+   requirement verification, and `sysml_modelica_constraints.rhai` assembles
+   geometry constraint models. Each is reloadable Rhai policy over the same
+   generic Rust facts. `report_structured_verdict` emits machine-readable
+   evidence plus the normal test verdict envelope. No product-specific Rust
+   assertion or geometry rule is added.
 6. **Production selector.** `luncosim test --scene <PATH> --verification
    QUALIFIED_NAME` validates the Twin mapping before constructing the
    simulation and selects its declared verdict channel. The mapped Rhai

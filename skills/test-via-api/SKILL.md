@@ -262,7 +262,7 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"OpenClass","params":{"qualified":"Modelica.Blocks.Continuous.PID"}}'
 ```
 
-Successful fire-and-forget response: `{"data":{"accepted":true}}`. A result-returning typed command puts its command-specific payload in the same `data` envelope. Malformed envelopes are rejected at the transport boundary, and invalid typed parameters return HTTP 422. Deferred commands return their completed payload or error on the same request; there is no command-id polling endpoint.
+Successful fire-and-forget response: `{"data":{"accepted":true}}`. A result-returning typed command puts its command-specific payload in the same `data` envelope. Malformed envelopes are rejected at the transport boundary, and invalid typed parameters return HTTP 422. A deferred command may resolve its acknowledgement on the same request, but that is not necessarily completion of the domain work. `RunExperiment` returns its exact `experiment_id` once registered; the numerical solve remains asynchronous and is read through `RunStatus` and `GetExperimentResult` using that id. Rhai's in-process `cmd` may expose a pending command id; `command_result(id)` resolves that deferred command acknowledgement only. There is no generic HTTP command-id polling endpoint, and callers must not guess the run from its label or newest position.
 
 ### Loading a scene or model
 
