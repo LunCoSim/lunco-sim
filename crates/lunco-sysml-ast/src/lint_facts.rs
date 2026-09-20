@@ -62,13 +62,22 @@ impl SysmlFactTable {
 
 /// Generic table/name selection for a typed SysML snapshot.
 ///
-/// `tables: None` returns the full fact set. `attribute_names` selects by
-/// exact qualified identity or local attribute name and intentionally returns
-/// every match; callers such as requirement policies own ambiguity handling.
+/// `tables: None` returns the full fact set. Name selectors accept either an
+/// exact qualified identity or a local name and intentionally return every
+/// match; callers such as requirement policies own ambiguity handling.
 #[derive(Debug, Clone, Default)]
 pub struct SysmlFactSelection {
     pub tables: Option<BTreeSet<SysmlFactTable>>,
     pub attribute_names: Option<BTreeSet<String>>,
+    pub requirement_names: Option<BTreeSet<String>>,
+    pub verification_names: Option<BTreeSet<String>>,
+}
+
+fn selected_identity(names: &Option<BTreeSet<String>>, qualified_name: &str) -> bool {
+    names.as_ref().map_or(true, |names| {
+        let local_name = qualified_name.rsplit("::").next().unwrap_or(qualified_name);
+        names.contains(qualified_name) || names.contains(local_name)
+    })
 }
 
 /// Project only requested tables from one immutable analysis. Source identity
@@ -143,13 +152,37 @@ pub fn selected_sysml_facts(analysis: &SysmlAnalysis, selection: &SysmlFactSelec
     if includes(SysmlFactTable::Requirements) {
         facts.push((
             "requirements",
-            H::Array(analysis.requirements().iter().map(requirement).collect()),
+            H::Array(
+                analysis
+                    .requirements()
+                    .iter()
+                    .filter(|record| {
+                        selected_identity(
+                            &selection.requirement_names,
+                            &record.element.qualified_name,
+                        )
+                    })
+                    .map(requirement)
+                    .collect(),
+            ),
         ));
     }
     if includes(SysmlFactTable::Verifications) {
         facts.push((
             "verifications",
-            H::Array(analysis.verifications().iter().map(verification).collect()),
+            H::Array(
+                analysis
+                    .verifications()
+                    .iter()
+                    .filter(|record| {
+                        selected_identity(
+                            &selection.verification_names,
+                            &record.element.qualified_name,
+                        )
+                    })
+                    .map(verification)
+                    .collect(),
+            ),
         ));
     }
     if includes(SysmlFactTable::Diagnostics) {

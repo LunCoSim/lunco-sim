@@ -1,8 +1,8 @@
 //! Generic, policy-neutral SysML semantic snapshots for Rhai tools.
 //!
-//! The source resolver and parser provide the typed model. Rhai owns selecting
-//! constraint definitions/usages, mapping geometry semantics and assembling
-//! Modelica; this adapter does not interpret or filter the graph.
+//! The source resolver and parser provide the typed model. This adapter
+//! projects requested tables and exact name selections without interpreting
+//! requirements or verification policy; Rhai owns those decisions.
 
 use bevy::prelude::*;
 use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult};
@@ -43,6 +43,8 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
         let selection = SysmlFactSelection {
             tables: parse_tables(params)?,
             attribute_names: parse_attribute_names(params)?,
+            requirement_names: parse_name_selection(params, "requirement_names")?,
+            verification_names: parse_name_selection(params, "verification_names")?,
         };
         let facts = report.sysml_analysis.as_deref().map_or_else(
             || HookValue::Unit,
@@ -101,13 +103,20 @@ fn parse_tables(params: &HookValue) -> Result<Option<BTreeSet<SysmlFactTable>>, 
 }
 
 fn parse_attribute_names(params: &HookValue) -> Result<Option<BTreeSet<String>>, ApiQueryError> {
-    let Some(value) = params.get("attribute_names") else {
+    parse_name_selection(params, "attribute_names")
+}
+
+fn parse_name_selection(
+    params: &HookValue,
+    key: &'static str,
+) -> Result<Option<BTreeSet<String>>, ApiQueryError> {
+    let Some(value) = params.get(key) else {
         return Ok(None);
     };
     let HookValue::Array(values) = value else {
         return Err(ApiQueryError::new(
             ApiErrorCode::DeserializationError,
-            "AnalyzeSysml: `attribute_names` must be an array of qualified or local names",
+            format!("AnalyzeSysml: `{key}` must be an array of qualified or local names"),
         ));
     };
     let mut names = BTreeSet::new();
@@ -115,7 +124,7 @@ fn parse_attribute_names(params: &HookValue) -> Result<Option<BTreeSet<String>>,
         let HookValue::Str(name) = value else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "AnalyzeSysml: `attribute_names` must contain only strings",
+                format!("AnalyzeSysml: `{key}` must contain only strings"),
             ));
         };
         names.insert(name.clone());

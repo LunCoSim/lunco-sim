@@ -917,20 +917,29 @@ fn evaluate_stream(source_report, checks, channel, title) {
 /// facts come from Rust; this Rhai policy joins manifest ownership with
 /// source-backed requirement and verification identities.
 fn source() {
-    _source_projection([], false, true)
+    _source_projection([], [], [], false, true)
 }
 
 /// Select only the typed values needed by a requirement-policy pass.
 fn source_with_attributes(names) {
-    _source_projection(names, false, true)
+    _source_projection(names, [], [], false, true)
+}
+
+/// Select only the attributes, requirement usages and verification cases
+/// needed by one policy pass. The Rust SysML projection performs the table
+/// filtering against a single immutable source snapshot before Rhai receives
+/// it, keeping large Twins within Rhai's bounded value budget.
+fn source_with_selection(attributes, requirements, verifications) {
+    _source_projection(attributes, requirements, verifications, false, true)
 }
 
 /// Select the constraint graph for the geometry/Modelica policy.
 fn source_with_constraints(names) {
-    _source_projection(names, true, false)
+    _source_projection(names, [], [], true, false)
 }
 
-fn _source_projection(names, include_constraints, include_twin_contract) {
+fn _source_projection(names, requirement_names, verification_names,
+                      include_constraints, include_twin_contract) {
     let name = twin_name();
     if name == "" { return #{ok: false, error: "active Twin is unavailable"}; }
     if type_of(names) != "array" {
@@ -952,6 +961,8 @@ fn _source_projection(names, include_constraints, include_twin_contract) {
     }
     let request = #{path: "twin://" + name, tables: tables};
     if selected.len() > 0 { request.attribute_names = selected; }
+    if requirement_names.len() > 0 { request.requirement_names = requirement_names; }
+    if verification_names.len() > 0 { request.verification_names = verification_names; }
     let analyzed = query("AnalyzeSysml", request);
     if analyzed == () || analyzed.analysis == () {
         return #{ok: false, error: _report_error(analyzed,
