@@ -308,9 +308,15 @@ fn native_value(report, name) {
     } else {
         name
     };
-    let value = sysml_value_from_report(report, qualified);
-    if value.ok != true { return value; }
-    if value.found == true { return value.value; }
+    // Compact policy reports may carry selected `attributes` without the
+    // original analysis table. Only attempt the no-query fast path when that
+    // immutable table is actually present; otherwise resolve this one typed
+    // attribute through the same generic API used by unloaded summaries.
+    if report.analysis != () {
+        let value = sysml_value_from_report(report, qualified);
+        if value.ok != true { return value; }
+        if value.found == true { return value.value; }
+    }
     if report.path == () || report.path == "" {
         return #{ok: false, error: "SysML source report has no resolvable path"};
     }
