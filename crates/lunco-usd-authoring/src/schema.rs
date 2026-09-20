@@ -96,8 +96,9 @@ pub enum LinearUnit {
 /// Keyed by `(schema, property)` for the same reason the registry itself is: core
 /// declares `radius` and `height` on four different gprims.
 ///
-/// Every entry is checked against the vendored `generatedSchema.usda` this registry
-/// loads; a name core does not declare does not belong here.
+/// Available entries are stamped as core sources arrive. Missing entries are
+/// checked only after the runtime asset pipeline finishes loading every vendored
+/// core schema, so an unrelated schema file cannot look like a dead declaration.
 const CORE_LINEAR_UNITS: &[(&str, &str, LinearUnit)] = &[
     // Gprim dimensions — plain lengths in stage linear units.
     (
@@ -368,7 +369,8 @@ impl SchemaRegistry {
 
     /// Register one OpenUSD core schema source without claiming its prim types
     /// as project-owned. Core declarations receive the shared linear-unit facts
-    /// after they are admitted.
+    /// after they are admitted. Missing table entries are validated separately,
+    /// after the runtime has loaded the complete vendored core-schema set.
     pub fn register_core_extension(src: &str) -> bool {
         let registered = Self::register_source(src, false);
         if registered {
@@ -377,6 +379,25 @@ impl SchemaRegistry {
             }
         }
         registered
+    }
+
+    /// Validate the linear-unit table after every vendored core schema loaded.
+    ///
+    /// Core schemas arrive as separate assets. A property absent from the current
+    /// partial registry is not dead until the runtime asset pipeline finishes.
+    pub fn validate_core_linear_units() {
+        let Ok(registry) = Self::global().read() else {
+            bevy::log::error!(
+                "[schema] could not validate core linear units: registry lock is poisoned"
+            );
+            return;
+        };
+        for (schema, name) in registry.missing_core_linear_units() {
+            bevy::log::warn!(
+                "[schema] linear-unit table names {schema}.{name}, which no vendored \
+                 core schema declares — the entry is dead and the unit is unknown"
+            );
+        }
     }
 
     fn register_source(src: &str, own: bool) -> bool {
@@ -389,24 +410,26 @@ impl SchemaRegistry {
         reg.ingest(src, own)
     }
 
-    /// Stamp [`CORE_LINEAR_UNITS`] onto the declarations core USD just contributed.
-    ///
-    /// Applied after the core ingest rather than consulted at lookup time so that a
-    /// table entry naming a property core does not declare cannot sit there unnoticed:
-    /// the only way to be sure the fact attaches to a real declaration is to attach it.
+    /// Stamp available [`CORE_LINEAR_UNITS`] onto declarations already admitted.
     fn apply_core_linear_units(&mut self) {
         for (schema, name, unit) in CORE_LINEAR_UNITS {
-            match self
+            if let Some(prop) = self
                 .properties
                 .get_mut(&(schema.to_string(), name.to_string()))
             {
-                Some(prop) => prop.linear = *unit,
-                None => bevy::log::warn!(
-                    "[schema] linear-unit table names {schema}.{name}, which no vendored \
-                     core schema declares — the entry is dead and the unit is unknown"
-                ),
+                prop.linear = *unit;
             }
         }
+    }
+
+    /// Find table entries absent from the complete core registry.
+    fn missing_core_linear_units(&self) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+        CORE_LINEAR_UNITS.iter().filter_map(|(schema, name, _)| {
+            (!self
+                .properties
+                .contains_key(&(schema.to_string(), name.to_string())))
+            .then_some((*schema, *name))
+        })
     }
 
     /// Fold one `generatedSchema.usda` into the registry. `own` records the file's
@@ -704,5 +727,49 @@ class "ProbeAPI" (
         assert!(!registry.ingest("not USDA", true));
         assert!(registry.prim_types().is_empty());
         assert!(registry.api_schemas().is_empty());
+    }
+
+    #[test]
+    fn core_linear_units_apply_across_incremental_core_sources() {
+        let mut registry = SchemaRegistry::default();
+        let camera = r#"#usda 1.0
+class "Camera"
+{
+    float focalLength = 50
+}
+"#;
+        let sphere = r#"#usda 1.0
+class "Sphere"
+{
+    double radius = 1
+}
+"#;
+
+        assert!(registry.ingest(camera, false));
+        registry.apply_core_linear_units();
+        assert_eq!(
+            registry.linear_unit("Camera", "focalLength"),
+            LinearUnit::Length {
+                stage_units_per_unit: 0.1,
+            }
+        );
+        assert!(registry
+            .missing_core_linear_units()
+            .any(|missing| missing == ("Sphere", "radius")));
+
+        assert!(registry.ingest(sphere, false));
+        registry.apply_core_linear_units();
+        assert_eq!(
+            registry.linear_unit("Sphere", "radius"),
+            LinearUnit::Length {
+                stage_units_per_unit: 1.0,
+            }
+        );
+        assert!(
+            !registry
+                .missing_core_linear_units()
+                .any(|missing| missing == ("Camera", "focalLength")
+                    || missing == ("Sphere", "radius"))
+        );
     }
 }

@@ -103,6 +103,11 @@ bundle installs the implementation plugins explicitly, so vehicle changes do
 not make the vehicle package depend on shader implementation or the 6.5k-line
 cosim implementation.
 
+Core USD schema assets register incrementally through
+`lunco-usd-bevy-runtime-core`. `lunco-usd-authoring` applies matching linear-unit
+facts as declarations arrive and validates missing entries only after all
+vendored core schema sources load successfully.
+
 Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
 recompile the command library's normal target. Private pending-load and

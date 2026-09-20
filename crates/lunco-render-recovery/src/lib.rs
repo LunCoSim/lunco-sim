@@ -1270,19 +1270,19 @@ fn apply_shadow_caster_policy(
         }
     }
 
-    let estimated_mib = required_bytes as f64 / (1024.0 * 1024.0);
-    warn!(
-        "shadow allocation: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {} bytes ({:.1} MiB) of configured ceiling {} bytes (directional {}px, point {}px); authored state preserved",
-        enabled_directional_casters,
-        directional_cascade_layers,
-        enabled_point_casters,
-        enabled_spot_casters,
-        required_bytes,
-        estimated_mib,
-        admission_budget,
-        directional_shadow_map.size,
-        point_shadow_map.size,
-    );
+    if required_bytes > 0 {
+        debug!(
+            "shadow allocation estimate: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {} bytes of configured ceiling {} bytes (directional {}px, point {}px); authored state preserved",
+            enabled_directional_casters,
+            directional_cascade_layers,
+            enabled_point_casters,
+            enabled_spot_casters,
+            required_bytes,
+            admission_budget,
+            directional_shadow_map.size,
+            point_shadow_map.size,
+        );
+    }
 
     state.light_count = Some(light_count);
     state.enabled_directional_casters = Some(enabled_directional_casters);
