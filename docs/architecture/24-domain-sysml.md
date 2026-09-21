@@ -324,8 +324,12 @@ authored runtime verdict:
 
 The remaining work is bounded follow-up: full KerML expression/constraint
 execution, a full SysML editor, and a SysML-to-USD projection are not part of
-this integration. `SysmlPlugin` opens the checked Twin source set after
-`TwinAssetMounted`; a full source browser remains a UI concern.
+this integration. The authored Twin loading policy selects indexed SysML
+sources from the manifest and file facts, then requests each through the typed
+`LoadTwinSysmlSource` command. Rust validates the active Twin, asset authority,
+and indexed path, then opens the selected sources through the async document
+loader; a full source browser remains a UI concern. An empty source set is an
+informational policy result, since SysML is optional for a Twin.
 
 ### Verification ownership
 

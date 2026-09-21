@@ -10,15 +10,15 @@
 # It has no collider and never participates in vehicle physics.
 def Xform "PredictedLandingMarker" (
     doc = "Kinematic, non-colliding marker for a guidance system's predicted touchdown point."
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoPointerInteractionAPI"]
     kind = "component"
 )
 {
     uniform bool lunco:spawnable = true
     bool physics:rigidBodyEnabled = true
     bool physics:kinematicEnabled = true
-    custom string lunco:interaction:left = "pass_through"
-    custom string lunco:interaction:right = "pass_through"
+    uniform token lunco:interaction:left = "pass_through"
+    uniform token lunco:interaction:right = "pass_through"
 
     # These are the generic Avian kinematic-position ports. A dynamic body's
     # authored mobility does not expose matching inputs.

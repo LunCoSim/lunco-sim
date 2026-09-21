@@ -30,12 +30,17 @@ fn on_start(me, ctx) {
     this.marker = -1;
     this.screen = ();
     this.secondary_pointer = ();
+    this.scene_pointer_events = 0;
+    this.last_event_name = "none";
 }
 
 fn on_event(me, event, ctx) {
-    if event.name == "scene.pointer" && event.value != ()
-        && event.value.button == "secondary" {
-        this.secondary_pointer = event.value;
+    this.last_event_name = event.name;
+    if event.name == "scene.pointer" {
+        this.scene_pointer_events += 1;
+        if event.value != () && event.value.button == "secondary" {
+            this.secondary_pointer = event.value;
+        }
     }
 }
 
@@ -108,17 +113,31 @@ fn on_tick(me, ctx) {
         if this.phase_elapsed < 0.25 { return; }
         if this.secondary_pointer == () {
             report(this, false,
-                "the native secondary click did not reach the shared scene-pointer policy");
+                "no secondary scene.pointer event arrived (observed "
+                    + this.scene_pointer_events + "; last event was " + this.last_event_name
+                    + "; target screen position was (" + this.screen[0].to_string()
+                    + "," + this.screen[1].to_string() + ")");
             return;
         }
-        if !this.secondary_pointer.pointer_intents.contains("route.context")
-            || this.secondary_pointer.pointer_policy == ()
-            || this.secondary_pointer.pointer_policy.right != "context"
-            || this.secondary_pointer.prim_paths == ()
-            || !this.secondary_pointer.prim_paths.contains(ROUTE + "/P0")
-            || !this.secondary_pointer.prim_paths.contains(ROUTE + "/P0/Dome") {
-            report(this, false,
-                "the route context gesture did not reach the router with its waypoint hit, semantic intent, and USD policy");
+        if !this.secondary_pointer.pointer_intents.contains("route.context") {
+            report(this, false, "the secondary pointer event did not resolve the route.context input binding");
+            return;
+        }
+        if this.secondary_pointer.pointer_policy == () {
+            report(this, false, "the secondary pointer event did not carry the hit prim's USD interaction policy");
+            return;
+        }
+        if this.secondary_pointer.pointer_policy.right != "context" {
+            report(this, false, "the hit prim's authored secondary interaction policy was not context");
+            return;
+        }
+        if this.secondary_pointer.prim_paths == ()
+            || !this.secondary_pointer.prim_paths.contains(ROUTE + "/P0") {
+            report(this, false, "the secondary pointer event did not resolve route waypoint P0");
+            return;
+        }
+        if !this.secondary_pointer.prim_paths.contains(ROUTE + "/P0/Dome") {
+            report(this, false, "the secondary pointer event did not resolve the route marker hit prim");
             return;
         }
         if !selected_only(this.subject) {

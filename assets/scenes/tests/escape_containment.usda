@@ -5,16 +5,14 @@
     metersPerUnit = 1
 )
 
-# Negative production fixture for the physics escape boundary.
+# Production fixture for per-object physics escape containment.
 #
-# The dynamic body is authored outside the only static collider's footprint. A
-# production luncosim session must keep running, raise the structured terminal
-# fault, and hold physics without rewriting the body's pose. Keeping the body
-# laterally outside the support avoids the authored-initial-pose penetration
-# gate while still exercising the world-exit boundary.
+# Escapee begins outside the only static collider's footprint. The default
+# application Rhai policy must disable its physics object while ControlBody
+# continues falling and settling under the same production solver.
 def Xform "EscapeContainmentTest" (
     kind = "assembly"
-    doc = "Negative fixture: a dynamic body begins outside the static world bounds."
+    doc = "An escaped dynamic object pauses while the rest of physics continues."
 )
 {
     def Scope "Scenario"
@@ -47,6 +45,17 @@ def Xform "EscapeContainmentTest" (
     {
         double size = 1.0
         double3 xformOp:translate = (1510.0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 1.0
+        bool physics:collisionEnabled = true
+    }
+
+    def Cube "ControlBody" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 10, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 1.0
         bool physics:collisionEnabled = true

@@ -10,8 +10,9 @@ use lunco_api::{ApiQueryError, ApiQueryResult};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 
 /// `ListDatasets` — list declared engine and Twin datasets without exposing
-/// machine-local paths. Requests use each returned `id` with `RequestDataset`
-/// or `CancelDataset`.
+/// machine-local paths. Use each returned `id` with `RequestDataset`,
+/// `ProcessDataset`, or `CancelDataset` according to the entry's `processed`
+/// flag and live state.
 ///
 /// params: `{ scope?: string }` where `scope` is the engine group or Twin name
 /// · returns `{ datasets: [{ id, key, group, scope, name, state, processed,

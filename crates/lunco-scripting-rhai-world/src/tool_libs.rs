@@ -9,6 +9,7 @@
 
 #![cfg(feature = "rhai")]
 
+use bevy::asset::{AssetEvent, AssetLoadFailedEvent};
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::{ApiQueryError, ApiQueryResult};
@@ -21,7 +22,7 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard};
 
-/// Policy seam that classifies one loaded Rhai source.
+/// Policy seam that classifies one loaded engine-library Rhai source.
 ///
 /// The Rust side supplies only the canonical asset id. The policy returns a
 /// role map such as `#{ role: "prelude" }`, `#{ role: "tool", name: "..." }`,
@@ -126,6 +127,300 @@ impl TwinToolLibraries {
     }
 }
 
+/// Replace the active Twin's tool-library scope before its policy requests
+/// selected source assets.
+#[lunco_core::Command(default)]
+pub struct ActivateTwinToolScope {
+    /// Workspace identity of the active Twin.
+    pub twin_id: u64,
+}
+
+/// Load and install one indexed tool library selected by Twin Rhai policy.
+#[lunco_core::Command(default)]
+pub struct LoadTwinToolLibrary {
+    /// Workspace identity of the active Twin.
+    pub twin_id: u64,
+    /// Exact `twin://` authority returned by the asset owner.
+    pub name: String,
+    /// Library name assigned by policy.
+    pub library_name: String,
+    /// Indexed Rhai source path relative to the Twin root.
+    pub relative_path: String,
+}
+
+struct PendingTwinTool {
+    handle: Handle<crate::source_asset::RhaiSource>,
+    twin: lunco_workspace::TwinId,
+    library_name: String,
+    relative_path: String,
+}
+
+/// Async source assets requested by the authored Twin loading policy.
+#[derive(Resource, Default)]
+pub struct PendingTwinTools {
+    items: Vec<PendingTwinTool>,
+    ready: HashSet<bevy::asset::AssetId<crate::source_asset::RhaiSource>>,
+    failed: HashMap<bevy::asset::AssetId<crate::source_asset::RhaiSource>, String>,
+}
+
+impl PendingTwinTools {
+    fn mark_ready(&mut self, id: bevy::asset::AssetId<crate::source_asset::RhaiSource>) {
+        if self.items.iter().any(|item| item.handle.id() == id) {
+            self.ready.insert(id);
+        }
+    }
+
+    fn mark_failed(
+        &mut self,
+        id: bevy::asset::AssetId<crate::source_asset::RhaiSource>,
+        error: String,
+    ) {
+        if self.items.iter().any(|item| item.handle.id() == id) {
+            self.failed.insert(id, error);
+        }
+    }
+
+    fn release_twin(&mut self, twin: lunco_workspace::TwinId) {
+        self.items.retain(|item| item.twin != twin);
+        let live = self
+            .items
+            .iter()
+            .map(|item| item.handle.id())
+            .collect::<HashSet<_>>();
+        self.ready.retain(|id| live.contains(id));
+        self.failed.retain(|id, _| live.contains(id));
+    }
+}
+
+#[lunco_core::on_command(ActivateTwinToolScope)]
+fn on_activate_twin_tool_scope(
+    trigger: bevy::ecs::observer::On<ActivateTwinToolScope>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut scoped: ResMut<TwinToolLibraries>,
+    mut pending: ResMut<PendingTwinTools>,
+) -> Result<lunco_command_contracts::Ack, String> {
+    let twin_id = lunco_workspace::TwinId::new(trigger.event().twin_id);
+    if workspace
+        .as_deref()
+        .is_none_or(|workspace| workspace.active_twin != Some(twin_id))
+    {
+        return Err(format!("Twin {} is not active", trigger.event().twin_id));
+    }
+    pending.release_twin(twin_id);
+    scoped.activate(twin_id);
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
+}
+
+#[lunco_core::on_command(LoadTwinToolLibrary)]
+fn on_load_twin_tool_library(
+    trigger: bevy::ecs::observer::On<LoadTwinToolLibrary>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
+    asset_server: Option<Res<AssetServer>>,
+    assets: Option<Res<Assets<crate::source_asset::RhaiSource>>>,
+    mut pending: ResMut<PendingTwinTools>,
+) -> Result<lunco_command_contracts::Ack, String> {
+    let request = trigger.event();
+    let twin_id = lunco_workspace::TwinId::new(request.twin_id);
+    let workspace = workspace
+        .as_deref()
+        .ok_or_else(|| "Workspace is not installed".to_owned())?;
+    let twin = workspace
+        .twin(twin_id)
+        .ok_or_else(|| format!("workspace Twin {} is unavailable", request.twin_id))?;
+    if workspace.active_twin != Some(twin_id) {
+        return Err(format!("Twin {} is not active", request.twin_id));
+    }
+    lunco_scripting_rhai_core::names::validate_file_stem(&request.library_name)
+        .map_err(|error| format!("invalid Twin tool library name: {error}"))?;
+    let relative = std::path::Path::new(&request.relative_path);
+    if !lunco_assets_path::is_safe_relative_path(&request.relative_path)
+        || !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        || relative.parent() != Some(std::path::Path::new(TOOLS_DIR))
+        || relative
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("rhai")
+    {
+        return Err(format!(
+            "Twin tool path `{}` must be a safe `tools/*.rhai` file",
+            request.relative_path
+        ));
+    }
+    if !twin
+        .files()
+        .iter()
+        .any(|entry| entry.relative_path.as_path() == relative)
+    {
+        return Err(format!(
+            "Twin tool path `{}` is not indexed",
+            request.relative_path
+        ));
+    }
+    let authority = roots
+        .as_deref()
+        .and_then(|roots| roots.name_for_root(&twin.root).ok().flatten())
+        .ok_or_else(|| format!("Twin asset authority `{}` is unavailable", request.name))?;
+    if authority != request.name {
+        return Err(format!(
+            "Twin asset authority `{}` does not belong to Twin {}",
+            request.name, request.twin_id
+        ));
+    }
+    if pending.items.iter().any(|item| {
+        item.twin == twin_id
+            && item.relative_path == request.relative_path
+            && item.library_name == request.library_name
+    }) {
+        return Ok(lunco_command_contracts::Ack::new(
+            lunco_command_contracts::OpId::new(),
+        ));
+    }
+    let asset_server = asset_server.ok_or_else(|| "AssetServer is not installed".to_owned())?;
+    let handle = asset_server.load::<crate::source_asset::RhaiSource>(lunco_assets_core::twin_uri(
+        &request.name,
+        &request.relative_path,
+    ));
+    let id = handle.id();
+    if assets
+        .as_deref()
+        .is_some_and(|assets| assets.get(id).is_some())
+    {
+        pending.ready.insert(id);
+    }
+    let failed = asset_server
+        .get_load_state(id)
+        .is_some_and(|state| state.is_failed());
+    pending.items.push(PendingTwinTool {
+        handle,
+        twin: twin_id,
+        library_name: request.library_name.clone(),
+        relative_path: request.relative_path.clone(),
+    });
+    if failed {
+        pending.mark_failed(id, "the source asset had already failed to load".to_owned());
+    }
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
+}
+
+fn mark_pending_twin_tools(
+    mut pending: ResMut<PendingTwinTools>,
+    mut events: MessageReader<AssetEvent<crate::source_asset::RhaiSource>>,
+    mut failures: MessageReader<AssetLoadFailedEvent<crate::source_asset::RhaiSource>>,
+) {
+    for event in events.read() {
+        match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => pending.mark_ready(*id),
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => pending.mark_failed(
+                *id,
+                "Twin tool source asset was removed before reading".to_owned(),
+            ),
+        }
+    }
+    for failure in failures.read() {
+        pending.mark_failed(failure.id, failure.error.to_string());
+    }
+}
+
+fn drain_pending_twin_tools(
+    mut pending: ResMut<PendingTwinTools>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    assets: Res<Assets<crate::source_asset::RhaiSource>>,
+    sources: Option<Res<lunco_assets_runtime::script_source::ScriptSources>>,
+    mut scoped: ResMut<TwinToolLibraries>,
+) {
+    let ready = std::mem::take(&mut pending.ready);
+    let failed = std::mem::take(&mut pending.failed);
+    let items = std::mem::take(&mut pending.items);
+    let mut still_pending = Vec::new();
+    for item in items {
+        let id = item.handle.id();
+        if let Some(error) = failed.get(&id) {
+            warn!(
+                "[tool_libs] failed to load `{}`: {error}",
+                item.relative_path
+            );
+            continue;
+        }
+        if !ready.contains(&id) {
+            still_pending.push(item);
+            continue;
+        }
+        let Some(source) = assets.get(&item.handle) else {
+            warn!(
+                "[tool_libs] `{}` became ready without source",
+                item.relative_path
+            );
+            continue;
+        };
+        if !workspace
+            .as_deref()
+            .is_some_and(|workspace| workspace.active_twin == Some(item.twin))
+            || scoped.owner() != Some(item.twin)
+        {
+            continue;
+        }
+        let validation = match crate::world_bridge::validate_tool_library(
+            &item.library_name,
+            &source.text,
+            sources.as_deref().cloned().unwrap_or_default(),
+        ) {
+            Ok(validation) => validation,
+            Err(error) => {
+                warn!("[tool_libs] invalid `{}`: {error}", item.relative_path);
+                continue;
+            }
+        };
+        if let Err(error) = scoped.register(item.twin, &item.library_name, &source.text) {
+            warn!(
+                "[tool_libs] cannot install `{}`: {error}",
+                item.relative_path
+            );
+            continue;
+        }
+        info!(
+            "[tool_libs] loaded Twin library `{}` with {} function{}",
+            item.library_name,
+            validation.len(),
+            if validation.len() == 1 { "" } else { "s" },
+        );
+    }
+    pending.items = still_pending;
+}
+
+fn wind_down_twin_tool_scope(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut pending: ResMut<PendingTwinTools>,
+    mut scoped: ResMut<TwinToolLibraries>,
+) {
+    let closed = trigger.event().twin;
+    pending.release_twin(closed);
+    scoped.wind_down_for(closed);
+}
+
+lunco_core::register_commands!(on_activate_twin_tool_scope, on_load_twin_tool_library);
+
+/// Register typed Twin tool-loading commands and their async source lifecycle.
+pub fn register_twin_tool_loading(app: &mut App) {
+    app.init_resource::<PendingTwinTools>()
+        .add_observer(wind_down_twin_tool_scope)
+        .add_systems(
+            Update,
+            (mark_pending_twin_tools, drain_pending_twin_tools)
+                .chain()
+                .after(crate::source_asset::RhaiSourceAssetSet),
+        );
+    register_all_commands(app);
+}
+
 /// Register the small native tool that is part of the generic scripting
 /// substrate. Source-defined tools are installed by the Bevy asset pipeline.
 pub fn register_native_builtins() {
@@ -190,49 +485,12 @@ pub fn classify_source(asset_id: &str) -> Result<Option<ScriptSourceRole>, Strin
 //
 // Per-entity scenarios live embedded in USD prims (a separate path); shared,
 // reusable tool sources persist as ordinary files beneath the Twin's authored
-// tool source root. The source-classification policy chooses which candidates
-// become `name::fn` libraries and what namespace they receive. On Twin open we
-// scan that root and register each selected source; the RegisterToolLibrary
-// command path can mirror an in-memory registration back to disk via
-// [`save_tool_library_file`]. Native-only (no filesystem on wasm).
+// tool source root. Twin Rhai loading policy selects indexed source assets and
+// issues typed load commands. The `RegisterToolLibrary` command path can
+// mirror an in-memory registration back to disk via [`save_tool_library_file`].
 
 /// Sub-directory under a Twin root that holds shared rhai tool libraries.
 pub const TOOLS_DIR: &str = "tools";
-
-/// Scan the Twin's authored tool source root and return `(asset_id, source)`
-/// candidates. The asset id is passed to [`classify_source`] so the policy,
-/// rather than this filesystem helper, decides whether to activate a source
-/// and what name it receives. A single unreadable file is logged and skipped;
-/// it never blocks the rest. Native-only.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn load_tool_sources_from_dir(root: &std::path::Path) -> Vec<(String, String)> {
-    let dir = root.join(TOOLS_DIR);
-    let mut loaded = Vec::new();
-    let entries = match lunco_storage::read_directory_sync(&dir) {
-        Ok(entries) => entries,
-        // No tools/ dir is the common case (twin has none) — not an error.
-        Err(_) => return loaded,
-    };
-    for path in entries {
-        if path.extension().and_then(|e| e.to_str()) != Some("rhai") {
-            continue;
-        }
-        let Some(filename) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        match lunco_storage::read_file_sync(&path)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-        {
-            Some(source) => {
-                loaded.push((format!("{TOOLS_DIR}/{filename}"), source));
-            }
-            None => warn!("[tool_libs] failed to read {}", path.display()),
-        }
-    }
-    loaded.sort_by(|left, right| left.0.cmp(&right.0));
-    loaded
-}
 
 /// Persist a tool library's source to `<root>/tools/<name>.rhai` (creating the
 /// dir if needed). The on-disk counterpart of [`register_tool_library`], so an
@@ -249,89 +507,6 @@ pub fn save_tool_library_file(
     let path = dir.join(format!("{name}.rhai"));
     lunco_storage::write_file_sync(&path, source.as_bytes())?;
     Ok(path)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn install_twin_tool_sources(
-    twin: lunco_workspace::TwinId,
-    sources: &[(String, String)],
-    scoped: &mut TwinToolLibraries,
-) {
-    for (asset_id, source) in sources {
-        let policy_id = format!("twin://{asset_id}");
-        match classify_source(&policy_id) {
-            Ok(Some(ScriptSourceRole::Tool(name))) => {
-                if let Err(error) = scoped.register(twin, &name, &source) {
-                    error!("[tool_libs] failed to install '{name}': {error}");
-                }
-            }
-            Ok(Some(ScriptSourceRole::Prelude)) | Ok(None) => {}
-            Err(error) => {
-                warn!("[tool_libs] source classification rejected {policy_id}: {error}");
-            }
-        }
-    }
-}
-
-/// Observer: on Twin open, replace the active scoped tool libraries with every
-/// `tools/*.rhai` file authored by that Twin. A non-active Twin does not alter
-/// the process-global registry.
-pub fn sync_tools_on_twin_added(
-    trigger: On<lunco_workspace::TwinAdded>,
-    ws: Option<Res<lunco_workspace::WorkspaceResource>>,
-    mut scoped: ResMut<TwinToolLibraries>,
-) {
-    let twin_id = trigger.event().twin;
-    let Some(ws) = ws.as_deref() else {
-        return;
-    };
-    if ws.active_twin != Some(twin_id) {
-        return;
-    }
-    let Some(twin) = ws.twin(twin_id) else {
-        return;
-    };
-    scoped.activate(twin_id);
-    #[cfg(not(target_arch = "wasm32"))]
-    let loaded = load_tool_sources_from_dir(&twin.root);
-    #[cfg(not(target_arch = "wasm32"))]
-    install_twin_tool_sources(twin_id, &loaded, &mut scoped);
-    #[cfg(target_arch = "wasm32")]
-    let loaded: Vec<(String, String)> = Vec::new();
-    if !loaded.is_empty() {
-        info!(
-            "[tool_libs] classified {} Twin tool source{}: {loaded:?}",
-            loaded.len(),
-            if loaded.len() == 1 { "" } else { "s" },
-        );
-    }
-}
-
-/// Observer: restore every tool definition shadowed by the closed active Twin,
-/// then install the replacement active Twin's libraries if one remains.
-pub fn wind_down_tools_on_twin_closed(
-    trigger: On<lunco_workspace::TwinClosed>,
-    ws: Option<Res<lunco_workspace::WorkspaceResource>>,
-    mut scoped: ResMut<TwinToolLibraries>,
-) {
-    let closed = trigger.event().twin;
-    if !scoped.wind_down_for(closed) {
-        return;
-    }
-    let Some(ws) = ws.as_deref() else {
-        return;
-    };
-    let Some(active) = ws.active_twin else {
-        return;
-    };
-    let Some(twin) = ws.twin(active) else {
-        return;
-    };
-    scoped.activate(active);
-    #[cfg(not(target_arch = "wasm32"))]
-    let loaded = load_tool_sources_from_dir(&twin.root);
-    #[cfg(not(target_arch = "wasm32"))]
-    install_twin_tool_sources(active, &loaded, &mut scoped);
 }
 
 /// Registry generation (changes when a tool is registered, replaced, or
@@ -456,8 +631,7 @@ pub fn register_queries(app: &mut App) {
 mod tests {
     use super::*;
 
-    /// `save_tool_library_file` → `load_tool_sources_from_dir` round-trips;
-    /// installation is a separate scoped operation.
+    /// Tool source persistence retains the exact authored source bytes.
     #[test]
     fn tool_library_file_save_load_roundtrip() {
         let _registry_guard = registry_test_guard();
@@ -469,32 +643,19 @@ mod tests {
         assert!(lunco_storage::read_file_sync(&path).is_ok());
         assert_eq!(path, root.join("tools").join("persist_probe.rhai"));
 
-        let loaded = load_tool_sources_from_dir(&root);
-        assert_eq!(
-            loaded,
-            vec![("tools/persist_probe.rhai".to_string(), src.to_string())]
-        );
+        let stored = lunco_storage::read_file_sync(&path).expect("saved Rhai source");
+        let stored = String::from_utf8(stored).expect("UTF-8 Rhai source");
+        assert_eq!(stored, src);
 
         // The scoped owner installs the source into the global binding registry.
         let twin = lunco_workspace::TwinId::new(1);
         let mut scoped = TwinToolLibraries::default();
         scoped.activate(twin);
-        scoped
-            .register(twin, "persist_probe", &loaded[0].1)
-            .unwrap();
+        scoped.register(twin, "persist_probe", &stored).unwrap();
         let tool = lunco_tools::get("persist_probe").expect("registered");
         assert_eq!(tool.backend(), "rhai");
         assert_eq!(tool.source(), Some(src));
         assert!(scoped.wind_down_for(twin));
         assert!(lunco_tools::get("persist_probe").is_none());
-    }
-
-    /// A missing tool source dir is the common case — yields no libraries, no error.
-    #[test]
-    fn missing_tools_dir_is_empty_not_error() {
-        let _registry_guard = registry_test_guard();
-        let temp = tempfile::tempdir().expect("tool library test directory");
-        let root = temp.path();
-        assert!(load_tool_sources_from_dir(&root).is_empty());
     }
 }

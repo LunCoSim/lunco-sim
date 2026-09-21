@@ -104,8 +104,19 @@ Use `list_hooks()` to inspect the reflected declaration. It reports
 requirement, and installation state. Use `policy_status()` for startup/Twin
 load diagnostics and the last typed Twin lifecycle result. The owner must
 consume every non-`Unit` result; the lifecycle dispatcher retains its returned
-map in that status surface. `invoke_hook(id, [args])` distinguishes unavailable
-hooks from installed functions that fault.
+map in that status surface. The `assets_mounted` lifecycle event receives the
+parsed Twin manifest, indexed relative paths, exact `twin://` authority, and
+active-Twin fact. Its ordered `{command, params}` actions go through the generic
+typed command bridge; Rhai chooses loaders and order, while each domain owner
+validates paths and performs asynchronous work. A malformed plan faults and
+queues no commands; a rejected command is reported while later actions
+continue. `invoke_hook(id, [args])` distinguishes unavailable hooks from
+installed functions that fault.
+
+The application `twin.lifecycle` policy selects the active Twin's default USD
+scene, tool libraries, timeline data, SysML/KerML sources, and Modelica roots
+from its typed manifest and indexed file inventory. Loader commands keep only
+generic ownership, safe-path, asset-read, and domain-registration mechanics.
 
 Put policy and observable runtime assertions in an authored Rhai production
 scene test. Cover the declared signature, successful binding/invocation,

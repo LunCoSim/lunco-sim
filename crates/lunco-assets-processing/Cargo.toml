@@ -5,13 +5,11 @@ edition = "2021"
 license.workspace = true
 description = "Native offline image, DEM, map, albedo, normal-map, and glTF asset processing"
 
-[dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-celestial-data = { path = "../lunco-celestial-data" }
 lunco-geotiff = { path = "../lunco-geotiff" }
 image = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 draco-gltf = { workspace = true }
 resvg = { workspace = true }
 tiff = { workspace = true }

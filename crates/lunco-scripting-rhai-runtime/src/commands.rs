@@ -1024,7 +1024,7 @@ pub struct RunTimeline {
 
 /// Validate the typed timeline structure and return its step count.
 #[cfg(feature = "rhai")]
-fn timeline_step_count(timeline: &ScenarioParameters) -> Result<usize, String> {
+pub(crate) fn timeline_step_count(timeline: &ScenarioParameters) -> Result<usize, String> {
     let values = timeline.as_map();
     for key in values.keys() {
         if key != "steps" && key != "name" {
@@ -1176,9 +1176,10 @@ fn on_run_timeline(
 /// Save a named mission **timeline** to the Twin — the storage counterpart of
 /// `RunTimeline` (which runs an inline one). Validates the typed timeline,
 /// stores it in the [`crate::timelines::TimelineStore`], and mirrors its
-/// persistent representation to `<twin>/timelines/<name>.json` (reloaded by the
-/// `TwinAdded` observer). Discover with `ListTimelines`/`GetTimeline`, run with
-/// `RunStoredTimeline`. Idempotent (re-registering a name replaces it).
+/// persistent representation to `<twin>/timelines/<name>.json` (selected on
+/// mount by the active Twin's Rhai loading policy). Discover with
+/// `ListTimelines`/`GetTimeline`, run with `RunStoredTimeline`. Idempotent
+/// (re-registering a name replaces it).
 #[cfg(feature = "rhai")]
 #[Command(default)]
 pub struct RegisterTimeline {

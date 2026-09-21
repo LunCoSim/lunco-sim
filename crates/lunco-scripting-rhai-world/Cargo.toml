@@ -19,6 +19,7 @@ serde = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-api-core = { path = "../lunco-api-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }

@@ -105,11 +105,39 @@ hook for its own authored behavior. A missing optional lifecycle policy is a
 valid unconfigured state, and a lifecycle fault is reported without crashing
 or silently selecting another implementation.
 
+Physics owns the required deterministic `physics.body_escape(ctx: Map) ->
+String` seam, installed by the application policy bootstrap during `PreStartup`
+and replaceable by an active Twin. Its map contains `kind` (`finite_world_exit`
+or `non_finite_state`), `path` and `global_id` (each a string or `Unit` when
+unavailable), `position_m`, `velocity_mps`, `world_min_m`, and `world_max_m`
+(three-float arrays for a bounded world, otherwise `Unit`). The application
+Rhai policy returns `pause_object` for either condition; Rust applies it to the
+dynamic joint-connected island, its joints, and its colliders so the stopped
+object cannot affect other bodies. Physics and world time continue for
+everything else. An authored policy can return `pause_world` when a Twin
+intentionally needs that response. Missing, faulting, or malformed policies
+fail closed with a visible runtime fault and physics hold.
+`assets/scripting/tests/test_hook_policies.rhai` covers the required contract
+and finite-exit default action; `escape_containment` proves the real solver
+keeps moving an unaffected control body.
+
 The lifecycle dispatcher validates the returned map, retains the typed result
 as the current lifecycle record, and exposes it through `policy_status()` and
-the API status view. This makes a structured lifecycle decision observable to
-the owner and to diagnostics; it is not an ignored side effect. If a lifecycle
-seam is only a notification, its contract should instead return `Unit`.
+the API status view. On `assets_mounted`, the application policy receives
+`twin_id`, the exact asset authority `name`, `root`, `active`, the parsed
+`manifest` as a typed map (or `Unit` for a plain folder), and indexed relative
+`files`. It returns an ordered `actions` array whose entries contain a reflected
+`command` name and typed `params` map. The generic executor validates the plan
+shape and dispatches each entry through the ordinary typed command bridge; it
+has no Twin-field or domain-loader branches. The queue is applied only while
+that Twin remains active. A malformed plan faults the lifecycle result and
+queues no actions; an individual command rejection is logged and later actions
+continue. This lets Rhai own the choice and ordering while domain owners retain
+path validation and asynchronous loading mechanics. The application policy
+selects the default USD scene, Twin tool libraries, timelines, SysML/KerML
+source files, and Modelica roots from the typed manifest and indexed inventory.
+If a lifecycle seam is only a notification, its contract should instead return
+`Unit`.
 
 For example, a Twin can keep its lifecycle policy beside its authored Twin:
 
@@ -133,8 +161,9 @@ The startup function is the only bootstrap convention in each scope. It is
 authored behavior and can choose installation order/reporting, while Rust
 retains the generic typed installer, owner-contract validation, and cleanup
 boundary. There is no second hardcoded list of policy files or source roles in
-the engine. The `scripting.source.classify` policy similarly decides whether a
-loaded Rhai asset is prelude, a tool library, or unrelated scenario content.
+the engine. The `scripting.source.classify` policy classifies engine-library
+sources as preludes or unrelated scenario content; Twin tool libraries are
+selected and loaded by the `twin.lifecycle` action plan.
 
 The same process supports a large behavior surface: each subsystem declares
 its own seam beside its owner, and the link-collected catalog exposes all

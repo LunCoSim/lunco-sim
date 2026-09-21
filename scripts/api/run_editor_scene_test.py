@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from runtime import POLL_INTERVAL_S, ProductionSession
+from runtime import POLL_INTERVAL_S, ProductionSession, ROOT
 
 
 def tail(path: Path, lines: int = 20) -> str:
@@ -30,29 +30,65 @@ def scene_root(scene: str) -> str:
     return match.group(1)
 
 
-def wait_for_scene(session: ProductionSession, root: str, timeout: float) -> None:
-    """Require the requested fixture's USD root in the live production world."""
+def wait_for_scene(session: ProductionSession, scene: str, timeout: float) -> None:
+    """Require the requested fixture root in the mounted live USD stage."""
     deadline = time.monotonic() + timeout
+    scene_path = Path(scene)
+    if not scene_path.is_absolute():
+        scene_path = ROOT / "assets" / scene_path
+    expected_path = scene_path.resolve()
+    root = scene_root(scene)
     path = f"/{root}"
     last_error = "no query result"
     while time.monotonic() < deadline:
-        response = session.post({
-            "type": "ExecuteCommand",
-            "command": "QueryUsdPrim",
-            "params": {"path": path},
-        })
-        if response.get("error"):
-            last_error = str(response["error"])
-        else:
-            data = response.get("data")
-            if isinstance(data, dict) and data.get("path") == path:
-                return
-            last_error = f"unexpected QueryUsdPrim result: {data!r}"
+        try:
+            documents = session.post({
+                "type": "ExecuteCommand",
+                "command": "ListOpenDocuments",
+                "params": {},
+            })
+            if documents.get("error"):
+                last_error = str(documents["error"])
+            else:
+                open_documents = documents.get("data", {}).get("open_documents", [])
+                fixture_doc_id = None
+                for document in open_documents:
+                    origin = document.get("origin", {})
+                    if (
+                        document.get("kind") != "usd"
+                        or origin.get("kind") != "file"
+                        or Path(origin.get("path", "")).resolve() != expected_path
+                    ):
+                        continue
+                    fixture_doc_id = int(document["doc_id"])
+                    break
+                if fixture_doc_id is None:
+                    last_error = f"fixture document is not open: {expected_path}"
+                else:
+                    response = session.post({
+                        "type": "ExecuteCommand",
+                        "command": "QueryUsdPrim",
+                        "params": {"path": path},
+                    })
+                    if response.get("error"):
+                        last_error = str(response["error"])
+                    else:
+                        data = response.get("data")
+                        if (
+                            isinstance(data, dict)
+                            and data.get("path") == path
+                            and int(data.get("doc_id", -1)) == fixture_doc_id
+                        ):
+                            return
+                        last_error = f"unexpected live QueryUsdPrim result: {data!r}"
+        except (KeyError, TypeError, ValueError, RuntimeError) as error:
+            last_error = str(error)
         if session.process is None or session.process.poll() is not None:
             raise RuntimeError(f"production editor exited before mounting {path}: {last_error}")
         time.sleep(POLL_INTERVAL_S)
     raise RuntimeError(
-        f"production host reported ready without mounting {path}; last query: {last_error}"
+        f"production host reported ready without mounting {expected_path} at {path}; "
+        f"last query: {last_error}"
     )
 
 
@@ -66,7 +102,7 @@ def run(port: int, timeout: float, scene: str, log_path: Path) -> int:
             log_path=log_path,
             windowed=True,
         ) as session:
-            wait_for_scene(session, scene_root(scene), min(timeout, 45.0))
+            wait_for_scene(session, scene, min(timeout, 45.0))
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if session.process is None or session.process.poll() is not None:

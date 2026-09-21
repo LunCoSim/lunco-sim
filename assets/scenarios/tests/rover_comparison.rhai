@@ -233,16 +233,13 @@ fn on_tick(me, ctx) {
         let checks = [];
         for i in 0..this.n {
             let rover = this.rovers[i];
-            // A rover the physics escape guard removed has no position at all.
-            // That is a RESULT — the vehicle left the world — and it has to be
-            // reported as one: passing `()` into the bounds check throws, which
-            // kills the scenario between here and `report_verdict` and makes
-            // `scene_test` say "no verdict" instead of naming the failure. This
-            // file did exactly that, looping past its own end time for 300 s.
+            // An unavailable pose is reported explicitly before any vector
+            // checks. The escape policy preserves the stopped object's pose,
+            // so a bounds verdict below can still name its final location.
             let at = world_pos(rover);
             if at == () {
                 checks.push(this.names[i] + " rover left the world entirely — no " +
-                    "pose remains, so the physics escape guard removed it after " +
+                    "pose remains after " +
                     r2(this.distance[i]) + " m of travel");
                 continue;
             }

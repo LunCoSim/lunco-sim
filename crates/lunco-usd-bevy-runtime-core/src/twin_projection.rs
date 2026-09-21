@@ -11,8 +11,9 @@
 //!
 //! Flow (doc-first: the document exists and its persistent source is the overlay
 //! BEFORE the scene mounts, so the world is projected exactly once):
-//! 1. On `TwinAssetMounted` with a `[usd] default_scene`, kick an async
-//!    [`UsdSourceText`] load of `twin://<name>/<scene>` (raw base layer, read
+//! 1. The authored Twin loading policy selects a scene and dispatches
+//!    `OpenTwinScene`; this owner kicks an async [`UsdSourceText`] load of
+//!    `twin://<name>/<scene>` (raw base layer, read
 //!    through the twin source — web-ready) and record it in [`PendingTwinDocs`].
 //!    The scene mount is admitted after the source asset reaches a terminal
 //!    success or failure event.
@@ -588,9 +589,10 @@ fn write_twin_overlay(
             return false;
         }
     };
-    if let Err(error) = world
-        .resource::<TwinRoots>()
-        .set_overlay(name, rel, Arc::new(source.into_bytes()))
+    if let Err(error) =
+        world
+            .resource::<TwinRoots>()
+            .set_overlay(name, rel, Arc::new(source.into_bytes()))
     {
         warn!("[usd-e1b] could not publish persistent source for document {doc}: {error}");
         return false;

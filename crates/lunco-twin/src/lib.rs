@@ -711,9 +711,6 @@ impl Twin {
         }
 
         let sources = self.discover_sysml_sources();
-        if sources.is_empty() {
-            errors.push("Twin declares no indexed .sysml or .kerml sources".to_owned());
-        }
         if errors.is_empty() {
             Ok(sources)
         } else {

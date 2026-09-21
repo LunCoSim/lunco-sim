@@ -1,9 +1,9 @@
 //! Headless SysML v2 integration for LunCoSim.
 //!
 //! The runtime crate owns document identity, reversible source edits, Bevy
-//! asset loading, and lifecycle/journal integration. Mounted Twins
-//! automatically open their indexed `.sysml`/`.kerml` sources through the
-//! canonical `twin://` asset authority. Parsing and semantic extraction stay
+//! asset loading, and lifecycle/journal integration. The authored Twin loading
+//! policy selects `.sysml`/`.kerml` sources; this crate opens each requested
+//! source through the canonical `twin://` asset authority. Parsing and semantic extraction stay
 //! in [`lunco_sysml_ast`], keeping the expensive language implementation out
 //! of consumers that only need the document contract.
 
@@ -15,7 +15,7 @@ mod twin_source;
 pub use api::{ApplySysmlOps, SysmlApiOp, SysmlApiPlugin};
 pub use document::{SysmlDocument, SysmlOp};
 pub use source_asset::{SysmlSource, SysmlSourceAssetPlugin, SysmlSourceLoader};
-pub use twin_source::{PendingSysmlSources, SYSML_TWIN_SOURCE_LOAD_FAILED};
+pub use twin_source::{LoadTwinSysmlSource, PendingSysmlSources, SYSML_TWIN_SOURCE_LOAD_FAILED};
 
 use bevy::prelude::*;
 
@@ -33,7 +33,6 @@ impl Plugin for SysmlPlugin {
             .add_plugins(SysmlApiPlugin)
             .init_resource::<lunco_doc_bevy::DocumentRegistry<SysmlDocument>>()
             .init_resource::<PendingSysmlSources>()
-            .add_observer(twin_source::request_twin_sysml_sources)
             .add_observer(twin_source::release_twin_sysml_sources)
             .add_systems(
                 Update,
@@ -48,5 +47,6 @@ impl Plugin for SysmlPlugin {
             .add_observer(twin_source::sync_workspace_on_sysml_doc_closed)
             .add_observer(twin_source::sync_workspace_on_sysml_doc_changed)
             .add_observer(twin_source::sync_workspace_on_sysml_doc_saved);
+        twin_source::register_twin_source_commands(app);
     }
 }
