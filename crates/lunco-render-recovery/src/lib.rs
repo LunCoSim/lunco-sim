@@ -62,10 +62,9 @@ use bevy::render::{
 };
 use bevy_egui::{egui, EguiContexts};
 use lunco_render::{
-    estimate_shadow_allocation_bytes, LightGraphicsDefaults, RenderingQuality,
-    RenderingQualityProfiles, RenderingQualitySettings, ShadowRangeAuthorship,
+    estimate_shadow_allocation_bytes, LightGraphicsDefaults, RenderingQualitySettings,
+    ShadowRangeAuthorship,
 };
-use lunco_settings::AppSettingsExt;
 
 /// Hook id for the authored render-shadow warning policy.
 pub const RENDER_SHADOW_QUALITY_HOOK: &str = "render.shadow_quality";
@@ -526,13 +525,9 @@ impl Ladder {
 ///
 /// No-op when there is no [`RenderApp`] (headless tests / API-only servers).
 pub fn install_wgpu_error_handler(app: &mut App) {
-    app.register_settings_section::<RenderingQualitySettings>();
-    app.init_resource::<RenderingQualityProfiles>()
-        .add_systems(Startup, load_authored_render_quality_profiles)
-        .add_systems(
-            Update,
-            load_authored_render_quality_profiles.run_if(render_quality_profiles_stale),
-        );
+    if !app.is_plugin_added::<lunco_render::RenderQualityPolicyPlugin>() {
+        app.add_plugins(lunco_render::RenderQualityPolicyPlugin);
+    }
 
     if app.get_sub_app_mut(RenderApp).is_none() {
         return;
@@ -554,7 +549,7 @@ pub fn install_wgpu_error_handler(app: &mut App) {
             apply_render_quality.run_if(render_quality_changed),
         )
             .chain()
-            .after(load_authored_render_quality_profiles),
+            .after(lunco_render::RenderQualityPolicySet),
     );
     app.init_resource::<ShadowAdmissionState>();
     // Shadow allocation happens during render extraction. The preflight must
@@ -591,129 +586,6 @@ pub fn install_wgpu_error_handler(app: &mut App) {
         RenderStartup,
         (set_error_handler, publish_render_capabilities).chain(),
     );
-}
-
-/// Load and validate every profile from the typed Rhai policy before the first
-/// update. Fresh settings use High; persisted user edits stay authoritative.
-fn load_authored_render_quality_profiles(
-    mut profiles: ResMut<RenderingQualityProfiles>,
-    mut settings: ResMut<RenderingQualitySettings>,
-    mut ladder: Option<ResMut<Ladder>>,
-) {
-    let previous_preset = settings.preset(&profiles);
-    let default_quality =
-        match lunco_hooks::invoke(lunco_render::RENDER_DEFAULT_QUALITY_PROFILE_HOOK, &[]) {
-            Some(Ok(lunco_hooks::HookValue::Str(id))) => match RenderingQuality::parse_id(&id) {
-                Some(quality) => quality,
-                None => {
-                    let reason = format!(
-                    "authored default rendering-quality policy returned unknown profile id '{id}'"
-                );
-                    profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                    warn!("[render] {reason}");
-                    return;
-                }
-            },
-            Some(Err(error)) => {
-                let reason = format!("authored default rendering-quality policy failed: {error}");
-                profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                warn!("[render] {reason}");
-                return;
-            }
-            None => {
-                let reason = "authored default rendering-quality policy is unavailable".to_string();
-                profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                warn!("[render] {reason}");
-                return;
-            }
-            Some(Ok(value)) => {
-                let reason = format!(
-                    "authored default rendering-quality policy returned {}, expected string",
-                    value.type_name()
-                );
-                profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                warn!("[render] {reason}");
-                return;
-            }
-        };
-    let mut loaded = Vec::with_capacity(RenderingQuality::all().len());
-    for quality in RenderingQuality::all() {
-        let value = match lunco_hooks::invoke(
-            lunco_render::RENDER_QUALITY_PROFILE_HOOK,
-            &[lunco_hooks::HookValue::str(quality.id())],
-        ) {
-            Some(Ok(value)) => value,
-            Some(Err(error)) => {
-                let reason = format!(
-                    "authored rendering-quality policy '{}' failed: {error}",
-                    quality.id()
-                );
-                profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                warn!("[render] {reason}");
-                return;
-            }
-            None => {
-                let reason = format!(
-                    "authored rendering-quality policy '{}' is unavailable",
-                    quality.id()
-                );
-                profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                warn!("[render] {reason}");
-                return;
-            }
-        };
-        let profile = match lunco_render::RenderQualityProfile::from_policy_value(&value) {
-            Ok(profile) => profile,
-            Err(error) => {
-                let reason = format!(
-                    "authored rendering-quality profile '{}' is invalid: {error}",
-                    quality.id()
-                );
-                profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                warn!("[render] {reason}");
-                return;
-            }
-        };
-        let mut validation = RenderingQualitySettings::default();
-        validation.apply_profile(profile);
-        if let Err(error) = validation.validate() {
-            let reason = format!(
-                "authored rendering-quality profile '{}' violates the render contract: {error}",
-                quality.id()
-            );
-            profiles.mark_unavailable(&reason, lunco_hooks::generation());
-            warn!("[render] {reason}");
-            return;
-        }
-        loaded.push((quality, profile));
-    }
-
-    let generation = lunco_hooks::generation();
-    if let Err(error) = profiles.install(loaded, default_quality, generation) {
-        profiles.mark_unavailable(&error, generation);
-        warn!("[render] {error}");
-        return;
-    }
-    if !settings.is_profile_initialized() || settings.has_requested_profile() {
-        if let Err(error) = settings.initialize_profile(&profiles) {
-            warn!("[render] could not initialize selected quality profile: {error}");
-        }
-    } else if let Some(quality) = previous_preset {
-        if let Some(profile) = profiles.get(quality) {
-            if settings.profile() != profile {
-                settings.apply_profile(profile);
-            }
-        }
-    }
-    if let Some(ladder) = ladder.as_mut() {
-        if let Ok(profile) = settings.validated_profile() {
-            ladder.set_recovery_policy(profile);
-        }
-    }
-}
-
-fn render_quality_profiles_stale(profiles: Res<RenderingQualityProfiles>) -> bool {
-    profiles.is_stale()
 }
 
 fn render_quality_changed(

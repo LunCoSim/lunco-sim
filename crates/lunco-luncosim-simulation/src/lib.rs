@@ -168,9 +168,9 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 /// physics, cosim, USD scene load, mobility, hardware, controller, avatar,
 /// environment, and renderer-independent scene services.
 ///
-/// The render plugins are configured in the GUI shell. Every plugin here is
-/// pure-CPU simulation/state. USD visual sync only writes the mesh/material
-/// asset stores (never touches a GPU device), so it is safe in headless mode.
+/// GPU presentation and recovery are configured by the GUI shell. Shared
+/// quality policy and USD visual sync remain device-independent, so scene
+/// materialization uses the same authored profile in headless mode.
 pub struct LunCoSimSimulationPlugin;
 
 // `set_parent_in_place` is `disallowed_methods`-banned for its atomicity
@@ -301,6 +301,12 @@ impl Plugin for LunCoSimSimulationPlugin {
         // install it once with the simulator core rather than coupling it to
         // the scene mutation command crate.
         app.add_plugins(lunco_scene_validation::SceneValidationPlugin);
+
+        // Quality-dependent mesh and USD visual projection use the same
+        // authored profile in every host. Only GPU recovery stays in the GUI.
+        if !app.is_plugin_added::<lunco_render::RenderQualityPolicyPlugin>() {
+            app.add_plugins(lunco_render::RenderQualityPolicyPlugin);
+        }
 
         app.add_plugins(lunco_core_runtime::gate::GatePlugin);
 

@@ -10,7 +10,7 @@
 # this asset and its program decides what the sensor means.
 def Xform "RoutePoint" (
     doc = "Reusable route-point marker with a non-solid overlap sensor."
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoBillboardAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoBillboardAPI", "LunCoPointerInteractionAPI"]
     kind = "component"
 )
 {
@@ -19,8 +19,8 @@ def Xform "RoutePoint" (
     string lunco:billboard:text = "Route point {index}\n{lat:.5}, {lon:.5}\n{height:.1} m"
     float lunco:billboard:offsetY = 4.0
     float lunco:billboard:fadeEnd = 1200.0
-    custom string lunco:interaction:left = "pass_through"
-    custom string lunco:interaction:right = "context"
+    uniform token lunco:interaction:left = "pass_through"
+    uniform token lunco:interaction:right = "context"
 
     def Scope "Looks"
     {
@@ -45,11 +45,11 @@ def Xform "RoutePoint" (
     # passes. displayOpacity is the standard USD gprim presentation control;
     # the marker does not emit light.
     def Sphere "Dome" (
-        prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"]
+        prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI", "LunCoPointerInteractionAPI"]
     )
     {
-        custom string lunco:interaction:left = "pass_through"
-        custom string lunco:interaction:right = "context"
+        uniform token lunco:interaction:left = "pass_through"
+        uniform token lunco:interaction:right = "context"
         double radius = 1.5
         double3 xformOp:translate = (0, 1.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]

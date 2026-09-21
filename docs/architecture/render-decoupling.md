@@ -225,11 +225,13 @@ deterministic `render.quality_profile` policy in
 [`assets/scripting/policy/render_quality_profiles.rhai`](../../assets/scripting/policy/render_quality_profiles.rhai).
 The same source authors `render.default_quality_profile`, which selects the
 initial profile for fresh settings. `lunco-render` declares both typed hook
-contracts; Rhai policies load in `PreStartup`, and render recovery loads and
-validates all three maps before the first update. CLI requests are applied from
-the same catalog, and saved custom Graphics values are preserved. Rust owns
-field conversion, range and memory checks, and applying validated values; it
-does not contain a second Low/Balanced/High settings table or default choice.
+contracts and its `RenderQualityPolicyPlugin` loads and validates all three
+maps before quality-dependent scene projection in graphical and headless hosts.
+The GPU recovery crate consumes the same catalog for presentation recovery.
+CLI requests are applied from that catalog, and saved custom Graphics values
+are preserved. Rust owns field conversion, range and memory checks, and
+applying validated values; it does not contain a second Low/Balanced/High
+settings table or default choice.
 
 | Preset | Directional map · cascades · near split · range | Point map · caster caps (directional / point / spot) | Filter | Estimated depth maps / ceiling |
 | --- | --- | --- | --- | --- |

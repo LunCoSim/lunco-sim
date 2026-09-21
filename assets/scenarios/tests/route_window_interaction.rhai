@@ -1,8 +1,10 @@
 // Headful acceptance for the native user path in a loaded Twin.
 //
-// The coordinates are supplied by the runner from a current screenshot. The
-// scenario sends typed window events, then observes the same public selection,
+// Pointer targets are projected from the live viewport before each gesture.
+// The scenario sends typed window events, then observes the public selection,
 // USD, control, and authored-program surfaces a user would see.
+
+const TEST_KIND = "editor";
 
 const ROUTE = "/Traverse/Route";
 const SUBJECT = "/Traverse/Rover";
@@ -49,6 +51,14 @@ fn port_active(id) {
 fn guidance_is_live(id) {
     let value = port(id, "guidance_throttle");
     value != () && value.abs() > 0.01
+}
+
+fn vessel_hud_visible() {
+    let result = query("ReadExposures", #{ surface: "vessel-hud" });
+    if result == () || result.surfaces == () { return (); }
+    let surface = result.surfaces["vessel-hud"];
+    if surface == () || surface.visible == () { return (); }
+    surface.visible
 }
 
 fn on_start(me, ctx) {
@@ -156,7 +166,9 @@ fn on_tick(me, ctx) {
         // that the F action consumes rather than conflating the two.
         this.selection_ok = is_controlled(this.subject);
         if !this.selection_ok { return; }
+        if vessel_hud_visible() != true { return; }
         this.checks.push(t_true(true, "native primary click controls the rover"));
+        this.checks.push(t_true(true, "the vessel HUD is visible while the rover is possessed"));
         this.route_was_active = port_active(this.subject);
         if this.route_was_active {
             send_key(this.action_key, "Pressed");
@@ -210,16 +222,71 @@ fn on_tick(me, ctx) {
             "the authored route program produces a live guidance command"));
         let active_label = get_exposure("vessel-hud", "program_label");
         if active_label == () || active_label != "AUTOPILOT ON" { return; }
+        if vessel_hud_visible() != true { return; }
         this.checks.push(t_true(true,
             "the vessel HUD reflects the authoritative active program state"));
-        // Stop before the spatial-edit half of the test. The attended camera
-        // follows the controlled subject, so leaving the route running would
-        // make a fixed screen coordinate cease to identify the point that was
-        // just authored. This still proves both F transitions and makes the
-        // subsequent pointer cycle deterministic.
+        // Possession and route execution have separate lifecycles. Releasing
+        // the local avatar must hide its HUD while the route keeps guiding the
+        // rover; a plain click must then reacquire that same rover.
+        send_key("Escape", "Pressed");
+        this.phase = 60;
+        return;
+    }
+
+    if this.phase == 60 {
+        send_key("Escape", "Released");
+        this.phase = 61;
+        return;
+    }
+
+    if this.phase == 61 {
+        if is_controlled(this.subject) || !port_active(this.subject)
+            || !guidance_is_live(this.subject) {
+            return;
+        }
+        if vessel_hud_visible() != false { return; }
+        this.checks.push(t_true(true,
+            "releasing possession keeps the route active and hides the vessel HUD"));
+        let rover_screen = viewport_position(find_path(ROVER_TARGET));
+        if rover_screen == () || rover_screen.len() != 2 { return; }
+        this.rover_x = rover_screen[0];
+        this.rover_y = rover_screen[1];
+        input_pointer_move(this.rover_x, this.rover_y);
+        this.phase = 62;
+        return;
+    }
+
+    if this.phase == 62 {
+        input_pointer_press("primary", this.rover_x, this.rover_y);
+        this.phase = 63;
+        return;
+    }
+
+    if this.phase == 63 {
+        input_pointer_release("primary", this.rover_x, this.rover_y);
+        this.phase = 64;
+        return;
+    }
+
+    if this.phase == 64 {
+        if !is_controlled(this.subject) || !port_active(this.subject)
+            || !guidance_is_live(this.subject) || vessel_hud_visible() != true {
+            return;
+        }
+        let active_label = get_exposure("vessel-hud", "program_label");
+        if active_label == () || active_label != "AUTOPILOT ON" { return; }
+        this.checks.push(t_true(true,
+            "the rover can be repossessed while autopilot remains active"));
+        this.checks.push(t_true(true,
+            "repossessing restores the vessel HUD with the active route state"));
         input_key_press(this.action_key);
-        this.stop_requested = true;
-        this.phase = 7;
+        this.phase = 65;
+        return;
+    }
+
+    if this.phase == 65 {
+        input_key_release(this.action_key);
+        this.phase = 8;
         return;
     }
 
@@ -509,7 +576,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 20 {
         // The generic menu is anchored at the secondary-click position. The
-        // runner supplies the current delete-row coordinate from its screenshot.
+        // second authored row is the explicit Delete route point action.
         input_pointer_move(this.delete_x, this.delete_y);
         this.phase = 21;
         return;

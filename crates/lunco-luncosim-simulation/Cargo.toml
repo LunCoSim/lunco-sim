@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
+lunco-render = { path = "../lunco-render" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_shader"] }

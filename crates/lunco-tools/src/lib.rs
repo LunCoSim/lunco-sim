@@ -154,11 +154,6 @@ pub fn index() -> Vec<ToolInfo> {
 /// palette entry that then has nothing to run.
 pub const UI_CLICK_FN: &str = "on_click/1";
 
-/// Optional scene-pointer policy hook. A tool exposing `on_pointer(context)`
-/// receives unarmed scene clicks through the generic editor bridge. The tool
-/// owns modifier/button semantics; the engine only supplies the typed context.
-pub const UI_POINTER_FN: &str = "on_pointer/1";
-
 /// Optional companions to [`UI_CLICK_FN`], read the same way. Absent is fine:
 /// the palette falls back to the tool's own name and no hint.
 pub const UI_LABEL_FN: &str = "ui_label/0";
@@ -175,15 +170,6 @@ pub fn ui_click_tools() -> Vec<ToolInfo> {
     index()
         .into_iter()
         .filter(|t| t.functions.iter().any(|f| f == UI_CLICK_FN))
-        .collect()
-}
-
-/// Every registered tool that participates in the unarmed scene-pointer
-/// policy, sorted by name.
-pub fn ui_pointer_tools() -> Vec<ToolInfo> {
-    index()
-        .into_iter()
-        .filter(|t| t.functions.iter().any(|f| f == UI_POINTER_FN))
         .collect()
 }
 

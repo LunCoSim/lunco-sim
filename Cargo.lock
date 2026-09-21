@@ -8204,6 +8204,7 @@ dependencies = [
  "lunco-modelica-runtime",
  "lunco-obstacle-field",
  "lunco-physics",
+ "lunco-render",
  "lunco-scene-camera",
  "lunco-scene-commands",
  "lunco-scene-selection",

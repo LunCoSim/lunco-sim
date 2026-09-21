@@ -16,6 +16,7 @@
 pub mod appearance;
 pub mod camera;
 pub mod quality;
+mod quality_policy;
 pub mod sun;
 
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, ProceduralSkybox, SurfaceAlpha};
@@ -29,6 +30,7 @@ pub use quality::{
     ShadowFilteringQuality, ShadowRangeAuthorship, RENDER_DEFAULT_QUALITY_PROFILE_HOOK,
     RENDER_QUALITY_PROFILE_HOOK,
 };
+pub use quality_policy::{RenderQualityPolicyPlugin, RenderQualityPolicySet};
 pub use sun::LunarSunShadow;
 
 /// Persisted presentation preference for runtime communication-link beams.

@@ -22,6 +22,10 @@ pipeline into the slim web / Modelica binaries.
   better edge quality when temporal anti-aliasing is off. The physical sun angle
   remains an authored USD/horizon-shadow concern, not a renderer-wide blur
   setting.
+- **`RenderQualityPolicyPlugin`** — registers the settings section and resolves
+  the complete typed profile catalog from Rhai before quality-dependent scene
+  projection. The shared plugin runs in graphical and headless hosts; GPU
+  recovery remains separate.
 - **`RenderingQualitySettings`** — the persisted Graphics section and its
   `RenderingQuality::{Low, Balanced, High}` choices. The values come from the
   deterministic `render.quality_profile` Rhai policy in
@@ -37,8 +41,8 @@ pipeline into the slim web / Modelica binaries.
   envelope is intentionally the same bounded envelope as `Balanced`; the extra
   High budget is spent on lighting, derived maps, rocks, and tessellation so
   terrain geometry cannot consume the frame. The settings are consumed by the
-  render-capable crates; they do not select or replace USD-authored shader
-  sources.
+  scene and geometry projectors in every host; they do not select or replace
+  USD-authored shader sources.
 
 ## Remaining roadmap
 

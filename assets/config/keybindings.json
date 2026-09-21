@@ -17,6 +17,21 @@
   "cancel":     ["Backspace", "Escape"],
   "delete_selection": ["Delete"],
   "pointer_bindings": {
+    "selection.replace": [
+      {"button": "Left"}
+    ],
+    "selection.extend": [
+      {"button": "Left", "shift": true}
+    ],
+    "selection.remove": [
+      {"button": "Left", "ctrl": true},
+      {"button": "Left", "ctrl": true, "shift": true},
+      {"button": "Left", "ctrl": true, "alt": true},
+      {"button": "Left", "ctrl": true, "alt": true, "shift": true}
+    ],
+    "selection.drill": [
+      {"button": "Left", "alt": true, "shift": true}
+    ],
     "route.add_point": [
       {"button": "Left", "alt": true}
     ],

@@ -2,10 +2,10 @@
 
 > Status: Design · Audience: contributors touching documents, registries, assets, or multi-user
 >
-> ⚠️ **PART DESIGN SPEC.** §1–§4 describe what IS. §5 onward (layer model, live
-> layer, resolver seam, permissions UI) is the **target end-state**: the
-> `ar::Resolver` seam is unused, `find_or_open` does not exist in our `openusd`
-> fork, and there is no live layer. Read those as intent, not code.
+> ⚠️ **PART DESIGN SPEC.** §1–§4 and §5–§5a describe the current identity,
+> authoring-layer, and simulation-state contracts. §6 onward remains the
+> collaboration target: the `ar::Resolver` seam is unused, `find_or_open` does
+> not exist in our `openusd` fork, and there is no replicated live layer.
 
 Complements [`10-document-system.md`](10-document-system.md), which defines what a
 Document *is*. This one answers: **who owns a file, what happens when two writers
@@ -121,85 +121,86 @@ are not, uniformly:
 
 Shipping collaboration before fixing rhai's addressing would destroy work quietly.
 
-## 5. Target: the layer model — **authoring only**
+## 5. As-built: authored, runtime, and view layers
 
-**Never edit the base layer live.** Edits land in a layer *above* it; composition
-resolves by strength. Then a base reload is conflict-free — the user's opinions
-ride on top — and most conflict UX dissolves instead of needing a merge dialog.
+USD authoring follows the non-destructive layer pattern: keep the shipped or
+Twin-authored source intact and write local edits into an explicit stronger
+layer. Each edit names its target; the composed stage resolves the result.
 
 ```
-AUTHORING — USD layers. Slow to write. Composition, undo, journal, git.
-  [ base .usda        ]  authored truth, resolved via ar::Resolver, never live-edited
-  [ runtime sublayer  ]  runtime-authored state (spawns, gizmo moves, checkpoints),
-                         PERSISTED to .lunco/runtime
-  [ live layer        ]  other users' authoring deltas, LWW per property  (Nucleus `.live`)
-  [ session layer     ]  truly ephemeral, NEVER saved (camera, selection, presence)
+DOCUMENT — authored USD opinions and derived view, composed in strength order.
+  [ @root@    ] source scene; saved to its source file on explicit Save
+  [ @runtime@ ] local authored edits; separately persisted under .lunco/runtime
+  [ @view@    ] derived presentation; disposable, never saved or journaled
+  [ ECS       ] continuous simulation and editor session state
 ```
 
-> **The `runtime` layer is a persisted sublayer, not a USD session layer.** A
-> session layer is by definition never serialized; ours round-trips through
-> `.lunco/runtime`. Do not "fix" it by calling it a session layer — the ephemeral
-> slot above is a *different*, currently-unused thing.
+`@runtime@` is an authored document layer, not a USD session layer. User edits
+such as route points and gizmo transforms are journaled typed operations and
+can be saved independently of the source `.usda`. When the owning Twin enables
+`usd.runtime_persistence`, the runtime layer is serialized to
+`.lunco/runtime/<scene-path>` and restored before the next scene mount.
+
+`@view@` contains disposable projections such as route ribbons and visited
+marker colors. `ApplyUsdOps` rejects this target; derived presentation uses the
+transient USD command, which updates the live stage but does not alter the
+runtime sidecar or undo history.
+
+Omniverse makes the active authoring layer visible in its Layers panel, while its
+Session Layer is temporary working state. LunCoSim's persisted `@runtime@` is a
+different contract: it is Twin-owned authoring that can survive reopening, not
+the transient Session Layer. Route and runtime tools select it by policy today.
+The expected editor experience is to name that target beside the active tool,
+show whether runtime persistence is enabled, and expose save progress and the
+last durable state. A user should be able to tell that a waypoint was authored
+to the Twin runtime sidecar without opening a layer inspector or guessing
+whether the source `.usda` changed.
+
+The viewport has the same visibility requirement for gestures. Omniverse's
+`GestureManager` resolves competing gestures by priority and prevents one input
+from triggering multiple actions. LunCoSim's Rhai router currently arbitrates
+the unarmed route-edit and selection gestures; armed spawn, terrain, attachment,
+possession, camera, and gizmo paths still have engine-owned input consumers.
+The robust target is one pointer gesture lifecycle: the engine gathers hit and
+capture facts, a typed Rhai policy chooses one owner and action, and generic
+Rust mechanisms apply that action. A drag remains captured until release or
+cancel. The USD per-button hit policy is translated into Bevy's ordered-hit
+contract before its picking backend runs, so a route marker may pass through
+for primary selection while remaining the actual secondary context target.
+Route target identity comes from the hit paths, not screen proximity. A
+waypoint context click opens its menu without selection or gizmo activation;
+selecting it is a separate menu action. Rhai owns the meaning and chosen action;
+continuous picking, gesture capture, transform math, and generic gizmo
+application remain engine work.
+
+For route authoring, the user should see `Twin Runtime` as the active target,
+receive immediate point and ribbon feedback without scene reload, and see
+whether the sidecar is saving or saved. Visited points turn gray. Autopilot and
+possession are separate controls: releasing the rover hides its driving HUD,
+while the route program continues until stopped or complete. Repossessing the
+rover restores its HUD without restarting the route.
 
 **Per-tick simulation state is NOT in this stack, and must never be** — see §5a.
 
-This is USD's native answer, and it generalises as **"base + addressable deltas"**:
+## 5a. Per-tick simulation state stays in the ECS
 
-- **USD** gets it natively — `Stage::open(root, session)` composes live.
-- **Modelica/rhai** have no layer model, but *do* have a base + an op log. Replay
-  is their composition — and it only works if ops are name-addressed (§4).
-
-**What this deletes.** Today the document composes `base ⊕ runtime`, **serializes
-it back to USDA text**, and publishes the bytes as a `twin://` overlay so the
-asset loader reads them back — a `parsed → text → parsed` round trip whose only
-purpose is to hand data to ourselves, because the stage is built by a *path
-loader* when the content already exists in memory. With a real session layer the
-overlay, `Assets<UsdSourceText>` (locally), and `composed_source()` all disappear.
-
-## 5a. Runtime state lives in the ECS, not in a layer
-
-USD is an **authoring** data model. It is fast to read and **slow to write** —
-NVIDIA measures a write-back at *milliseconds to hundreds of milliseconds* — and
-their guidance is explicit: *"changing the USD data in runtime is not recommended
-because of performance reasons"*, and *"it's best not to write back to USD while
-the simulation is running."*
-
-So Omniverse splits it in two, and so do we — under different names:
-
-| concern | Omniverse | LunCoSim |
-|---|---|---|
-| authoring truth | USD layers | USD documents / layers |
-| per-tick runtime | **Fabric** (via USDRT) | **Bevy ECS + avian** |
-| USD → runtime | USDRT Population (batched) | `StageSink` projection |
-| runtime → USD | explicit, never per-frame | checkpoint / save only |
-| who reads runtime | PhysX, render delegate | avian, renderer |
-
-**The ECS *is* our Fabric.** That is what "USD = truth, ECS = projection (two
-worlds)" has always meant; it is the same architecture NVIDIA ships, not a
-LunCoSim invention.
-
-The rule that falls out:
+USD layers own scene structure and user-authored edits. They do not store
+continuously changing simulation state. The runtime document layer changes on
+explicit authoring actions; route ribbons and visited marker colors change on
+route revisions or sensor events. Neither is rewritten every frame. Runtime
+layer serialization runs asynchronously from coalesced snapshots, while the
+live projector applies typed operations incrementally to the already-mounted
+stage.
 
 > **Never author per-tick simulation state as a USD op.** A rover's position each
-> frame belongs in the ECS and is replicated by rollback netcode (§7). It reaches
-> USD only when a human asks — save, checkpoint, promote-scenario.
+> frame belongs in Bevy ECS / Avian, while Modelica owns continuous equations.
+> Checkpointing is an explicit authored action with its own owner; it must not
+> turn the simulation tick into a stream of USD writes.
 
-This is not theoretical for us: `sync_twin_overlays` sends a settle message for
-its whole-stage serialization because per-stroke USD writes are unaffordable
-during terrain brushing. The message boundary coalesces the edit burst while
-the live stage still receives each authored operation immediately.
-
-**Three things, not two** — and the middle one is easy to miss:
-
-1. **Authoring edits** (user drags a gizmo, spawns a rover) → base / live layer.
-   Journaled, undoable, saved.
-2. **Runtime-authored state** (a scenario's spawns, a saved checkpoint) → runtime
-   sublayer. Persisted, but *not* the user's edit history.
-3. **Per-tick sim state** (where the rover is this frame) → **ECS only**. Never a
-   USD op, never journaled, never undoable.
-
-Today (1) and (2) share the `runtime` sublayer. That conflation is why a gizmo
-drag and a scenario checkpoint are indistinguishable to save/undo.
+The four lifetimes are distinct: source USD, journaled runtime-layer authoring,
+disposable view-layer presentation, and continuous ECS/Modelica simulation.
+Keep those owners separate so an editor gesture cannot rebuild the running
+simulation or persist presentation state.
 
 ## 6. Target: the resolver is the only local/client seam
 

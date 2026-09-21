@@ -473,7 +473,8 @@ pub fn run_gui() -> AppExit {
         None
     };
 
-    let mut app = build_gui_app_with_profile(offscreen, render_profile);
+    let startup_scene = lunco_luncosim_runtime::startup_scene_arg(&args);
+    let mut app = build_gui_app_with_profile(offscreen, render_profile, startup_scene);
 
     #[cfg(all(
         feature = "api-transport",
@@ -557,7 +558,11 @@ fn apply_render_quality_override(app: &mut App, quality: Option<lunco_render::Re
     );
 }
 
-fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderProfile) -> App {
+fn build_gui_app_with_profile(
+    offscreen: bool,
+    render_profile: LunCoSimRenderProfile,
+    startup_scene: Option<String>,
+) -> App {
     let mut app = App::new();
     // Register every LunCo asset source (lunco:// and twin://) +
     // the shared `TwinRoots` resource in ONE shared place (`lunco-assets-core`), so all
@@ -577,7 +582,10 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
     }
     app.add_plugins(LunCoSimSimulationPlugin);
-    app.add_plugins(LunCoSimRuntimePlugin::default());
+    app.add_plugins(LunCoSimRuntimePlugin {
+        headless: false,
+        startup_scene,
+    });
     if !offscreen {
         crate::camera::install_interactive_camera(&mut app);
     }

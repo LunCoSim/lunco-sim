@@ -15,6 +15,7 @@ export LUNCOSIM_EPHEMERAL_SETTINGS=1
 export LUNCOSIM_ISOLATED_RUN=1
 
 BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
+export LUNCOSIM_BIN="$BIN"
 EDITOR_TIMEOUT="${EDITOR_TIMEOUT:-120}"
 EDITOR_API_PORT="${EDITOR_API_PORT:-4700}"
 LOG_DIR="target/scene-tests"
@@ -84,6 +85,10 @@ if [[ ${#SCENES[@]} -eq 0 ]]; then
     echo "editor scene gate: no editor scene matches '${FILTER:-all}'" >&2
     exit 2
 fi
+if ((EDITOR_API_PORT + ${#SCENES[@]} - 1 > 65535)); then
+    echo "editor scene gate: selected scenes exceed the available API port range" >&2
+    exit 2
+fi
 
 mkdir -p "$LOG_DIR"
 overall=0
@@ -95,60 +100,15 @@ for scene in "${SCENES[@]}"; do
     port=$((EDITOR_API_PORT + index))
     index=$((index + 1))
     echo "==> editor $name"
-
-    # This is a production windowed process, not a mock editor. Closing stdin
-    # is part of the process contract: a background GUI process must not let
-    # the Rhai REPL consume the controlling terminal or receive SIGTTIN.
-    "$BIN" --api "$port" --scene "$scene" </dev/null >"$log" 2>&1 &
-    pid=$!
-    started_at="$(date +%s)"
-    verdict=""
-    while kill -0 "$pid" 2>/dev/null; do
-        if grep -Fq '[rhai] TESTS_FAIL' "$log"; then
-            verdict="FAIL"
-            break
-        fi
-        if grep -Fq '[rhai] TESTS_OK' "$log"; then
-            verdict="PASS"
-            break
-        fi
-        now="$(date +%s)"
-        if ((now - started_at >= EDITOR_TIMEOUT)); then
-            verdict="TIMEOUT"
-            break
-        fi
-        sleep 0.25
-    done
-
-    if [[ -n "$verdict" ]]; then
-        kill -TERM "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+    if python3 scripts/api/run_editor_scene_test.py \
+        --port "$port" \
+        --timeout "$EDITOR_TIMEOUT" \
+        --scene "$scene" \
+        --log "$log"; then
+        passed=$((passed + 1))
     else
-        wait "$pid" || true
-        verdict="EXITED"
+        overall=1
     fi
-
-    case "$verdict" in
-        PASS)
-            passed=$((passed + 1))
-            echo "    PASS — production editor verdict; log=$log"
-            ;;
-        FAIL)
-            overall=1
-            echo "    FAIL — production editor verdict; log=$log"
-            tail -20 "$log" | sed 's/^/    | /'
-            ;;
-        TIMEOUT)
-            overall=1
-            echo "    FAIL — editor verdict did not arrive within ${EDITOR_TIMEOUT}s; log=$log"
-            tail -20 "$log" | sed 's/^/    | /'
-            ;;
-        *)
-            overall=1
-            echo "    FAIL — editor process exited without a verdict; log=$log"
-            tail -20 "$log" | sed 's/^/    | /'
-            ;;
-    esac
 done
 
 echo "editor scene gate: ${passed}/${#SCENES[@]} passed"

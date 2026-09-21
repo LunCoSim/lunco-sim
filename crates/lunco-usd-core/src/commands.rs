@@ -46,10 +46,10 @@ pub struct ApplyUsdOps {
     pub ops: Vec<UsdOp>,
 }
 
-/// Apply a compound USD edit that belongs to a disposable view rather than to
-/// user-authored history. The document and typed operation log still advance,
-/// so the live canonical stage receives the same ordered delta; only the
-/// undo/redo and external-journal entries are omitted.
+/// Apply a compound USD edit to the disposable view layer rather than to user-
+/// authored history. The document and typed operation log still advance, so
+/// the live canonical stage receives the same ordered delta; the view layer is
+/// excluded from the runtime sidecar, source save, undo/redo, and journal.
 #[Command(default)]
 pub struct ApplyUsdTransientOps {
     /// Target document.

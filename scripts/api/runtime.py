@@ -19,7 +19,8 @@ from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BINARY = ROOT / "target" / "debug" / "luncosim"
+_binary = Path(os.environ.get("LUNCOSIM_BIN", "target/debug/luncosim"))
+BINARY = _binary if _binary.is_absolute() else ROOT / _binary
 REQUEST_TIMEOUT_S = float(os.environ.get("LUNCOSIM_API_REQUEST_TIMEOUT_S", "10"))
 READY_TIMEOUT_S = float(os.environ.get("LUNCOSIM_API_READY_TIMEOUT_S", "120"))
 EXIT_TIMEOUT_S = float(os.environ.get("LUNCOSIM_API_EXIT_TIMEOUT_S", "15"))
@@ -102,14 +103,18 @@ class ProductionSession:
         *,
         extra_args: Iterable[str] = (),
         log_path: Path | None = None,
+        windowed: bool = False,
     ) -> None:
         self.port = port
         self.extra_args = list(extra_args)
         self.log_path = log_path or Path(f"/tmp/luncosim-api-{port}.log")
+        self.windowed = windowed
         self._log = None
         self.process: subprocess.Popen[bytes] | None = None
 
     def __enter__(self) -> "ProductionSession":
+        if port_is_open(self.port):
+            raise RuntimeErrorWithLog(f"API port {self.port} is already in use")
         if not BINARY.is_file():
             raise RuntimeErrorWithLog(
                 f"missing production binary {BINARY}; build it first with "
@@ -117,9 +122,14 @@ class ProductionSession:
             )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log = self.log_path.open("wb")
+        args = [str(BINARY)]
+        if not self.windowed:
+            args.append("--no-ui")
+        args.extend(["--api", str(self.port), *self.extra_args])
         self.process = subprocess.Popen(
-            [str(BINARY), "--no-ui", "--api", str(self.port), *self.extra_args],
+            args,
             cwd=ROOT,
+            stdin=subprocess.DEVNULL,
             stdout=self._log,
             stderr=subprocess.STDOUT,
             start_new_session=True,

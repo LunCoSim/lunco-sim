@@ -167,7 +167,7 @@ used; the route program does not invent a second terrain-derived path.
 
 The scene-level Rhai route program and composed USD points are the single source
 for the route that drives the subject. The reusable `waypoint_editor` Rhai tool
-derives one runtime `BasisCurves` annotation from those same active point
+derives one disposable `@view@` `BasisCurves` annotation from those same active point
 children. It uses exact composed paths and writes the route view only after a
 route revision changes and the canonical projection has settled; it does not
 create a second authored route, a subject component, or a per-frame document
@@ -182,7 +182,7 @@ points in local curve coordinates, so large-world coordinates do not need to be
 duplicated into every vertex. The reusable USD asset owns its material, depth behavior,
 and shadowless/additive presentation; the tool owns only the current point topology.
 It is not a terrain mesh, a physics surface, or a camera-path preview. If fewer
-than two active points remain, the tool removes the runtime ribbon atomically.
+than two active points remain, the tool removes the view-layer ribbon atomically.
 
 USD remains authoritative for point identity, composed transforms, active state,
 and mission topology. A transient generation gap while a typed edit is being
@@ -191,8 +191,8 @@ synchronized is rejected instead of guessing a duplicate path. A missing
 subject, malformed point, or persistent unavailable USD generation is a visible
 route-program error and leaves the subject safely braked. The selected program
 path, not a hardcoded `/Route`, determines which plan receives an edit or a
-control edge. Because the ribbon is generated in the runtime layer, closing
-the runtime view leaves the authored Twin and its route points unchanged.
+control edge. Because the ribbon is generated in the disposable view layer,
+closing that view leaves the authored Twin and its route points unchanged.
 
 ## Difficulty tiers as a variantSet
 
