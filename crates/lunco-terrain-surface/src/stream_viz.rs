@@ -3373,7 +3373,12 @@ mod draw_partition_tests {
     use bevy::camera::Viewport;
 
     fn terrain_quality() -> lunco_render::RenderQualityProfile {
-        lunco_render::RenderingQualitySettings::default().profile()
+        lunco_render::RenderQualityProfile {
+            terrain_lod_pixel_error: 2.0,
+            terrain_lod_morph_start_ratio: 0.55,
+            terrain_lod_tile_resolution: 49,
+            ..Default::default()
+        }
     }
 
     fn production_template() -> ShaderLook {

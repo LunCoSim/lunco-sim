@@ -26,12 +26,12 @@ fn unvisited_marker_color() { [0.10, 0.95, 0.22] }
 fn visited_marker_color() { [0.55, 0.55, 0.55] }
 
 fn ui_label() { "Route point" }
-fn ui_hint() { "Use the configured add-point gesture on terrain to append a point to the active route" }
+fn ui_hint() { "Add points to the active route's Twin Runtime layer; they persist when runtime persistence is enabled" }
 
-// The generic scene adapter invokes this hook for an unarmed pointer gesture.
+// Called by the one scene-interaction policy for an unarmed pointer gesture.
 // Physical button/modifier meaning is resolved by shared input settings; this
 // policy consumes only semantic pointer intents.
-fn on_pointer(context) {
+fn route_pointer_action(context) {
     if context == () { return #{ ok: true, changed: false, handled: false }; }
     if pointer_intent(context, "route.add_point") {
         let point = pointer_surface_point(context);
@@ -41,14 +41,26 @@ fn on_pointer(context) {
         if point.ok != true {
             return #{ ok: true, changed: false, handled: true, reason: "terrain_required" };
         }
-        return on_click(context);
+        // Every semantic pointer owner must explicitly claim the gesture.
+        // The edit result carries the created path, while `handled` tells the
+        // central router to stop before selection or gizmo policies run.
+        let result = on_click(context);
+        result.handled = true;
+        return result;
     }
-    if pointer_intent(context, "route.context") {
+    let policy = context["pointer_policy"];
+    let side = if context.button == "primary" { "left" }
+        else if context.button == "secondary" { "right" }
+        else { "" };
+    if pointer_intent(context, "route.context")
+        && side != "" && policy != () && policy[side] == "context" {
         let route = route_edit_path(context);
         if route == () || context_route_point(context, route) == () {
             return #{ ok: true, changed: false, handled: false };
         }
-        return on_context(context);
+        let result = on_context(context);
+        result.handled = true;
+        return result;
     }
     #{ ok: true, changed: false, handled: false }
 }
@@ -88,7 +100,7 @@ fn prim_exists(doc, path) {
     // Runtime presentation reads follow the composed stage. The authored
     // document can be one journal revision ahead while a transient view edit
     // is being projected, and that must not make the ribbon disappear.
-    let result = query("QueryUsdPrim", #{ path: path });
+    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path });
     result != () && result.ok != false
 }
 
@@ -134,7 +146,7 @@ fn apply_view_ops(doc, label, ops) {
         ops: ops,
     });
     if result == () || result.ok != true {
-        // Presentation is disposable runtime state. A projection-generation
+        // Presentation is disposable @view@ state. A projection-generation
         // race is retried by its owner and is never reported as a failed
         // durable authoring command.
         return #{ ok: false, retryable: true,
@@ -177,7 +189,7 @@ fn sync_marker_states(doc, route, visited) {
         let current_color = marker.attrs["primvars:displayColor"];
         if current_color.len() != 1 || !vector_equal(current_color[0], color) {
             ops.push(#{ SetAttribute: #{
-                edit_target: "@runtime@",
+                edit_target: "@view@",
                 path: point + "/Dome",
                 name: "primvars:displayColor",
                 type_name: "color3f[]",
@@ -384,39 +396,6 @@ fn direct_route_point(doc, path, route) {
     trigger.authored_in_document == true
 }
 
-fn route_point_screen_radius() { 36.0 }
-
-// Route-point domes are transparent, pass-through annotations. A renderer may
-// therefore report the terrain below them as the picked mesh even when the
-// operator clicked the visible dome. Resolve the nearest authored point in the
-// active render viewport so the policy still receives the intended semantic
-// target without making the marker a physics collider or blocking the rover.
-fn route_point_at_screen(context, route) {
-    if context == () || context.screen_position == () { return (); }
-    let screen = context.screen_position;
-    let children = query("QueryUsdPrim", #{ path: route, children: true });
-    if children == () || children.ok == false || children.children == () {
-        return ();
-    }
-    let nearest = ();
-    let nearest_distance = route_point_screen_radius();
-    for child in children.children {
-        if !is_route_point(context.doc_id, child) { continue; }
-        let marker = find_path(child + "/Dome");
-        if marker < 0 { continue; }
-        let projected = viewport_position(marker);
-        if projected == () || projected.len() != 2 { continue; }
-        let dx = projected[0] - screen[0];
-        let dy = projected[1] - screen[1];
-        let distance = (dx * dx + dy * dy).sqrt();
-        if distance <= nearest_distance {
-            nearest = child;
-            nearest_distance = distance;
-        }
-    }
-    nearest
-}
-
 fn context_route_point(context, route) {
     if context == () { return (); }
     let doc = context["doc_id"];
@@ -431,7 +410,7 @@ fn context_route_point(context, route) {
         let direct = direct_route_point(doc, path, route);
         if direct { return path; }
     }
-    route_point_at_screen(context, route)
+    ()
 }
 
 fn next_point_name(doc, route) {
@@ -474,6 +453,7 @@ fn route_positions(doc, route) {
             error: "route document generation is unavailable" };
     }
     let result = query("QueryUsdPrim", #{
+        doc_id: doc,
         path: route,
         children: true,
     });
@@ -484,13 +464,14 @@ fn route_positions(doc, route) {
     }
     for child in result.children {
         if !is_route_point(doc, child) { continue; }
-        let record = query("QueryUsdPrim", #{ path: child });
+        let record = query("QueryUsdPrim", #{ doc_id: doc, path: child });
         if record == () || record.ok == false {
             return #{ ok: false, retryable: true,
                 error: "route point state is not synchronized" };
         }
         if record.active != true { continue; }
         let point = query("QueryUsdPrim", #{
+            doc_id: doc,
             path: child,
             attrs: ["xformOp:translate"],
         });
@@ -506,7 +487,7 @@ fn route_positions(doc, route) {
 }
 
 // A route view depends on authored point identity and placement, not on the
-// document generation used by disposable runtime presentation edits. Keep the
+// document generation used by disposable @view@ presentation edits. Keep the
 // key at the policy boundary so the generic live projector does not need to
 // know that a particular consumer is a route ribbon.
 fn route_view_key(read) {
@@ -521,30 +502,6 @@ fn route_view_key(read) {
             + point[1].to_string() + "," + point[2].to_string() + ";";
     }
     key
-}
-
-// Sample the authoritative DEM for presentation points. If a Twin has no
-// terrain oracle (for example a flat unit-test fixture), retain the authored
-// route point and an up normal; that is the documented geometry of that scene,
-// not a guessed origin or a vehicle-specific fallback.
-fn terrain_ribbon_sample(point) {
-    let result = query("TerrainHeight", #{
-        x: point[0],
-        z: point[2],
-        eps: 1.0,
-    });
-    if result != () && result.found == true
-        && result.height != () && result.normal != () {
-        let normal = vnorm(result.normal);
-        if normal != () {
-            return #{
-                point: [point[0], result.height, point[2]],
-                normal: normal,
-                surface: true,
-            };
-        }
-    }
-    #{ point: point, normal: [0.0, 1.0, 0.0], surface: false }
 }
 
 fn ribbon_step_count(a, b, spacing) {
@@ -591,43 +548,60 @@ fn ribbon_surface_samples(points) {
     let sampled_points = [];
     let sampled_normals = [];
     if points.len() == 0 {
-        return #{ points: sampled_points, normals: sampled_normals };
+        return #{ ok: true, points: sampled_points, normals: sampled_normals };
     }
+    let dense_points = [];
     if points.len() == 1 {
-        let sample = terrain_ribbon_sample(points[0]);
-        sampled_points.push(sample.point);
-        sampled_normals.push(sample.normal);
-        return #{ points: sampled_points, normals: sampled_normals };
+        dense_points.push(points[0]);
+    } else {
+        let spacing = ribbon_sampling_spacing(points);
+        for i in 0..(points.len() - 1) {
+            let a = points[i];
+            let b = points[i + 1];
+            let steps = ribbon_step_count(a, b, spacing);
+            for j in 0..steps {
+                let t = j.to_float() / steps.to_float();
+                dense_points.push([
+                    a[0] + (b[0] - a[0]) * t,
+                    a[1] + (b[1] - a[1]) * t,
+                    a[2] + (b[2] - a[2]) * t,
+                ]);
+            }
+        }
+        dense_points.push(points[points.len() - 1]);
     }
-    let first = terrain_ribbon_sample(points[0]);
-    if first.surface != true {
+    let coordinates = [];
+    for point in dense_points { coordinates.push([point[0], point[2]]); }
+    let heights = query("TerrainHeights", #{ points: coordinates, eps: 1.0 });
+    if heights == () || heights.len() != dense_points.len() {
+        return #{ ok: false, retryable: true,
+            error: "batched terrain sampling did not return one result per ribbon point" };
+    }
+    // A scene without an analytic terrain provider authors its route points as
+    // the available support geometry. The query still returns an ordered,
+    // explicit `found: false` result for those samples.
+    if heights[0].found != true {
         for point in points {
             sampled_points.push(point);
             sampled_normals.push([0.0, 1.0, 0.0]);
         }
-        return #{ points: sampled_points, normals: sampled_normals };
+        return #{ ok: true, points: sampled_points, normals: sampled_normals };
     }
-    let spacing = ribbon_sampling_spacing(points);
-    for i in 0..(points.len() - 1) {
-        let a = points[i];
-        let b = points[i + 1];
-        let steps = ribbon_step_count(a, b, spacing);
-        for j in 0..steps {
-            let t = j.to_float() / steps.to_float();
-            let point = [
-                a[0] + (b[0] - a[0]) * t,
-                a[1] + (b[1] - a[1]) * t,
-                a[2] + (b[2] - a[2]) * t,
-            ];
-            let sample = terrain_ribbon_sample(point);
-            sampled_points.push(sample.point);
-            sampled_normals.push(sample.normal);
+    for i in 0..dense_points.len() {
+        let point = dense_points[i];
+        let sample = heights[i];
+        if sample.found == true && sample.height != () && sample.normal != () {
+            let normal = vnorm(sample.normal);
+            if normal != () {
+                sampled_points.push([point[0], sample.height, point[2]]);
+                sampled_normals.push(normal);
+                continue;
+            }
         }
+        sampled_points.push(point);
+        sampled_normals.push([0.0, 1.0, 0.0]);
     }
-    let last = terrain_ribbon_sample(points[points.len() - 1]);
-    sampled_points.push(last.point);
-    sampled_normals.push(last.normal);
-    #{ points: sampled_points, normals: sampled_normals }
+    #{ ok: true, points: sampled_points, normals: sampled_normals }
 }
 
 fn point_literal(point) {
@@ -705,10 +679,12 @@ fn ribbon_width_matches(widths) {
 fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, local_normals) {
     if !prim_exists(doc, ribbon) { return true; }
     let root = query("QueryUsdPrim", #{
+        doc_id: doc,
         path: ribbon,
         attrs: ["xformOp:translate"],
     });
     let shape = query("QueryUsdPrim", #{
+        doc_id: doc,
         path: geometry,
         attrs: ["type", "wrap", "curveVertexCounts", "points", "widths", "normals"],
     });
@@ -733,18 +709,19 @@ fn ribbon_ops(doc, route, points) {
     let ribbon = ribbon_path(route);
     if points.len() < 2 {
         if prim_exists(doc, ribbon) {
-            return [#{ RemovePrim: #{
-                edit_target: "@runtime@",
+            return #{ ok: true, ops: [#{ RemovePrim: #{
+                edit_target: "@view@",
                 path: ribbon,
-            }}];
+            }}] };
         }
-        return [];
+        return #{ ok: true, ops: [] };
     }
     let sampled = ribbon_surface_samples(points);
+    if sampled.ok != true { return sampled; }
     let surface_points = sampled.points;
     let surface_normals = sampled.normals;
     if surface_points.len() < 2 || surface_normals.len() != surface_points.len() {
-        return [];
+        return #{ ok: true, ops: [] };
     }
     let geometry = ribbon_geometry_path(route);
     // Keep the route root at the exact first sampled surface point so its USD
@@ -769,7 +746,7 @@ fn ribbon_ops(doc, route, points) {
     if !ribbon_needs_update(
         doc, ribbon, geometry, anchor, encoded_points, encoded_normals
     ) {
-        return [];
+        return #{ ok: true, ops: [] };
     }
 
     let ops = [];
@@ -778,7 +755,7 @@ fn ribbon_ops(doc, route, points) {
         let parent = "";
         for i in 1..parts.len() - 1 { parent += "/" + parts[i]; }
         ops.push(#{ AddPrim: #{
-            edit_target: "@runtime@",
+            edit_target: "@view@",
             parent_path: parent,
             name: parts[parts.len() - 1],
             type_name: "Xform",
@@ -787,57 +764,57 @@ fn ribbon_ops(doc, route, points) {
         }});
     }
     ops.push(#{ SetTranslate: #{
-        edit_target: "@runtime@",
+        edit_target: "@view@",
         path: ribbon,
         value: anchor,
     }});
     ops.push(#{ SetAttribute: #{
-        edit_target: "@runtime@",
+        edit_target: "@view@",
         path: geometry,
         name: "type",
         type_name: "token",
         value: "\"linear\"",
     }});
     ops.push(#{ SetAttribute: #{
-        edit_target: "@runtime@",
+        edit_target: "@view@",
         path: geometry,
         name: "wrap",
         type_name: "token",
         value: "\"nonperiodic\"",
     }});
     ops.push(#{ SetAttribute: #{
-        edit_target: "@runtime@",
+        edit_target: "@view@",
         path: geometry,
         name: "curveVertexCounts",
         type_name: "int[]",
         value: "[" + surface_points.len().to_string() + "]",
     }});
     ops.push(#{ SetAttribute: #{
-        edit_target: "@runtime@",
+        edit_target: "@view@",
         path: geometry,
         name: "points",
         type_name: "point3f[]",
         value: points_literal(encoded_points),
     }});
     ops.push(#{ SetAttribute: #{
-        edit_target: "@runtime@",
+        edit_target: "@view@",
         path: geometry,
         name: "widths",
         type_name: "float[]",
         value: "[" + route_ribbon_width().to_string() + "]",
     }});
     ops.push(#{ SetAttribute: #{
-        edit_target: "@runtime@",
+        edit_target: "@view@",
         path: geometry,
         name: "normals",
         type_name: "normal3f[]",
         value: ribbon_normals_literal(encoded_normals),
     }});
-    ops
+    #{ ok: true, ops: ops }
 }
 
 // Route points are authored facts. The ribbon is a disposable tool view in
-// the runtime layer, so a Twin remains portable and contains no editor-only
+// the @view@ layer, so a Twin remains portable and contains no editor-only
 // presentation prim.
 fn ensure_ribbon(context) {
     if context == () || context.doc_id == () || context.route_path == () {
@@ -849,8 +826,9 @@ fn ensure_ribbon(context) {
     }
     let read = route_positions(context.doc_id, route);
     if read.ok != true { return read; }
-    let ops = ribbon_ops(context.doc_id, route, read.points);
-    apply_view_ops(context.doc_id, "Update route ribbon", ops)
+    let plan = ribbon_ops(context.doc_id, route, read.points);
+    if plan.ok != true { return plan; }
+    apply_view_ops(context.doc_id, "Update route ribbon", plan.ops)
 }
 
 fn marker_ops(doc, route, position) {
@@ -870,10 +848,9 @@ fn marker_ops(doc, route, position) {
     if !target.ok || !target.exists {
         return #{ ok: false, error: "selected route is not present in the composed USD stage" };
     }
-    let edit_target = if target.under_arc { "@runtime@" } else { "@root@" };
     #{ ok: true, path: path, ops: [
         #{ AddPrim: #{
-            edit_target: edit_target,
+            edit_target: "@runtime@",
             parent_path: route,
             name: name,
             type_name: "Xform",
@@ -881,12 +858,12 @@ fn marker_ops(doc, route, position) {
             reference_prim_path: "",
         }},
         #{ SetTranslate: #{
-            edit_target: edit_target,
+            edit_target: "@runtime@",
             path: path,
             value: position,
         }},
         #{ SetAttribute: #{
-            edit_target: edit_target,
+            edit_target: "@runtime@",
             path: path + "/Trigger",
             name: "lunco:triggerZone",
             type_name: "token",
@@ -896,6 +873,9 @@ fn marker_ops(doc, route, position) {
 }
 
 fn on_click(context) {
+    if context == () || context.button != "primary" {
+        return #{ ok: true, changed: false, handled: false };
+    }
     if context == () || context.doc_id == () || context.scene_root_path == () {
         return failure("click has no active document or scene root");
     }
@@ -921,11 +901,10 @@ fn on_move(context) {
     let route = route_edit_path(context);
     let point = context_route_point(context, route);
     if point == () { return failure("move target is not a direct route point"); }
-    let target = target_record(context.doc_id, point, "@root@");
+    let target = target_record(context.doc_id, point, "@runtime@");
     if !target.ok || !target.exists { return failure("move target does not exist"); }
-    let edit_target = if target.authored_here && !target.under_arc { "@root@" } else { "@runtime@" };
     let ops = [#{ SetTranslate: #{
-            edit_target: edit_target,
+            edit_target: "@runtime@",
             path: point,
             value: point_values(pointer.point),
         }}];
@@ -941,23 +920,23 @@ fn on_delete(context) {
     let route = route_edit_path(context);
     let point = context_route_point(context, route);
     if point == () { return failure("delete target is not a direct route point"); }
-    let target = target_record(context.doc_id, point, "@root@");
+    let target = target_record(context.doc_id, point, "@runtime@");
     if !target.ok || !target.exists { return failure("delete target does not exist"); }
 
-    let op = if target.under_arc {
-        // A referenced child cannot be removed from the referencing layer. USD
-        // expresses this edit as a stronger local active=false opinion, even
-        // when the local layer already carries transform or other overrides.
-        #{ SetActive: #{ edit_target: "@runtime@", path: point, active: false } }
-    } else if target.authored_here {
-        #{ RemovePrim: #{ edit_target: "@root@", path: point } }
+    // A Runtime marker-color opinion can create a local spec at the waypoint
+    // path without making Runtime its owner. The authored Trigger child is the
+    // route-point creation fact: remove points created in Runtime, and use a
+    // stronger active=false opinion for points owned by source/reference data.
+    let runtime_trigger = target_record(
+        context.doc_id, point + "/Trigger", "@runtime@",
+    );
+    if !runtime_trigger.ok {
+        return failure("route-point ownership cannot be resolved in the Runtime layer");
+    }
+    let op = if runtime_trigger.authored_here {
+        #{ RemovePrim: #{ edit_target: "@runtime@", path: point } }
     } else {
-        let runtime = target_record(context.doc_id, point, "@runtime@");
-        if runtime.ok && runtime.authored_here {
-            #{ RemovePrim: #{ edit_target: "@runtime@", path: point } }
-        } else {
-            return failure("route point is composed read-only");
-        }
+        #{ SetActive: #{ edit_target: "@runtime@", path: point, active: false } }
     };
     let ops = [op];
     let result = apply_ops(context.doc_id, "Delete route point", ops);
@@ -995,6 +974,7 @@ fn on_select(context) {
         extend: false,
         toggle: false,
         remove_only: false,
+        inspector_part_entity_id: 0,
     });
     if result == () {
         return failure("SelectEntity command is unavailable in this host");
@@ -1005,8 +985,9 @@ fn on_select(context) {
     #{ ok: true, path: point }
 }
 
-// Secondary pointer context opens a generic authored menu. The editor owns
-// only popup placement and dispatch; labels and actions are authored here.
+// Secondary pointer context opens a generic authored menu without changing
+// scene selection. Selection remains an explicit menu action, so opening the
+// menu cannot also activate the transform gizmo.
 fn on_context(context) {
     if context == () || context.doc_id == () {
         return failure("context click has no active document");
@@ -1015,8 +996,6 @@ fn on_context(context) {
     let point = context_route_point(context, route);
     if point == () { return failure("context target is not a direct route point"); }
     if is_unattended() { return #{ ok: true, path: point, selected: false }; }
-    let selected = on_select(context);
-    if selected.ok != true { return selected; }
     if context.screen_position == () {
         return failure("context click has no screen position");
     }
@@ -1035,5 +1014,5 @@ fn on_context(context) {
         },
     ]);
     if !opened { return failure("the scene context-menu host is unavailable"); }
-    #{ ok: true, path: point, menu: true }
+    #{ ok: true, path: point, menu: true, selected: false }
 }

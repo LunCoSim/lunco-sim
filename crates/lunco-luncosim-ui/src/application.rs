@@ -250,21 +250,6 @@ mod render_profile_tests {
     }
 
     #[test]
-    fn explicit_render_quality_replaces_the_existing_settings_resource() {
-        let mut app = App::new();
-        app.insert_resource(lunco_render::RenderingQualitySettings::default());
-
-        apply_render_quality_override(&mut app, Some(lunco_render::RenderingQuality::High));
-
-        assert_eq!(
-            app.world()
-                .resource::<lunco_render::RenderingQualitySettings>()
-                .profile(),
-            lunco_render::RenderingQuality::High.profile()
-        );
-    }
-
-    #[test]
     fn parses_offline_recording_request_and_frame_limit() {
         let (request, limit) = parse_recording_args(&[
             "luncosim".to_string(),
@@ -488,7 +473,8 @@ pub fn run_gui() -> AppExit {
         None
     };
 
-    let mut app = build_gui_app_with_profile(offscreen, render_profile);
+    let startup_scene = lunco_luncosim_runtime::startup_scene_arg(&args);
+    let mut app = build_gui_app_with_profile(offscreen, render_profile, startup_scene);
 
     #[cfg(all(
         feature = "api-transport",
@@ -548,10 +534,8 @@ pub fn run_gui() -> AppExit {
     app.run()
 }
 
-/// Apply a process-level quality choice after all render plugins have initialized
-/// their settings resource. Omitting the flag leaves the persisted Graphics choice
-/// (or the renderer's documented default) unchanged; supplying it is an explicit
-/// test/recording contract.
+/// Queue a process-level quality choice until the authored profile policy has
+/// loaded. Omitting the flag leaves persisted Graphics settings unchanged.
 fn apply_render_quality_override(app: &mut App, quality: Option<lunco_render::RenderingQuality>) {
     let Some(quality) = quality else {
         return;
@@ -567,14 +551,18 @@ fn apply_render_quality_override(app: &mut App, quality: Option<lunco_render::Re
         return;
     };
 
-    settings.apply_preset(quality);
+    settings.request_profile(quality);
     info!(
-        "[render] explicit quality override enabled: {}",
+        "[render] explicit quality profile requested: {}",
         quality.label()
     );
 }
 
-fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderProfile) -> App {
+fn build_gui_app_with_profile(
+    offscreen: bool,
+    render_profile: LunCoSimRenderProfile,
+    startup_scene: Option<String>,
+) -> App {
     let mut app = App::new();
     // Register every LunCo asset source (lunco:// and twin://) +
     // the shared `TwinRoots` resource in ONE shared place (`lunco-assets-core`), so all
@@ -594,7 +582,10 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
     }
     app.add_plugins(LunCoSimSimulationPlugin);
-    app.add_plugins(LunCoSimRuntimePlugin::default());
+    app.add_plugins(LunCoSimRuntimePlugin {
+        headless: false,
+        startup_scene,
+    });
     if !offscreen {
         crate::camera::install_interactive_camera(&mut app);
     }

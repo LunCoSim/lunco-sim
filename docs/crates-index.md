@@ -16,7 +16,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-command-contracts`** | Pure mutation, session, acknowledgement, rejection, and synchronization-channel contracts shared by document, transport, networking, and runtime adapters without ECS. `Ack.data` uses the shared typed `HookValue` ABI; API JSON is created only at the external adapter. |
 | **`lunco-id`** | Platform-neutral 53-bit operation/entity ID generation shared by document and runtime identity boundaries. |
 | **`lunco-viewport-core`** | Renderer-independent viewport contract: explicit active-camera binding, scene visibility and layout state, viewport scheduling boundary, and the shared camera-ray construction used by scene-click owners. |
-| **`lunco-interaction-core`** | Renderer-independent cursor interaction contract: pointer policy, primary-click ownership, editor tool gates, drag state, and the affected-entity marker consumed by scene, avatar, and camera runtimes. |
+| **`lunco-interaction-core`** | Renderer-independent cursor interaction contract: registered USD button policy, semantic single-owner possession arbitration, editor tool gates, drag state, and the affected-entity marker consumed by scene, avatar, and camera runtimes. |
 | **`lunco-port-core`** | Shared co-simulation port substrate: `Port`, endpoint/control-surface components, `PortRegistry`, backend registration and resolution, topology invalidation state, metadata, collision reporting, and resolved fast-path handles. It is independent of the general engine core. |
 | **`lunco-spatial`** | BigSpace spatial substrate: f64 coordinate/frame helpers, the persistent `WorldRoot`/`WorldGrid` shell, atomic grid migration, hierarchy invariants, spatial markers, and the vehicle-neutral navigation law. It depends on `lunco-core` for the shared runtime-diagnostic resource, but core does not depend on spatial. |
 | **`lunco-core-session`** | Always-on session and authority substrate: network role/status, `SessionRegistry`, generic `ClaimControl`/`ReleaseControlClaim` transitions, `ControlAuthorityChanged`, RBAC policy, prediction markers/input watermarks, and session-dependent identity admission. |
@@ -80,7 +80,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | :--- | :--- |
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
 | **`lunco-control-core`** | Generic semantic-control contracts: `ControlLink`, `AcquireControl`, `ReleaseControlSource`, the shared `UserIntent` vocabulary, authored intent-to-port bindings, input state, egui focus gate, interaction schedule boundary, and bounded causal-edge trace. Input producers and domain consumers depend on this focused package instead of placing control policy in `lunco-core`. |
-| **`lunco-interaction-core`** | Small cross-runtime cursor-interaction contract: pointer policy, primary-click ownership, editor tool gates, drag state, and the affected-entity marker consumed by camera, possession, and follow runtimes. It contains no editor implementation. |
+| **`lunco-interaction-core`** | Small cross-runtime cursor-interaction contract: registered USD button policy, semantic exclusive possession arbitration, editor tool gates, drag state, and the affected-entity marker consumed by camera, possession, and follow runtimes. It contains no editor implementation. |
 | **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |
 | **`lunco-input-ui`** | Optional egui presentation for the shared input state: the recording/observation input overlay and its typed visibility command. It does not translate input or own vessel control. |
 | **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, smoothing defaults, pose-transition state, adaptive clip-plane math, camera input accumulators, deterministic authored-camera display labels, and the `camera.default_presentation` policy-hook contract. Device translation, rendering, and UI adapters consume these contracts. |
@@ -209,7 +209,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-luncosim-edit-inspector-core`** | Renderer-independent Inspector readout snapshot and change gate. It owns the bounded ECS queries for sun, camera, ambient, and joint facts; the rendered Inspector consumes this package without moving those scans into egui paint. |
 | **`lunco-luncosim-edit-inspector-ui`** | Domain-heavy Inspector and authored USD panels: standard USD joint/animation/mount/variant/parameter view models plus environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
-| **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `ProceduralSkybox`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
+| **`lunco-render`** | Render-free appearance intent and typed graphics settings; `RenderQualityPolicyPlugin` resolves Rhai-owned profiles for graphical and headless scene projection. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
 | **`lunco-web`** | Shared web frontend for wasm apps: streaming loader, `WebReadyPlugin`, and the HTML/CSS/Rhai tool host routed through `lunco_rhai`. |
@@ -274,7 +274,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-updater`** | — | Native desktop update capability and rendered update surface. It owns Velopack admission and update UI behind the application’s opt-in `updates` feature. |
 | **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, readiness barriers, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
 | **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, build identity, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
-| **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, scene commands, and headless execution. |
+| **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, shared render-quality policy, scene commands, and headless execution. |
 | **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, and persisted experiment artifacts. It is composed by the runtime boundary rather than embedded in the generic core. |
 | **`lunco-luncosim-runtime`** | — | Production application composition: services plus Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends on `lunco-luncosim-runtime` with API + networking enabled; the GUI shell is not linked. |
@@ -511,9 +511,12 @@ simulation, and vessel control; the generic engine substrate remains in
 **`lunco-interaction-core`**
 Small cross-runtime cursor-interaction contract package. The editor publishes
 `DragModeActive` and `GizmoDragging`; camera, possession, and follow runtimes
-consume those contracts to stand down during a transform drag. Keeping these
-types here prevents the camera runtime from depending on the high-fan-out
-`lunco-core` package and keeps editor implementation details out of consumers.
+consume those contracts to stand down during a transform drag. Its
+`ScenePointerPolicy` is projected from the registered
+`LunCoPointerInteractionAPI`, while possession only claims a click whose shared
+semantic intent is exclusively `selection.replace`. Keeping these types here
+prevents the camera runtime from depending on the high-fan-out `lunco-core`
+package and keeps editor implementation details out of consumers.
 
 **`lunco-avatar`**
 Headless-safe local-avatar runtime. Implements control authority, scene

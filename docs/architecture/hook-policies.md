@@ -76,6 +76,27 @@ active. A Twin manifest with policy records must declare its own `[startup]`;
 an empty Twin policy directory may omit it. Source bytes are resolved by the
 asset/storage layer.
 
+The Rhai policy bootstrap runs in `PreStartup`, before startup systems consume
+authored policies. For example, rendering quality is owned by the
+`lunco-render` seam: `render.quality_profile(id: String) -> Map` supplies the
+complete typed settings for one stable profile id, while
+`render.default_quality_profile() -> String` chooses the initial id for fresh
+settings. The application manifest installs both from
+`assets/scripting/policy/render_quality_profiles.rhai`; Rust validates map
+shape, types, bounds, and shadow allocation before installing the catalog in
+`Startup`. An active Twin can replace either hook through its policy manifest,
+and a changed hook generation causes the catalog to be resolved again.
+
+Both rendering hooks are deterministic, required, and installable. The render
+owner keeps the stable ids and typed field contract; Rhai owns all profile
+values and the fresh-settings selection. A missing hook, invalid id, malformed
+map, or rejected profile leaves the catalog unavailable with a visible
+diagnostic. There is no Rust preset table or fallback profile. Existing valid
+persisted custom settings remain authoritative if the catalog cannot load.
+The production Rhai test verifies declarations, the High default, representative
+values for each profile, and failure for an unknown id in
+`assets/scripting/tests/test_hook_policies.rhai`.
+
 The application startup policy is run once when the simulation starts. It may
 install a generic lifecycle hook such as `twin.lifecycle`. The active Twin
 invokes that hook for `startup`, `reload`, and `close`; the application policy

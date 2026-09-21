@@ -1554,6 +1554,9 @@ fn apply_ops_as_change_set_result(
     ops: Vec<UsdOp>,
     parent_gen: Option<u64>,
 ) -> Result<(Ack, usize), String> {
+    if ops.iter().any(|op| op.edit_target().is_view()) {
+        return Err("the disposable view layer only accepts ApplyUsdTransientOps".to_string());
+    }
     refresh_authoring_recipe(world, doc);
     validate_live_attribute_types(world, doc, &ops)?;
     let total = ops.len();
@@ -1604,6 +1607,10 @@ fn apply_transient_ops_result(
     _label: String,
     ops: Vec<UsdOp>,
 ) -> Result<(Ack, usize), String> {
+    let ops = ops
+        .into_iter()
+        .map(|op| op.with_edit_target(LayerId::view()))
+        .collect::<Vec<_>>();
     refresh_authoring_recipe(world, doc);
     validate_live_attribute_types(world, doc, &ops)?;
     let total = ops.len();

@@ -138,6 +138,11 @@ impl Plugin for LuncoRenderPlugin {
         // use the same lunar terminator without either binary having a second
         // implementation or a per-frame sweep.
         app.add_observer(ensure_lunar_shadow_filtering);
+        app.add_systems(
+            Update,
+            apply_graphics_shadow_filtering
+                .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
+        );
         // Lights and transforms become connection targets, so a value the
         // simulation publishes reaches them through the ordinary port graph rather
         // than through a script that samples a port every tick.
@@ -161,11 +166,13 @@ impl Plugin for LuncoRenderPlugin {
     }
 }
 
-/// Apply the renderer's crisp lunar shadow filter to every 3D camera, including
-/// cameras created after startup by an asynchronously loaded USD scene.
+/// Apply the selected Graphics shadow filter to cameras without an existing
+/// choice, including cameras created after startup by an asynchronously loaded
+/// USD scene.
 fn ensure_lunar_shadow_filtering(
     add: On<Add, Camera3d>,
     profile: Res<RenderProfile>,
+    settings: Res<lunco_render::RenderingQualitySettings>,
     cameras: Query<(), Without<bevy::light::ShadowFilteringMethod>>,
     mut commands: Commands,
 ) {
@@ -174,9 +181,40 @@ fn ensure_lunar_shadow_filtering(
     }
     let entity = add.entity;
     if cameras.get(entity).is_ok() {
-        commands
-            .entity(entity)
-            .try_insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
+        commands.entity(entity).try_insert((
+            bevy_shadow_filter(settings.shadow_filtering_quality),
+            GraphicsShadowFiltering,
+        ));
+    }
+}
+
+/// Marks a camera filter supplied by Graphics so a settings edit can update it
+/// without replacing a filter authored by another camera owner.
+#[derive(Component)]
+struct GraphicsShadowFiltering;
+
+fn bevy_shadow_filter(
+    quality: lunco_render::ShadowFilteringQuality,
+) -> bevy::light::ShadowFilteringMethod {
+    match quality {
+        lunco_render::ShadowFilteringQuality::Hardware2x2 => {
+            bevy::light::ShadowFilteringMethod::Hardware2x2
+        }
+        lunco_render::ShadowFilteringQuality::Gaussian => {
+            bevy::light::ShadowFilteringMethod::Gaussian
+        }
+    }
+}
+
+fn apply_graphics_shadow_filtering(
+    settings: Res<lunco_render::RenderingQualitySettings>,
+    mut cameras: Query<&mut bevy::light::ShadowFilteringMethod, With<GraphicsShadowFiltering>>,
+) {
+    let next = bevy_shadow_filter(settings.shadow_filtering_quality);
+    for mut filtering in &mut cameras {
+        if *filtering != next {
+            *filtering = next;
+        }
     }
 }
 
@@ -433,18 +471,36 @@ mod tests {
     use bevy::light::ShadowFilteringMethod;
 
     #[test]
-    fn standard_camera_uses_hardware_shadow_filtering() {
+    fn graphics_selects_shadow_filtering_for_standard_cameras() {
         let mut app = App::new();
+        let mut settings = lunco_render::RenderingQualitySettings::default();
+        settings.shadow_filtering_quality = lunco_render::ShadowFilteringQuality::Gaussian;
         app.init_resource::<RenderProfile>()
+            .insert_resource(settings)
             .add_observer(ensure_lunar_shadow_filtering);
+        app.add_systems(
+            Update,
+            apply_graphics_shadow_filtering
+                .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
+        );
 
         let camera = app.world_mut().spawn(Camera3d::default()).id();
         app.update();
 
         assert_eq!(
             app.world().entity(camera).get::<ShadowFilteringMethod>(),
+            Some(&ShadowFilteringMethod::Gaussian),
+            "the selected Graphics filter is applied to new standard cameras"
+        );
+
+        app.world_mut()
+            .resource_mut::<lunco_render::RenderingQualitySettings>()
+            .shadow_filtering_quality = lunco_render::ShadowFilteringQuality::Hardware2x2;
+        app.update();
+        assert_eq!(
+            app.world().entity(camera).get::<ShadowFilteringMethod>(),
             Some(&ShadowFilteringMethod::Hardware2x2),
-            "standard lunar shadows must retain a crisp 2x2 comparison filter"
+            "Graphics edits update filters supplied by the Graphics settings"
         );
     }
 

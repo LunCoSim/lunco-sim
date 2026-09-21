@@ -4,9 +4,7 @@
 //! Ctrl+left click removes only the clicked entity. The viewport, API, and
 //! editor panels all route through the same selection mutation owner.
 
-use bevy::picking::events::{Click, Pointer};
 use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility};
-use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 
 use bevy::camera::primitives::Aabb;
@@ -16,7 +14,6 @@ use bevy::math::Isometry3d;
 use lunco_control_core::ControlLink;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
-use lunco_luncosim_edit_core::SpawnState;
 use lunco_luncosim_edit_gizmo_ui::GizmoSelected;
 use lunco_scene_selection::{
     SelectEntityTarget, SelectedEntities, SelectionIntent, SelectionTarget,
@@ -223,6 +220,10 @@ pub struct SelectEntity {
     /// If true, removes this entity without adding it when it is not selected
     /// (the Ctrl+Left-click viewport intent).
     pub remove_only: bool,
+    /// Optional child entity to focus in the Inspector without changing the
+    /// already-selected root. The handler validates that it is a descendant.
+    #[serde(default)]
+    pub inspector_part_entity_id: u64,
 }
 
 /// Select a composed USD prim in one explicit open and focused preview.
@@ -243,8 +244,8 @@ pub struct SelectUsdPrim {
 }
 
 /// THE single selection-mutation, shared by every selection surface: the
-/// viewport-click observer ([`on_scene_click_select`]), the `SelectEntity` API
-/// command ([`on_select_entity`]), and the Explorer list (`ui::entity_list`).
+/// Rhai scene-interaction policy, the `SelectEntity` API command
+/// ([`on_select_entity`]), and the Explorer list (`ui::entity_list`).
 ///
 /// Keyed by `Entity`, **never** by api_id — multiple instances of one USD asset
 /// can share an api_id, so resolving id→entity returns the wrong instance.
@@ -391,6 +392,7 @@ pub fn on_select_entity(
     mut selected: ResMut<SelectedEntities>,
     mut inspector_target: ResMut<SelectionTarget>,
     q_old: Query<Entity, With<Selected>>,
+    q_parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -413,6 +415,44 @@ pub fn on_select_entity(
         }
         return;
     };
+
+    if cmd.inspector_part_entity_id != 0 {
+        if selected.primary() != Some(target) {
+            warn!(
+                "SELECT_ENTITY: inspector part requires selected root api_id={}",
+                cmd.entity_id
+            );
+            return;
+        }
+        let part_id = lunco_core::GlobalEntityId::from_raw(cmd.inspector_part_entity_id);
+        let Some(part) = registry.resolve(&part_id) else {
+            warn!(
+                "SELECT_ENTITY: no inspector part api_id={}",
+                cmd.inspector_part_entity_id
+            );
+            return;
+        };
+        let mut current = part;
+        let mut is_descendant = false;
+        for _ in 0..32 {
+            let Ok(parent) = q_parents.get(current) else { break };
+            current = parent.parent();
+            if current == target {
+                is_descendant = true;
+                break;
+            }
+        }
+        if !is_descendant {
+            warn!(
+                "SELECT_ENTITY: inspector part api_id={} is not below selected root api_id={}",
+                cmd.inspector_part_entity_id,
+                cmd.entity_id
+            );
+            return;
+        }
+        inspector_target.part = Some(part);
+        return;
+    }
 
     apply_selection(
         &mut commands,
@@ -523,7 +563,7 @@ fn resolve_usd_prim_in_preview(
 ///
 /// If neither marker exists in the chain, it falls back to the clicked entity,
 /// so ground, terrain and plain USD visual props remain selectable.
-fn find_selectable(
+pub(crate) fn find_selectable(
     hit: Entity,
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
     q_mobility: &Query<Entity, With<lunco_core::MobilityRoot>>,
@@ -562,157 +602,6 @@ fn find_selectable(
     }
 
     selectable.unwrap_or(hit)
-}
-
-/// The nearest PRIM-BACKED entity on the chain from `hit` up to (excluding)
-/// `root` — the drill target the Inspector's USD-parameter section aims at.
-///
-/// The picked leaf is often a synthesized visual child (a wheel's `*_visual`
-/// split, a glTF node) that carries no `UsdPrimPath`; the prim entity — the one
-/// whose attributes `ApplyUsdOp` can address — is an ancestor. `None` when
-/// nothing strictly below the root is prim-backed (the drill then keeps the raw
-/// hit for material-scoped editing).
-fn find_prim_part(
-    hit: Entity,
-    root: Entity,
-    q_prims: &Query<Entity, With<lunco_usd_bevy_scene::UsdPrimPath>>,
-    q_parents: &Query<&ChildOf>,
-) -> Option<Entity> {
-    const MAX_DEPTH: usize = 32;
-    let mut entity = hit;
-    for _ in 0..MAX_DEPTH {
-        if entity == root {
-            return None;
-        }
-        if q_prims.get(entity).is_ok() {
-            return Some(entity);
-        }
-        entity = q_parents.get(entity).ok()?.parent();
-    }
-    None
-}
-
-/// Selects the entity under the pointer, driven by **bevy_picking**.
-///
-/// Registered as a global `On<Pointer<Click>>` observer. bevy_picking (with
-/// bevy_egui's picking backend, enabled by default) resolves panel-vs-scene
-/// occlusion for us: when the pointer is over any egui chrome, egui's backend
-/// wins the pick and this fires with the egui-context entity — which carries no
-/// world-space `hit.position` (egui emits `HitData` with `position: None`),
-/// whereas a real 3D mesh hit always has one. So the `position.is_none()` guard
-/// rejects every chrome click with no hand-rolled gate, no `ScenePointer`, no
-/// manual ray-cast, and no cross-schedule staleness.
-///
-/// - **Left-click** replaces the selection and marks the entity for gizmo
-///   proxy presentation.
-/// - **Shift+left-click** extends the selection without toggling an existing
-///   member off.
-/// - **Ctrl+left-click** removes only the clicked entity and never adds it.
-///   In View, Shift/Ctrl are explicit selection intents; the avatar possession
-///   observer stands down on those modifiers before it resolves the hit.
-/// - **Alt+Shift+click on a sub-part** of the already-selected primary DRILLS the
-///   Inspector to that part. Ctrl takes precedence, so Ctrl+Alt+Shift remains
-///   removal rather than an Inspector drill.
-///
-/// Deselect is explicit (Escape/Backspace via [`handle_deselect_keys`], the
-/// Explorer, or selecting another entity) — a click on empty space or a panel
-/// never clears the selection.
-pub fn on_scene_click_select(
-    mut click: On<Pointer<Click>>,
-    spawn_state: Res<SpawnState>,
-    terrain_tool_active: Res<lunco_interaction_core::TerrainToolActive>,
-    armed_script_tool: Res<lunco_interaction_core::ArmedScriptTool>,
-    keys: Res<ButtonInput<KeyCode>>,
-    egui_focus: Res<lunco_control_core::EguiFocus>,
-    scene_interaction: Res<lunco_interaction_core::SceneInteractionMode>,
-    q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
-    q_mobility: Query<Entity, With<lunco_core::MobilityRoot>>,
-    q_prims: Query<Entity, With<lunco_usd_bevy_scene::UsdPrimPath>>,
-    q_parents: Query<&ChildOf>,
-    selected: Res<SelectedEntities>,
-    mut inspector_target: ResMut<SelectionTarget>,
-    mut commands: Commands,
-) {
-    let shift_held = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    let ctrl_held = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    // View reserves plain clicks for avatar possession, but modifier clicks
-    // remain explicit selection/removal intents in every perspective.
-    if !scene_interaction.selection_owns_click(shift_held || ctrl_held) {
-        return;
-    }
-    // Left button only.
-    if click.button != PointerButton::Primary {
-        return;
-    }
-    // Shared egui-vs-scene guard (viewport-rect aware) — the same robust check
-    // possession and placement use. Empty/chrome clicks resolve to no
-    // `SelectableRoot` below, so they select nothing regardless.
-    if egui_focus.wants_pointer {
-        return;
-    }
-    // Spawn tool armed: clicks place objects, not select.
-    if !matches!(spawn_state.as_ref(), SpawnState::Idle) {
-        return;
-    }
-    // Terrain brush armed: clicks sculpt the terrain, not select.
-    if terrain_tool_active.0 {
-        return;
-    }
-    // A script tool is armed: that click belongs to the tool, not to selection.
-    if armed_script_tool.armed() {
-        return;
-    }
-    // Alt alone is the generic scene-authoring modifier. The pointer event is
-    // still published for Rhai, but selection must not consume the same gesture.
-    if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) && !shift_held && !ctrl_held {
-        return;
-    }
-
-    // Chrome and empty-space clicks carry no world hit. Keep the selection
-    // unchanged; explicit Cancel/Escape owns deselection.
-    if click.hit.position.is_none() {
-        return;
-    }
-
-    let intent = selection_intent(shift_held, ctrl_held);
-
-    // `Pointer<Click>` auto-propagates leaf→parent→…→window; a global observer
-    // would otherwise fire at every ancestor and select the wrong (top) one. We
-    // resolve the semantic target ourselves, so stop the bubble at the picked
-    // leaf — this runs target-first, so we're at the leaf.
-    click.propagate(false);
-
-    let hit_entity = click.entity;
-    let prev_selected = selected.primary();
-
-    // Resolve the picked mesh to its semantic owner: a mobility root for a
-    // vehicle assembly, otherwise the nearest selectable root or the hit
-    // entity itself for ground/props.
-    let entity = find_selectable(hit_entity, &q_selectable, &q_mobility, &q_parents);
-
-    // DRILL: **Alt+Shift+click** on a sub-part of the ALREADY-selected primary
-    // aims the Inspector at that part. Resolved to the nearest PRIM-BACKED
-    // ancestor of the picked leaf (a wheel's `*_visual` mesh drills to the
-    // wheel PRIM, whose `lunco:wheel:*` params the USD section can edit); the
-    // raw hit is kept only when nothing below the root carries a prim path.
-    let alt_held = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
-    if matches!(intent, SelectionIntent::Extend)
-        && alt_held
-        && prev_selected == Some(entity)
-        && hit_entity != entity
-    {
-        inspector_target.part =
-            Some(find_prim_part(hit_entity, entity, &q_prims, &q_parents).unwrap_or(hit_entity));
-        return;
-    }
-
-    // Route through the same internal selection event used by the Explorer. The
-    // event observer owns mutation and the shared script event, so this path
-    // cannot drift from other selection surfaces.
-    commands.trigger(SelectEntityTarget {
-        target: entity,
-        intent,
-    });
 }
 
 /// The `Cancel` intent clears the selection and gizmo. Split out of the click

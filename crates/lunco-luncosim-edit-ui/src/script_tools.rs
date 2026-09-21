@@ -45,9 +45,7 @@ pub(crate) fn tool_map(entries: Vec<(String, TelemetryValue)>) -> TelemetryValue
 }
 
 /// Pointer events bubble through every authored parent. Keep one dispatch key
-/// for the duration of the frame so the generic scene event is emitted once,
-/// while the normal selection and possession observers can still receive the
-/// original pointer event.
+/// for the duration of the frame so the Rhai interaction policy sees one event.
 #[derive(Resource, Default)]
 pub struct ScenePointerDispatch {
     seen: HashSet<ScenePointerKey>,
@@ -68,8 +66,10 @@ pub fn clear_scene_pointer_dispatch(mut dispatch: ResMut<ScenePointerDispatch>) 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SceneToolWorld<'w, 's> {
     q_selectable: Query<'w, 's, Entity, With<lunco_core::SelectableRoot>>,
+    q_mobility: Query<'w, 's, Entity, With<lunco_core::MobilityRoot>>,
     q_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
     q_prim: Query<'w, 's, &'static lunco_usd_bevy_scene::UsdPrimPath>,
+    q_pointer_policy: Query<'w, 's, &'static lunco_interaction_core::ScenePointerPolicy>,
     q_scene_roots: Query<
         'w,
         's,
@@ -90,6 +90,7 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     viewport: Res<'w, lunco_viewport_core::SceneViewport>,
     surface: lunco_terrain_surface::GridSurfaceQuery<'w, 's>,
     input_bindings: Res<'w, InputBindingsSettings>,
+    scene_interaction: Res<'w, lunco_interaction_core::SceneInteractionMode>,
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
     asset_server: Res<'w, AssetServer>,
     coordinates: ActiveFrameCoordinates<'w, 's>,
@@ -151,8 +152,10 @@ pub(crate) fn on_scene_click_script_tool(
         &click,
         &keys,
         &world.q_selectable,
+        &world.q_mobility,
         &world.q_ids,
         &world.q_prim,
+        &world.q_pointer_policy,
         &world.q_scene_roots,
         &world.q_parents,
         &world.selected,
@@ -162,6 +165,7 @@ pub(crate) fn on_scene_click_script_tool(
         &world.asset_server,
         &world.coordinates,
         &world.input_bindings,
+        &world.scene_interaction,
         &world.q_scene_cameras,
         &world.q_lod_tiles,
         &world.viewport,
@@ -181,8 +185,12 @@ fn scene_tool_context(
     click: &Pointer<Click>,
     keys: &ButtonInput<KeyCode>,
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
+    q_mobility: &Query<Entity, With<lunco_core::MobilityRoot>>,
     q_ids: &Query<&lunco_core::GlobalEntityId>,
     q_prim: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    q_pointer_policy: &Query<
+        &lunco_interaction_core::ScenePointerPolicy,
+    >,
     q_scene_roots: &Query<
         &lunco_usd_bevy_scene::UsdPrimPath,
         With<lunco_usd_bevy_scene::UsdSceneRoot>,
@@ -195,6 +203,7 @@ fn scene_tool_context(
     asset_server: &AssetServer,
     coordinates: &ActiveFrameCoordinates<'_, '_>,
     input_bindings: &InputBindingsSettings,
+    scene_interaction: &lunco_interaction_core::SceneInteractionMode,
     q_scene_cameras: &Query<
         (&Camera, &GlobalTransform),
         (With<Camera3d>, With<lunco_render::SceneCamera>),
@@ -203,29 +212,34 @@ fn scene_tool_context(
     viewport: &lunco_viewport_core::SceneViewport,
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> TelemetryValue {
-    let mut cursor = click.entity;
-    let root = loop {
-        if q_selectable.contains(cursor) {
-            break Some(cursor);
-        }
-        match q_parents.get(cursor) {
-            Ok(parent) => cursor = parent.0,
-            Err(_) => break None,
-        }
-    };
+    let root = crate::selection::find_selectable(
+        click.entity,
+        q_selectable,
+        q_mobility,
+        q_parents,
+    );
 
     let mut prim_paths = Vec::new();
+    let mut inspector_part = None;
+    let mut pointer_policy = None;
     let mut ancestor = Some(click.entity);
     for _ in 0..32 {
         let Some(entity) = ancestor else { break };
+        if pointer_policy.is_none() {
+            pointer_policy = q_pointer_policy.get(entity).ok().copied();
+        }
         if let Ok(path) = q_prim.get(entity) {
             prim_paths.push(TelemetryValue::String(path.path.clone()));
+            if root != entity && inspector_part.is_none() {
+                inspector_part = Some(entity);
+            }
         }
         ancestor = q_parents.get(entity).ok().map(|parent| parent.0);
     }
 
-    let target_prim = root
-        .and_then(|entity| q_prim.get(entity).ok())
+    let target_prim = q_prim
+        .get(root)
+        .ok()
         .or_else(|| q_prim.get(click.entity).ok());
     let selected_entity = selected.primary();
     let controlled_entity = local_avatar
@@ -267,6 +281,10 @@ fn scene_tool_context(
             TelemetryValue::String(button.to_string()),
         ),
         (
+            "scene_interaction_mode".to_string(),
+            TelemetryValue::String(scene_interaction.as_str().to_string()),
+        ),
+        (
             "pointer_intents".to_string(),
             TelemetryValue::Array(
                 pointer_intents
@@ -290,19 +308,38 @@ fn scene_tool_context(
         ("prim_paths".to_string(), TelemetryValue::Array(prim_paths)),
         ("modifiers".to_string(), modifiers),
     ];
+    if let Some(policy) = pointer_policy {
+        context.push((
+            "pointer_policy".to_string(),
+            tool_map(vec![
+                (
+                    "left".to_string(),
+                    TelemetryValue::String(pointer_interaction_name(policy.left).to_string()),
+                ),
+                (
+                    "right".to_string(),
+                    TelemetryValue::String(pointer_interaction_name(policy.right).to_string()),
+                ),
+            ]),
+        ));
+    }
     if let Ok(id) = q_ids.get(click.entity) {
         context.push((
             "hit_entity_id".to_string(),
             TelemetryValue::I64(id.get() as i64),
         ));
     }
-    if let Some(root) = root {
-        if let Ok(id) = q_ids.get(root) {
-            context.push((
-                "target_entity_id".to_string(),
-                TelemetryValue::I64(id.get() as i64),
-            ));
-        }
+    if let Some(part) = inspector_part.and_then(|entity| q_ids.get(entity).ok()) {
+        context.push((
+            "inspector_part_entity_id".to_string(),
+            TelemetryValue::I64(part.get() as i64),
+        ));
+    }
+    if let Ok(id) = q_ids.get(root) {
+        context.push((
+            "target_entity_id".to_string(),
+            TelemetryValue::I64(id.get() as i64),
+        ));
     }
     if let Ok(path) = q_prim.get(click.entity) {
         context.push((
@@ -419,6 +456,16 @@ fn scene_tool_context(
         }
     }
     tool_map(context)
+}
+
+fn pointer_interaction_name(
+    interaction: lunco_interaction_core::PointerInteraction,
+) -> &'static str {
+    match interaction {
+        lunco_interaction_core::PointerInteraction::Block => "block",
+        lunco_interaction_core::PointerInteraction::PassThrough => "pass_through",
+        lunco_interaction_core::PointerInteraction::Context => "context",
+    }
 }
 
 /// Return a hit in the renderer's floating-origin frame.
@@ -591,8 +638,10 @@ pub(crate) fn on_scene_pointer_event(
         &click,
         &keys,
         &world.q_selectable,
+        &world.q_mobility,
         &world.q_ids,
         &world.q_prim,
+        &world.q_pointer_policy,
         &world.q_scene_roots,
         &world.q_parents,
         &world.selected,
@@ -602,6 +651,7 @@ pub(crate) fn on_scene_pointer_event(
         &world.asset_server,
         &world.coordinates,
         &world.input_bindings,
+        &world.scene_interaction,
         &world.q_scene_cameras,
         &world.q_lod_tiles,
         &world.viewport,
@@ -612,13 +662,11 @@ pub(crate) fn on_scene_pointer_event(
         .get(click.entity)
         .map(|id| id.get())
         .unwrap_or_default();
-    for tool in lunco_tools::ui_pointer_tools() {
-        commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
-            tool: tool.name,
-            hook: "on_pointer".to_string(),
-            args: context.clone(),
-        });
-    }
+    commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
+        tool: "scene_interaction".to_string(),
+        hook: "on_pointer".to_string(),
+        args: context.clone(),
+    });
     commands.trigger(TelemetryEvent {
         name: "scene.pointer".to_string(),
         source,

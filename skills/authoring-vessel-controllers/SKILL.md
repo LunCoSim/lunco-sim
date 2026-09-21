@@ -105,11 +105,11 @@ end MyController;
 
 For a rover route, the drivetrain and any continuous control law remain the
 actuator-side Modelica/USD contract. A scene-level Rhai route program reads
-the route's composed point prims, waits for the generic sensor enter events,
-and publishes the current named-port command through the shared bridge.
-The route is not stored on the rover, and possession remains the single
-authority gate; no vessel-specific autopilot component or waypoint command is
-needed.
+the route's composed point prims, waits for generic sensor enter events, and
+publishes current named-port guidance through the shared bridge. The route is
+not stored on the rover. User possession controls the local `ControlLink`, HUD,
+and manual-input session; it is independent of an enabled route program. Do not
+represent a guidance program as a user-session claim.
 
 ## 2. High-level logic → rhai, event-driven
 
@@ -159,13 +159,14 @@ frame conversion, navigation, and control. Do not add a semantic sensor
 registry, a world-coordinate force special case, or a fallback port when the
 parsed Modelica contract does not match the authored scene.
 
-## 4. Control authority → the `piloted` signal + possession
+## 4. User possession → the `piloted` signal + `ControlLink`
 
 **This is the key pattern. Do not build a bespoke gate.**
 
-- **The GNC is INTERNAL** (part of the model). **A user and an autopilot are both
-  external SESSIONS** that *possess* the vessel; user-vs-autopilot is arbitrated by
-  possession + RBAC (`may_take_control`), which already exists.
+- **The GNC is INTERNAL** (part of the model). A local or remote user is an
+  external session that may possess the vessel; `SessionRegistry` and RBAC
+  (`may_take_control`) arbitrate those user sessions. An authored mission or
+  route program is scenario policy, not a possession session.
 - The internal controller **yields** to whoever possesses via the **`piloted`** port:
   a read-only cosim port (`PILOTED_BACKEND`, `lunco-cosim/src/ports.rs`) that is `1.0`
   when any session owns the vessel (`SessionRegistry::owner_of(...).is_some()`), else `0`.
@@ -189,13 +190,17 @@ target) and hard-stops each released vessel; release hard-stops the current vess
 restoring free flight. Wire-applied commands update host authority only and never bind a
 remote session to the local camera.
 
-### Autopilots must drive like humans
+### Guidance policy is separate from user possession
 
-An autopilot is only a different policy. It must acquire authority with
-`AcquireControl`, then use the vessel's `ControlBinding`/intent surface and the
-same live port writes as a human. Do not set `Position`, `LinearVelocity`,
+A route or mission program publishes authored guidance through the vessel's
+generic named-port surface and the model's existing guidance/actuation
+contract. It does not call `AcquireControl` or claim a user session. Releasing
+possession may safe the manual input ports for that transaction; an enabled
+program remains active and republishes its current guidance on its next event
+or program step. The model's control topology owns precedence when manual and
+autonomous inputs coexist. Do not set `Position`, `LinearVelocity`,
 `ModelicaModel.inputs`, or a private actuator component to make a scenario move;
-those bypass possession, arbitration, and the authored input contract.
+those bypass the authored input and model contracts.
 
 ## What makes an entity *active* — the intent→port `Controls` scope
 

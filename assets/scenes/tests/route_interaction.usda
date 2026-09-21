@@ -1,0 +1,24 @@
+#usda 1.0
+(
+    defaultPrim = "RouteInteraction"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Windowed acceptance for the native scene-pointer path. The shared source
+# supplies one ordinary USD route point and rover for the interaction policy.
+def Xform "RouteInteraction" (
+    prepend references = @lunco://scenes/base/route_lifecycle_source.usda@</RouteLifecycleSource>
+)
+{
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/route_interaction.rhai@
+        }
+    }
+}

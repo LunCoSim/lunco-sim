@@ -470,7 +470,6 @@ fn drive_current_point(me, state) {
         if stopped.ok == true && !state.completed {
             state.completed = true;
             state.enabled = false;
-            if state.claimed_here { release_control_claim(subject); state.claimed_here = false; }
             emit("route_completed");
         }
         if stopped.ok == true { state.safe_stopped = true; }
@@ -506,7 +505,7 @@ fn route_revision_for(state) {
     usd_document_generation(state.route_document)
 }
 
-fn refresh_route_view(me, state) {
+fn refresh_route_view(me, state, snapshot) {
     let doc = state.route_document;
     let revision = route_revision_for(state);
     if doc == () {
@@ -521,7 +520,9 @@ fn refresh_route_view(me, state) {
     // The document generation also advances for disposable view overlays. Read
     // the authored route geometry first and invalidate only when its typed
     // identity/placement key changes (or marker state is explicitly dirty).
-    let read = waypoint_editor::route_positions(doc, state.route_path);
+    let read = if snapshot == () {
+        waypoint_editor::route_positions(doc, state.route_path)
+    } else { snapshot };
     if read == () || read.ok != true {
         return #{
             result: if read == () {
@@ -684,25 +685,19 @@ fn start_route(me, state) {
     if owner != () && (local == () || owner != local) {
         return route_failure("the route subject is controlled by another session");
     }
-    // Possession and program execution share the session's authority. A local
-    // human possession is already the valid owner of the subject; claiming it
-    // a second time would manufacture a competing owner and the authority
-    // layer must reject that. Only an unowned subject needs a program claim.
-    if owner == () {
-        let claimed = claim_control(subject);
-        if claimed == () || claimed.ok != true {
-            return route_failure("the route subject rejected the program authority claim");
-        }
-        return #{ ok: true, subject: subject, claimed_here: true };
-    }
-    #{ ok: true, subject: subject, claimed_here: false }
+    // Program execution is not avatar possession. The route writes its
+    // authored guidance setpoint through the generic control surface while
+    // SessionRegistry remains free to represent only the user's possession.
+    // This keeps the HUD and the next possession click tied to the avatar,
+    // while ReleaseControl can still fence one input batch before this policy
+    // publishes the active target again.
+    #{ ok: true, subject: subject }
 }
 
 fn begin_route_run(me, state, started) {
     let progress = route_start_progress(me, state);
     state.selected = true;
     state.enabled = true;
-    state.claimed_here = started.claimed_here == true;
     state.safe_stopped = false;
     state.route_index = progress.index;
     state.current_path = ();
@@ -735,10 +730,6 @@ fn apply_toggle_transition(me, state, enabled) {
     state.enabled = false;
     let stopped = ensure_route_safe_stop(me, state);
     if stopped.ok == true { state.safe_stopped = true; }
-    let subject = route_subject_for(me, state);
-    if subject >= 0 {
-        if state.claimed_here { release_control_claim(subject); state.claimed_here = false; }
-    }
     emit("route_stopped");
     state
 }
@@ -753,7 +744,6 @@ fn on_start(me, ctx) {
     this.subject_id = ();
     this.subject_path = ();
     this.safe_stopped = true;
-    this.claimed_here = false;
     this.commanded_path = ();
     this.commanded_revision = ();
     this.commanded_view_key = ();
@@ -767,7 +757,7 @@ fn on_start(me, ctx) {
     this.route_view_key = ();
     this.route_error = "";
     this.start_requested = false;
-    let refreshed = refresh_route_view(me, this);
+    let refreshed = refresh_route_view(me, this, ());
     this = refreshed.state;
     let view = refreshed.result;
     if view.ok != true {
@@ -794,14 +784,37 @@ fn on_start(me, ctx) {
 fn on_event(me, evt, ctx) {
     if evt.name == "usd.document.projected" && evt.value != ()
         && evt.value["doc_id"] == this.route_document {
-        // A view edit publishes the same generic projection event as a durable
-        // route edit. The revision captured after a successful view update is
-        // already current, so do not force an expensive composed route scan on
-        // every disposable marker/ribbon projection. A different generation
-        // is the structural invalidation boundary and must refresh the key.
+        // Projection is the authoritative invalidation boundary for route
+        // presentation. Compare its composed point key here, after the stage
+        // is current, rather than polling topology from the control task. The
+        // key makes a view edit's follow-up event idempotent even when several
+        // layer changes share a document generation.
         let generation = evt.value["generation"];
-        if generation == () || this.route_revision != generation {
+        let read = waypoint_editor::route_positions(
+            this.route_document, this.route_path,
+        );
+        if read == () || read.ok != true {
             this.route_revision = ();
+            return;
+        }
+        let view_key = waypoint_editor::route_view_key(read);
+        if view_key == () {
+            this.route_revision = ();
+            return;
+        }
+        if view_key == this.route_view_key && !this.marker_sync_pending {
+            this.route_revision = generation;
+            return;
+        }
+        this.route_revision = ();
+        let refreshed = refresh_route_view(me, this, read);
+        this = refreshed.state;
+        let view = refreshed.result;
+        if view.ok == true {
+            this.route_revision = view.revision;
+            this.route_view_key = view.view_key;
+        } else if view.retryable != true && this.route_error != view.error {
+            emit("route_presentation_unavailable", view.error);
         }
         return;
     }
@@ -813,10 +826,6 @@ fn on_event(me, evt, ctx) {
                 let stopped = ensure_route_safe_stop(me, this);
                 if stopped.ok == true { this.safe_stopped = true; }
             }
-            if subject >= 0 && this.claimed_here {
-                release_control_claim(subject);
-                this.claimed_here = false;
-            }
             this.enabled = false;
             emit("route_stopped");
         }
@@ -824,6 +833,16 @@ fn on_event(me, evt, ctx) {
     }
     if evt.name == "runtime.ui.action" {
         this = runtime_program_action(me, evt.value, this);
+        return;
+    }
+    if evt.name == "cmd:ReleaseControl" && this.enabled {
+        // Releasing the avatar is a manual-control lifecycle edge, not a
+        // program stop. ReleaseControl applies its generic safe state once;
+        // clear the route's command cache so the next program step republishes
+        // the active waypoint without claiming the user's session.
+        this.commanded_path = ();
+        this.commanded_revision = ();
+        this.commanded_view_key = ();
         return;
     }
     // Avian owns zone occupancy. Keep route-zone enter pulses in the program's
@@ -873,10 +892,6 @@ fn on_event(me, evt, ctx) {
             if stopped.ok == true { this.safe_stopped = true; }
             if stopped.ok == true && !this.completed {
                 this.completed = true;
-                if subject >= 0 && this.claimed_here {
-                    release_control_claim(subject);
-                    this.claimed_here = false;
-                }
                 emit("route_completed");
             }
         }
@@ -904,13 +919,11 @@ fn route_task_tick(m) {
     // control authority. Keep it synchronized for every live program so
     // selecting a different program cannot make the previous view stale.
     // Only navigation below is gated by the active-program selection.
-    // Route topology and the disposable view are revision-driven. Re-reading
-    // every composed child and the full ribbon payload on every control tick
-    // makes a long route look like a simulation stall and can starve input.
-    // `usd.document.projected` clears this fence only for a new generation;
-    // successful presentation writes retain the captured post-edit revision.
+    // Document-projection events normally refresh route topology and the
+    // disposable view. This branch retries only an explicitly pending or
+    // retryable projection handoff; stable routes do no per-tick scene query.
     if this.route_revision == () || this.marker_sync_pending {
-        let refreshed = refresh_route_view(m, this);
+        let refreshed = refresh_route_view(m, this, ());
         this = refreshed.state;
         let view = refreshed.result;
         if view.ok != true {
@@ -970,9 +983,4 @@ fn route_task_never_done(me) {
 
 fn on_stop(me, ctx) {
     ensure_route_safe_stop(me, this);
-    let subject = route_subject_for(me, this);
-    if subject >= 0 && this.claimed_here {
-        release_control_claim(subject);
-        this.claimed_here = false;
-    }
 }

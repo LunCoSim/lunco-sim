@@ -78,7 +78,6 @@ impl Plugin for UsdSceneRuntimePlugin {
 
         app.init_resource::<twin_projection::PendingTwinDocs>();
         app.init_resource::<lunco_usd_bevy_twin::TwinProjectionWake>();
-        app.add_message::<twin_projection::TwinProjectionSettle>();
         app.add_observer(twin_projection::wake_twin_projection_on_document_changed);
         app.init_resource::<live_consume::LiveTransformEditHints>();
         app.init_resource::<twin_projection::PendingRefSpawns>();
@@ -87,7 +86,6 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.add_systems(
             bevy::prelude::PreUpdate,
             (
-                twin_projection::settle_twin_overlays,
                 twin_projection::mark_pending_twin_docs,
                 twin_projection::drain_pending_twin_docs
                     .run_if(twin_projection::pending_twin_docs_ready),

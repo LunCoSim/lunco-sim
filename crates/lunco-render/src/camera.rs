@@ -102,8 +102,11 @@ pub enum ToneMap {
 }
 
 /// Multisample level.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize,
+)]
 pub enum MsaaLevel {
+    #[default]
     Off,
     X2,
     X4,

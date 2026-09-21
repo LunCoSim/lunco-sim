@@ -183,6 +183,7 @@ pub(crate) fn register_settings_submenu(world: &mut World) {
                 .weak()
                 .small(),
         );
+        ui.small("Route points, runtime spawns, and gizmo edits use Twin Runtime (@runtime@).");
         let persistence_state = ctx.resource::<WorkspaceResource>().map(|workspace| {
             let Some(twin_id) = workspace.active_twin else {
                 return (false, Ok(false));
@@ -202,7 +203,7 @@ pub(crate) fn register_settings_submenu(world: &mut World) {
                 ui.add_enabled_ui(can_persist, |ui| {
                     ui.checkbox(&mut next, "Persist runtime scene edits")
                         .on_hover_text(
-                            "When enabled, generated spawns and moves are read and written from this Twin's .lunco/runtime cache. Off means no runtime cache I/O.",
+                            "Route points, generated spawns, and gizmo moves are authored in this Twin's Runtime layer. When enabled, that layer loads from and saves to .lunco/runtime; off keeps edits for this session only.",
                         );
                 });
                 if !can_persist {

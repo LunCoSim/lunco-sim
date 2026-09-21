@@ -198,6 +198,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<lunco_interaction_core::TerrainToolActive>();
         app.init_resource::<lunco_interaction_core::ArmedScriptTool>();
         app.init_resource::<lunco_interaction_core::SceneInteractionMode>();
+        app.init_resource::<lunco_input_core::InputBindingsSettings>();
         app.add_observer(avatar_raycast_possession);
         // Native avatar construction receives the resolved command policy;
         // composed USD avatars receive the same policy from their `Controls` scope.
@@ -450,6 +451,7 @@ const CELESTIAL_CLICK_FOCUS: bool = false;
 pub struct SceneInteractionGate<'w> {
     mode: Res<'w, lunco_interaction_core::SceneInteractionMode>,
     egui_focus: Res<'w, lunco_control_core::EguiFocus>,
+    input_bindings: Res<'w, lunco_input_core::InputBindingsSettings>,
 }
 
 pub fn avatar_raycast_possession(
@@ -489,18 +491,16 @@ pub fn avatar_raycast_possession(
     if click.button != PointerButton::Primary {
         return;
     }
-    // The editor selection observer receives the same global click. Both
-    // observers consult the shared mode and modifier intent so one gesture has
-    // one owner: View plain clicks possess, while modifiers select/remove.
-    let modified = keys.any_pressed([
-        KeyCode::AltLeft,
-        KeyCode::AltRight,
-        KeyCode::ShiftLeft,
-        KeyCode::ShiftRight,
-        KeyCode::ControlLeft,
-        KeyCode::ControlRight,
-    ]);
-    if !scene_interaction.mode.possession_owns_click(modified) {
+    // Authored policy and the possession resolver share the semantic pointer
+    // map. Possession runs only when ordinary selection is the sole intent, so
+    // overlapping bindings cannot make both listeners consume one gesture.
+    let intents = scene_interaction.input_bindings.pointer_intents(
+        "primary",
+        keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
+        keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+        keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
+    );
+    if !scene_interaction.mode.possession_owns_pointer(&intents) {
         return;
     }
     let Some((camera, cam_gtf, avatar_entity, _intents)) = camera_q.single().ok() else {
@@ -1409,7 +1409,7 @@ mod tests {
                 Camera::default(),
                 lunco_render::scene_camera_look_with_profile(
                     None,
-                    lunco_render::RenderingQuality::Balanced.profile(),
+                    lunco_render::RenderQualityProfile::default(),
                 ),
                 lunco_embodiment_core::roles::Embodiment,
                 LocalEmbodiment,
@@ -1432,7 +1432,7 @@ mod tests {
                 Camera::default(),
                 lunco_render::scene_camera_look_with_profile(
                     None,
-                    lunco_render::RenderingQuality::Balanced.profile(),
+                    lunco_render::RenderQualityProfile::default(),
                 ),
                 lunco_embodiment_core::roles::Embodiment,
                 LocalEmbodiment,

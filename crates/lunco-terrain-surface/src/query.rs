@@ -1,6 +1,7 @@
 //! Terrain spatial-query providers — expose the analytic DEM height field to the
 //! API / scripting surface as generic geometry queries: `query("TerrainHeight",
-//! #{x, z})` (one point), `query("TerrainField", #{field, x, z, half})` (a raster
+//! #{x, z})` (one point), `query("TerrainHeights", #{points})` (a bounded batch),
+//! `query("TerrainField", #{field, x, z, half})` (a raster
 //! region) and `query("TerrainRaycast", #{origin, ...})` (does relief block a ray).
 //!
 //! These are the read-side twin of the `#[Command]` bus, registered into
@@ -30,8 +31,8 @@ use bevy::ecs::query::QueryState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{
-    api_param_f64, api_param_str, api_param_u64, ApiQueryError, ApiQueryProvider, ApiQueryRegistry,
-    ApiQueryResult,
+    api_param_array, api_param_f64, api_param_str, api_param_u64, ApiQueryError,
+    ApiQueryProvider, ApiQueryRegistry, ApiQueryResult,
 };
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
@@ -49,6 +50,67 @@ use crate::stream_viz::{TerrainDetailDemands, TerrainStreamStatus};
 /// 65 k texels). A deliberate readback for a tool/analyst, not a streaming path — the
 /// cap just bounds one response payload; larger coverage is a tiled/streamed concern.
 const FIELD_MAX_RES: usize = 256;
+/// Maximum points returned by one analytic terrain sample request.
+const HEIGHTS_MAX_POINTS: usize = 4096;
+
+fn height_terrains(world: &World, query_name: &str) -> Result<Vec<(Entity, Arc<SurfaceOracle>)>, ApiQueryError> {
+    let Some(mut query) = QueryState::<(Entity, &DemHeightField)>::try_new(world) else {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::InternalError,
+            format!("{query_name}: DEM query is unavailable"),
+        ));
+    };
+    Ok(query
+        .iter(world)
+        .map(|(entity, field)| (entity, field.0.clone()))
+        .collect())
+}
+
+fn sample_height(
+    terrains: &[(Entity, Arc<SurfaceOracle>)],
+    x: f64,
+    z: f64,
+    eps_override: Option<f64>,
+) -> Option<(Entity, f64, [f64; 3], f64)> {
+    let point = GridPos(DVec3::new(x, 0.0, z));
+    for (entity, oracle) in terrains {
+        let Some(height) = crate::surface_query::height_in_footprint(oracle.as_ref(), point) else {
+            continue;
+        };
+        let eps = eps_override
+            .unwrap_or_else(|| oracle.spacing() as f64)
+            .max(1e-6);
+        let normal = normal_at_bounded(
+            oracle.as_ref(),
+            point.0.x,
+            point.0.z,
+            eps,
+            oracle.half_extent() as f64,
+        );
+        let slope = normal[1].clamp(-1.0, 1.0).acos();
+        return Some((*entity, height, normal, slope));
+    }
+    None
+}
+
+fn optional_height_eps(params: &ApiValue, query_name: &str) -> Result<Option<f64>, ApiQueryError> {
+    let Some(value) = params.get("eps") else {
+        return Ok(None);
+    };
+    let eps = value.as_f64().ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            format!("{query_name}: `eps` must be a number"),
+        )
+    })?;
+    if !eps.is_finite() || eps <= 0.0 {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            format!("{query_name}: `eps` must be finite and positive"),
+        ));
+    }
+    Ok(Some(eps))
+}
 
 /// Resolve a field id (the stable [`SurfaceField::id`]) to a boxed instance. The set
 /// mirrors `lunco_terrain_core`'s geometric fields; a caller naming an unknown field
@@ -92,79 +154,108 @@ impl ApiQueryProvider for TerrainHeightProvider {
                 "TerrainHeight: `x` and `z` must be finite",
             ));
         }
-        let eps_override = match params.get("eps") {
-            None => None,
-            Some(_) => Some(api_param_f64(params, "eps").ok_or_else(|| {
-                ApiQueryError::new(
-                    ApiErrorCode::DeserializationError,
-                    "TerrainHeight: `eps` must be a number",
-                )
-            })?),
+        let eps_override = optional_height_eps(params, "TerrainHeight")?;
+        let terrains = height_terrains(world, "TerrainHeight")?;
+        let Some((entity, height, normal, slope)) =
+            sample_height(&terrains, x, z, eps_override)
+        else {
+            return Ok(Some(api_value!({ "found": false })));
         };
-        if eps_override.is_some_and(|eps| !eps.is_finite() || eps <= 0.0) {
+        let entity = world
+            .get_resource::<ApiEntityRegistry>()
+            .and_then(|reg| reg.api_id_for(entity))
+            .map(|global_id| global_id.get());
+        Ok(Some(api_value!({
+            "found": true,
+            "height": height,
+            "normal": api_value!([normal[0], normal[1], normal[2]]),
+            "slope": slope,
+            "entity": entity,
+        })))
+    }
+}
+
+/// `TerrainHeights` — evaluate many independent world `(x, z)` points against
+/// one snapshot of the analytic DEM providers.
+///
+/// params: `{ points: [[x, z], ...], eps?: f64 }`, capped at 4096 points.
+/// Returns an array with the same order and one `TerrainHeight` result shape per
+/// input point. This avoids rebuilding the ECS query and crossing the Rhai/API
+/// boundary once per ribbon vertex.
+pub struct TerrainHeightsProvider;
+
+impl ApiQueryProvider for TerrainHeightsProvider {
+    fn name(&self) -> &'static str {
+        "TerrainHeights"
+    }
+
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let points = api_param_array(params, "points").ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "TerrainHeights: `points` must be an array of [x, z] pairs",
+            )
+        })?;
+        if points.len() > HEIGHTS_MAX_POINTS {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "TerrainHeight: `eps` must be finite and positive",
+                format!(
+                    "TerrainHeights: {} points exceeds the limit of {HEIGHTS_MAX_POINTS}",
+                    points.len()
+                ),
             ));
         }
-        let p = GridPos(DVec3::new(x, 0.0, z));
-
-        // Snapshot the DEM terrains, releasing the world borrow before the
-        // registry read. The oracle is shared via `Arc`.
-        let Some(mut q) = QueryState::<(Entity, &DemHeightField)>::try_new(world) else {
-            return Err(ApiQueryError::new(
-                ApiErrorCode::InternalError,
-                "TerrainHeight: DEM query is unavailable",
-            ));
-        };
-        let terrains: Vec<(Entity, Arc<SurfaceOracle>)> =
-            q.iter(world).map(|(e, hf)| (e, hf.0.clone())).collect();
-
-        // First terrain whose footprint covers the point wins. The DEM frame IS
-        // the grid frame: the terrain entity is a grid-direct child at
-        // `CellCoord::default()` (`terrain.rs`), so the query point — a
-        // [`GridPos`], the same currency as avian `Position` and every other
-        // port — samples the oracle DIRECTLY, in f64 (`.0` taken only at the
-        // oracle boundary; the oracle itself is DEM-frame math). No
-        // `GlobalTransform` belongs in between: a render GT is origin-relative,
-        // and pushing grid-absolute coordinates through its f32 inverse silently
-        // shifted the footprint test after a floating-origin XZ move (the same
-        // frame bug the collider ring had — see the frame rule in
-        // `collider_ring.rs`). Height comes back AS THE ORACLE GIVES IT — already
-        // absolute body-datum metres (the DEM keeps the GeoTIFF's own values; see
-        // `lunco-terrain-bake::dem`) — matching `world_pos`, the entity's own
-        // `position_y` port, and the sibling `GroundHeight` raycast.
-        for (entity, oracle) in terrains {
-            // The footprint test + sample are `surface_query::height_in_footprint`
-            // — one implementation shared with `GridSurfaceQuery`, so this
-            // provider and the in-process placement path can never disagree about
-            // which terrain covers a point.
-            let Some(h) = crate::surface_query::height_in_footprint(oracle.as_ref(), p) else {
+        let mut coordinates = Vec::with_capacity(points.len());
+        for (index, value) in points.iter().enumerate() {
+            let ApiValue::Array(pair) = value else {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("TerrainHeights: points[{index}] must be an [x, z] pair"),
+                ));
+            };
+            if pair.len() != 2 {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("TerrainHeights: points[{index}] must contain exactly two values"),
+                ));
+            }
+            let (Some(x), Some(z)) = (pair[0].as_f64(), pair[1].as_f64()) else {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("TerrainHeights: points[{index}] values must be numbers"),
+                ));
+            };
+            if !x.is_finite() || !z.is_finite() {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("TerrainHeights: points[{index}] values must be finite"),
+                ));
+            }
+            coordinates.push((x, z));
+        }
+        let eps_override = optional_height_eps(params, "TerrainHeights")?;
+        let terrains = height_terrains(world, "TerrainHeights")?;
+        let entity_ids = world.get_resource::<ApiEntityRegistry>();
+        let mut results = Vec::with_capacity(coordinates.len());
+        for (x, z) in coordinates {
+            let Some((entity, height, normal, slope)) =
+                sample_height(&terrains, x, z, eps_override)
+            else {
+                results.push(api_value!({ "found": false }));
                 continue;
             };
-
-            let eps = eps_override
-                .unwrap_or_else(|| oracle.spacing() as f64)
-                .max(1e-6);
-            let half = oracle.half_extent() as f64;
-            let n = normal_at_bounded(oracle.as_ref(), p.0.x, p.0.z, eps, half);
-            let slope = n[1].clamp(-1.0, 1.0).acos();
-
-            let entity = world
-                .get_resource::<ApiEntityRegistry>()
-                .and_then(|reg| reg.api_id_for(entity))
-                .map(|g| g.get());
-
-            return Ok(Some(api_value!({
+            let entity = entity_ids
+                .and_then(|registry| registry.api_id_for(entity))
+                .map(|global_id| global_id.get());
+            results.push(api_value!({
                 "found": true,
-                "height": h,
-                "normal": api_value!([n[0], n[1], n[2]]),
+                "height": height,
+                "normal": api_value!([normal[0], normal[1], normal[2]]),
                 "slope": slope,
                 "entity": entity,
-            })));
+            }));
         }
-
-        Ok(Some(api_value!({ "found": false })))
+        Ok(Some(ApiValue::Array(results)))
     }
 }
 
@@ -555,6 +646,7 @@ pub fn register_terrain_queries(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
     let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
     reg.register(TerrainHeightProvider);
+    reg.register(TerrainHeightsProvider);
     reg.register(TerrainFieldProvider);
     reg.register(TerrainRaycastProvider);
     reg.register(TerrainLodStatusProvider);

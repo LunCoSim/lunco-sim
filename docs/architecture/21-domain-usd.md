@@ -103,6 +103,11 @@ bundle installs the implementation plugins explicitly, so vehicle changes do
 not make the vehicle package depend on shader implementation or the 6.5k-line
 cosim implementation.
 
+Core USD schema assets register incrementally through
+`lunco-usd-bevy-runtime-core`. `lunco-usd-authoring` applies matching linear-unit
+facts as declarations arrive and validates missing entries only after all
+vendored core schema sources load successfully.
+
 Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
 recompile the command library's normal target. Private pending-load and
@@ -204,24 +209,33 @@ Views observing a `UsdDocument`:
 - **USDA text editor** — text view of the stage
 - **Property inspector** — attributes of the selected prim
 
-### Two representations: authored layers ⊕ the composed stage
+### Authored/view layers ⊕ the composed stage
 
-A running scene is held in **two** forms, and neither absorbs the other — this is
-USD's own `SdfLayer` (authored opinions you save) vs `UsdStage` (the composition) split:
+A running scene has three document layers and one composed stage. Each layer
+has a distinct lifetime and write path:
 
-- **`UsdDocument`** (`lunco-usd-document/src/document.rs`) — the authored `sdf::Data` **layers**:
-  `base` (persisted root layer, written on Save) **⊕** `runtime` (ephemeral overlay —
-  spawns, moves, obstacle fields — *not* saved). `LayerId::root()` vs `LayerId::runtime()`
-  route each op. Plain, `Send`, serializable: this is what Save writes, the journal
-  records, and the network ships. Reads are cheap and off-main-thread.
+- **`UsdDocument`** (`lunco-usd-document/src/document.rs`) — the authored `sdf::Data` layers:
+  `base` (`@root@`, saved to the source file), `runtime` (`@runtime@`, durable
+  document edits kept out of that source file), and `view` (`@view@`, disposable
+  derived presentation). Twin policy may persist the runtime layer in
+  `.lunco/runtime/<scene-path>`; the view layer is never saved, journaled, or
+  included in that sidecar. Typed journal entries preserve user-authored root
+  and runtime operations. All three layers remain send-safe and serializable.
 - **`CanonicalStage`** (`lunco-usd-bevy-stage/src/canonical.rs`) — the live, *composed* openusd
-  `Stage` with references / sublayers / variants resolved. `Rc`-backed, therefore `!Send`:
+  `Stage` with references / sublayers / variants resolved in
+  `base ⊕ runtime ⊕ view` strength order. `Rc`-backed, therefore `!Send`:
   a main-thread `NonSend` resource (`CanonicalStages`). It is the projection engine —
   authoring onto it fires openusd's change sink, which reconciles the ECS.
 
 The `Send`/`!Send` boundary falls on this same seam by nature, so the two stay even if
 openusd ever makes `Stage` `Send`. Save / journal / net-sync touch the cheap serializable
 layers; composition (the expensive resolver work) is isolated to the one stage owner.
+
+The runtime-layer sidecar is saved off-thread from coalesced document snapshots.
+Incremental authored operations still reach the live stage immediately; adding a
+route point does not serialize and reload the whole scene. Derived route ribbons
+and visited marker colors use transient view operations and disappear when the
+document closes.
 
 ### Op-driven projection (author-once coherence)
 
@@ -369,13 +383,13 @@ On `TwinAssetMounted` (`open_usd_docs_on_twin_asset_mounted`,
 `lunco-usd-bevy-runtime-core/src/scene_runtime.rs`), exactly **one** stage resolves per the table above,
 after the asset boundary has registered the exact `twin://` authority, and the mount is
 **doc-first**: the scene's document opens first (its base read through the
-`twin://` source, web-ready). Generated runtime spawns and moves are restored
-and written only when the owning Twin manifest opts in with the generic
+`twin://` source, web-ready). Generated runtime spawns, moves, and route points
+are restored and written only when the owning Twin manifest opts in with the generic
 `[settings] usd.runtime_persistence = true`; an omitted or false value makes
-the `.lunco/runtime` cache inert in both directions. When enabled, its
-composed (`base ⊕ runtime`) source is published as the twin byte-overlay — and
-only then does `LoadScene` fire, so the **single** projection already carries
-restored runtime spawns/moves (see the E1b flow in
+the `.lunco/runtime` cache inert in both directions. When enabled, the runtime
+layer is restored before the initial mount and composed over the source scene;
+the view layer starts empty. `LoadScene` then performs the **single** initial
+projection with restored runtime edits already present (see the E1b flow in
 [18-unified-journal-and-history](18-unified-journal-and-history.md)). The
 Settings menu changes this same Twin setting through `SetTwinSetting`; it is
 not a second global preference. The Twin's other `.usda` files are *indexed*

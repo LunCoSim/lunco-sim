@@ -389,6 +389,7 @@ impl Panel for AuthoringReviewPanel {
                     extend: false,
                     toggle: false,
                     remove_only: false,
+                    inspector_part_entity_id: 0,
                 });
             }
         });

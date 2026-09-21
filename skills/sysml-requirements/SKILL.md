@@ -34,6 +34,15 @@ why; USD states what is authored and observable; Modelica states equations;
 Rhai executes the observation and policy. A verification registry selects a
 scene and script but does not duplicate requirement text or thresholds.
 
+For mission models with material-dependent structural, pressure, thermal, or
+electrical behavior, follow the
+[physical-material data gate](../interactive-component-authoring/references/mission-engineering-quality.md#physical-materials-and-engineering-properties).
+Use typed material definitions/usages and unit-bearing properties with their
+conditions and evidence; do not encode material identity or property arrays as
+strings. The current typed SysML projection is not itself a material catalogue
+or an automatic cross-domain binding—keep the limit visible until a generic
+resolver and consumer path are demonstrated.
+
 For a mission Twin, apply the generic
 [mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
 alongside this parser/runtime contract. Requirements are the baselined bridge
@@ -195,6 +204,10 @@ cardinality, and each component's unit before lowering them to the shared
 `Vec3`; never read only `number_value` and drop unit metadata. The current
 SysML-to-Modelica geometry adapter accepts `LengthValue[3]` in metres and
 reports other units as unsupported rather than guessing a conversion.
+Other physical-property quantities, including material properties, need the
+same unit-preserving treatment. Do not reuse the geometry-only length adapter,
+strip units, or assume an unimplemented material projection; capability-check
+the property kind and consumer before generating a model.
 
 It does not provide a full SysML/KerML execution engine. Parsed generic
 elements, references, constraints, and relationships are source facts, not a

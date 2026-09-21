@@ -805,6 +805,81 @@ pub fn equirect_to_cubemap(src: &Equirect, face_size: u32, tint: LinearRgba) -> 
 mod tests {
     use super::*;
 
+    // Valid input fixture for dome projection; shipped profile data stays in
+    // the application Rhai policy.
+    fn test_quality_settings() -> RenderingQualitySettings {
+        let profile = RenderQualityProfile {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            directional_cascades: 2,
+            shadow_filtering_quality: lunco_render::ShadowFilteringQuality::Hardware2x2,
+            max_directional_shadow_casters: 1,
+            max_point_shadow_casters: 1,
+            max_spot_shadow_casters: 1,
+            shadow_budget_bytes: 64 * 1024 * 1024,
+            horizon_shadow_cache_sun_threshold_deg: 0.2,
+            horizon_march_steps: 24,
+            horizon_cache_samples_per_axis: 1,
+            shadow_minimum_distance: 0.1,
+            shadow_first_cascade_far_bound: 20.0,
+            shadow_maximum_distance: 600.0,
+            shadow_cascade_overlap: 0.1,
+            shadow_depth_bias: 0.1,
+            shadow_normal_bias: 4.0,
+            camera_exposure_ev100: 16.0,
+            render_failure_quiet_period_secs: 0.5,
+            render_failure_give_up_after_secs: 5.0,
+            distant_light_default_illuminance: 128_000.0,
+            local_light_default_intensity: 1_000.0,
+            rect_light_default_intensity: 10_000.0,
+            dome_default_intensity: 1_000.0,
+            local_light_default_range: 30.0,
+            local_shadow_map_near_z: 0.2,
+            dome_cubemap_face_size: 512,
+            primitive_sphere_longitudes: 24,
+            primitive_sphere_latitudes: 16,
+            primitive_radial_segments: 32,
+            primitive_capsule_longitudes: 16,
+            primitive_capsule_latitudes: 8,
+            terrain_mesh_cache_bytes: 256 * 1024 * 1024,
+            terrain_derived_map_resolution: 512,
+            terrain_derived_ao_directions: 4,
+            terrain_derived_ao_steps: 4,
+            terrain_derived_ao_radius_fraction: 0.1,
+            terrain_derived_roughness_base: 0.6,
+            terrain_derived_roughness_saturation_radians: 0.6,
+            terrain_derived_texture_anisotropy: 1,
+            terrain_rock_max_instances: 2_000,
+            terrain_rock_mesh_buckets: 3,
+            terrain_rock_mesh_cube_count: 2,
+            terrain_rock_lod_start_distance: 1_500.0,
+            terrain_rock_lod_fade_distance: 300.0,
+            terrain_lod_tile_resolution: 33,
+            terrain_lod_cinematic_resolution: 1025,
+            terrain_lod_pixel_error: 4.0,
+            terrain_lod_max_depth: 6,
+            terrain_lod_probe_resolution: 5,
+            terrain_lod_bakes_per_frame: 8,
+            terrain_lod_max_inflight_bakes: 16,
+            terrain_lod_tile_budget: 256,
+            terrain_lod_cover_edits_per_frame: 16,
+            terrain_lod_hysteresis_ratio: 1.2,
+            terrain_lod_morph_start_ratio: 0.45,
+            nurbs_surface_samples_per_control_span: 3,
+            nurbs_surface_minimum_subdivisions: 6,
+            nurbs_surface_maximum_subdivisions: 64,
+            nurbs_trim_curve_samples: 12,
+            nurbs_trim_minimum_subdivisions: 8,
+            nurbs_trim_maximum_subdivisions: 48,
+            curve_samples_per_segment: 4,
+            curve_radial_segments: 6,
+            ..Default::default()
+        };
+        let mut settings = RenderingQualitySettings::default();
+        settings.apply_profile(profile);
+        settings
+    }
+
     #[test]
     fn malformed_textured_dome_format_is_not_treated_as_automatic() {
         let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
@@ -965,7 +1040,7 @@ def DomeLight "Dome"
     #[test]
     fn graphics_quality_updates_unauthored_dome_state_without_rewriting_authored_values() {
         let mut app = App::new();
-        app.insert_resource(RenderingQualitySettings::default());
+        app.insert_resource(test_quality_settings());
         app.insert_resource(bevy::light::GlobalAmbientLight::default());
         app.add_systems(Update, apply_graphics_dome_quality);
 

@@ -102,7 +102,7 @@ actually parses, so prefer it if this table and the binary ever disagree.
 | `--api [PORT]` | Enable the HTTP API server. Default port is 4101. **Not implied by `--no-ui`**: without this flag there is no API port at all. |
 | `--scene <PATH>` | Load a specific USD scene from a relative or absolute filesystem path. Startup resolves its owning root and mounts it through the canonical `twin://` address, and opens the simulator in the **View** perspective even if that Twin was last left in Design/Lunica. Without it, luncosim starts with an empty persistent world shell. |
 | `--render-profile <standard\|fast>` | Select the startup compatibility profile. `fast` uses unlit, texture-free materials and disables HDR, bloom, and MSAA. |
-| `--render-quality <low\|balanced\|high>` | Override the Graphics quality for this process. `high` is the highest shipped visual preset, raising shadow, sky-cubemap, lunar-terrain, LOD, and tessellation budgets. |
+| `--render-quality <low\|balanced\|high>` | Override the Graphics quality for this process. Fresh settings default to `high`; choose `low` for lower-end machines. `high` is the highest shipped visual preset, raising shadow, sky-cubemap, lunar-terrain, LOD, and tessellation budgets. |
 | `--record-offline <dir\|out.mp4>` | Arm a GPU-backed PNG sequence or direct video recording; offscreen captures begin after the authored scene is presentable. |
 | `--record-fps <N>` | Set the recorded output rate; requires `--record-offline`. Defaults to 60. |
 | `--record-frames <N>` | Stop a one-shot recording after `N` frames; requires `--record-offline`. |

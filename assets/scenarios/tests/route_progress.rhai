@@ -1,5 +1,6 @@
-// Production acceptance for occupied route starts and preserved route progress.
-// Avian supplies the initial sensor enter; Rhai owns route start/restart policy.
+// Production acceptance for Avian-driven route starts and preserved progress.
+// The Rover moves through each trigger; this observer never manufactures
+// route-zone events.
 
 const ROOT = "/RouteProgress";
 const ROUTE = ROOT + "/Route";
@@ -89,6 +90,7 @@ fn on_start(me, ctx) {
     this.subject = find(SUBJECT_PATH);
     this.route_entity = find_path(ROUTE);
     this.start_entered = 0;
+    this.point_one_entered = 0;
     this.started = 0;
     this.stopped = 0;
     this.reached = [];
@@ -100,6 +102,10 @@ fn on_event(me, evt, ctx) {
         && event_is_within(evt.value, find(SUBJECT_PATH)) {
         this.start_entered += 1;
     }
+    if evt.name == "enter:route_P1"
+        && event_is_within(evt.value, find(SUBJECT_PATH)) {
+        this.point_one_entered += 1;
+    }
     if evt.source == this.route_entity {
         if evt.name == "route_started" { this.started += 1; }
         if evt.name == "route_stopped" { this.stopped += 1; }
@@ -110,7 +116,7 @@ fn on_event(me, evt, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
-    if this.elapsed > 20.0 {
+    if this.elapsed > 45.0 {
         this.checks.push(t_true(false,
             "route progress acceptance timed out in phase " + this.phase.to_string()));
         finish(this, false);
@@ -159,14 +165,13 @@ fn on_tick(me, ctx) {
             "the initially occupied route point is marked visited"));
         this.checks.push(t_true(starts_at_next,
             "autopilot begins at the first route point after the occupied start"));
-        let entered = emit("enter:route_P1", this.subject);
-        if !entered { finish(this, false); return; }
         this.phase = 3;
         return;
     }
 
     if this.phase == 3 {
-        if this.reached.len() != 1 || this.reached[0] != 1 { return; }
+        if this.point_one_entered == 0 || this.reached.len() != 1
+            || this.reached[0] != 1 { return; }
         let points = point_paths(this.doc);
         if points.len() != 3 { return; }
         this.checks.push(t_true(
@@ -201,8 +206,6 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(resumed_at_next,
             "re-enabling skips every previously visited route point"));
         if !resumed_at_next { finish(this, false); return; }
-        let stale = emit("enter:route_P1", this.subject);
-        if !stale { finish(this, false); return; }
         this.transition_elapsed = 0.0;
         this.phase = 6;
         return;
@@ -210,13 +213,14 @@ fn on_tick(me, ctx) {
 
     if this.phase == 6 {
         this.transition_elapsed += dt();
-        if this.transition_elapsed < 0.02 { return; }
+        if this.transition_elapsed < 0.5 { return; }
         let points = point_paths(this.doc);
-        let stale_ignored = this.reached.len() == 1 && this.reached[0] == 1
+        let visited_zone_did_not_repeat = this.point_one_entered == 1
+            && this.reached.len() == 1 && this.reached[0] == 1
             && points.len() == 3 && target_is(this.subject, this.doc, points[2]);
-        this.checks.push(t_true(stale_ignored,
-            "a stale event for a visited point does not advance the resumed route"));
-        finish(this, stale_ignored);
+        this.checks.push(t_true(visited_zone_did_not_repeat,
+            "restarting inside a visited sensor keeps the next unvisited target"));
+        finish(this, visited_zone_did_not_repeat);
     }
 }
 

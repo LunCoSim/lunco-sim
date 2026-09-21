@@ -569,6 +569,53 @@ fn forks_isolate_layers_revisions_and_composed_cache() {
 }
 
 #[test]
+fn view_layer_composes_without_entering_persistent_runtime_source() {
+    let mut document = UsdDocument::with_origin(
+        DocumentId::new(14),
+        TINY_USDA,
+        DocumentOrigin::writable_file("/tmp/view-layer.usda"),
+    );
+    document
+        .apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "RoutePoints".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+    document
+        .apply(UsdOp::AddPrim {
+            edit_target: LayerId::view(),
+            parent_path: "/World".into(),
+            name: "RouteRibbon".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+
+    let points = SdfPath::new("/World/RoutePoints").unwrap();
+    let ribbon = SdfPath::new("/World/RouteRibbon").unwrap();
+    assert!(document.composed().spec(&points).is_some());
+    assert!(document.composed().spec(&ribbon).is_some());
+    assert!(document.runtime_data().spec(&points).is_some());
+    assert!(document.view_data().spec(&ribbon).is_some());
+    assert_eq!(document.runtime_revision(), 1);
+    assert_eq!(document.view_revision(), 1);
+
+    let persistent =
+        usda_to_data(&document.persistent_composed_source().unwrap()).unwrap();
+    assert!(persistent.spec(&points).is_some());
+    assert!(persistent.spec(&ribbon).is_none());
+
+    let fork = document.fork(DocumentId::new(15), "Route.usda").unwrap();
+    assert!(fork.composed().spec(&points).is_some());
+    assert!(fork.composed().spec(&ribbon).is_none());
+}
+
+#[test]
 fn fork_requires_new_identity_and_makes_readonly_sources_editable() {
     let source = UsdDocument::with_origin(
         DocumentId::new(10),

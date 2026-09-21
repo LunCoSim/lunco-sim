@@ -45,7 +45,7 @@ is refreshed by its external owner — a disk-backed `.rhai` file, USD
 parse/compile invalidation, and clean baseline without creating a second
 `DocumentHost` undo entry or duplicating the source owner's journal entry.
 Likewise, a derived presentation such as the USD route ribbon uses a typed
-transient projection command. It may update the runtime view and its
+transient projection command. It updates the document's disposable `@view@` layer and its
 projection cursor, but it is not authored content and therefore is not saved,
 undone, or journaled.
 

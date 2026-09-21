@@ -4,11 +4,12 @@
 //! through the `twin://` asset source and the async [`UsdLoader`], which
 //! re-attaches the scheme so co-located refs (terrain `.glb`) resolve on every
 //! platform the source supports. It is made doc-backed by serving the scene
-//! document's **composed** (`base ⊕ runtime`) source as a *byte-overlay* on the
-//! twin source, so the live world composes from the editable document and
-//! runtime spawns/moves appear live.
+//! document's **persistent** (`base ⊕ runtime`) source as a *byte-overlay* on
+//! the twin source, so the live world composes from the editable document and
+//! runtime edits appear in the initial mount. Disposable `view` opinions are
+//! excluded from that source.
 //!
-//! Flow (doc-first: the document exists and its composed source is the overlay
+//! Flow (doc-first: the document exists and its persistent source is the overlay
 //! BEFORE the scene mounts, so the world is projected exactly once):
 //! 1. On `TwinAssetMounted` with a `[usd] default_scene`, kick an async
 //!    [`UsdSourceText`] load of `twin://<name>/<scene>` (raw base layer, read
@@ -22,15 +23,15 @@
 //!    the composed source as the twin overlay, record it in
 //!    [`DocBackedTwinScenes`] (synced after the canonical stage sink is drained), and only then
 //!    fire `LoadScene` — the single mount composes `base ⊕ runtime`.
-//! 3. [`sync_twin_overlays`] — on an authored document or stage-lifecycle event
-//!    (initial mount, open-time `restore_runtime`, or a later spawn/move), refresh the
-//!    twin **overlay** (for persistence / re-open) and **author the delta onto
-//!    the live composed stage**: translates and structural spawns/removes are
+//! 3. [`sync_twin_overlays`] — later document edits author typed deltas onto the
+//!    live composed stage: translates and structural spawns/removes are
 //!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy_stage::canonical::CanonicalStage)
 //!    directly, firing its openusd change sink so `project_stage_changes`
-//!    projects the edit in place — no whole-scene asset reload. A referenced
-//!    spawn whose asset isn't loaded yet is fetched once through
-//!    [`drain_ref_spawns`], then authored the same way.
+//!    projects the edit in place — no whole-scene asset reload. The runtime
+//!    persistence plugin saves coalesced runtime-layer snapshots off-thread;
+//!    dependent stages are refreshed only when their composition uses the
+//!    changed document. A referenced spawn whose asset isn't loaded yet is
+//!    fetched once through [`drain_ref_spawns`], then authored the same way.
 //!
 //! Ownership: a default Twin scene gets a scene lease in
 //! [`DocBackedTwinScenes`]. An explicit file open, new document, or authored edit
@@ -449,6 +450,7 @@ pub(crate) fn drain_pending_twin_docs(
     sources: Res<Assets<UsdSourceText>>,
     twin_roots: Res<TwinRoots>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    runtime_saves: Res<lunco_usd_bevy_runtime_persistence::RuntimeSaveJobs>,
     mut empty_reason: ResMut<EmptyViewportReason>,
     mut commands: Commands,
 ) {
@@ -509,14 +511,30 @@ pub(crate) fn drain_pending_twin_docs(
         // after the stage load has already read its bytes. Guarded: whichever
         // runs second is a no-op.
         if let Some(ws) = workspace.as_deref() {
-            lunco_usd_bevy_runtime_persistence::restore_doc_runtime(ws, &mut registry, doc);
+            lunco_usd_bevy_runtime_persistence::restore_doc_runtime_with_pending(
+                ws,
+                &mut registry,
+                &runtime_saves,
+                doc,
+            );
         }
-        // Publish the composed source as the twin overlay so the stage build
+        // Publish the persistent source as the Twin overlay so the stage build
         // reads `base ⊕ runtime`, and mark both projection cursors at this generation —
         // every op through it is reflected by the mount itself, so
         // `sync_twin_overlays` only has to project edits made AFTER open.
         let (cur_gen, composed) = match registry.host(doc) {
-            Some(h) => (h.document().generation(), h.document().composed_source()),
+            Some(host) => match host.document().persistent_composed_source() {
+                Ok(source) => (host.document().generation(), source),
+                Err(error) => {
+                    report_twin_doc_load_failed(
+                        &mut empty_reason,
+                        &mut commands,
+                        &twin_path,
+                        format!("could not serialize persistent Twin source: {error}"),
+                    );
+                    continue;
+                }
+            },
             None => continue,
         };
         if let Err(error) =
@@ -542,15 +560,15 @@ pub(crate) fn drain_pending_twin_docs(
     pending.items.extend(still);
 }
 
-/// Keep each doc-backed twin scene's twin-source overlay and live stage in step
-/// with its document. The projection is woken by document and asset lifecycle
-/// events; it does not poll every frame. Persistence is serialized once after
-/// the live edit reaches the settled generation. Drops entries whose document
-/// has closed.
-/// Serialize a doc-backed scene's composed source into its twin overlay (the
-/// persistence / next-load source) and mark it overlay-synced at `generation`. O(stage) — a
-/// whole-stage recompose + serialize — so call it only once the document has SETTLED
-/// (see the settle step in [`sync_twin_overlays`]), never on every edit.
+/// Keep each doc-backed Twin scene's in-memory next-mount source and live stage
+/// in step with its document. The projection is woken by document and asset
+/// lifecycle events; it does not poll every frame. Durable runtime-layer I/O
+/// is owned separately by the asynchronous persistence plugin. Drops entries
+/// whose document has closed.
+/// Publish the persistent source into the in-memory Twin asset overlay for the
+/// next stage mount and mark it synced at `generation`. This is an O(stage)
+/// recompose and serialize, so it runs at the initial projection boundary;
+/// ordinary edits use typed incremental operations on the live stage.
 fn write_twin_overlay(
     world: &mut World,
     doc: DocumentId,
@@ -558,68 +576,29 @@ fn write_twin_overlay(
     rel: &str,
     generation: u64,
 ) -> bool {
-    let composed_source = world
+    let source = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)
-        .map(|h| h.document().composed_source());
-    if let Some(src) = composed_source {
-        if let Err(error) =
-            world
-                .resource::<TwinRoots>()
-                .set_overlay(name, rel, Arc::new(src.into_bytes()))
-        {
-            warn!("[usd-e1b] could not publish composed source for document {doc}: {error}");
+        .map(|h| h.document().persistent_composed_source());
+    let Some(source) = source else { return false };
+    let source = match source {
+        Ok(source) => source,
+        Err(error) => {
+            warn!("[usd-e1b] cannot serialize persistent source for document {doc}: {error}");
             return false;
         }
-        world
-            .resource_mut::<DocBackedTwinScenes>()
-            .mark_overlay_synced(doc, generation);
-        true
-    } else {
-        false
+    };
+    if let Err(error) = world
+        .resource::<TwinRoots>()
+        .set_overlay(name, rel, Arc::new(source.into_bytes()))
+    {
+        warn!("[usd-e1b] could not publish persistent source for document {doc}: {error}");
+        return false;
     }
-}
-
-/// A live projection finished an authored generation and may persist it after
-/// the current edit burst settles. The message is read at the next
-/// `PreUpdate`, which is the explicit settle boundary; no timer or generation
-/// polling is needed.
-#[derive(Message, Clone, Copy, Debug)]
-pub(crate) struct TwinProjectionSettle {
-    doc: DocumentId,
-    generation: u64,
-}
-
-/// Persist settled document overlays in the frame after live projection.
-///
-/// The queued closure re-checks the generation before serializing. This keeps
-/// an older settle message from marking a newer document generation as saved
-/// when another edit arrived before deferred commands were flushed.
-pub(crate) fn settle_twin_overlays(
-    mut messages: MessageReader<TwinProjectionSettle>,
-    backed: Res<DocBackedTwinScenes>,
-    mut commands: Commands,
-) {
-    for message in messages.read() {
-        let Some((name, rel)) = backed.coords_of(message.doc) else {
-            continue;
-        };
-        let doc = message.doc;
-        let generation = message.generation;
-        commands.queue(move |world: &mut World| {
-            let current_generation = world
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .host(doc)
-                .map(|host| host.document().generation());
-            let overlay_generation = world
-                .resource::<DocBackedTwinScenes>()
-                .overlay_synced_generation(doc);
-            if current_generation != Some(generation) || overlay_generation == Some(generation) {
-                return;
-            }
-            write_twin_overlay(world, doc, &name, &rel, generation);
-        });
-    }
+    world
+        .resource_mut::<DocBackedTwinScenes>()
+        .mark_overlay_synced(doc, generation);
+    true
 }
 
 pub(crate) fn sync_twin_overlays(world: &mut World) {
@@ -656,8 +635,6 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     // live as one graph: the component's `twin://` bytes are patched into every
     // loaded dependent recipe and its canonical stage is rebuilt in place.  The
     // viewport state (including orbit camera) is deliberately not touched.
-    let mut changed_sources: Vec<(DocumentId, AssetId<UsdStageAsset>, String, String)> = Vec::new();
-
     for (doc, name, rel, applied, overlay_synced) in entries {
         let preview_owned = world
             .resource::<DocBackedTwinScenes>()
@@ -681,9 +658,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             }
         };
         if Some(cur_gen) == applied {
-            // Live projection is already up to date. Persistence is handled by
-            // the explicit one-frame settle message, not by rechecking this
-            // document on every render frame.
+            // The live stage is current. Durable runtime-layer persistence is
+            // scheduled independently from DocumentChanged; there is no stage
+            // projection or whole-source serialization to do here.
             continue;
         }
 
@@ -757,8 +734,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe
                 // removal / composition arc — no incremental stage-author yet,
                 // and whole-source undo may change surviving prims' values): rebuild the
-                // stage from composed_source + the already-loaded closure. (The
-                // overlay is refreshed on the next settled frame.)
+                // stage from composed_source + the already-loaded closure. The
+                // next mount rebuilds its in-memory Twin overlay from the
+                // document's persistent source.
                 None => {
                     let cs = world
                         .resource::<DocumentRegistry<UsdDocument>>()
@@ -784,8 +762,10 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                         .unwrap_or_default();
                     rebuild_scene_from_composed(world, scene_id, &cs);
                 }
-                // Incremental: replay each op's typed delta onto the live stage. NO
-                // whole-stage serialize here — the overlay catches up when settled.
+                // Incremental: replay each op's typed delta onto the live stage.
+                // The runtime persistence owner snapshots authored edits
+                // asynchronously; the in-memory Twin overlay is rebuilt on the
+                // next mount rather than serializing the whole stage here.
                 Some(ops) => {
                     for op in &ops {
                         apply_incremental_op_to_stage(world, scene_id, op);
@@ -810,23 +790,11 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         } else {
             crate::live_consume::queue_stage_projection(world, doc, scene_id, cur_gen);
         }
-        let composed_source = world
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .host(doc)
-            .map(|host| host.document().composed_source());
-        if let Some(source) = composed_source {
-            changed_sources.push((doc, scene_id, twin_path, source));
-        }
-        if applied.is_some() && Some(cur_gen) != overlay_synced {
-            world.write_message(TwinProjectionSettle {
-                doc,
-                generation: cur_gen,
-            });
-        }
-    }
-
-    for (doc, scene_id, twin_path, source) in changed_sources {
-        refresh_dependent_stage_assets(world, doc, scene_id, &twin_path, &source);
+        // The live stage now owns this generation. Do not serialize the whole
+        // composed scene into the asset overlay for ordinary edits. A later
+        // mount publishes the current document once; loaded dependent stages
+        // receive the affected layer through the targeted refresh below.
+        refresh_dependent_stage_assets(world, doc, scene_id, &twin_path);
     }
 }
 
@@ -844,9 +812,7 @@ fn refresh_dependent_stage_assets(
     changed_doc: DocumentId,
     changed_scene: AssetId<UsdStageAsset>,
     layer_id: &str,
-    source: &str,
 ) {
-    let source_bytes = source.as_bytes().to_vec();
     let candidates: Vec<(
         AssetId<UsdStageAsset>,
         lunco_usd_compose::recipe::StageRecipe,
@@ -871,6 +837,25 @@ fn refresh_dependent_stage_assets(
         "[usd-live] component layer changed: doc={changed_doc} layer={layer_id} dependent_candidates={}",
         candidates.len()
     );
+
+    if candidates.is_empty() {
+        return;
+    }
+    let Some(source) = world
+        .resource::<DocumentRegistry<UsdDocument>>()
+        .host(changed_doc)
+        .map(|host| host.document().persistent_composed_source())
+    else {
+        return;
+    };
+    let source = match source {
+        Ok(source) => source,
+        Err(error) => {
+            warn!("[usd-live] cannot serialize persistent source for {changed_doc}: {error}");
+            return;
+        }
+    };
+    let source_bytes = source.into_bytes();
 
     for (stage_id, mut recipe) in candidates {
         match component_refresh_decision(changed_doc, layer_id, stage_id) {

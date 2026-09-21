@@ -68,6 +68,11 @@ fn runtime_source(document: &UsdDocument) -> Result<String, String> {
         .map_err(|error| format!("could not serialize runtime layer: {error}"))
 }
 
+fn view_source(document: &UsdDocument) -> Result<String, String> {
+    lunco_usd_authoring::author::data_to_usda(document.view_data())
+        .map_err(|error| format!("could not serialize view layer: {error}"))
+}
+
 fn document_snapshot(
     world: &World,
     doc: DocumentId,
@@ -77,6 +82,8 @@ fn document_snapshot(
 ) -> Result<ApiValue, ApiQueryError> {
     let source = document.source();
     let runtime = runtime_source(document)
+        .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?;
+    let view = view_source(document)
         .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?;
     let mut diagnostics = Vec::new();
     if let Some(error) = document.parse_error() {
@@ -106,9 +113,15 @@ fn document_snapshot(
             },
             "runtime": {
                 "id": "@runtime@",
-                "persistent": false,
+                "persistent": "twin_policy",
                 "revision": document.runtime_revision(),
                 "source": runtime,
+            },
+            "view": {
+                "id": "@view@",
+                "persistent": false,
+                "revision": document.view_revision(),
+                "source": view,
             },
         },
         "composition": {
@@ -369,6 +382,9 @@ fn variant_selection_stack_api_value(document: &UsdDocument, path: &SdfPath) -> 
             "runtime": variant_selection_metadata_api_value(
                 document.runtime_data(), path, "@runtime@",
             ),
+            "view": variant_selection_metadata_api_value(
+                document.view_data(), path, "@view@",
+            ),
         },
         "composed": variant_selection_metadata_api_value(
             document.composed_arc().as_ref(), path, "document_composed",
@@ -388,6 +404,7 @@ fn metadata_stack_api_value(
             api_value!({
                 "root": token_metadata_api_value(document.data(), path, field, "@root@"),
                 "runtime": token_metadata_api_value(document.runtime_data(), path, field, "@runtime@"),
+                "view": token_metadata_api_value(document.view_data(), path, field, "@view@"),
             }),
         ),
         (
@@ -457,6 +474,9 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
         let runtime_bytes = runtime_source(document)
             .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?
             .len();
+        let view_bytes = view_source(document)
+            .map_err(|error| ApiQueryError::new(ApiErrorCode::InternalError, error))?
+            .len();
         let mut diagnostics = Vec::new();
         if let Some(error) = document.parse_error() {
             diagnostics.push(error.to_owned());
@@ -492,9 +512,15 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                     },
                     "runtime": {
                         "id": "@runtime@",
-                        "persistent": false,
+                        "persistent": "twin_policy",
                         "revision": document.runtime_revision(),
                         "bytes": runtime_bytes,
+                    },
+                    "view": {
+                        "id": "@view@",
+                        "persistent": false,
+                        "revision": document.view_revision(),
+                        "bytes": view_bytes,
                     },
                 }),
             ),
@@ -541,6 +567,7 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                     api_value!({
                         "root": reference_list_api_value(document.data(), &path),
                         "runtime": reference_list_api_value(document.runtime_data(), &path),
+                        "view": reference_list_api_value(document.view_data(), &path),
                     }),
                 ),
                 (

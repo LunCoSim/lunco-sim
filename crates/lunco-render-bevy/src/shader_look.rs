@@ -743,6 +743,13 @@ fn prepare_authored_shader_image_mips(
     let (Some(image_events), Some(mut images)) = (image_events.as_mut(), images) else {
         return;
     };
+    let Some(default_anisotropy) = quality
+        .as_ref()
+        .and_then(|settings| settings.validated_profile().ok())
+        .map(|profile| profile.terrain_derived_texture_anisotropy.max(1))
+    else {
+        return;
+    };
 
     for event in image_events.read() {
         match event {
@@ -844,15 +851,7 @@ fn prepare_authored_shader_image_mips(
         state.tasks.remove(key);
     }
 
-    let default_anisotropy = lunco_render::RenderingQualitySettings::default()
-        .profile()
-        .terrain_derived_texture_anisotropy;
-    let anisotropy = quality
-        .as_ref()
-        .and_then(|settings| settings.validated_profile().ok())
-        .map(|profile| profile.terrain_derived_texture_anisotropy)
-        .unwrap_or(default_anisotropy)
-        .max(1);
+    let anisotropy = default_anisotropy;
 
     for (_, result) in finished {
         let Some(result) = result else { continue };

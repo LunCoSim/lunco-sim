@@ -4,7 +4,8 @@
 //! lifecycle that supplies schema text from the normal USD asset pipeline,
 //! including on wasm. Each source is admitted independently so one damaged
 //! optional module does not prevent valid modules from becoming available; every
-//! failed source is reported explicitly.
+//! failed source is reported explicitly. Cross-schema linear-unit validation
+//! waits until every vendored core source has finished loading.
 
 use std::collections::HashSet;
 
@@ -17,6 +18,7 @@ pub(crate) struct PendingSchemaAssets {
     entries: Vec<(bool, String, Handle<UsdSourceText>)>,
     finished: HashSet<AssetId<UsdSourceText>>,
     failed: HashSet<AssetId<UsdSourceText>>,
+    core_linear_units_validated: bool,
 }
 
 /// Request the runtime schema sources once all asset loaders have been built.
@@ -62,6 +64,7 @@ pub(crate) fn request_schema_assets(
         entries,
         finished: HashSet::default(),
         failed: HashSet::default(),
+        core_linear_units_validated: false,
     });
 }
 
@@ -104,6 +107,25 @@ pub(crate) fn register_ready_schema_assets(
         {
             error!("[schema] failed to load {module} schema asset");
             pending.failed.insert(id);
+        }
+    }
+
+    if !pending.core_linear_units_validated {
+        let core_sources = pending
+            .entries
+            .iter()
+            .filter(|(own, _, _)| !own)
+            .map(|(_, _, handle)| handle.id())
+            .collect::<Vec<_>>();
+        let core_sources_settled = !core_sources.is_empty()
+            && core_sources
+                .iter()
+                .all(|id| pending.finished.contains(id) || pending.failed.contains(id));
+        if core_sources_settled {
+            if core_sources.iter().all(|id| pending.finished.contains(id)) {
+                lunco_usd_authoring::schema::SchemaRegistry::validate_core_linear_units();
+            }
+            pending.core_linear_units_validated = true;
         }
     }
 }

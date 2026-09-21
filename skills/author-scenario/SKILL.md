@@ -28,8 +28,8 @@ For live route edits, Rhai owns the route policy and calls the generic typed USD
 operation command. The reusable `waypoint_editor` tool authors ordinary USD
 route points, whether their route scope is inline or composed from a separate
 route-plan asset. It uses a local `active=false` opinion when a point comes from
-a reference arc, and updates the disposable runtime ribbon under the selected
-route scope from the committed USD route. Keeping the ribbon under that scope
+a reference arc, and updates the disposable ribbon in the document's `@view@`
+layer under the selected route scope from the committed USD route. Keeping the ribbon under that scope
 preserves the route points' USD parent frame. The subject and route owner remain live:
 route edits do not rebuild
 or reset their physics, Modelica state, pose, possession, or Rhai `this` state.
@@ -57,12 +57,19 @@ autopilot stop/start; if the rover is already inside the initial route sensor,
 the start transaction marks that occupied prefix visited before sensor events
 drive later progression. This is presentation state, not a vessel component or
 a second route fact.
+The route context gesture opens its authored menu without selecting the point;
+selection and gizmo activation require the menu's explicit select action. User
+possession is a `ControlLink`/`SessionRegistry` lifecycle, while a route program
+is guidance policy. Releasing possession hides the vessel HUD and applies the
+generic input safe state; an enabled route then republishes its active guidance
+target without claiming the user's session. Repossession restores the HUD
+without restarting the route.
 
 Script source edits made by a user go through the `ScriptDocument` host, so
 undo, redo, and the Twin journal see the same typed `ScriptOp`. A file-backed
 or USD-embedded source refresh uses the shared external-baseline path instead;
 it advances the runtime generation without duplicating the source owner's
-journal entry. The disposable ribbon follows the same rule: its typed runtime
+journal entry. The disposable ribbon follows the same rule: its typed `@view@`
 projection is rebuilt from the committed route and is never authored as Twin
 content or placed in user history.
 

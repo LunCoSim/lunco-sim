@@ -185,7 +185,7 @@ fn on_tick(me, ctx) {
         if active_points(this.doc) != 3 { return; }
         this.checks.push(t_true(true,
             "undo restores the variant point and its route membership"));
-        let added = waypoint_editor::on_pointer(
+        let added = scene_interaction::on_pointer(
             unselected_pointer_context(this.doc, [30.0, 1.0, -32.0]),
         );
         if !query_ok(added) || added.path != P3 {

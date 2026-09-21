@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "RouteRuntimePersistence"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Minimal authored Twin for the runtime-route persistence production gate.
+def Xform "RouteRuntimePersistence"
+{
+    def Xform "Subject" {}
+
+    def Scope "Route"
+    {
+        def Scope "Program" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/route_runtime_anchor.rhai@
+            rel inputs:subject = </RouteRuntimePersistence/Subject>
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/route_runtime_persistence.rhai@
+        }
+    }
+}

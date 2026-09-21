@@ -27,20 +27,24 @@
 //!
 //! Per the Omniverse pattern, every [`UsdOp`] carries an `edit_target:
 //! LayerId` naming *which layer* receives the opinion. The document composes
-//! **`base ⊕ runtime`**: [`LayerId::root`] authors the persisted base layer,
-//! [`LayerId::runtime`] the ephemeral, **non-persisted** overlay — so a tool can
-//! edit non-destructively over the base and promote to persistent on save.
+//! **`base ⊕ runtime ⊕ view`**: [`LayerId::root`] authors the source scene,
+//! [`LayerId::runtime`] holds user-authored runtime edits, and
+//! [`LayerId::view`] holds disposable derived presentation. Twin policy may
+//! persist the runtime layer; the view layer is never persisted or journaled.
 //! `apply` routes to the target layer via [`TargetLayer::from_id`]; unknown
 //! identifiers are rejected (no silent misrouting to root).
 //!
 //! ## Two representations, and why both are permanent
 //!
-//! A running scene is held in **two** forms, and neither can absorb the other:
+//! A running scene is held in authored document layers plus a live composed
+//! stage; neither representation can absorb the other:
 //!
-//! - **This document** — the authored [`sdf::Data`] layers (`base` ⊕ `runtime`,
-//!   read via [`UsdDocument::data`] / [`UsdDocument::runtime_data`]). Plain,
-//!   `Send`, serializable. This is what Save writes, what the journal records, and
-//!   what the networking layer ships. Reads are cheap and run off the main thread.
+//! - **This document** — the [`sdf::Data`] layers (`base` ⊕ `runtime` ⊕ `view`,
+//!   read via [`UsdDocument::data`], [`UsdDocument::runtime_data`], and
+//!   [`UsdDocument::view_data`]). Save writes the base layer; Twin policy can
+//!   persist the runtime layer; the typed journal records user-authored ops.
+//!   The disposable view layer is excluded from save, persistence, and journal
+//!   history.
 //! - **The `CanonicalStage`** (in `lunco_usd_bevy_core`) — the live, *composed*
 //!   openusd `Stage` with references / sublayers / variants resolved. It is
 //!   `Rc`-backed and therefore `!Send`: a main-thread `NonSend` resource. It is
@@ -113,12 +117,13 @@ const EMPTY_USDA: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\n";
 
 /// Identifies one layer in a [`UsdDocument`]'s layer stack.
 ///
-/// A document has two layers (Phase C4):
+/// A document has three layers:
 /// - [`LayerId::root`] — the **base** layer: the authored scene, serialized to
 ///   disk on Save.
-/// - [`LayerId::runtime`] — the **runtime** layer: generated, ephemeral state
-///   (obstacle fields, spawn transforms) that overlays the base for reads but
-///   is **not** written to the authored file.
+/// - [`LayerId::runtime`] — the **runtime** layer: user-authored edits kept
+///   separate from the source file and optionally persisted by Twin policy.
+/// - [`LayerId::view`] — the **view** layer: derived presentation that composes
+///   over authored content and is never persisted or journaled.
 ///
 /// An op's `edit_target` names which layer receives the opinion; unknown
 /// identifiers are rejected.
@@ -131,9 +136,14 @@ impl LayerId {
         Self("@root@".to_string())
     }
 
-    /// The runtime layer — generated, non-persisted overlay state.
+    /// The runtime layer — user-authored overlay state.
     pub fn runtime() -> Self {
         Self("@runtime@".to_string())
+    }
+
+    /// The disposable presentation layer.
+    pub fn view() -> Self {
+        Self("@view@".to_string())
     }
 
     /// Wrap an arbitrary layer identifier (path or anonymous handle).
@@ -154,6 +164,11 @@ impl LayerId {
     /// True when this id refers to the document's runtime layer.
     pub fn is_runtime(&self) -> bool {
         self.0 == "@runtime@"
+    }
+
+    /// True when this id refers to the disposable presentation layer.
+    pub fn is_view(&self) -> bool {
+        self.0 == "@view@"
     }
 }
 
@@ -228,9 +243,10 @@ pub enum UsdChange {
 /// A typed, reversible mutation to a [`UsdDocument`].
 ///
 /// Every variant carries an `edit_target: LayerId` naming *which layer*
-/// receives the opinion — [`LayerId::root`] (persisted base) or
-/// [`LayerId::runtime`] (ephemeral, non-persisted overlay); `apply` routes to
-/// each. Unknown identifiers are rejected.
+/// receives the opinion — [`LayerId::root`] (source), [`LayerId::runtime`]
+/// (user-authored overlay), or [`LayerId::view`] (disposable presentation).
+/// `apply` routes to that layer; command owners restrict which layer each
+/// authoring path can target. Unknown identifiers are rejected.
 ///
 /// Forward application routes through [`lunco_usd_authoring::author`] — the op is
 /// authored by SDF path into a transient `Stage` and the updated root layer
@@ -246,7 +262,7 @@ pub enum UsdOp {
     /// previous source as another `ReplaceSource`. Used as the
     /// universal inverse fallback for the other variants.
     ReplaceSource {
-        /// Layer to write to: [`LayerId::root`] (base) or [`LayerId::runtime`] (overlay).
+        /// Layer to write to.
         edit_target: LayerId,
         /// New full source for the layer.
         text: String,
@@ -672,6 +688,45 @@ impl UsdOp {
         }
     }
 
+    /// Return this operation targeted at `layer`.
+    ///
+    /// Transient document commands use this to place their complete typed
+    /// operation batch in the disposable view layer regardless of the layer
+    /// supplied by a reusable authoring helper.
+    pub fn with_edit_target(mut self, layer: LayerId) -> Self {
+        *self.edit_target_mut() = layer;
+        self
+    }
+
+    fn edit_target_mut(&mut self) -> &mut LayerId {
+        match self {
+            Self::ReplaceSource { edit_target, .. }
+            | Self::AddPrim { edit_target, .. }
+            | Self::RemovePrim { edit_target, .. }
+            | Self::SetTranslate { edit_target, .. }
+            | Self::RemoveXformOp { edit_target, .. }
+            | Self::RestoreXformOp { edit_target, .. }
+            | Self::RemoveAttribute { edit_target, .. }
+            | Self::SetRotate { edit_target, .. }
+            | Self::SetScale { edit_target, .. }
+            | Self::SetAttribute { edit_target, .. }
+            | Self::SetTimeSample { edit_target, .. }
+            | Self::RemoveTimeSample { edit_target, .. }
+            | Self::SetRelationship { edit_target, .. }
+            | Self::SetConnection { edit_target, .. }
+            | Self::SetDefaultPrim { edit_target, .. }
+            | Self::SetStageMetrics { edit_target, .. }
+            | Self::SetPrimKind { edit_target, .. }
+            | Self::MovePrim { edit_target, .. }
+            | Self::SetApiSchemas { edit_target, .. }
+            | Self::SetVariantSelection { edit_target, .. }
+            | Self::SetPayload { edit_target, .. }
+            | Self::SetReferenceArcs { edit_target, .. }
+            | Self::SetActive { edit_target, .. }
+            | Self::ClearActive { edit_target, .. } => edit_target,
+        }
+    }
+
     /// Return the authored prim or property paths touched by this operation.
     ///
     /// This is metadata for acknowledgements and diagnostics; validation and
@@ -750,11 +805,11 @@ pub struct UsdDocument {
     /// is the canonical content [`source`](Self::source) serializes and Save
     /// writes to disk. Root-targeted ops edit this layer.
     base: sdf::Data,
-    /// The **runtime** layer: generated, ephemeral overlay state authored by
-    /// runtime-targeted ops (obstacle fields, spawn transforms). Kept separate
-    /// so it never reaches the saved file. Starts empty; folding it into reads
-    /// is deferred until a producer needs it (see [`runtime_data`](Self::runtime_data)).
+    /// The **runtime** layer: user-authored changes to the live scene. It stays
+    /// separate from the base source and can be persisted by Twin policy.
     runtime: sdf::Data,
+    /// Disposable presentation derived from authored/runtime facts.
+    view: sdf::Data,
     /// Set only when the base source text failed to parse on construction:
     /// holds the verbatim source so [`source`](Self::source) and Save preserve
     /// the file rather than silently emptying it. While `Some`, structural ops
@@ -766,6 +821,8 @@ pub struct UsdDocument {
     base_revision: u64,
     /// Revision of the runtime overlay layer.
     runtime_revision: u64,
+    /// Revision of the disposable presentation layer.
+    view_revision: u64,
     origin: DocumentOrigin,
     /// Authored-base revision at which the document was last persisted to disk.
     /// `None` = never saved (freshly created in-memory); `Some(r)` = last
@@ -785,8 +842,8 @@ pub struct UsdDocument {
     /// a synthetic [`UsdOp::ReplaceSource`] marker so the projector still rebuilds.
     /// See [`ops_since`](Self::ops_since).
     op_log: VecDeque<(u64, UsdOp)>,
-    /// Memoized `base ⊕ runtime` composition. The cache is private to this
-    /// document instance; its key names the document identity and both layer
+    /// Memoized `base ⊕ runtime ⊕ view` composition. The cache is private to this
+    /// document instance; its key names the document identity and all layer
     /// revisions, so derived data cannot cross a fork boundary or survive a
     /// changed layer.
     composed_cache: std::sync::Mutex<Option<(UsdCompositionKey, std::sync::Arc<sdf::Data>)>>,
@@ -795,12 +852,13 @@ pub struct UsdDocument {
 /// Inputs to the document's authored-layer composition memo.
 ///
 /// Full USD stage composition remains owned by `lunco-usd-compose` and its
-/// resolver recipe. This key is only for the local `base ⊕ runtime` merge.
+/// resolver recipe. This key is only for the local layer merge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct UsdCompositionKey {
     document: DocumentId,
     base_revision: u64,
     runtime_revision: u64,
+    view_revision: u64,
 }
 
 impl Clone for UsdDocument {
@@ -810,10 +868,12 @@ impl Clone for UsdDocument {
             authoring_recipe: self.authoring_recipe.clone(),
             base: self.base.clone(),
             runtime: self.runtime.clone(),
+            view: self.view.clone(),
             parse_error: self.parse_error.clone(),
             generation: self.generation,
             base_revision: self.base_revision,
             runtime_revision: self.runtime_revision,
+            view_revision: self.view_revision,
             origin: self.origin.clone(),
             last_saved_base_revision: self.last_saved_base_revision,
             changes: self.changes.clone(),
@@ -863,10 +923,12 @@ impl UsdDocument {
             authoring_recipe: None,
             base,
             runtime: usda_to_data(EMPTY_USDA).unwrap_or_default(),
+            view: usda_to_data(EMPTY_USDA).unwrap_or_default(),
             parse_error,
             generation: 0,
             base_revision: 0,
             runtime_revision: 0,
+            view_revision: 0,
             origin,
             last_saved_base_revision,
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
@@ -877,7 +939,7 @@ impl UsdDocument {
 
     /// The current source text, serialized from the **base** layer on demand.
     /// This is what Save writes to disk and what the viewport preview / session
-    /// snapshot consume. The runtime overlay is deliberately excluded — sim
+    /// snapshot consume. Runtime and view overlays are deliberately excluded — sim
     /// state must never reach the authored file. Round-trips losslessly with
     /// [`new`](Self::new) (references and structure survive); only formatting is
     /// normalized.
@@ -903,11 +965,16 @@ impl UsdDocument {
         &self.base
     }
 
-    /// The **runtime** layer's overlay data — generated state authored by
-    /// runtime-targeted ops, never persisted to the base file. Empty until a
-    /// runtime op lands.
+    /// The **runtime** layer's overlay data — user-authored edits kept outside
+    /// the source file and optionally persisted by the owning Twin's policy.
     pub fn runtime_data(&self) -> &sdf::Data {
         &self.runtime
+    }
+
+    /// The disposable **view** layer. It composes into live reads and is
+    /// excluded from source Save and runtime persistence.
+    pub fn view_data(&self) -> &sdf::Data {
+        &self.view
     }
 
     /// Attach the send-safe layer closure used to rebuild the live stage.
@@ -1005,9 +1072,14 @@ impl UsdDocument {
         self.base_revision
     }
 
-    /// Revision of the non-persisted runtime overlay layer.
+    /// Revision of the runtime overlay layer.
     pub fn runtime_revision(&self) -> u64 {
         self.runtime_revision
+    }
+
+    /// Revision of the disposable presentation layer.
+    pub fn view_revision(&self) -> u64 {
+        self.view_revision
     }
 
     /// Source parse diagnostic, when the document was opened with invalid USDA.
@@ -1015,9 +1087,9 @@ impl UsdDocument {
         self.parse_error.as_deref()
     }
 
-    /// The **composed** view: the runtime overlay merged over the base layer
-    /// (runtime opinions win, runtime-only prims included). This is what the
-    /// viewport renders — base authored content plus generated runtime state —
+    /// The **composed** view: runtime edits and disposable presentation merged
+    /// over the base layer, in that strength order. This is what the viewport
+    /// renders — authored content plus runtime and derived view state —
     /// whereas [`source`](Self::source) (Save) stays base-only. References
     /// survive as opinions; this is an sdf layer-stack merge, not render-time
     /// PCP composition.
@@ -1035,6 +1107,7 @@ impl UsdDocument {
             document: self.id,
             base_revision: self.base_revision,
             runtime_revision: self.runtime_revision,
+            view_revision: self.view_revision,
         };
         // A cache miss is always safe: the value is a derived memo and can be
         // recomputed from the two authoritative layers.
@@ -1049,7 +1122,8 @@ impl UsdDocument {
                 }
             }
         }
-        let data = std::sync::Arc::new(author::compose_layers(&self.base, &self.runtime));
+        let runtime = author::compose_layers(&self.base, &self.runtime);
+        let data = std::sync::Arc::new(author::compose_layers(&runtime, &self.view));
         *self
             .composed_cache
             .lock()
@@ -1073,10 +1147,26 @@ impl UsdDocument {
         })
     }
 
+    /// Serialize the base and user-authored runtime layers for a Twin source
+    /// overlay. Disposable presentation is deliberately omitted.
+    pub fn persistent_composed_source(&self) -> Result<String, DocumentError> {
+        if let Some(raw) = &self.parse_error {
+            return Ok(raw.clone());
+        }
+        let composed = author::compose_layers(&self.base, &self.runtime);
+        author::data_to_usda(&composed).map_err(|error| {
+            DocumentError::Internal(format!(
+                "failed to serialize persistent document {}: {error}",
+                self.id.raw()
+            ))
+        })
+    }
+
     /// Create a new editable untitled snapshot of this document.
     ///
     /// The base and runtime USD layers, revision history, dirty baseline, and
-    /// projection journals are copied as values. The derived composition memo
+    /// projection journals are copied as values. Disposable view data is
+    /// cleared in the new document. The derived composition memo
     /// is created empty by Clone, so equal-generation forks cannot share a
     /// composed result. The registry assigns the new id and Save-As later
     /// establishes a file identity.
@@ -1093,6 +1183,8 @@ impl UsdDocument {
         }
         let mut fork = self.clone();
         fork.id = id;
+        fork.view = usda_to_data(EMPTY_USDA).unwrap_or_default();
+        fork.view_revision = 0;
         fork.origin = DocumentOrigin::untitled(name);
         fork.last_saved_base_revision = None;
         Ok(fork)
@@ -1180,8 +1272,10 @@ impl UsdDocument {
         };
         self.base = base;
         self.runtime = usda_to_data(EMPTY_USDA).unwrap_or_default();
+        self.view = usda_to_data(EMPTY_USDA).unwrap_or_default();
         self.base_revision += 1;
         self.runtime_revision += 1;
+        self.view_revision += 1;
         self.generation += 1;
         if self.changes.len() == CHANGE_HISTORY_CAPACITY {
             self.changes.pop_front();
@@ -1302,6 +1396,7 @@ impl UsdDocument {
         match t {
             TargetLayer::Base => &self.base,
             TargetLayer::Runtime => &self.runtime,
+            TargetLayer::View => &self.view,
         }
     }
 
@@ -1323,7 +1418,11 @@ impl UsdDocument {
                 "attribute `{prim}.{name}` has an invalid path: {error}"
             ))
         })?;
-        for (layer_name, layer) in [("root", &self.base), ("runtime", &self.runtime)] {
+        for (layer_name, layer) in [
+            ("root", &self.base),
+            ("runtime", &self.runtime),
+            ("view", &self.view),
+        ] {
             let Some(spec) = layer.spec(&attr) else {
                 continue;
             };
@@ -1360,6 +1459,13 @@ impl UsdDocument {
                 );
                 EMPTY_USDA.to_string()
             }),
+            TargetLayer::View => author::data_to_usda(&self.view).unwrap_or_else(|e| {
+                warn!(
+                    "[usd] failed to serialize view layer {}: {e}",
+                    self.id.raw()
+                );
+                EMPTY_USDA.to_string()
+            }),
         }
     }
 
@@ -1375,6 +1481,10 @@ impl UsdDocument {
             TargetLayer::Runtime => {
                 self.runtime = data;
                 self.runtime_revision += 1;
+            }
+            TargetLayer::View => {
+                self.view = data;
+                self.view_revision += 1;
             }
         }
         self.generation += 1;
@@ -1395,12 +1505,15 @@ impl UsdDocument {
         }
     }
 
-    /// Validate that `path` names a prim present in **either** layer (base or
-    /// runtime) — a runtime op may add a child or override an attribute under a
-    /// base-authored prim. Returns the parsed [`SdfPath`].
+    /// Validate that `path` names a prim present in one of the document layers —
+    /// an overlay op may add a child or override an attribute under a weaker
+    /// prim. Returns the parsed [`SdfPath`].
     fn require_prim_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
         let sdf = parse_prim_path(path)?;
-        if prim_in(&self.base, &sdf) || prim_in(&self.runtime, &sdf) {
+        if prim_in(&self.base, &sdf)
+            || prim_in(&self.runtime, &sdf)
+            || prim_in(&self.view, &sdf)
+        {
             Ok(sdf)
         } else {
             Err(DocumentError::ValidationFailed(format!(
@@ -1456,13 +1569,15 @@ impl UsdDocument {
     }
 }
 
-/// Which of a document's two layers an op edits.
+/// Which of a document's layers an op edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TargetLayer {
     /// The authored base layer (saved to disk).
     Base,
-    /// The generated runtime overlay (not saved).
+    /// The user-authored runtime overlay.
     Runtime,
+    /// Disposable derived presentation; never serialized to the sidecar.
+    View,
 }
 
 impl TargetLayer {
@@ -1473,6 +1588,8 @@ impl TargetLayer {
             Some(Self::Base)
         } else if id.is_runtime() {
             Some(Self::Runtime)
+        } else if id.is_view() {
+            Some(Self::View)
         } else {
             None
         }
@@ -1792,7 +1909,7 @@ impl Document for UsdDocument {
         };
         let target = TargetLayer::from_id(&id).ok_or_else(|| {
             DocumentError::ValidationFailed(format!(
-                "edit target {id:?} not a known layer (root | runtime)"
+                "edit target {id:?} not a known layer (root | runtime | view)"
             ))
         })?;
         // A document opened from un-parseable base source can only be repaired

@@ -8204,6 +8204,7 @@ dependencies = [
  "lunco-modelica-runtime",
  "lunco-obstacle-field",
  "lunco-physics",
+ "lunco-render",
  "lunco-scene-camera",
  "lunco-scene-commands",
  "lunco-scene-selection",
@@ -8986,6 +8987,7 @@ name = "lunco-render"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-hooks",
  "lunco-settings",
  "serde",
 ]
@@ -10638,6 +10640,7 @@ dependencies = [
  "lunco-core",
  "lunco-settings",
  "lunco-signal",
+ "lunco-telemetry",
  "lunco-theme",
  "lunco-usd-bevy-scene",
  "lunco-viz-core",

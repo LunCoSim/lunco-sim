@@ -76,14 +76,20 @@ pub enum SceneInteractionMode {
 }
 
 impl SceneInteractionMode {
-    /// Whether the editor selection observer owns this primary scene click.
-    pub const fn selection_owns_click(self, modified: bool) -> bool {
-        modified || matches!(self, Self::Editor)
+    /// Stable semantic name exposed to authored interaction policies.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Simulation => "simulation",
+            Self::Editor => "editor",
+        }
     }
 
-    /// Whether avatar possession owns this primary scene click.
-    pub const fn possession_owns_click(self, modified: bool) -> bool {
-        !modified && matches!(self, Self::Simulation)
+    /// Whether the configured semantic intents assign this click exclusively
+    /// to the simulation's ordinary selection/possession gesture.
+    pub fn possession_owns_pointer(self, intents: &[String]) -> bool {
+        matches!(self, Self::Simulation)
+            && intents.len() == 1
+            && intents[0] == "selection.replace"
     }
 }
 
@@ -148,13 +154,17 @@ mod tests {
     }
 
     #[test]
-    fn primary_click_has_one_owner_per_mode() {
-        assert!(SceneInteractionMode::Simulation.possession_owns_click(false));
-        assert!(!SceneInteractionMode::Simulation.possession_owns_click(true));
-        assert!(!SceneInteractionMode::Simulation.selection_owns_click(false));
-        assert!(SceneInteractionMode::Simulation.selection_owns_click(true));
-        assert!(SceneInteractionMode::Editor.selection_owns_click(false));
-        assert!(!SceneInteractionMode::Editor.possession_owns_click(false));
-        assert!(!SceneInteractionMode::Editor.possession_owns_click(true));
+    fn possession_requires_the_exclusive_semantic_pointer_intent() {
+        let selection = vec!["selection.replace".to_string()];
+        let overlapping = vec![
+            "selection.replace".to_string(),
+            "route.add_point".to_string(),
+        ];
+        let route = vec!["route.add_point".to_string()];
+        assert!(SceneInteractionMode::Simulation.possession_owns_pointer(&selection));
+        assert!(!SceneInteractionMode::Simulation.possession_owns_pointer(&overlapping));
+        assert!(!SceneInteractionMode::Simulation.possession_owns_pointer(&route));
+        assert!(!SceneInteractionMode::Simulation.possession_owns_pointer(&[]));
+        assert!(!SceneInteractionMode::Editor.possession_owns_pointer(&selection));
     }
 }

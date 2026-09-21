@@ -489,6 +489,23 @@ if [[ ${#EDITOR_SCENES[@]} -gt 0 ]]; then
     fi
 fi
 
+# Route runtime persistence is a separate two-launch boundary gate: the
+# ordinary scene suite deliberately runs with runtime-overlay I/O disabled.
+runtime_persistence_selected=0
+for scene in "${SCENES[@]}"; do
+    if [[ "$(basename "$scene" .usda)" == "route_runtime_persistence" ]]; then
+        runtime_persistence_selected=1
+        break
+    fi
+done
+if ((runtime_persistence_selected)); then
+    echo
+    echo "==> route runtime persistence pass (manifest-backed production Twin)"
+    if ! LUNCOSIM_BIN="$BIN" python3 scripts/api/test_route_runtime_persistence.py; then
+        overall=1
+    fi
+fi
+
 # ── Summary table ───────────────────────────────────────────────────────────
 total_scene_tests=$((
     ${#SCENES[@]} + ${#GRAPHICS_SCENES[@]} +

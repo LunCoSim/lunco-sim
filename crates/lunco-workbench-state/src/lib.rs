@@ -12,12 +12,9 @@
 //! - **Active perspective** — restored on Twin activation (workbench
 //!   local, side-effect free). A host may provide a one-shot initial
 //!   perspective for an explicit launch through [`WorkspaceStateRestorePolicy`].
-//! - **Open document paths + active document** — persisted so a future
-//!   session-restore can reopen them. We do *not* auto-reopen yet:
-//!   reopening means replaying domain-specific open commands
-//!   (`OpenClass` for Modelica, scene-open for USD, …) with parse /
-//!   recompile side effects. That wiring is a deliberate follow-up; the
-//!   data is captured now so it's ready when it lands.
+//! - **Open documents + active document** — hot-exit state is saved and
+//!   restored for an explicitly active Twin. With no active Twin, the host
+//!   uses its startup defaults and does not load or save workspace state.
 //!
 //! Global, app-wide preferences (theme, perf HUD, **default window
 //! geometry**) stay in the shared LunCoSim settings file via `lunco-settings` —
@@ -434,10 +431,9 @@ impl RuntimeSurfaceLayouts {
 pub struct WorkspaceState {
     /// Version of the persisted representation.
     pub schema_version: u32,
-    /// The Twin root this state belongs to (empty when no Twin is
-    /// active — a "no-folder" session still hot-exits its docs). Stored
-    /// so a hash collision (two paths landing on the same file stem) is
-    /// detectable — a mismatch is treated as a miss.
+    /// The non-empty Twin root this state belongs to. Stored so a hash
+    /// collision (two paths landing on the same file stem) is detectable —
+    /// a mismatch is treated as a miss.
     pub twin_root: PathBuf,
     /// `PerspectiveId` string of the perspective active at save time.
     /// `None` ⇒ leave the app's startup default.
@@ -496,10 +492,13 @@ fn decode_workspace_state(text: &str) -> Result<WorkspaceState, String> {
 }
 
 impl WorkspaceState {
-    /// Load the state for a Twin root. Returns `None` on missing /
-    /// unreadable / corrupt file, or when the stored `twin_root` doesn't
-    /// match (hash collision guard) — all of which mean "use defaults".
+    /// Load the state for a non-empty Twin root. Returns `None` for an empty
+    /// root, a missing / unreadable / corrupt file, or when the stored
+    /// `twin_root` doesn't match (hash collision guard) — all mean "use defaults".
     pub fn load(twin_root: &Path) -> Option<Self> {
+        if twin_root.as_os_str().is_empty() {
+            return None;
+        }
         let path = workspace_state_path(twin_root);
         use lunco_storage::Storage;
         let bytes = lunco_storage::FileStorage::new()
@@ -552,6 +551,12 @@ impl WorkspaceState {
     /// reuse that exact string instead of `save()` re-serializing the same
     /// value a second time per write (CQ-209).
     pub fn save_serialized(&self, json: &str) -> std::io::Result<()> {
+        if self.twin_root.as_os_str().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "workspace state requires an active Twin root",
+            ));
+        }
         let path = workspace_state_path(&self.twin_root);
         // CQ-107: persist through the Storage API (atomic tmp+rename,
         // creates parent dirs) instead of hand-rolling `std::fs`.
@@ -575,7 +580,8 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     h
 }
 
-/// Resolve the on-disk path for a Twin's state file:
+/// Resolve the on-disk path for a Twin's state file (the root must be
+/// non-empty):
 /// `<config>/workspace-state/<fnv1a-hex>.json`. Honours the
 /// `LUNCOSIM_CONFIG` override via `lunco_settings::user_config_dir`.
 ///
@@ -659,14 +665,13 @@ const SETTLE_FRAMES: u32 = 3;
 /// starved by a perpetually-churning doc set.
 const SETTLE_BUDGET: u32 = 60;
 
-/// Absolute root of the active Twin, or the empty path for a "no-folder"
-/// session (which still hot-exits its docs into a sentinel file).
-fn active_twin_root(world: &World) -> PathBuf {
+/// Absolute root of the active Twin, when one is active.
+fn active_twin_root(world: &World) -> Option<PathBuf> {
     let ws = world.resource::<WorkspaceResource>();
     ws.active_twin
         .and_then(|id| ws.twin(id))
         .map(|t| t.root.clone())
-        .unwrap_or_default()
+        .filter(|root| !root.as_os_str().is_empty())
 }
 
 /// Concat every registered codec's open-doc snapshots, each paired with
@@ -713,7 +718,8 @@ fn session_revision(world: &mut World) -> u64 {
 
 /// Cheap value that changes when anything we persist changes (docs,
 /// perspective, active Twin) — gates the expensive capture/serialize.
-fn gate_value(world: &mut World) -> u64 {
+fn gate_value(world: &mut World) -> Option<u64> {
+    let twin_root = active_twin_root(world)?;
     let docs = session_revision(world);
     let (persp, active, dock) = with_layout(world, |layout, world| {
         let persp = layout
@@ -746,18 +752,20 @@ fn gate_value(world: &mut World) -> u64 {
         };
         (persp, active, dock)
     });
-    let twin = fnv1a64(active_twin_root(world).to_string_lossy().as_bytes());
+    let twin = fnv1a64(twin_root.to_string_lossy().as_bytes());
     let runtime_surface_layouts = world.resource::<RuntimeSurfaceLayouts>().revision();
-    docs.wrapping_add(persp)
-        .wrapping_add(twin)
-        .wrapping_add(active)
-        .wrapping_add(dock)
-        .wrapping_add(runtime_surface_layouts)
+    Some(
+        docs.wrapping_add(persp)
+            .wrapping_add(twin)
+            .wrapping_add(active)
+            .wrapping_add(dock)
+            .wrapping_add(runtime_surface_layouts),
+    )
 }
 
 /// Build the full hot-exit state from live resources.
-fn build_state(world: &mut World) -> WorkspaceState {
-    let twin_root = active_twin_root(world);
+fn build_state(world: &mut World) -> Option<WorkspaceState> {
+    let twin_root = active_twin_root(world)?;
     let perspective = with_layout(world, |layout, world| layout.active_perspective(world));
     let pairs = capture_documents(world);
     // Active tab = index of the document whose live id matches the
@@ -797,7 +805,7 @@ fn build_state(world: &mut World) -> WorkspaceState {
         HashMap::new() // see RESTORE_DOCK_ARRANGEMENT
     };
     let runtime_surface_layouts = world.resource::<RuntimeSurfaceLayouts>().as_map().clone();
-    WorkspaceState {
+    Some(WorkspaceState {
         schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
         twin_root,
         perspective,
@@ -805,7 +813,7 @@ fn build_state(world: &mut World) -> WorkspaceState {
         active_document,
         docks,
         runtime_surface_layouts,
-    }
+    })
 }
 
 /// Restore the active Twin's saved session — perspective + open
@@ -813,6 +821,27 @@ fn build_state(world: &mut World) -> WorkspaceState {
 /// Twin switch. Exclusive system: codecs need `&mut World`.
 fn restore_workspace_state(world: &mut World) {
     let active = world.resource::<WorkspaceResource>().active_twin;
+
+    // No-folder sessions use the host's startup layout. They do not share a
+    // process-wide document snapshot across luncosim, lunica, and other hosts.
+    if active.is_none() {
+        let changed = {
+            let mut applied = world.resource_mut::<AppliedTwin>();
+            if applied.initialized && applied.twin.is_some() {
+                applied.twin = None;
+                applied.restore_failed = false;
+                applied.settle_frames = 0;
+                applied.settle_budget = 0;
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            world.resource_mut::<RuntimeSurfaceLayouts>().clear();
+        }
+        return;
+    }
 
     // Decide whether to run this frame. Startup restore waits for the
     // doc set to settle (apps auto-open async); a later Twin switch runs
@@ -841,21 +870,29 @@ fn restore_workspace_state(world: &mut World) {
         }
     }
 
+    let Some(root) = active_twin_root(world) else {
+        warn!("[WorkspaceState] active Twin has no root; skipping workspace restore");
+        {
+            let mut applied = world.resource_mut::<AppliedTwin>();
+            applied.initialized = true;
+            applied.twin = active;
+            applied.restore_failed = true;
+        }
+        world.resource_mut::<RuntimeSurfaceLayouts>().clear();
+        return;
+    };
+
     {
         let mut applied = world.resource_mut::<AppliedTwin>();
         applied.initialized = true;
         applied.twin = active;
+        applied.restore_failed = false;
     }
 
-    let initial_perspective = if active.is_some() {
-        world
-            .resource_mut::<WorkspaceStateRestorePolicy>()
-            .take_initial_perspective()
-    } else {
-        None
-    };
+    let initial_perspective = world
+        .resource_mut::<WorkspaceStateRestorePolicy>()
+        .take_initial_perspective();
 
-    let root = active_twin_root(world);
     let state = WorkspaceState::load(&root);
     world.resource_mut::<RuntimeSurfaceLayouts>().replace(
         state
@@ -989,14 +1026,18 @@ fn persist_workspace_state(world: &mut World) {
             return;
         }
     }
-    let rev = gate_value(world);
+    let Some(rev) = gate_value(world) else {
+        return;
+    };
     {
         let last = world.resource::<WorkspaceStateLast>();
         if last.seeded && last.rev == rev {
             return;
         }
     }
-    let state = build_state(world);
+    let Some(state) = build_state(world) else {
+        return;
+    };
     let key = format!(
         "{:016x}",
         fnv1a64(

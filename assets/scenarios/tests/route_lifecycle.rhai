@@ -214,6 +214,7 @@ fn selected_route_context(doc, path, position, program) {
 fn invalid_edit_checks(doc) {
     let before = route_revision(doc);
     let missing_context = waypoint_editor::on_click(#{
+        button: "primary",
         doc_id: doc,
         scene_root_path: ROOT,
         route_path: ROUTE,
@@ -289,7 +290,22 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
     if this.elapsed > 45.0 {
-        this.checks.push(t_true(false, "route lifecycle acceptance timed out in phase " + this.phase));
+        let detail = "route lifecycle acceptance timed out in phase " + this.phase;
+        if this.phase == 2 {
+            detail += "; point_count=" + point_count(this.doc).to_string()
+                + ", new_point=" + this.new_point.to_string()
+                + ", ribbon_count=" + ribbon_count(this.doc).to_string();
+        }
+        if this.phase == 5 {
+            detail += "; point_count=" + point_count(this.doc).to_string()
+                + ", referenced_point_exists=" + has_path(this.doc, ROUTE + "/P2").to_string()
+                + ", ribbon_count=" + ribbon_count(this.doc).to_string();
+        }
+        if this.phase == 9 {
+            detail += "; point_count=" + point_count(this.doc).to_string()
+                + ", ribbon_count=" + ribbon_count(this.doc).to_string();
+        }
+        this.checks.push(t_true(false, detail));
         finish(this);
         return;
     }
@@ -385,7 +401,7 @@ fn on_tick(me, ctx) {
         terrain_pointer.hit_path = ();
         terrain_pointer.prim_paths = [];
         terrain_pointer.pointer_intents = ["route.add_point"];
-        let terrain_added = waypoint_editor::on_pointer(terrain_pointer);
+        let terrain_added = scene_interaction::on_pointer(terrain_pointer);
         this.checks.push(t_true(terrain_added.ok && terrain_added.path != (),
             "terrain add-point intent resolves a route without a hit or selected prim"));
         if terrain_added.ok && terrain_added.path != () {
@@ -395,7 +411,7 @@ fn on_tick(me, ctx) {
             this.checks.push(t_true(terrain_removed.ok,
                 "the terrain-created point can be removed through the typed edit path"));
         }
-        let pointer = waypoint_editor::on_pointer(
+        let pointer = scene_interaction::on_pointer(
             selected_route_context(this.doc, (), [0.0, 1.0, -32.0], ROUTE),
         );
         if pointer.ok != true {
@@ -466,6 +482,12 @@ fn on_tick(me, ctx) {
             return;
         }
         let transient_path = transient.path;
+        let unsettled = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: transient_path,
+        });
+        this.checks.push(t_true(unsettled != () && unsettled.ok == false,
+            "a document-scoped composed query rejects a route edit before projection"));
         let transient_move = waypoint_editor::on_move(
             context(this.doc, transient_path, [1.0, 1.0, -41.0]),
         );
@@ -484,7 +506,7 @@ fn on_tick(me, ctx) {
         // Let the disposable ribbon observe the completed delete before the
         // durable point used by the rest of this lifecycle is appended.
         if point_count(this.doc) != 3 || ribbon_count(this.doc) != 3 { return; }
-        let pointer = waypoint_editor::on_pointer(
+        let pointer = scene_interaction::on_pointer(
             context(this.doc, (), [0.0, 1.0, -32.0]),
         );
         if pointer.ok != true {
@@ -524,9 +546,22 @@ fn on_tick(me, ctx) {
         secondary.button = "secondary";
         secondary.modifiers = #{ alt: false, shift: false, ctrl: false };
         secondary.pointer_intents = ["route.context"];
-        let pointer = waypoint_editor::on_pointer(secondary);
-        this.checks.push(t_true(pointer.ok == true,
-            "generic pointer policy accepts secondary-click context"));
+        secondary.pointer_policy = #{ right: "block" };
+        let denied = scene_interaction::on_pointer(secondary);
+        this.checks.push(t_true(denied.handled == false,
+            "a pointer chord cannot open route context without the USD-authored context policy"));
+        secondary.pointer_policy = #{ right: "context" };
+        if !is_unattended() {
+            let selection = query("InspectSelection", #{});
+            this.selection_before_context = if selection != () && selection.ok != false {
+                selection.primary
+            } else { () };
+        }
+        let pointer = scene_interaction::on_pointer(secondary);
+        this.checks.push(t_true(pointer.ok == true && pointer.selected == false,
+            "secondary-click opens waypoint context without selecting it (ok="
+                + pointer.ok.to_string() + ", selected=" + pointer.selected.to_string()
+                + ", handled=" + pointer.handled.to_string() + ")"));
         this.phase = 20;
         return;
     }
@@ -539,10 +574,10 @@ fn on_tick(me, ctx) {
             return;
         }
         let selection = query("InspectSelection", #{});
-        let expected = find_path(this.new_point);
-        if selection == () || selection.ok == false || selection.primary != expected { return; }
+        if selection == () || selection.ok == false
+            || selection.primary != this.selection_before_context { return; }
         this.checks.push(t_true(true,
-            "secondary-click routes through the generic scene pointer policy"));
+            "secondary-click preserves the existing scene selection"));
         this.phase = 21;
         return;
     }
@@ -552,7 +587,7 @@ fn on_tick(me, ctx) {
             context(this.doc, this.new_point, ()), ROUTE,
         );
         this.checks.push(t_true(selected == this.new_point,
-            "secondary-click policy selects the direct route point"));
+            "secondary-click policy resolves the direct route point independently of selection"));
         if find_path(this.new_point) < 0 { return; }
         let nested = context(this.doc, this.new_point + "/Dome", ());
         nested.target_path = this.new_point + "/Dome";
@@ -703,7 +738,7 @@ fn on_tick(me, ctx) {
         let modified = modified_context(this.doc, (), [0.0, 1.0, -24.0],
             #{ alt: true, shift: true, ctrl: true });
         modified.pointer_intents = [];
-        waypoint_editor::on_pointer(modified);
+        scene_interaction::on_pointer(modified);
         this.phase = 90;
         return;
     }

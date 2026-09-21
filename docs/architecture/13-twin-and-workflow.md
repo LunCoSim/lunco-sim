@@ -1041,6 +1041,9 @@ The workbench shell and `lunco-workbench-state` provide document/session UI
 integration and persistence; they do not replace scene or simulation
 composition. New examples should be authored as
 Twins or scenes and opened through the normal document/load commands.
+Workbench hot-exit state is restored only after a Twin becomes active. A
+no-Twin launch uses the host's startup layout and does not reopen or save
+previous-run document tabs or dock windows.
 
 ### Per-app: "New file" menu entries
 

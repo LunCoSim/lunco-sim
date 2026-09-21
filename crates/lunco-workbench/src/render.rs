@@ -2138,9 +2138,24 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
     menus.register_settings_submenu("Graphics", |ui, ctx| {
         ui.label(egui::RichText::new("Rendering").weak().small());
         if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
+            let Some(profiles) = ctx.resource::<lunco_render::RenderingQualityProfiles>() else {
+                ui.label("Rendering profiles are unavailable until the authored policy loads.");
+                return;
+            };
+            if !profiles.is_available() {
+                ui.label(format!(
+                    "Rendering profiles are unavailable: {}",
+                    profiles.error().unwrap_or("the profile catalog is incomplete")
+                ));
+                return;
+            }
+            let Some(default_quality) = profiles.default_quality() else {
+                ui.label("Rendering profiles are unavailable: the authored default is missing.");
+                return;
+            };
             let mut settings = *current;
-            let current_preset = settings.preset();
-            let mut selected_preset = current_preset.unwrap_or(lunco_render::RenderingQuality::Balanced);
+            let current_preset = settings.preset(&profiles);
+            let mut selected_preset = current_preset.unwrap_or(default_quality);
             let preset_label = current_preset.map_or("Custom", |preset| preset.label());
             let preset_changed = settings_choice_menu(
                 ui,
@@ -2151,7 +2166,9 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                     .map(|quality| (quality, quality.label().to_owned())),
             );
             if preset_changed {
-                settings.apply_preset(selected_preset);
+                if let Some(profile) = profiles.get(selected_preset) {
+                    settings.apply_profile(profile);
+                }
             }
             let shadow_map_sizes = ctx
                 .resource::<lunco_render_recovery::RenderCapabilities>()
@@ -2170,6 +2187,26 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                 .weak()
                 .small(),
             );
+            ui.collapsing("Shadow edge filtering", |ui| {
+                settings_choice_menu(
+                    ui,
+                    format!(
+                        "Shadow filter: {}",
+                        settings.shadow_filtering_quality.label()
+                    ),
+                    &mut settings.shadow_filtering_quality,
+                    lunco_render::ShadowFilteringQuality::all()
+                        .into_iter()
+                        .map(|quality| (quality, quality.label().to_owned())),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Gaussian smooths shadow-map edges with a wider filter; Hardware 2×2 is faster and sharper.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
             ui.collapsing("Shadow allocation", |ui| {
                 if let Some(sizes) = shadow_map_sizes.as_deref() {
                     settings_choice_menu(

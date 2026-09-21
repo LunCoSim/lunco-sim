@@ -9,8 +9,16 @@ fn ui_label() { "NURBS points" }
 fn ui_hint() { "Click a NURBS prim to select it; call set_point(doc, path, index, p) from Rhai" }
 
 fn on_click(context) {
-    if context.target_entity_id == () { return; }
-    cmd("SelectEntity", #{ entity_id: context.target_entity_id, extend: false, toggle: false, remove_only: false });
+    if context == () || context.button != "primary" || context.target_entity_id == () {
+        return;
+    }
+    cmd("SelectEntity", #{
+        entity_id: context.target_entity_id,
+        inspector_part_entity_id: 0,
+        extend: false,
+        toggle: false,
+        remove_only: false,
+    });
 }
 
 fn point_literal(point) {

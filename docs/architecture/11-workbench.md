@@ -616,15 +616,19 @@ restart:
   a hash of the project path**, *not* written into the Twin folder:
   `<OS config dir>/lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
   `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
-  churn, and personal layout never leaks into a shared project.
+  churn, and personal layout never leaks into a shared project. A snapshot is
+  read or written only while a Twin is active. With no active Twin, the host
+  uses its startup windows and does not load or save a shared no-folder
+  session.
 The `lunco-workbench-window` crate restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). The `lunco-workbench-state` crate owns volatile per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies only the layout-provider adapter used for dock capture and restore. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
 
 An explicit host launch may provide a one-shot
-`lunco-workbench-state::WorkspaceStateRestorePolicy` initial perspective. The policy is consumed when
-the first real Twin becomes active, so a scene-oriented launch can open its
-View presentation without allowing a stale Design/Lunica choice to cover it.
-Later Twin switches and ordinary launches continue to restore the persisted
-per-Twin perspective.
+`lunco-workbench-state::WorkspaceStateRestorePolicy` initial perspective. The
+policy is consumed when the first real Twin becomes active, so a scene-oriented
+launch can open its View presentation without allowing a stale Design/Lunica
+choice to cover it. Later Twin switches and ordinary launches restore the
+persisted state for that Twin's root. With no active Twin, previous document
+tabs and dock windows are not restored or persisted.
 
 **Reconciliation.** Restore maps stored string ids back to the panels /
 perspectives registered in *this* binary (luncosim and lunica ship
@@ -632,10 +636,10 @@ different sets) and **drops anything unknown** — `PanelId` /
 `PerspectiveId` hold `&'static str`, so the live registry is the source
 of truth, never the file.
 
-**Deferred.** Free-form dock-tree fidelity (arbitrary user split
-rearrangements) and document auto-reopen are follow-ups — see the crate
-docs. Today restore re-applies the perspective preset and persists the
-open-document paths; it does not yet replay per-domain open commands.
+**Restore.** Once a Twin is active, its document snapshots are reopened through
+their registered domain codecs, and saved dock trees are reconciled against the
+live tabs. This restores the Twin's open documents and layout after restart.
+No active Twin means there is no workspace-state load or save.
 
 ### 9a. Recents
 

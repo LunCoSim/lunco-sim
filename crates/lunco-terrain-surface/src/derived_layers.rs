@@ -919,6 +919,13 @@ mod tests {
     use super::*;
     use lunco_precompute::Bake;
 
+    fn terrain_profile() -> lunco_render::RenderQualityProfile {
+        lunco_render::RenderQualityProfile {
+            terrain_derived_map_resolution: 1024,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn baker_and_renderer_share_exact_texel_spacing() {
         assert_eq!(raster_texel_size_m(4_096.0, 1_024), 8.0);
@@ -926,7 +933,7 @@ mod tests {
 
     #[test]
     fn static_derived_resolution_is_bounded_by_its_visual_product() {
-        let profile = lunco_render::RenderingQuality::Balanced.profile();
+        let profile = terrain_profile();
         assert_eq!(
             profile_for_terrain(profile, 3_200, Some(32), false).terrain_derived_map_resolution,
             32
@@ -955,7 +962,7 @@ mod tests {
         });
         let first_oracle = SurfaceOracle::new_with_base_key(first, Vec::new(), 42);
         let second_oracle = SurfaceOracle::new_with_base_key(second, Vec::new(), 42);
-        let profile = lunco_render::RenderingQuality::Balanced.profile();
+        let profile = terrain_profile();
 
         assert_eq!(
             DerivedBake {

@@ -24,7 +24,7 @@ use bevy::light::{
 };
 use bevy::prelude::Color;
 
-use crate::{RenderQualityProfile, RenderingQuality};
+use crate::RenderQualityProfile;
 
 /// How to **render** a lunar sun's shadows — the cascade split, biases and
 /// atlas size. This is render-side *presentation* config only; the sun's
@@ -61,16 +61,6 @@ pub struct LunarSunShadow {
 }
 
 impl LunarSunShadow {
-    /// Build the canonical sun-shadow spec for a resolved quality profile.
-    ///
-    /// Authored USD may still override the standard maximum shadow distance and
-    /// renderer-specific first-cascade split after this constructor returns.
-    /// Omitted values, along with all other renderer quality values, come from
-    /// the settings profile.
-    pub fn for_quality(quality: RenderingQuality) -> Self {
-        Self::for_profile(quality.profile())
-    }
-
     /// Build the canonical sun-shadow spec from the authoritative graphics
     /// settings, including custom edits made after a preset was applied.
     pub fn for_profile(profile: RenderQualityProfile) -> Self {
@@ -156,26 +146,39 @@ impl LunarSunShadow {
 mod tests {
     use super::*;
 
+    fn test_sun() -> LunarSunShadow {
+        LunarSunShadow {
+            num_cascades: 3,
+            minimum_distance: 0.1,
+            first_cascade_far_bound: 40.0,
+            maximum_distance: 1500.0,
+            overlap_proportion: 0.1,
+            depth_bias: 0.06,
+            normal_bias: 2.5,
+            shadow_map_size: 2048,
+        }
+    }
+
     #[test]
     fn invalid_cascade_settings_are_rejected_without_normalization() {
-        let mut sun = LunarSunShadow::for_quality(crate::RenderingQuality::Balanced);
+        let mut sun = test_sun();
         sun.num_cascades = 0;
         assert!(sun.cascade_config().is_none());
 
-        let mut sun = LunarSunShadow::for_quality(crate::RenderingQuality::Balanced);
+        let mut sun = test_sun();
         sun.first_cascade_far_bound = sun.maximum_distance;
         assert!(sun.cascade_config().is_none());
 
-        let mut sun = LunarSunShadow::for_quality(crate::RenderingQuality::Balanced);
+        let mut sun = test_sun();
         sun.overlap_proportion = 1.0;
         assert!(sun.cascade_config().is_none());
     }
 
     #[test]
     fn balanced_cascade_settings_build() {
-        let config = LunarSunShadow::for_quality(crate::RenderingQuality::Balanced)
+        let config = test_sun()
             .cascade_config()
-            .expect("balanced shadow settings");
+            .expect("valid test shadow settings");
         assert_eq!(config.bounds.len(), 2);
     }
 }

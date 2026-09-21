@@ -3,9 +3,13 @@
 Route geometry and route execution are program-level concerns. A route is an
 ordinary USD scope containing reusable route-point prims and a child Rhai
 program. The scope may be authored in the scene or in a separate route-plan
-USD asset that the scene composes at its canonical path. The subject is an
-authored relationship on the program, so a vehicle does not own a waypoint
-list and the Rust core does not know about vehicles or autopilot programs.
+USD asset that the scene composes at its canonical path. New and edited route
+points are opinions in the document's `@runtime@` layer, saved to the owning
+Twin's `.lunco/runtime/<scene-path>` sidecar when
+`usd.runtime_persistence` is enabled. The source scene and route-plan files
+remain untouched. The subject is an authored relationship on the program, so a
+vehicle does not own a waypoint list and the Rust core does not know about
+vehicles or autopilot programs.
 
 ## Ownership
 
@@ -16,7 +20,7 @@ list and the Rust core does not know about vehicles or autopilot programs.
 | Sensor overlap and `enter:<zone>` event production | Generic physics/sensor runtime |
 | Steering math and named-port writes | Generic navigation/port mechanisms |
 | Equations, actuator dynamics, and contact response | Modelica / Avian |
-| Route ribbon presentation | Reusable `waypoint_editor` Rhai tool + standard USD BasisCurves asset in the runtime layer |
+| Route ribbon presentation | Reusable `waypoint_editor` Rhai tool + standard USD BasisCurves asset in the disposable `@view@` layer |
 
 The standard reusable marker is
 [`assets/markers/route_point.usda`](../../assets/markers/route_point.usda).
@@ -79,14 +83,17 @@ document-backed live edit still uses the composed canonical path and the
 existing USD journal boundary.
 
 The editor's route tool derives a ribbon from the same point children after the
-canonical USD projection has settled. It references the reusable
+canonical USD projection has settled. Route-point topology and transforms are
+durable `@runtime@` edits; the ribbon and visited-marker colors are disposable
+`@view@` presentation. The view layer composes over the route while open, but
+does not enter Save, runtime-sidecar persistence, or the journal. It references the reusable
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
-asset as a runtime child of the route scope and writes only the generated
-`BasisCurves` opinions to the document's `@runtime@` layer. Keeping the view
+asset as a child of the route scope and writes only generated `BasisCurves`
+opinions to the document's `@view@` layer. Keeping the view
 under the route is a frame invariant: the ribbon anchor and every route point
 are expressed in the same USD parent space, so a transformed scene scope
 cannot put the overlay in a different frame. The Twin therefore contains no
-editor ribbon prim: removing the runtime view leaves the authored route
+editor ribbon prim: removing the view layer leaves the authored route
 unchanged, and another Twin can use the same tool without importing a
 Twin-specific presentation object.
 
@@ -95,8 +102,11 @@ scene gizmo persists translation/rotation through the generic runtime-layer
 authoring commands, including local overrides for referenced children. The
 standard Delete command removes a runtime-only point and deactivates a
 base-authored or referenced point in the runtime layer; it never tries to
-remove a spec from a layer that does not own it. Both paths are journaled and
-feed the same route revision/ribbon refresh.
+remove a spec from a layer that does not own it. Durable changes are journaled
+and feed the same route revision/ribbon refresh. Runtime-layer snapshots are
+serialized and written asynchronously, with newer revisions coalesced while a
+write is in flight; no whole-scene serialization or file I/O runs in the
+pointer handler.
 For a point below a reference, payload, or selected variant, the canonical
 composed path is the edit identity: the stronger local layer authors an `over`
 and the transform opinion there, and undo/redo removes or restores only that
@@ -142,22 +152,67 @@ safe-stop action cannot be lost to an unrelated point edit.
 
 ## Interaction
 
-The editor exposes a generic typed scene-pointer context to any registered Rhai
-tool that declares `on_pointer(context)`. Physical pointer chords are resolved
+For unarmed route editing and ordinary selection, the viewport adapter builds
+one typed context and dispatches it to the `scene_interaction` Rhai policy.
+That policy gives route editing first refusal, then routes an eligible primary
+gesture to the generic selection command. Physical pointer chords are resolved
 by the persisted shared `input_bindings.pointer_bindings` settings, which
-publish open-ended semantic names in `context.pointer_intents`; authored tools
-never hardcode Alt, mouse buttons, or modifier combinations. The bundled route
-policy consumes `route.add_point` and `route.context`, so a user can remap
-those names without a Rust rebuild or a waypoint-specific input branch. Rust
+publish open-ended semantic names in `context.pointer_intents`; authored
+policies never hardcode Alt, mouse buttons, or modifier combinations. Rust
 resolves the canonical document, prim paths, screen position, raw diagnostic
 metadata, semantic intents, and coordinates; it does not decide that a click
 means “waypoint”. `world_position` is a typed `point3` map in the
 `active_physics` frame; `render_position` is a separate floating-origin point
 for presentation diagnostics only. `pointer_point(context)` is the standard
 Rhai entry point and returns an explicit error when the active frame is
-unavailable. The popup host only renders authored menu items and dispatches
-their typed tool hooks, so adding another route action does not require an
-editor-specific Rust branch.
+unavailable. The popup host renders authored menu items and dispatches their
+typed tool hooks.
+
+This router is not yet a global gesture manager. Spawn, terrain, attachment,
+possession, camera, and gizmo paths still have engine-owned input consumers.
+Their active modes must remain mutually exclusive and the native gate must
+prove which owner received the physical gesture. The target contract is one
+captured gesture with one owner, selected by typed Rhai policy and applied by
+generic Rust mechanisms; a tool-specific observer must not race selection or
+another armed tool.
+
+The USD `LunCoPointerInteractionAPI` is enforced by the generic viewport
+adapter per mouse button before Bevy computes ordered hits. This preserves a
+primary pass-through marker while making the same visible marker the secondary
+context target. Route editing resolves only canonical paths in those hit facts;
+screen distance is never used to guess which waypoint was clicked. The adapter
+translates authored hit behavior into Bevy's backend contract; it does not
+choose a route action or tool owner.
+
+Rhai owns the gesture's meaning and returns typed semantic actions. Rust owns
+pointer sampling, ordered hit testing, capture, continuous gizmo handle math,
+and generic action application. In particular, a gizmo drag can be exposed to
+Rhai as a typed lifecycle/policy decision, but its high-frequency ray tests,
+transform math, and journaled commit remain engine mechanisms. The current
+gizmo path is not yet routed through the global owner/capture policy, so the
+route-specific gate proves only the unarmed route/selection path.
+
+The `route.context` semantic intent opens the authored waypoint menu only when
+the hit prim's registered `LunCoPointerInteractionAPI` marks that button as
+`context`. The shared Rhai router gives route editing first refusal and then
+dispatches generic selection for eligible primary gestures. Only the explicit
+“Select route point” menu action selects the point and enables its transform
+gizmo; delete and move resolve the point from the original pointer context. The
+windowed `route_interaction` production gate requires the fixture root in the
+live editor, observes the secondary pointer context and its semantic intent,
+then checks that selection stays unchanged until the explicit menu action.
+
+In the editor, the runtime edit panel identifies `@runtime@` as the target for
+route points, runtime spawns, and gizmo edits. Its Twin setting tells the user
+whether those authored edits persist across sessions or remain session-only.
+The `route_runtime_persistence` production gate opens a manifest-backed test
+Twin twice through the API: the first run adds a route point and waits for the
+sidecar write, and the second asserts the point was restored before the initial
+scene projection. Both runs verify the source scene file is unchanged. While
+route autopilot is enabled, releasing rover possession ends only the human
+control link: the route remains active and continues publishing guidance. The
+rover status view follows the avatar's `ControlLink`, so it reports free flight
+after release and driving again after possession.
 
 ## Presentation
 
@@ -167,8 +222,9 @@ is green; the route program changes the dome's standard
 surface bypasses light, normal, and shadow processing, and emits no light. Its
 trigger is invisible and has its own authored radius. Billboard text and placement are
 read by the generic billboard renderer. The ribbon is a separate, lightweight
-world-space annotation: the route tool densifies long legs with the shared
-`TerrainHeight` query, authors the sampled support normals, and standard
+world-space annotation: the route tool densifies long legs, sends all sample
+coordinates through one bounded `TerrainHeights` query, authors the sampled
+support normals, and standard
 `normals` make its authored 0.12 m width a narrow readable flat strip rather
 than a tube. Each sampled vertex is offset 0.03 m along its support normal, so
 the annotation stays above slopes without applying a global vertical offset.
@@ -177,7 +233,7 @@ adjacent ordered points are connected; the last point never connects back to
 the first.
 Long legs use a 3 m base sampling interval during ribbon rebuilds to avoid
 cutting through streamed terrain relief. The route tool caps the transient
-payload at 768 samples, quantizes only the transient text representation to
+payload at 256 samples, quantizes only the transient text representation to
 millimetre positions and 0.1 mm normals, and increases spacing only for
 unusually long routes. Every authored waypoint remains an endpoint without
 allowing the Rhai/USD string transport to overflow. This work is not performed
@@ -187,8 +243,15 @@ individual Twins do not duplicate it.
 
 The visual contract is covered by
 [`assets/scenes/tests/waypoint_visual.usda`](../../assets/scenes/tests/waypoint_visual.usda)
-and its Rhai observer. The route/task behavior contract is covered by authored
-scene scenarios, including
+and its Rhai observer. Real Avian trigger arrival and route resume are covered
+by [`route_progress.usda`](../../assets/scenes/tests/route_progress.usda); the
+windowed pointer/menu path is covered by
+[`route_interaction.usda`](../../assets/scenes/tests/route_interaction.usda).
+The manifest-backed runtime-layer write and restore path is covered by
+[`route_runtime_persistence.usda`](../../assets/scenes/tests/route_runtime_persistence.usda)
+and `scripts/api/test_route_runtime_persistence.py`.
+The remaining route/task behavior contract is covered by authored scene
+scenarios, including
 [`scripting_task_contract.rhai`](../../assets/scenarios/tests/scripting_task_contract.rhai).
 Rust tests retain only generic USD projection, sensor, and task-shape
 mechanisms that the production scene surface cannot isolate more directly.

@@ -65,7 +65,6 @@ use lunco_render::{
     estimate_shadow_allocation_bytes, LightGraphicsDefaults, RenderingQualitySettings,
     ShadowRangeAuthorship,
 };
-use lunco_settings::AppSettingsExt;
 
 /// Hook id for the authored render-shadow warning policy.
 pub const RENDER_SHADOW_QUALITY_HOOK: &str = "render.shadow_quality";
@@ -397,19 +396,21 @@ pub(crate) struct Ladder {
     failure_quiet_period_secs: f64,
     /// Configured wall-clock grace period before presentation is stopped.
     failure_give_up_after_secs: f64,
+    /// The authored profile policy has supplied recovery timings.
+    recovery_policy_configured: bool,
 }
 
 impl Default for Ladder {
     fn default() -> Self {
-        let profile = RenderingQualitySettings::default().profile();
         Self {
             rung: Rung::default(),
             last_total: 0,
             failing_since: None,
             last_failure_at: None,
             failure_kind: FailureKind::default(),
-            failure_quiet_period_secs: profile.render_failure_quiet_period_secs,
-            failure_give_up_after_secs: profile.render_failure_give_up_after_secs,
+            failure_quiet_period_secs: 0.0,
+            failure_give_up_after_secs: 0.0,
+            recovery_policy_configured: false,
         }
     }
 }
@@ -435,6 +436,7 @@ impl Ladder {
     fn set_recovery_policy(&mut self, profile: lunco_render::RenderQualityProfile) {
         self.failure_quiet_period_secs = profile.render_failure_quiet_period_secs;
         self.failure_give_up_after_secs = profile.render_failure_give_up_after_secs;
+        self.recovery_policy_configured = true;
     }
 
     fn reset_state(&mut self) {
@@ -475,6 +477,10 @@ impl Ladder {
             }
             self.rung = Rung::GaveUp;
             return Some(Action::GiveUp);
+        }
+
+        if !self.recovery_policy_configured {
+            return None;
         }
 
         let failed_again = total > self.last_total;
@@ -519,7 +525,9 @@ impl Ladder {
 ///
 /// No-op when there is no [`RenderApp`] (headless tests / API-only servers).
 pub fn install_wgpu_error_handler(app: &mut App) {
-    app.register_settings_section::<RenderingQualitySettings>();
+    if !app.is_plugin_added::<lunco_render::RenderQualityPolicyPlugin>() {
+        app.add_plugins(lunco_render::RenderQualityPolicyPlugin);
+    }
 
     if app.get_sub_app_mut(RenderApp).is_none() {
         return;
@@ -540,7 +548,8 @@ pub fn install_wgpu_error_handler(app: &mut App) {
             escalate_render_recovery,
             apply_render_quality.run_if(render_quality_changed),
         )
-            .chain(),
+            .chain()
+            .after(lunco_render::RenderQualityPolicySet),
     );
     app.init_resource::<ShadowAdmissionState>();
     // Shadow allocation happens during render extraction. The preflight must
@@ -1270,19 +1279,19 @@ fn apply_shadow_caster_policy(
         }
     }
 
-    let estimated_mib = required_bytes as f64 / (1024.0 * 1024.0);
-    warn!(
-        "shadow allocation: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {} bytes ({:.1} MiB) of configured ceiling {} bytes (directional {}px, point {}px); authored state preserved",
-        enabled_directional_casters,
-        directional_cascade_layers,
-        enabled_point_casters,
-        enabled_spot_casters,
-        required_bytes,
-        estimated_mib,
-        admission_budget,
-        directional_shadow_map.size,
-        point_shadow_map.size,
-    );
+    if required_bytes > 0 {
+        debug!(
+            "shadow allocation estimate: {} directional caster(s), {} cascade layer(s), {} point caster(s), {} spot caster(s), estimated allocation {} bytes of configured ceiling {} bytes (directional {}px, point {}px); authored state preserved",
+            enabled_directional_casters,
+            directional_cascade_layers,
+            enabled_point_casters,
+            enabled_spot_casters,
+            required_bytes,
+            admission_budget,
+            directional_shadow_map.size,
+            point_shadow_map.size,
+        );
+    }
 
     state.light_count = Some(light_count);
     state.enabled_directional_casters = Some(enabled_directional_casters);
@@ -1420,7 +1429,97 @@ mod tests {
     }
 
     fn default_give_up_after_secs() -> f64 {
-        RenderingQualitySettings::default().render_failure_give_up_after_secs
+        5.0
+    }
+
+    // Valid input fixture for capability and recovery mechanisms; shipped
+    // quality profile data lives only in the Rhai policy.
+    fn test_profile() -> lunco_render::RenderQualityProfile {
+        lunco_render::RenderQualityProfile {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            directional_cascades: 2,
+            shadow_filtering_quality: lunco_render::ShadowFilteringQuality::Hardware2x2,
+            max_directional_shadow_casters: 1,
+            max_point_shadow_casters: 1,
+            max_spot_shadow_casters: 1,
+            shadow_budget_bytes: 64 * 1024 * 1024,
+            horizon_shadow_cache_sun_threshold_deg: 0.2,
+            horizon_march_steps: 24,
+            horizon_cache_samples_per_axis: 1,
+            shadow_minimum_distance: 0.1,
+            shadow_first_cascade_far_bound: 20.0,
+            shadow_maximum_distance: 600.0,
+            shadow_cascade_overlap: 0.1,
+            shadow_depth_bias: 0.1,
+            shadow_normal_bias: 4.0,
+            camera_exposure_ev100: 16.0,
+            render_failure_quiet_period_secs: 0.5,
+            render_failure_give_up_after_secs: default_give_up_after_secs(),
+            camera_bloom_intensity: 0.0,
+            camera_bloom_low_frequency_boost: 0.0,
+            distant_light_default_illuminance: 128_000.0,
+            local_light_default_intensity: 1_000.0,
+            rect_light_default_intensity: 10_000.0,
+            dome_default_intensity: 1_000.0,
+            local_light_default_range: 30.0,
+            local_shadow_map_near_z: 0.2,
+            dome_cubemap_face_size: 512,
+            primitive_sphere_longitudes: 24,
+            primitive_sphere_latitudes: 16,
+            primitive_radial_segments: 32,
+            primitive_capsule_longitudes: 16,
+            primitive_capsule_latitudes: 8,
+            terrain_mesh_cache_bytes: 256 * 1024 * 1024,
+            terrain_derived_map_resolution: 512,
+            terrain_derived_ao_directions: 4,
+            terrain_derived_ao_steps: 4,
+            terrain_derived_ao_radius_fraction: 0.1,
+            terrain_derived_roughness_base: 0.6,
+            terrain_derived_roughness_saturation_radians: 0.6,
+            terrain_derived_texture_anisotropy: 1,
+            terrain_rock_max_instances: 2_000,
+            terrain_rock_mesh_buckets: 3,
+            terrain_rock_mesh_cube_count: 2,
+            terrain_rock_lod_start_distance: 1_500.0,
+            terrain_rock_lod_fade_distance: 300.0,
+            terrain_lod_tile_resolution: 33,
+            terrain_lod_cinematic_resolution: 1025,
+            terrain_lod_pixel_error: 4.0,
+            terrain_lod_max_depth: 6,
+            terrain_lod_probe_resolution: 5,
+            terrain_lod_bakes_per_frame: 8,
+            terrain_lod_max_inflight_bakes: 16,
+            terrain_lod_tile_budget: 256,
+            terrain_lod_cover_edits_per_frame: 16,
+            terrain_lod_hysteresis_ratio: 1.2,
+            terrain_lod_morph_start_ratio: 0.45,
+            nurbs_surface_samples_per_control_span: 3,
+            nurbs_surface_minimum_subdivisions: 6,
+            nurbs_surface_maximum_subdivisions: 64,
+            nurbs_trim_curve_samples: 12,
+            nurbs_trim_minimum_subdivisions: 8,
+            nurbs_trim_maximum_subdivisions: 48,
+            curve_samples_per_segment: 4,
+            curve_radial_segments: 6,
+            ..Default::default()
+        }
+    }
+
+    fn test_settings() -> RenderingQualitySettings {
+        let mut settings = RenderingQualitySettings::default();
+        settings.apply_profile(test_profile());
+        settings
+    }
+
+    fn configured_ladder() -> Ladder {
+        let mut ladder = Ladder::default();
+        ladder.set_recovery_policy(lunco_render::RenderQualityProfile {
+            render_failure_quiet_period_secs: 0.5,
+            render_failure_give_up_after_secs: default_give_up_after_secs(),
+            ..Default::default()
+        });
+        ladder
     }
 
     struct TestShadowQualityPolicy;
@@ -1477,7 +1576,7 @@ mod tests {
 
     #[test]
     fn shadow_settings_reject_bevy_shader_limits() {
-        let mut profile = RenderingQualitySettings::default().profile();
+        let mut profile = test_profile();
         profile.directional_cascades = bevy::pbr::MAX_CASCADES_PER_LIGHT + 1;
         assert!(
             validate_profile_for_capabilities(profile, &capabilities(4096, 2048))
@@ -1485,7 +1584,7 @@ mod tests {
                 .contains("cascade count")
         );
 
-        profile = RenderingQualitySettings::default().profile();
+        profile = test_profile();
         profile.max_directional_shadow_casters = bevy::pbr::MAX_DIRECTIONAL_LIGHTS + 1;
         assert!(
             validate_profile_for_capabilities(profile, &capabilities(4096, 2048))
@@ -1496,7 +1595,7 @@ mod tests {
 
     #[test]
     fn shadow_settings_reject_adapter_texture_limits() {
-        let mut profile = RenderingQualitySettings::default().profile();
+        let mut profile = test_profile();
         profile.directional_shadow_map_size = 8192;
         assert!(
             validate_profile_for_capabilities(profile, &capabilities(4096, 2048))
@@ -1504,7 +1603,7 @@ mod tests {
                 .contains("directional shadow-map size")
         );
 
-        profile = RenderingQualitySettings::default().profile();
+        profile = test_profile();
         profile.max_point_shadow_casters = 2;
         assert!(
             validate_profile_for_capabilities(profile, &capabilities(4096, 6))
@@ -1512,7 +1611,7 @@ mod tests {
                 .contains("point shadow caster limit")
         );
 
-        profile = RenderingQualitySettings::default().profile();
+        profile = test_profile();
         profile.max_directional_shadow_casters = 2;
         profile.directional_cascades = 2;
         profile.max_spot_shadow_casters = 1;
@@ -1570,7 +1669,7 @@ mod tests {
     #[test]
     fn quality_settings_apply_to_existing_and_late_lights() {
         let mut app = App::new();
-        app.insert_resource(RenderingQualitySettings::default());
+        app.insert_resource(test_settings());
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
         app.init_resource::<Ladder>();
@@ -1682,7 +1781,7 @@ mod tests {
     #[test]
     fn graphics_light_defaults_update_live_without_overwriting_authored_values() {
         let mut app = App::new();
-        app.insert_resource(RenderingQualitySettings::default());
+        app.insert_resource(test_settings());
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
         app.init_resource::<Ladder>();
@@ -1821,7 +1920,7 @@ mod tests {
     #[test]
     fn quality_range_defaults_update_without_overwriting_authored_ranges() {
         let mut app = App::new();
-        app.insert_resource(RenderingQualitySettings::default());
+        app.insert_resource(test_settings());
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
         app.init_resource::<Ladder>();
@@ -1893,7 +1992,7 @@ mod tests {
     /// intact.
     #[test]
     fn a_transient_error_never_gives_up() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         l.step(1, FailureKind::ShadowMap, false, 0.0);
         for i in 0..1000 {
             // No new errors: healthy frames, arbitrarily far into the future.
@@ -1910,7 +2009,7 @@ mod tests {
     /// any quality setting.
     #[test]
     fn first_failure_does_not_change_quality() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         assert_eq!(l.step(1, FailureKind::ShadowMap, false, 0.0), None);
         assert_eq!(l.rung, Rung::PersistentFailure);
     }
@@ -1919,15 +2018,11 @@ mod tests {
     fn configured_shadow_caster_limits_preserve_authored_lights_and_deduplicate_warning() {
         let _policy = install_test_shadow_quality_policy();
         let mut app = App::new();
-        let settings = RenderingQualitySettings {
-            directional_shadow_map_size: 1024,
-            point_shadow_map_size: 512,
-            max_directional_shadow_casters: 0,
-            max_point_shadow_casters: 1,
-            max_spot_shadow_casters: 0,
-            shadow_budget_bytes: 16 * 1024 * 1024,
-            ..Default::default()
-        };
+        let mut settings = test_settings();
+        settings.max_directional_shadow_casters = 0;
+        settings.max_point_shadow_casters = 1;
+        settings.max_spot_shadow_casters = 0;
+        settings.shadow_budget_bytes = 16 * 1024 * 1024;
         app.insert_resource(settings);
         app.insert_resource(lunco_status_core::status_bus::StatusBus::default());
         app.insert_resource(lunco_exposure_core::EngineExposures::default());
@@ -2020,15 +2115,11 @@ mod tests {
     #[test]
     fn invalid_byte_ceiling_does_not_shed_casters() {
         let mut app = App::new();
-        let settings = RenderingQualitySettings {
-            directional_shadow_map_size: 1024,
-            point_shadow_map_size: 512,
-            max_directional_shadow_casters: 0,
-            max_point_shadow_casters: 1,
-            max_spot_shadow_casters: 0,
-            shadow_budget_bytes: 1,
-            ..Default::default()
-        };
+        let mut settings = test_settings();
+        settings.max_directional_shadow_casters = 0;
+        settings.max_point_shadow_casters = 1;
+        settings.max_spot_shadow_casters = 0;
+        settings.shadow_budget_bytes = 1;
         app.insert_resource(settings);
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
@@ -2054,7 +2145,7 @@ mod tests {
     #[test]
     fn effective_cascade_overflow_does_not_shed_or_lower_quality() {
         let mut app = App::new();
-        app.insert_resource(RenderingQualitySettings::default());
+        app.insert_resource(test_settings());
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
         app.insert_resource(RenderHealthHandle(health.clone()));
@@ -2089,7 +2180,7 @@ mod tests {
         );
         let required = health.shadow_estimated_bytes.load(Ordering::Relaxed);
         assert!(
-            required > RenderingQualitySettings::default().shadow_budget_bytes,
+            required > test_profile().shadow_budget_bytes,
             "the fixture must exceed the explicit byte ceiling"
         );
         let exposures = app
@@ -2108,7 +2199,7 @@ mod tests {
     /// so presentation is abandoned — once, and only after the grace period.
     #[test]
     fn persistent_failure_gives_up_after_the_grace_period() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         assert_eq!(l.step(1, FailureKind::ShadowMap, false, 0.0), None);
 
         // Still failing, but inside the grace period: hold.
@@ -2148,7 +2239,7 @@ mod tests {
     /// no automatic mitigation is applied.
     #[test]
     fn grace_period_starts_at_the_first_failure() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         assert_eq!(l.step(1, FailureKind::ShadowMap, false, 100.0), None);
         // 4s after the first failure — not yet.
         assert_eq!(l.step(2, FailureKind::ShadowMap, false, 104.0), None);
@@ -2163,7 +2254,7 @@ mod tests {
     /// or changing any quality setting.
     #[test]
     fn a_clean_frame_resets_the_persistence_clock() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         l.step(1, FailureKind::ShadowMap, false, 0.0);
         // Frames now render. Total never moves again.
         for i in 0..100 {
@@ -2177,7 +2268,7 @@ mod tests {
 
     #[test]
     fn an_explicit_quality_change_rearms_pending_failures() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         assert_eq!(l.step(1, FailureKind::ShadowMap, false, 0.0), None);
         l.rearm(1, false);
         assert_eq!(l.rung, Rung::Healthy);
@@ -2185,7 +2276,7 @@ mod tests {
         // immediately trip the ladder again.
         assert_eq!(l.step(1, FailureKind::ShadowMap, false, 1.0), None);
 
-        let mut persistent = Ladder::default();
+        let mut persistent = configured_ladder();
         persistent.step(1, FailureKind::OutOfMemory, false, 0.0);
         persistent.rearm(1, false);
         assert_eq!(persistent.rung, Rung::Healthy);
@@ -2196,7 +2287,7 @@ mod tests {
     /// report by the grace period.
     #[test]
     fn device_lost_gives_up_immediately() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         assert_eq!(
             l.step(0, FailureKind::Other, true, 0.0),
             Some(Action::GiveUp)
@@ -2213,7 +2304,7 @@ mod tests {
     /// rather than waiting out a grace period that cannot help.
     #[test]
     fn device_lost_from_a_degraded_rung_is_still_immediate() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         l.step(1, FailureKind::ShadowMap, false, 0.0);
         assert_eq!(l.rung, Rung::PersistentFailure);
         assert_eq!(
@@ -2224,14 +2315,14 @@ mod tests {
 
     #[test]
     fn oom_does_not_disable_shadow_maps() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         assert_eq!(l.step(1, FailureKind::OutOfMemory, false, 0.0), None);
         assert_eq!(l.rung, Rung::PersistentFailure);
     }
 
     #[test]
     fn a_short_callback_gap_does_not_reset_persistent_failure_clock() {
-        let mut l = Ladder::default();
+        let mut l = configured_ladder();
         assert_eq!(l.step(1, FailureKind::OutOfMemory, false, 0.0), None);
         assert_eq!(l.step(1, FailureKind::OutOfMemory, false, 0.25), None);
         assert_eq!(l.step(2, FailureKind::OutOfMemory, false, 0.75), None);

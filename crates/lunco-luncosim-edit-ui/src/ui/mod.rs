@@ -448,7 +448,6 @@ impl Plugin for SceneEditUiPlugin {
         app.add_systems(Update, crate::selection::handle_deselect_keys);
         app.add_observer(crate::script_tools::on_scene_pointer_event);
         app.add_observer(scene_context_menu::on_script_ui_request);
-        app.add_observer(crate::selection::on_scene_click_select);
         app.add_observer(crate::selection::on_usd_viewport_click);
         app.add_observer(crate::script_tools::on_scene_click_script_tool);
         crate::diagnostic_visuals::register_all_commands(app);
@@ -739,7 +738,14 @@ impl Plugin for SceneEditUiPlugin {
         // Keep authored labels in the egui pass. Scene tools themselves are
         // discovered and dispatched by `script_tools`, so no product-specific
         // waypoint observer or overlay is registered here.
-        app.add_observer(scene_context::apply_pointer_policy)
+        app.init_resource::<scene_context::ActivePointerButton>()
+            .add_observer(scene_context::apply_pointer_policy)
+            .add_systems(
+                PreUpdate,
+                scene_context::sync_active_pointer_policy
+                    .after(bevy::input::InputSystems)
+                    .before(bevy::picking::PickingSystems::Backend),
+            )
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (

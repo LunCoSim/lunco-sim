@@ -209,11 +209,41 @@ would let a look reflect like diamond and refract like glass, and would need to 
 
 `lunco-render-bevy` owns the backend choice for sampling the cascaded shadow maps.
 Every non-fast `Camera3d`, including one projected asynchronously from USD, receives
-Bevy's `Hardware2x2` comparison filter. This keeps the authored lunar sun's contact
-shadows crisp; the physical `UsdLuxDistantLight.inputs:angle` remains owned by USD
-and the horizon-shadow path. Do not replace this with a wider Gaussian/PCSS filter
-or change authored light range, cascades, bias, or caster policy to compensate for
-soft edges. Fast mode deliberately does not attach the standard PBR shadow filter.
+the selected Graphics shadow filter unless its owner already supplied one. The
+`Balanced` and `High` use Bevy's Gaussian filter for smoother map edges; `Low` uses
+`Hardware2x2` to reduce sampling cost. Graphics edits update only filters that
+Graphics supplied. Temporal filtering is not offered because scene cameras do not use
+temporal anti-aliasing, and PCSS remains behind Bevy's experimental feature. The
+physical `UsdLuxDistantLight.inputs:angle` remains owned by USD and the horizon-shadow
+path. Fast mode deliberately does not attach the standard PBR shadow filter.
+
+The shadow portions of the Graphics presets balance range and caster memory as
+follows:
+
+The concrete Low, Balanced, and High profile maps are authored by the
+deterministic `render.quality_profile` policy in
+[`assets/scripting/policy/render_quality_profiles.rhai`](../../assets/scripting/policy/render_quality_profiles.rhai).
+The same source authors `render.default_quality_profile`, which selects the
+initial profile for fresh settings. `lunco-render` declares both typed hook
+contracts and its `RenderQualityPolicyPlugin` loads and validates all three
+maps before quality-dependent scene projection in graphical and headless hosts.
+The GPU recovery crate consumes the same catalog for presentation recovery.
+CLI requests are applied from that catalog, and saved custom Graphics values
+are preserved. Rust owns field conversion, range and memory checks, and
+applying validated values; it does not contain a second Low/Balanced/High
+settings table or default choice.
+
+| Preset | Directional map · cascades · near split · range | Point map · caster caps (directional / point / spot) | Filter | Estimated depth maps / ceiling |
+| --- | --- | --- | --- | --- |
+| Low | 512 px · 1 · 20 m · 600 m | 512 px · 1 / 2 / 2 | Hardware2x2 | 15 / 32 MiB |
+| Balanced | 2048 px · 3 · 40 m · 1500 m | 1024 px · 1 / 4 / 4 | Gaussian | 208 / 256 MiB |
+| High | 4096 px · 4 · 80 m · 3000 m | 2048 px · 2 / 8 / 8 | Gaussian | 1792 / 2048 MiB |
+
+Estimates cover the configured maximum caster counts and Depth32Float map textures;
+spot maps use the directional map size. The ceiling is a logical shadow-allocation
+limit, not a prediction of total GPU memory use. Scenes without shadow attributes use
+the selected Graphics profile, so Low, Balanced, and High keep their own far range and
+first-cascade bound.
 
 `ProceduralSkybox` is a render-free scene intent owned by `lunco-render` that may accompany `ShaderLook` from `lunco-materials`.
 The USD projection reads the authored `lunco:surface:skybox` flag once on its

@@ -45,6 +45,32 @@ Use `KeyF` for the default action binding only after checking the active
 pointer event for context menus. Do not combine press and release events in
 one same-frame script step when testing focus, modifier state, or picking.
 
+A route-point secondary click opens its authored context menu without changing
+scene selection. Selecting the point is a separate menu action; the context
+gesture itself must not enable the transform gizmo. The hit prim's registered
+`LunCoPointerInteractionAPI` must authorize that button as `context`; the
+generic viewport adapter applies its per-button blocking behavior before the
+ordered-hit pass, and route policy uses canonical hit paths rather than screen
+proximity. A semantic chord alone does not create a menu. Unarmed route-edit
+and selection clicks go through one `scene_interaction` Rhai policy; simulation
+possession accepts only an exclusive `selection.replace` intent. Spawn, terrain,
+attachment, camera, and gizmo consumers are not yet under one captured gesture
+manager, so a route fixture passing does not prove global viewport arbitration.
+The repeatable production gate is `assets/scenes/tests/route_interaction.usda`,
+run by `scripts/run_editor_scene_tests.sh`; it sends typed native-window input
+through picking and verifies the mounted fixture, waypoint hit, semantic
+context intent, unchanged pre-menu selection, and explicit menu selection
+action. The runner waits for `/api/ready` and requires
+the API `Exit` command and port release after every verdict.
+
+Runtime-authored route edits belong in Twin `@runtime@`. Run
+`scripts/run_scene_tests.sh --exact route_runtime_persistence` to exercise a
+manifest-backed Twin through two production API sessions: add a point, verify
+the `.lunco/runtime` sidecar write, then reopen and require that the point is
+present before the scene's initial projection. This test is separate from the
+isolated editor fixture gate because the latter intentionally disables
+runtime-overlay I/O.
+
 Coordinates are logical primary-window pixels. Obtain them from a current
 screenshot and record the window geometry used for the run. A coordinate is
 test input, not domain state: never use it to infer a USD position or replace

@@ -63,6 +63,58 @@ let camera_call = invoke_hook("camera.default_presentation", [#{
 checks.push(t_true(camera_call.ok == true && camera_call.value == "avatar",
     "the authored policy is installed and returns its declared type"));
 
+let quality_profile_hook = ();
+let default_quality_hook = ();
+for hook in hooks {
+    if hook.id == "render.quality_profile" { quality_profile_hook = hook; }
+    if hook.id == "render.default_quality_profile" { default_quality_hook = hook; }
+}
+checks.push(t_true(quality_profile_hook != ()
+        && quality_profile_hook.declared == true
+        && quality_profile_hook.deterministic == true
+        && quality_profile_hook.required == true
+        && quality_profile_hook.parameters.len() == 1
+        && quality_profile_hook.parameters[0].name == "id"
+        && quality_profile_hook.parameters[0].type == "string"
+        && quality_profile_hook.output == "map",
+    "render presets expose a required deterministic typed profile policy"));
+
+checks.push(t_true(default_quality_hook != ()
+        && default_quality_hook.declared == true
+        && default_quality_hook.deterministic == true
+        && default_quality_hook.required == true
+        && default_quality_hook.parameters.len() == 0
+        && default_quality_hook.output == "string",
+    "fresh settings use a required deterministic authored default-profile policy"));
+let default_quality = invoke_hook("render.default_quality_profile", []);
+checks.push(t_true(default_quality.ok == true && default_quality.value == "high",
+    "the application Rhai policy selects High for fresh settings"));
+
+let low_profile = invoke_hook("render.quality_profile", ["low"]);
+let balanced_profile = invoke_hook("render.quality_profile", ["balanced"]);
+let high_profile = invoke_hook("render.quality_profile", ["high"]);
+checks.push(t_true(low_profile.ok == true
+        && low_profile.value.len() == 69
+        && low_profile.value.directional_shadow_map_size == 512
+        && low_profile.value.directional_cascades == 1,
+    "Low profile values and complete field coverage come from Rhai"));
+checks.push(t_true(balanced_profile.ok == true
+        && balanced_profile.value.len() == 69
+        && balanced_profile.value.directional_shadow_map_size == 2048
+        && balanced_profile.value.directional_cascades == 3
+        && balanced_profile.value.shadow_maximum_distance == 1500.0,
+    "Balanced shadow quality uses the authored map, cascade, and range values"));
+checks.push(t_true(high_profile.ok == true
+        && high_profile.value.len() == 69
+        && high_profile.value.directional_shadow_map_size == 4096
+        && high_profile.value.directional_cascades == 4
+        && high_profile.value.shadow_maximum_distance == 3000.0
+        && high_profile.value.horizon_march_steps == 96,
+    "High shadow quality uses the authored high-detail values"));
+let missing_profile = invoke_hook("render.quality_profile", ["turbo"]);
+checks.push(t_true(missing_profile.ok == false && missing_profile.status == "fault",
+    "unknown profile ids fail visibly instead of selecting another profile"));
+
 let wrong_shape = invoke_hook("camera.default_presentation", [41]);
 checks.push(t_true(wrong_shape.ok == false && wrong_shape.status == "fault"
         && wrong_shape.error.contains("expects map"),

@@ -105,6 +105,24 @@ class "LunCoDomeAPI" (
     )
 }
 
+class "LunCoPointerInteractionAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Button-specific scene pointer behavior consumed by the shared interaction router."
+)
+{
+    uniform token lunco:interaction:left = "block" (
+        doc = "Primary-button behavior: block lower picks, pass through to lower geometry, or route to an authored context policy."
+        allowedTokens = ["block", "pass_through", "context"]
+    )
+    uniform token lunco:interaction:right = "block" (
+        doc = "Secondary-button behavior: block lower picks, pass through to lower geometry, or route to an authored context policy."
+        allowedTokens = ["block", "pass_through", "context"]
+    )
+}
+
 class LunCoPolicy "LunCoPolicy" (
     inherits = </Typed>
     doc = """A scripted authorization hook, expressed as a prim so that policy
