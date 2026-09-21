@@ -249,13 +249,12 @@ lunco_version = ">=0.6"
 
 [sysml]
 # Entry-point SysML file for system structure + requirements.
-# Additional `.sysml` files are picked up recursively from `paths`.
+# The Twin loading policy selects indexed `.sysml`/`.kerml` files in `paths`.
 root = "system.sysml"
 paths = ["."]
 
 [modelica]
-# Recursive scan from twin root for `.mo` files and `package.mo` markers.
-# Matches MODELICAPATH behavior.
+# The Twin loading policy selects Modelica source roots from these paths.
 paths = ["."]
 
 # External libraries (optional).
@@ -270,9 +269,8 @@ externals = [
 # (projected into the Grid) when the Twin opens. Path is relative to the Twin
 # root. This is the declared "which scene opens" answer that core USD leaves to
 # convention; LunCoSim never *infers* a starting scene from a folder of many
-# `.usda` files. Other `.usda` files in the Twin are a
-# referenceable asset library, not auto-loaded. Full resolution rule (incl. the
-# no-manifest folder fallback) in 21-domain-usd.md § "Which stage opens".
+# `.usda` files. The Rhai Twin loading policy selects this scene. Other `.usda`
+# files in the Twin are indexed but not mounted automatically.
 default_scene = "main_scene.usda"
 
 [environment]
@@ -650,6 +648,21 @@ Modelica master, an external sim runner, a downstream PLM/MBSE
 system) reads and writes through it.
 
 ## 6. Startup flow
+
+Opening a folder or Twin first runs the Rust bootstrap that parses the manifest,
+indexes files, establishes the Twin identity and `twin://` authority, and emits
+the mounted event. The `twin.lifecycle` Rhai policy then receives the typed
+manifest and indexed relative paths and returns an ordered command plan. That
+policy selects the default USD scene, tool libraries, timelines, SysML/KerML
+sources, and Modelica roots. Typed Rust commands validate active-Twin identity,
+path ownership, and asset authority, then use the domain's asynchronous loader.
+Rust owns the filesystem and lifecycle mechanisms; Rhai owns content selection
+and load order.
+
+An absent optional content set is valid. For example, a Twin with no indexed
+SysML/KerML sources produces an informational lifecycle message and loads no
+SysML documents. An invalid path or rejected command remains visible at the
+owning boundary.
 
 The two workbench apps (`luncosim` and `lunica`) share the same document and
 Twin startup logic. `luncosim-server` reuses the simulation lifecycle without

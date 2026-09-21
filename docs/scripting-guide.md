@@ -546,9 +546,17 @@ registered tool with ordinary Rhai syntax (`import "other_tool" as other_tool`);
 the tool resolver uses the registry and does not read dependency files.
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (generic frame/shape construction, placement, alignment, composed collision-clearance, geometry, parameter, retrofit, and socket mating plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`editor_workflow.rhai`](../assets/scripting/tools/editor_workflow.rhai) (explicit inspect/projection/lint checkpoints and opt-in authored autosave), [`modelica_editor.rhai`](../assets/scripting/tools/modelica_editor.rhai) (generation-checked AST/diagram/text batches and compile checkpoints), [`sysml_editor.rhai`](../assets/scripting/tools/sysml_editor.rhai) (source-range edits and semantic checkpoints), [`rhai_editor.rhai`](../assets/scripting/tools/rhai_editor.rhai) (generation-checked script source edits and compile checkpoints), [`authoring_session.rhai`](../assets/scripting/tools/authoring_session.rhai) (cross-domain capability discovery, dry plan, grouped apply, checkpoint, undo, and redo), [`physics_acceptance.rhai`](../assets/scripting/tools/physics_acceptance.rhai) (generic contact, motion, settling, joint, and runtime-evidence checks), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Examples: [`assets.rhai`](../assets/scripting/tools/assets.rhai) (manifest-scoped dataset download and bake orchestration), [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (generic frame/shape construction, placement, alignment, composed collision-clearance, geometry, parameter, retrofit, and socket mating plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`editor_workflow.rhai`](../assets/scripting/tools/editor_workflow.rhai) (explicit inspect/projection/lint checkpoints and opt-in authored autosave), [`modelica_editor.rhai`](../assets/scripting/tools/modelica_editor.rhai) (generation-checked AST/diagram/text batches and compile checkpoints), [`sysml_editor.rhai`](../assets/scripting/tools/sysml_editor.rhai) (source-range edits and semantic checkpoints), [`rhai_editor.rhai`](../assets/scripting/tools/rhai_editor.rhai) (generation-checked script source edits and compile checkpoints), [`authoring_session.rhai`](../assets/scripting/tools/authoring_session.rhai) (cross-domain capability discovery, dry plan, grouped apply, checkpoint, undo, and redo), [`physics_acceptance.rhai`](../assets/scripting/tools/physics_acceptance.rhai) (generic contact, motion, settling, joint, and runtime-evidence checks), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
-- **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
+- **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai`. On Twin mount, `twin.lifecycle` selects indexed tool files and requests their loading through typed commands.
+
+The shared `assets` library reads declarations through `ListDatasets`.
+`assets::request(id)` downloads a declared source,
+`assets::bake(id)` sends `ProcessDataset { id }` to run its authored
+`Assets.toml` pipeline without another download, and
+`assets::bake_scope(scope)` queues all idle processing declarations in one
+scope. The native worker owns source resolution, cancellation, bake keys, and
+atomic publication; query `ListDatasets` to read each operation's live state.
 
 ### One editing contract across formats
 
@@ -1291,7 +1299,7 @@ production contract is exercised by
   the program; `parent(me)` refers to the scene hierarchy above that owner and is not
   a replacement for the program host.
 - **Tool libraries → files:** `<twin>/tools/*.rhai` (see [§E](#e-tools-shared-libraries)).
-- **Timelines → files:** `RegisterTimeline { name, timeline: #{ steps: [...] } }` stores typed step data to `<twin>/timelines/<name>.json`; reloaded on Twin open. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`. The command passes native structured values to Rhai, not a JSON string.
+- **Timelines → files:** `RegisterTimeline { name, timeline: #{ steps: [...] } }` stores typed step data to `<twin>/timelines/<name>.json`; on Twin mount, `twin.lifecycle` selects indexed timeline files and requests their loading through typed commands. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`. The command passes native structured values to Rhai, not a JSON string.
 - **Model events → USD:** express the condition in Modelica as a 0/1 output, then connect
   it to a `def LunCoEvent` prim through `inputs:trigger.connect`. The prim supplies only
   the bus-facing `lunco:event:name` and `lunco:event:severity`; scripts receive its rising

@@ -14,8 +14,8 @@ The bridge is split by responsibility. `ValidateSysml` performs source
 validation, runs the structural `lint.sysml` policy, and returns diagnostics
 plus source identity. It does not evaluate Twin-manifest binding policy or
 runtime requirement observations. `AnalyzeSysml` exposes
-the parser's typed, source-backed fact tables, with optional table and
-attribute-name selection. `ReadActiveTwinContract` exposes the active Twin's
+the parser's typed, source-backed fact tables, with optional table, name,
+and bounded-page selection. `ReadActiveTwinContract` exposes the active Twin's
 component and verification bindings. These are generic Rust mechanisms; Rhai
 policies decide what the facts mean and join Twin bindings to SysML identities.
 The current policy layers are deliberately independent:
@@ -62,17 +62,34 @@ fields, the ordered `source_files` list, and optional observer `metrics`.
 Component observers should put clock/root/package facts in `metrics`; they
 must not copy requirement thresholds there.
 
-For inspection and tooling, the same snapshot is available as native Rhai
-maps (no stringify/parse round trip):
+For bounded generic inspection, `sysml_report(path)` exposes `AnalyzeSysml`
+facts as native Rhai values (no stringify/parse round trip). Twin-scale callers
+should request selected pages through the generic query:
 
 ```rhai
-let report = sysml_requirement_report();
-let all_declarations = sysml_report();
+let first_page = query("AnalyzeSysml", #{
+    path: "twin://my-twin", tables: ["requirements", "verifications"],
+    offset: 0, limit: 16
+});
+let page = first_page.analysis.page.tables.requirements;
+// Continue at offset 16 while any selected table reports has_more == true.
 ```
 
-Numeric literals in those maps retain authored source identity and provide a
-validated native finite `number_value` for policy. Consumers use that typed
-number rather than reparsing literal text in Rhai.
+Every selected table reports `offset`, `limit`, `total`, `returned`, and
+`has_more` under `analysis.page.tables`. The top-level page also carries the
+source revision. A Rhai assembler must check that revision on each page and
+fail if it changes; do not concatenate pages from different source snapshots.
+
+These functions are policy-neutral fact queries. The Twin-aware report shape,
+source/verification joins, and any selected requirement set are authored in
+`sysml_requirements.rhai`; changing that policy does not require rebuilding
+Rust. `sysml_requirements::source()` pages Twin-wide requirement and
+verification facts, reduces them to qualified identities and verification
+links, and keeps detailed records available through `source_with_selection()`.
+Rust changes are reserved for new generic SysML semantics, typed value
+lowering, or transport-selection capabilities. Numeric literals retain their
+authored source identity and provide a validated native finite `number_value`;
+consumers use that value instead of reparsing literal text in Rhai.
 
 For one native typed literal, `sysml_value(path, qualified_name)` and
 `sysml_value_from_report(report, qualified_name)` return a tagged map:
@@ -130,8 +147,9 @@ Supported observations are `assert`, `exists`, `children`, `attribute`,
 `attribute_component`, `extent_component`, `bounds_component`,
 `attribute_equals`, `relationship`, and `coverage`. `expected_attr` reads a
 literal SysML attribute by its qualified source name, so numeric limits are not
-copied into a Rhai script. `AnalyzeSysml` can select only required fact tables
-and, when attributes are requested, only named attributes. The requirements
+copied into a Rhai script. `AnalyzeSysml` can select only required fact tables,
+page a selected table, and, when attributes are requested, only named
+attributes. The requirements
 policy preserves qualified identity and reports ambiguous short names instead
 of silently selecting one component's literal. Every check carries a component
 and requirement ID, producing a per-component evidence record with the source

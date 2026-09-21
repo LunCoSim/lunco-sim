@@ -44,6 +44,11 @@ generic cross-domain binding are not yet established; if the current bridge
 cannot provide a required property with its unit and applicability, report that
 generic gap instead of substituting a copied constant.
 
+For radiation or surface thermal models, also resolve the typed finish/coating
+assigned to the analyzed face and use its sourced engineering optical/thermal
+properties. `UsdShade` shader presets are presentation mappings only and must
+not be used as Modelica property sources.
+
 | App | Launch | Modelica surface |
 |---|---|---|
 | **`lunica`** | `"$LUNICA_BIN" --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |

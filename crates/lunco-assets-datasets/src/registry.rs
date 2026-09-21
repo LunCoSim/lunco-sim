@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use lunco_core::Command;
 
-use crate::{
-    entry_dest_path, installed_destination_present, process_output_path, processed_output_present,
-    AssetEntry, AssetManifest,
-};
+use crate::{entry_dest_path, process_output_path, AssetEntry, AssetManifest};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{installed_destination_present, processed_output_present};
 
 /// What a declared dataset is currently doing.
 #[derive(Debug, Clone, PartialEq)]
@@ -22,7 +21,7 @@ pub enum DatasetState {
         /// Expected bytes, or zero when unknown.
         bytes_total: u64,
     },
-    /// The download completed and local processing is running.
+    /// A manifest-declared local processing pipeline is running.
     Processing {
         /// Manifest-declared processing pipeline.
         kind: String,
@@ -189,7 +188,6 @@ fn artifact_rel_of(
     scope: &DatasetScope,
     destination: &Path,
 ) -> Result<String, std::io::Error> {
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(process) = &entry.process {
         let twin_root = match scope {
             DatasetScope::Twin { root, .. } => Some(root.as_path()),
@@ -518,6 +516,30 @@ impl DatasetRegistry {
         true
     }
 
+    /// Mark a manifest-declared processing pipeline as in flight without
+    /// downloading its source again. Installed datasets may be processed again;
+    /// the processor's bake key decides whether any work is needed.
+    pub fn process(&mut self, id: &str) -> bool {
+        let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) else {
+            return false;
+        };
+        let Some(process) = &entry.spec.process else {
+            return false;
+        };
+        if matches!(
+            entry.state,
+            DatasetState::Downloading { .. }
+                | DatasetState::Processing { .. }
+                | DatasetState::Cancelling
+        ) {
+            return false;
+        }
+        entry.state = DatasetState::Processing {
+            kind: process.kind.clone(),
+        };
+        true
+    }
+
     /// Mark an explicit cancellation request as unwinding.
     pub fn cancel(&mut self, id: &str) -> bool {
         let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) else {
@@ -554,6 +576,17 @@ pub fn dataset_id(scope: &DatasetScope, group: &str, key: &str) -> String {
 /// User intent to start one dataset operation.
 #[Command]
 pub struct RequestDataset {
+    /// Globally unique dataset id.
+    pub id: String,
+}
+
+/// Process one declared dataset's available source without requesting a download.
+///
+/// The manifest supplies both the source identity and processing configuration;
+/// this command only selects the declared dataset. The native processor checks
+/// the content bake key and skips work when the output is already current.
+#[Command]
+pub struct ProcessDataset {
     /// Globally unique dataset id.
     pub id: String,
 }

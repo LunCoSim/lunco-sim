@@ -65,6 +65,25 @@ install it alongside the compiler; compiler-only builds do not inherit query
 registration, edit-command registration, or Workspace API dependencies. Workspace queries remain owned by
 [`lunco-workspace-api`](../../crates/lunco-workspace-api/).
 
+`CreateScratchModelicaDocument` allocates a source-backed untitled document in
+the shared Modelica registry in both headless and workbench hosts. It does not
+open a tab or select an active Editor document; those are presentation/session
+decisions. Rhai tools that generate Modelica for a solve can therefore use the
+same document lifecycle and asynchronous Rumoca experiment path in production
+scene tests and non-UI hosts.
+
+`RunModelicaSolve` starts the existing asynchronous experiment runner against
+an explicit document id, parsed class, and source generation. It returns an
+experiment id immediately; callers poll `RunStatus` and read finite `f64`
+series through `GetExperimentResult`. `CloseScratchModelicaDocument` removes
+only untitled generated documents and their completed run records; ordinary
+saved-document closing remains an Editor lifecycle operation.
+
+`ModelicaCorePlugin` also owns the shared Rumoca engine-sync driver and the
+deferred structural-edit queue. Headless source edits therefore receive the
+same asynchronous parse/install cycle as workbench edits; the UI plugin only
+adds presentation and pacing hints.
+
 The shared render-free participant contract is [`lunco-modelica-runtime`](../../crates/lunco-modelica-runtime/).
 It owns `ModelicaModel`, the serialized worker command/result messages, source
 assets, generated USD-document metadata, communication scheduling, notices,
@@ -1220,6 +1239,15 @@ twin-journal doc; not in scope here.
 
 The following issues are tracked as implementation work, not architectural
 decisions:
+
+**Typed material and surface-finish binding**: Modelica does not yet resolve a
+selected SysML material/finish record into typed, unit-preserving constitutive
+properties. The required path must preserve grade/form/temper or directional
+layup, applicable temperature/environment, and source status; a finish is a
+separate assignment with its own thermal/optical data. `UsdShade` appearance
+presets are not property models. Until the generic resolver and law mapping
+exist, do not copy material constants into `.mo` files or infer engineering
+properties from a render shader.
 
 ### P0 — Blocking
 

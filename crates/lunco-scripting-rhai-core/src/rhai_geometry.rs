@@ -8,7 +8,10 @@ use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
 use lunco_geometry_core::bounds::{Bounds3, BoundsRelation, OrientedBounds3};
 use lunco_geometry_core::profile_extrusion::{
-    ProfileExtrusionError, ProfileMeshData, ProfilePlane, extrude_profile,
+    extrude_profile, ProfileExtrusionError, ProfileMeshData, ProfilePlane,
+};
+use lunco_geometry_core::profile_revolution::{
+    revolve_profile, ProfileRevolutionError, RevolvedProfileMeshData,
 };
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Position};
 
@@ -77,6 +80,18 @@ fn profile_extrusion(
     })
 }
 
+fn profile_revolution(
+    values: Array,
+    angular_segments: i64,
+) -> Result<RevolvedProfileMeshData, Box<EvalAltResult>> {
+    let points = profile_points(values)?;
+    let angular_segments = u16::try_from(angular_segments)
+        .map_err(|_| runtime_error("revolution segment count must be a positive integer"))?;
+    revolve_profile(&points, angular_segments).map_err(|error: ProfileRevolutionError| {
+        runtime_error(format!("profile revolution failed: {error}"))
+    })
+}
+
 fn vec3_array(values: &[DVec3]) -> Array {
     values.iter().copied().map(Dynamic::from).collect()
 }
@@ -131,6 +146,28 @@ pub fn register(engine: &mut Engine) {
         .register_get("face_count", |mesh: &mut ProfileMeshData| {
             mesh.face_count() as i64
         })
+        .register_type_with_name::<RevolvedProfileMeshData>("RevolvedProfileMesh")
+        .register_get("points", |mesh: &mut RevolvedProfileMeshData| {
+            vec3_array(mesh.points())
+        })
+        .register_get(
+            "face_vertex_counts",
+            |mesh: &mut RevolvedProfileMeshData| int_array(mesh.face_vertex_counts()),
+        )
+        .register_get(
+            "face_vertex_indices",
+            |mesh: &mut RevolvedProfileMeshData| int_array(mesh.face_vertex_indices()),
+        )
+        .register_get(
+            "face_varying_normals",
+            |mesh: &mut RevolvedProfileMeshData| vec3_array(mesh.face_varying_normals()),
+        )
+        .register_get("vertex_count", |mesh: &mut RevolvedProfileMeshData| {
+            mesh.vertex_count() as i64
+        })
+        .register_get("face_count", |mesh: &mut RevolvedProfileMeshData| {
+            mesh.face_count() as i64
+        })
         .register_fn("bounds3", bounds)
         .register_fn("oriented_bounds3", oriented_bounds)
         .register_fn("oriented_bounds_from_local", oriented_bounds_from_local)
@@ -141,5 +178,6 @@ pub fn register(engine: &mut Engine) {
         .register_fn("profile_plane_xy", || ProfilePlane::XY)
         .register_fn("profile_plane_xz", || ProfilePlane::XZ)
         .register_fn("profile_plane_yz", || ProfilePlane::YZ)
-        .register_fn("extrude_profile", profile_extrusion);
+        .register_fn("extrude_profile", profile_extrusion)
+        .register_fn("revolve_profile", profile_revolution);
 }

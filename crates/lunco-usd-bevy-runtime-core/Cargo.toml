@@ -15,6 +15,7 @@ openusd = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-core = { path = "../lunco-core" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-doc = { path = "../lunco-doc" }

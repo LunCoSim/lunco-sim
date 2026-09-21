@@ -19,6 +19,7 @@ lunco-assets-processing = { path = "../lunco-assets-processing" }
 lunco-celestial-data = { path = "../lunco-celestial-data" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 # A broken `Assets.toml` or a failed dataset download has to REACH the user, and
 # `warn!`/`error!` is not surfacing — the workbench fans an Error-severity
 # `lunco_telemetry_core::TelemetryEvent` to the status bar and Diagnostics. Plain

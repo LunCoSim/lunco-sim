@@ -341,21 +341,29 @@ from a folder of files.
 
 ### Resolution rule
 
-The Twin adds exactly **one** thing over a plain folder: it **auto-loads the
-declared starting scene**. Nothing else is inferred.
+The Twin's starting scene is never inferred from a folder of files: only an
+authored `[usd] default_scene` can select the active scene. Other source
+domains may have their own manifest or indexed-file selection rules.
 
 | Open entry point | Browser | Active stage on open |
 |---|---|---|
 | **Open Folder** (no manifest) | lists all files (USD, Modelica, …) | **none** — clicking a `.usda`/`.usd`/`.usdc` opens its focused editor preview; scene replacement is explicit |
-| **Open Twin** (`twin.toml`) | same folder browser | **auto-loads `[usd] default_scene`** |
-| **Twin** with no `default_scene` | same folder browser | none — behaves like a folder; warn "no starting scene declared" |
+| **Open Twin** (`twin.toml`) | same folder browser | authored `twin.lifecycle` policy selects `[usd] default_scene` |
+| **Twin** with no `default_scene` | same folder browser | the authored policy clears the viewport and explains that no scene was selected |
 | **Loose USD file** (orphan) | owning folder | that file, selected during the folder scan |
 
-Opening a Twin **is** opening its folder — same browser, same file list — with
-the single addition that `default_scene` is loaded automatically. A plain
-folder mounts no active scene until an explicit scene transition; clicking a
-USD file opens its document through `OpenFile` and focuses the isolated
-`OpenUsdPreview` lease without replacing the running scene.
+Opening a Twin **is** opening its folder — same browser, same file list. The
+application loading policy receives the parsed Twin manifest and indexed paths
+after `twin://` is mounted, then selects the authored `default_scene` or clears
+the viewport. A plain folder mounts no active scene until an explicit scene
+transition; clicking a USD file opens its document through `OpenFile` and
+focuses the isolated `OpenUsdPreview` lease without replacing the running scene.
+
+The same `twin.lifecycle` plan selects indexed `tools/*.rhai` libraries,
+`timelines/*.json` data, SysML/KerML sources, and Modelica roots. Each domain's
+typed command checks the active Twin, indexed path, and `twin://` authority
+before using its asynchronous loader. Rust owns those generic mechanisms;
+Rhai owns which Twin assets to load and in what order.
 
 Whether loaded automatically (Twin) or by an explicit scene transition, a
 scene loads as a **single root** (the typed `SceneTransitionIntent` →
@@ -379,10 +387,10 @@ limits are not treated as missing files. The loader never rewrites a stale
 authored URI to a different asset. Fixing an old `waypoint.usda` reference is
 an authored Twin/library migration, not a Windows-path fallback.
 
-On `TwinAssetMounted` (`open_usd_docs_on_twin_asset_mounted`,
-`lunco-usd-bevy-runtime-core/src/scene_runtime.rs`), exactly **one** stage resolves per the table above,
-after the asset boundary has registered the exact `twin://` authority, and the mount is
-**doc-first**: the scene's document opens first (its base read through the
+After `TwinAssetMounted`, `twin.lifecycle` returns an ordered typed command plan.
+The generic policy executor dispatches `OpenTwinScene`; the USD owner validates
+the selected indexed path and the mount is **doc-first**: the scene's document
+opens first (its base read through the
 `twin://` source, web-ready). Generated runtime spawns, moves, and route points
 are restored and written only when the owning Twin manifest opts in with the generic
 `[settings] usd.runtime_persistence = true`; an omitted or false value makes
@@ -400,8 +408,9 @@ single active stage; it never stacks.
 
 ### `default_scene` is a path, the scene owns composition
 
-`[usd] default_scene` names a path **relative to the Twin root**. Keep the
-manifest thin: it points *at* a USD root; the USD root owns scene composition
+`[usd] default_scene` names a path **relative to the Twin root**. The Rhai
+loading policy selects whether to open it; the typed USD command validates and
+loads the selected path. Keep the manifest thin: it points *at* a USD root; the USD root owns scene composition
 (sublayers/references/payloads). Don't grow the manifest into a scene
 description — that's USD's job. See
 [`13-twin-and-workflow.md`](13-twin-and-workflow.md) § 3 for the `[usd]`

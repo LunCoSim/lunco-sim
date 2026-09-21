@@ -73,7 +73,7 @@ pub struct ValidationReport {
     /// The immutable semantic snapshot backing this report. Kept in-process
     /// for typed query projections; never serialized through `info`/JSON.
     #[serde(skip)]
-    pub(crate) sysml_analysis: Option<std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>>,
+    pub sysml_analysis: Option<std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>>,
 }
 
 impl ValidationReport {
@@ -724,6 +724,10 @@ impl ApiQueryProvider for ValidateSysmlProvider {
             "source_revision_hex": source_revision_hex,
         })))
     }
+}
+
+pub fn analyze_sysml_reference(world: &World, reference: &str) -> ValidationReport {
+    validate_sysml_reference(world, reference, false)
 }
 
 pub(crate) fn validate_sysml_reference(

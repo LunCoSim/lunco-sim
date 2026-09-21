@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult};
 use lunco_api_core::ApiErrorCode;
 use lunco_hooks::HookValue;
-use lunco_sysml_ast::lint_facts::{SysmlFactSelection, SysmlFactTable};
+use lunco_sysml_ast::lint_facts::{SysmlFactPage, SysmlFactSelection, SysmlFactTable};
 use std::collections::BTreeSet;
 
 use crate::validate::validate_sysml_reference;
@@ -42,6 +42,7 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
         let report = validate_sysml_reference(world, path, false);
         let selection = SysmlFactSelection {
             tables: parse_tables(params)?,
+            page: parse_page(params)?,
             attribute_names: parse_attribute_names(params)?,
             attribute_owners: parse_name_selection(params, "attribute_owners")?,
             attribute_string_values: parse_name_selection(params, "attribute_string_values")?,
@@ -70,6 +71,49 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
             ),
             ("analysis", facts),
         ])))
+    }
+}
+
+fn parse_page(params: &HookValue) -> Result<Option<SysmlFactPage>, ApiQueryError> {
+    let offset = match params.get("offset") {
+        None => 0,
+        Some(HookValue::Int(value)) if *value >= 0 => usize::try_from(*value).map_err(|_| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "AnalyzeSysml: `offset` is too large for this platform",
+            )
+        })?,
+        Some(_) => {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "AnalyzeSysml: `offset` must be a non-negative integer",
+            ));
+        }
+    };
+    let limit = match params.get("limit") {
+        None => None,
+        Some(HookValue::Int(value)) if *value > 0 => {
+            Some(usize::try_from(*value).map_err(|_| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "AnalyzeSysml: `limit` is too large for this platform",
+                )
+            })?)
+        }
+        Some(_) => {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "AnalyzeSysml: `limit` must be a positive integer",
+            ));
+        }
+    };
+    match limit {
+        Some(limit) => Ok(Some(SysmlFactPage { offset, limit })),
+        None if offset == 0 => Ok(None),
+        None => Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            "AnalyzeSysml: `offset` requires a positive `limit`",
+        )),
     }
 }
 

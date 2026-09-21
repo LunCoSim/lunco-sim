@@ -4,14 +4,14 @@
 //! native semantic snapshot; it never parses source or mutates a document,
 //! keeping the language boundary small and deterministic.
 
-use std::sync::Arc;
-
 use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
 use lunco_sysml_ast::{
-    SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlEnumValue,
-    SysmlMultiplicity, SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlSubject, SysmlType,
-    SysmlTypeCategory,
+    SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlElementHandle,
+    SysmlEnumValue, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator,
+    SysmlFeatureHandle, SysmlModelicaType, SysmlMultiplicity, SysmlPrimitiveType,
+    SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlSubject, SysmlType, SysmlTypeCategory,
+    SysmlTypeRef, SysmlUnsupportedExpression,
 };
 use rhai::{Dynamic, Engine, Map};
 
@@ -38,14 +38,12 @@ fn record_has_field(record: &mut SysmlRecordValue, name: &str) -> bool {
     record.inner.fields.iter().any(|field| field.name == name)
 }
 
-/// Produce a native Rhai map for a complete immutable SysML snapshot.
-///
-/// This is the preferred in-process path: every field is constructed directly
-/// as a Rhai value, so callers do not serialize to JSON and immediately parse
-/// the same data back into maps.  Source generations are exposed as canonical
-/// decimal text plus hexadecimal text: Rhai's signed integer is not a lossless
-/// representation of the full u64 identity, so the bridge never narrows it.
-pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
+/// Project all semantic facts as native Rhai values without copying the full
+/// source text into the runtime snapshot. The source remains available from
+/// the owning document; policies normally need source names, spans and the
+/// content revision, not another copy of every file's bytes. Report shape and
+/// selection policy belong to authored Rhai tools.
+pub fn semantic_snapshot_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     let mut report = Map::new();
     report.insert(
         "source_revision_hex".into(),
@@ -54,6 +52,10 @@ pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     report.insert(
         "source_revision".into(),
         Dynamic::from(analysis.source_revision().to_string()),
+    );
+    report.insert(
+        "source_fingerprint".into(),
+        Dynamic::from(format!("0x{:016x}", analysis.source_fingerprint())),
     );
     report.insert(
         "stdlib".into(),
@@ -68,7 +70,6 @@ pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
                 .map(|file| {
                     let mut value = Map::new();
                     value.insert("name".into(), Dynamic::from(file.name.clone()));
-                    value.insert("text".into(), Dynamic::from(file.text.clone()));
                     Dynamic::from_map(value)
                 })
                 .collect(),
@@ -164,122 +165,6 @@ pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     Dynamic::from_map(report)
 }
 
-/// Produce the compact native Rhai requirement/verification projection.
-pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
-    let mut report = Map::new();
-    report.insert(
-        "source_revision_hex".into(),
-        Dynamic::from(format!("0x{:016x}", analysis.source_revision())),
-    );
-    report.insert(
-        "source_revision".into(),
-        Dynamic::from(analysis.source_revision().to_string()),
-    );
-    report.insert(
-        "stdlib".into(),
-        Dynamic::from_bool(analysis.includes_stdlib()),
-    );
-    report.insert(
-        "source_files".into(),
-        Dynamic::from_array(
-            analysis
-                .files()
-                .iter()
-                .map(|file| Dynamic::from(file.name.clone()))
-                .collect(),
-        ),
-    );
-    report.insert(
-        "attributes".into(),
-        attributes_short_dynamic(analysis, analysis.source_revision()),
-    );
-    report.insert(
-        "records".into(),
-        Dynamic::from_array(
-            analysis
-                .records()
-                .iter()
-                .cloned()
-                .map(|record| Dynamic::from(SysmlRecordValue { inner: record }))
-                .collect(),
-        ),
-    );
-    report.insert(
-        "attributes_qualified".into(),
-        attributes_qualified_dynamic(analysis, analysis.source_revision()),
-    );
-    report.insert(
-        "attribute_collisions".into(),
-        attribute_collisions_dynamic(analysis),
-    );
-    report.insert(
-        "relationships".into(),
-        Dynamic::from_array(
-            analysis
-                .relationships()
-                .iter()
-                .map(relationship_dynamic)
-                .collect(),
-        ),
-    );
-    report.insert(
-        "constraints".into(),
-        Dynamic::from_array(
-            analysis
-                .constraints()
-                .iter()
-                .map(constraint_dynamic)
-                .collect(),
-        ),
-    );
-    report.insert(
-        "requirements".into(),
-        Dynamic::from_array(
-            analysis
-                .requirements()
-                .iter()
-                .map(|record| requirement_dynamic(record, analysis.source_revision()))
-                .collect(),
-        ),
-    );
-    report.insert(
-        "verifications".into(),
-        Dynamic::from_array(
-            analysis
-                .verifications()
-                .iter()
-                .map(verification_dynamic)
-                .collect(),
-        ),
-    );
-    report.insert(
-        "diagnostics".into(),
-        Dynamic::from_array(
-            analysis
-                .diagnostics()
-                .iter()
-                .map(diagnostic_dynamic)
-                .collect(),
-        ),
-    );
-    Dynamic::from_map(report)
-}
-
-/// Register read-only native report functions in a Rhai engine.
-///
-/// A snapshot is captured by `Arc`, so script execution does not borrow a
-/// Bevy world or a live document. Callers can create a fresh registration when
-/// a `DocumentChanged` event publishes a newer generation.
-pub fn register_sysml_report(engine: &mut rhai::Engine, analysis: Arc<SysmlAnalysis>) {
-    register_sysml_types(engine);
-    let dynamic_report = Arc::clone(&analysis);
-    let compact_report = Arc::clone(&analysis);
-    engine.register_fn("sysml_report", move || report_dynamic(&dynamic_report));
-    engine.register_fn("sysml_requirement_report", move || {
-        requirement_report_dynamic(&compact_report)
-    });
-}
-
 /// Register the native semantic values used by the SysML adapter.
 ///
 /// Spatial values deliberately reuse the exact f64 Bevy/glam types already
@@ -289,16 +174,119 @@ pub fn register_sysml_report(engine: &mut rhai::Engine, analysis: Arc<SysmlAnaly
 /// or quaternion type family.
 pub fn register_sysml_types(engine: &mut Engine) {
     engine
+        .register_type_with_name::<SysmlElementHandle>("SysmlElementHandle")
+        .register_get("element_id", |handle: &mut SysmlElementHandle| {
+            handle.element_id as i64
+        })
+        .register_get("source_revision", |handle: &mut SysmlElementHandle| {
+            i64::try_from(handle.source_revision).unwrap_or(-1)
+        })
+        .register_get("source_fingerprint", |handle: &mut SysmlElementHandle| {
+            format!("0x{:016x}", handle.source_fingerprint)
+        })
+        .register_fn(
+            "==",
+            |left: SysmlElementHandle, right: SysmlElementHandle| left == right,
+        )
+        .register_fn(
+            "!=",
+            |left: SysmlElementHandle, right: SysmlElementHandle| left != right,
+        )
+        .register_type_with_name::<SysmlFeatureHandle>("SysmlFeatureHandle")
+        .register_get("element", |handle: &mut SysmlFeatureHandle| handle.element)
+        .register_fn(
+            "==",
+            |left: SysmlFeatureHandle, right: SysmlFeatureHandle| left == right,
+        )
+        .register_fn(
+            "!=",
+            |left: SysmlFeatureHandle, right: SysmlFeatureHandle| left != right,
+        )
+        .register_type_with_name::<SysmlExpressionKind>("SysmlExpressionKind")
+        .register_type_with_name::<SysmlExpressionOperator>("SysmlExpressionOperator")
+        .register_fn("is_add", |op: SysmlExpressionOperator| {
+            op == SysmlExpressionOperator::Add
+        })
+        .register_fn("is_equal", |op: SysmlExpressionOperator| {
+            op == SysmlExpressionOperator::Equal
+        })
+        .register_fn("modelica_symbol", |op: SysmlExpressionOperator| {
+            op.modelica_symbol()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_type_with_name::<SysmlUnsupportedExpression>("SysmlUnsupportedExpression")
+        .register_type_with_name::<SysmlExpression>("SysmlExpression")
+        .register_get("source", |value: &mut SysmlExpression| value.source.clone())
+        .register_get("kind", |value: &mut SysmlExpression| value.kind)
+        .register_get("feature", |value: &mut SysmlExpression| {
+            value.feature.map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("operator", |value: &mut SysmlExpression| {
+            value.operator.map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("integer_value", |value: &mut SysmlExpression| {
+            value
+                .integer_value
+                .map(Dynamic::from_int)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("real_value", |value: &mut SysmlExpression| {
+            value
+                .real_value
+                .map(|number| Dynamic::from_float(number.as_f64()))
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("boolean_value", |value: &mut SysmlExpression| {
+            value
+                .boolean_value
+                .map(Dynamic::from_bool)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("string_value", |value: &mut SysmlExpression| {
+            value
+                .string_value
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("unsupported", |value: &mut SysmlExpression| {
+            value
+                .unsupported
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("children", |value: &mut SysmlExpression| {
+            Dynamic::from_array(value.children.iter().cloned().map(Dynamic::from).collect())
+        })
+        .register_type_with_name::<SysmlTypeCategory>("SysmlTypeCategory")
+        .register_type_with_name::<SysmlPrimitiveType>("SysmlPrimitiveType")
+        .register_type_with_name::<SysmlModelicaType>("SysmlModelicaType")
+        .register_type_with_name::<SysmlTypeRef>("SysmlTypeRef")
+        .register_get("qualified_name", |value: &mut SysmlTypeRef| {
+            value.qualified_name.clone()
+        })
         .register_type_with_name::<SysmlType>("SysmlType")
         .register_get("base", |value: &mut SysmlType| value.base.clone())
-        .register_get("category", |value: &mut SysmlType| {
-            format!("{:?}", value.category)
+        .register_get("category", |value: &mut SysmlType| value.category)
+        .register_get("value_category", |value: &mut SysmlType| {
+            value.value_category
+        })
+        .register_get("is_collection", |value: &mut SysmlType| {
+            value.category == SysmlTypeCategory::Collection
+        })
+        .register_get("is_quantity", |value: &mut SysmlType| {
+            value.value_category == SysmlTypeCategory::Quantity
+        })
+        .register_get("resolved_type", |value: &mut SysmlType| {
+            value
+                .resolved_type
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
         })
         .register_get("primitive", |value: &mut SysmlType| {
-            value
-                .primitive
-                .map(|primitive| format!("{:?}", primitive))
-                .unwrap_or_default()
+            value.primitive.map(Dynamic::from).unwrap_or(Dynamic::UNIT)
         })
         .register_get("dimensions", |value: &mut SysmlType| {
             Dynamic::from_array(
@@ -311,14 +299,47 @@ pub fn register_sysml_types(engine: &mut Engine) {
         })
         .register_get("multiplicity", |value: &mut SysmlType| value.multiplicity)
         .register_get("quantity_kind", |value: &mut SysmlType| {
-            value.quantity_kind.clone().unwrap_or_default()
+            value
+                .quantity_kind
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
         })
         .register_get("unit", |value: &mut SysmlType| {
             value.unit.clone().unwrap_or_default()
         })
         .register_get("modelica_type", |value: &mut SysmlType| {
-            format!("{:?}", value.modelica_type())
+            value.modelica_type()
         })
+        .register_type_with_name::<SysmlAttribute>("SysmlAttribute")
+        .register_get("owner", |value: &mut SysmlAttribute| value.owner.clone())
+        .register_get("name", |value: &mut SysmlAttribute| value.name.clone())
+        .register_get("qualified_name", |value: &mut SysmlAttribute| {
+            value.qualified_name.clone()
+        })
+        .register_get("type_name", |value: &mut SysmlAttribute| {
+            value.type_name.clone().unwrap_or_default()
+        })
+        .register_get("declared_type", |value: &mut SysmlAttribute| {
+            value
+                .declared_type
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("value", |value: &mut SysmlAttribute| {
+            value
+                .value
+                .as_ref()
+                .map(literal_dynamic)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("typed_value", |value: &mut SysmlAttribute| {
+            typed_attribute_value_dynamic(value).unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("file", |value: &mut SysmlAttribute| value.file.clone())
+        .register_get("start", |value: &mut SysmlAttribute| value.start as i64)
+        .register_get("end", |value: &mut SysmlAttribute| value.end as i64)
         .register_type_with_name::<SysmlMultiplicity>("Multiplicity")
         .register_get("lower", |value: &mut SysmlMultiplicity| value.lower as i64)
         .register_get("upper", |value: &mut SysmlMultiplicity| {
@@ -337,11 +358,19 @@ pub fn register_sysml_types(engine: &mut Engine) {
             quantity.unit.clone()
         })
         .register_get("kind", |quantity: &mut SysmlQuantityValue| {
-            quantity.quantity_kind.clone().unwrap_or_default()
+            quantity
+                .quantity_kind
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
         })
         .register_type_with_name::<SysmlEnumValue>("EnumValue")
-        .register_get("type_name", |value: &mut SysmlEnumValue| {
-            value.type_name.clone()
+        .register_get("type_ref", |value: &mut SysmlEnumValue| {
+            value
+                .type_ref
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
         })
         .register_get("literal", |value: &mut SysmlEnumValue| {
             value.literal.clone()
@@ -384,54 +413,11 @@ pub fn typed_attribute_value_dynamic(attribute: &SysmlAttribute) -> Option<Dynam
     typed_literal_dynamic(literal, declared)
 }
 
-/// Lower the already-projected `ValidateSysml` attribute record without
-/// serializing it again.  The production API query is language-neutral and
-/// therefore returns a Rhai map; this adapter consumes the structured fields
-/// and restores the same native f64 values used by direct analysis snapshots.
-pub fn typed_report_attribute_value(record: &Map) -> Option<Dynamic> {
-    let declared = record
-        .get("declared_type")
-        .and_then(|value| value.clone().try_cast::<Map>());
-    let literal = record
-        .get("value")
-        .and_then(|value| value.clone().try_cast::<Map>())?;
-    typed_report_literal_value(&literal, declared.as_ref())
-}
-
-fn report_element_type(declared: Option<&Map>) -> Option<Map> {
-    let mut element = declared?.clone();
-    let mut dimensions = element
-        .get("dimensions")?
-        .clone()
-        .try_cast::<rhai::Array>()?;
-    if dimensions.is_empty() {
-        return None;
-    }
-    let _ = dimensions.remove(0);
-    let remaining = dimensions.len();
-    element.insert("dimensions".into(), Dynamic::from_array(dimensions));
-    if remaining == 0
-        && element
-            .get("category")
-            .and_then(|value| value.clone().into_immutable_string().ok())
-            .is_some_and(|category| category.as_str() == "Collection")
-    {
-        let base = element
-            .get("base")
-            .and_then(|value| value.clone().into_immutable_string().ok())?;
-        let category = semantic_category_for_element(&base);
-        element.insert("category".into(), Dynamic::from(category));
-    }
-    Some(element)
-}
-
-fn semantic_category_for_element(base: &str) -> &'static str {
-    match SysmlType::parse(base).map(|sysml_type| sysml_type.category) {
-        Some(SysmlTypeCategory::Primitive) => "Primitive",
-        Some(SysmlTypeCategory::Quantity) => "Quantity",
-        Some(SysmlTypeCategory::Structured) => "Structured",
-        _ => "Unknown",
-    }
+/// Extract a typed literal from the opaque native attribute value at a Rhai
+/// adapter boundary. The world bridge need not depend on the SysML AST crate.
+pub fn typed_dynamic_attribute_value(attribute: Dynamic) -> Option<Dynamic> {
+    let attribute = attribute.try_cast::<SysmlAttribute>()?;
+    typed_attribute_value_dynamic(&attribute)
 }
 
 fn sysml_element_type(declared: Option<&SysmlType>) -> Option<SysmlType> {
@@ -446,148 +432,12 @@ fn sysml_element_type(declared: Option<&SysmlType>) -> Option<SysmlType> {
         .copied()
         .map(SysmlMultiplicity::fixed)
         .unwrap_or_else(SysmlMultiplicity::one);
-    if element.dimensions.is_empty() && element.category == SysmlTypeCategory::Collection {
-        element.category = match semantic_category_for_element(&element.base) {
-            "Primitive" => SysmlTypeCategory::Primitive,
-            "Structured" => SysmlTypeCategory::Structured,
-            "Quantity" => SysmlTypeCategory::Quantity,
-            _ => SysmlTypeCategory::Unknown,
-        };
-    }
+    element.category = if element.dimensions.is_empty() && !element.multiplicity.is_collection() {
+        element.value_category
+    } else {
+        SysmlTypeCategory::Collection
+    };
     Some(element)
-}
-
-fn typed_report_literal_value(literal: &Map, declared: Option<&Map>) -> Option<Dynamic> {
-    if let Some(elements) = literal
-        .get("elements")
-        .and_then(|value| value.clone().try_cast::<rhai::Array>())
-    {
-        let base = declared
-            .and_then(|value| value.get("base"))
-            .and_then(|value| value.clone().into_immutable_string().ok())
-            .unwrap_or_default();
-        let element_type = report_element_type(declared);
-        let values: Vec<Dynamic> = elements
-            .iter()
-            .map(|element| {
-                let element = element.clone().try_cast::<Map>()?;
-                typed_report_literal_value(&element, element_type.as_ref())
-            })
-            .collect::<Option<_>>()?;
-        let base = base.rsplit("::").next().unwrap_or_default();
-        if matches!(
-            base,
-            "Vec2"
-                | "CartesianTwoVectorValue"
-                | "CartesianVectorValue"
-                | "NumericalVectorValue"
-                | "VectorValue"
-        ) && values.len() == 2
-        {
-            let coordinates = values
-                .iter()
-                .map(numeric_dynamic_f64)
-                .collect::<Option<Vec<_>>>()?;
-            let vector = DVec2::new(coordinates[0], coordinates[1]);
-            return vector.is_finite().then_some(Dynamic::from(vector));
-        }
-        if matches!(
-            base,
-            "Vec3"
-                | "Position"
-                | "Direction"
-                | "Dimensions"
-                | "CartesianThreeVectorValue"
-                | "ThreeVectorValue"
-                | "CartesianVectorValue"
-                | "NumericalVectorValue"
-                | "VectorValue"
-        ) && values.len() == 3
-        {
-            let coordinates = values
-                .iter()
-                .map(numeric_dynamic_f64)
-                .collect::<Option<Vec<_>>>()?;
-            return finite_vec3(coordinates[0], coordinates[1], coordinates[2]);
-        }
-        if matches!(base, "Quat" | "Quaternion") && values.len() == 4 {
-            let components = values
-                .iter()
-                .map(numeric_dynamic_f64)
-                .collect::<Option<Vec<_>>>()?;
-            let quaternion =
-                DQuat::from_xyzw(components[0], components[1], components[2], components[3]);
-            return normalized_quat(quaternion);
-        }
-        if base == "Transform" && values.len() == 3 {
-            return native_transform(&values);
-        }
-        return Some(Dynamic::from_array(values));
-    }
-
-    let category = declared
-        .and_then(|value| value.get("category"))
-        .and_then(|value| value.clone().into_immutable_string().ok())
-        .unwrap_or_default();
-    if category == "Quantity" {
-        let number = literal.get("number_value")?.as_float().ok()?;
-        let unit = literal
-            .get("unit")
-            .and_then(|value| value.clone().into_immutable_string().ok())
-            .or_else(|| {
-                declared
-                    .and_then(|value| value.get("unit"))
-                    .and_then(|value| value.clone().into_immutable_string().ok())
-            })
-            .unwrap_or_default();
-        let quantity_kind = declared
-            .and_then(|value| value.get("quantity_kind"))
-            .and_then(|value| value.clone().into_immutable_string().ok());
-        return Some(Dynamic::from(SysmlQuantityValue {
-            value: lunco_sysml_ast::SysmlNumber::new(number)?,
-            unit: unit.to_string(),
-            quantity_kind: quantity_kind.map(|value| value.to_string()),
-        }));
-    }
-    if category == "Enumeration" {
-        let type_name = declared
-            .and_then(|value| value.get("base"))
-            .and_then(|value| value.clone().into_immutable_string().ok())?;
-        let literal = literal
-            .get("string_value")
-            .and_then(|value| value.clone().into_immutable_string().ok())
-            .or_else(|| {
-                literal
-                    .get("literal")
-                    .and_then(|value| value.clone().into_immutable_string().ok())
-            })?;
-        return Some(Dynamic::from(SysmlEnumValue {
-            type_name: type_name.to_string(),
-            literal: literal.to_string(),
-        }));
-    }
-    if let Some(value) = literal
-        .get("integer_value")
-        .and_then(|value| value.as_int().ok())
-    {
-        return Some(Dynamic::from_int(value));
-    }
-    if let Some(value) = literal
-        .get("number_value")
-        .and_then(|value| value.as_float().ok())
-    {
-        return Some(Dynamic::from_float(value));
-    }
-    if let Some(value) = literal
-        .get("boolean_value")
-        .and_then(|value| value.as_bool().ok())
-    {
-        return Some(Dynamic::from_bool(value));
-    }
-    literal
-        .get("string_value")
-        .and_then(|value| value.clone().into_immutable_string().ok())
-        .map(Dynamic::from)
 }
 
 fn typed_literal_dynamic(
@@ -657,8 +507,9 @@ fn typed_literal_dynamic(
     }
 
     if literal.unit.is_some()
-        || declared
-            .is_some_and(|value| value.category == lunco_sysml_ast::SysmlTypeCategory::Quantity)
+        || declared.is_some_and(|value| {
+            value.value_category == lunco_sysml_ast::SysmlTypeCategory::Quantity
+        })
     {
         return Some(Dynamic::from(SysmlQuantityValue {
             value: literal.number_value?,
@@ -671,11 +522,11 @@ fn typed_literal_dynamic(
         }));
     }
 
-    if declared
-        .is_some_and(|value| value.category == lunco_sysml_ast::SysmlTypeCategory::Enumeration)
-    {
+    if declared.is_some_and(|value| {
+        value.value_category == lunco_sysml_ast::SysmlTypeCategory::Enumeration
+    }) {
         return Some(Dynamic::from(SysmlEnumValue {
-            type_name: declared?.base.clone(),
+            type_ref: declared?.resolved_type.clone(),
             literal: literal
                 .string_value
                 .clone()
@@ -776,6 +627,21 @@ fn string_array(values: &[String]) -> Dynamic {
 
 fn element_dynamic(element: &SysmlElement) -> Dynamic {
     let mut value = Map::new();
+    value.insert("handle".into(), Dynamic::from(element.handle));
+    value.insert(
+        "owner_handle".into(),
+        element
+            .owner_handle
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "feature_handle".into(),
+        element
+            .feature_handle
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
     value.insert("id".into(), Dynamic::from_int(element.id as i64));
     value.insert("file".into(), Dynamic::from(element.file.clone()));
     value.insert(
@@ -794,8 +660,15 @@ fn reference_dynamic(reference: &lunco_sysml_ast::SysmlReference) -> Dynamic {
     value.insert("start".into(), Dynamic::from_int(reference.start as i64));
     value.insert("end".into(), Dynamic::from_int(reference.end as i64));
     value.insert("name".into(), Dynamic::from(reference.name.clone()));
-    value.insert("from".into(), Dynamic::from(reference.from.clone()));
-    value.insert("target".into(), Dynamic::from(reference.target.clone()));
+    value.insert("from".into(), Dynamic::from(reference.from));
+    value.insert("target".into(), Dynamic::from(reference.target));
+    value.insert(
+        "target_feature".into(),
+        reference
+            .target_feature
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
     Dynamic::from_map(value)
 }
 
@@ -811,7 +684,28 @@ fn relationship_dynamic(relationship: &lunco_sysml_ast::SysmlRelationship) -> Dy
                 .map(|property| {
                     let mut value = Map::new();
                     value.insert("name".into(), Dynamic::from(property.name.clone()));
-                    value.insert("targets".into(), string_array(&property.targets));
+                    value.insert(
+                        "targets".into(),
+                        Dynamic::from_array(
+                            property
+                                .targets
+                                .iter()
+                                .copied()
+                                .map(Dynamic::from)
+                                .collect(),
+                        ),
+                    );
+                    value.insert(
+                        "feature_targets".into(),
+                        Dynamic::from_array(
+                            property
+                                .feature_targets
+                                .iter()
+                                .copied()
+                                .map(Dynamic::from)
+                                .collect(),
+                        ),
+                    );
                     Dynamic::from_map(value)
                 })
                 .collect(),
@@ -823,9 +717,17 @@ fn relationship_dynamic(relationship: &lunco_sysml_ast::SysmlRelationship) -> Dy
 fn constraint_dynamic(constraint: &lunco_sysml_ast::SysmlConstraint) -> Dynamic {
     let mut value = Map::new();
     value.insert("element".into(), element_dynamic(&constraint.element));
-    if let Some(expression) = &constraint.expression {
-        value.insert("expression".into(), Dynamic::from(expression.clone()));
-    }
+    value.insert(
+        "expressions".into(),
+        Dynamic::from_array(
+            constraint
+                .expressions
+                .iter()
+                .cloned()
+                .map(Dynamic::from)
+                .collect(),
+        ),
+    );
     Dynamic::from_map(value)
 }
 
@@ -886,6 +788,14 @@ fn literal_dynamic(literal: &lunco_sysml_ast::SysmlLiteral) -> Dynamic {
 
 fn attribute_dynamic_at_revision(attribute: &SysmlAttribute, revision: u64) -> Dynamic {
     let mut value = Map::new();
+    value.insert("handle".into(), Dynamic::from(attribute.handle));
+    value.insert(
+        "owner_handle".into(),
+        attribute
+            .owner_handle
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
     value.insert("owner".into(), Dynamic::from(attribute.owner.clone()));
     value.insert("name".into(), Dynamic::from(attribute.name.clone()));
     value.insert(
@@ -896,35 +806,7 @@ fn attribute_dynamic_at_revision(attribute: &SysmlAttribute, revision: u64) -> D
         value.insert("type_name".into(), type_name);
     }
     if let Some(declared_type) = &attribute.declared_type {
-        value.insert("typed_type".into(), Dynamic::from(declared_type.clone()));
-        let mut type_value = Map::new();
-        type_value.insert("base".into(), Dynamic::from(declared_type.base.clone()));
-        type_value.insert(
-            "category".into(),
-            Dynamic::from(format!("{:?}", declared_type.category)),
-        );
-        type_value.insert(
-            "modelica_type".into(),
-            Dynamic::from(format!("{:?}", declared_type.modelica_type())),
-        );
-        type_value.insert(
-            "dimensions".into(),
-            Dynamic::from_array(
-                declared_type
-                    .dimensions
-                    .iter()
-                    .map(|dimension| Dynamic::from_int(*dimension as i64))
-                    .collect(),
-            ),
-        );
-        type_value.insert(
-            "multiplicity".into(),
-            Dynamic::from(declared_type.multiplicity),
-        );
-        if let Some(quantity_kind) = &declared_type.quantity_kind {
-            type_value.insert("quantity_kind".into(), Dynamic::from(quantity_kind.clone()));
-        }
-        value.insert("declared_type".into(), Dynamic::from_map(type_value));
+        value.insert("declared_type".into(), Dynamic::from(declared_type.clone()));
     }
     if let Some(literal) = &attribute.value {
         value.insert("value".into(), literal_dynamic(literal));
@@ -940,52 +822,6 @@ fn attribute_dynamic_at_revision(attribute: &SysmlAttribute, revision: u64) -> D
         Dynamic::from(attribute.source_ref(revision)),
     );
     Dynamic::from_map(value)
-}
-
-fn attributes_qualified_dynamic(analysis: &SysmlAnalysis, revision: u64) -> Dynamic {
-    let mut output = Map::new();
-    for attribute in analysis.attributes() {
-        output.insert(
-            attribute.qualified_name.clone().into(),
-            attribute_dynamic_at_revision(attribute, revision),
-        );
-    }
-    Dynamic::from_map(output)
-}
-
-fn attributes_short_dynamic(analysis: &SysmlAnalysis, revision: u64) -> Dynamic {
-    let mut output = Map::new();
-    for attribute in analysis.attributes() {
-        output.insert(
-            attribute.name.clone().into(),
-            attribute_dynamic_at_revision(attribute, revision),
-        );
-    }
-    Dynamic::from_map(output)
-}
-
-fn attribute_collisions_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
-    let mut names = std::collections::BTreeMap::<String, Vec<String>>::new();
-    for attribute in analysis.attributes() {
-        names
-            .entry(attribute.name.clone())
-            .or_default()
-            .push(attribute.qualified_name.clone());
-    }
-    Dynamic::from_array(
-        names
-            .into_iter()
-            .filter_map(|(name, qualified_names)| {
-                if qualified_names.len() < 2 {
-                    return None;
-                }
-                let mut value = Map::new();
-                value.insert("name".into(), Dynamic::from(name));
-                value.insert("qualified_names".into(), string_array(&qualified_names));
-                Some(Dynamic::from_map(value))
-            })
-            .collect(),
-    )
 }
 
 fn requirement_dynamic(record: &lunco_sysml_ast::SysmlRequirementRecord, revision: u64) -> Dynamic {
@@ -1037,124 +873,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn report_is_consumable_by_rhai() {
-        let analysis = Arc::new(SysmlAnalysis::from_files([(
-            "example.sysml",
-            "requirement def MassRequirement {}",
-        )]));
-        let mut engine = rhai::Engine::new();
-        register_sysml_report(&mut engine, analysis);
-        let native: Dynamic = engine.eval("sysml_requirement_report()").unwrap();
-        let native = native.cast::<Map>();
-        assert!(native.contains_key("requirements"));
-        let report: Map = engine.eval("sysml_report()").unwrap();
-        let files = report
-            .get("files")
-            .cloned()
-            .expect("source files report")
-            .cast::<rhai::Array>();
-        let file = files[0].clone().cast::<Map>();
-        assert_eq!(
-            file.get("name")
-                .cloned()
-                .expect("file name")
-                .into_immutable_string()
-                .unwrap(),
-            "example.sysml"
-        );
-    }
-
-    #[test]
-    fn native_report_exposes_numeric_literal_without_string_parsing() {
-        let analysis = Arc::new(SysmlAnalysis::from_files_without_stdlib([(
-            "numeric.sysml",
-            "part def A { attribute mass : Real = 2.5; }",
-        )]));
-        let mut engine = rhai::Engine::new();
-        register_sysml_report(&mut engine, analysis);
-        let value: f64 = engine
-            .eval("sysml_report().attributes[0].value.number_value")
-            .expect("native numeric projection");
-        assert_eq!(value, 2.5);
-    }
-
-    #[test]
-    fn rhai_report_exposes_quantity_and_enum_as_typed_values() {
-        let analysis = Arc::new(SysmlAnalysis::from_files_without_stdlib([(
-            "typed-values.sysml",
-            r#"enum def Pose { Landed; }
-                part def Lander {
-                    attribute mass : Mass = 1200 [kg];
-                    attribute pose : Pose = "Landed";
-                }"#,
-        )]));
-        let mut engine = rhai::Engine::new();
-        register_sysml_report(&mut engine, analysis);
-        let values: rhai::Array = engine
-            .eval(
-                "let a = sysml_report().attributes; \
-                 [a[0].typed_value.value, a[0].typed_value.unit, \
-                  a[1].typed_value.type_name, a[1].typed_value.literal]",
-            )
-            .expect("typed quantity and enumeration projection");
-        assert_eq!(values[0].as_float().unwrap(), 1200.0);
-        assert_eq!(values[1].clone().into_immutable_string().unwrap(), "kg");
-        assert_eq!(values[2].clone().into_immutable_string().unwrap(), "Pose");
-        assert_eq!(values[3].clone().into_immutable_string().unwrap(), "Landed");
-    }
-
-    #[test]
-    fn source_revision_is_lossless_text_in_native_reports() {
+    fn source_revision_is_lossless_text_in_native_snapshot() {
         let analysis = SysmlAnalysis::build(
             [("revision.sysml", "requirement def R {}")],
             false,
             u64::MAX,
         );
-        let report = report_dynamic(&analysis);
-        let report = report.cast::<Map>();
+        let snapshot = semantic_snapshot_dynamic(&analysis);
+        let snapshot = snapshot.cast::<Map>();
         assert_eq!(
-            report["source_revision"]
+            snapshot["source_revision"]
                 .clone()
                 .into_immutable_string()
                 .unwrap(),
             u64::MAX.to_string()
         );
         assert_eq!(
-            report["source_revision_hex"]
+            snapshot["source_revision_hex"]
                 .clone()
                 .into_immutable_string()
                 .unwrap(),
             "0xffffffffffffffff"
         );
-    }
-
-    #[test]
-    fn native_record_exposes_typed_transform_and_source() {
-        let analysis = Arc::new(SysmlAnalysis::from_files_without_stdlib([(
-            "griffin.sysml",
-            "part def Griffin { attribute pose : Transform = ((1.0, 2.0, 3.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0)); attribute railLength : Real = 2.6; }",
-        )]));
-        let mut engine = rhai::Engine::new();
-        lunco_scripting_rhai_core::rhai_math::register(&mut engine);
-        register_sysml_report(&mut engine, analysis);
-        let values: rhai::Array = engine
-            .eval(
-                "let record = sysml_report().records[0]; \
-                 [record.type_name, record.field_names[0], \
-                  record.value(\"pose\").translation.x, \
-                  record.source.file, record.source.revision]",
-            )
-            .expect("typed SysML record projection");
-        assert_eq!(
-            values[0].clone().into_immutable_string().unwrap(),
-            "Griffin"
-        );
-        assert_eq!(values[1].clone().into_immutable_string().unwrap(), "pose");
-        assert_eq!(values[2].as_float().unwrap(), 1.0);
-        assert_eq!(
-            values[3].clone().into_immutable_string().unwrap(),
-            "griffin.sysml"
-        );
-        assert_eq!(values[4].clone().into_immutable_string().unwrap(), "0");
     }
 }

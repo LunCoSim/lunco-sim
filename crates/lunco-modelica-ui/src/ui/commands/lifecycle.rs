@@ -422,9 +422,10 @@ fn create_new_scratch_model(
 
     let source = req_source.unwrap_or_else(|| format!("model {name}\nend {name};\n"));
     let mem_id = format!("mem://{name}");
-    let doc_id = registry.allocate(
+    let doc_id = lunco_modelica_core::doc_ops::allocate_scratch_document(
+        registry,
         source.clone(),
-        lunco_doc::PathlessOrigin::untitled(name.clone()),
+        name.clone(),
     );
 
     cache.in_memory_models.retain(|e| e.id != mem_id);

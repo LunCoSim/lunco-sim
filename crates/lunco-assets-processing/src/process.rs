@@ -12,24 +12,16 @@
 //! output = "textures/earth.png"
 //! ```
 
-#[cfg(not(target_arch = "wasm32"))]
 use image::GenericImageView;
-#[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_datasets::{
     bake_key, bake_stamp_path, default_dem_pixel_scale_m, process_output_path,
     processed_output_present, ProcessConfig,
 };
-#[cfg(not(target_arch = "wasm32"))]
 use resvg::tiny_skia;
-#[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeMap;
-#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
 use usvg::{Options, Tree};
 
 /// Cancellation and commit ownership for one processing attempt.
@@ -38,14 +30,12 @@ use usvg::{Options, Tree};
 /// cancellation is cooperative at pipeline boundaries. The commit gate is
 /// shared with the dataset download attempt: closing a Twin acquires it before
 /// retiring the attempt, which makes the close boundary a real write barrier.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct ProcessControl {
     cancel: Arc<AtomicBool>,
     commit_gate: Arc<Mutex<()>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl ProcessControl {
     /// Create processing control owned by an application worker.
     pub fn new(cancel: Arc<AtomicBool>, commit_gate: Arc<Mutex<()>>) -> Self {
@@ -80,7 +70,6 @@ impl ProcessControl {
 }
 
 /// Native function implemented by one asset processor.
-#[cfg(not(target_arch = "wasm32"))]
 pub type ProcessorFn = fn(
     source: &Path,
     output: &Path,
@@ -89,7 +78,6 @@ pub type ProcessorFn = fn(
 ) -> Result<(), std::io::Error>;
 
 /// One registered processing implementation.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy)]
 pub struct ProcessorSpec {
     /// Manifest value that selects this processor.
@@ -100,7 +88,6 @@ pub struct ProcessorSpec {
     pub sidecars: &'static [&'static str],
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl ProcessorSpec {
     /// Define a processor and the sidecars it atomically publishes.
     pub const fn new(
@@ -122,13 +109,11 @@ impl ProcessorSpec {
 /// heavy decoder or transform does not require growing one central match. The
 /// registry is a Rust extension seam because processors own I/O and math;
 /// Rhai remains responsible for selecting and sequencing authored policy.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct ProcessorRegistry {
     specs: BTreeMap<String, ProcessorSpec>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl ProcessorRegistry {
     /// Create a registry containing the processors shipped by LunCoSim.
     pub fn builtin() -> Self {
@@ -160,7 +145,6 @@ impl ProcessorRegistry {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Default for ProcessorRegistry {
     fn default() -> Self {
         Self {
@@ -193,7 +177,6 @@ impl Default for ProcessorRegistry {
 /// Engine entries use the global cache; a Twin entry uses its own cache unless
 /// its declaration opts into the shared pool. `twin_root` is the caller-supplied
 /// Twin folder for `output_root = "twin"`.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn process_asset(
     source_path: &Path,
     process: &ProcessConfig,
@@ -217,7 +200,6 @@ pub fn process_asset(
 /// This is the extension point for a domain-specific native processor. The
 /// registry changes dispatch only; output-path resolution, bake keys, staging,
 /// cancellation, and atomic commit remain shared here.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn process_asset_with_registry(
     source_path: &Path,
     process: &ProcessConfig,
@@ -237,7 +219,6 @@ pub fn process_asset_with_registry(
 }
 
 /// The body of [`process_asset`] once its output path is known.
-#[cfg(not(target_arch = "wasm32"))]
 fn process_asset_to(
     source_path: &Path,
     process: &ProcessConfig,
@@ -301,17 +282,14 @@ fn process_asset_to(
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 struct StageCleanup(std::path::PathBuf);
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Drop for StageCleanup {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn staging_root(output_path: &Path) -> Result<std::path::PathBuf, std::io::Error> {
     let parent = output_path.parent().ok_or_else(|| {
         io_err(format!(
@@ -326,7 +304,6 @@ fn staging_root(output_path: &Path) -> Result<std::path::PathBuf, std::io::Error
     Ok(root)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn commit_staged_output(
     stage_root: &Path,
     output_path: &Path,
@@ -406,7 +383,6 @@ fn commit_staged_output(
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn process_texture(
     source: &Path,
     output: &Path,
@@ -435,7 +411,6 @@ fn process_texture(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn process_gltf_adapter(
     source: &Path,
     output: &Path,
@@ -453,7 +428,6 @@ fn process_gltf_adapter(
 /// therefore rejects such input until the conversion is implemented. The
 /// resulting document is emitted as a GLB while non-transformed authored data
 /// remains intact. Native-only — wasm builds skip this whole module.
-#[cfg(not(target_arch = "wasm32"))]
 fn process_gltf(source: &Path, output: &Path, control: &ProcessControl) -> std::io::Result<()> {
     control.check()?;
     let mut import = draco_gltf::open(source, draco_gltf::ValidationProfile::Gltf20)
@@ -479,7 +453,6 @@ fn process_gltf(source: &Path, output: &Path, control: &ProcessControl) -> std::
     std::fs::write(output, bytes)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn json_contains_key(value: &draco_gltf::JsonValue, key: &str) -> bool {
     let mut pending = vec![value];
     while let Some(value) = pending.pop() {
@@ -502,7 +475,6 @@ fn json_contains_key(value: &draco_gltf::JsonValue, key: &str) -> bool {
     false
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn process_svg(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), std::io::Error> {
     let svg_data = std::fs::read(source)?;
     let opt = Options::default();
@@ -522,7 +494,6 @@ fn process_svg(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), std
         .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn process_image(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), std::io::Error> {
     let img = image::open(source)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
@@ -575,7 +546,6 @@ fn process_image(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), s
 /// (longitude shrinks by `cos(lat)`; row grows downward — PDS rasters are
 /// north-up.) For a ≤2 km site the accumulated scale error from ignoring
 /// second-order terms is well under a pixel and irrelevant to the sim.
-#[cfg(not(target_arch = "wasm32"))]
 fn process_dem(
     source: &Path,
     output_dir: &Path,
@@ -669,7 +639,6 @@ fn process_dem(
 /// Convert the source DEM's declared vertical units into metres relative to the
 /// body's reference surface. The source declaration owns this conversion; the
 /// raster reader and the terrain runtime consume metres and never guess units.
-#[cfg(not(target_arch = "wasm32"))]
 fn apply_dem_height_units(
     samples: &mut [f64],
     scale_m_per_unit: f64,
@@ -702,9 +671,8 @@ fn apply_dem_height_units(
 
 /// A grayscale source raster decoded for the geographic pipelines, plus the
 /// projection facts the container itself supplied. PDS3 labels carry their
-/// own extent/scale; raw LROC TIFFs carry nothing (their `.LBL` values go in
-/// the manifest instead).
-#[cfg(not(target_arch = "wasm32"))]
+/// own extent/scale. TIFF georeferencing is authored in the process manifest;
+/// this grayscale decoder does not project TIFF tags into crop coordinates.
 struct GraySource {
     w: usize,
     h: usize,
@@ -716,7 +684,6 @@ struct GraySource {
 
 /// Decode a DEM-class source raster to grayscale `f64`: TIFF (any numeric
 /// Gray layout) or PDS3 `.IMG` (attached/detached label).
-#[cfg(not(target_arch = "wasm32"))]
 fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
     use std::io::Cursor;
 
@@ -745,7 +712,7 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
     // each and drifted; the copy here is gone deliberately, do not restore it.
     let bytes = std::fs::read(source)?;
     let (src_w, src_h, heights_f64) = lunco_geotiff::decode_gray_f64(Cursor::new(bytes.as_slice()))
-        .map_err(|e| io_err(format!("decoding DTM TIFF: {e}")))?;
+        .map_err(|e| io_err(format!("decoding grayscale TIFF: {e}")))?;
     Ok(GraySource {
         w: src_w,
         h: src_h,
@@ -757,7 +724,6 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
 }
 
 /// A resolved square crop: source-pixel window + output resolution.
-#[cfg(not(target_arch = "wasm32"))]
 struct RoiCrop {
     x0: usize,
     y0: usize,
@@ -771,10 +737,8 @@ struct RoiCrop {
 /// crop via the 2-point extent affine. Extent and pixel scale come from the
 /// manifest's `src_*`/`pixel_scale_m` fields, falling back to what the source
 /// container itself declares (PDS3 labels only): the manifest wins when it
-/// authors all four extent values; `pixel_scale_m` yields to the label's
-/// `MAP_SCALE` when left at its serde default (2.0) — an authored value
-/// identical to the default is indistinguishable, so pin the label's value in
-/// the manifest if it must be exactly 2.0 against a disagreeing label.
+/// authors all four extent values and an explicit scale; otherwise the label's
+/// `MAP_SCALE` wins, followed by the documented 2 m default.
 ///
 /// Longitude convention: the affine is convention-agnostic, but `center_lon`
 /// must use the SAME convention as the extent it is resolved against (LROC
@@ -782,7 +746,6 @@ struct RoiCrop {
 ///
 /// Fails loudly on a non-equirectangular source (polar stereographic products
 /// need a real projection, not this affine — the known pipeline gate).
-#[cfg(not(target_arch = "wasm32"))]
 /// Bounding box (inclusive) of the samples that are actual measurements.
 ///
 /// PDS orthorectified products are footprints padded to a rectangle: the imaged
@@ -813,7 +776,6 @@ fn valid_data_bounds(samples: &[f64], w: usize, h: usize) -> Option<(usize, usiz
 ///
 /// The nodata guard sees these rather than the resampled output so its coverage
 /// decision is made against source measurements, independently of interpolation.
-#[cfg(not(target_arch = "wasm32"))]
 fn roi_samples(
     samples: &[f64],
     src_w: usize,
@@ -863,7 +825,6 @@ fn roi_samples(
 /// The cap bounds the work and, more usefully, refuses to invent a large interior:
 /// a gap that survives it is too big to fill honestly and is a real authoring
 /// error, not a speckle.
-#[cfg(not(target_arch = "wasm32"))]
 fn fill_dem_voids(
     v: &mut [f64],
     n: usize,
@@ -936,7 +897,6 @@ fn fill_dem_voids(
 ///
 /// Fails the bake instead of warning. A warning is what the previous behaviour
 /// effectively was, and an 18%-dead map shipped anyway.
-#[cfg(not(target_arch = "wasm32"))]
 fn reject_if_mostly_nodata(values: &[f64], kind: &str, limit: f64) -> Result<(), std::io::Error> {
     if values.is_empty() {
         return Ok(());
@@ -956,7 +916,6 @@ fn reject_if_mostly_nodata(values: &[f64], kind: &str, limit: f64) -> Result<(),
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn resolve_roi(
     cfg: &ProcessConfig,
     src: &GraySource,
@@ -981,12 +940,15 @@ fn resolve_roi(
     let window_m = cfg
         .window_m
         .ok_or_else(|| io_err(format!("{kind} pipeline requires `window_m`")))?;
-    let scale = if (cfg.pixel_scale_m - default_dem_pixel_scale_m()).abs() > 1e-12 {
-        cfg.pixel_scale_m
-    } else {
-        src.scale_m.unwrap_or(cfg.pixel_scale_m)
+    let scale = cfg
+        .pixel_scale_m
+        .or(src.scale_m)
+        .unwrap_or_else(default_dem_pixel_scale_m);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(io_err(format!(
+            "{kind} pipeline requires a finite positive `pixel_scale_m`, got {scale}"
+        )));
     }
-    .max(1e-6); // metres per source pixel
     let half_px = (window_m * 0.5 / scale).round() as isize;
 
     // Map the ROI center to a source pixel via a 2-point affine from the
@@ -1011,15 +973,26 @@ fn resolve_roi(
         .ok_or_else(|| {
             io_err(format!(
                 "{kind} pipeline requires the source extent: set all four \
-                 `src_min_lat`/`src_max_lat`/`src_min_lon`/`src_max_lon` (from \
-                 the product's PDS3 label), or use a PDS3 `.IMG` source that \
-                 declares its own IMAGE_MAP_PROJECTION"
+                 `src_min_lat`/`src_max_lat`/`src_min_lon`/`src_max_lon` from \
+                 the product metadata, or use a PDS3 `.IMG` source that declares \
+                 its own IMAGE_MAP_PROJECTION"
             ))
         })?;
+    if !min_lat.is_finite()
+        || !max_lat.is_finite()
+        || !min_lon.is_finite()
+        || !max_lon.is_finite()
+        || min_lat >= max_lat
+        || min_lon >= max_lon
+    {
+        return Err(io_err(format!(
+            "{kind} pipeline requires finite increasing source extents, got lat {min_lat}..{max_lat}, lon {min_lon}..{max_lon}"
+        )));
+    }
     let (src_w, src_h) = (src.w, src.h);
     // North-up: max_lat → row 0, min_lat → row (h-1). Lon grows with column.
-    let lon_span = (max_lon - min_lon).abs().max(1e-9);
-    let lat_span = (max_lat - min_lat).abs().max(1e-9);
+    let lon_span = max_lon - min_lon;
+    let lat_span = max_lat - min_lat;
     let center_col = ((center_lon - min_lon) / lon_span) * (src_w as f64 - 1.0);
     let center_row = ((max_lat - center_lat) / lat_span) * (src_h as f64 - 1.0);
     let cc = center_col.round() as isize;
@@ -1087,7 +1060,6 @@ fn resolve_roi(
 
 /// Resample the crop's source window to `out_n × out_n` (bilinear;
 /// finite neighbours are renormalised and an all-nodata sample remains NaN).
-#[cfg(not(target_arch = "wasm32"))]
 fn resample_roi_bilinear(
     samples: &[f64],
     src_w: usize,
@@ -1162,7 +1134,6 @@ fn resample_roi_bilinear(
 /// would sample red in the layered shader's albedo slot. Encoding the stretched
 /// signal here is required because the runtime loader correctly decodes the
 /// authored PNG back to linear samples.
-#[cfg(not(target_arch = "wasm32"))]
 fn process_map(
     source: &Path,
     output_path: &Path,
@@ -1331,7 +1302,6 @@ fn process_map(
 /// field with a valid-sample box filter, and anchors the result at the authored
 /// neutral regolith albedo. The output is therefore a stable material albedo,
 /// not a claim that an unnormalised orthophoto has become calibrated reflectance.
-#[cfg(not(target_arch = "wasm32"))]
 fn process_albedo(
     source: &Path,
     output_path: &Path,
@@ -1344,10 +1314,47 @@ fn process_albedo(
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if ext != "img" {
+    let is_pds_img = ext == "img";
+    let is_gray_tiff = matches!(ext.as_str(), "tif" | "tiff");
+    if !is_pds_img && !is_gray_tiff {
         return Err(io_err(
-            "albedo pipeline requires a grayscale PDS orthophoto `.IMG`; use `texture` for an already-authored colour albedo".into(),
+            "albedo pipeline requires a grayscale PDS orthophoto `.IMG` or GeoTIFF; use `texture` for an already-authored colour albedo".into(),
         ));
+    }
+    if is_gray_tiff {
+        let extent = (
+            cfg.src_min_lat,
+            cfg.src_max_lat,
+            cfg.src_min_lon,
+            cfg.src_max_lon,
+        );
+        let Some((min_lat, max_lat, min_lon, max_lon)) = extent
+            .0
+            .zip(extent.1)
+            .zip(extent.2)
+            .zip(extent.3)
+            .map(|(((a, b), c), d)| (a, b, c, d))
+        else {
+            return Err(io_err(
+                "albedo pipeline requires a GeoTIFF's explicit `pixel_scale_m` and all four `src_*` extent values".into(),
+            ));
+        };
+        if cfg.pixel_scale_m.is_none() {
+            return Err(io_err(
+                "albedo pipeline requires an explicit `pixel_scale_m` for GeoTIFF sources".into(),
+            ));
+        }
+        if !min_lat.is_finite()
+            || !max_lat.is_finite()
+            || !min_lon.is_finite()
+            || !max_lon.is_finite()
+            || min_lat >= max_lat
+            || min_lon >= max_lon
+        {
+            return Err(io_err(
+                "albedo pipeline requires finite increasing GeoTIFF `src_*` extents".into(),
+            ));
+        }
     }
 
     let src = decode_gray_source(source)?;
@@ -1420,7 +1427,6 @@ fn process_albedo(
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn grayscale_percentile_bounds<F>(values: &[f64], is_measurement: F) -> (f64, f64)
 where
     F: Fn(f64) -> bool,
@@ -1447,7 +1453,6 @@ where
 /// into an artificial dark or bright illumination source. Integral fields keep
 /// the offline bake bounded even for large source crops and give edge pixels
 /// the correctly clipped 2D window.
-#[cfg(not(target_arch = "wasm32"))]
 fn local_mean_field(
     values: &[f64],
     n: usize,
@@ -1519,7 +1524,6 @@ fn local_mean_field(
 /// contract is nonlinear. Keeping the conversion at the bake boundary means
 /// the runtime receives the same normalized contrast value it was authored
 /// from after Bevy's sRGB decode.
-#[cfg(not(target_arch = "wasm32"))]
 fn encode_map_contrast_to_srgb_u8(value: f64) -> u8 {
     let value = value.clamp(0.0, 1.0);
     let encoded = if value <= 0.003_130_8 {
@@ -1530,7 +1534,6 @@ fn encode_map_contrast_to_srgb_u8(value: f64) -> u8 {
     (encoded * 255.0).round() as u8
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn encode_linear_to_srgb_u8(value: f64) -> u8 {
     encode_map_contrast_to_srgb_u8(value)
 }
@@ -1543,7 +1546,6 @@ fn encode_linear_to_srgb_u8(value: f64) -> u8 {
 /// increasing column (east) and `+z` = increasing row (south, since PDS
 /// rasters are north-up) — source/object space, no tangent basis. Consumers
 /// transform it through the terrain mesh instance before world-space lighting.
-#[cfg(not(target_arch = "wasm32"))]
 fn process_normalmap(
     source: &Path,
     output_path: &Path,
@@ -1620,17 +1622,15 @@ fn process_normalmap(
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn io_err(msg: String) -> std::io::Error {
     std::io::Error::other(msg)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn tiff_io_err(e: tiff::TiffError) -> std::io::Error {
     std::io::Error::other(e.to_string())
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
@@ -1700,7 +1700,7 @@ mod tests {
             center_lat: Some(0.5),
             center_lon: Some(0.5),
             window_m: Some(2.0),
-            pixel_scale_m: 1.0,
+            pixel_scale_m: Some(1.0),
             source_height_scale_m_per_unit: 1.0,
             source_height_offset_m: 0.0,
             src_min_lat: Some(0.0),
@@ -1925,7 +1925,7 @@ mod tests {
             center_lat: Some(0.0),
             center_lon: Some(0.0),
             window_m: Some(8.0), // 8 m ÷ 2 m/px = 4 px half → 9px square window
-            pixel_scale_m: 2.0,
+            pixel_scale_m: Some(2.0),
             source_height_scale_m_per_unit: 1.0,
             source_height_offset_m: 0.0,
             // Source extent: lat/lon each span [-1, 1] over the 12×8 raster, so
@@ -2017,7 +2017,7 @@ mod tests {
             center_lat: Some(0.0),
             center_lon: Some(0.0),
             window_m: Some(8.0),
-            pixel_scale_m: 2.0, // serde default — label's MAP_SCALE governs
+            pixel_scale_m: None, // label's MAP_SCALE supplies the source scale
             source_height_scale_m_per_unit: 1.0,
             source_height_offset_m: 0.0,
             src_min_lat: None, // absent on purpose: label extent must serve
@@ -2072,7 +2072,7 @@ mod tests {
             center_lat: Some(0.0),
             center_lon: Some(0.0),
             window_m: Some(16.0),
-            pixel_scale_m: 1.0,
+            pixel_scale_m: Some(1.0),
             source_height_scale_m_per_unit: 1.0,
             source_height_offset_m: 0.0,
             src_min_lat: Some(-1.0),
@@ -2133,7 +2133,7 @@ mod tests {
             center_lat: Some(0.0),
             center_lon: Some(0.0),
             window_m: Some(16.0),
-            pixel_scale_m: 1.0,
+            pixel_scale_m: Some(1.0),
             source_height_scale_m_per_unit: 1.0,
             source_height_offset_m: 0.0,
             src_min_lat: Some(-1.0),

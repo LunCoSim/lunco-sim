@@ -6,16 +6,26 @@ import "modelica_editor" as modelica_editor;
 import "assembly_builder" as assembly_builder;
 import "assembly_edit" as assembly_edit;
 
-fn analyze(path) {
-    query("AnalyzeSysml", #{path: path,
-        tables: ["constraints", "references", "relationships"]})
-}
+fn analyze(path) { sysml_analysis(path) }
 
-/// Load only the geometry attributes that the current solve policy consumes.
+/// Request only the geometry attributes this policy consumes. The generic
+/// projection filters the immutable SysML snapshot before constructing Rhai
+/// values; this policy owns the selected names and needs no Rust rebuild when
+/// the design inputs change.
 fn analyze_selected(path, attribute_names) {
-    query("AnalyzeSysml", #{path: path,
-        tables: ["constraints", "references", "relationships", "attributes"],
-        attribute_names: attribute_names})
+    let report = sysml_analysis(path);
+    if report == () || report.ok != true || report.analysis == () { return report; }
+    let selected = [];
+    for attribute in report.analysis.attributes {
+        for name in attribute_names {
+            if attribute.qualified_name == name || attribute.name == name {
+                selected.push(attribute);
+                break;
+            }
+        }
+    }
+    report.analysis.attributes = selected;
+    report
 }
 
 fn _short_name(qualified_name) {
@@ -23,9 +33,52 @@ fn _short_name(qualified_name) {
     parts[parts.len() - 1]
 }
 
-/// Select definitions, usages and relationship edges for the requested
-/// semantic constraint identities. This selection is intentionally Rhai
-/// policy, not part of the Rust source projection.
+fn _constraint_by_name(report, qualified_name, kind) {
+    for record in report.analysis.constraints {
+        if record.element.qualified_name == qualified_name
+            && (kind == "" || record.element.kind == kind) { return record; }
+    }
+    ()
+}
+
+fn _element_name(report, handle) {
+    for element in report.analysis.elements {
+        if element.handle == handle { return element.qualified_name; }
+    }
+    "<unmapped SysML element>"
+}
+
+fn _feature_for_owner_name(report, owner_handle, local_name) {
+    for attribute in report.analysis.attributes {
+        if attribute.owner_handle == owner_handle && attribute.name == local_name {
+            return attribute.handle;
+        }
+    }
+    for element in report.analysis.elements {
+        if element.owner_handle == owner_handle
+            && _short_name(element.qualified_name) == local_name
+            && type_of(element.feature_handle) == "SysmlFeatureHandle" {
+            return element.feature_handle;
+        }
+    }
+    ()
+}
+
+fn _attribute_for_feature(report, feature_handle) {
+    for attribute in report.analysis.attributes {
+        if attribute.handle == feature_handle { return attribute; }
+    }
+    ()
+}
+
+fn _contains_handle(handles, candidate) {
+    for handle in handles { if handle == candidate { return true; } }
+    false
+}
+
+/// Select definitions, usages and relationship edges from resolved native
+/// handles. Qualified names remain an explicit caller selector/display edge;
+/// no graph join is performed on text.
 fn select(report, requested) {
     if type_of(report) != "map" || report.ok != true
         || report.analysis == () || report.analysis.constraints == () {
@@ -42,53 +95,51 @@ fn select(report, requested) {
     }
 
     let definitions = [];
-    let definition_names = #{};
-    for record in report.analysis.constraints {
-        if record.element.kind != "ConstraintDefinition" { continue; }
-        let qualified_name = record.element.qualified_name;
-        let matched = false;
-        for identity in requested {
-            if qualified_name == identity { matched = true; }
-        }
-        if !matched { continue; }
-        if definition_names[qualified_name] == true { continue; }
-        definitions.push(record);
-        definition_names[qualified_name] = true;
+    let definition_handles = [];
+    for identity in requested {
+        let definition = _constraint_by_name(report, identity, "ConstraintDefinition");
+        if definition == () { continue; }
+        let handle = definition.element.handle;
+        if _contains_handle(definition_handles, handle) { continue; }
+        definitions.push(definition);
+        definition_handles.push(handle);
     }
     if definitions.is_empty() {
         return #{ok: false, error: "no matching SysML constraint definition"};
     }
 
     let usages = [];
-    let usage_names = #{};
+    let usage_handles = [];
     let related = [];
     let related_references = [];
     for reference in report.analysis.references {
-        if definition_names[reference.target] != true { continue; }
-        let usage_name = reference.from;
+        if !_contains_handle(definition_handles, reference.target) { continue; }
         for record in report.analysis.constraints {
             if record.element.kind == "ConstraintUsage"
-                && record.element.qualified_name == usage_name
-                && usage_names[usage_name] != true {
+                && record.element.handle == reference.from
+                && !_contains_handle(usage_handles, reference.from) {
                 usages.push(record);
-                usage_names[usage_name] = true;
+                usage_handles.push(reference.from);
                 related_references.push(reference);
             }
         }
     }
     for relationship in report.analysis.relationships {
-        if usage_names[relationship.element.qualified_name] == true {
-            related.push(relationship);
+        for usage in usages {
+            if relationship.element.owner_handle == usage.element.handle {
+                related.push(relationship);
+                break;
+            }
         }
     }
 
     let definition_edges = [];
     for relationship in report.analysis.relationships {
         let related_to_definition = false;
-        let related_to_usage = usage_names[relationship.element.qualified_name] == true;
+        let related_to_usage = _contains_handle(usage_handles, relationship.element.handle);
         for property in relationship.properties {
             for target in property.targets {
-                if definition_names[target] == true { related_to_definition = true; }
+                if _contains_handle(definition_handles, target) { related_to_definition = true; }
             }
         }
         if related_to_definition && !related_to_usage { definition_edges.push(relationship); }
@@ -101,15 +152,27 @@ fn select(report, requested) {
 
 /// Read exactly three length quantities authored in metres, then lower them
 /// to the shared f64 Bevy/Rhai Vec3. Unit conversion is not inferred here.
-fn position_m(report, qualified_name) {
+/// A qualified name is accepted only as a public selector; all later joins
+/// use the attribute's native feature and owner handles.
+fn position_m(report, feature_selector) {
     if type_of(report) != "map" || report.analysis == ()
         || report.analysis.attributes == () {
         return #{ok: false, error: "SysML analysis has no attribute records"};
     }
+    let selected = ();
     for attribute in report.analysis.attributes {
-        if attribute.qualified_name != qualified_name { continue; }
+        if type_of(feature_selector) == "SysmlFeatureHandle"
+            && attribute.handle == feature_selector { selected = attribute; break; }
+        if type_of(feature_selector) == "string"
+            && attribute.qualified_name == feature_selector { selected = attribute; break; }
+    }
+    if selected != () {
+        let attribute = selected;
+        let qualified_name = attribute.qualified_name;
         if attribute.declared_type == ()
-            || attribute.declared_type.quantity_kind != "Length"
+            || attribute.declared_type.is_quantity != true
+            || attribute.declared_type.quantity_kind == ()
+            || attribute.declared_type.quantity_kind.qualified_name != "ISQBase::LengthValue"
             || attribute.declared_type.dimensions.len() != 1
             || attribute.declared_type.dimensions[0] != 3 {
             return #{ok: false, error: "SysML position must be a fixed three-element length quantity: " + qualified_name};
@@ -125,55 +188,65 @@ fn position_m(report, qualified_name) {
             }
             values.push(element.number_value);
         }
-        return #{ok: true, value: vec3(values[0], values[1], values[2])};
+        return #{ok: true, value: vec3(values[0], values[1], values[2]),
+          feature: attribute.handle, owner: attribute.owner_handle,
+          display_name: attribute.qualified_name};
     }
-    #{ok: false, error: "SysML vector attribute is missing: " + qualified_name}
+    #{ok: false, error: "SysML vector feature is missing from the selected source snapshot"}
 }
 
 /// Resolve one constraint-definition input through a standard SysML binding
 /// connector. The relationship's typed ends carry the definition feature and
 /// the bound part feature; the reference graph ties the connector to the
 /// particular constraint usage in whose context it is declared.
-fn bound_vector(report, usage_name, input_name) {
+fn bound_vector(report, usage_selector, input_name) {
     if type_of(report) != "map" || report.analysis == ()
         || report.analysis.relationships == () || report.analysis.references == () {
         return #{ok: false, error: "SysML analysis has no binding relationship facts"};
     }
-    let definition = _definition_for_usage(report, usage_name);
+    let usage = if type_of(usage_selector) == "map" { usage_selector }
+        else { _constraint_by_name(report, usage_selector, "ConstraintUsage") };
+    if usage == () { return #{ok: false, error: "constraint usage selector did not resolve"}; }
+    let usage_handle = usage.element.handle;
+    let usage_name = usage.element.qualified_name;
+    let definition = _definition_for_usage(report, usage_handle);
     if definition == () {
         return #{ok: false, error: "constraint usage has no unique source definition: " + usage_name};
     }
-    let formal_name = definition.element.qualified_name + "::" + input_name;
+    let formal_handle = _feature_for_owner_name(
+        report, definition.element.handle, input_name);
+    if formal_handle == () {
+        return #{ok: false, error: "constraint definition input is not a resolved feature: " + input_name};
+    }
     let candidates = [];
     for relationship in report.analysis.relationships {
-        if relationship.element.kind != "BindingConnectorAsUsage" { continue; }
-        let belongs_to_usage = relationship.element.qualified_name
-            .starts_with(usage_name + "::");
+        if relationship.element.kind != "BindingConnector" { continue; }
+        let belongs_to_usage = relationship.element.owner_handle == usage_handle;
         let binds_formal = false;
         for reference in report.analysis.references {
-            if reference.from != relationship.element.qualified_name { continue; }
-            if reference.target == usage_name { belongs_to_usage = true; }
-            if reference.target == formal_name { binds_formal = true; }
+            if reference.from != relationship.element.handle { continue; }
+            if reference.target == usage_handle { belongs_to_usage = true; }
+            if reference.target == formal_handle.element { binds_formal = true; }
         }
         if !belongs_to_usage || !binds_formal { continue; }
 
         let related_features = ();
         for property in relationship.properties {
-            if property.name == "relatedFeature" { related_features = property.targets; }
+            if property.name == "relatedFeature" { related_features = property.feature_targets; }
         }
         if type_of(related_features) != "array" || related_features.len() != 2 {
             return #{ok: false, error: "binding connector must resolve to exactly two feature ends: "
                 + relationship.element.qualified_name};
         }
-        let bound_feature = "";
+        let bound_feature = ();
         for target in related_features {
-            if target != formal_name { bound_feature = target; }
+            if target.element != formal_handle.element { bound_feature = target; }
         }
-        if bound_feature == "" {
+        if bound_feature == () {
             return #{ok: false, error: "binding connector does not bind a distinct part feature: "
                 + relationship.element.qualified_name};
         }
-        candidates.push(#{binding: relationship.element.qualified_name, feature: bound_feature});
+        candidates.push(#{binding: relationship.element.handle, feature: bound_feature});
     }
     if candidates.len() != 1 {
         return #{ok: false, error: "expected one binding from " + usage_name + "." + input_name
@@ -182,24 +255,16 @@ fn bound_vector(report, usage_name, input_name) {
     let resolved = position_m(report, candidates[0].feature);
     if resolved.ok != true { return resolved; }
     #{ok: true, binding: candidates[0].binding,
-      feature: candidates[0].feature, value: resolved.value}
+      feature: candidates[0].feature, feature_name: resolved.display_name,
+      owner: resolved.owner, value: resolved.value}
 }
 
-fn _definition_for_usage(report, usage_name) {
-    let definition_name = "";
+fn _definition_for_usage(report, usage_handle) {
     for reference in report.analysis.references {
-        if reference.from != usage_name { continue; }
+        if reference.from != usage_handle { continue; }
         for constraint in report.analysis.constraints {
             if constraint.element.kind != "ConstraintDefinition"
-                || constraint.element.qualified_name != reference.target { continue; }
-            if definition_name != "" && definition_name != reference.target { return (); }
-            definition_name = reference.target;
-        }
-    }
-    if definition_name == "" { return (); }
-    for constraint in report.analysis.constraints {
-        if constraint.element.kind == "ConstraintDefinition"
-            && constraint.element.qualified_name == definition_name {
+                || constraint.element.handle != reference.target { continue; }
             return constraint;
         }
     }
@@ -226,7 +291,11 @@ fn assemble_segment(report, usage_name) {
     if type_of(report) != "map" || report.analysis == () {
         return #{ok: false, error: "SysML analysis is unavailable"};
     }
-    let definition = _definition_for_usage(report, usage_name);
+    let usage = _constraint_by_name(report, usage_name, "ConstraintUsage");
+    if usage == () {
+        return #{ok: false, error: "segment constraint usage selector did not resolve: " + usage_name};
+    }
+    let definition = _definition_for_usage(report, usage.element.handle);
     if definition == () || _short_name(definition.element.qualified_name) != "SegmentMember" {
         return #{ok: false, error: "constraint usage is not linked to the SegmentMember geometry policy: " + usage_name};
     }
@@ -234,7 +303,7 @@ fn assemble_segment(report, usage_name) {
     if selection.ok != true { return selection; }
     let start = bound_vector(report, usage_name, "start");
     if start.ok != true { return start; }
-    let finish = bound_vector(report, usage_name, "end");
+    let finish = bound_vector(report, usage_name, "finish");
     if finish.ok != true { return finish; }
 
     let source = "model SysmlSegmentConstraintSolve\n"
@@ -254,7 +323,10 @@ fn assemble_segment(report, usage_name) {
       constraint: definition.element.qualified_name,
       usage: usage_name, modelica_class: "LunCo.Geometry.Segment3D",
       start_feature: start.feature, end_feature: finish.feature,
+      start_feature_name: start.feature_name, end_feature_name: finish.feature_name,
       start_binding: start.binding, end_binding: finish.binding,
+      start_binding_name: _element_name(report, start.binding),
+      end_binding_name: _element_name(report, finish.binding),
       start: start.value, finish: finish.value}
 }
 
@@ -270,41 +342,301 @@ fn apply_segment(doc_id, parent_generation, report, usage_name) {
     #{ok: edit.ok == true, generated: generated, edit: edit}
 }
 
-/// Assemble a one-shot translation solve for a CoincidentPointTranslation
-/// usage. The moving and fixed point inputs are resolved from its standard
-/// SysML binding connectors rather than passed as duplicate caller data.
-fn assemble_coincident_translation(report, usage_name) {
+fn _is_feature_expression(expression, feature) {
+    type_of(expression) == "SysmlExpression"
+        && type_of(expression.feature) == "SysmlFeatureHandle"
+        && expression.feature == feature
+}
+
+fn _unwrap_expression_group(expression) {
+    let current = expression;
+    while type_of(current) == "SysmlExpression"
+        && current.feature == () && current.operator == ()
+        && current.integer_value == () && current.real_value == ()
+        && current.boolean_value == () && current.string_value == ()
+        && current.unsupported == () && current.children.len() == 1 {
+        current = current.children[0];
+    }
+    current
+}
+
+fn _coincident_translation_equation(report, definition) {
+    let moving = _feature_for_owner_name(report, definition.element.handle, "movingPoint");
+    let translation = _feature_for_owner_name(report, definition.element.handle, "translation");
+    let fixed = _feature_for_owner_name(report, definition.element.handle, "fixedPoint");
+    if moving == () || translation == () || fixed == () { return (); }
+    for expression in definition.expressions {
+        if type_of(expression) != "SysmlExpression"
+            || type_of(expression.operator) != "SysmlExpressionOperator"
+            || !expression.operator.is_equal() || expression.children.len() != 2 { continue; }
+        let lhs = _unwrap_expression_group(expression.children[0]);
+        let rhs = _unwrap_expression_group(expression.children[1]);
+        let sum = lhs;
+        let target = rhs;
+        if type_of(sum) == "SysmlExpression"
+            && type_of(sum.operator) == "SysmlExpressionOperator"
+            && sum.operator.is_add() && sum.children.len() == 2
+            && _is_feature_expression(target, fixed) {
+            let first = _unwrap_expression_group(sum.children[0]);
+            let second = _unwrap_expression_group(sum.children[1]);
+            if _is_feature_expression(first, moving)
+                && _is_feature_expression(second, translation) {
+                return #{ expression: expression, lhs: expression.children[0],
+                    rhs: expression.children[1], moving: moving,
+                    translation: translation, fixed: fixed };
+            }
+            if _is_feature_expression(first, translation)
+                && _is_feature_expression(second, moving) {
+                return #{ expression: expression, lhs: expression.children[0],
+                    rhs: expression.children[1], moving: moving,
+                    translation: translation, fixed: fixed };
+            }
+        }
+    }
+    ()
+}
+
+fn _modelica_scalar_expression(expression, axis, context) {
+    if type_of(expression) != "SysmlExpression" {
+        return #{ok: false, error: "constraint expression node is not typed SysML"};
+    }
+    if type_of(expression.feature) == "SysmlFeatureHandle" {
+        if expression.feature == context.moving_feature {
+            return #{ok: true, source: context.moving_name + "[" + axis.to_string() + "]"};
+        }
+        if expression.feature == context.translation_feature {
+            return #{ok: true, source: "translation[" + axis.to_string() + "]"};
+        }
+        if expression.feature == context.fixed_feature {
+            return #{ok: true, source: context.fixed_name + "[" + axis.to_string() + "]"};
+        }
+        return #{ok: false, error: "constraint references a feature outside the bound translation relation"};
+    }
+    if expression.integer_value != () {
+        return #{ok: true, source: expression.integer_value.to_string()};
+    }
+    if expression.real_value != () {
+        if type_of(expression.real_value) != "f64" || !expression.real_value.is_finite() {
+            return #{ok: false, error: "constraint contains a non-finite real literal"};
+        }
+        return #{ok: true, source: _modelica_real(expression.real_value)};
+    }
+    if expression.boolean_value != () {
+        return #{ok: true, source: if expression.boolean_value { "true" } else { "false" }};
+    }
+    if expression.unsupported != () {
+        return #{ok: false, error: "unsupported SysML expression at "
+            + expression.source.file + ":" + expression.source.start.to_string()};
+    }
+    let children = expression.children;
+    if children.len() == 1 {
+        let inner = _modelica_scalar_expression(children[0], axis, context);
+        if inner.ok != true { return inner; }
+        if expression.operator == () {
+            return #{ok: true, source: "(" + inner.source + ")"};
+        }
+        let symbol = expression.operator.modelica_symbol();
+        if type_of(symbol) != "string" {
+            return #{ok: false, error: "SysML unary operator has no supported Modelica spelling"};
+        }
+        return #{ok: true, source: "(" + symbol + " " + inner.source + ")"};
+    }
+    if children.len() == 2 {
+        if type_of(expression.operator) != "SysmlExpressionOperator"
+            || expression.operator.is_equal() {
+            return #{ok: false, error: "nested equality is not a scalar Modelica expression"};
+        }
+        let symbol = expression.operator.modelica_symbol();
+        if type_of(symbol) != "string" {
+            return #{ok: false, error: "SysML binary operator has no supported Modelica spelling"};
+        }
+        let lhs = _modelica_scalar_expression(children[0], axis, context);
+        if lhs.ok != true { return lhs; }
+        let rhs = _modelica_scalar_expression(children[1], axis, context);
+        if rhs.ok != true { return rhs; }
+        return #{ok: true, source: "(" + lhs.source + " " + symbol + " " + rhs.source + ")"};
+    }
+    #{ok: false, error: "constraint expression is not a supported scalar Modelica expression"}
+}
+
+/// Resolve and assemble one or more coincident-point usages that place the
+/// same component by one shared translation. The first relation anchors the
+/// three unknown DOFs. Every additional relation contributes a three-axis
+/// closure residual, so inconsistent datums are detected instead of silently
+/// overconstraining or moving the component to satisfy only the last mate.
+fn assemble_coincident_translation_set(report, usage_selectors) {
     if type_of(report) != "map" || report.analysis == () {
         return #{ok: false, error: "SysML analysis is unavailable"};
     }
-    let definition = _definition_for_usage(report, usage_name);
-    if definition == ()
-        || _short_name(definition.element.qualified_name) != "CoincidentPointTranslation" {
-        return #{ok: false, error: "constraint usage is not linked to the CoincidentPointTranslation geometry policy: " + usage_name};
+    if type_of(usage_selectors) != "array" || usage_selectors.is_empty() {
+        return #{ok: false, error: "at least one coincident-translation usage selector is required"};
     }
-    let selection = select(report, [definition.element.qualified_name]);
-    if selection.ok != true { return selection; }
-    let moving = bound_vector(report, usage_name, "movingPoint");
-    if moving.ok != true { return moving; }
-    let fixed = bound_vector(report, usage_name, "fixedPoint");
-    if fixed.ok != true { return fixed; }
 
-    let source = "model SysmlCoincidentPointTranslationSolve\n"
-        + "  LunCo.Geometry.CoincidentPointTranslation3D relation(\n"
-        + "    moving_point=" + _modelica_vec3(moving.value) + ",\n"
-        + "    fixed_point=" + _modelica_vec3(fixed.value) + ");\n"
-        + "  output Real translation[3](each unit=\"m\");\n"
-        + "equation\n"
-        + "  translation = relation.translation;\n"
-        + "end SysmlCoincidentPointTranslationSolve;\n";
-    #{ok: true, class: "SysmlCoincidentPointTranslationSolve", source: source,
+    let definitions = [];
+    let usages = [];
+    let moving_points = [];
+    let fixed_points = [];
+    let moving_features = [];
+    let fixed_features = [];
+    let moving_bindings = [];
+    let fixed_bindings = [];
+    let moving_feature_names = [];
+    let fixed_feature_names = [];
+    let usage_handles = [];
+    let definition_handle = ();
+    let common_moving_owner = ();
+    let common_fixed_owner = ();
+
+    for usage_selector in usage_selectors {
+        if type_of(usage_selector) != "string" {
+            return #{ok: false, error: "usage selectors must be qualified SysML names"};
+        }
+        let usage = _constraint_by_name(report, usage_selector, "ConstraintUsage");
+        if usage == () {
+            return #{ok: false, error: "coincident-translation usage is missing: " + usage_selector};
+        }
+        if _contains_handle(usage_handles, usage.element.handle) {
+            return #{ok: false, error: "a coincident-translation usage was selected more than once"};
+        }
+        let definition = _definition_for_usage(report, usage.element.handle);
+        if definition == ()
+            || _short_name(definition.element.qualified_name) != "CoincidentPointTranslation" {
+            return #{ok: false, error: "usage is not typed by CoincidentPointTranslation: " + usage_selector};
+        }
+        if definition_handle == () { definition_handle = definition.element.handle; }
+        else if definition.element.handle != definition_handle {
+            return #{ok: false, error: "all relations in one solve must share the same resolved constraint definition"};
+        }
+
+        let moving = bound_vector(report, usage, "movingPoint");
+        if moving.ok != true { return moving; }
+        let fixed = bound_vector(report, usage, "fixedPoint");
+        if fixed.ok != true { return fixed; }
+        if moving.owner == () || fixed.owner == () {
+            return #{ok: false, error: "bound datum features must have resolved semantic owners"};
+        }
+        if common_moving_owner == () { common_moving_owner = moving.owner; }
+        else if moving.owner != common_moving_owner {
+            return #{ok: false, error: "the relation set has more than one moving component owner"};
+        }
+        if common_fixed_owner == () { common_fixed_owner = fixed.owner; }
+        else if fixed.owner != common_fixed_owner {
+            return #{ok: false, error: "the relation set has more than one fixed-frame owner"};
+        }
+
+        definitions.push(definition);
+        usages.push(usage);
+        usage_handles.push(usage.element.handle);
+        moving_points.push(moving.value);
+        fixed_points.push(fixed.value);
+        moving_features.push(moving.feature);
+        fixed_features.push(fixed.feature);
+        moving_bindings.push(moving.binding);
+        fixed_bindings.push(fixed.binding);
+        moving_feature_names.push(moving.feature_name);
+        fixed_feature_names.push(fixed.feature_name);
+    }
+
+    let definition = definitions[0];
+    let equation = _coincident_translation_equation(report, definition);
+    if equation == () {
+        return #{ok: false, error: "resolved SysML constraint body is not movingPoint + translation == fixedPoint"};
+    }
+
+    let source = "model SysmlCoincidentPointTranslationSetSolve\n";
+    for relation_index in 0..usages.len() {
+        let modelica_index = relation_index + 1;
+        source += "  parameter Real movingPoint" + modelica_index.to_string()
+            + "[3](each unit=\"m\") = "
+            + _modelica_vec3(moving_points[relation_index]) + ";\n";
+        source += "  parameter Real fixedPoint" + modelica_index.to_string()
+            + "[3](each unit=\"m\") = "
+            + _modelica_vec3(fixed_points[relation_index]) + ";\n";
+    }
+    source += "  output Real translation[3](each unit=\"m\");\n";
+    let closure_count = 3 * (usages.len() - 1);
+    source += "  output Real relationResiduals[" + (3 * usages.len()).to_string()
+        + "](each unit=\"m\");\n";
+    source += "equation\n";
+    let relation_residual_outputs = [];
+    for relation_index in 0..usages.len() {
+        let modelica_index = relation_index + 1;
+        // Expression leaves identify the formal features owned by the
+        // ConstraintDefinition; the bound instance features above are a
+        // separate identity space used for source provenance and placement.
+        let context = #{moving_feature: equation.moving,
+            translation_feature: equation.translation,
+            fixed_feature: equation.fixed,
+            moving_name: "movingPoint" + modelica_index.to_string(),
+            fixed_name: "fixedPoint" + modelica_index.to_string()};
+        for axis in 1..4 {
+            let lhs = _modelica_scalar_expression(equation.lhs, axis, context);
+            if lhs.ok != true { return lhs; }
+            let rhs = _modelica_scalar_expression(equation.rhs, axis, context);
+            if rhs.ok != true { return rhs; }
+            if relation_index == 0 {
+                source += "  " + lhs.source + " = " + rhs.source + ";\n";
+            }
+            let residual_index = relation_index * 3 + axis;
+            let output_name = "relationResiduals[" + residual_index.to_string() + "]";
+            relation_residual_outputs.push(output_name);
+            source += "  " + output_name + " = (" + lhs.source + ") - ("
+                + rhs.source + ");\n";
+        }
+    }
+    source += "end SysmlCoincidentPointTranslationSetSolve;\n";
+
+    let relation_evidence = [];
+    for index in 0..usages.len() {
+        relation_evidence.push(#{
+            usage: usages[index].element.qualified_name,
+            usage_handle: usages[index].element.handle,
+            moving_feature: moving_features[index],
+            fixed_feature: fixed_features[index],
+            moving_feature_name: moving_feature_names[index],
+            fixed_feature_name: fixed_feature_names[index],
+            moving_binding: moving_bindings[index],
+            fixed_binding: fixed_bindings[index],
+            moving_point: moving_points[index],
+            fixed_point: fixed_points[index]
+        });
+    }
+    let experiment_outputs = ["translation[1]", "translation[2]", "translation[3]"];
+    experiment_outputs += relation_residual_outputs;
+    #{ok: true, class: "SysmlCoincidentPointTranslationSetSolve", source: source,
       source_revision_hex: report.analysis.source_revision_hex,
+      source_fingerprint: report.analysis.source_fingerprint,
       constraint: definition.element.qualified_name,
-      usage: usage_name,
-      modelica_class: "LunCo.Geometry.CoincidentPointTranslation3D",
-      moving_feature: moving.feature, fixed_feature: fixed.feature,
-      moving_binding: moving.binding, fixed_binding: fixed.binding,
-      moving_point: moving.value, fixed_point: fixed.value}
+      usage: usages[0].element.qualified_name,
+      usages: usages.map(|record| record.element.qualified_name),
+      relation_count: usages.len(), relations: relation_evidence,
+      modelica_class: "SysmlCoincidentPointTranslationSetSolve",
+      equation_origin: "resolved SysML constraint expression tree",
+      numerical_backend: "Rumoca Modelica DAE",
+      moving_point: moving_points[0], fixed_point: fixed_points[0],
+      moving_points: moving_points, fixed_points: fixed_points,
+      moving_owner: common_moving_owner, fixed_owner: common_fixed_owner,
+      initial_translation_dof: 3, constraint_jacobian_rank: 3,
+      remaining_translation_dof: 0, closure_equation_count: closure_count,
+      relation_residual_outputs: relation_residual_outputs,
+      experiment_outputs: experiment_outputs}
+}
+
+/// Compatibility-shaped single relation helper; it delegates to the same
+/// relation-set policy and exposes display strings only in its report fields.
+fn assemble_coincident_translation(report, usage_name) {
+    let generated = assemble_coincident_translation_set(report, [usage_name]);
+    if generated.ok != true { return generated; }
+    let relation = generated.relations[0];
+    generated.moving_feature = relation.moving_feature;
+    generated.fixed_feature = relation.fixed_feature;
+    generated.moving_feature_name = relation.moving_feature_name;
+    generated.fixed_feature_name = relation.fixed_feature_name;
+    generated.moving_binding = relation.moving_binding;
+    generated.fixed_binding = relation.fixed_binding;
+    generated.moving_binding_name = _element_name(report, relation.moving_binding);
+    generated.fixed_binding_name = _element_name(report, relation.fixed_binding);
+    generated
 }
 
 /// Apply the generated translation model to one explicit Modelica Editor
@@ -337,20 +669,46 @@ fn begin_coincident_translation(doc_id, parent_generation, report, usage_name) {
             error: "Modelica Editor rejected the generated constraint source",
             generated: generated, edit: edit };
     }
-    let after = query("GetDocumentSource", #{ doc_id: doc_id });
+    if edit.status != "pending" && edit.status != "applied" {
+        return #{ ok: false, stage: "source", retryable: false,
+            error: "Modelica source replacement did not reach the applied state",
+            generated: generated, edit: edit };
+    }
+    if edit.status == "pending" && edit.id == () {
+        return #{ ok: false, stage: "source", retryable: false,
+            error: "pending Modelica source replacement omitted its command identity",
+            generated: generated, edit: edit };
+    }
+    let state = if edit.status == "pending" { "source_apply" } else { "source_readback" };
+    #{ ok: true, pending: true, complete: false, stage: state,
+       generated: generated, edit: edit,
+       ticket: #{ stage: state, doc_id: doc_id,
+           parent_generation: parent_generation, command_id: edit.id,
+           poll_count: 0, edit: edit } }
+}
+
+fn _coincident_translation_experiment_ticket(doc_id, parent_generation, generated, edit, after) {
     if after == () || after.ok == false || after.source != generated.source
         || after.generation == () || after.generation <= parent_generation {
+        let actual_generation = if after == () { "unavailable" }
+            else if after.generation == () { "unavailable" }
+            else { after.generation.to_string() };
+        let actual_length = if after == () || after.source == () { -1 }
+            else { after.source.len() };
         return #{ ok: false, stage: "source_readback", retryable: false,
-            error: "Modelica Editor source readback did not match the generated wrapper",
+            error: "Modelica Editor source readback mismatched generated wrapper (expected generation > "
+                + parent_generation.to_string() + ", actual generation " + actual_generation
+                + ", expected bytes " + generated.source.len().to_string()
+                + ", actual bytes " + actual_length.to_string() + ")",
             generated: generated, edit: edit, inspection: after };
     }
     // `label` is for the Experiments UI only; execution identity comes from
     // the deferred RunExperiment acknowledgement, never from name matching.
     let label = "SysML geometry solve: " + generated.source_revision_hex
-        + " / " + usage_name;
+        + " / " + generated.usage;
     let ticket = modelica_editor::experiment_ticket(
         doc_id, generated.class, after.generation, label,
-        ["translation[1]", "translation[2]", "translation[3]"],
+        generated.experiment_outputs,
         0.0, 0.01, 0.01, 1800);
     if ticket == () || ticket.ok != true {
         return #{ ok: false, stage: "ticket", retryable: false,
@@ -374,10 +732,16 @@ fn coincident_translation_readback(generated, completed) {
     }
     let result = completed.result;
     let source = query("GetDocumentSource", #{ doc_id: completed.ticket.doc_id });
-    if source == () || source.ok != true
+    if source == () || source.ok == false
         || source.generation != completed.ticket.source_generation {
         return #{ ok: false, stage: "readback",
-            error: "Modelica source generation changed before placement readback" };
+            error: "Modelica source generation changed before placement readback (expected "
+                + completed.ticket.source_generation.to_string() + ", observed "
+                + if source == () || source.generation == () { "unavailable" }
+                  else { source.generation.to_string() },
+            expected_generation: completed.ticket.source_generation,
+            observed_generation: if source == () { () } else { source.generation },
+            source_snapshot: source };
     }
     if result.state != "done" || result.times == () || result.times.is_empty()
         || result.series == () {
@@ -397,16 +761,51 @@ fn coincident_translation_readback(generated, completed) {
         components.push(value);
     }
     let translation = vec3(components[0], components[1], components[2]);
-    let residual = vsub(vadd(generated.moving_point, translation), generated.fixed_point);
-    if vlen(residual) > 1.0e-9 {
-        return #{ ok: false, stage: "equation_check",
-            error: "Modelica translation does not close the source-bound coincidence equation",
-            translation: translation, residual: residual };
+    let relation_residuals = [];
+    let all_closed = true;
+    for relation_index in 0..generated.relations.len() {
+        let relation = generated.relations[relation_index];
+        let residual_components = [];
+        for axis in 1..4 {
+            let sample_index = relation_index * 3 + axis;
+            let name = "relationResiduals[" + sample_index.to_string() + "]";
+            let samples = result.series[name];
+            if type_of(samples) != "array" || samples.is_empty() {
+                return #{ ok: false, stage: "readback",
+                    error: "missing Modelica relation residual output " + name };
+            }
+            let value = samples[samples.len() - 1];
+            if type_of(value) != "f64" || !value.is_finite() {
+                return #{ ok: false, stage: "readback",
+                    error: "Modelica relation residual is not finite f64 data: " + name };
+            }
+            residual_components.push(value);
+        }
+        let residual = vec3(residual_components[0], residual_components[1], residual_components[2]);
+        let satisfied = vlen(residual) <= 1.0e-9;
+        if !satisfied { all_closed = false; }
+        relation_residuals.push(#{usage: relation.usage,
+            usage_handle: relation.usage_handle,
+            moving_feature: relation.moving_feature,
+            fixed_feature: relation.fixed_feature,
+            residual: residual, residual_m: vlen(residual),
+            satisfied: satisfied});
     }
-    #{ ok: true, kind: "coincident_translation_solution",
-       translation: translation, units: "m", residual: residual,
+    let dof = #{initial: generated.initial_translation_dof,
+        rank: generated.constraint_jacobian_rank,
+        remaining: generated.remaining_translation_dof,
+        closure_equations: generated.closure_equation_count};
+    if !all_closed {
+        return #{ok: false, stage: "equation_check",
+            error: "the shared translation does not close every source-bound SysML relation",
+            translation: translation, relation_residuals: relation_residuals, dof: dof};
+    }
+    #{ ok: true, kind: "coincident_translation_set_solution",
+       translation: translation, units: "m", residual: relation_residuals[0].residual,
+       relation_residuals: relation_residuals, relation_count: generated.relation_count,
+       dof: dof,
        moving_point: generated.moving_point, fixed_point: generated.fixed_point,
-       constraint: generated.constraint, usage: generated.usage,
+       constraint: generated.constraint, usage: generated.usage, usages: generated.usages,
        source_revision_hex: generated.source_revision_hex,
        modelica_doc_id: completed.ticket.doc_id,
        source_generation: completed.ticket.source_generation,
@@ -414,9 +813,75 @@ fn coincident_translation_readback(generated, completed) {
        sample_time: result.times[result.times.len() - 1], result: result }
 }
 
-/// Advance one solve ticket. A pending result is an ordinary state, not a
-/// failed compile and not a reason to block the simulation/editor thread.
+/// Advance one source-application or Modelica solve ticket. Deferred document
+/// edits are polled through the shared command-result API before the generated
+/// wrapper is inspected or dispatched; pending remains non-blocking.
 fn poll_coincident_translation(ticket, generated) {
+    if type_of(ticket) != "map" || ticket.stage == () {
+        return #{ ok: false, stage: "ticket", retryable: false,
+            error: "a source-application or Modelica experiment ticket is required" };
+    }
+    if ticket.stage == "source_apply" {
+        ticket.poll_count += 1;
+        let command = command_result(ticket.command_id);
+        if command == () || command.status == "pending" {
+            if ticket.poll_count > 300 {
+                return #{ ok: false, stage: "source_apply", retryable: true,
+                    error: "Modelica source replacement exceeded its bounded command-poll budget",
+                    ticket: ticket, command: command };
+            }
+            return #{ ok: true, pending: true, complete: false,
+                stage: "source_apply", ticket: ticket, command: command };
+        }
+        if command.ok != true || command.status != "applied" {
+            let message = if command.error == () {
+                "Modelica source replacement did not complete successfully"
+            } else {
+                command.error
+            };
+            return #{ ok: false, stage: "source_apply", retryable: false,
+                error: message, ticket: ticket, command: command };
+        }
+        ticket.stage = "source_readback";
+        ticket.poll_count = 0;
+        ticket.edit = command;
+        return #{ ok: true, pending: true, complete: false,
+            stage: "source_readback", ticket: ticket, command: command };
+    }
+    if ticket.stage == "source_readback" {
+        ticket.poll_count += 1;
+        let after = query("GetDocumentSource", #{ doc_id: ticket.doc_id });
+        if after != () && after.ok != false && after.generation != ()
+            && after.generation > ticket.parent_generation
+            && after.source == generated.source {
+            let prepared = _coincident_translation_experiment_ticket(
+                ticket.doc_id, ticket.parent_generation, generated, ticket.edit, after);
+            if prepared.ok != true { return prepared; }
+            ticket = prepared.ticket;
+        } else {
+            if after != () && after.ok != false && after.generation != ()
+                && after.generation > ticket.parent_generation
+                && after.source != generated.source {
+                return #{ ok: false, stage: "source_readback", retryable: false,
+                    error: "Modelica document advanced to a different source before constraint readback",
+                    ticket: ticket, inspection: after };
+            }
+            if ticket.poll_count > 300 {
+                let actual_generation = if after == () || after.generation == () {
+                    "unavailable"
+                } else {
+                    after.generation.to_string()
+                };
+                return #{ ok: false, stage: "source_readback", retryable: true,
+                    error: "Modelica source replacement exceeded its bounded readback budget (expected generation > "
+                        + ticket.parent_generation.to_string() + ", actual generation "
+                        + actual_generation + ")",
+                    ticket: ticket, inspection: after };
+            }
+            return #{ ok: true, pending: true, complete: false,
+                stage: "source_readback", ticket: ticket, inspection: after };
+        }
+    }
     let progress = modelica_editor::poll_experiment_ticket(ticket);
     if progress == () || progress.ok != true { return progress; }
     if progress.pending == true {
@@ -460,7 +925,7 @@ fn coincident_translation_placement_plan(doc_id, edit_target, path,
         return #{ ok: false, stage: "plan", error: "USD document generation changed before placement planning", inspection: document };
     }
     let modelica_source = query("GetDocumentSource", #{ doc_id: solution.modelica_doc_id });
-    if modelica_source == () || modelica_source.ok != true
+    if modelica_source == () || modelica_source.ok == false
         || modelica_source.generation != solution.source_generation {
         return #{ ok: false, stage: "modelica_source",
             error: "Modelica source generation changed before placement planning",

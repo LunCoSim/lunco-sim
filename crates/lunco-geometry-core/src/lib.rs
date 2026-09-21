@@ -5,3 +5,4 @@
 
 pub mod bounds;
 pub mod profile_extrusion;
+pub mod profile_revolution;

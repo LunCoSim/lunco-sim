@@ -4,8 +4,9 @@
 //! (`{ name?, steps: [...] }`). This module gives timelines the same durable,
 //! discoverable treatment shared tool libraries get (the sibling
 //! `lunco-scripting-rhai-world::tool_libs` registry): named timelines persist
-//! as `<twin>/timelines/*.json` files (the file is the source of truth, loaded
-//! on active Twin open), and the API can enumerate / fetch / run them by name.
+//! as `<twin>/timelines/*.json` files (the file is the source of truth, selected
+//! by the active Twin's Rhai loading policy), and the API can enumerate / fetch
+//! / run them by name.
 //!
 //! Unlike tool libraries — which must be reachable from the rhai engine OUTSIDE
 //! the ECS (hence a process-global static) — timelines are plain data only ever
@@ -14,13 +15,14 @@
 
 #![cfg(feature = "rhai")]
 
+use bevy::asset::{AssetEvent, AssetLoadFailedEvent};
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::{ApiQueryError, ApiQueryResult};
 use lunco_api_core::ApiErrorCode;
 use lunco_api_core::{ApiValue, IntoApiValue, api_value_from_serializable};
 use lunco_scripting::ScenarioParameters;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The owner of the currently addressable timeline set.
 ///
@@ -47,7 +49,8 @@ pub struct TimelineOwnerMismatch {
 }
 
 /// In-memory store of named typed mission timelines, mirrored to
-/// `<twin>/timelines/*.json` on disk. Populated on Twin open and by
+/// `<twin>/timelines/*.json` on disk. Populated by the active Twin's loading
+/// policy and by
 /// `RegisterTimeline`; read by `ListTimelines` / `GetTimeline` / `RunStoredTimeline`.
 #[derive(Resource, Default)]
 pub struct TimelineStore {
@@ -129,42 +132,298 @@ impl TimelineStore {
 /// Sub-directory under a Twin root that holds saved mission timelines.
 pub const TIMELINES_DIR: &str = "timelines";
 
-/// Scan `<root>/timelines/*.json` → `(name, timeline)` for each valid file.
-/// A single unreadable file is logged and skipped, never blocking the rest. A
-/// missing dir is the common case (twin has none) → empty, not an error.
-/// Native-only.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn load_timelines_from_dir(root: &std::path::Path) -> Vec<(String, ScenarioParameters)> {
-    let dir = root.join(TIMELINES_DIR);
-    let mut loaded = Vec::new();
-    let entries = match lunco_storage::read_directory_sync(&dir) {
-        Ok(entries) => entries,
-        Err(lunco_storage::StorageError::NotFound) => return loaded,
-        Err(error) => {
-            warn!("[timelines] failed to list {}: {error}", dir.display());
-            return loaded;
-        }
-    };
-    for path in entries {
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        let result = lunco_storage::read_file_sync(&path)
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| {
-                serde_json::from_slice::<ScenarioParameters>(&bytes)
-                    .map_err(|error| error.to_string())
-            });
-        match result {
-            Ok(timeline) => loaded.push((name.to_string(), timeline)),
-            Err(error) => warn!("[timelines] failed to load {}: {error}", path.display()),
+/// Replace the active Twin's addressable timeline scope before loading files.
+#[lunco_core::Command(default)]
+pub struct ActivateTwinTimelineScope {
+    /// Workspace identity of the active Twin.
+    pub twin_id: u64,
+}
+
+/// Load one indexed timeline file selected by the Twin loading policy.
+#[lunco_core::Command(default)]
+pub struct LoadTwinTimelineFile {
+    /// Workspace identity of the active Twin.
+    pub twin_id: u64,
+    /// Exact `twin://` authority returned by the asset owner.
+    pub name: String,
+    /// Timeline name exposed through `ListTimelines`.
+    pub timeline_name: String,
+    /// Indexed JSON file relative to the Twin root.
+    pub relative_path: String,
+}
+
+struct PendingTwinTimeline {
+    handle: Handle<lunco_assets_runtime::TextAsset>,
+    twin: lunco_workspace::TwinId,
+    timeline_name: String,
+    relative_path: String,
+}
+
+/// Async timeline text assets requested by the authored Twin policy.
+#[derive(Resource, Default)]
+pub struct PendingTwinTimelines {
+    items: Vec<PendingTwinTimeline>,
+    ready: HashSet<bevy::asset::AssetId<lunco_assets_runtime::TextAsset>>,
+    failed: HashMap<bevy::asset::AssetId<lunco_assets_runtime::TextAsset>, String>,
+}
+
+impl PendingTwinTimelines {
+    fn mark_ready(&mut self, id: bevy::asset::AssetId<lunco_assets_runtime::TextAsset>) {
+        if self.items.iter().any(|item| item.handle.id() == id) {
+            self.ready.insert(id);
         }
     }
-    loaded.sort_by(|a, b| a.0.cmp(&b.0));
-    loaded
+
+    fn mark_failed(
+        &mut self,
+        id: bevy::asset::AssetId<lunco_assets_runtime::TextAsset>,
+        error: String,
+    ) {
+        if self.items.iter().any(|item| item.handle.id() == id) {
+            self.failed.insert(id, error);
+        }
+    }
+
+    fn release_twin(&mut self, twin: lunco_workspace::TwinId) {
+        self.items.retain(|item| item.twin != twin);
+        let live = self
+            .items
+            .iter()
+            .map(|item| item.handle.id())
+            .collect::<HashSet<_>>();
+        self.ready.retain(|id| live.contains(id));
+        self.failed.retain(|id, _| live.contains(id));
+    }
+}
+
+#[lunco_core::on_command(ActivateTwinTimelineScope)]
+fn on_activate_twin_timeline_scope(
+    trigger: bevy::ecs::observer::On<ActivateTwinTimelineScope>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut store: ResMut<TimelineStore>,
+    mut pending: ResMut<PendingTwinTimelines>,
+) -> Result<lunco_command_contracts::Ack, String> {
+    let twin_id = lunco_workspace::TwinId::new(trigger.event().twin_id);
+    let is_active = workspace
+        .as_deref()
+        .is_some_and(|workspace| workspace.active_twin == Some(twin_id));
+    if !is_active {
+        return Err(format!("Twin {} is not active", trigger.event().twin_id));
+    }
+    pending.release_twin(twin_id);
+    store.replace_scope(TimelineOwner::Twin(twin_id), std::iter::empty());
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
+}
+
+#[lunco_core::on_command(LoadTwinTimelineFile)]
+fn on_load_twin_timeline_file(
+    trigger: bevy::ecs::observer::On<LoadTwinTimelineFile>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
+    asset_server: Option<Res<AssetServer>>,
+    assets: Option<Res<Assets<lunco_assets_runtime::TextAsset>>>,
+    mut pending: ResMut<PendingTwinTimelines>,
+) -> Result<lunco_command_contracts::Ack, String> {
+    let request = trigger.event();
+    let twin_id = lunco_workspace::TwinId::new(request.twin_id);
+    let twin = workspace
+        .as_deref()
+        .and_then(|workspace| workspace.twin(twin_id))
+        .ok_or_else(|| format!("workspace Twin {} is unavailable", request.twin_id))?;
+    if workspace
+        .as_deref()
+        .is_none_or(|workspace| workspace.active_twin != Some(twin_id))
+    {
+        return Err(format!("Twin {} is not active", request.twin_id));
+    }
+    let relative = std::path::Path::new(&request.relative_path);
+    if !lunco_assets_path::is_safe_relative_path(&request.relative_path)
+        || !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        || relative.parent() != Some(std::path::Path::new(TIMELINES_DIR))
+        || relative
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("json")
+    {
+        return Err(format!(
+            "Twin timeline path `{}` must be a safe `timelines/<name>.json` file",
+            request.relative_path
+        ));
+    }
+    if !twin
+        .files()
+        .iter()
+        .any(|entry| entry.relative_path.as_path() == relative)
+    {
+        return Err(format!(
+            "Twin timeline path `{}` is not indexed",
+            request.relative_path
+        ));
+    }
+    lunco_scripting_rhai_core::names::validate_file_stem(&request.timeline_name)
+        .map_err(|error| format!("invalid Twin timeline name: {error}"))?;
+    if relative.file_stem().and_then(|stem| stem.to_str()) != Some(request.timeline_name.as_str()) {
+        return Err(format!(
+            "Twin timeline name `{}` must match `{}`",
+            request.timeline_name, request.relative_path
+        ));
+    }
+    let authority = roots
+        .as_deref()
+        .and_then(|roots| roots.name_for_root(&twin.root).ok().flatten())
+        .ok_or_else(|| format!("Twin asset authority `{}` is unavailable", request.name))?;
+    if authority != request.name {
+        return Err(format!(
+            "Twin asset authority `{}` does not belong to Twin {}",
+            request.name, request.twin_id
+        ));
+    }
+    let asset_server = asset_server.ok_or_else(|| "AssetServer is not installed".to_owned())?;
+    if pending
+        .items
+        .iter()
+        .any(|item| item.twin == twin_id && item.relative_path == request.relative_path)
+    {
+        return Ok(lunco_command_contracts::Ack::new(
+            lunco_command_contracts::OpId::new(),
+        ));
+    }
+    let handle = asset_server.load::<lunco_assets_runtime::TextAsset>(lunco_assets_core::twin_uri(
+        &request.name,
+        &request.relative_path,
+    ));
+    let id = handle.id();
+    if assets
+        .as_deref()
+        .is_some_and(|assets| assets.get(id).is_some())
+    {
+        pending.ready.insert(id);
+    }
+    let failed = asset_server
+        .get_load_state(id)
+        .is_some_and(|state| state.is_failed());
+    pending.items.push(PendingTwinTimeline {
+        handle,
+        twin: twin_id,
+        timeline_name: request.timeline_name.clone(),
+        relative_path: request.relative_path.clone(),
+    });
+    if failed {
+        pending.mark_failed(id, "the source asset had already failed to load".into());
+    }
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
+}
+
+fn mark_pending_twin_timelines(
+    mut pending: ResMut<PendingTwinTimelines>,
+    mut events: MessageReader<AssetEvent<lunco_assets_runtime::TextAsset>>,
+    mut failures: MessageReader<AssetLoadFailedEvent<lunco_assets_runtime::TextAsset>>,
+) {
+    for event in events.read() {
+        match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => pending.mark_ready(*id),
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => pending.mark_failed(
+                *id,
+                "Twin timeline text asset was removed before reading".to_owned(),
+            ),
+        }
+    }
+    for failure in failures.read() {
+        pending.mark_failed(failure.id, failure.error.to_string());
+    }
+}
+
+fn drain_pending_twin_timelines(
+    mut pending: ResMut<PendingTwinTimelines>,
+    mut store: ResMut<TimelineStore>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    assets: Option<Res<Assets<lunco_assets_runtime::TextAsset>>>,
+) {
+    let Some(assets) = assets else {
+        return;
+    };
+    let ready = std::mem::take(&mut pending.ready);
+    let failed = std::mem::take(&mut pending.failed);
+    let items = std::mem::take(&mut pending.items);
+    let mut still_pending = Vec::new();
+    for item in items {
+        let id = item.handle.id();
+        if let Some(error) = failed.get(&id) {
+            warn!(
+                "[timelines] failed to load `{}`: {error}",
+                item.relative_path
+            );
+            continue;
+        }
+        if !ready.contains(&id) {
+            still_pending.push(item);
+            continue;
+        }
+        let Some(source) = assets.get(&item.handle) else {
+            warn!(
+                "[timelines] `{}` became ready without text",
+                item.relative_path
+            );
+            continue;
+        };
+        if !workspace
+            .as_deref()
+            .is_some_and(|workspace| workspace.active_twin == Some(item.twin))
+        {
+            continue;
+        }
+        let timeline: ScenarioParameters = match serde_json::from_str(&source.text) {
+            Ok(timeline) => timeline,
+            Err(error) => {
+                warn!("[timelines] invalid `{}`: {error}", item.relative_path);
+                continue;
+            }
+        };
+        if let Err(error) = crate::commands::timeline_step_count(&timeline) {
+            warn!("[timelines] invalid `{}`: {error}", item.relative_path);
+            continue;
+        }
+        if let Err(error) =
+            store.insert_for(TimelineOwner::Twin(item.twin), item.timeline_name, timeline)
+        {
+            warn!(
+                "[timelines] cannot install `{}`: {error:?}",
+                item.relative_path
+            );
+        }
+    }
+    pending.items = still_pending;
+}
+
+fn release_twin_timelines(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut pending: ResMut<PendingTwinTimelines>,
+    mut store: ResMut<TimelineStore>,
+) {
+    let closed = trigger.event().twin;
+    pending.release_twin(closed);
+    store.clear_for(TimelineOwner::Twin(closed));
+}
+
+lunco_core::register_commands!(on_activate_twin_timeline_scope, on_load_twin_timeline_file);
+
+/// Register the typed Twin timeline loader and its async text-asset lifecycle.
+pub fn register_twin_timeline_loading(app: &mut App) {
+    app.init_resource::<PendingTwinTimelines>()
+        .add_observer(release_twin_timelines)
+        .add_systems(
+            Update,
+            (mark_pending_twin_timelines, drain_pending_twin_timelines).chain(),
+        );
+    register_all_commands(app);
 }
 
 /// Persist a typed timeline to `<root>/timelines/<name>.json` (creating the dir
@@ -200,66 +459,6 @@ pub fn active_owner(
             .ok_or_else(|| "no active Twin".to_string()),
         None => Ok(TimelineOwner::Session),
     }
-}
-
-/// Observer: on Twin open, replace the store with that active Twin's
-/// timelines. A non-active Twin is only a workspace entry and must not mutate
-/// the active runtime's addressable names.
-pub fn sync_timelines_on_twin_added(
-    trigger: On<lunco_workspace::TwinAdded>,
-    ws: Option<Res<lunco_workspace::WorkspaceResource>>,
-    mut store: ResMut<TimelineStore>,
-) {
-    let twin_id = trigger.event().twin;
-    let Some(ws) = ws.as_deref() else {
-        return;
-    };
-    if ws.active_twin != Some(twin_id) {
-        return;
-    }
-    let Some(twin) = ws.twin(twin_id) else {
-        return;
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let loaded = load_timelines_from_dir(&twin.root);
-    #[cfg(target_arch = "wasm32")]
-    let loaded = Vec::new();
-    let count = loaded.len();
-    store.replace_scope(TimelineOwner::Twin(twin_id), loaded);
-    if count > 0 {
-        info!(
-            "[timelines] loaded {count} timeline{} from Twin",
-            if count == 1 { "" } else { "s" }
-        );
-    }
-}
-
-/// Observer: close the old active scope and, when Workspace promotion selects
-/// another Twin, load that Twin as the new addressable scope. Closing a
-/// non-active Twin cannot clear the active store.
-pub fn wind_down_timelines_on_twin_closed(
-    trigger: On<lunco_workspace::TwinClosed>,
-    ws: Option<Res<lunco_workspace::WorkspaceResource>>,
-    mut store: ResMut<TimelineStore>,
-) {
-    let closed = TimelineOwner::Twin(trigger.event().twin);
-    if !store.clear_for(closed) {
-        return;
-    }
-    let Some(ws) = ws.as_deref() else {
-        return;
-    };
-    let Some(active) = ws.active_twin else {
-        return;
-    };
-    let Some(twin) = ws.twin(active) else {
-        return;
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let loaded = load_timelines_from_dir(&twin.root);
-    #[cfg(target_arch = "wasm32")]
-    let loaded = Vec::new();
-    store.replace_scope(TimelineOwner::Twin(active), loaded);
 }
 
 // ── API discovery surface ────────────────────────────────────────────────────
@@ -350,7 +549,7 @@ mod tests {
         serde_json::from_str(r#"{"steps":[{"wait":1.0}]}"#).expect("typed timeline fixture")
     }
 
-    /// `save_timeline_file` → `load_timelines_from_dir` round-trips typed data.
+    /// Timeline persistence keeps the authored typed JSON representation.
     #[test]
     fn timeline_file_save_load_roundtrip() {
         let temp = tempfile::tempdir().expect("timeline test directory");
@@ -361,16 +560,9 @@ mod tests {
         assert!(lunco_storage::read_file_sync(&path).is_ok());
         assert_eq!(path, root.join("timelines").join("approach.json"));
 
-        let loaded = load_timelines_from_dir(root);
-        assert_eq!(loaded, vec![("approach".to_string(), source)]);
-    }
-
-    /// A missing `timelines/` dir yields nothing, not an error.
-    #[test]
-    fn missing_timelines_dir_is_empty_not_error() {
-        let temp = tempfile::tempdir().expect("timeline test directory");
-        let root = temp.path();
-        assert!(load_timelines_from_dir(&root).is_empty());
+        let stored = lunco_storage::read_file_sync(&path).expect("saved timeline bytes");
+        let loaded: ScenarioParameters = serde_json::from_slice(&stored).unwrap();
+        assert_eq!(loaded, source);
     }
 
     #[test]
@@ -401,63 +593,5 @@ mod tests {
         assert!(!store.clear_for(first));
         assert!(store.insert_for(first, "stale", timeline()).is_err());
         assert_eq!(store.get("current"), Some(&current));
-    }
-
-    #[test]
-    fn twin_events_replace_the_runtime_timeline_scope() {
-        let root_temp = tempfile::tempdir().expect("first Twin directory");
-        let replacement_temp = tempfile::tempdir().expect("replacement Twin directory");
-        let root = root_temp.path().to_path_buf();
-        let replacement = replacement_temp.path().to_path_buf();
-        let old_timeline = timeline();
-        let new_timeline = timeline();
-        save_timeline_file(&root, "old", &old_timeline).unwrap();
-        save_timeline_file(&replacement, "new", &new_timeline).unwrap();
-
-        let first_twin = match lunco_workspace::TwinMode::open(&root).unwrap() {
-            lunco_workspace::TwinMode::Folder(twin) | lunco_workspace::TwinMode::Twin(twin) => twin,
-            lunco_workspace::TwinMode::Orphan(_) => panic!("test root must be a folder"),
-        };
-        let second_twin = match lunco_workspace::TwinMode::open(&replacement).unwrap() {
-            lunco_workspace::TwinMode::Folder(twin) | lunco_workspace::TwinMode::Twin(twin) => twin,
-            lunco_workspace::TwinMode::Orphan(_) => panic!("test root must be a folder"),
-        };
-
-        let mut app = App::new();
-        app.insert_resource(lunco_workspace::WorkspaceResource::new());
-        app.init_resource::<TimelineStore>();
-        app.add_observer(sync_timelines_on_twin_added);
-        app.add_observer(wind_down_timelines_on_twin_closed);
-        let first_id = app
-            .world_mut()
-            .resource_mut::<lunco_workspace::WorkspaceResource>()
-            .add_twin(first_twin);
-        app.world_mut()
-            .trigger(lunco_workspace::TwinAdded { twin: first_id });
-        assert_eq!(
-            app.world().resource::<TimelineStore>().get("old"),
-            Some(&old_timeline)
-        );
-
-        let mut workspace = app
-            .world_mut()
-            .resource_mut::<lunco_workspace::WorkspaceResource>();
-        workspace.close_twin(first_id);
-        app.world_mut().trigger(lunco_workspace::TwinClosed {
-            twin: first_id,
-            root: root.clone(),
-            was_active: true,
-        });
-        let second_id = app
-            .world_mut()
-            .resource_mut::<lunco_workspace::WorkspaceResource>()
-            .add_twin(second_twin);
-        app.world_mut()
-            .trigger(lunco_workspace::TwinAdded { twin: second_id });
-
-        let store = app.world().resource::<TimelineStore>();
-        assert_eq!(store.owner(), Some(TimelineOwner::Twin(second_id)));
-        assert_eq!(store.get("old"), None);
-        assert_eq!(store.get("new"), Some(&new_timeline));
     }
 }

@@ -10,7 +10,8 @@ use crate::scene::{
     clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
 };
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands};
+use lunco_command_contracts::{Ack, OpId};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
@@ -24,6 +25,24 @@ use lunco_workspace::{TwinClosed, WorkspaceResource};
 /// not become available. This is a scene-load failure, not a simulation fault:
 /// the viewport remains empty and a later Twin replacement is still admitted.
 pub(crate) const TWIN_SCENE_LOAD_FAILED: &str = "TWIN_SCENE_LOAD_FAILED";
+
+/// Open one Twin-relative scene selected by the active Rhai loading policy.
+#[Command(default)]
+pub struct OpenTwinScene {
+    /// Workspace identity of the Twin whose source authority was mounted.
+    pub twin_id: u64,
+    /// Exact `twin://` authority returned by the asset owner.
+    pub name: String,
+    /// Indexed path relative to the Twin root.
+    pub relative_path: String,
+}
+
+/// Set the explanation displayed while the viewport has no scene.
+#[Command(default)]
+pub struct SetEmptyViewportReason {
+    /// Authored reason to show, or an empty string to clear it.
+    pub reason: String,
+}
 
 /// Workspace replacement owns the scene boundary. Closing the old Twin must
 /// clear its mounted USD scene immediately, even when the replacement Twin's
@@ -43,147 +62,98 @@ pub(crate) fn clear_scene_on_twin_closed(
     commands.trigger(ClearScene {});
 }
 
-/// Route the dependency-light in-process scene intent to the typed USD command
-/// that owns path resolution and scene mounting. This is the single adapter
-/// between higher-level domains and the USD command surface; it carries typed
-/// data all the way through and never parses a command name or JSON payload.
-/// Once the asset boundary has mounted a Twin authority, make the viewport
-/// **reflect the opened Twin/folder**.
-/// — clear-and-replace, so a previously loaded scene never lingers:
-///
-/// - **Has `[usd] default_scene`** → construct its `twin://` address and
-///   [`LoadScene`] it. `LoadScene` clears the old scene, then mounts this
-///   one as the single active stage; the co-simulation projection derives its
-///   native `connectionPaths` wiring from the composed prims.
-/// - **No starting scene** (Twin without `default_scene`, or a plain
-///   folder with no manifest — including one with **no `.usda` at all**)
-///   → [`ClearScene`]: empty viewport. The folder's files are still
-///   indexed and shown in the browser; the user picks a scene from there.
-///
-/// The Twin's other `.usda` files are an **asset library** — indexed but
-/// not auto-loaded; composed into the active stage on demand via
-/// `AddReference`. Full resolution rule in
-/// `docs/architecture/21-domain-usd.md` § "Which stage opens".
-///
-/// Skips child Twins — they raise their own `TwinAdded` when the
-/// workspace eagerly opens them, each resolving its own starting scene.
-pub(crate) fn open_usd_docs_on_twin_asset_mounted(
-    trigger: On<lunco_assets_runtime::TwinAssetMounted>,
+/// Open one scene selected by the active Twin loading policy. The command
+/// owns the typed path checks and the existing document-first USD load; Rhai
+/// owns whether this Twin has a scene to open.
+#[on_command(OpenTwinScene)]
+fn on_open_twin_scene(
+    trigger: On<OpenTwinScene>,
     workspace: Res<WorkspaceResource>,
-    // Optional because a document-only host may not install the asset pipeline.
-    // The authoritative doc-backed mount below is the only scene-loading path;
-    // without it, report the missing production prerequisite visibly.
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     asset_server: Option<Res<AssetServer>>,
     usd_sources: Option<Res<Assets<UsdSourceText>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
-    mut empty_reason: ResMut<EmptyViewportReason>,
-    mut commands: Commands,
-) {
-    let twin_id = trigger.event().twin;
-    let Some(twin) = workspace.twin(twin_id) else {
-        return;
-    };
-    let default_scene = twin
-        .manifest
-        .as_ref()
-        .and_then(|m| m.usd.as_ref())
-        .and_then(|u| u.default_scene.as_deref());
-    // The asset boundary emitted this event only after registering the root.
-    // Use the exact assigned authority from the event; do not rediscover it
-    // through a second lookup whose timing could reintroduce the mount race.
-    let twin_name = trigger.event().name.clone();
-    match default_scene {
-        Some(scene) => {
-            let scene_uri = lunco_assets_core::twin_uri(&twin_name, scene);
-            // Load the scene THROUGH the `twin://` source registered above —
-            // never a bare absolute path. Works identically on native (fs) and
-            // web (http), and keeps the scene's co-located relative refs
-            // (terrain glb) resolving under `twin://`.
-            //
-            // E1b: open the scene as a document FIRST — the mount comes from
-            // `drain_pending_twin_docs` once the document exists and its composed
-            // (base ⊕ runtime) source is published as the twin overlay, so the
-            // one and only stage build already carries persisted runtime
-            // spawns/moves. Mounting eagerly here and doc-backing afterwards
-            // built the stage from the raw base, then the open-time
-            // `restore_runtime` forced a whole-scene rebuild ~70 ms later —
-            // every prim (rovers included) spawned twice. Read the base text
-            // THROUGH the twin source (web-ready) rather than `std::fs`.
-            if let (Some(asset_server), Some(_)) = (&asset_server, &usd_sources) {
-                info!(
-                    "[twin] doc-backing starting scene `twin://{}/{}` (twin `{}`) — mount follows",
-                    twin_name,
-                    scene,
-                    twin.root.display()
-                );
-                let handle = asset_server.load::<UsdSourceText>(scene_uri.clone());
-                let source_ready = usd_sources
-                    .as_ref()
-                    .is_some_and(|sources| sources.get(handle.id()).is_some());
-                let source_failed = asset_server
-                    .get_load_state(handle.id())
-                    .is_some_and(|state| state.is_failed());
-                let source_id = handle.id();
-                pending_twin.push(
-                    handle,
-                    source_ready,
-                    twin_name.clone(),
-                    scene.to_string(),
-                    twin.root.join(scene),
-                    twin.root.clone(),
-                );
-                if source_failed {
-                    pending_twin.mark_failed(
-                        source_id,
-                        "the source asset had already failed to load".into(),
-                    );
-                }
-            }
-            if asset_server.is_none() || usd_sources.is_none() {
-                let detail = format!(
-                    "cannot load `{}`: the USD asset pipeline is not installed",
-                    scene_uri
-                );
-                warn!("[twin] {detail}");
-                empty_reason.0 = Some(detail.clone());
-                lunco_core::trigger_runtime_error(&mut commands, TWIN_SCENE_LOAD_FAILED, detail);
-            }
-        }
-        None => {
-            // A folder with a `twin.toml` that names no `default_scene` is rare;
-            // the usual cause of reaching here is that the folder has NO
-            // `twin.toml` at all (opened as a plain folder), which most often
-            // means the user opened the WRONG DIRECTORY — e.g. the wrapper that
-            // *contains* the twin rather than the twin itself. Distinguish the
-            // two so the placeholder can tell the user which it is, instead of
-            // a generic "nothing to show".
-            let has_manifest = twin.manifest.is_some();
-            let reason = if has_manifest {
-                format!(
-                    "`{}` has a twin.toml but declares no default scene — nothing to load.",
-                    twin.root.display()
-                )
-            } else {
-                format!(
-                    "`{}` has no twin.toml, so there is no scene to load. \
-                     You may have opened the wrong folder — check that you opened the Twin \
-                     root itself (the one containing twin.toml), not a folder above or beside it.",
-                    twin.root.display()
-                )
-            };
-            info!(
-                "[twin] `{}` declares no starting scene — clearing viewport ({})",
-                twin.root.display(),
-                if has_manifest {
-                    "manifest present, no default_scene"
-                } else {
-                    "no twin.toml"
-                }
-            );
-            empty_reason.0 = Some(reason);
-            commands.trigger(ClearScene {});
-        }
+) -> Result<Ack, String> {
+    let request = trigger.event();
+    let twin_id = lunco_workspace::TwinId::new(request.twin_id);
+    let twin = workspace
+        .twin(twin_id)
+        .ok_or_else(|| format!("Twin {} is not open", request.twin_id))?;
+    if workspace.active_twin != Some(twin_id) {
+        return Err(format!("Twin {} is not active", request.twin_id));
     }
+    let relative = Path::new(&request.relative_path);
+    if !lunco_assets_path::is_safe_relative_path(&request.relative_path)
+        || relative == Path::new(".")
+        || !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        || !is_usd_path(&request.relative_path)
+    {
+        return Err(format!(
+            "Twin scene path `{}` must be a safe Twin-relative USD file",
+            request.relative_path
+        ));
+    }
+    if !twin
+        .files()
+        .iter()
+        .any(|entry| entry.relative_path == relative)
+    {
+        return Err(format!(
+            "Twin scene path `{}` is not indexed",
+            request.relative_path
+        ));
+    }
+    if !roots
+        .as_deref()
+        .and_then(|roots| roots.name_for_root(&twin.root).ok().flatten())
+        .is_some_and(|name| name == request.name)
+    {
+        return Err(format!(
+            "Twin asset authority `{}` does not belong to Twin {}",
+            request.name, request.twin_id
+        ));
+    }
+    let (Some(asset_server), Some(usd_sources)) = (asset_server, usd_sources) else {
+        return Err("the USD asset pipeline is not installed".to_owned());
+    };
+
+    let scene_uri = lunco_assets_core::twin_uri(&request.name, &request.relative_path);
+    info!(
+        "[twin] doc-backing starting scene `{scene_uri}` (twin `{}`) — mount follows",
+        twin.root.display()
+    );
+    let handle = asset_server.load::<UsdSourceText>(scene_uri);
+    let source_ready = usd_sources.get(handle.id()).is_some();
+    let source_failed = asset_server
+        .get_load_state(handle.id())
+        .is_some_and(|state| state.is_failed());
+    let source_id = handle.id();
+    pending_twin.push(
+        handle,
+        source_ready,
+        request.name.clone(),
+        request.relative_path.clone(),
+        twin.root.join(relative),
+        twin.root.clone(),
+    );
+    if source_failed {
+        pending_twin.mark_failed(
+            source_id,
+            "the source asset had already failed to load".into(),
+        );
+    }
+    Ok(Ack::new(OpId::new()))
+}
+
+#[on_command(SetEmptyViewportReason)]
+fn on_set_empty_viewport_reason(
+    trigger: On<SetEmptyViewportReason>,
+    mut reason: ResMut<EmptyViewportReason>,
+) {
+    let value = trigger.event().reason.trim();
+    reason.0 = (!value.is_empty()).then(|| value.to_owned());
 }
 
 /// Mount a scene, resolving the requested path to its **document** first.
@@ -549,4 +519,9 @@ fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: 
     spawn_twin_scan(&root, pending, log_tag, Some(rel), TwinOpenMode::Replace);
 }
 
-register_commands!(on_load_scene, on_open_file);
+register_commands!(
+    on_load_scene,
+    on_open_file,
+    on_open_twin_scene,
+    on_set_empty_viewport_reason
+);

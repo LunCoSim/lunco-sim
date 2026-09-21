@@ -108,7 +108,11 @@ Griffin component model:
 - kernel primitive categories (`Boolean`, `Integer`, `Rational`, `Real`,
   `Complex`, and `String`);
 - feature multiplicity, including lower/upper bounds and ordered/unique flags;
-- quantity kind and unit-bearing literals;
+- direct type identity as a native `SysmlTypeRef`, with quantity-value family
+  and most-specific quantity kind classified through resolved SysML
+  inheritance (rather than a hard-coded quantity-name table);
+- collection cardinality kept separate from its scalar element category;
+- unit-bearing literals and typed quantity-kind references;
 - enumeration and structured-value categories;
 - part, item, and port element categories from resolved definitions;
 - an explicit Modelica mapping for scalar/quantity values, primitive arrays,
@@ -125,20 +129,31 @@ the generic SysML-to-Rhai bridge. A geometry policy may lower a
 `LengthValue[3]` to `DVec3` only after it verifies each component's unit; the
 current Modelica geometry adapter accepts metres and does not infer unit
 conversion. This keeps numeric vectors and dimensioned positions distinct.
+Rhai receives one native `SysmlType` value instead of duplicate hand-built
+type maps. Unit suffixes are still retained as authored symbols; resolving unit
+definitions, dimensional compatibility, and conversion factors is an explicit
+remaining generic feature, so the adapter must not silently convert or drop
+them.
 
 The parser and source projection retain the declared elements and resolved
 relationships from the selected files. The specialized typed records cover
-parts, items, ports, attributes, requirements, verification cases, and opaque
-constraint expressions. Other parsed metamodel elements remain available as
+parts, items, ports, attributes, requirements, verification cases, and
+source-spanned constraint expression trees. Expression feature leaves carry
+snapshot-scoped resolved handles; relationship ends preserve both element and
+feature handles. Other parsed metamodel elements remain available as
 source-backed generic elements rather than being assigned invented runtime
 semantics.
 
 This is not a SysML/KerML execution engine. Constraint expressions, general
 derived-feature evaluation, N-dimensional non-Real collections, full quantity
-conversion, redefinition/subsetting semantics, and state/behavior execution
-are not evaluated by the runtime. Rhai owns verification policy and consumes
-the typed facts that the current projection can establish; unresolved values
-remain explicit instead of being guessed from source text.
+and unit conversion, redefinition/subsetting semantics, and state/behavior
+execution are not evaluated directly by the runtime. Rhai owns domain mappings
+and policies over the generic typed projection. A bounded Rhai policy may
+lower a resolved constraint expression into Modelica equations and use the
+existing Rumoca experiment path for numerical evaluation; this does not make
+arbitrary SysML expressions executable. Unsupported syntax and unresolved
+references remain explicit with source spans instead of being guessed from
+source text.
 
 The Rhai functions `sysml_value(path, qualified_name)` and
 `sysml_value_from_report(report, qualified_name)` return a tagged result map.
@@ -161,11 +176,24 @@ returned as explicit errors. `InspectSysmlDocument` supplies source identity,
 generation, origin and diagnostics for the Editor. For production checks,
 `ValidateSysml` reports source validation status, structural `lint.sysml`
 findings, source files and revision; it does not evaluate Twin manifest
-bindings or requirement observations. `AnalyzeSysml` exposes selected typed
-semantic fact tables. The latter accepts table and attribute-name selectors and returns the existing
-source-backed values through the in-process `HookValue` ABI. It does not build
-a second JSON-shaped semantic graph or interpret project rules. A filesystem
-path or `twin://name/relative` selects one source; `twin://name` loads the
+bindings or requirement observations. `AnalyzeSysml` exposes selected
+language-neutral semantic fact tables through the `HookValue` ABI. Its table,
+name, and bounded-page selectors limit API payload size; they do not encode
+project acceptance policy. A page request supplies non-negative `offset` and
+positive `limit`; `analysis.page.tables` reports each selected table's total,
+returned count, and `has_more`, and each page carries the same source revision
+that Rhai must verify while assembling a larger result. Rhai runtime tools that
+need native SysML/Rhai values may use `sysml_analysis(path)` for a deliberately
+bounded source, then select attributes, relationships, and constraints in
+Rhai. For Twin-scale sources, use selected `AnalyzeSysml` pages or
+`sysml_requirements::source()`, which pages the requirement/verification facts
+and keeps only compact identities and coverage links. Detailed records remain
+available through `source_with_selection()`. `sysml_attribute(path, qualified_name)` is the
+exact-identity accessor for a single source-backed `SysmlAttribute`;
+`sysml_value` is its typed-literal convenience view. These direct Rhai values
+retain native `SysmlType`, `SysmlTypeRef`, and f64 spatial/quantity values
+without serializing to JSON and rebuilding them. A filesystem path or
+`twin://name/relative` selects one source; `twin://name` loads the
 manifest-declared, indexed Twin source set.
 
 `ReadActiveTwinContract` exposes the active Twin's component and verification
@@ -177,7 +205,22 @@ constraints and assembles Modelica source. These policies keep their own
 selection and rules while sharing the same typed SysML facts. The requirement
 policy preserves qualified attribute identity and reports collisions rather
 than silently choosing one. It can request selected attributes instead of
-projecting every literal on each pass.
+projecting every literal on each pass. `source()` reads the complete Twin
+identity/coverage set in bounded pages and rejects a source-revision change
+during assembly; parameter values and detailed requirement attributes remain
+selected on demand.
+
+Keep project-specific parameter acceptance in Rhai: dimensional limits,
+component counts, acceptable material choices, and geometry rules should be
+editable policy, not Rust branches that force a rebuild for every design
+iteration. Rust owns the stable language substrate—SysML parsing and semantic
+resolution, typed source objects, and faithful conversion to shared native
+types. Native type metadata is evidence for Rhai policies, not a precomputed
+Griffin verdict. Use the selected `AnalyzeSysml` API projection where a
+language-neutral client benefits from a smaller transport payload; use one
+native snapshot plus Rhai selection for small in-process sources, and bounded
+fact pages for Twin-scale data. Changing a source parameter or authored Rhai
+acceptance check must not require rebuilding Rust.
 
 Acceptance remains Twin-authored: each Twin keeps its SysML requirements, USD
 fixture, and Rhai scenario together. Core runtime code contains only this
@@ -281,8 +324,12 @@ authored runtime verdict:
 
 The remaining work is bounded follow-up: full KerML expression/constraint
 execution, a full SysML editor, and a SysML-to-USD projection are not part of
-this integration. `SysmlPlugin` opens the checked Twin source set after
-`TwinAssetMounted`; a full source browser remains a UI concern.
+this integration. The authored Twin loading policy selects indexed SysML
+sources from the manifest and file facts, then requests each through the typed
+`LoadTwinSysmlSource` command. Rust validates the active Twin, asset authority,
+and indexed path, then opens the selected sources through the async document
+loader; a full source browser remains a UI concern. An empty source set is an
+informational policy result, since SysML is optional for a Twin.
 
 ### Verification ownership
 

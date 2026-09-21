@@ -45,9 +45,9 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         lunco_scripting_rhai_world::tool_libs::register_native_builtins();
         app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
             .init_resource::<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>()
+            .init_resource::<lunco_scripting_rhai_world::policy::PendingTwinPolicyCommands>()
             .init_resource::<lunco_scripting_rhai_world::world_bridge::PendingWorldScripts>()
-            .init_resource::<lunco_scripting_rhai_world::world_bridge::RhaiRuntimeStatus>()
-            .init_resource::<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>();
+            .init_resource::<lunco_scripting_rhai_world::world_bridge::RhaiRuntimeStatus>();
         #[cfg(feature = "native-plugins")]
         app.init_resource::<lunco_scripting_rhai_world::native_plugins::NativeTwinPlugins>();
         app.add_systems(
@@ -55,6 +55,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             lunco_scripting_rhai_world::policy::load_application_policies_on_startup,
         )
         .add_observer(lunco_scripting_rhai_world::policy::sync_policies_on_twin_added)
+        .add_observer(lunco_scripting_rhai_world::policy::plan_twin_asset_loading)
         .add_observer(lunco_scripting_rhai_world::policy::wind_down_policies_on_twin_closed)
         .register_deferred_command::<commands::RunRhai>()
         .register_deferred_command::<commands::RunRhaiTool>()
@@ -76,13 +77,11 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
 
         lunco_scripting_rhai_world::tool_libs::register_queries(app);
         app.init_resource::<lunco_scripting_rhai_world::tool_libs::TwinToolLibraries>()
-            .add_observer(lunco_scripting_rhai_world::tool_libs::sync_tools_on_twin_added)
-            .add_observer(lunco_scripting_rhai_world::tool_libs::wind_down_tools_on_twin_closed)
             .init_resource::<timelines::TimelineStore>();
+        lunco_scripting_rhai_world::tool_libs::register_twin_tool_loading(app);
         timelines::register_queries(app);
-        app.add_observer(timelines::sync_timelines_on_twin_added)
-            .add_observer(timelines::wind_down_timelines_on_twin_closed)
-            .add_systems(lunco_core::SceneTeardown, stop_scene_owned_scripts)
+        timelines::register_twin_timeline_loading(app);
+        app.add_systems(lunco_core::SceneTeardown, stop_scene_owned_scripts)
             .add_systems(
                 Update,
                 lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets
@@ -92,6 +91,10 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
                 Update,
                 lunco_scripting_rhai_world::world_bridge::drain_world_scripts
                     .run_if(scripts_run_here),
+            )
+            .add_systems(
+                Update,
+                lunco_scripting_rhai_world::policy::apply_twin_policy_commands,
             )
             .add_systems(
                 PreUpdate,

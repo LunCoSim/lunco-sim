@@ -38,7 +38,8 @@ built script-free, with optional Python, and for `wasm32-unknown-unknown`.
   the only engine mutation boundary. Native editor panels remain egui panels.
 - **Timeline storage** — `RegisterTimeline` / `RunStoredTimeline` +
   `ListTimelines` / `GetTimeline`; typed step data is persisted as Twin files
-  under `<twin>/timelines/*.json` and passed to Rhai through scenario context.
+  under `<twin>/timelines/*.json`, selected by the active Twin's Rhai loading
+  policy, and passed to Rhai through scenario context.
 - **USD-embedded scenarios (load)** — a `LunCoProgramAPI` child prim naming a `.rhai`
   (`info:implementationSource = "sourceAsset"` or `"sourceCode"` authored in place)
   auto-attaches + runs on spawn.

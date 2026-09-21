@@ -410,6 +410,7 @@ pub fn run_gui() -> AppExit {
     // `ui` build because it is provided by this UI package.
     let offscreen = cfg!(feature = "api-transport") && std::env::args().any(|a| a == "--offscreen");
     let args: Vec<String> = std::env::args().collect();
+    let startup_scene = lunco_luncosim_runtime::startup_scene_arg(&args);
     let max_speed_requested = args.iter().any(|arg| arg == "--headless-max-speed");
     if max_speed_requested {
         eprintln!(

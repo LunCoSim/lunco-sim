@@ -1,8 +1,8 @@
 //! Twin-native SysML source loading and document lifecycle.
 //!
 //! A mounted Twin already owns an indexed file list and a `twin://` asset
-//! authority. This module joins those existing owners: it asks the Twin for
-//! its checked SysML source set, loads each file through `AssetServer`, and
+//! authority. Its Rhai loading policy selects each source path; this module
+//! validates that typed request, loads the file through `AssetServer`, and
 //! opens the resulting bytes in the canonical SysML document registry. It
 //! never walks the filesystem or parses a second copy of the source.
 
@@ -13,7 +13,6 @@ use bevy::asset::{AssetEvent, AssetLoadFailedEvent, AssetServer, Assets, Handle}
 use bevy::prelude::*;
 
 use lunco_assets_core::twin_uri;
-use lunco_assets_runtime::TwinAssetMounted;
 use lunco_doc::{DocumentId, FileBacked, OpenOutcome};
 use lunco_doc_bevy::{
     DocumentChanged, DocumentClosed, DocumentOpened, DocumentRegistry, DocumentSaved,
@@ -22,8 +21,8 @@ use lunco_workspace::{DocumentEntry, TwinClosed, WorkspaceResource};
 
 use crate::{SysmlDocument, SysmlSource};
 
-/// Structured runtime fault emitted when a Twin-declared SysML source cannot
-/// be loaded or opened. A missing source is not an empty requirement set.
+/// Structured runtime fault emitted when a selected Twin SysML source cannot
+/// be loaded or opened. An absent optional SysML source set is not a fault.
 pub const SYSML_TWIN_SOURCE_LOAD_FAILED: &str = "sysml-twin-source-load-failed";
 
 /// One source file requested from a mounted Twin.
@@ -71,83 +70,117 @@ impl PendingSysmlSources {
     }
 }
 
-/// Request every manifest/indexed SysML source when the Twin asset authority
-/// is mounted. The Twin index is the only source discovery path.
-pub(crate) fn request_twin_sysml_sources(
-    trigger: On<TwinAssetMounted>,
+/// Request one Twin-relative SysML source selected by the active Rhai loading
+/// policy. Rust validates the path and performs the asynchronous asset/document
+/// operation; source-set selection belongs to the Twin policy.
+#[lunco_core::Command(default)]
+pub struct LoadTwinSysmlSource {
+    /// Workspace identity of the Twin whose source authority was mounted.
+    pub twin_id: u64,
+    /// Exact `twin://` authority returned by the asset owner.
+    pub name: String,
+    /// Indexed `.sysml` or `.kerml` path relative to the Twin root.
+    pub relative_path: String,
+}
+
+#[lunco_core::on_command(LoadTwinSysmlSource)]
+fn load_twin_sysml_source(
+    trigger: On<LoadTwinSysmlSource>,
     workspace: Option<Res<WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     asset_server: Option<Res<AssetServer>>,
     assets: Option<Res<Assets<SysmlSource>>>,
     mut pending: ResMut<PendingSysmlSources>,
-    mut commands: Commands,
-) {
-    let Some(workspace) = workspace else {
-        report_source_error(
-            &mut commands,
-            &trigger.event().name,
-            "WorkspaceResource is not installed",
-        );
-        return;
-    };
-    let Some(asset_server) = asset_server else {
-        report_source_error(
-            &mut commands,
-            &trigger.event().name,
-            "AssetServer is not installed",
-        );
-        return;
-    };
-    let twin_id = trigger.event().twin;
-    let Some(twin) = workspace.twin(twin_id) else {
-        report_source_error(
-            &mut commands,
-            &trigger.event().name,
-            format!("workspace Twin {:?} is unavailable", twin_id),
-        );
-        return;
-    };
-    let relative_paths = match twin.discover_sysml_sources_checked() {
-        Ok(paths) => paths,
-        Err(errors) => {
-            report_source_error(&mut commands, &trigger.event().name, errors.join("; "));
-            return;
-        }
-    };
-    let twin_name = trigger.event().name.clone();
-    let twin_root = twin.root.clone();
-    for relative in relative_paths {
-        let Some(relative_path) = relative.to_str() else {
-            report_source_error(
-                &mut commands,
-                &twin_name,
-                format!("SysML source path `{relative:?}` is not valid UTF-8"),
-            );
-            return;
-        };
-        if pending
-            .items
-            .iter()
-            .any(|item| item.twin_root == twin_root && item.relative_path == relative_path)
-        {
-            continue;
-        }
-        let uri = twin_uri(&twin_name, relative_path);
-        let handle = asset_server.load::<SysmlSource>(uri);
-        let id = handle.id();
-        if assets
-            .as_ref()
-            .is_some_and(|loaded| loaded.get(id).is_some())
-        {
-            pending.ready.insert(id);
-        }
-        pending.items.push(PendingSysmlSource {
-            handle,
-            twin_name: twin_name.clone(),
-            relative_path: relative_path.to_owned(),
-            absolute_path: twin_root.join(relative),
-            twin_root: twin_root.clone(),
-        });
+) -> Result<lunco_command_contracts::Ack, String> {
+    let request = trigger.event();
+    let workspace = workspace.ok_or_else(|| "WorkspaceResource is not installed".to_owned())?;
+    let twin_id = lunco_workspace::TwinId::new(request.twin_id);
+    let twin = workspace
+        .twin(twin_id)
+        .ok_or_else(|| format!("workspace Twin {} is unavailable", request.twin_id))?;
+    if workspace.active_twin != Some(twin_id) {
+        return Err(format!("Twin {} is not active", request.twin_id));
     }
+    let relative = Path::new(&request.relative_path);
+    let extension = relative
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    if !lunco_assets_path::is_safe_relative_path(&request.relative_path)
+        || relative == Path::new(".")
+        || !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        || !matches!(extension.as_deref(), Some("sysml" | "kerml"))
+    {
+        return Err(format!(
+            "Twin SysML path `{}` must be a safe Twin-relative .sysml or .kerml file",
+            request.relative_path
+        ));
+    }
+    if !twin
+        .files()
+        .iter()
+        .any(|entry| entry.relative_path.as_path() == relative)
+    {
+        return Err(format!(
+            "Twin SysML path `{}` is not indexed",
+            request.relative_path
+        ));
+    }
+    if !roots
+        .as_deref()
+        .and_then(|roots| roots.name_for_root(&twin.root).ok().flatten())
+        .is_some_and(|name| name == request.name)
+    {
+        return Err(format!(
+            "Twin asset authority `{}` does not belong to Twin {}",
+            request.name, request.twin_id
+        ));
+    }
+    let asset_server = asset_server.ok_or_else(|| "AssetServer is not installed".to_owned())?;
+    let twin_root = twin.root.clone();
+    if pending
+        .items
+        .iter()
+        .any(|item| item.twin_root == twin_root && item.relative_path == request.relative_path)
+    {
+        return Ok(lunco_command_contracts::Ack::new(
+            lunco_command_contracts::OpId::new(),
+        ));
+    }
+
+    let uri = twin_uri(&request.name, &request.relative_path);
+    let handle = asset_server.load::<SysmlSource>(uri);
+    let id = handle.id();
+    if assets
+        .as_deref()
+        .is_some_and(|loaded| loaded.get(id).is_some())
+    {
+        pending.ready.insert(id);
+    }
+    let source_failed = asset_server
+        .get_load_state(id)
+        .is_some_and(|state| state.is_failed());
+    pending.items.push(PendingSysmlSource {
+        handle,
+        twin_name: request.name.clone(),
+        relative_path: request.relative_path.clone(),
+        absolute_path: twin_root.join(relative),
+        twin_root,
+    });
+    if source_failed {
+        pending.mark_failed(id, "the source asset had already failed to load".into());
+    }
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
+}
+
+lunco_core::register_commands!(load_twin_sysml_source);
+
+pub(crate) fn register_twin_source_commands(app: &mut App) {
+    register_all_commands(app);
 }
 
 /// Convert source asset lifecycle messages into terminal pending state.

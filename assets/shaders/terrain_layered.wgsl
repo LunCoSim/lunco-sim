@@ -265,13 +265,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
                 * mottle
                 * procedural_albedo_weight;
     }
-    // Authored albedo owns broad colour. This independent, DEM-anchored grain
-    // remains available in close views without reintroducing a second colour
-    // field when a tile changes LOD.
-    if (micro_fade > 0.0 && micro_albedo > 0.0) {
-        albedo *= 1.0 + (micro_h - 0.5) * micro_albedo * micro_fade;
-    }
-
     let macro_rough = mix(0.5, macro_h, macro_fade);
     var roughness = clamp(mix(macro_rough, 1.0, rough_mix), 0.05, 1.0);
 
@@ -330,6 +323,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // the streamed path. Authored normal maps intentionally do not supply it.
     albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * map_weight_tone);
 #endif
+
+    // Apply the close-range grain after authored/derived albedo selection. A
+    // full-weight authored raster replaces the base colour above, so applying
+    // this before map selection would erase the grain on the production DEM path.
+    if (micro_fade > 0.0 && micro_albedo > 0.0) {
+        albedo *= 1.0 + (micro_h - 0.5) * micro_albedo * micro_fade;
+    }
 
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh[in.instance_index].flags;

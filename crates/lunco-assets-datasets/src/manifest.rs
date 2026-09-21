@@ -57,14 +57,15 @@ impl AssetEntry {
     }
 }
 
-/// Processing configuration from an `Assets.toml` declaration.
+/// Platform-neutral processing configuration from an `Assets.toml` declaration.
+/// Native hosts execute the selected pipeline; all targets parse and preserve
+/// the same authored configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProcessConfig {
     /// Pipeline selector. Built-ins include `texture`, `gltf`, `dem`, `map`,
     /// `albedo`, and `normalmap`; native hosts may register additional kinds.
     pub kind: String,
     /// Target dimensions for image-like pipelines.
-    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub target_resolution: Option<[u32; 2]>,
     /// Output path relative to `output_root`.
@@ -72,74 +73,60 @@ pub struct ProcessConfig {
     /// Output owner: `cache`, `assets`, or `twin`.
     #[serde(default = "default_output_root")]
     pub output_root: String,
-    /// Center latitude for a DEM crop, in degrees.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Center latitude for a geographic crop, in degrees.
     #[serde(default)]
     pub center_lat: Option<f64>,
-    /// Center longitude for a DEM crop, in degrees.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Center longitude for a geographic crop, in degrees.
     #[serde(default)]
     pub center_lon: Option<f64>,
-    /// Side length of a DEM crop in metres.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Side length of a geographic crop in metres.
     #[serde(default)]
     pub window_m: Option<f64>,
-    /// Source metres per pixel for a DEM crop.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default = "default_dem_pixel_scale_m")]
-    pub pixel_scale_m: f64,
+    /// Source metres per pixel for a geographic crop. When omitted, a PDS3
+    /// label supplies its map scale; otherwise the documented 2 m default is
+    /// used. Georeferenced grayscale TIFF albedo sources require this value.
+    #[serde(default, serialize_with = "serialize_pixel_scale_m")]
+    pub pixel_scale_m: Option<f64>,
     /// Source-height units converted to metres.
-    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default = "default_dem_height_scale")]
     pub source_height_scale_m_per_unit: f64,
     /// Height offset applied after the source scale.
-    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub source_height_offset_m: f64,
-    /// Minimum source latitude for the DEM affine mapping.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Minimum source latitude for the geographic affine mapping.
     #[serde(default)]
     pub src_min_lat: Option<f64>,
-    /// Maximum source latitude for the DEM affine mapping.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Maximum source latitude for the geographic affine mapping.
     #[serde(default)]
     pub src_max_lat: Option<f64>,
-    /// Minimum source longitude for the DEM affine mapping.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Minimum source longitude for the geographic affine mapping.
     #[serde(default)]
     pub src_min_lon: Option<f64>,
-    /// Maximum source longitude for the DEM affine mapping.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Maximum source longitude for the geographic affine mapping.
     #[serde(default)]
     pub src_max_lon: Option<f64>,
     /// Optional DEM site identity.
-    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub site_id: Option<String>,
     /// Optional source lunar reference frame.
-    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub frame: Option<String>,
     /// Linear material albedo used by the `albedo` pipeline when the source is
     /// a grayscale orthophoto rather than a calibrated reflectance raster.
-    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub albedo_base_linear: Option<f64>,
     /// Maximum relative albedo variation retained from the source's local
     /// detail. The `albedo` pipeline removes the low-frequency illumination
     /// field before applying this contrast.
-    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub albedo_detail_strength: Option<f64>,
     /// Positive radius of the illumination field removed from an orthophoto, in
     /// metres. Calibrated reflectance should use the `texture` pipeline instead.
-    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub albedo_illumination_radius_m: Option<f64>,
-    /// Processor-specific parameters preserved for registered native
-    /// processors. Keeping these values in the manifest makes the dispatch
-    /// contract extensible without adding a new field to this shared crate for
-    /// every domain-specific baker.
+    /// Processor-specific parameters preserved for registered processors.
+    /// Keeping these values in the manifest makes the dispatch contract
+    /// extensible without adding a shared field for each domain-specific baker.
     #[serde(flatten)]
     #[serde(default)]
     pub parameters: BTreeMap<String, toml::Value>,
@@ -149,13 +136,21 @@ fn default_output_root() -> String {
     "cache".to_owned()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-/// Default source pixel scale used when a DEM declaration omits one.
+/// Default source pixel scale used when a geographic process omits one and
+/// the source container does not provide a scale.
 pub fn default_dem_pixel_scale_m() -> f64 {
     2.0
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+fn serialize_pixel_scale_m<S>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    // Preserve the effective historic value in bake keys while retaining
+    // whether the manifest explicitly authored a scale for source validation.
+    serializer.serialize_f64((*value).unwrap_or_else(default_dem_pixel_scale_m))
+}
+
 fn default_dem_height_scale() -> f64 {
     1.0
 }
@@ -178,6 +173,7 @@ impl std::str::FromStr for AssetManifest {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AssetManifest {
     /// Read and parse an `Assets.toml` file.
     pub fn from_file(path: &Path) -> Result<Self, std::io::Error> {
@@ -223,8 +219,7 @@ pub fn entry_dest_path(
     })
 }
 
-/// Resolve the delivered artifact path for a native process declaration.
-#[cfg(not(target_arch = "wasm32"))]
+/// Resolve the delivered artifact path for a manifest process declaration.
 pub fn entry_artifact_path(
     entry: &AssetEntry,
     cache_root: &Path,
@@ -237,6 +232,7 @@ pub fn entry_artifact_path(
 }
 
 /// Path of a version marker stored beside an installed destination.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn version_marker_path(destination: &Path) -> PathBuf {
     install_marker_path(destination, destination.is_dir(), "version")
 }
@@ -262,7 +258,6 @@ fn integrity_marker_path(destination: &Path) -> PathBuf {
 }
 
 /// Recognize archive suffixes supported by the native downloader.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn archive_extension(url: &str) -> Option<&'static str> {
     if url.ends_with(".tar.gz") {
         Some("tar.gz")
@@ -363,8 +358,7 @@ pub fn source_pool_path(root: &Path, url: &str) -> PathBuf {
 /// Current processing pipeline identity used by bake completion stamps.
 pub const PROCESS_PIPELINE_VERSION: u32 = 7;
 
-/// Resolve the output path of a native process declaration.
-#[cfg(not(target_arch = "wasm32"))]
+/// Resolve the output path of a manifest process declaration.
 pub fn process_output_path(
     process: &ProcessConfig,
     cache_root: Option<&Path>,
@@ -406,7 +400,6 @@ pub fn process_output_path(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 /// Path of the completion stamp for a processed artifact.
 pub fn bake_stamp_path(output_path: &Path) -> PathBuf {
     if output_path.extension().is_none() {

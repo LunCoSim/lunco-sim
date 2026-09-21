@@ -104,7 +104,10 @@ fn apply(doc, ops, parent_generation) {
 /// additionally expose the full Twin source-set validation report.
 fn verify(doc) {
     let inspection = inspect(doc);
-    if inspection == () || inspection.ok != true {
+    // Successful read-only queries may omit `ok`; only an explicit false
+    // indicates rejection. Requiring true made the editor report valid,
+    // generation-bearing InspectSysmlDocument responses as failures.
+    if inspection == () || inspection.ok == false {
         return _error("inspect", "InspectSysmlDocument failed");
     }
     if inspection.semantic_errors == true {

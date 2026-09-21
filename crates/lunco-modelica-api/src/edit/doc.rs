@@ -3,9 +3,152 @@
 use super::util::resolve_doc;
 use crate::ModelicaDocuments;
 use bevy::prelude::*;
+use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
+use lunco_experiments::ExperimentRegistry;
 use lunco_modelica_document::ModelicaOp;
+use lunco_modelica_runner::{ExperimentSources, PendingHandles};
+use std::collections::HashSet;
+
+/// Identities of untitled documents allocated specifically for generated
+/// API/tool work. Kept separate from generic untitled Editor documents so the
+/// scratch-only close command cannot discard a user's unsaved model.
+#[derive(Resource, Default)]
+pub struct ToolScratchDocuments(HashSet<DocumentId>);
+
+/// Create an untitled Modelica document without requiring the workbench UI.
+/// UI hosts may additionally open a tab; headless/script hosts use the same
+/// document registry and lifecycle path for generated or scratch models.
+#[Command(default)]
+pub struct CreateScratchModelicaDocument {
+    pub source: String,
+    pub name: String,
+}
+
+#[on_command(CreateScratchModelicaDocument)]
+pub fn on_create_scratch_modelica_document(
+    trigger: On<CreateScratchModelicaDocument>,
+    mut registry: ResMut<ModelicaDocuments>,
+    mut scratch_documents: ResMut<ToolScratchDocuments>,
+) -> Result<Ack, String> {
+    let request = trigger.event();
+    if request.source.trim().is_empty() {
+        return Err("CreateScratchModelicaDocument requires non-empty Modelica source".into());
+    }
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err("CreateScratchModelicaDocument requires a display name".into());
+    }
+    let doc_id = lunco_modelica_core::doc_ops::allocate_scratch_document(
+        &mut registry,
+        request.source.clone(),
+        name.to_owned(),
+    );
+    scratch_documents.0.insert(doc_id);
+    Ok(Ack::with_data(
+        OpId::new(),
+        lunco_api_core::api_value!({ "doc_id": doc_id.raw() as i64 }),
+    ))
+}
+
+/// Close only an untitled Modelica scratch document through the shared
+/// document registry. This is intended for generated, non-tab documents used
+/// by headless tools; saved documents continue through the normal Editor close
+/// flow.
+#[Command(default)]
+pub struct CloseScratchModelicaDocument {
+    pub doc_id: DocumentId,
+}
+
+#[on_command(CloseScratchModelicaDocument)]
+pub fn on_close_scratch_modelica_document(
+    trigger: On<CloseScratchModelicaDocument>,
+    mut registry: ResMut<ModelicaDocuments>,
+    mut scratch_documents: ResMut<ToolScratchDocuments>,
+    mut experiments: Option<ResMut<ExperimentRegistry>>,
+    mut sources: Option<ResMut<ExperimentSources>>,
+    mut pending: Option<ResMut<PendingHandles>>,
+) -> Result<Ack, String> {
+    let doc = trigger.event().doc_id;
+    if !scratch_documents.0.contains(&doc) {
+        return Err(
+            "CloseScratchModelicaDocument only closes API-owned generated scratch documents".into(),
+        );
+    }
+    let host = registry
+        .host(doc)
+        .ok_or_else(|| format!("CloseScratchModelicaDocument: unknown document {doc}"))?;
+    if !host.document().origin().is_untitled() {
+        return Err("CloseScratchModelicaDocument only closes untitled scratch documents".into());
+    }
+
+    let run_ids: Vec<_> = sources
+        .as_ref()
+        .map(|sources| {
+            sources
+                .0
+                .iter()
+                .filter_map(|(id, source_doc)| (*source_doc == doc).then_some(*id))
+                .collect()
+        })
+        .unwrap_or_default();
+    let live_run_ids: Vec<_> = experiments
+        .as_ref()
+        .map(|experiments| {
+            run_ids
+                .iter()
+                .copied()
+                .filter(|id| {
+                    experiments
+                        .get(*id)
+                        .is_some_and(|experiment| !experiment.status.is_terminal())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !live_run_ids.is_empty() && pending.is_none() {
+        return Err(
+            "CloseScratchModelicaDocument cannot stop live runs without the Modelica runner".into(),
+        );
+    }
+    if let Some(pending) = pending.as_mut() {
+        for handle in &pending.0 {
+            if live_run_ids.contains(&handle.run_id) {
+                handle.cancel();
+            }
+        }
+    }
+    if let Some(experiments) = experiments.as_mut() {
+        for id in &live_run_ids {
+            experiments.set_status(*id, lunco_experiments::RunStatus::Cancelled);
+        }
+    }
+
+    if let Some(experiments) = experiments.as_mut() {
+        for id in &run_ids {
+            experiments.delete(*id);
+        }
+    }
+    if let Some(sources) = sources.as_mut() {
+        for id in run_ids {
+            sources.0.remove(&id);
+        }
+    }
+    registry.remove_document(doc);
+    scratch_documents.0.remove(&doc);
+    Ok(Ack::with_data(
+        OpId::new(),
+        lunco_api_core::api_value!({ "doc_id": doc.raw() as i64 }),
+    ))
+}
+
+pub fn forget_tool_scratch_document(
+    trigger: On<lunco_doc_bevy::DocumentClosed>,
+    mut scratch_documents: ResMut<ToolScratchDocuments>,
+) {
+    scratch_documents.0.remove(&trigger.event().doc);
+}
 
 /// Replace an open document's entire source text.
 #[Command(default)]

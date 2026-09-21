@@ -25,6 +25,8 @@ pub struct ModelicaApiEditPlugin;
 // Observers live in split submodules; registration stays owned by the
 // module that defines each command.
 register_commands!(
+    doc::on_create_scratch_modelica_document,
+    doc::on_close_scratch_modelica_document,
     doc::on_set_document_source,
     component::on_add_modelica_component,
     component::on_remove_modelica_component,
@@ -36,6 +38,7 @@ register_commands!(
 
 impl Plugin for ModelicaApiEditPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<doc::ToolScratchDocuments>();
         app.register_type::<ApiOp>()
             .register_type::<ApiPlacement>()
             .register_type::<ApiModification>()
@@ -53,6 +56,7 @@ impl Plugin for ModelicaApiEditPlugin {
         // never fires the event). The Untitled-draft rename chain (which names
         // a workbench UI event) lives in the Modelica UI package instead.
         app.add_observer(class::on_file_renamed_chain_to_modelica);
+        app.add_observer(doc::forget_tool_scratch_document);
     }
 }
 

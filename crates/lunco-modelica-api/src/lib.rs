@@ -10,6 +10,7 @@
 
 /// Transport-free Modelica document edit commands and their observers.
 pub mod edit;
+pub mod run;
 
 use bevy::prelude::*;
 use lunco_api::queries::{api_param_array, api_param_u64, ApiQueryError, ApiQueryResult};
@@ -53,6 +54,9 @@ impl Plugin for ModelicaApiQueriesPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<edit::ModelicaApiEditPlugin>() {
             app.add_plugins(edit::ModelicaApiEditPlugin);
+        }
+        if !app.is_plugin_added::<run::ModelicaRunApiPlugin>() {
+            app.add_plugins(run::ModelicaRunApiPlugin);
         }
         // Idempotent init: `LunCoApiPlugin::ApiQueryRegistryPlugin`
         // installs this resource too, but plugin ordering is not
