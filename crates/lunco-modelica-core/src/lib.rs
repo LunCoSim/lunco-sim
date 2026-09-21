@@ -238,6 +238,14 @@ fn sync_workspace_on_doc_saved(
     }
 }
 fn build_modelica_core(app: &mut App) {
+    // Parsing and keeping each document's Rumoca session in sync are core
+    // document/runtime services, not editor presentation. Headless hosts need
+    // this too, especially for generated scratch models that receive edits
+    // before their first syntax cache has been installed.
+    if !app.is_plugin_added::<crate::engine_resource::ModelicaEnginePlugin>() {
+        app.add_plugins(crate::engine_resource::ModelicaEnginePlugin);
+    }
+
     // Ensure source-library admission is present. The compiler host consumes
     // this generic capability without owning its browser transport details.
     if !app.is_plugin_added::<lunco_modelica_library::SourceLibraryPlugin>() {
@@ -277,7 +285,12 @@ fn build_modelica_core(app: &mut App) {
     // command plugin is owned by `lunco-modelica-api` and installed by API
     // hosts. Guarded/idempotent so hosts can compose the packages independently.
     app.init_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>();
+    // Structural source edits can arrive before the asynchronous syntax cache
+    // catches up. The queue and its drain are document mechanics, so headless
+    // hosts need the same lifecycle as the editor UI.
+    app.init_resource::<crate::doc_ops::PendingStructuralOps>();
     app.add_systems(Update, crate::doc_ops::drain_document_changes);
+    app.add_systems(Update, crate::doc_ops::drain_pending_structural_ops);
     app.add_systems(
         Update,
         crate::doc_ops::wire_modelica_journal_handle

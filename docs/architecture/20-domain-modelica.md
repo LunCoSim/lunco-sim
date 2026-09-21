@@ -65,6 +65,25 @@ install it alongside the compiler; compiler-only builds do not inherit query
 registration, edit-command registration, or Workspace API dependencies. Workspace queries remain owned by
 [`lunco-workspace-api`](../../crates/lunco-workspace-api/).
 
+`CreateScratchModelicaDocument` allocates a source-backed untitled document in
+the shared Modelica registry in both headless and workbench hosts. It does not
+open a tab or select an active Editor document; those are presentation/session
+decisions. Rhai tools that generate Modelica for a solve can therefore use the
+same document lifecycle and asynchronous Rumoca experiment path in production
+scene tests and non-UI hosts.
+
+`RunModelicaSolve` starts the existing asynchronous experiment runner against
+an explicit document id, parsed class, and source generation. It returns an
+experiment id immediately; callers poll `RunStatus` and read finite `f64`
+series through `GetExperimentResult`. `CloseScratchModelicaDocument` removes
+only untitled generated documents and their completed run records; ordinary
+saved-document closing remains an Editor lifecycle operation.
+
+`ModelicaCorePlugin` also owns the shared Rumoca engine-sync driver and the
+deferred structural-edit queue. Headless source edits therefore receive the
+same asynchronous parse/install cycle as workbench edits; the UI plugin only
+adds presentation and pacing hints.
+
 The shared render-free participant contract is [`lunco-modelica-runtime`](../../crates/lunco-modelica-runtime/).
 It owns `ModelicaModel`, the serialized worker command/result messages, source
 assets, generated USD-document metadata, communication scheduling, notices,

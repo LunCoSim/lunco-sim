@@ -7,9 +7,11 @@
 use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
 use lunco_sysml_ast::{
-    SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlEnumValue,
-    SysmlModelicaType, SysmlMultiplicity, SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord,
-    SysmlSourceRef, SysmlSubject, SysmlType, SysmlTypeCategory, SysmlTypeRef,
+    SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlElementHandle,
+    SysmlEnumValue, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator,
+    SysmlFeatureHandle, SysmlModelicaType, SysmlMultiplicity, SysmlPrimitiveType,
+    SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlSubject, SysmlType, SysmlTypeCategory,
+    SysmlTypeRef, SysmlUnsupportedExpression,
 };
 use rhai::{Dynamic, Engine, Map};
 
@@ -50,6 +52,10 @@ pub fn semantic_snapshot_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     report.insert(
         "source_revision".into(),
         Dynamic::from(analysis.source_revision().to_string()),
+    );
+    report.insert(
+        "source_fingerprint".into(),
+        Dynamic::from(format!("0x{:016x}", analysis.source_fingerprint())),
     );
     report.insert(
         "stdlib".into(),
@@ -168,6 +174,91 @@ pub fn semantic_snapshot_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
 /// or quaternion type family.
 pub fn register_sysml_types(engine: &mut Engine) {
     engine
+        .register_type_with_name::<SysmlElementHandle>("SysmlElementHandle")
+        .register_get("element_id", |handle: &mut SysmlElementHandle| {
+            handle.element_id as i64
+        })
+        .register_get("source_revision", |handle: &mut SysmlElementHandle| {
+            i64::try_from(handle.source_revision).unwrap_or(-1)
+        })
+        .register_get("source_fingerprint", |handle: &mut SysmlElementHandle| {
+            format!("0x{:016x}", handle.source_fingerprint)
+        })
+        .register_fn(
+            "==",
+            |left: SysmlElementHandle, right: SysmlElementHandle| left == right,
+        )
+        .register_fn(
+            "!=",
+            |left: SysmlElementHandle, right: SysmlElementHandle| left != right,
+        )
+        .register_type_with_name::<SysmlFeatureHandle>("SysmlFeatureHandle")
+        .register_get("element", |handle: &mut SysmlFeatureHandle| handle.element)
+        .register_fn(
+            "==",
+            |left: SysmlFeatureHandle, right: SysmlFeatureHandle| left == right,
+        )
+        .register_fn(
+            "!=",
+            |left: SysmlFeatureHandle, right: SysmlFeatureHandle| left != right,
+        )
+        .register_type_with_name::<SysmlExpressionKind>("SysmlExpressionKind")
+        .register_type_with_name::<SysmlExpressionOperator>("SysmlExpressionOperator")
+        .register_fn("is_add", |op: SysmlExpressionOperator| {
+            op == SysmlExpressionOperator::Add
+        })
+        .register_fn("is_equal", |op: SysmlExpressionOperator| {
+            op == SysmlExpressionOperator::Equal
+        })
+        .register_fn("modelica_symbol", |op: SysmlExpressionOperator| {
+            op.modelica_symbol()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_type_with_name::<SysmlUnsupportedExpression>("SysmlUnsupportedExpression")
+        .register_type_with_name::<SysmlExpression>("SysmlExpression")
+        .register_get("source", |value: &mut SysmlExpression| value.source.clone())
+        .register_get("kind", |value: &mut SysmlExpression| value.kind)
+        .register_get("feature", |value: &mut SysmlExpression| {
+            value.feature.map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("operator", |value: &mut SysmlExpression| {
+            value.operator.map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("integer_value", |value: &mut SysmlExpression| {
+            value
+                .integer_value
+                .map(Dynamic::from_int)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("real_value", |value: &mut SysmlExpression| {
+            value
+                .real_value
+                .map(|number| Dynamic::from_float(number.as_f64()))
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("boolean_value", |value: &mut SysmlExpression| {
+            value
+                .boolean_value
+                .map(Dynamic::from_bool)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("string_value", |value: &mut SysmlExpression| {
+            value
+                .string_value
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("unsupported", |value: &mut SysmlExpression| {
+            value
+                .unsupported
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("children", |value: &mut SysmlExpression| {
+            Dynamic::from_array(value.children.iter().cloned().map(Dynamic::from).collect())
+        })
         .register_type_with_name::<SysmlTypeCategory>("SysmlTypeCategory")
         .register_type_with_name::<SysmlPrimitiveType>("SysmlPrimitiveType")
         .register_type_with_name::<SysmlModelicaType>("SysmlModelicaType")
@@ -536,6 +627,21 @@ fn string_array(values: &[String]) -> Dynamic {
 
 fn element_dynamic(element: &SysmlElement) -> Dynamic {
     let mut value = Map::new();
+    value.insert("handle".into(), Dynamic::from(element.handle));
+    value.insert(
+        "owner_handle".into(),
+        element
+            .owner_handle
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "feature_handle".into(),
+        element
+            .feature_handle
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
     value.insert("id".into(), Dynamic::from_int(element.id as i64));
     value.insert("file".into(), Dynamic::from(element.file.clone()));
     value.insert(
@@ -554,8 +660,15 @@ fn reference_dynamic(reference: &lunco_sysml_ast::SysmlReference) -> Dynamic {
     value.insert("start".into(), Dynamic::from_int(reference.start as i64));
     value.insert("end".into(), Dynamic::from_int(reference.end as i64));
     value.insert("name".into(), Dynamic::from(reference.name.clone()));
-    value.insert("from".into(), Dynamic::from(reference.from.clone()));
-    value.insert("target".into(), Dynamic::from(reference.target.clone()));
+    value.insert("from".into(), Dynamic::from(reference.from));
+    value.insert("target".into(), Dynamic::from(reference.target));
+    value.insert(
+        "target_feature".into(),
+        reference
+            .target_feature
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
     Dynamic::from_map(value)
 }
 
@@ -571,7 +684,28 @@ fn relationship_dynamic(relationship: &lunco_sysml_ast::SysmlRelationship) -> Dy
                 .map(|property| {
                     let mut value = Map::new();
                     value.insert("name".into(), Dynamic::from(property.name.clone()));
-                    value.insert("targets".into(), string_array(&property.targets));
+                    value.insert(
+                        "targets".into(),
+                        Dynamic::from_array(
+                            property
+                                .targets
+                                .iter()
+                                .copied()
+                                .map(Dynamic::from)
+                                .collect(),
+                        ),
+                    );
+                    value.insert(
+                        "feature_targets".into(),
+                        Dynamic::from_array(
+                            property
+                                .feature_targets
+                                .iter()
+                                .copied()
+                                .map(Dynamic::from)
+                                .collect(),
+                        ),
+                    );
                     Dynamic::from_map(value)
                 })
                 .collect(),
@@ -583,9 +717,17 @@ fn relationship_dynamic(relationship: &lunco_sysml_ast::SysmlRelationship) -> Dy
 fn constraint_dynamic(constraint: &lunco_sysml_ast::SysmlConstraint) -> Dynamic {
     let mut value = Map::new();
     value.insert("element".into(), element_dynamic(&constraint.element));
-    if let Some(expression) = &constraint.expression {
-        value.insert("expression".into(), Dynamic::from(expression.clone()));
-    }
+    value.insert(
+        "expressions".into(),
+        Dynamic::from_array(
+            constraint
+                .expressions
+                .iter()
+                .cloned()
+                .map(Dynamic::from)
+                .collect(),
+        ),
+    );
     Dynamic::from_map(value)
 }
 
@@ -646,6 +788,14 @@ fn literal_dynamic(literal: &lunco_sysml_ast::SysmlLiteral) -> Dynamic {
 
 fn attribute_dynamic_at_revision(attribute: &SysmlAttribute, revision: u64) -> Dynamic {
     let mut value = Map::new();
+    value.insert("handle".into(), Dynamic::from(attribute.handle));
+    value.insert(
+        "owner_handle".into(),
+        attribute
+            .owner_handle
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
     value.insert("owner".into(), Dynamic::from(attribute.owner.clone()));
     value.insert("name".into(), Dynamic::from(attribute.name.clone()));
     value.insert(

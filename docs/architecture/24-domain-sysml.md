@@ -137,17 +137,23 @@ them.
 
 The parser and source projection retain the declared elements and resolved
 relationships from the selected files. The specialized typed records cover
-parts, items, ports, attributes, requirements, verification cases, and opaque
-constraint expressions. Other parsed metamodel elements remain available as
+parts, items, ports, attributes, requirements, verification cases, and
+source-spanned constraint expression trees. Expression feature leaves carry
+snapshot-scoped resolved handles; relationship ends preserve both element and
+feature handles. Other parsed metamodel elements remain available as
 source-backed generic elements rather than being assigned invented runtime
 semantics.
 
 This is not a SysML/KerML execution engine. Constraint expressions, general
 derived-feature evaluation, N-dimensional non-Real collections, full quantity
-and unit conversion, redefinition/subsetting semantics, and state/behavior execution
-are not evaluated by the runtime. Rhai owns verification policy and consumes
-the typed facts that the current projection can establish; unresolved values
-remain explicit instead of being guessed from source text.
+and unit conversion, redefinition/subsetting semantics, and state/behavior
+execution are not evaluated directly by the runtime. Rhai owns domain mappings
+and policies over the generic typed projection. A bounded Rhai policy may
+lower a resolved constraint expression into Modelica equations and use the
+existing Rumoca experiment path for numerical evaluation; this does not make
+arbitrary SysML expressions executable. Unsupported syntax and unresolved
+references remain explicit with source spans instead of being guessed from
+source text.
 
 The Rhai functions `sysml_value(path, qualified_name)` and
 `sysml_value_from_report(report, qualified_name)` return a tagged result map.

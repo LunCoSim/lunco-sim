@@ -23,7 +23,7 @@ fn new_scratch(source, name) {
         || name == () || type_of(name) != "string" || name == "" {
         return _error("new_scratch", "non-empty Modelica source and scratch name are required");
     }
-    let created = cmd("CreateNewScratchModel", #{ source: source, name: name });
+    let created = cmd("CreateScratchModelicaDocument", #{ source: source, name: name });
     if created == () || created.ok != true || created.data == ()
         || created.data.doc_id == () || created.data.doc_id <= 0 {
         return _error("new_scratch", "Modelica Editor did not return the created document identity");
@@ -82,6 +82,7 @@ fn save_as(doc, path) { cmd("SaveAsDocument", #{ doc_id: doc, path: path }) }
 fn undo(doc) { cmd("UndoDocument", #{ doc_id: doc }) }
 fn redo(doc) { cmd("RedoDocument", #{ doc_id: doc }) }
 fn close(doc) { cmd("CloseDocument", #{ doc_id: doc }) }
+fn close_scratch(doc) { cmd("CloseScratchModelicaDocument", #{ doc_id: doc }) }
 
 fn _query_ok(value) {
     value != () && value.ok != false
@@ -262,11 +263,10 @@ fn poll_experiment_ticket(ticket) {
             });
         }
 
-        let dispatch = cmd("RunExperiment", #{
+        let dispatch = cmd("RunModelicaSolve", #{
             doc_id: ticket.doc_id,
             class: ticket.class,
-            overrides: [],
-            inputs: [],
+            source_generation: ticket.source_generation,
             t_start: ticket.t_start,
             t_end: ticket.t_end,
             dt: ticket.dt,

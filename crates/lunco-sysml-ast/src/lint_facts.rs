@@ -6,9 +6,10 @@
 //! it does not execute a requirement or verification.
 
 use crate::{
-    SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlDiagnostic, SysmlElement, SysmlLiteral,
-    SysmlReference, SysmlRelationship, SysmlRequirementRecord, SysmlSubject, SysmlType,
-    SysmlTypeRef, SysmlVerificationRecord,
+    SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlDiagnostic, SysmlElement,
+    SysmlElementHandle, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator,
+    SysmlFeatureHandle, SysmlLiteral, SysmlReference, SysmlRelationship, SysmlRequirementRecord,
+    SysmlSubject, SysmlType, SysmlTypeRef, SysmlUnsupportedExpression, SysmlVerificationRecord,
 };
 use lunco_hooks::HookValue as H;
 use std::collections::BTreeSet;
@@ -387,6 +388,15 @@ pub fn sysml_facts(analysis: &SysmlAnalysis) -> H {
 
 fn element(value: &SysmlElement) -> H {
     H::map([
+        ("handle", element_handle(value.handle)),
+        (
+            "owner_handle",
+            value.owner_handle.map(element_handle).unwrap_or(H::Unit),
+        ),
+        (
+            "feature_handle",
+            value.feature_handle.map(feature_handle).unwrap_or(H::Unit),
+        ),
         ("id", H::Int(i64::from(value.id))),
         ("file", H::str(value.file.clone())),
         ("qualified_name", H::str(value.qualified_name.clone())),
@@ -402,8 +412,12 @@ fn reference(value: &SysmlReference) -> H {
         ("start", H::Int(i64::from(value.start))),
         ("end", H::Int(i64::from(value.end))),
         ("name", H::str(value.name.clone())),
-        ("from", H::str(value.from.clone())),
-        ("target", H::str(value.target.clone())),
+        ("from", element_handle(value.from)),
+        ("target", element_handle(value.target)),
+        (
+            "target_feature",
+            value.target_feature.map(feature_handle).unwrap_or(H::Unit),
+        ),
     ])
 }
 
@@ -419,7 +433,28 @@ fn relationship(value: &SysmlRelationship) -> H {
                     .map(|property| {
                         H::map([
                             ("name", H::str(property.name.clone())),
-                            ("targets", strings(&property.targets)),
+                            (
+                                "targets",
+                                H::Array(
+                                    property
+                                        .targets
+                                        .iter()
+                                        .copied()
+                                        .map(element_handle)
+                                        .collect(),
+                                ),
+                            ),
+                            (
+                                "feature_targets",
+                                H::Array(
+                                    property
+                                        .feature_targets
+                                        .iter()
+                                        .copied()
+                                        .map(feature_handle)
+                                        .collect(),
+                                ),
+                            ),
                         ])
                     })
                     .collect(),
@@ -432,14 +467,158 @@ fn constraint(value: &SysmlConstraint) -> H {
     H::map([
         ("element", element(&value.element)),
         (
-            "expression",
-            H::str(value.expression.clone().unwrap_or_default()),
+            "expressions",
+            H::Array(value.expressions.iter().map(expression).collect()),
         ),
     ])
 }
 
+fn element_handle(value: SysmlElementHandle) -> H {
+    H::map([
+        (
+            "source_revision",
+            H::str(format!("0x{:016x}", value.source_revision)),
+        ),
+        (
+            "source_fingerprint",
+            H::str(format!("0x{:016x}", value.source_fingerprint)),
+        ),
+        ("element_id", H::Int(i64::from(value.element_id))),
+    ])
+}
+
+fn feature_handle(value: SysmlFeatureHandle) -> H {
+    H::map([("element", element_handle(value.element))])
+}
+
+fn expression(value: &SysmlExpression) -> H {
+    H::map([
+        (
+            "source",
+            H::map([
+                ("file", H::str(value.source.file.clone())),
+                ("start", H::Int(i64::from(value.source.start))),
+                ("end", H::Int(i64::from(value.source.end))),
+                (
+                    "revision",
+                    H::str(format!("0x{:016x}", value.source.revision)),
+                ),
+            ]),
+        ),
+        ("kind_code", H::Int(expression_kind_code(value.kind))),
+        (
+            "feature",
+            value.feature.map(feature_handle).unwrap_or(H::Unit),
+        ),
+        (
+            "operator_code",
+            value
+                .operator
+                .map(expression_operator_code)
+                .map(H::Int)
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "integer_value",
+            value.integer_value.map(H::Int).unwrap_or(H::Unit),
+        ),
+        (
+            "real_value",
+            value
+                .real_value
+                .map(|number| H::Float(number.as_f64()))
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "boolean_value",
+            value.boolean_value.map(H::Bool).unwrap_or(H::Unit),
+        ),
+        (
+            "string_value",
+            value
+                .string_value
+                .as_ref()
+                .map(|string| H::str(string.clone()))
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "unsupported_code",
+            value
+                .unsupported
+                .map(unsupported_expression_code)
+                .map(H::Int)
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "children",
+            H::Array(value.children.iter().map(expression).collect()),
+        ),
+    ])
+}
+
+// Numeric tags keep the language-neutral hook contract typed. Rhai's native
+// SysmlExpression adapter exposes the Rust enums directly.
+fn expression_kind_code(kind: SysmlExpressionKind) -> i64 {
+    match kind {
+        SysmlExpressionKind::FeatureReference => 1,
+        SysmlExpressionKind::IntegerLiteral => 2,
+        SysmlExpressionKind::RealLiteral => 3,
+        SysmlExpressionKind::BooleanLiteral => 4,
+        SysmlExpressionKind::StringLiteral => 5,
+        SysmlExpressionKind::NullLiteral => 6,
+        SysmlExpressionKind::Unary => 7,
+        SysmlExpressionKind::Binary => 8,
+        SysmlExpressionKind::Conditional => 9,
+        SysmlExpressionKind::Group => 10,
+        SysmlExpressionKind::Unsupported => 11,
+    }
+}
+
+fn expression_operator_code(operator: SysmlExpressionOperator) -> i64 {
+    match operator {
+        SysmlExpressionOperator::Positive => 1,
+        SysmlExpressionOperator::Negative => 2,
+        SysmlExpressionOperator::Not => 3,
+        SysmlExpressionOperator::Add => 4,
+        SysmlExpressionOperator::Subtract => 5,
+        SysmlExpressionOperator::Multiply => 6,
+        SysmlExpressionOperator::Divide => 7,
+        SysmlExpressionOperator::Power => 8,
+        SysmlExpressionOperator::Equal => 9,
+        SysmlExpressionOperator::NotEqual => 10,
+        SysmlExpressionOperator::Less => 11,
+        SysmlExpressionOperator::LessEqual => 12,
+        SysmlExpressionOperator::Greater => 13,
+        SysmlExpressionOperator::GreaterEqual => 14,
+        SysmlExpressionOperator::And => 15,
+        SysmlExpressionOperator::Or => 16,
+        SysmlExpressionOperator::Implies => 17,
+        SysmlExpressionOperator::Equivalent => 18,
+    }
+}
+
+fn unsupported_expression_code(reason: SysmlUnsupportedExpression) -> i64 {
+    match reason {
+        SysmlUnsupportedExpression::UnresolvedReference => 1,
+        SysmlUnsupportedExpression::NonFeatureReference => 2,
+        SysmlUnsupportedExpression::Operator => 3,
+        SysmlUnsupportedExpression::Call => 4,
+        SysmlUnsupportedExpression::Collection => 5,
+        SysmlUnsupportedExpression::Index => 6,
+        SysmlUnsupportedExpression::Metadata => 7,
+        SysmlUnsupportedExpression::Arrow => 8,
+        SysmlUnsupportedExpression::OtherSyntax => 9,
+        SysmlUnsupportedExpression::InvalidLiteral => 10,
+    }
+}
+
 fn attribute(value: &SysmlAttribute) -> H {
     H::map([
+        ("handle", feature_handle(value.handle)),
+        (
+            "owner_handle",
+            value.owner_handle.map(element_handle).unwrap_or(H::Unit),
+        ),
         ("owner", H::str(value.owner.clone())),
         ("name", H::str(value.name.clone())),
         ("qualified_name", H::str(value.qualified_name.clone())),

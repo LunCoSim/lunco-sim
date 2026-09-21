@@ -4,6 +4,23 @@
 
 import "assembly_audit" as assembly_audit;
 
+fn _revolved_mesh_signed_volume(mesh) {
+    let volume = 0.0;
+    let cursor = 0;
+    for face_count in mesh.face_vertex_counts {
+        let first = mesh.points[mesh.face_vertex_indices[cursor]];
+        for corner in 1..face_count - 1 {
+            let b = mesh.points[mesh.face_vertex_indices[cursor + corner]];
+            let c = mesh.points[mesh.face_vertex_indices[cursor + corner + 1]];
+            volume += (first.x * (b.y * c.z - b.z * c.y)
+                + first.y * (b.z * c.x - b.x * c.z)
+                + first.z * (b.x * c.y - b.y * c.x)) / 6.0;
+        }
+        cursor += face_count;
+    }
+    volume
+}
+
 let checks = [];
 
 let scaled = vec3(1.0, -2.0, 3.5) * 0.5;
@@ -33,6 +50,56 @@ checks.push(t_true(mesh.face_varying_normals[0].y < -0.999
     "XZ caps have outward normals in the expected Y directions"));
 checks.push(t_true(mesh.points[0].z > 0.999 && mesh.points[6].y > 0.079,
     "XZ profile mapping preserves the right-handed local frame"));
+
+let foot_radius = 0.52;
+let hemisphere_profile = [vec2(0.0, 0.0), vec2(foot_radius, 0.0)];
+for station in 1..24 {
+    let angle = 1.5707963267948966 * station / 24.0;
+    hemisphere_profile.push(vec2(foot_radius * angle.cos(),
+        foot_radius * angle.sin()));
+}
+hemisphere_profile.push(vec2(0.0, foot_radius));
+let hemisphere = revolve_profile(hemisphere_profile, 64);
+let hemisphere_volume = _revolved_mesh_signed_volume(hemisphere);
+let expected_hemisphere_volume = 2.0 * 3.141592653589793
+    * foot_radius * foot_radius * foot_radius / 3.0;
+checks.push(t_true(type_of(hemisphere) == "RevolvedProfileMesh"
+    && hemisphere.vertex_count > 1400 && hemisphere.face_count > 1500
+    && hemisphere.face_vertex_indices.len() == hemisphere.face_varying_normals.len()
+    && abs(hemisphere_volume / expected_hemisphere_volume - 1.0) < 0.01,
+    "typed profile revolution builds a closed hemisphere at the requested radius with outward volume"));
+
+let min_x = foot_radius;
+let min_y = foot_radius;
+let min_z = foot_radius;
+let max_x = -foot_radius;
+let max_y = -foot_radius;
+let max_z = -foot_radius;
+for point in hemisphere.points {
+    if point.x < min_x { min_x = point.x; }
+    if point.y < min_y { min_y = point.y; }
+    if point.z < min_z { min_z = point.z; }
+    if point.x > max_x { max_x = point.x; }
+    if point.y > max_y { max_y = point.y; }
+    if point.z > max_z { max_z = point.z; }
+}
+let face_offset = 0;
+let oriented_faces = true;
+for face_count in hemisphere.face_vertex_counts {
+    let first_index = hemisphere.face_vertex_indices[face_offset];
+    let normal = hemisphere.face_varying_normals[face_offset];
+    let center_dot = normal.x * hemisphere.points[first_index].x
+        + normal.y * hemisphere.points[first_index].y
+        + normal.z * hemisphere.points[first_index].z;
+    if center_dot < -0.000001 { oriented_faces = false; }
+    face_offset += face_count;
+}
+checks.push(t_true(abs(min_x + foot_radius) < 0.000001
+    && min_y == 0.0 && abs(min_z + foot_radius) < 0.000001
+    && abs(max_x - foot_radius) < 0.000001
+    && abs(max_y - foot_radius) < 0.000001
+    && abs(max_z - foot_radius) < 0.000001 && oriented_faces,
+    "revolved hemisphere has the dimensional envelope and outward right-handed face normals"));
 
 let a = oriented_bounds3(vec3(0.0, 0.0, 0.0), vec3(1.0, 0.2, 0.2),
     quat_identity());

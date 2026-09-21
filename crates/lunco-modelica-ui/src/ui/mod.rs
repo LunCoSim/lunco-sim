@@ -601,12 +601,6 @@ impl Plugin for ModelicaUiPlugin {
         use lunco_workbench_state::AppDocumentSessionExt;
         app.register_document_session_codec(session_codec::ModelicaSessionCodec);
 
-        // Long-lived workspace `ModelicaEngine` mirrored from
-        // `ModelicaDocuments`. Panel render code, API
-        // observers, and async tasks query the same warm session
-        // instead of rebuilding one per call.
-        app.add_plugins(crate::engine_resource::ModelicaEnginePlugin);
-
         // Off-thread icon pre-warmer: on every DocumentOpened, walk
         // the doc's AST for cross-package type references and prime
         // rumoca's caches in the background. Drill-in projection
@@ -762,15 +756,6 @@ impl Plugin for ModelicaUiPlugin {
             // Push-driven editor buffer sync — replaces the old
             // per-frame generation poll in `CodeEditorPanel::render`.
             .add_observer(panels::code_editor::editor_on_doc_changed)
-            // Structural ops that arrive against a stale syntax
-            // cache are deferred here and applied once the async
-            // engine sync lands a fresh parse — removes the last
-            // sync-reparse from the write path.
-            .init_resource::<panels::canvas_diagram::PendingStructuralOps>()
-            .add_systems(
-                Update,
-                panels::canvas_diagram::drain_pending_structural_ops,
-            )
             .init_resource::<DocTitleGenCache>()
             .add_systems(Update, derive_doc_title)
             .add_systems(Update, panels::diagnostics::refresh_diagnostics)

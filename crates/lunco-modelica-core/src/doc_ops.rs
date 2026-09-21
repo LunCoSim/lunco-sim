@@ -14,6 +14,18 @@ use lunco_modelica_document::{ModelicaDocument, ModelicaOp};
 
 type ModelicaDocuments = lunco_doc_bevy::DocumentRegistry<ModelicaDocument>;
 
+/// Allocate an untitled Modelica document through the canonical document
+/// registry. UI and headless API hosts share this path; presentation adapters
+/// decide whether to open a tab, while the registry owns document identity and
+/// lifecycle publication.
+pub fn allocate_scratch_document(
+    registry: &mut lunco_doc_bevy::DocumentRegistry<ModelicaDocument>,
+    source: String,
+    display_name: String,
+) -> lunco_doc::DocumentId {
+    registry.allocate(source, lunco_doc::PathlessOrigin::untitled(display_name))
+}
+
 /// Drain the registry's pending doc-lifecycle rings into the canonical
 /// `lunco_doc_bevy` triggers each frame (Opened → Changed → Closed).
 ///

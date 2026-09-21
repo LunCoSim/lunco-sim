@@ -19,7 +19,7 @@ fn fail(me, message) {
             modelica_editor::cancel_experiment_ticket(me.solve_ticket);
         }
         if me.modelica_doc > 0 {
-            modelica_editor::close(me.modelica_doc);
+            modelica_editor::close_scratch(me.modelica_doc);
         }
         if me.doc > 0 {
             assembly_edit::close_document(me.doc);
@@ -259,7 +259,13 @@ fn on_tick(me, ctx) {
             "model ConstraintSolveScratch\nend ConstraintSolveScratch;\n",
             "SysMLConstraintSolveScratch");
         if new_modelica == () || new_modelica.ok != true {
-            fail(this, "Modelica Editor did not create a scratch document for the generated solve");
+            let detail = if new_modelica == () || new_modelica.error == () {
+                "missing diagnostic"
+            } else {
+                new_modelica.error
+            };
+            fail(this, "headless Modelica document API did not create a scratch document for the generated solve: "
+                + detail);
             this.done = true;
             return;
         }
@@ -533,7 +539,7 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    let closed = modelica_editor::close(this.modelica_doc);
+    let closed = modelica_editor::close_scratch(this.modelica_doc);
     if closed == () || closed.ok != true {
         fail(this, "the test-owned Modelica scratch document did not accept its close request");
         this.done = true;

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use sysml_model::{ElementId, ElementKind, Value};
 use sysml_semantics::Workspace;
-use sysml_syntax::TextRange;
+use sysml_syntax::{SyntaxKind, SyntaxNode, TextRange};
 
 thread_local! {
     // `sysml_semantics::Workspace` owns rowan syntax nodes and is deliberately
@@ -68,6 +68,31 @@ pub struct SysmlSourceRef {
     pub revision: u64,
 }
 
+/// Identity of one semantic element inside one exact SysML source snapshot.
+///
+/// The upstream element index is only meaningful within its workspace. The
+/// source revision and content fingerprint prevent a handle from one Twin or
+/// document generation being mistaken for a coincidentally equal index in
+/// another analysis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SysmlElementHandle {
+    /// Caller-owned source generation.
+    pub source_revision: u64,
+    /// Content identity of the complete source set (including stdlib mode).
+    pub source_fingerprint: u64,
+    /// Upstream semantic model element index.
+    pub element_id: u32,
+}
+
+/// Identity of a resolved SysML feature, including datum and parameter
+/// features. Construction is restricted to semantic elements whose upstream
+/// metamodel kind specializes `Feature`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SysmlFeatureHandle {
+    /// Snapshot-scoped element identity of this feature.
+    pub element: SysmlElementHandle,
+}
+
 /// The category of a semantic diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SysmlDiagnosticKind {
@@ -97,6 +122,15 @@ pub struct SysmlDiagnostic {
 /// A source-backed SysML element suitable for navigation and reports.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlElement {
+    /// Snapshot-scoped semantic identity.
+    #[serde(default)]
+    pub handle: SysmlElementHandle,
+    /// Snapshot-scoped immediate owner when the upstream model provides one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_handle: Option<SysmlElementHandle>,
+    /// Feature identity when this metamodel element specializes `Feature`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_handle: Option<SysmlFeatureHandle>,
     /// Stable index within the upstream semantic model snapshot.
     pub id: u32,
     /// Logical source file containing the declaration.
@@ -122,10 +156,13 @@ pub struct SysmlReference {
     pub end: u32,
     /// Final name segment as written.
     pub name: String,
-    /// Qualified element that owns the reference expression.
-    pub from: String,
-    /// Root-qualified target name.
-    pub target: String,
+    /// Snapshot-scoped element that owns the reference expression.
+    pub from: SysmlElementHandle,
+    /// Resolved snapshot-scoped target.
+    pub target: SysmlElementHandle,
+    /// Typed target when the reference resolves to a SysML feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_feature: Option<SysmlFeatureHandle>,
 }
 
 /// One standard KerML/SysML relationship projected without losing its typed
@@ -148,21 +185,132 @@ pub struct SysmlRelationship {
 pub struct SysmlRelationshipProperty {
     /// Property name from the KerML/SysML metamodel.
     pub name: String,
-    /// Qualified target elements, in authored/model order.
-    pub targets: Vec<String>,
+    /// Resolved target elements, in authored/model order.
+    pub targets: Vec<SysmlElementHandle>,
+    /// Resolved feature endpoints, in authored/model order.
+    pub feature_targets: Vec<SysmlFeatureHandle>,
 }
 
-/// A constraint or assertion with its authored expression kept opaque.
-/// Evaluation belongs to the owning Twin/Rhai/Modelica adapter; the SysML
-/// bridge only guarantees source identity and does not guess expression
-/// semantics from text.
+/// A typed operator in the supported source-backed expression projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlExpressionOperator {
+    Positive,
+    Negative,
+    Not,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Power,
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    And,
+    Or,
+    Implies,
+    Equivalent,
+}
+
+impl SysmlExpressionOperator {
+    /// Render only this typed operator in Modelica source. Relational
+    /// equality is emitted as a Modelica equation by the Rhai lowering policy,
+    /// not as an expression operator.
+    pub fn modelica_symbol(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Positive => "+",
+            Self::Negative => "-",
+            Self::Not => "not",
+            Self::Add => "+",
+            Self::Subtract => "-",
+            Self::Multiply => "*",
+            Self::Divide => "/",
+            Self::Power => "^",
+            Self::Equal => "==",
+            Self::NotEqual => "<>",
+            Self::Less => "<",
+            Self::LessEqual => "<=",
+            Self::Greater => ">",
+            Self::GreaterEqual => ">=",
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Implies | Self::Equivalent => return None,
+        })
+    }
+}
+
+/// Typed shape of one parsed SysML/KerML expression node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlExpressionKind {
+    FeatureReference,
+    IntegerLiteral,
+    RealLiteral,
+    BooleanLiteral,
+    StringLiteral,
+    NullLiteral,
+    Unary,
+    Binary,
+    Conditional,
+    Group,
+    Unsupported,
+}
+
+/// Parsed expression syntax that this bounded bridge recognizes but does not
+/// yet lower to an executable typed node. This preserves a typed reason and
+/// source span instead of leaking opaque authored expression text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlUnsupportedExpression {
+    UnresolvedReference,
+    NonFeatureReference,
+    Operator,
+    Call,
+    Collection,
+    Index,
+    Metadata,
+    Arrow,
+    OtherSyntax,
+    InvalidLiteral,
+}
+
+/// One typed, source-spanned expression node.
+///
+/// Values live in their native fields, reference leaves carry resolved
+/// feature handles, and compound expressions retain child topology. This is
+/// a projection for policy and model generation, not a general expression
+/// evaluator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlExpression {
+    pub source: SysmlSourceRef,
+    pub kind: SysmlExpressionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature: Option<SysmlFeatureHandle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<SysmlExpressionOperator>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integer_value: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub real_value: Option<SysmlNumber>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boolean_value: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub string_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsupported: Option<SysmlUnsupportedExpression>,
+    #[serde(default)]
+    pub children: Vec<SysmlExpression>,
+}
+
+/// A source-backed constraint/assertion with zero or more typed expression
+/// statements. Unsupported grammar remains explicit at a source location.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlConstraint {
     /// Source-backed constraint element.
     pub element: SysmlElement,
-    /// Authored body when the semantic model provides one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expression: Option<String>,
+    /// Parsed, resolved body expressions in authored order.
+    #[serde(default)]
+    pub expressions: Vec<SysmlExpression>,
 }
 
 /// A finite numeric literal projected from SysML source.
@@ -655,6 +803,12 @@ fn default_literal_kind() -> SysmlLiteralKind {
 /// An authored SysML attribute with its source span and owning element.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlAttribute {
+    /// Snapshot-scoped identity of this datum/parameter feature.
+    #[serde(default)]
+    pub handle: SysmlFeatureHandle,
+    /// Snapshot-scoped owning element when the owner is in the source set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_handle: Option<SysmlElementHandle>,
     /// Qualified owner (`Package::Part`).
     pub owner: String,
     /// Attribute name.
@@ -762,6 +916,7 @@ pub struct SysmlAnalysis {
     requirements: Vec<SysmlRequirementRecord>,
     verifications: Vec<SysmlVerificationRecord>,
     source_revision: u64,
+    source_fingerprint: u64,
     includes_stdlib: bool,
 }
 
@@ -804,6 +959,7 @@ impl SysmlAnalysis {
                 text: text.into(),
             })
             .collect();
+        let source_fingerprint = source_fingerprint_sysml(&files, includes_stdlib);
         // The official library is immutable data. Parse and resolve it once,
         // then clone the upstream semantic workspace for each source-set
         // snapshot. This keeps keystroke edits proportional to project size
@@ -858,7 +1014,23 @@ impl SysmlAnalysis {
                 let Some((range, _name_range)) = workspace.element_ranges(id) else {
                     continue;
                 };
+                let kind = workspace.model().kind(id);
+                let handle = SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: id.index() as u32,
+                };
+                let owner_handle = workspace.model().owner(id).map(|owner| SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: owner.index() as u32,
+                });
                 elements.push(SysmlElement {
+                    handle,
+                    owner_handle,
+                    feature_handle: kind
+                        .is_a(ElementKind::Feature)
+                        .then_some(SysmlFeatureHandle { element: handle }),
                     id: id.index() as u32,
                     file: file_name.clone(),
                     qualified_name: workspace.qualified_name_of(id),
@@ -890,14 +1062,45 @@ impl SysmlAnalysis {
                     )
                     .unwrap_or_default()
                     .to_string(),
-                from: workspace.qualified_name_of(reference.from),
-                target: workspace.qualified_name_of(reference.target),
+                from: SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: reference.from.index() as u32,
+                },
+                target: SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: reference.target.index() as u32,
+                },
+                target_feature: workspace
+                    .model()
+                    .kind(reference.target)
+                    .is_a(ElementKind::Feature)
+                    .then_some(SysmlFeatureHandle {
+                        element: SysmlElementHandle {
+                            source_revision,
+                            source_fingerprint,
+                            element_id: reference.target.index() as u32,
+                        },
+                    }),
             });
         }
 
         let type_catalog = type_catalog(&elements);
-        let relationships = project_relationships(&workspace, &elements, &project_indices);
-        let constraints = project_constraints(&workspace, &elements, &project_indices);
+        let relationships = project_relationships(
+            &workspace,
+            &elements,
+            &project_indices,
+            source_revision,
+            source_fingerprint,
+        );
+        let constraints = project_constraints(
+            &workspace,
+            &elements,
+            &project_indices,
+            source_revision,
+            source_fingerprint,
+        );
         let attributes = project_attributes(&mut workspace, &files, &elements, &type_catalog);
         let records = project_records(&attributes, source_revision);
         let requirements = project_requirements(&files, &elements, &attributes);
@@ -915,6 +1118,7 @@ impl SysmlAnalysis {
             requirements,
             verifications,
             source_revision,
+            source_fingerprint,
             includes_stdlib,
         }
     }
@@ -1016,6 +1220,11 @@ impl SysmlAnalysis {
         self.source_revision
     }
 
+    /// Content identity shared by every handle created from this source set.
+    pub fn source_fingerprint(&self) -> u64 {
+        self.source_fingerprint
+    }
+
     /// Whether the embedded SysML standard library was included.
     pub fn includes_stdlib(&self) -> bool {
         self.includes_stdlib
@@ -1046,6 +1255,30 @@ fn standard_library_workspace() -> Workspace {
 }
 
 fn source_fingerprint(files: &[(String, String)], includes_stdlib: bool) -> u64 {
+    source_fingerprint_entries(
+        files
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str())),
+        files.len(),
+        includes_stdlib,
+    )
+}
+
+fn source_fingerprint_sysml(files: &[SysmlFile], includes_stdlib: bool) -> u64 {
+    source_fingerprint_entries(
+        files
+            .iter()
+            .map(|file| (file.name.as_str(), file.text.as_str())),
+        files.len(),
+        includes_stdlib,
+    )
+}
+
+fn source_fingerprint_entries<'a>(
+    files: impl Iterator<Item = (&'a str, &'a str)>,
+    file_count: usize,
+    includes_stdlib: bool,
+) -> u64 {
     let mut hash = lunco_hash::Fnv1a::new();
     hash.write_u64(ANALYSIS_CACHE_FORMAT)
         .write_u64(u64::from(includes_stdlib));
@@ -1065,7 +1298,7 @@ fn source_fingerprint(files: &[(String, String)], includes_stdlib: bool) -> u64 
             library_hash.finish()
         }));
     }
-    hash.write_u64(files.len() as u64);
+    hash.write_u64(file_count as u64);
     for (name, text) in files {
         hash.write_u64(name.len() as u64)
             .write_bytes(name.as_bytes())
@@ -1098,6 +1331,8 @@ fn project_relationships(
     workspace: &Workspace,
     elements: &[SysmlElement],
     project_files: &[usize],
+    source_revision: u64,
+    source_fingerprint: u64,
 ) -> Vec<SysmlRelationship> {
     let model = workspace.model();
     let mut relationships = Vec::new();
@@ -1116,16 +1351,31 @@ fn project_relationships(
                 .props(id)
                 .filter_map(|(name, value)| {
                     let targets = match value {
-                        Value::Ref(target) => vec![workspace.qualified_name_of(*target)],
-                        Value::RefList(targets) => targets
-                            .iter()
-                            .map(|target| workspace.qualified_name_of(*target))
-                            .collect(),
+                        Value::Ref(target) => vec![*target],
+                        Value::RefList(targets) => targets.clone(),
                         _ => return None,
                     };
                     (!targets.is_empty()).then_some(SysmlRelationshipProperty {
                         name: name.to_owned(),
-                        targets,
+                        feature_targets: targets
+                            .iter()
+                            .filter(|target| model.kind(**target).is_a(ElementKind::Feature))
+                            .map(|target| SysmlFeatureHandle {
+                                element: SysmlElementHandle {
+                                    source_revision,
+                                    source_fingerprint,
+                                    element_id: target.index() as u32,
+                                },
+                            })
+                            .collect(),
+                        targets: targets
+                            .iter()
+                            .map(|target| SysmlElementHandle {
+                                source_revision,
+                                source_fingerprint,
+                                element_id: target.index() as u32,
+                            })
+                            .collect(),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -1143,6 +1393,8 @@ fn project_constraints(
     workspace: &Workspace,
     elements: &[SysmlElement],
     project_files: &[usize],
+    source_revision: u64,
+    source_fingerprint: u64,
 ) -> Vec<SysmlConstraint> {
     let model = workspace.model();
     let mut constraints = Vec::new();
@@ -1164,17 +1416,357 @@ fn project_constraints(
             else {
                 continue;
             };
-            let expression = model
-                .maybe(id, "body")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
+            let expressions = workspace
+                .file_parse(file)
+                .syntax()
+                .descendants()
+                .filter(|node| node.kind() == SyntaxKind::EXPR_STMT)
+                .filter(|node| {
+                    let start = u32::from(node.text_range().start());
+                    let end = u32::from(node.text_range().end());
+                    start >= element.start && end <= element.end
+                })
+                .filter_map(|statement| statement.children().next())
+                .map(|node| {
+                    lower_expression(
+                        &node,
+                        workspace,
+                        file,
+                        workspace.file_name(file),
+                        source_revision,
+                        source_fingerprint,
+                        0,
+                    )
+                })
+                .collect();
             constraints.push(SysmlConstraint {
                 element: element.clone(),
-                expression,
+                expressions,
             });
         }
     }
     constraints
+}
+
+fn lower_expression(
+    node: &SyntaxNode,
+    workspace: &Workspace,
+    file_index: usize,
+    file_name: &str,
+    source_revision: u64,
+    source_fingerprint: u64,
+    depth: usize,
+) -> SysmlExpression {
+    let range = node.text_range();
+    let source = SysmlSourceRef {
+        file: file_name.to_owned(),
+        start: u32::from(range.start()),
+        end: u32::from(range.end()),
+        revision: source_revision,
+    };
+    let unsupported = |reason| SysmlExpression {
+        source: source.clone(),
+        kind: SysmlExpressionKind::Unsupported,
+        feature: None,
+        operator: None,
+        integer_value: None,
+        real_value: None,
+        boolean_value: None,
+        string_value: None,
+        unsupported: Some(reason),
+        children: Vec::new(),
+    };
+    if depth >= 128 {
+        return unsupported(SysmlUnsupportedExpression::OtherSyntax);
+    }
+    let lower_children = || {
+        node.children()
+            .map(|child| {
+                lower_expression(
+                    &child,
+                    workspace,
+                    file_index,
+                    file_name,
+                    source_revision,
+                    source_fingerprint,
+                    depth + 1,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let base = |kind, children| SysmlExpression {
+        source: source.clone(),
+        kind,
+        feature: None,
+        operator: None,
+        integer_value: None,
+        real_value: None,
+        boolean_value: None,
+        string_value: None,
+        unsupported: None,
+        children,
+    };
+
+    match node.kind() {
+        SyntaxKind::EXPR_STMT => node
+            .children()
+            .next()
+            .map(|child| {
+                lower_expression(
+                    &child,
+                    workspace,
+                    file_index,
+                    file_name,
+                    source_revision,
+                    source_fingerprint,
+                    depth + 1,
+                )
+            })
+            .unwrap_or_else(|| unsupported(SysmlUnsupportedExpression::OtherSyntax)),
+        SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR => {
+            let range_start = u32::from(range.start());
+            let range_end = u32::from(range.end());
+            let exact = workspace.references().iter().find(|reference| {
+                reference.file == file_index
+                    && u32::from(reference.range.start()) == range_start
+                    && u32::from(reference.range.end()) == range_end
+            });
+            let resolved = exact.or_else(|| {
+                (node.kind() == SyntaxKind::PATH_EXPR)
+                    .then(|| {
+                        workspace
+                            .references()
+                            .iter()
+                            .filter(|reference| {
+                                reference.file == file_index
+                                    && u32::from(reference.range.start()) >= range_start
+                                    && u32::from(reference.range.end()) <= range_end
+                                    && u32::from(reference.range.end()) == range_end
+                            })
+                            .max_by_key(|reference| u32::from(reference.range.start()))
+                    })
+                    .flatten()
+            });
+            let Some(reference) = resolved else {
+                return unsupported(SysmlUnsupportedExpression::UnresolvedReference);
+            };
+            if !workspace
+                .model()
+                .kind(reference.target)
+                .is_a(ElementKind::Feature)
+            {
+                return unsupported(SysmlUnsupportedExpression::NonFeatureReference);
+            }
+            let element = SysmlElementHandle {
+                source_revision,
+                source_fingerprint,
+                element_id: reference.target.index() as u32,
+            };
+            SysmlExpression {
+                source,
+                kind: SysmlExpressionKind::FeatureReference,
+                feature: Some(SysmlFeatureHandle { element }),
+                operator: None,
+                integer_value: None,
+                real_value: None,
+                boolean_value: None,
+                string_value: None,
+                unsupported: None,
+                children: Vec::new(),
+            }
+        }
+        SyntaxKind::LITERAL => {
+            let Some(token) = node.first_token() else {
+                return unsupported(SysmlUnsupportedExpression::InvalidLiteral);
+            };
+            match token.kind() {
+                SyntaxKind::DECIMAL => {
+                    let parsed = parse_literal(token.text().as_ref());
+                    if let Some(value) = parsed.integer_value {
+                        SysmlExpression {
+                            source,
+                            kind: SysmlExpressionKind::IntegerLiteral,
+                            feature: None,
+                            operator: None,
+                            integer_value: Some(value),
+                            real_value: None,
+                            boolean_value: None,
+                            string_value: None,
+                            unsupported: None,
+                            children: Vec::new(),
+                        }
+                    } else if let Some(value) = parsed.number_value {
+                        SysmlExpression {
+                            source,
+                            kind: SysmlExpressionKind::RealLiteral,
+                            feature: None,
+                            operator: None,
+                            integer_value: None,
+                            real_value: Some(value),
+                            boolean_value: None,
+                            string_value: None,
+                            unsupported: None,
+                            children: Vec::new(),
+                        }
+                    } else {
+                        unsupported(SysmlUnsupportedExpression::InvalidLiteral)
+                    }
+                }
+                SyntaxKind::REAL => {
+                    let parsed = parse_literal(token.text().as_ref());
+                    match parsed.number_value {
+                        Some(value) => SysmlExpression {
+                            source,
+                            kind: SysmlExpressionKind::RealLiteral,
+                            feature: None,
+                            operator: None,
+                            integer_value: None,
+                            real_value: Some(value),
+                            boolean_value: None,
+                            string_value: None,
+                            unsupported: None,
+                            children: Vec::new(),
+                        },
+                        None => unsupported(SysmlUnsupportedExpression::InvalidLiteral),
+                    }
+                }
+                SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW => SysmlExpression {
+                    source,
+                    kind: SysmlExpressionKind::BooleanLiteral,
+                    feature: None,
+                    operator: None,
+                    integer_value: None,
+                    real_value: None,
+                    boolean_value: Some(token.kind() == SyntaxKind::TRUE_KW),
+                    string_value: None,
+                    unsupported: None,
+                    children: Vec::new(),
+                },
+                SyntaxKind::STRING => {
+                    let parsed = parse_literal(token.text().as_ref());
+                    match parsed.string_value {
+                        Some(value) => SysmlExpression {
+                            source,
+                            kind: SysmlExpressionKind::StringLiteral,
+                            feature: None,
+                            operator: None,
+                            integer_value: None,
+                            real_value: None,
+                            boolean_value: None,
+                            string_value: Some(value),
+                            unsupported: None,
+                            children: Vec::new(),
+                        },
+                        None => unsupported(SysmlUnsupportedExpression::InvalidLiteral),
+                    }
+                }
+                SyntaxKind::NULL_KW => SysmlExpression {
+                    source,
+                    kind: SysmlExpressionKind::NullLiteral,
+                    feature: None,
+                    operator: None,
+                    integer_value: None,
+                    real_value: None,
+                    boolean_value: None,
+                    string_value: None,
+                    unsupported: None,
+                    children: Vec::new(),
+                },
+                _ => unsupported(SysmlUnsupportedExpression::InvalidLiteral),
+            }
+        }
+        SyntaxKind::PAREN_EXPR => {
+            let children = lower_children();
+            if children.len() == 1 {
+                base(SysmlExpressionKind::Group, children)
+            } else {
+                unsupported(SysmlUnsupportedExpression::Collection)
+            }
+        }
+        SyntaxKind::UNARY_EXPR => {
+            let operator = node
+                .children_with_tokens()
+                .filter_map(|item| item.into_token())
+                .find(|token| !token.kind().is_trivia())
+                .and_then(|token| unary_expression_operator(token.kind()));
+            let children = lower_children();
+            if children.len() == 1 {
+                if let Some(operator) = operator {
+                    let mut expression = base(SysmlExpressionKind::Unary, children);
+                    expression.operator = Some(operator);
+                    expression
+                } else {
+                    unsupported(SysmlUnsupportedExpression::Operator)
+                }
+            } else {
+                unsupported(SysmlUnsupportedExpression::Operator)
+            }
+        }
+        SyntaxKind::BINARY_EXPR => {
+            let operator = node
+                .children_with_tokens()
+                .filter_map(|item| item.into_token())
+                .find(|token| !token.kind().is_trivia())
+                .and_then(|token| binary_expression_operator(token.kind()));
+            let children = lower_children();
+            if children.len() == 2 {
+                if let Some(operator) = operator {
+                    let mut expression = base(SysmlExpressionKind::Binary, children);
+                    expression.operator = Some(operator);
+                    expression
+                } else {
+                    unsupported(SysmlUnsupportedExpression::Operator)
+                }
+            } else {
+                unsupported(SysmlUnsupportedExpression::Operator)
+            }
+        }
+        SyntaxKind::COND_EXPR => {
+            let children = lower_children();
+            if children.len() == 3 {
+                base(SysmlExpressionKind::Conditional, children)
+            } else {
+                unsupported(SysmlUnsupportedExpression::OtherSyntax)
+            }
+        }
+        SyntaxKind::CALL_EXPR => unsupported(SysmlUnsupportedExpression::Call),
+        SyntaxKind::INDEX_EXPR => unsupported(SysmlUnsupportedExpression::Index),
+        SyntaxKind::METADATA_ACCESS_EXPR => unsupported(SysmlUnsupportedExpression::Metadata),
+        SyntaxKind::ARROW_EXPR | SyntaxKind::BODY_EXPR => {
+            unsupported(SysmlUnsupportedExpression::Arrow)
+        }
+        _ => unsupported(SysmlUnsupportedExpression::OtherSyntax),
+    }
+}
+
+fn unary_expression_operator(kind: SyntaxKind) -> Option<SysmlExpressionOperator> {
+    Some(match kind {
+        SyntaxKind::PLUS => SysmlExpressionOperator::Positive,
+        SyntaxKind::MINUS => SysmlExpressionOperator::Negative,
+        SyntaxKind::NOT_KW | SyntaxKind::TILDE => SysmlExpressionOperator::Not,
+        _ => return None,
+    })
+}
+
+fn binary_expression_operator(kind: SyntaxKind) -> Option<SysmlExpressionOperator> {
+    Some(match kind {
+        SyntaxKind::PLUS => SysmlExpressionOperator::Add,
+        SyntaxKind::MINUS => SysmlExpressionOperator::Subtract,
+        SyntaxKind::STAR => SysmlExpressionOperator::Multiply,
+        SyntaxKind::SLASH => SysmlExpressionOperator::Divide,
+        SyntaxKind::CARET => SysmlExpressionOperator::Power,
+        SyntaxKind::EQ_EQ | SyntaxKind::EQ_EQ_EQ => SysmlExpressionOperator::Equal,
+        SyntaxKind::NOT_EQ | SyntaxKind::NOT_EQ_EQ => SysmlExpressionOperator::NotEqual,
+        SyntaxKind::LT => SysmlExpressionOperator::Less,
+        SyntaxKind::LT_EQ => SysmlExpressionOperator::LessEqual,
+        SyntaxKind::GT => SysmlExpressionOperator::Greater,
+        SyntaxKind::GT_EQ => SysmlExpressionOperator::GreaterEqual,
+        SyntaxKind::AND_KW | SyntaxKind::AMP => SysmlExpressionOperator::And,
+        SyntaxKind::OR_KW | SyntaxKind::PIPE => SysmlExpressionOperator::Or,
+        SyntaxKind::IMPLIES_KW => SysmlExpressionOperator::Implies,
+        SyntaxKind::EQ => SysmlExpressionOperator::Equal,
+        _ => return None,
+    })
 }
 
 fn semantic_type_id(workspace: &Workspace, name: &str) -> Option<ElementId> {
@@ -1397,7 +1989,15 @@ fn project_attributes(
                 .rsplit_once("::")
                 .map(|(owner, _)| owner.to_owned())
                 .unwrap_or_default();
+            let owner_handle = elements
+                .iter()
+                .find(|candidate| candidate.qualified_name == owner)
+                .map(|candidate| candidate.handle);
             Some(SysmlAttribute {
+                handle: SysmlFeatureHandle {
+                    element: element.handle,
+                },
+                owner_handle,
                 owner,
                 name: name.to_owned(),
                 qualified_name: element.qualified_name.clone(),
