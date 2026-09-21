@@ -92,7 +92,7 @@ vertical datum, or record the native-tool gap as blocked work.
 |---|---|---|
 | `dem` | DTM (GeoTIFF/.IMG) | `<output>/materials/textures/heightmap.tif` — square float32, georef in tags. `output` is a FOLDER; scenes reference it as `demSource = @terrain/<site>@` |
 | `map` | co-registered raster (ortho `.IMG`, `_SHADE`/`_SLOPE`/`_CLRGRAD` `.TIF`) | 8-bit RGB PNG at `output` (a FILE). Gray sources get a 1–99 percentile stretch in linear contrast space, then sRGB encoding for the runtime loader |
-| `albedo` | illumination-bearing grayscale orthophoto | stable linear material-albedo PNG at `output` (a FILE) |
+| `albedo` | grayscale PDS3 `.IMG` or georeferenced TIFF orthophoto | stable linear material-albedo PNG at `output` (a FILE) |
 | `normalmap` | DTM | DEM-local ENU normal PNG (`RGB = n*0.5+0.5`, decoded by the shared terrain-surface shader kernel) |
 | `texture` | any image | resized PNG (non-geo default) |
 | `gltf` | .glb | Draco-normalized .glb; WebP extension conversion pending |
@@ -106,6 +106,15 @@ domain. Keep selection, ordering, and onboarding policy in the reusable Rhai
 `assets` tool library or a Twin-owned script; Rust remains the owner of
 decoding, heavy math, cancellation, and atomic publication.
 
+Use the existing `assets` Rhai library to process declared sources at runtime:
+`assets::bake(id)` dispatches `ProcessDataset`, and
+`assets::bake_scope(scope)` queues each idle processing declaration in a scope.
+Both read source identity and pipeline settings from `Assets.toml`; the command
+carries only the dataset id. `ListDatasets` reports completion through each
+entry's `state`. Calling bake again is safe: the content bake key skips current
+outputs. Adding another source or changing its output size/ROI therefore needs
+manifest and Rhai edits only; add a Rust processor only for a new transform.
+
 Shared ROI fields: `center_lat`, `center_lon`, `window_m`,
 `target_resolution = [n, n]`, `pixel_scale_m`, `src_min/max_lat`,
 `src_min/max_lon`, `frame = "MOON_ME"`, `output_root = "twin"`.
@@ -116,7 +125,11 @@ process entry. Its optional native-only parameters are
 `albedo_detail_strength` (retained local contrast, default `0.35`), and
 `albedo_illumination_radius_m` (low-frequency field radius, default `40`). The
 processor writes a stable `albedo.png`; it does not claim to perform full
-photometric calibration. Keep `map` for analysis/display outputs. In Rhai,
+photometric calibration. PDS3 `.IMG` sources supply their projection extent and
+pixel scale from the attached or detached label. A grayscale TIFF albedo source
+must author `pixel_scale_m` and all four `src_*` bounds in the process table;
+the grayscale TIFF decoder does not infer those geographic facts from its tags.
+Keep `map` for analysis/display outputs. In Rhai,
 `assembly_builder::lunar_albedo_material_plan(...)` returns standard USD
 `SetAttribute` operations for the produced albedo/normal assets; submit those
 through `assembly_edit::batch` or `assembly_edit::propose`. This keeps heavy
@@ -126,12 +139,15 @@ image math in Rust while making the assembly policy replaceable and extensible.
 
 1. Find the product: `https://data.lroc.im-ldi.com/lroc/view_rdr/NAC_DTM_<SITE>`;
    files under `https://pds.lroc.im-ldi.com/data/LRO-L-LROC-5-RDR-V1.0/LROLRC_2001/DATA/SDP/NAC_DTM/<SITE>/`.
-2. Read its `.LBL`: `MAP_PROJECTION_TYPE` (EQUIRECTANGULAR → processable;
-   POLARSTEREOGRAPHIC → download-only entry, no `[*.process]`),
-   `MAP_SCALE` → `pixel_scale_m`, `MIN/MAXIMUM_LATITUDE` +
-   `EASTERNMOST/WESTERNMOST_LONGITUDE` → the four `src_*` fields.
-   **Label longitudes are 0–360 °E — author `center_lon` in the same
-   convention.** Never trust `CENTER_LONGITUDE` (body-frame quirk).
+2. For an LROC PDS3 source, read its `.LBL`: `MAP_PROJECTION_TYPE`
+   (EQUIRECTANGULAR → processable; POLARSTEREOGRAPHIC → download-only entry,
+   no `[*.process]`), `MAP_SCALE` → `pixel_scale_m`, and
+   `MIN/MAXIMUM_LATITUDE` + `EASTERNMOST/WESTERNMOST_LONGITUDE` → the four
+   `src_*` fields. **Label longitudes are 0–360 °E — author `center_lon` in
+   the same convention.** Never trust `CENTER_LONGITUDE` (body-frame quirk).
+   For a GeoTIFF, verify its CRS/geotransform is equirectangular, then author
+   `pixel_scale_m` and all four geographic extent fields explicitly; the
+   grayscale decoder does not read those facts from TIFF tags.
 3. Pick `center_lat/lon` (the POI), `window_m` (scene size),
    `target_resolution ≈ window_m / native m-per-px` (square).
 4. `sha256 = ""` on first download → the tool prints the hash; paste it in.
@@ -176,6 +192,14 @@ def Scope "Looks"
     }
 }
 ```
+
+For authored DEM terrain, `terrain_layered.wgsl` owns the canonical material
+fragment. `terrain_geomorph.wgsl` is only its optional CDLOD vertex stage;
+`terrain_shadow.wgsl` is an explicit material for non-authored terrain and is
+never an automatic recovery choice. Keep shared regolith detail and lunar
+photometry in the imported `lunco::terrain` and `lunco::lunar` shader modules.
+See the [terrain rendering decision record](../../docs/architecture/terrain-layered-rendering.md)
+before adding another terrain shader path.
 
 Keep production albedo and normal rasters as authored assets. An illumination-
 bearing grayscale orthophoto is not intrinsic albedo: declare it as

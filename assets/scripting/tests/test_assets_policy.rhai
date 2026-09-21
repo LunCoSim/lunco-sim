@@ -6,8 +6,10 @@
 fn query(name, params) {
     #{
         datasets: [
-            #{ id: "engine/moon", recommended: true, state: #{ kind: "missing" } },
-            #{ id: "engine/earth", recommended: true, state: #{ kind: "installed" } },
+            #{ id: "engine/moon", processed: true, recommended: true, state: #{ kind: "missing" } },
+            #{ id: "engine/earth", processed: true, recommended: true, state: #{ kind: "installed" } },
+            #{ id: "engine/stars", processed: false, recommended: false, state: #{ kind: "missing" } },
+            #{ id: "engine/busy", processed: true, recommended: false, state: #{ kind: "processing" } },
         ]
     }
 }
@@ -27,6 +29,14 @@ checks.push(t_eq(request("engine/earth").status, "already_installed",
     "assets.request does not enqueue an installed dataset"));
 checks.push(t_eq(request("engine/moon").command, "RequestDataset",
     "assets.request emits the typed request command"));
+checks.push(t_eq(bake("engine/moon").command, "ProcessDataset",
+    "assets.bake emits the generic manifest-processing command"));
+checks.push(t_true(bake("engine/stars").ok == false,
+    "assets.bake rejects entries without a processing pipeline"));
+checks.push(t_true(bake("engine/mars").ok == false,
+    "assets.bake rejects an undeclared dataset"));
+checks.push(t_eq(bake_scope("").bakes.len(), 2,
+    "assets.bake_scope selects idle processed entries and skips active work"));
 checks.push(t_eq(cancel("engine/moon").command, "CancelDataset",
     "assets.cancel emits the typed cancel command"));
 checks.push(t_eq(request_recommended("").requested.len(), 1,

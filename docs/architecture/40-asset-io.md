@@ -115,6 +115,17 @@ render-bound code, then their bytes are written through the same storage API.
 This keeps native filesystem paths and browser storage from becoming two
 different loading/saving sequences.
 
+Dataset processing is selected from each entry's `[key.process]` declaration.
+The `lunco-assets-processing` crate gates its native processor module once at
+the crate boundary; code inside that module does not repeat the same target
+guard. `ProcessDataset { id }` asks the native dataset owner to process an
+already available declared source through its manifest pipeline. The existing
+source resolver, cancellation and Twin-close barrier, bake key, and staged
+atomic publication still own the work. Rhai's `assets.bake(id)` and
+`assets.bake_scope(scope)` choose and sequence these generic requests, so adding
+another dataset or changing its parameters is an `Assets.toml` edit. Rust changes
+are needed only when adding a new processing algorithm or owner.
+
 ## Asset loaders we maintain
 
 | Loader | Asset type | Where | Extensions |

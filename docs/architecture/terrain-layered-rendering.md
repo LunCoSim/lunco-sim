@@ -84,8 +84,9 @@ diagnostic replacement:
    The static layered path scales its broad procedural dust/mottle colour by
    `1 - weight_albedo`. An authored albedo does not suppress the separate,
    low-amplitude `micro_albedo` regolith grain: it is anchored to the DEM-local
-   coordinate and uses the same footprint fade as `micro_bump`. This resolves
-   the authored mosaic's finite texel size in close views without replacing
+   coordinate, is applied after authored/derived albedo selection, and uses the
+   same footprint fade as `micro_bump`. This resolves the authored mosaic's finite
+   texel size in close views without replacing
    authored low-frequency colour or introducing a second LOD-dependent colour
    path. Relief normals, roughness, ambient occlusion, and photometry remain
    independent, so camera footprint or CDLOD replacement cannot introduce

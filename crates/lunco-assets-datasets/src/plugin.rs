@@ -5,7 +5,8 @@
 //! available to headless and browser-safe hosts without compiling HTTP,
 //! archive, image, or GeoTIFF processing. The explicit provisioning plugin in
 //! `lunco-assets` owns workers and must be installed by an application that
-//! wants `RequestDataset` to perform I/O.
+//! wants `RequestDataset` downloads or `ProcessDataset` bakes to perform
+//! native I/O.
 
 use bevy::prelude::*;
 
