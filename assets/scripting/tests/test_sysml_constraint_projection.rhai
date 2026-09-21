@@ -1,16 +1,17 @@
-// Production Rhai proof that generic SysML source analysis reaches Rhai as
-// typed records and that the existing native vector adapter remains usable.
+// Production Rhai proof that selected SysML facts stay typed and that exact
+// attribute reads expose the native wrappers used by geometry policies.
 
 import "sysml_modelica_constraints" as geometry_constraints;
 
 let path = "assets/scripting/tests/fixtures/sysml_constraint_projection.sysml";
 let report = geometry_constraints::analyze_selected(path,
-    ["upperMount", "lowerMount", "movingAnchor", "fixedAnchor"]);
+    ["upperMount", "lowerMount", "movingAnchor", "fixedAnchor",
+     "materialDensity", "vesselPressure", "elasticModulus"]);
 let checks = [];
 checks.push(t_true(type_of(report) == "map" && report.ok == true,
-    "the standard SysML constraint fixture resolves through generic source analysis"));
+    "the standard SysML constraint fixture resolves through native source analysis"));
 checks.push(t_true(report.analysis.constraints.len() == 4,
-    "the source query exposes generic constraint definitions and usages"));
+    "the native source snapshot exposes constraint definitions and usages"));
 let selected_attributes = [];
 for attribute in report.analysis.attributes {
     if attribute.qualified_name == "ConstraintProjection::StrutAssembly::upperMount"
@@ -21,7 +22,7 @@ for attribute in report.analysis.attributes {
     }
 }
 checks.push(t_true(selected_attributes.len() == 4,
-    "generic fact selection returns the four requested typed geometry inputs"));
+    "the Rhai policy selects the four requested geometry inputs"));
 
 let definition = false;
 let usage = false;
@@ -58,7 +59,9 @@ checks.push(t_true(selected.ok == true && selected.definitions.len() == 1
 
 let binding_links = [];
 for relationship in report.analysis.relationships {
-    if relationship.element.kind != "BindingConnectorAsUsage" { continue; }
+    if relationship.element.kind != "BindingConnector" { continue; }
+    if !relationship.element.qualified_name.starts_with(
+        "ConstraintProjection::StrutAssembly::loadPath::") { continue; }
     let endpoints = [];
     for property in relationship.properties {
         if property.name == "relatedFeature" { endpoints = property.targets; }
@@ -70,6 +73,9 @@ checks.push(t_true(binding_links.len() == 2,
 
 let upper = ();
 let lower = ();
+let material_density = ();
+let vessel_pressure = ();
+let elastic_modulus = ();
 for attribute in report.analysis.attributes {
     if attribute.qualified_name == "ConstraintProjection::StrutAssembly::upperMount" {
         upper = attribute;
@@ -77,8 +83,21 @@ for attribute in report.analysis.attributes {
     if attribute.qualified_name == "ConstraintProjection::StrutAssembly::lowerMount" {
         lower = attribute;
     }
+    if attribute.qualified_name == "ConstraintProjection::StrutAssembly::materialDensity" {
+        material_density = attribute;
+    }
+    if attribute.qualified_name == "ConstraintProjection::StrutAssembly::vesselPressure" {
+        vessel_pressure = attribute;
+    }
+    if attribute.qualified_name == "ConstraintProjection::StrutAssembly::elasticModulus" {
+        elastic_modulus = attribute;
+    }
 }
-checks.push(t_true(upper.declared_type.quantity_kind == "Length"
+checks.push(t_true(type_of(upper.declared_type) == "map"
+    && upper.declared_type.category == "Collection"
+    && upper.declared_type.value_category == "Quantity"
+    && type_of(upper.declared_type.quantity_kind) == "map"
+    && upper.declared_type.quantity_kind.qualified_name == "ISQBase::LengthValue"
     && upper.declared_type.dimensions.len() == 1
     && upper.declared_type.dimensions[0] == 3
     && upper.value.kind == "vector" && upper.value.elements.len() == 3
@@ -88,15 +107,37 @@ checks.push(t_true(upper.declared_type.quantity_kind == "Length"
     && upper.value.elements[0].number_value == 0.0
     && lower.value.kind == "vector" && lower.value.elements[0].unit == "m"
     && lower.value.elements[0].number_value == 0.5,
-    "typed facts preserve length kind, fixed cardinality, metre units, and numeric values"));
+    "typed facts preserve resolved length identity, fixed cardinality, metre units, and numeric values"));
+checks.push(t_true(material_density.declared_type.value_category == "Quantity"
+    && type_of(material_density.declared_type.quantity_kind) == "map"
+    && material_density.declared_type.quantity_kind.qualified_name == "ISQMechanics::MassDensityValue"
+    && vessel_pressure.declared_type.value_category == "Quantity"
+    && type_of(vessel_pressure.declared_type.quantity_kind) == "map"
+    && vessel_pressure.declared_type.quantity_kind.qualified_name == "ISQMechanics::PressureValue"
+    && elastic_modulus.declared_type.value_category == "Quantity"
+    && type_of(elastic_modulus.declared_type.quantity_kind) == "map"
+    && elastic_modulus.declared_type.quantity_kind.qualified_name == "ISQMechanics::ModulusOfElasticityValue",
+    "standard material-property quantity types resolve from SysML type inheritance"));
 
 let upper_native = sysml_value(path,
     "ConstraintProjection::StrutAssembly::upperMount");
 let lower_native = sysml_value(path,
     "ConstraintProjection::StrutAssembly::lowerMount");
+let upper_attribute = sysml_attribute(path,
+    "ConstraintProjection::StrutAssembly::upperMount");
+checks.push(t_true(upper_attribute.ok == true && upper_attribute.found == true
+    && type_of(upper_attribute.attribute) == "SysmlAttribute"
+    && type_of(upper_attribute.attribute.declared_type) == "SysmlType"
+    && upper_attribute.attribute.qualified_name
+        == "ConstraintProjection::StrutAssembly::upperMount"
+    && type_of(upper_attribute.attribute.typed_value) == "array"
+    && type_of(upper_attribute.attribute.typed_value[0]) == "Quantity",
+    "Rhai receives the source attribute and resolved type as native Rust-backed values"));
 checks.push(t_true(upper_native.ok == true && upper_native.found == true
     && type_of(upper_native.value) == "array"
     && type_of(upper_native.value[0]) == "Quantity"
+    && type_of(upper_native.value[0].kind) == "SysmlTypeRef"
+    && upper_native.value[0].kind.qualified_name == "ISQBase::LengthValue"
     && upper_native.value[0].unit == "m" && upper_native.value[1].value == 1.0
     && upper_native.value[2].value == 0.0,
     "SysML-to-Rhai preserves each standard length quantity and its unit"));

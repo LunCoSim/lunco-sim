@@ -41,12 +41,13 @@ lunco-hooks-native = { path = "../lunco-hooks-native", optional = true }
 lunco-storage = { path = "../lunco-storage" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-sysml-rhai = { path = "../lunco-sysml-rhai", optional = true }
+lunco-scene-validation = { path = "../lunco-scene-validation", optional = true }
 
 [features]
 default = ["rhai"]
 rhai = []
 native-plugins = ["dep:lunco-hooks-native"]
-sysml = ["dep:lunco-sysml-rhai"]
+sysml = ["dep:lunco-sysml-rhai", "dep:lunco-scene-validation"]
 
 [dev-dependencies]
 tempfile.workspace = true

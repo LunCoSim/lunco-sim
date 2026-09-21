@@ -1221,6 +1221,15 @@ twin-journal doc; not in scope here.
 The following issues are tracked as implementation work, not architectural
 decisions:
 
+**Typed material and surface-finish binding**: Modelica does not yet resolve a
+selected SysML material/finish record into typed, unit-preserving constitutive
+properties. The required path must preserve grade/form/temper or directional
+layup, applicable temperature/environment, and source status; a finish is a
+separate assignment with its own thermal/optical data. `UsdShade` appearance
+presets are not property models. Until the generic resolver and law mapping
+exist, do not copy material constants into `.mo` files or infer engineering
+properties from a render shader.
+
 ### P0 — Blocking
 
 **Diagram ↔ Code synchronization**: The Diagram and Code editor share a single `ModelicaDocument`. Edits in either panel flow through the document and update the other on the next frame. Opening a file from the Library Browser populates both views from the same source. See § 5 and § 9 above.

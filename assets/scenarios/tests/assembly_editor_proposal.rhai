@@ -1,12 +1,14 @@
 // TEST-ONLY. Runs against scenes/tests/assembly_editor_proposal.usda.
-// This is the production acceptance path for reviewed typed USD edits, including
-// one generated nonzero SysML -> Modelica -> Editor proposal round trip.
+// The scenario owns temporary USD and Modelica documents created through the
+// production Editor APIs; it accepts one generated nonzero SysML -> Modelica
+// -> Editor proposal round trip without editing its own mounted scene.
+const TEST_KIND = "editor";
 
-import "modelica_editor" as modelica_editor;
-import "sysml_modelica_constraints" as geometry_constraints;
+import "/scripting/tools/modelica_editor" as modelica_editor;
+import "/scripting/tools/sysml_modelica_constraints" as geometry_constraints;
 
-const ROOT = "/AssemblyEditorProposalTest";
-const ASSEMBLY = ROOT + "/Assembly";
+const ROOT = "/World";
+const ASSEMBLY = ROOT;
 const PROPOSED = ASSEMBLY + "/ReviewedPart";
 const INDEPENDENT = ASSEMBLY + "/IndependentPart";
 const STALE = ASSEMBLY + "/StalePart";
@@ -18,6 +20,9 @@ fn fail(me, message) {
         }
         if me.modelica_doc > 0 {
             modelica_editor::close(me.modelica_doc);
+        }
+        if me.doc > 0 {
+            assembly_edit::close_document(me.doc);
         }
         me.done = true;
         report_verdict([message], "ASSEMBLY EDITOR PROPOSAL", "ASSEMBLY_EDITOR_PROPOSAL");
@@ -32,15 +37,6 @@ fn assertion_failures(checks) {
 
 fn query_ok(record) {
     record != () && record.ok != false
-}
-
-fn find_usd_document() {
-    let docs = query("ListOpenDocuments");
-    if docs == () || docs.open_documents == () { return -1; }
-    for item in docs.open_documents {
-        if item.kind == "usd" { return item.doc_id; }
-    }
-    -1
 }
 
 fn prim_exists(doc, path) {
@@ -76,6 +72,15 @@ fn modelica_document_is_open(doc_id) {
     false
 }
 
+fn usd_document_is_open(doc_id) {
+    let documents = query("ListOpenDocuments", #{});
+    if documents == () || documents.open_documents == () { return (); }
+    for document in documents.open_documents {
+        if document.kind == "usd" && document.doc_id == doc_id { return true; }
+    }
+    false
+}
+
 fn vector_matches(value, expected) {
     if value == () { return false; }
     if type_of(value) == "Vec3" {
@@ -90,34 +95,76 @@ fn vector_matches(value, expected) {
 fn on_start(me, ctx) {
     this.doc = -1;
     this.modelica_doc = -1;
+    this.initial_modelica_generation = -1;
+    this.initial_usd_docs = [];
     this.solve_ticket = ();
     this.solve_checks = [];
     this.done = false;
     this.elapsed = 0.0;
-    this.phase = "proposal";
+    this.phase = "create_usd_document";
 }
 
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 
-    if this.phase == "proposal" {
-        if this.doc < 0 {
-            this.doc = find_usd_document();
-            if this.doc < 0 {
-                if this.elapsed > 8.0 { fail(this, "no open USD document was discoverable"); }
-                return;
+    if this.phase == "create_usd_document" {
+        let documents = query("ListOpenDocuments", #{});
+        if documents == () || documents.open_documents == () {
+            if this.elapsed > 8.0 {
+                fail(this, "Editor did not expose its document registry");
+                this.done = true;
+            }
+            return;
+        }
+        this.initial_usd_docs = [];
+        for document in documents.open_documents {
+            if document.kind == "usd" { this.initial_usd_docs.push(document.doc_id); }
+        }
+        let created = assembly_edit::new_document();
+        if !query_ok(created) {
+            fail(this, "Editor did not accept creation of the scratch USD stage");
+            this.done = true;
+            return;
+        }
+        this.phase = "await_usd_document";
+        this.elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == "await_usd_document" {
+        let documents = query("ListOpenDocuments", #{});
+        if documents != () && documents.open_documents != () {
+            for document in documents.open_documents {
+                if document.kind == "usd" && !this.initial_usd_docs.contains(document.doc_id) {
+                    this.doc = document.doc_id;
+                    break;
+                }
             }
         }
+        if this.doc < 0 {
+            if this.elapsed > 8.0 {
+                fail(this, "Editor did not publish the new scratch USD document");
+                this.done = true;
+            }
+            return;
+        }
+        this.phase = "proposal";
+        this.elapsed = 0.0;
+        return;
+    }
 
+    if this.phase == "proposal" {
         let before = assembly_edit::describe(this.doc);
         if !query_ok(before) || before.generation == () {
             fail(this, "InspectUsdDocument did not expose the proposal base generation");
+            this.done = true;
             return;
         }
         if prim_exists(this.doc, PROPOSED) || prim_exists(this.doc, INDEPENDENT)
             || prim_exists(this.doc, STALE) {
             fail(this, "proposal fixture started with unexpected authored prims");
+            this.done = true;
             return;
         }
 
@@ -131,18 +178,21 @@ fn on_tick(me, ctx) {
         );
         if !query_ok(created) {
             fail(this, "CreateUsdProposal was rejected: " + created.error);
+            this.done = true;
             return;
         }
 
         let pending = assembly_edit::review_session(this.doc);
         if !query_ok(pending) || pending.proposals == () || pending.proposals.len() != 1 {
             fail(this, "proposal was not visible in the document review session");
+            this.done = true;
             return;
         }
         let proposal = pending.proposals[0];
         if proposal.state != "pending" || proposal.ops == () || proposal.ops.len() != 1
             || proposal.affected_paths[0] != PROPOSED || prim_exists(this.doc, PROPOSED) {
             fail(this, "pending review did not preserve a typed, non-mutating plan");
+            this.done = true;
             return;
         }
 
@@ -151,6 +201,7 @@ fn on_tick(me, ctx) {
         let muted_proposal = proposal_for(muted_review, proposal.id);
         if !query_ok(muted) || muted_proposal == () || muted_proposal.state != "muted" {
             fail(this, "proposal mute was not reflected by the review query");
+            this.done = true;
             return;
         }
 
@@ -159,6 +210,7 @@ fn on_tick(me, ctx) {
         let unmuted_proposal = proposal_for(unmuted_review, proposal.id);
         if !query_ok(unmuted) || unmuted_proposal == () || unmuted_proposal.state != "pending" {
             fail(this, "proposal unmute was not reflected by the review query");
+            this.done = true;
             return;
         }
 
@@ -169,17 +221,20 @@ fn on_tick(me, ctx) {
             || after_commit.generation <= before.generation
             || committed_review.proposals.len() != 0 {
             fail(this, "proposal commit did not enter the document journal atomically");
+            this.done = true;
             return;
         }
 
         let undone = assembly_edit::undo(this.doc);
         if !query_ok(undone) || prim_exists(this.doc, PROPOSED) {
             fail(this, "committed proposal did not use the existing USD undo path");
+            this.done = true;
             return;
         }
         let redone = assembly_edit::redo(this.doc);
         if !query_ok(redone) || !prim_exists(this.doc, PROPOSED) {
             fail(this, "committed proposal did not use the existing USD redo path");
+            this.done = true;
             return;
         }
 
@@ -188,6 +243,7 @@ fn on_tick(me, ctx) {
             sysml_path, ["movingAnchor", "fixedAnchor"]);
         if this.constraint_report == () || this.constraint_report.ok != true {
             fail(this, "SysML geometry fixture did not produce typed source facts");
+            this.done = true;
             return;
         }
         let generated = geometry_constraints::assemble_coincident_translation(
@@ -195,6 +251,7 @@ fn on_tick(me, ctx) {
             "ConstraintProjection::StrutAssembly::alignMount");
         if generated == () || generated.ok != true {
             fail(this, "Rhai did not assemble the bound CoincidentPointTranslation model");
+            this.done = true;
             return;
         }
         this.generated = generated;
@@ -203,6 +260,7 @@ fn on_tick(me, ctx) {
             "SysMLConstraintSolveScratch");
         if new_modelica == () || new_modelica.ok != true {
             fail(this, "Modelica Editor did not create a scratch document for the generated solve");
+            this.done = true;
             return;
         }
         this.modelica_doc = new_modelica.doc_id;
@@ -217,13 +275,16 @@ fn on_tick(me, ctx) {
         if source == () || source.ok == false {
             if this.solve_elapsed > 8.0 {
                 fail(this, "Modelica Editor did not publish source for the acknowledged scratch document");
+                this.done = true;
             }
             return;
         }
         if source.generation == () {
             fail(this, "Modelica Editor did not expose the scratch source generation");
+            this.done = true;
             return;
         }
+        this.initial_modelica_generation = source.generation;
         this.solve_checks.push(t_true(
             source.doc_id == this.modelica_doc,
             "CreateNewScratchModel returned the exact document identity used for source inspection"));
@@ -231,7 +292,14 @@ fn on_tick(me, ctx) {
             this.modelica_doc, source.generation, this.constraint_report,
             "ConstraintProjection::StrutAssembly::alignMount");
         if started == () || started.ok != true {
-            fail(this, "generated Modelica wrapper was not admitted by the document owner");
+            let detail = if started == () || started.error == () {
+                "missing diagnostic"
+            } else {
+                started.stage + ": " + started.error
+            };
+            fail(this, "generated Modelica wrapper was not admitted by the document owner: "
+                + detail);
+            this.done = true;
             return;
         }
         this.generated = started.generated;
@@ -244,6 +312,7 @@ fn on_tick(me, ctx) {
         this.solve_elapsed += dt();
         if this.solve_elapsed > 30.0 {
             fail(this, "generated Modelica experiment did not reach a terminal readback");
+            this.done = true;
             return;
         }
         let advanced = geometry_constraints::poll_coincident_translation(
@@ -252,9 +321,10 @@ fn on_tick(me, ctx) {
             let message = if advanced == () || advanced.error == () {
                 "missing diagnostic"
             } else {
-                advanced.error
+                advanced.stage + ": " + advanced.error
             };
             fail(this, "Rhai Modelica solve/readback failed: " + message);
+            this.done = true;
             return;
         }
         this.solve_ticket = advanced.ticket;
@@ -263,6 +333,9 @@ fn on_tick(me, ctx) {
         let solution = advanced.solution;
         let expected = vsub(this.generated.fixed_point, this.generated.moving_point);
         let numerical_checks = [
+            t_true(advanced.ticket.source_generation > this.initial_modelica_generation
+                && solution.source_generation == advanced.ticket.source_generation,
+                "the asynchronous source edit advanced and retained its exact Modelica document generation"),
             t_true(advanced.complete == true && advanced.run.state == "done"
                 && advanced.result.state == "done",
                 "the generated Modelica experiment completed and returned its typed trajectory"),
@@ -283,6 +356,7 @@ fn on_tick(me, ctx) {
         if !numerical_failures.is_empty() {
             fail(this, "generated Modelica solve returned values outside its typed SysML contract: "
                 + numerical_failures.join("; "));
+            this.done = true;
             return;
         }
         this.solve_checks += numerical_checks;
@@ -290,18 +364,27 @@ fn on_tick(me, ctx) {
         let doc_state = assembly_edit::describe(this.doc);
         if !query_ok(doc_state) || doc_state.generation == () {
             fail(this, "USD proposal fixture did not expose its current placement generation");
+            this.done = true;
             return;
         }
         let placement = geometry_constraints::coincident_translation_placement_plan(
             this.doc, "@root@", PROPOSED, doc_state.generation, solution);
         if placement == () || placement.ok != true {
-            fail(this, "solved result did not produce a generation-bound typed Editor placement plan");
+            let detail = if placement == () || placement.error == () {
+                "missing diagnostic"
+            } else {
+                placement.stage + ": " + placement.error
+            };
+            fail(this, "solved result did not produce a generation-bound typed Editor placement plan: "
+                + detail);
+            this.done = true;
             return;
         }
         let reviewed = geometry_constraints::propose_coincident_translation_plan(
             placement, "Review Modelica-derived coincidence placement", false);
         if reviewed == () || reviewed.ok != true || reviewed.committed != false {
             fail(this, "Editor did not expose the solved placement as an uncommitted reviewed proposal");
+            this.done = true;
             return;
         }
         let translate_value = ();
@@ -322,6 +405,7 @@ fn on_tick(me, ctx) {
         if !proposal_failures.is_empty() {
             fail(this, "Editor proposal readback did not preserve solved translation provenance: "
                 + proposal_failures.join("; "));
+            this.done = true;
             return;
         }
         this.solve_checks += proposal_checks;
@@ -330,34 +414,39 @@ fn on_tick(me, ctx) {
         let cleared = assembly_edit::review_session(this.doc);
         if !query_ok(rejected) || cleared.proposals.len() != 0 {
             fail(this, "test placement proposal did not leave the fixture geometry unmodified");
+            this.done = true;
             return;
         }
         this.phase = "placement_finish";
     }
 
-    if this.phase == "await_modelica_close" {
+    if this.phase == "await_documents_close" {
         this.solve_elapsed += dt();
-        let still_open = modelica_document_is_open(this.modelica_doc);
-        if still_open == () {
+        let modelica_open = modelica_document_is_open(this.modelica_doc);
+        let usd_open = usd_document_is_open(this.doc);
+        if modelica_open == () || usd_open == () {
             if this.solve_elapsed > 10.0 {
-                fail(this, "Modelica Editor could not confirm the scratch document close");
+                fail(this, "Editor could not confirm both scratch documents closed");
+                this.done = true;
             }
             return;
         }
-        if still_open {
+        if modelica_open || usd_open {
             if this.solve_elapsed > 10.0 {
-                fail(this, "the test-owned Modelica scratch document did not close cleanly");
+                fail(this, "test-owned scratch document did not close cleanly");
+                this.done = true;
             }
             return;
         }
         this.done = true;
         let checks = [
-            t_true(true, "typed placement proposal was validated without committing fixture geometry"),
+            t_true(true, "typed placement proposal was validated without committing scratch geometry"),
             t_true(true, "mute and unmute state is visible through InspectUsdEditSession"),
             t_true(true, "commit uses the existing USD journal, undo, and redo path"),
             t_true(true, "public transform authors standard USD scale with the document snapshot path"),
             t_true(true, "stale commit becomes a visible conflict without overwriting newer edits"),
             t_true(true, "the Modelica scratch document was closed after the solve readback"),
+            t_true(true, "the USD scratch document was closed after the Editor lifecycle"),
         ];
         checks += this.solve_checks;
         report_verdict(checks, "ASSEMBLY EDITOR PROPOSAL", "ASSEMBLY_EDITOR_PROPOSAL");
@@ -378,6 +467,7 @@ fn on_tick(me, ctx) {
     );
     if !query_ok(scaled) {
         fail(this, "the public transform helper did not author a scale edit");
+        this.done = true;
         return;
     }
     let snapshot = assembly_edit::sync_document(this.doc, ());
@@ -391,6 +481,7 @@ fn on_tick(me, ctx) {
         || !source.contains("(2.0, 3.0, 4.0)")
         || !source.contains("xformOpOrder = [\"xformOp:scale\"]") {
         fail(this, "scale edit did not serialize as a standard USD xformOp:scale");
+        this.done = true;
         return;
     }
 
@@ -405,6 +496,7 @@ fn on_tick(me, ctx) {
     let stale_review = assembly_edit::review_session(this.doc);
     if !query_ok(stale_created) || stale_review.proposals.len() != 1 {
         fail(this, "stale-conflict proposal was not created for the current generation");
+        this.done = true;
         return;
     }
     let stale_proposal = stale_review.proposals[0];
@@ -419,6 +511,7 @@ fn on_tick(me, ctx) {
     );
     if !query_ok(independent) || !prim_exists(this.doc, INDEPENDENT) {
         fail(this, "independent USD edit did not advance the proposal base");
+        this.done = true;
         return;
     }
 
@@ -428,6 +521,7 @@ fn on_tick(me, ctx) {
     if stale_commit.ok != false || conflicted == () || conflicted.state != "conflict"
         || prim_exists(this.doc, STALE) || !prim_exists(this.doc, INDEPENDENT) {
         fail(this, "stale proposal was not rejected without overwriting newer USD edits");
+        this.done = true;
         return;
     }
 
@@ -435,14 +529,22 @@ fn on_tick(me, ctx) {
     let final_review = assembly_edit::review_session(this.doc);
     if !query_ok(rejected) || final_review.proposals.len() != 0 {
         fail(this, "conflicted proposal was not removable from the review session");
+        this.done = true;
         return;
     }
 
     let closed = modelica_editor::close(this.modelica_doc);
     if closed == () || closed.ok != true {
         fail(this, "the test-owned Modelica scratch document did not accept its close request");
+        this.done = true;
+        return;
+    }
+    let usd_closed = assembly_edit::close_document(this.doc);
+    if usd_closed == () || usd_closed.ok != true {
+        fail(this, "the test-owned USD scratch document did not accept its close request");
+        this.done = true;
         return;
     }
     this.solve_elapsed = 0.0;
-    this.phase = "await_modelica_close";
+    this.phase = "await_documents_close";
 }

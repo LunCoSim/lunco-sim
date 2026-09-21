@@ -9437,6 +9437,7 @@ dependencies = [
  "lunco-hooks-rhai",
  "lunco-input-core",
  "lunco-physics",
+ "lunco-scene-validation",
  "lunco-scripting",
  "lunco-scripting-bridge-core",
  "lunco-scripting-bridge-spatial",

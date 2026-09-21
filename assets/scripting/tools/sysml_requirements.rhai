@@ -28,6 +28,17 @@ fn _numeric(value) {
         || kind == "decimal"
 }
 
+fn _numeric_sysml_type(declared_type) {
+    if declared_type == () || declared_type.primitive == () { return false; }
+    let primitive = _text(declared_type.primitive);
+    primitive == "Integer" || primitive == "Rational" || primitive == "Real"
+}
+
+fn _string_sysml_type(declared_type) {
+    declared_type != () && declared_type.primitive != ()
+        && _text(declared_type.primitive) == "String"
+}
+
 // Compare structured USD values without flattening them into strings.  USD
 // transform orders, colour arrays, and topology lists are all authored values;
 // silently coercing them would let a malformed order pass a requirement gate.
@@ -346,8 +357,7 @@ fn vector(report, name) {
     if resolved.record.declared_type == ()
         || resolved.record.declared_type.dimensions == ()
         || resolved.record.declared_type.dimensions.len() != 1
-        || (resolved.record.declared_type.base != "Real"
-            && resolved.record.declared_type.base != "Integer") {
+        || !_numeric_sysml_type(resolved.record.declared_type) {
         return ();
     }
     if resolved.record.declared_type.dimensions[0] != resolved.record.value.elements.len() {
@@ -371,7 +381,7 @@ fn string_vector(report, name) {
         || resolved.record.value.kind != "vector"
         || resolved.record.value.elements == ()
         || resolved.record.declared_type == ()
-        || resolved.record.declared_type.base != "String"
+        || !_string_sysml_type(resolved.record.declared_type)
         || resolved.record.declared_type.dimensions == ()
         || resolved.record.declared_type.dimensions.len() != 1
         || resolved.record.declared_type.dimensions[0] != resolved.record.value.elements.len() {
@@ -950,6 +960,88 @@ fn source_with_constraints(names) {
     _source_projection(names, [], [], true, false)
 }
 
+// Full Twin reports use a small bounded query window and retain only the
+// source identities and verification links needed by this policy. Rich
+// requirement details remain available through source_with_selection().
+fn _compact_requirement_identity(record) {
+    let name = _record_name(record);
+    #{element: #{qualified_name: name}, qualified_name: name,
+      kind: record.kind}
+}
+
+fn _compact_verification_identity(record) {
+    let name = _record_name(record);
+    #{element: #{qualified_name: name}, qualified_name: name,
+      verifies: record.verifies}
+}
+
+fn _paged_twin_source(path, tables) {
+    // Keep each returned Dynamic comfortably below Rhai's aggregate string
+    // budget. The limit is transport batching, not model or requirement policy.
+    let page_limit = 16;
+    let offset = 0;
+    let page_count = 0;
+    let revision = "";
+    let requirement_total = ();
+    let verification_total = ();
+    let assembled = ();
+    let requirements = [];
+    let verifications = [];
+    loop {
+        let page = query("AnalyzeSysml", #{path: path, tables: tables,
+            offset: offset, limit: page_limit});
+        if page == () || page.analysis == () {
+            return #{ok: false, path: path, error: _report_error(page,
+                "AnalyzeSysml page omitted its semantic facts")};
+        }
+        let page_revision = page.analysis.source_revision_hex;
+        if page_revision == () || page_revision == "" {
+            return #{ok: false, path: path,
+                error: "AnalyzeSysml page omitted its source revision"};
+        }
+        if revision == "" {
+            revision = page_revision;
+            assembled = page;
+        } else if revision != page_revision {
+            return #{ok: false, path: path,
+                error: "SysML source revision changed during paged analysis"};
+        }
+        page_count += 1;
+        for record in page.analysis.requirements {
+            requirements.push(_compact_requirement_identity(record));
+        }
+        for record in page.analysis.verifications {
+            verifications.push(_compact_verification_identity(record));
+        }
+        let page_tables = page.analysis.page.tables;
+        if page_tables == () || page_tables.requirements == ()
+            || page_tables.verifications == () {
+            return #{ok: false, path: path,
+                error: "AnalyzeSysml page omitted table pagination metadata"};
+        }
+        if requirement_total == () {
+            requirement_total = page_tables.requirements.total;
+            verification_total = page_tables.verifications.total;
+        } else if requirement_total != page_tables.requirements.total
+            || verification_total != page_tables.verifications.total {
+            return #{ok: false, path: path,
+                error: "SysML fact-table totals changed during paged analysis"};
+        }
+        if page_tables.requirements.has_more != true
+            && page_tables.verifications.has_more != true {
+            break;
+        }
+        offset += page_limit;
+    }
+    assembled.analysis = #{source_files: assembled.analysis.source_files,
+        source_revision_hex: revision,
+        requirements: requirements, verifications: verifications};
+    assembled.source_page_count = page_count;
+    assembled.source_fact_totals = #{requirements: requirement_total,
+        verifications: verification_total};
+    assembled
+}
+
 fn _source_projection(names, requirement_names, verification_names,
                       include_constraints, include_twin_contract) {
     let name = twin_name();
@@ -981,7 +1073,11 @@ fn _source_projection(names, requirement_names, verification_names,
     if selected.len() > 0 { request.attribute_names = selected; }
     if requirement_names.len() > 0 { request.requirement_names = requirement_names; }
     if verification_names.len() > 0 { request.verification_names = verification_names; }
-    let analyzed = query("AnalyzeSysml", request);
+    let analyzed = if include_twin_contract {
+        _paged_twin_source(request.path, tables)
+    } else {
+        query("AnalyzeSysml", request)
+    };
     if analyzed == () || analyzed.analysis == () {
         return #{ok: false, error: _report_error(analyzed,
             "AnalyzeSysml could not resolve the Twin SysML source set")};
@@ -991,6 +1087,8 @@ fn _source_projection(names, requirement_names, verification_names,
         ok: analyzed.ok, errors: analyzed.errors, warnings: analyzed.warnings,
         source_files: analyzed.analysis.source_files,
         source_revision_hex: analyzed.analysis.source_revision_hex,
+        source_page_count: if analyzed.source_page_count == () { 1 } else { analyzed.source_page_count },
+        source_fact_totals: if analyzed.source_fact_totals == () { () } else { analyzed.source_fact_totals },
         requirement_records: analyzed.analysis.requirements,
         verification_records: analyzed.analysis.verifications,
         attributes: #{}, attributes_qualified: #{}, attribute_collisions: [],

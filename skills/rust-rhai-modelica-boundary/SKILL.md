@@ -37,6 +37,16 @@ scene/scenario tests.
 Math means domain equations in Modelica; Rust still owns numerical operations
 that are part of a real-time engine invariant or a generic projection.
 
+For a typed language bridge such as SysML, keep parsing, name/type resolution,
+source spans, and lossless native-value conversion in Rust. Expose those
+resolved types to Rhai and keep changeable project parameter checks, selectors,
+limits, and verdict policy in Rhai. Do not add Rust convenience booleans such
+as `is_valid_for_griffin` or project-specific dimension/range checks when the
+same rule can consume the typed source value in an authored policy. A generic
+API may still accept table/name selectors solely to bound transport volume;
+that is distinct from encoding domain acceptance policy in the Rust source
+adapter.
+
 Use a policy hook when the decision is expected to change independently of the
 engine: pass a small typed fact map in, require a closed result out, and keep
 the Rust owner responsible for validation, safety limits, lifecycle, and

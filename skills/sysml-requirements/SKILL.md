@@ -43,6 +43,14 @@ strings. The current typed SysML projection is not itself a material catalogue
 or an automatic cross-domain binding—keep the limit visible until a generic
 resolver and consumer path are demonstrated.
 
+Model substrate and surface finish/coating as separate typed facts. Permit a
+component face/region to select a sourced finish independently of its bulk
+material. Keep visual `UsdShade` shader mapping distinct from optical/thermal
+engineering properties: a shader preset is not a source for absorptance,
+emittance, coating thickness, or Modelica thermal parameters. Record missing
+finish catalog and rendering adapters as generic tool gaps, not per-component
+string metadata.
+
 For a mission Twin, apply the generic
 [mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
 alongside this parser/runtime contract. Requirements are the baselined bridge
@@ -297,8 +305,29 @@ if facts.ok != true { throw(facts.errors); }
 `relationships`, `constraints`, `attributes`, `requirements`, `verifications`,
 and `diagnostics` tables. `attribute_names` narrows the attribute table to
 qualified or local names; ambiguous local names remain visible to the policy
-for explicit handling. Omit selectors only when the caller genuinely needs the
-full analysis.
+for explicit handling. Optional positive `limit` and non-negative `offset`
+page every selected table independently. `analysis.page.tables` reports each
+table's total, returned count, offset, limit, and `has_more`; every page also
+carries the source revision. Check that revision before assembling pages.
+Unpaged full analysis can exceed Rhai's bounded-value budget on Twin-scale
+sources, so prefer selected tables, selected names, or bounded pages.
+
+For editable Rhai runtime policy, `sysml_analysis(path)` provides a native
+snapshot for small bounded sources. For Twin-scale sources use selected
+`AnalyzeSysml` pages or `sysml_requirements::source()`, which pages the
+requirement/verification tables, checks revision consistency, and retains only
+the compact identities and verification links needed for policy joins.
+Detailed selected requirement records remain available through
+`source_with_selection()`. Use
+`sysml_attribute(path, qualified_name)` when the policy needs the native
+`SysmlAttribute` object for one exact-name source read, and `sysml_value` only
+when it needs the typed literal rather than the attribute metadata. Keep
+acceptance checks (dimensions, ranges, counts, material eligibility, and
+geometry rules) in the authored policy so ordinary
+design changes do not require a Rust rebuild. Rust should expose the source
+semantics and reusable native conversion, not Griffin-specific pass/fail
+decisions. The generic `AnalyzeSysml` selectors remain useful for clients that
+need to limit language-neutral API payloads.
 
 For the active Twin, the requirements policy composes source facts and the Twin
 contract through:
@@ -326,7 +355,8 @@ ambiguous short selectors remain an explicit error.
 
 `sysml_requirements::source()` is read-only. It fails visibly when there is no
 active Twin, no indexed SysML source, a parser diagnostic, a registry error, or
-a verification name that does not resolve in the source set. It joins the
+a verification name that does not resolve in the source set, or when the
+source revision changes during page assembly. It joins the
 `AnalyzeSysml` result with `ReadActiveTwinContract` in Rhai; neither generic
 query implements that policy. Use native typed Rhai maps inside the workflow;
 JSON is reserved for explicit external transport/logging boundaries. Never

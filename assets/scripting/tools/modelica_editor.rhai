@@ -87,6 +87,17 @@ fn _query_ok(value) {
     value != () && value.ok != false
 }
 
+fn _source_generation_detail(source, expected) {
+    if source == () {
+        return "GetDocumentSource returned no document snapshot";
+    }
+    if source.generation == () {
+        return "GetDocumentSource omitted the document generation";
+    }
+    "expected generation " + expected.to_string()
+        + ", observed " + source.generation.to_string()
+}
+
 fn _experiment_error(stage, message, ticket, retryable) {
     #{ ok: false, pending: false, complete: false, domain: "modelica",
        stage: stage, retryable: retryable, error: message, ticket: ticket }
@@ -286,7 +297,8 @@ fn poll_experiment_ticket(ticket) {
         let source = query("GetDocumentSource", #{ doc_id: ticket.doc_id });
         if !_query_ok(source) || source.generation != ticket.source_generation {
             return _experiment_error("result",
-                "Modelica source generation changed while its experiment was running",
+                "Modelica source generation changed while its experiment was running ("
+                    + _source_generation_detail(source, ticket.source_generation) + ")",
                 ticket, false);
         }
         let status = query("RunStatus", #{ experiment_id: ticket.experiment_id });

@@ -116,6 +116,19 @@ and shared SysML-to-Modelica/USD/physics binding are not established. Confirm
 the current API before use; if that binding is missing, record it as one generic
 feature gap rather than duplicating material data per subsystem.
 
+Treat a surface finish or coating as a separate typed selection layered on a
+substrate, not as a replacement material identity. One substrate may have
+different finishes on distinct exposed faces or regions, and one finish may
+be applied over different substrates. Record coating stack/order, thickness
+or areal mass, process, and environment limits when the design or analysis
+depends on them. Keep the finish's measured optical/thermal properties and
+their sources in engineering data. A renderer mapping may select a LunCo
+shader family and appearance parameters for that typed finish, but shader
+color, metallic, and roughness values do not establish solar absorptance,
+infrared emittance, coating thickness, or thermal performance. The typed
+finish-to-`UsdShade` mapping is a generic tooling gap until a supported
+resolver and scene projection are present.
+
 ## 3. Control interfaces before detail
 
 Treat every physical, data, and operational interface as an explicit contract.

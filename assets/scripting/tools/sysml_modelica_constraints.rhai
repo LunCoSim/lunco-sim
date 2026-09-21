@@ -11,7 +11,10 @@ fn analyze(path) {
         tables: ["constraints", "references", "relationships"]})
 }
 
-/// Load only the geometry attributes that the current solve policy consumes.
+/// Request only the geometry attributes this policy consumes. The generic
+/// projection filters the immutable SysML snapshot before constructing Rhai
+/// values; this policy owns the selected names and needs no Rust rebuild when
+/// the design inputs change.
 fn analyze_selected(path, attribute_names) {
     query("AnalyzeSysml", #{path: path,
         tables: ["constraints", "references", "relationships", "attributes"],
@@ -109,7 +112,9 @@ fn position_m(report, qualified_name) {
     for attribute in report.analysis.attributes {
         if attribute.qualified_name != qualified_name { continue; }
         if attribute.declared_type == ()
-            || attribute.declared_type.quantity_kind != "Length"
+            || attribute.declared_type.value_category != "Quantity"
+            || attribute.declared_type.quantity_kind == ()
+            || attribute.declared_type.quantity_kind.qualified_name != "ISQBase::LengthValue"
             || attribute.declared_type.dimensions.len() != 1
             || attribute.declared_type.dimensions[0] != 3 {
             return #{ok: false, error: "SysML position must be a fixed three-element length quantity: " + qualified_name};
@@ -146,7 +151,7 @@ fn bound_vector(report, usage_name, input_name) {
     let formal_name = definition.element.qualified_name + "::" + input_name;
     let candidates = [];
     for relationship in report.analysis.relationships {
-        if relationship.element.kind != "BindingConnectorAsUsage" { continue; }
+        if relationship.element.kind != "BindingConnector" { continue; }
         let belongs_to_usage = relationship.element.qualified_name
             .starts_with(usage_name + "::");
         let binds_formal = false;
@@ -234,7 +239,7 @@ fn assemble_segment(report, usage_name) {
     if selection.ok != true { return selection; }
     let start = bound_vector(report, usage_name, "start");
     if start.ok != true { return start; }
-    let finish = bound_vector(report, usage_name, "end");
+    let finish = bound_vector(report, usage_name, "finish");
     if finish.ok != true { return finish; }
 
     let source = "model SysmlSegmentConstraintSolve\n"
@@ -337,17 +342,43 @@ fn begin_coincident_translation(doc_id, parent_generation, report, usage_name) {
             error: "Modelica Editor rejected the generated constraint source",
             generated: generated, edit: edit };
     }
-    let after = query("GetDocumentSource", #{ doc_id: doc_id });
+    if edit.status != "pending" && edit.status != "applied" {
+        return #{ ok: false, stage: "source", retryable: false,
+            error: "Modelica source replacement did not reach the applied state",
+            generated: generated, edit: edit };
+    }
+    if edit.status == "pending" && edit.id == () {
+        return #{ ok: false, stage: "source", retryable: false,
+            error: "pending Modelica source replacement omitted its command identity",
+            generated: generated, edit: edit };
+    }
+    let state = if edit.status == "pending" { "source_apply" } else { "source_readback" };
+    #{ ok: true, pending: true, complete: false, stage: state,
+       generated: generated, edit: edit,
+       ticket: #{ stage: state, doc_id: doc_id,
+           parent_generation: parent_generation, command_id: edit.id,
+           poll_count: 0, edit: edit } }
+}
+
+fn _coincident_translation_experiment_ticket(doc_id, parent_generation, generated, edit, after) {
     if after == () || after.ok == false || after.source != generated.source
         || after.generation == () || after.generation <= parent_generation {
+        let actual_generation = if after == () { "unavailable" }
+            else if after.generation == () { "unavailable" }
+            else { after.generation.to_string() };
+        let actual_length = if after == () || after.source == () { -1 }
+            else { after.source.len() };
         return #{ ok: false, stage: "source_readback", retryable: false,
-            error: "Modelica Editor source readback did not match the generated wrapper",
+            error: "Modelica Editor source readback mismatched generated wrapper (expected generation > "
+                + parent_generation.to_string() + ", actual generation " + actual_generation
+                + ", expected bytes " + generated.source.len().to_string()
+                + ", actual bytes " + actual_length.to_string() + ")",
             generated: generated, edit: edit, inspection: after };
     }
     // `label` is for the Experiments UI only; execution identity comes from
     // the deferred RunExperiment acknowledgement, never from name matching.
     let label = "SysML geometry solve: " + generated.source_revision_hex
-        + " / " + usage_name;
+        + " / " + generated.usage;
     let ticket = modelica_editor::experiment_ticket(
         doc_id, generated.class, after.generation, label,
         ["translation[1]", "translation[2]", "translation[3]"],
@@ -374,10 +405,16 @@ fn coincident_translation_readback(generated, completed) {
     }
     let result = completed.result;
     let source = query("GetDocumentSource", #{ doc_id: completed.ticket.doc_id });
-    if source == () || source.ok != true
+    if source == () || source.ok == false
         || source.generation != completed.ticket.source_generation {
         return #{ ok: false, stage: "readback",
-            error: "Modelica source generation changed before placement readback" };
+            error: "Modelica source generation changed before placement readback (expected "
+                + completed.ticket.source_generation.to_string() + ", observed "
+                + if source == () || source.generation == () { "unavailable" }
+                  else { source.generation.to_string() },
+            expected_generation: completed.ticket.source_generation,
+            observed_generation: if source == () { () } else { source.generation },
+            source_snapshot: source };
     }
     if result.state != "done" || result.times == () || result.times.is_empty()
         || result.series == () {
@@ -414,9 +451,75 @@ fn coincident_translation_readback(generated, completed) {
        sample_time: result.times[result.times.len() - 1], result: result }
 }
 
-/// Advance one solve ticket. A pending result is an ordinary state, not a
-/// failed compile and not a reason to block the simulation/editor thread.
+/// Advance one source-application or Modelica solve ticket. Deferred document
+/// edits are polled through the shared command-result API before the generated
+/// wrapper is inspected or dispatched; pending remains non-blocking.
 fn poll_coincident_translation(ticket, generated) {
+    if type_of(ticket) != "map" || ticket.stage == () {
+        return #{ ok: false, stage: "ticket", retryable: false,
+            error: "a source-application or Modelica experiment ticket is required" };
+    }
+    if ticket.stage == "source_apply" {
+        ticket.poll_count += 1;
+        let command = command_result(ticket.command_id);
+        if command == () || command.status == "pending" {
+            if ticket.poll_count > 300 {
+                return #{ ok: false, stage: "source_apply", retryable: true,
+                    error: "Modelica source replacement exceeded its bounded command-poll budget",
+                    ticket: ticket, command: command };
+            }
+            return #{ ok: true, pending: true, complete: false,
+                stage: "source_apply", ticket: ticket, command: command };
+        }
+        if command.ok != true || command.status != "applied" {
+            let message = if command.error == () {
+                "Modelica source replacement did not complete successfully"
+            } else {
+                command.error
+            };
+            return #{ ok: false, stage: "source_apply", retryable: false,
+                error: message, ticket: ticket, command: command };
+        }
+        ticket.stage = "source_readback";
+        ticket.poll_count = 0;
+        ticket.edit = command;
+        return #{ ok: true, pending: true, complete: false,
+            stage: "source_readback", ticket: ticket, command: command };
+    }
+    if ticket.stage == "source_readback" {
+        ticket.poll_count += 1;
+        let after = query("GetDocumentSource", #{ doc_id: ticket.doc_id });
+        if after != () && after.ok != false && after.generation != ()
+            && after.generation > ticket.parent_generation
+            && after.source == generated.source {
+            let prepared = _coincident_translation_experiment_ticket(
+                ticket.doc_id, ticket.parent_generation, generated, ticket.edit, after);
+            if prepared.ok != true { return prepared; }
+            ticket = prepared.ticket;
+        } else {
+            if after != () && after.ok != false && after.generation != ()
+                && after.generation > ticket.parent_generation
+                && after.source != generated.source {
+                return #{ ok: false, stage: "source_readback", retryable: false,
+                    error: "Modelica document advanced to a different source before constraint readback",
+                    ticket: ticket, inspection: after };
+            }
+            if ticket.poll_count > 300 {
+                let actual_generation = if after == () || after.generation == () {
+                    "unavailable"
+                } else {
+                    after.generation.to_string()
+                };
+                return #{ ok: false, stage: "source_readback", retryable: true,
+                    error: "Modelica source replacement exceeded its bounded readback budget (expected generation > "
+                        + ticket.parent_generation.to_string() + ", actual generation "
+                        + actual_generation + ")",
+                    ticket: ticket, inspection: after };
+            }
+            return #{ ok: true, pending: true, complete: false,
+                stage: "source_readback", ticket: ticket, inspection: after };
+        }
+    }
     let progress = modelica_editor::poll_experiment_ticket(ticket);
     if progress == () || progress.ok != true { return progress; }
     if progress.pending == true {
@@ -460,7 +563,7 @@ fn coincident_translation_placement_plan(doc_id, edit_target, path,
         return #{ ok: false, stage: "plan", error: "USD document generation changed before placement planning", inspection: document };
     }
     let modelica_source = query("GetDocumentSource", #{ doc_id: solution.modelica_doc_id });
-    if modelica_source == () || modelica_source.ok != true
+    if modelica_source == () || modelica_source.ok == false
         || modelica_source.generation != solution.source_generation {
         return #{ ok: false, stage: "modelica_source",
             error: "Modelica source generation changed before placement planning",
