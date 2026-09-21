@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::band::SurfaceBand;
 use crate::oracle::{DemHeightField, SurfaceOracle};
+use crate::surface_change::TerrainSurfaceChange;
 use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Square};
 
 /// Smallest and largest supported collider-ring quadtree depth.
@@ -177,7 +178,10 @@ pub struct ColliderTiles {
     /// a resident tile is never re-baked by the wanted-set diff, so without this
     /// tether the rover keeps driving the PRE-swap surface (visibly floating
     /// above every crater the recompose added).
-    oracle_key: u64,
+    oracle_key: Option<u64>,
+    /// Revision of the last committed surface change this ring fully observed.
+    /// A skipped revision widens the next dirty region to the complete terrain.
+    surface_revision: u64,
     /// The canonical-depth assembly-ring nodes last frame (sorted). The cheap
     /// gate: when no physics footprint crossed a node boundary the wanted set
     /// is unchanged by construction, so with nothing stale and nothing baking
@@ -292,18 +296,6 @@ pub fn invalidate_ring_on_retune(
             tiles.stale.insert(coord);
         }
     }
-}
-
-/// Per-frame: maintain the collider ring around dynamic bodies for each terrain.
-/// The edited region + the oracle version it belongs to, handed from
-/// `finish_dem_restamp` so [`update_collider_ring`] re-bakes ONLY the ring tiles the
-/// edit touched. `bounds` = `[min_x, min_z, max_x, max_z]` terrain-local metres;
-/// `None` = whole terrain. `oracle_key` matches the swap it describes (so a stale
-/// region can't scope the wrong oracle). Consumed once applied.
-#[derive(Component)]
-pub struct ColliderDirtyRegion {
-    pub bounds: Option<[f64; 4]>,
-    pub oracle_key: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -851,14 +843,6 @@ pub(crate) fn update_physics_support_cache(
     }
 }
 
-/// Whether a node's world [`Square`] overlaps an `[min_x, min_z, max_x, max_z]` box.
-fn square_overlaps_aabb(s: Square, a: [f64; 4]) -> bool {
-    s.center[0] - s.half <= a[2]
-        && s.center[0] + s.half >= a[0]
-        && s.center[1] - s.half <= a[3]
-        && s.center[1] + s.half >= a[1]
-}
-
 /// Return the X/Z footprint of one dynamic body in Avian's world frame.
 ///
 /// `ColliderAabb` is the authoritative broad-phase geometry, so this remains
@@ -1014,7 +998,7 @@ fn push_assembly_ring_nodes(
     }
 }
 
-pub fn update_collider_ring(
+pub(crate) fn update_collider_ring(
     mut commands: Commands,
     cache: Res<PhysicsSupportCache>,
     mut terrains: Query<(
@@ -1023,7 +1007,7 @@ pub fn update_collider_ring(
         &TerrainColliderRing,
         &mut ColliderTiles,
         &mut PendingColliderBakes,
-        Option<&ColliderDirtyRegion>,
+        Option<&TerrainSurfaceChange>,
     )>,
     mut ring_nodes: Local<Vec<QuadCoord>>,
     mut wanted: Local<HashSet<QuadCoord>>,
@@ -1048,7 +1032,7 @@ pub fn update_collider_ring(
     #[cfg(not(target_arch = "wasm32"))]
     let mut bake_budget: usize = usize::MAX;
 
-    for (terrain, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
+    for (terrain, hf, ring, mut tiles, mut pending, surface_change) in &mut terrains {
         let Some((grid_entity, grid)) =
             lunco_spatial::coords::ancestor_grid(terrain, &parents, &grids)
         else {
@@ -1093,17 +1077,17 @@ pub fn update_collider_ring(
         // despawn+respawn the whole ring (the broadphase-churn physics spike on a burst).
         // A whole-terrain change (`None`) invalidates the whole ring, as before.
         let oracle_key = oracle.surface_key();
-        let oracle_swapped = tiles.oracle_key != oracle_key;
+        let oracle_swapped = tiles.oracle_key != Some(oracle_key);
         if oracle_swapped {
-            let dirty = dirty_region
-                .filter(|d| d.oracle_key == oracle_key)
-                .and_then(|d| d.bounds);
+            let dirty = surface_change.and_then(|change| {
+                change.bounds_since(tiles.surface_revision, tiles.oracle_key, oracle_key)
+            });
             let t = &mut *tiles;
             // Mark — don't despawn. A stale tile keeps supporting the rover until
             // its replacement collider is baked and swapped in place (below).
             for coord in t.map.keys() {
                 let hit = match dirty {
-                    Some(aabb) => square_overlaps_aabb(qt.region(*coord), aabb),
+                    Some(aabb) => qt.region(*coord).overlaps_aabb(aabb),
                     None => true,
                 };
                 if hit {
@@ -1112,11 +1096,13 @@ pub fn update_collider_ring(
             }
             // In-flight bakes for touched tiles sampled the OLD oracle — drop them.
             pending.0.retain(|coord, _| match dirty {
-                Some(aabb) => !square_overlaps_aabb(qt.region(*coord), aabb),
+                Some(aabb) => !qt.region(*coord).overlaps_aabb(aabb),
                 None => false,
             });
-            t.oracle_key = oracle_key;
-            commands.entity(terrain).try_remove::<ColliderDirtyRegion>();
+            t.oracle_key = Some(oracle_key);
+            t.surface_revision = surface_change
+                .filter(|change| change.surface_key == oracle_key)
+                .map_or(0, |change| change.revision);
         }
 
         // Each assembly's canonical-depth footprint plus one tile of build-ahead.

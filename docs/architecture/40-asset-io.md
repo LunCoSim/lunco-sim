@@ -126,6 +126,12 @@ atomic publication still own the work. Rhai's `assets.bake(id)` and
 another dataset or changing its parameters is an `Assets.toml` edit. Rust changes
 are needed only when adding a new processing algorithm or owner.
 
+The dataset registry rejects process outputs that overlap another process
+output or a declared download source, including file paths nested under a
+directory output. Directory processors such as `dem` atomically replace their
+entire configured output folder, so independent maps and textures must use
+disjoint sibling paths rather than live inside that folder.
+
 ## Asset loaders we maintain
 
 | Loader | Asset type | Where | Extensions |

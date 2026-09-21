@@ -12,6 +12,13 @@ Sources may be **GeoTIFF or PDS3 `.IMG`** (attached or detached `.LBL`;
 crop affine is equirectangular-only. Use the target Twin's own `Assets.toml` as
 the worked example and inspect its current scene before wiring outputs.
 
+Wire baked terrain outputs into a scene through LunCoSim's USD document
+authoring commands. Open the exact USD source, inspect its layer and target,
+apply typed `ApplyUsdOp(s)` or the existing terrain-material planner, save, and
+read back the authored value. Do not patch `.usd*` text directly; if the
+available command surface cannot author a required standard field, add the
+smallest typed operation at the owning USD layer first.
+
 ## Quick commands (run from this repo's root)
 
 ```bash
@@ -105,6 +112,12 @@ the shared staging/commit path. Put processor-specific manifest values in
 domain. Keep selection, ordering, and onboarding policy in the reusable Rhai
 `assets` tool library or a Twin-owned script; Rust remains the owner of
 decoding, heavy math, cancellation, and atomic publication.
+
+`DatasetRegistry` rejects process outputs that overlap another process output
+or any declared download source, including file paths nested under a directory
+output. The `dem` processor replaces its complete configured folder when it
+commits. Store independent material maps in sibling paths and point the scene
+at the DEM folder.
 
 Use the existing `assets` Rhai library to process declared sources at runtime:
 `assets::bake(id)` dispatches `ProcessDataset`, and

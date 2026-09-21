@@ -170,6 +170,11 @@ runtime prim or caching an entity id.
 
 ## Anti-patterns
 
+- ❌ Writing or patching `.usd`, `.usda`, or `.usdc` source text directly, even
+  for a temporary preview. Open the exact document, inspect its authored layer
+  and edit target, submit schema-aware commands or typed `ApplyUsdOp(s)`, save,
+  and inspect the result. If the authoring API is missing a needed operation,
+  extend that API before changing the scene.
 - ❌ Passing a bare or absolute filesystem path to `LoadScene`.
 - ❌ Guessing an `entry_id` instead of `list_bundled`.
 - ❌ `SetDocumentSource` to build a scene incrementally — use the typed scene commands and their USD operation path.

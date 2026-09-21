@@ -49,6 +49,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
 use crate::oracle::{DemHeightField, SurfaceOracle};
+use crate::surface_change::TerrainSurfaceChange;
 use crate::terrain::DemTerrainSurface;
 use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Selected, Square};
 
@@ -1083,8 +1084,8 @@ impl LodTiles {
         self.coarse_ready = false;
     }
 
-    /// Invalidate only the tiles whose world footprint overlaps `bounds`
-    /// (`[min_x, min_z, max_x, max_z]`, terrain-local metres) — the incremental
+    /// Invalidate only the tiles whose world footprint overlaps the committed
+    /// surface change's bounds — the incremental
     /// re-bake for a **bounded** edit (a brush/flatten touches a small patch, not
     /// the whole terrain). Tiles outside the region are re-stamped to the new
     /// generation so they read as fresh and are never re-selected or re-baked; only
@@ -1162,16 +1163,18 @@ fn selected_cover_status(tiles: &LodTiles, current_generation: u32) -> SelectedC
 
 /// Whether the world square of quadtree node `coord` (derived from the DEM
 /// `root_half_extent`, origin-centred — matching [`lunco_terrain_core::Quadtree::region`])
-/// overlaps the axis-aligned `[min_x, min_z, max_x, max_z]` box. The shared
-/// spatial test behind the incremental region re-bake.
+/// overlaps the axis-aligned `[min_x, min_z, max_x, max_z]` box.
 fn node_overlaps_aabb(coord: QuadCoord, root_half_extent: f64, aabb: [f64; 4]) -> bool {
-    let [min_x, min_z, max_x, max_z] = aabb;
     let nodes_per_side = (1u64 << coord.depth) as f64;
     let side = (2.0 * root_half_extent) / nodes_per_side;
     let half = 0.5 * side;
     let cx = -root_half_extent + (coord.x as f64 + 0.5) * side;
     let cz = -root_half_extent + (coord.z as f64 + 0.5) * side;
-    cx - half <= max_x && cx + half >= min_x && cz - half <= max_z && cz + half >= min_z
+    Square {
+        center: [cx, cz],
+        half,
+    }
+    .overlaps_aabb(aabb)
 }
 
 /// Back-pointer from a spawned LOD tile to its owning terrain. Tiles are parented
@@ -1474,6 +1477,62 @@ struct BakedTile {
 /// the terrain despawns.
 #[derive(Component, Default)]
 pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
+
+impl PendingTileBakes {
+    /// Drop in-flight bakes whose tile overlaps the committed surface change.
+    /// A bounded change leaves pending work elsewhere valid; retag it to the
+    /// new visual generation so the completed mesh can still be published.
+    pub(crate) fn apply_surface_change(
+        &mut self,
+        change: TerrainSurfaceChange,
+        generation: Option<u32>,
+        root_half_extent: f64,
+    ) {
+        let Some(generation) = generation else {
+            self.0.clear();
+            return;
+        };
+        let Some(bounds) = change.dirty_bounds else {
+            self.0.clear();
+            return;
+        };
+        self.0.retain(|coord, (pending_generation, _)| {
+            if node_overlaps_aabb(*coord, root_half_extent, bounds) {
+                false
+            } else {
+                *pending_generation = generation;
+                true
+            }
+        });
+    }
+}
+
+/// Apply one committed surface change to every visual cache owned by the
+/// streamer. Both native restamps and progressive worker upgrades use this
+/// boundary so tile generations, pending tasks, and cached meshes cannot drift.
+pub(crate) fn invalidate_visual_products(
+    commands: &mut Commands,
+    terrain: Entity,
+    change: TerrainSurfaceChange,
+    root_half_extent: f64,
+    tiles: Option<Mut<LodTiles>>,
+    pending: Option<Mut<PendingTileBakes>>,
+    mesh_cache: &mut LodMeshCache,
+) {
+    let generation = if let Some(mut tiles) = tiles {
+        for entity in tiles.reap_stale() {
+            commands.entity(entity).try_despawn();
+        }
+        tiles.invalidate_region(change.dirty_bounds, root_half_extent);
+        Some(tiles.gen)
+    } else {
+        None
+    };
+    if let Some(mut pending) = pending {
+        pending.apply_surface_change(change, generation, root_half_extent);
+    }
+    mesh_cache.drop_region(terrain, change.dirty_bounds, root_half_extent);
+}
 
 /// Terrain self-shadow wiring for a STREAMED terrain's tiles: the pre-baked R8
 /// sun-visibility texture from `lunco-environment`'s horizon solution. The
@@ -3411,6 +3470,7 @@ mod draw_partition_tests {
         let maps = TerrainDerivedMaps {
             surface: Handle::default(),
             normal: Handle::default(),
+            surface_key: 0,
             res: 1024,
             texel_size_m: 7.820_137,
         };
@@ -3523,6 +3583,7 @@ mod draw_partition_tests {
         let derived = TerrainDerivedMaps {
             surface: Handle::default(),
             normal: Handle::default(),
+            surface_key: 0,
             res: 1024,
             texel_size_m: 7.0,
         };
@@ -3641,6 +3702,7 @@ mod draw_partition_tests {
         let derived = TerrainDerivedMaps {
             surface: Handle::default(),
             normal: Handle::default(),
+            surface_key: 0,
             res: 1024,
             texel_size_m: 7.0,
         };
@@ -3698,6 +3760,7 @@ mod draw_partition_tests {
                 TerrainDerivedMaps {
                     surface: Handle::default(),
                     normal: Handle::default(),
+                    surface_key: 0,
                     res: 1024,
                     texel_size_m: 7.0,
                 },

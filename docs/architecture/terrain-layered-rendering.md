@@ -10,7 +10,7 @@ overlays (slope, minerals), a lat/lon graticule, and **time-dependent maps**
 (connectivity, illumination) — as a single extensible, live-tunable, USD-authored
 system, without a bespoke shader per layer.
 
-## Terrain material decision record (2026-09-03)
+## Terrain material decision record (2026-09-21)
 
 The current source inventory has one authored terrain appearance contract, one
 optional geometry stage, one explicit non-authored material, and one general-purpose
@@ -69,7 +69,9 @@ diagnostic replacement:
    interpolation changes at a CDLOD boundary. A separate footprint-filtered
    micro-normal is allowed on every DEM as shading-only regolith grain: it does
    not modify height, collision, or the measured DEM/raster normal band, and
-   fades out before it aliases. The larger procedural shader bumps remain
+   fades out before it aliases. Analytic noise gradients evaluate each bump
+   layer once, and unresolved slope variance transfers into GGX roughness over
+   the same pixel-footprint fade. The larger procedural shader bumps remain
    available for the general regolith material and their scalar height can
    still drive authored fallback roughness/colour, but they do not perturb a
    measured DEM normal. This prevents a second view-dependent surface from
@@ -82,15 +84,12 @@ diagnostic replacement:
    weight; they do not apply an orthophoto transfer at runtime. `kind = "map"`
    remains an analysis/display product and is not a valid direct albedo input.
    The static layered path scales its broad procedural dust/mottle colour by
-   `1 - weight_albedo`. An authored albedo does not suppress the separate,
-   low-amplitude `micro_albedo` regolith grain: it is anchored to the DEM-local
-   coordinate, is applied after authored/derived albedo selection, and uses the
-   same footprint fade as `micro_bump`. This resolves the authored mosaic's finite
-   texel size in close views without replacing
-   authored low-frequency colour or introducing a second LOD-dependent colour
-   path. Relief normals, roughness, ambient occlusion, and photometry remain
-   independent, so camera footprint or CDLOD replacement cannot introduce
-   unrelated colour changes.
+   `1 - weight_albedo`. Authored albedo suppresses independent procedural
+   `micro_albedo` colour variation. The measured raster already owns the colour
+   frequencies it resolves; regolith grain comes from the filtered normal and
+   roughness response, not a second unrelated colour field. Relief normals,
+   roughness, ambient occlusion, and photometry remain independent, so camera
+   footprint or CDLOD replacement cannot introduce unrelated colour changes.
    The packed surface map's G channel is ambient occlusion and is sent to
    Bevy's `PbrInput.diffuse_occlusion`, where it modulates indirect diffuse
    light only. It must never be multiplied into base albedo: doing so turns a
@@ -119,12 +118,13 @@ Static terrain that opts into `HorizonShadowTerrain` remains both a native
 directional-shadow caster and receiver. Bevy's cascaded shadow map owns the
 mesh-accurate near field and carries dynamic-object shadows onto the surface;
 the heightfield cache or march fades in outside the authored CSM range. The
-canonical terrain fragment applies the heightfield visibility only to the
-engine-selected Sun's direct contribution, using Bevy's own directional BRDF
-and native CSM shadow for that term. It does not multiply the completed PBR
-result: ambient/environment light and authored earthshine remain visible when a
-local terrain horizon blocks direct Sun. This keeps ambient, exposure, and
-shadow ownership in the renderer that owns those contracts.
+The canonical terrain fragment applies lunar photometry and heightfield
+visibility only to the engine-selected Sun's direct contribution, using Bevy's
+own directional BRDF and native CSM shadow for that term. It does not multiply
+`base_color` or the completed PBR result: ambient/environment light and authored
+earthshine remain independent when a local terrain horizon blocks direct Sun.
+This keeps ambient, exposure, and shadow ownership in the renderer that owns
+those contracts.
 static terrain shaders use `csm_far` as that handoff boundary, so the two
 systems do not multiply the same terrain self-shadow in their overlap. Streamed
 tiles always remain directional-shadow receivers, so dynamic-object shadows

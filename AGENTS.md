@@ -125,6 +125,15 @@ package checks after changing skill metadata or packaging.
   reads for authoring/document questions. A composed stage is inert: it does not
   launch Modelica, Rhai, behavior trees, physics, or rendering. Tutorials read a
   supplied stage and never open layers themselves.
+- **Author USD through LunCoSim's document tools.** Never create, edit, or
+  rewrite authored `.usd`, `.usda`, or `.usdc` files with shell scripts, direct
+  text edits, or patch tools. Open the exact source with `OpenFile`, inspect its
+  document and edit target, apply the needed schema-aware command or typed
+  `ApplyUsdOp(s)`, then `SaveDocument` and read the result back. If the live API
+  cannot express the needed authored change, add the smallest typed capability
+  at the owning USD layer before making that change. This includes temporary
+  preview scenes; use a document operation or an existing fixture instead of
+  hand-writing USDA.
 - Prefer existing USD schemas and properties whenever they express the authored
   fact (`UsdGeom`, `UsdShade`, `UsdPhysics`, `UsdLux`, `Usd.CollectionAPI`,
   `kind`, variants, and `inputs:`/`outputs:`). Introduce a `lunco:` property or

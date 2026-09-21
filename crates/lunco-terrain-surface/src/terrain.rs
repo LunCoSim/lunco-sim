@@ -1698,6 +1698,7 @@ fn finish_dem_worker(
     jobs: Query<(Entity, &DemWorkerJob)>,
     mut swap_q: Query<(
         &mut crate::oracle::DemHeightField,
+        Option<&crate::surface_change::TerrainSurfaceChange>,
         Option<&mut crate::stream_viz::LodTiles>,
         Option<&mut crate::stream_viz::PendingTileBakes>,
         Has<Mesh3d>,
@@ -1710,6 +1711,7 @@ fn finish_dem_worker(
     // re-composed onto the worker's bare grid so web keeps full analytic realism.
     stacks: Query<&crate::terrain_layers::TerrainLayerStack>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut mesh_cache: ResMut<crate::stream_viz::LodMeshCache>,
     // `materials: Assets<StandardMaterial>` is GONE (render decoupling): `assemble_dem_build`
     // no longer binds a material here — the terrain owner carries a `ShaderLook` intent and
     // `lunco-render-bevy` does the GPU bind. `curvature` stays: it is simulation data (the body-curvature "globe
@@ -1824,7 +1826,9 @@ fn finish_dem_worker(
                 // Re-compose the analytic oracle on the worker's full bare grid.
                 let contributions =
                     layer_contributions(stacks.get(entity).ok(), &grid, curvature_radius);
-                if let Ok((mut hf, tiles, pending, has_static_mesh)) = swap_q.get_mut(entity) {
+                if let Ok((mut hf, previous_surface_change, tiles, pending, has_static_mesh)) =
+                    swap_q.get_mut(entity)
+                {
                     let base = std::sync::Arc::new(grid);
                     // D9: the ONLY `DemBaseGrid` insert is `assemble_dem_build`, and on
                     // web that ran for the COARSE preview. Without re-inserting it here
@@ -1848,10 +1852,11 @@ fn finish_dem_worker(
                         &mut commands,
                         entity,
                         oracle,
-                        job.collider_ring,
                         &mut hf,
+                        previous_surface_change,
                         tiles,
                         pending,
+                        &mut mesh_cache,
                         has_static_mesh,
                         job.target_res,
                         meshes.as_deref_mut(),
@@ -1968,34 +1973,33 @@ fn finish_dem_worker(
 }
 
 /// Swap a freshly (re)baked surface oracle into a live terrain: replace
-/// `DemHeightField`, rebuild the static mesh if it uses one, arm the debounced
-/// static-collider rebuild (unless a collider ring streams physics), and invalidate
-/// the LOD tiles so they refresh near-camera-first with no despawn flash. The web
-/// worker's full-grid reply composes the oracle then calls this.
+/// `DemHeightField`, publish the shared change record, rebuild the static mesh if
+/// it uses one, and invalidate the visual products. Physics consumers then observe
+/// the same record. The web worker's full-grid reply composes the oracle then calls
+/// this.
 #[cfg(target_arch = "wasm32")]
 #[allow(clippy::too_many_arguments)]
 fn swap_terrain_grid(
     commands: &mut Commands,
     entity: Entity,
     oracle: std::sync::Arc<crate::oracle::SurfaceOracle>,
-    collider_ring: bool,
     hf: &mut crate::oracle::DemHeightField,
+    previous_surface_change: Option<&crate::surface_change::TerrainSurfaceChange>,
     tiles: Option<Mut<crate::stream_viz::LodTiles>>,
     pending: Option<Mut<crate::stream_viz::PendingTileBakes>>,
+    mesh_cache: &mut crate::stream_viz::LodMeshCache,
     has_static_mesh: bool,
     target_res: usize,
     meshes: Option<&mut Assets<Mesh>>,
 ) {
-    // Defer the (heavy) static-collider rebuild so the VISUAL swap lands immediately
-    // and physics reconverges shortly after. Collider-ring terrains stream physics.
-    if !collider_ring {
-        commands
-            .entity(entity)
-            .insert(DemColliderDirty(Timer::from_seconds(
-                COLLIDER_DEBOUNCE_SECS,
-                TimerMode::Once,
-            )));
-    }
+    let surface_change = crate::surface_change::TerrainSurfaceChange::next(
+        previous_surface_change,
+        hf.0.surface_key(),
+        oracle.surface_key(),
+        None,
+    );
+    let half = oracle.half_extent() as f64;
+    commands.entity(entity).try_insert(surface_change);
     if has_static_mesh {
         if let Some(meshes) = meshes {
             let MeshData {
@@ -2015,18 +2019,15 @@ fn swap_terrain_grid(
         }
     }
     *hf = crate::oracle::DemHeightField(oracle);
-    // Progressive refresh: reap any already-stale tiles (keep ≤1 generation of
-    // cover), bump the generation so live tiles re-bake near-first, drop in-flight
-    // bakes from the OLD heights.
-    if let Some(mut tiles) = tiles {
-        for e in tiles.reap_stale() {
-            commands.entity(e).try_despawn();
-        }
-        tiles.invalidate();
-    }
-    if let Some(mut pending) = pending {
-        *pending = crate::stream_viz::PendingTileBakes::default();
-    }
+    crate::stream_viz::invalidate_visual_products(
+        commands,
+        entity,
+        surface_change,
+        half,
+        tiles,
+        pending,
+        mesh_cache,
+    );
     // Scatter layers re-run once the applied-marker is gone (next frame).
     commands
         .entity(entity)
@@ -2051,17 +2052,16 @@ pub(crate) struct DemRestampTask(
     )>,
 );
 
-/// Armed after a visual re-stamp swaps new heights in (non-collider-ring terrains):
-/// once it settles, the static heightfield collider is rebuilt off-thread from the
-/// current grid. Decoupling it from the visual swap means dragging a slider doesn't
-/// wait on (or repeatedly redo) the multi-million-point collider build — physics just
-/// reconverges shortly after the visuals.
+/// Debounce state for the static collider consumer of [`crate::surface_change::TerrainSurfaceChange`].
+/// Once a committed surface settles, the static heightfield collider is rebuilt
+/// off-thread from the current oracle. Decoupling it from the visual swap means
+/// dragging a slider doesn't wait on repeated multi-million-point collider builds.
 #[derive(Component)]
 struct DemColliderDirty(Timer);
 
 /// In-flight off-thread static-collider rebuild (see [`DemColliderDirty`]).
 #[derive(Component)]
-struct DemColliderTask(Task<Collider>);
+struct DemColliderTask(Task<(u64, Collider)>);
 
 /// Settle delay before the (heavy) static collider is rebuilt after the last visual
 /// re-stamp. Longer than the restamp debounce so a burst of edits rebuilds the
@@ -2323,10 +2323,10 @@ pub(crate) fn finish_dem_restamp(
     mut tasks: Query<(
         Entity,
         &mut DemRestampTask,
-        &DemTerrainSource,
         &mut crate::oracle::DemHeightField,
         Option<&mut crate::stream_viz::LodTiles>,
         Option<&mut crate::stream_viz::PendingTileBakes>,
+        Option<&crate::surface_change::TerrainSurfaceChange>,
         Has<DemRestampPending>,
         Option<&TerrainDirty>,
         Has<TerrainRescatter>,
@@ -2349,10 +2349,10 @@ pub(crate) fn finish_dem_restamp(
     for (
         entity,
         mut task,
-        src,
         mut hf,
         tiles,
         pending,
+        previous_surface_change,
         was_pending,
         dirty,
         rescatter,
@@ -2368,7 +2368,6 @@ pub(crate) fn finish_dem_restamp(
         // The region this re-bake must refresh: `Some` = a bounded edit (only those
         // tiles + no rock re-scatter); `None`/absent = whole terrain.
         let dirty_bounds = dirty.and_then(|d| d.bounds);
-        let scoped = dirty_bounds.is_some();
         // Consume the mark so the NEXT change starts clean.
         commands.entity(entity).try_remove::<TerrainDirty>();
 
@@ -2430,19 +2429,15 @@ pub(crate) fn finish_dem_restamp(
         }
 
         let half = oracle.half_extent() as f64;
+        let surface_change = crate::surface_change::TerrainSurfaceChange::next(
+            previous_surface_change,
+            hf.0.surface_key(),
+            oracle.surface_key(),
+            dirty_bounds,
+        );
+        let scoped = surface_change.dirty_bounds.is_some();
+        commands.entity(entity).try_insert(surface_change);
 
-        // Defer the (heavy) static-collider rebuild: arm its debounce instead of
-        // building it here, so the VISUAL swap below lands immediately and physics
-        // reconverges shortly after. Collider-ring terrains stream physics → no
-        // static collider to rebuild.
-        if !src.collider_ring {
-            commands
-                .entity(entity)
-                .try_insert(DemColliderDirty(Timer::from_seconds(
-                    COLLIDER_DEBOUNCE_SECS,
-                    TimerMode::Once,
-                )));
-        }
         // Swap in the static visual mesh, if this terrain uses one (not streaming).
         // The full-DEM rasterisation already happened in the task body
         // (`spawn_restamp_task`) — 16.8 M oracle samples here stalled `Update`.
@@ -2465,53 +2460,30 @@ pub(crate) fn finish_dem_restamp(
                 )));
             }
         }
-        // Hand the edited region to the collider ring so it re-bakes ONLY the tiles the
-        // edit touched (and skips rings the edit doesn't reach), instead of despawning +
-        // rebuilding every ring tile on any oracle swap (the burst physics spike). Keyed
-        // by the new oracle's `surface_key` so `update_collider_ring` matches this exact
-        // swap; captured BEFORE the oracle moves into `hf`. `None` bounds = whole terrain.
-        let new_oracle_key = oracle.surface_key();
-        commands
-            .entity(entity)
-            .try_insert(crate::collider_ring::ColliderDirtyRegion {
-                bounds: dirty_bounds,
-                oracle_key: new_oracle_key,
-            });
-        // Tell the derived-maps re-bake whether this swap was a bounded edit: if
-        // so it keeps the published maps live (correct outside the footprint)
-        // instead of popping the far field to the procedural fallback.
-        commands
-            .entity(entity)
-            .try_insert(crate::derived_layers::DerivedDirtyRegion { bounded: scoped });
         // A bounded height edit does not rebuild scatter. Move the retained
         // entities by the exact surface delta so their visual sink and collider
         // remain attached to the edited surface.
         if scoped && !rescatter {
-            refresh_scatter_heights(&mut scattered, entity, &hf.0, &oracle, dirty_bounds);
+            refresh_scatter_heights(
+                &mut scattered,
+                entity,
+                &hf.0,
+                &oracle,
+                surface_change.dirty_bounds,
+            );
         }
         // Swap in the new surface (streaming tiles, collider ring, TerrainHeight query).
         *hf = crate::oracle::DemHeightField(oracle);
 
-        // Progressive refresh: bump the generation so live tiles go stale + re-bake
-        // near-first (still covering the surface), and drop in-flight bakes from the
-        // OLD heights. No despawn-everything flash. First REAP any tiles already stale
-        // from a prior re-bake so rapid edits keep at most one generation of cover —
-        // otherwise dead tiles pile up and the per-frame bookkeeping goes O(n²).
-        if let Some(mut tiles) = tiles {
-            for e in tiles.reap_stale() {
-                commands.entity(e).try_despawn();
-            }
-            // Only tiles overlapping the edited patch go stale + re-bake; a whole-
-            // terrain change (`None`) invalidates all, as before.
-            tiles.invalidate_region(dirty_bounds, half);
-        }
-        if let Some(mut pending) = pending {
-            *pending = crate::stream_viz::PendingTileBakes::default();
-        }
-        // The per-node mesh cache assumes geometry is a pure function of the coord,
-        // which a live edit breaks — drop the entries the edit touched (or all, on a
-        // whole-terrain change) so re-baked tiles pick up the new heights.
-        mesh_cache.drop_region(entity, dirty_bounds, half);
+        crate::stream_viz::invalidate_visual_products(
+            &mut commands,
+            entity,
+            surface_change,
+            half,
+            tiles,
+            pending,
+            &mut mesh_cache,
+        );
 
         // A bounded edit leaves the crater/rock fields untouched, so DON'T re-scatter
         // (that despawn+respawn of every rock is a big part of the per-edit cost). A
@@ -2550,23 +2522,39 @@ pub(crate) fn finish_dem_restamp(
     }
 }
 
-/// Debounced **static-collider rebuild**, decoupled from the visual re-stamp. When a
-/// re-stamp swaps new heights in it arms [`DemColliderDirty`]; once that settles (no
-/// further re-stamp), this rebuilds the heightfield collider OFF-THREAD from the
-/// current grid. So a slider drag updates the visible terrain right away and physics
-/// reconverges a moment later — instead of every edit blocking on the multi-million-
-/// point collider build. Skips while a build is already in flight (it'll re-arm).
+/// Debounced **static-collider rebuild**, decoupled from the visual re-stamp. A new
+/// shared surface revision resets the settle timer; once edits stop, this builds the
+/// heightfield collider OFF-THREAD from the current oracle. A stale in-flight result
+/// is rejected by its oracle key before it can replace the current collider.
 fn start_dem_collider(
     time: Res<Time>,
     mut commands: Commands,
-    mut q: Query<(
-        Entity,
-        &crate::oracle::DemHeightField,
-        Has<DemColliderTask>,
-        &mut DemColliderDirty,
-    )>,
+    mut q: Query<
+        (
+            Entity,
+            &crate::oracle::DemHeightField,
+            Has<DemColliderTask>,
+            Option<Ref<'_, crate::surface_change::TerrainSurfaceChange>>,
+            Option<&mut DemColliderDirty>,
+        ),
+        Without<crate::collider_ring::TerrainColliderRing>,
+    >,
 ) {
-    for (entity, hf, busy, mut dirty) in &mut q {
+    for (entity, hf, busy, surface_change, dirty) in &mut q {
+        if surface_change.is_some_and(|change| change.is_changed()) {
+            if let Some(mut dirty) = dirty {
+                dirty.0.reset();
+            } else {
+                commands
+                    .entity(entity)
+                    .try_insert(DemColliderDirty(Timer::from_seconds(
+                        COLLIDER_DEBOUNCE_SECS,
+                        TimerMode::Once,
+                    )));
+            }
+            continue;
+        }
+        let Some(mut dirty) = dirty else { continue };
         if !dirty.0.tick(time.delta()).just_finished() {
             continue;
         }
@@ -2583,6 +2571,7 @@ fn start_dem_collider(
             continue;
         }
         let oracle = hf.0.clone();
+        let surface_key = oracle.surface_key();
         let task = AsyncComputeTaskPool::get().spawn(async move {
             // Off-thread body → own Tracy zone.
             let _span = bevy::log::info_span!("terrain_static_collider_bake").entered();
@@ -2590,19 +2579,41 @@ fn start_dem_collider(
             // heightfield (streamed rings sample the oracle per-tile instead).
             let grid = oracle.materialize();
             let h = grid.half_extent as f64;
-            Collider::heightfield(grid.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h))
+            (
+                surface_key,
+                Collider::heightfield(grid.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h)),
+            )
         });
         commands.entity(entity).try_insert(DemColliderTask(task));
     }
 }
 
 /// Insert finished off-thread static colliders (see [`start_dem_collider`]).
-fn finish_dem_collider(mut commands: Commands, mut q: Query<(Entity, &mut DemColliderTask)>) {
+fn finish_dem_collider(
+    mut commands: Commands,
+    mut q: Query<(
+        Entity,
+        &mut DemColliderTask,
+        &crate::oracle::DemHeightField,
+        Option<&DemColliderDirty>,
+    )>,
+) {
     use bevy::tasks::futures_lite::future;
-    for (entity, mut task) in &mut q {
-        let Some(collider) = future::block_on(future::poll_once(&mut task.0)) else {
+    for (entity, mut task, height_field, dirty) in &mut q {
+        let Some((surface_key, collider)) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
+        if surface_key != height_field.0.surface_key() {
+            let mut entity_commands = commands.entity(entity);
+            entity_commands.try_remove::<DemColliderTask>();
+            if dirty.is_none() {
+                entity_commands.try_insert(DemColliderDirty(Timer::from_seconds(
+                    COLLIDER_DEBOUNCE_SECS,
+                    TimerMode::Once,
+                )));
+            }
+            continue;
+        }
         commands
             .entity(entity)
             .try_remove::<DemColliderTask>()
@@ -2876,8 +2887,8 @@ pub(crate) fn register(app: &mut App) {
                 restamp_on_curvature.before(start_dem_restamp),
                 start_dem_restamp,
                 finish_dem_restamp,
-                start_dem_collider,
-                finish_dem_collider,
+                start_dem_collider.after(finish_dem_restamp),
+                finish_dem_collider.after(start_dem_collider),
                 remove_late_ring_owner_colliders,
                 update_terrain_gen_status,
             ),

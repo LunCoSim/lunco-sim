@@ -47,6 +47,7 @@ pub mod overlay;
 pub mod plugin;
 pub mod query;
 pub mod stream_viz;
+mod surface_change;
 pub mod surface_query;
 pub mod terrain;
 pub mod terrain_layers;

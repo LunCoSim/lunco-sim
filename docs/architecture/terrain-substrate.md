@@ -49,6 +49,27 @@ quality change cannot add physics work or change contact geometry. Crater
 crispness is no longer bounded by a DEM mip; it is bounded by each product's
 own sampling contract.
 
+### One committed-change contract, independent product caches
+
+Every committed oracle swap records its source key, destination key, revision,
+and terrain-local dirty bounds once in `TerrainSurfaceChange`. Native restamps
+and progressive worker upgrades publish the same record. The visual owner
+applies it through one invalidation function for tile generations, in-flight
+bakes, and cached meshes. The collider ring accepts bounded reuse only when its
+cached source key and revision match the record's source; otherwise it refreshes
+the full ring. Derived maps carry their bake source key, so maps from an older
+surface are dropped instead of being retained across a later bounded edit. The
+monolithic static collider consumes the same change record to debounce its
+rebuild, and rejects an async result whose oracle key is stale.
+
+Each product still applies the change according to its own contract: visual
+tiles invalidate overlapping meshes and retain compatible in-flight work;
+physics keeps stale colliders supporting bodies until replacements are ready;
+derived maps stay published only while their source is the surface immediately
+being replaced. The visual and physics quad lattices share the core
+`Square::overlaps_aabb` spatial rule, while their resolution, bands, scheduling,
+and cache lifetimes remain independent.
+
 ### Why (the bug this replaces)
 
 The first crater implementation had **two materializations** of the surface: a
@@ -418,9 +439,11 @@ the same three contributions a static layer makes.
 - **Parametric brush edits** — built: `EditsLayer` is the generic
   radial-profile-over-placements modifier (`CraterField`'s shape generalised),
   and its bucket index gives the bounded dirty-region lookup.
-- **Edit → dirty-tiles signal** — built: an edit records its footprint as a
-  `TerrainDirty` region; only overlapping tiles/collider tiles re-bake, and
-  error-driven detail auto-refines a sharp edit locally.
+- **Edit → dirty-surface signal** — built: an edit records its footprint as a
+  `TerrainDirty` region; the committed `TerrainSurfaceChange` sends that same
+  region to overlapping visual and collider tiles, while the monolithic static
+  collider rebuild and derived-map bake use their own source-keyed refresh rules.
+  Error-driven visual detail auto-refines a sharp edit locally.
 - **Freeform sculpt** (arbitrary per-vertex Δ, not parametric) — still deferred:
   a `SparseEditField` — a hashmap/edit-raster of touched cells, itself a
   `HeightSource`. It stays bounded, composable, and content-addressable; a

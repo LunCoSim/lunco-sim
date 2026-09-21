@@ -14,14 +14,13 @@
 //     shadow-hiding term (<~20°) plus a narrow coherent-backscatter spike
 //     (<~3°). Lambert/GGX has no term that brightens toward the *light*.
 //
-// We apply this as a multiplier on `base_color` *before* bevy's
-// `apply_pbr_lighting`. Bevy's built-in Lambert then multiplies by μ₀, so the
-// net sun diffuse becomes  albedo · μ₀/(μ₀+μ) · B(α)  — exactly
-// Lommel-Seeliger × opposition. The factor is geometry-only and clamped, and
-// the final diffuse stays bounded (the μ₀ numerator → 0 at the terminator),
-// so a large factor never produces fireflies. Ambient/specular ride the same
-// `base_color`, but on an airless body ambient ≈ 0 and dielectric F0 is fixed
-// (reflectance 0.5), so the side effects are negligible.
+// The shared terrain lighting helper applies this factor to the reconstructed
+// canonical Sun contribution after `apply_pbr_lighting`. Bevy's Lambert term
+// has already supplied μ₀, so the result is albedo · μ₀/(μ₀+μ) · B(α) — the
+// Lommel-Seeliger response with opposition surge. Applying it to `base_color`
+// would also change earthshine, environment fill, and other authored lights.
+// The factor is geometry-only and clamped; the direct response remains bounded
+// and tends to zero at the terminator.
 //
 // Constants are conservative first-cut values; promote to `//!@ui` params for
 // live maria/highlands tuning (highlands back-scatter more) as a follow-up.
@@ -29,9 +28,8 @@
 #define_import_path lunco::lunar
 
 /// Floor on μ = cos(emission). At a grazing view μ → 0 and the Lommel-Seeliger
-/// denominator collapses onto μ₀ alone, so `ls` would run away. The product that
-/// actually reaches the framebuffer is bounded regardless (bevy multiplies by μ₀),
-/// but `albedo * k` is evaluated first and a 1e4 intermediate is a firefly.
+/// denominator collapses onto μ₀ alone, so `ls` would run away. The final
+/// direct-light response remains bounded because Lambert already supplies μ₀.
 const MU_FLOOR: f32 = 0.01;
 
 /// Ceiling on the whole photometric multiplier. Headroom for a full opposition
@@ -62,8 +60,8 @@ fn opposition_surge(alpha: f32, amp: f32, width: f32) -> f32 {
     return 1.0 + amp / (1.0 + t / max(width, 1e-4));
 }
 
-/// Multiplier applied to linear albedo so bevy's Lambert (·μ₀) completes a
-/// Lommel-Seeliger × opposition response for the dominant sun.
+/// Multiplier for the canonical Sun response after Bevy's Lambert term has
+/// supplied μ₀, completing Lommel-Seeliger × opposition.
 ///
 ///   N  shading normal   (world, unit)
 ///   L  to-sun direction (world, unit)
@@ -72,12 +70,6 @@ fn opposition_surge(alpha: f32, amp: f32, width: f32) -> f32 {
 /// LOMMEL-SEELIGER. Reflectance goes as μ₀/(μ₀+μ). Bevy's Lambert already supplies
 /// the μ₀ numerator, so the multiplier this returns carries 1/(μ₀+μ) — and μ is
 /// `dot(N, V)`, the emission cosine.
-///
-/// This function previously accepted `V` and never read it, substituting a constant
-/// 0.5 for μ. That is not a cheaper Lommel-Seeliger, it is a different law: LS
-/// cancels Lambert's limb darkening *because* μ sits in the denominator, so freezing
-/// μ removes the half of the effect that responds to viewing geometry — the half
-/// that makes the full Moon read as a flat disc rather than a shaded ball.
 ///
 /// The 2.0 normalises to Lambert parity at μ₀ == μ (normal incidence, normal view),
 /// so enabling LS is a RESHAPING rather than a global brightness step. `gain` is the

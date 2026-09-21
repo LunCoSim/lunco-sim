@@ -237,13 +237,19 @@ settings table or default choice.
 | --- | --- | --- | --- | --- |
 | Low | 512 px · 1 · 20 m · 600 m | 512 px · 1 / 2 / 2 | Hardware2x2 | 15 / 32 MiB |
 | Balanced | 2048 px · 3 · 40 m · 1500 m | 1024 px · 1 / 4 / 4 | Gaussian | 208 / 256 MiB |
-| High | 4096 px · 4 · 80 m · 3000 m | 2048 px · 2 / 8 / 8 | Gaussian | 1792 / 2048 MiB |
+| High | 4096 px · 4 · 30 m · 3000 m | 2048 px · 2 / 8 / 8 | Gaussian | 1792 / 2048 MiB |
 
 Estimates cover the configured maximum caster counts and Depth32Float map textures;
 spot maps use the directional map size. The ceiling is a logical shadow-allocation
 limit, not a prediction of total GPU memory use. Scenes without shadow attributes use
 the selected Graphics profile, so Low, Balanced, and High keep their own far range and
 first-cascade bound.
+
+High also raises streamed terrain to depth 9 with a 1024-tile budget while keeping
+49 vertices per tile. Across the 1 km Apollo crop, a deepest-level tile spans about
+1.95 m and resolves the sampled surface at roughly 4 cm per interval. This supplies
+the 3–5 cm class of rover-scale geometry described in the lunar terrain research
+without increasing the terrain density or bake work in Balanced.
 
 `ProceduralSkybox` is a render-free scene intent owned by `lunco-render` that may accompany `ShaderLook` from `lunco-materials`.
 The USD projection reads the authored `lunco:surface:skybox` flag once on its
