@@ -11,6 +11,10 @@ and the target scene's composed USD before changing a shader or asset. The
 authored USD Material/Shader network and its assets own visual intent; the
 runtime binder projects that intent to Bevy.
 
+For lunar-specific terrain data, regolith reflectance, multiscale detail, and
+LOD approaches, consult the source-linked
+[`lunar surface rendering research note`](../../docs/research/lunar-surface-rendering.md).
+
 ## Diagnose in order
 
 1. Confirm the terrain prim, `material:binding`, Material surface connection,
