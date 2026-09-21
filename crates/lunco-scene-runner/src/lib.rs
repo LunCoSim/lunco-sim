@@ -1530,7 +1530,7 @@ pub fn run() -> u8 {
         #[cfg(feature = "ui")]
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
-                use lunco_luncosim_edit_ui::selection::{Selected, compute_selection_aabb};
+                use lunco_luncosim_edit_ui::selection::{compute_selection_aabb, Selected};
                 use lunco_usd_bevy_scene::UsdPrimPath;
 
                 let target_ent = {
@@ -1619,8 +1619,10 @@ pub fn run() -> u8 {
 
     // A PASS cannot stand while the engine is still reporting a terminal
     // runtime fault. This is a separate causal boundary from wiring: a
-    // rejected client-prediction loop, non-finite force, or escaped body must
-    // be reported as that fault, not disguised as a dangling connection.
+    // rejected client-prediction loop, non-finite force, or an explicitly
+    // world-pausing escape policy must be reported as that fault, not disguised
+    // as a dangling connection. The default object-scoped escape action is
+    // recoverable and keeps the rest of the solver available to this verdict.
     let expected_runtime = app.world().resource::<ExpectedRuntimeFaults>().0.clone();
     if let Some(fault) = app
         .world()

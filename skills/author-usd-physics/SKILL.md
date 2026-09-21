@@ -443,8 +443,8 @@ re-authored by the incoming scene.
 
 | Symptom | Look at |
 |---|---|
-| `origin.is_finite()` panic in `obvhs` | a body reached ±inf; a raycast was issued from it. The *cause* is upstream — find the first `body left the world` |
-| `[physics] body left the world: …` | first escapee names the mechanism that diverged. Bodies at the end of a lever arm (pads, wheels) escape first |
+| `origin.is_finite()` panic in `obvhs` | a body reached ±inf; a raycast was issued from it. The *cause* is upstream — find the first `body has non-finite state` diagnostic |
+| `[physics] body left the world: …` or `body has non-finite state: …` | first escapee names the mechanism that diverged. The required `physics.body_escape` Rhai policy pauses that dynamic joint island by default, including its colliders, while other bodies continue; inspect the first escapee to find the upstream cause. Bodies at the end of a lever arm (pads, wheels) escape first |
 | `joint … starts violated by … rad` | a joint frame; see §1 |
 | stroke reads exactly `0.0000` in every regime | a second contact carrying the load (§2). Measure the joint's angular-lock error before touching its limits |
 | a spring loads the "wrong way" | almost never the joint. A jammed DOF and a reversed one look identical from the port; §2 tells them apart |
