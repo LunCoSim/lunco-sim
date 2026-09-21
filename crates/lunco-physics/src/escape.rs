@@ -53,9 +53,10 @@
 //!   static extent, with [`ESCAPE_VERTICAL_FACTOR`] scene-scale slack. Orbital
 //!   scenes have no static colliders and therefore remain `None`.
 //!
-//! Non-finite positions and velocities (NaN/±inf) are flagged unconditionally,
-//! bounds or no bounds. A NaN in the solver is never legitimate in any regime,
-//! and it is the one signal that needs no scene context at all.
+//! Non-finite positions and velocities (NaN/±inf) are detected regardless of
+//! world bounds and use the same required Rhai containment policy. The default
+//! stops only the affected dynamic object; an unavailable or invalid policy
+//! still fails closed with a physics hold.
 //!
 //! # Known limitations (stated, not hidden)
 //!
@@ -80,17 +81,40 @@
 //! actually changes, which after terrain settles is never. Nothing allocates
 //! per frame.
 //!
-//! A reported escape also raises the shared `TelemetryEvent` named
-//! `physics-body-escaped`. The physics boundary remains the single producer:
-//! the existing error log and the workbench Recent Events entry both consume
-//! this one observation, with no log parsing or UI-specific dependency.
+//! An escaped or non-finite state invokes the required `physics.body_escape`
+//! Rhai policy. The application default disables only its dynamic
+//! joint-connected object, including joints and colliders, and leaves the rest
+//! of physics running.
+//! Missing or invalid policy results fail closed with a physics hold. The same
+//! policy receives non-finite position or velocity as `non_finite_state`, so
+//! the default also isolates that object without holding unrelated physics.
+//! Every first report emits the shared `TelemetryEvent` named
+//! `physics-body-escaped`; the logger and workbench Recent Events consume this
+//! one observation without log parsing or UI-specific dependencies.
 
 use avian3d::math::{Scalar, Vector};
 use avian3d::prelude::*;
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
+use lunco_hooks::HookValue;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
+
+/// Policy seam for a changed rigid body that left the bounds or became invalid.
+/// `ctx` includes kind, optional path and global_id, position_m, velocity_mps,
+/// world_min_m, and world_max_m; the returned string is a containment action.
+pub const BODY_ESCAPE_POLICY_HOOK: &str = "physics.body_escape";
+
+lunco_hooks::declare_hook! {
+    id: BODY_ESCAPE_POLICY_HOOK,
+    owner: "lunco-physics",
+    description: "Choose how to contain an escaped or non-finite rigid-body state.",
+    signature: [ctx: Map],
+    output: String,
+    deterministic: true,
+    required: true,
+    installable: true,
+}
 
 /// Fraction of the static world's largest extent added as lateral/downward
 /// slack. Ten percent is comfortably more than terrain-tile paging jitter and
@@ -104,6 +128,175 @@ pub const ESCAPE_MARGIN_MIN: Scalar = 100.0;
 /// Additional local-world height, in multiples of the static world's largest
 /// extent. This catches runaway integration without rewriting physics state.
 pub const ESCAPE_VERTICAL_FACTOR: Scalar = 10.0;
+
+/// Marks an entity in an articulated object stopped by the escape policy.
+/// Readiness release leaves Avian's disable in place while this marker remains.
+#[derive(Component, Debug, Clone, Copy)]
+pub(super) struct PhysicsEscapePaused;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EscapePolicyAction {
+    PauseObject,
+    PauseWorld,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EscapeKind {
+    FiniteWorldExit,
+    NonFiniteState,
+}
+
+impl EscapeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::FiniteWorldExit => "finite_world_exit",
+            Self::NonFiniteState => "non_finite_state",
+        }
+    }
+}
+
+impl EscapePolicyAction {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pause_object" => Some(Self::PauseObject),
+            "pause_world" => Some(Self::PauseWorld),
+            _ => None,
+        }
+    }
+}
+
+fn hook_vector(value: Vector) -> HookValue {
+    HookValue::Array(vec![
+        HookValue::Float(value.x as f64),
+        HookValue::Float(value.y as f64),
+        HookValue::Float(value.z as f64),
+    ])
+}
+
+fn escape_policy_action(
+    kind: EscapeKind,
+    path: Option<&Name>,
+    global_id: Option<u64>,
+    position: Vector,
+    velocity: Vector,
+    bounds: WorldBounds,
+) -> Result<EscapePolicyAction, String> {
+    let (world_min, world_max) = match bounds {
+        WorldBounds::Some { min, max } => (hook_vector(min), hook_vector(max)),
+        WorldBounds::None if kind == EscapeKind::NonFiniteState => {
+            (HookValue::Unit, HookValue::Unit)
+        }
+        WorldBounds::None => {
+            return Err("a finite world exit was reported without static-world bounds".to_owned());
+        }
+    };
+    let context = HookValue::map([
+        ("kind", HookValue::str(kind.as_str())),
+        (
+            "path",
+            path.map_or(HookValue::Unit, |name| HookValue::str(name.as_str())),
+        ),
+        (
+            "global_id",
+            global_id.map_or(HookValue::Unit, |id| HookValue::str(id.to_string())),
+        ),
+        ("position_m", hook_vector(position)),
+        ("velocity_mps", hook_vector(velocity)),
+        ("world_min_m", world_min),
+        ("world_max_m", world_max),
+    ]);
+    let Some(result) = lunco_hooks::invoke(BODY_ESCAPE_POLICY_HOOK, &[context]) else {
+        return Err(format!(
+            "required `{BODY_ESCAPE_POLICY_HOOK}` policy is not installed"
+        ));
+    };
+    let value =
+        result.map_err(|error| format!("`{BODY_ESCAPE_POLICY_HOOK}` policy failed: {error}"))?;
+    match value {
+        HookValue::Str(value) => EscapePolicyAction::parse(&value).ok_or_else(|| {
+            format!(
+                "`{BODY_ESCAPE_POLICY_HOOK}` returned unsupported action `{value}`; expected `pause_object` or `pause_world`"
+            )
+        }),
+        other => Err(format!(
+            "`{BODY_ESCAPE_POLICY_HOOK}` returned {other:?}; expected a string action"
+        )),
+    }
+}
+
+/// Find the live dynamic bodies joined to `seed`. Static and kinematic anchors
+/// terminate traversal so independent mechanisms attached to the same world
+/// frame remain independent objects.
+fn dynamic_object_island(
+    seed: Entity,
+    body_modes: &Query<&RigidBody>,
+    joint_links: &Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
+) -> EntityHashSet {
+    let mut island = EntityHashSet::default();
+    island.insert(seed);
+    loop {
+        let mut added = false;
+        for (_, link) in joint_links.iter() {
+            let body0_dynamic = body_modes
+                .get(link.body0)
+                .is_ok_and(|mode| matches!(mode, RigidBody::Dynamic));
+            let body1_dynamic = body_modes
+                .get(link.body1)
+                .is_ok_and(|mode| matches!(mode, RigidBody::Dynamic));
+            if !body0_dynamic || !body1_dynamic {
+                continue;
+            }
+            if island.contains(&link.body0) && island.insert(link.body1) {
+                added = true;
+            }
+            if island.contains(&link.body1) && island.insert(link.body0) {
+                added = true;
+            }
+        }
+        if !added {
+            return island;
+        }
+    }
+}
+
+fn pause_dynamic_object(
+    seed: Entity,
+    body_modes: &Query<&RigidBody>,
+    joint_links: &Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
+    colliders: &Query<(Entity, &ColliderOf)>,
+    reported: &mut ReportedEscapes,
+    commands: &mut Commands,
+) -> usize {
+    let mut island: Vec<_> = dynamic_object_island(seed, body_modes, joint_links)
+        .into_iter()
+        .collect();
+    island.sort_unstable_by_key(|entity| entity.to_bits());
+    let mut island_set = EntityHashSet::default();
+    for entity in &island {
+        island_set.insert(*entity);
+    }
+    for (joint, link) in joint_links.iter() {
+        if island_set.contains(&link.body0) || island_set.contains(&link.body1) {
+            commands.entity(joint).try_insert(JointDisabled);
+        }
+    }
+    for (collider, collider_of) in colliders.iter() {
+        if island_set.contains(&collider_of.body) {
+            commands
+                .entity(collider)
+                .try_insert((ColliderDisabled, PhysicsEscapePaused));
+        }
+    }
+    for entity in &island {
+        commands
+            .entity(*entity)
+            .try_insert((RigidBodyDisabled, PhysicsEscapePaused));
+        // One event and one policy decision describe the whole articulated
+        // object even if several of its bodies crossed the bounds this step.
+        reported.0.insert(*entity);
+    }
+    island.len()
+}
 
 /// The volume the simulation has static geometry in, expanded by the margins
 /// described in the module docs — or [`WorldBounds::None`] when the scene has no
@@ -132,9 +325,9 @@ impl WorldBounds {
     }
 }
 
-/// Entities already reported. Membership is the anti-spam rule: a body that has
-/// left the world stays left, and re-logging it every tick would bury the very
-/// first report — the one that names when it happened.
+/// Entities already handled by the escape boundary. Object-policy membership
+/// covers the full dynamic joint island, so one escape produces one policy
+/// decision and telemetry event instead of one per wheel or joint endpoint.
 #[derive(Resource, Debug, Default)]
 pub struct ReportedEscapes(EntityHashSet);
 
@@ -216,8 +409,8 @@ fn update_world_bounds(
     }
 }
 
-/// Log — once per entity, at `error!` — any dynamic body that has left
-/// [`WorldBounds`], with everything needed to act on it without a re-run.
+/// Observe dynamic bodies outside [`WorldBounds`], invoke the authored policy
+/// once per escaped object, and keep missing or invalid policy results fail-closed.
 ///
 /// `Name` carries the USD prim path for USD-spawned bodies: the loader spawns
 /// each prim with `Name::new(prim_path)` (`lunco-usd-bevy` visual projection).
@@ -231,11 +424,14 @@ fn report_escaped_bodies(
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     world_time: Option<Res<lunco_time::WorldTime>>,
     mut commands: Commands,
-    // `Changed<Position>` is the query-level body-kind gate: avian has no
-    // per-variant marker component (`RigidBody` is one enum component), so
-    // "dynamic only" cannot be a `With<>` filter — but a body cannot escape
-    // without its `Position` being written, and the solver writes every awake
-    // dynamic body each step while statics are never written after settle.
+    body_modes: Query<&RigidBody>,
+    joint_links: Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
+    colliders: Query<(Entity, &ColliderOf)>,
+    // Changed position or velocity is the query-level activity filter: avian
+    // has no per-variant marker component (`RigidBody` is one enum component),
+    // so "dynamic only" cannot be a `With<>` filter. The solver writes every
+    // awake dynamic body's position each step; watching velocity changes also
+    // catches a bad externally-authored velocity before it produces a position.
     // Statics (terrain tiles — the bulk of the body count) therefore cost one
     // change-tick compare instead of a full fetch + enum match per tick. A
     // sleeping body is skipped too, correctly: escapes accelerate, they never
@@ -249,7 +445,7 @@ fn report_escaped_bodies(
             Option<&GlobalEntityId>,
             &RigidBody,
         ),
-        Changed<Position>,
+        Or<(Changed<Position>, Changed<LinearVelocity>)>,
     >,
 ) {
     for (entity, pos, vel, name, global_id, rb) in &q {
@@ -261,48 +457,112 @@ fn report_escaped_bodies(
         if !matches!(rb, RigidBody::Dynamic) {
             continue;
         }
-        if !bounds.escaped(pos.0) {
+        let non_finite_state = !pos.0.is_finite() || !vel.0.is_finite();
+        if !non_finite_state && !bounds.escaped(pos.0) {
             continue;
         }
         // `insert` returns false if already present: the whole anti-spam rule.
         if !reported.0.insert(entity) {
             continue;
         }
-        holds.set(crate::PhysicsHolds::SAFETY_FAILURE, true);
         let label = name.map(Name::as_str).unwrap_or("<unnamed>");
-        let global_id = global_id.map(GlobalEntityId::get).unwrap_or(0);
+        let global_id_value = global_id.map(GlobalEntityId::get);
+        let global_id_detail =
+            global_id_value.map_or_else(|| "none".to_owned(), |id| id.to_string());
+        let telemetry_source = global_id_value.unwrap_or(0);
         let timestamp = world_time.as_ref().map(|time| time.epoch_jd).unwrap_or(0.0);
         let sim_secs = world_time.as_ref().map(|time| time.sim_secs).unwrap_or(0.0);
-        let detail = format!(
-            "body={label}; entity_bits={}; global_id={global_id}; position={:?}; velocity={:?}; bounds={:?}; sim_secs={sim_secs:.6}",
+        let escape_kind = if non_finite_state {
+            EscapeKind::NonFiniteState
+        } else {
+            EscapeKind::FiniteWorldExit
+        };
+        let condition = match escape_kind {
+            EscapeKind::FiniteWorldExit => "body left the world",
+            EscapeKind::NonFiniteState => "body has non-finite state",
+        };
+        let mut detail = format!(
+            "kind={}; body={label}; entity_bits={}; global_id={global_id_detail}; position={:?}; velocity={:?}; bounds={:?}; sim_secs={sim_secs:.6}",
+            escape_kind.as_str(),
             entity.to_bits(),
             pos.0,
             vel.0,
             *bounds,
         );
-        if let Some(faults) = faults.as_deref_mut() {
-            if faults.raise("physics-body-escaped", Some(entity), label, detail.clone()) {
-                error!(
-                    "[physics] terminal runtime failure: body left the world: {} ({entity})",
-                    label
+        let action_name;
+        let mut paused_bodies = 0;
+        match escape_policy_action(escape_kind, name, global_id_value, pos.0, vel.0, *bounds) {
+            Ok(EscapePolicyAction::PauseObject) => {
+                paused_bodies = pause_dynamic_object(
+                    entity,
+                    &body_modes,
+                    &joint_links,
+                    &colliders,
+                    &mut reported,
+                    &mut commands,
                 );
+                action_name = "pause_object";
+            }
+            Ok(EscapePolicyAction::PauseWorld) => {
+                action_name = "pause_world";
+                holds.set(crate::PhysicsHolds::SAFETY_FAILURE, true);
+                if let Some(faults) = faults.as_deref_mut() {
+                    let fault_kind = match escape_kind {
+                        EscapeKind::FiniteWorldExit => "physics-body-escaped",
+                        EscapeKind::NonFiniteState => "physics-body-nonfinite",
+                    };
+                    if faults.raise(fault_kind, Some(entity), label, detail.clone()) {
+                        error!(
+                            "[physics] Rhai policy selected a world hold for {condition}: {label} ({entity})"
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                action_name = "policy_failed";
+                detail.push_str("; policy_error=");
+                detail.push_str(&error);
+                holds.set(crate::PhysicsHolds::SAFETY_FAILURE, true);
+                if let Some(faults) = faults.as_deref_mut() {
+                    if faults.raise(
+                        "physics-escape-policy-failed",
+                        Some(entity),
+                        label,
+                        detail.clone(),
+                    ) {
+                        error!(
+                            "[physics] terminal runtime failure: {BODY_ESCAPE_POLICY_HOOK} failed for {label} ({entity}): {error}"
+                        );
+                    }
+                }
             }
         }
+        detail.push_str(&format!(
+            "; policy_action={action_name}; paused_dynamic_bodies={paused_bodies}"
+        ));
         commands.trigger(TelemetryEvent {
             name: "physics-body-escaped".to_string(),
-            source: global_id,
+            // The telemetry contract reserves 0 for an event without an
+            // attached global entity identity; the detail string says `none`.
+            source: telemetry_source,
             severity: Severity::Error,
             data: TelemetryValue::String(detail),
             timestamp,
         });
-        error!(
-            "[physics] body left the world: {} ({entity}) at {:?}, velocity {:?} \
-             — outside {:?}. A dynamic body outside the static geometry has nothing \
-             left to collide with and will keep accelerating. Usual cause: physics \
-             stepped while its collider was absent (see `PhysicsHolds`), or the body \
-             was spawned below the terrain.",
-            label, pos.0, vel.0, *bounds,
-        );
+        match action_name {
+            "pause_object" => warn!(
+                "[physics] {condition}: {} ({entity}) at {:?}, velocity {:?} — Rhai policy paused its articulated object ({paused_bodies} dynamic bodies); the rest of the simulation continues",
+                label, pos.0, vel.0,
+            ),
+            "pause_world" => error!(
+                "[physics] {condition}: {} ({entity}) at {:?}, velocity {:?} — Rhai policy paused physics for the whole scene",
+                label, pos.0, vel.0,
+            ),
+            _ => error!(
+                "[physics] {condition}: {} ({entity}) at {:?}, velocity {:?} — physics held because its escape policy is unsafe",
+                label, pos.0, vel.0,
+            ),
+        }
     }
 }
 
@@ -583,12 +843,11 @@ mod tests {
         );
     }
 
-    /// An escape is a terminal diagnostic, not a pose-correction mechanism.
-    /// The first bad state must remain available to the fault/recording
-    /// boundary; silently changing it would destroy the evidence and alter the
-    /// simulation's meaning.
+    /// A finite escape without an installed application policy fails closed.
+    /// The production application supplies the required Rhai policy; this
+    /// low-level boundary must not invent a Rust action when it is absent.
     #[test]
-    fn an_escape_reports_and_holds_without_mutating_the_body() {
+    fn a_missing_escape_policy_holds_physics_with_a_fault() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
@@ -621,7 +880,7 @@ mod tests {
         let fault = world.resource::<lunco_core::RuntimeFaults>();
         assert_eq!(
             fault.first.as_ref().map(|fault| fault.kind),
-            Some("physics-body-escaped")
+            Some("physics-escape-policy-failed")
         );
     }
 

@@ -128,6 +128,13 @@ Per-body physics suspension uses the authored/runtime body mechanism such as
 `RigidBodyDisabled` and `ColliderDisabled`. It does not create a clock per body:
 contact islands and one solver step require a coherent physics cadence.
 
+The required `physics.body_escape` Rhai policy uses this same boundary. Its
+application default disables the affected dynamic joint island and its
+colliders for both finite world exits and non-finite position or velocity,
+leaving other bodies and the simulation clock running. A Twin may author a
+world-wide physics hold when that is its intended response; missing or invalid
+policy results remain visible safety faults.
+
 ### 5.3 Cadence is not clock
 
 The schedule answers how often a system runs; the domain answers which time it

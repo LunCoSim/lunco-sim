@@ -17,6 +17,32 @@ checks.push(t_true(camera.parameters.len() == 1
 checks.push(t_true(camera.output == "string",
     "hook output type is reflected"));
 
+let escape_policy_hook = ();
+for hook in hooks {
+    if hook.id == "physics.body_escape" { escape_policy_hook = hook; }
+}
+checks.push(t_true(escape_policy_hook != ()
+        && escape_policy_hook.declared == true
+        && escape_policy_hook.deterministic == true
+        && escape_policy_hook.required == true
+        && escape_policy_hook.installable == true
+        && escape_policy_hook.parameters.len() == 1
+        && escape_policy_hook.parameters[0].name == "ctx"
+        && escape_policy_hook.parameters[0].type == "map"
+        && escape_policy_hook.output == "string",
+    "physics escape exposes a required deterministic Rhai action policy"));
+let default_escape_policy = invoke_hook("physics.body_escape", [#{
+    kind: "finite_world_exit",
+    path: "/EscapeContainmentTest/Escapee",
+    global_id: (),
+    position_m: [1510.0, 0.0, 0.0],
+    velocity_mps: [0.0, -0.16, 0.0],
+    world_min_m: [-200.0, -200.0, -200.0],
+    world_max_m: [200.0, 200.0, 200.0],
+}]);
+checks.push(t_true(default_escape_policy.ok == true
+        && default_escape_policy.value == "pause_object",
+    "the application Rhai default pauses the escaped object"));
 let merge = ();
 for hook in hooks {
     if hook.id == "journal.merge.order" { merge = hook; }

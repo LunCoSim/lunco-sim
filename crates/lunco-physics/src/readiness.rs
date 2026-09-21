@@ -114,7 +114,7 @@ pub fn apply_world_readiness_hold(state: Res<ReadinessState>, mut holds: ResMut<
 /// re-enable them when the mark clears.
 ///
 /// Idempotent — safe (and intended) to run every frame.
-pub fn reconcile_frozen_subtrees(
+pub(crate) fn reconcile_frozen_subtrees(
     held: Query<Entity, With<HeldForReadiness>>,
     children: Query<&Children>,
     bodies: Query<(), (With<RigidBody>, Without<RigidBodyDisabled>)>,
@@ -127,6 +127,7 @@ pub fn reconcile_frozen_subtrees(
         ),
     >,
     frozen: Query<(Entity, &FrozenForReadiness)>,
+    escape_paused: Query<(), With<crate::escape::PhysicsEscapePaused>>,
     mut commands: Commands,
 ) {
     // ── Freeze: everything under a held root that is not frozen yet ──────────
@@ -173,10 +174,10 @@ pub fn reconcile_frozen_subtrees(
             continue;
         }
         let mut e = commands.entity(entity);
-        if record.body {
+        if record.body && !escape_paused.contains(entity) {
             e.try_remove::<RigidBodyDisabled>();
         }
-        if record.collider {
+        if record.collider && !escape_paused.contains(entity) {
             e.try_remove::<ColliderDisabled>();
         }
         e.try_remove::<FrozenForReadiness>();
