@@ -45,6 +45,12 @@ several hours tracing four separate instances (mio in `lunco-api`,
 The fix isn't a smarter function; it's a rule that any code reading a
 shippable asset goes through one path that works on both targets.
 
+For Twin document and source assets, the Rhai lifecycle policy chooses indexed
+files and their load order. Typed domain commands validate Twin ownership and
+path safety, then request the selected asset through `AssetServer`; domain
+loaders must not scan Twin folders or select manifest paths in Rust. The asset
+layer still owns the shared index and `twin://` resolution.
+
 Known engine layout is owned by `lunco-assets-core` as well. Consumers use its
 helpers for Modelica sources, scene tests, shaders, and the runtime manifest
 instead of joining `assets`, `models`, `scenes`, `shaders`, or

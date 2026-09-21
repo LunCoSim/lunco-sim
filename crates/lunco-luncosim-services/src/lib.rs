@@ -800,9 +800,10 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
         twin_root.display()
     );
     // `--scene` is doc-backed through the same path as any workspace Twin: the
-    // asset-mounted event emitted after `TwinAdded` runs the doc-first mount
-    // (`open_usd_docs_on_twin_asset_mounted` → `drain_pending_twin_docs`), and
-    // terrain edits stay on the incremental re-bake — `LiveRebuildExempt` +
+    // asset-mounted event emitted after `TwinAdded` reaches the Rhai loading
+    // policy, whose `OpenTwinScene` action enters the doc-first mount
+    // (`drain_pending_twin_docs`), and terrain edits stay on the incremental
+    // re-bake — `LiveRebuildExempt` +
     // `edit_confined_to_exempt_subtree` keep a terrain-confined USD edit from
     // ever reloading the scene.
 }

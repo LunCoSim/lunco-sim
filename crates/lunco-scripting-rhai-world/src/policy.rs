@@ -100,6 +100,18 @@ pub struct LifecyclePolicyReport {
     pub error: Option<String>,
 }
 
+/// Ordered command plan returned by an authored Twin loading policy.
+#[derive(Clone, Debug)]
+struct TwinPolicyCommand {
+    twin: lunco_workspace::TwinId,
+    command: String,
+    params: HookValue,
+}
+
+/// Commands waiting for the generic typed command bridge to apply them.
+#[derive(Resource, Default)]
+pub struct PendingTwinPolicyCommands(Vec<TwinPolicyCommand>);
+
 /// The derived set of active scripted policies on this process.
 #[derive(Resource, Default, Clone)]
 pub struct ScriptedPolicyRegistry {
@@ -284,6 +296,10 @@ fn invoke_twin_lifecycle(
             ),
         ),
     ]);
+    invoke_twin_lifecycle_context(event, context)
+}
+
+fn invoke_twin_lifecycle_context(event: &str, context: HookValue) -> LifecyclePolicyReport {
     match lunco_hooks::invoke(TWIN_LIFECYCLE_HOOK, &[HookValue::str(event), context]) {
         None => LifecyclePolicyReport {
             event: event.to_owned(),
@@ -316,6 +332,164 @@ fn invoke_twin_lifecycle(
                 status: "fault".into(),
                 error: Some(error.to_string()),
                 ..Default::default()
+            }
+        }
+    }
+}
+
+/// Deliver the mounted Twin's typed manifest and file index to Rhai. The
+/// policy selects domain loaders and returns an ordered list of typed command
+/// requests; this Rust boundary only validates that generic action shape.
+pub fn plan_twin_asset_loading(
+    trigger: On<lunco_assets_runtime::TwinAssetMounted>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut registry: ResMut<ScriptedPolicyRegistry>,
+    mut pending: ResMut<PendingTwinPolicyCommands>,
+) {
+    let twin_id = trigger.event().twin;
+    let Some(workspace) = workspace.as_deref() else {
+        return;
+    };
+    let Some(twin) = workspace.twin(twin_id) else {
+        return;
+    };
+
+    let manifest = match twin.manifest.as_ref() {
+        Some(manifest) => match lunco_api_core::api_value_from_serializable(manifest) {
+            Ok(value) => value,
+            Err(error) => {
+                registry.lifecycle = LifecyclePolicyReport {
+                    event: "assets_mounted".into(),
+                    status: "fault".into(),
+                    error: Some(format!("cannot expose Twin manifest to Rhai: {error}")),
+                    ..Default::default()
+                };
+                return;
+            }
+        },
+        None => HookValue::Unit,
+    };
+    let files = HookValue::Array(
+        twin.files()
+            .iter()
+            .map(|entry| {
+                HookValue::str(lunco_assets_core::asset_path::slashed(&entry.relative_path))
+            })
+            .collect(),
+    );
+    let context = HookValue::map([
+        ("twin_id", HookValue::Int(twin_id.raw() as i64)),
+        ("name", HookValue::str(trigger.event().name.clone())),
+        ("root", HookValue::str(twin.root.display().to_string())),
+        (
+            "active",
+            HookValue::Bool(workspace.active_twin == Some(twin_id)),
+        ),
+        ("manifest", manifest),
+        ("files", files),
+    ]);
+    let report = invoke_twin_lifecycle_context("assets_mounted", context);
+    let Some(result) = report.result.as_ref() else {
+        registry.lifecycle = report;
+        return;
+    };
+
+    let actions = match result.get("actions") {
+        None | Some(HookValue::Unit) => Vec::new(),
+        Some(HookValue::Array(actions)) => actions.clone(),
+        Some(value) => {
+            registry.lifecycle = LifecyclePolicyReport {
+                status: "fault".into(),
+                error: Some(format!(
+                    "Twin loading policy actions must be an array, got {}",
+                    value.type_name()
+                )),
+                ..report
+            };
+            return;
+        }
+    };
+
+    let mut parsed = Vec::with_capacity(actions.len());
+    for (index, action) in actions.into_iter().enumerate() {
+        let HookValue::Map(fields) = action else {
+            registry.lifecycle = LifecyclePolicyReport {
+                status: "fault".into(),
+                error: Some(format!("Twin loading policy action {index} must be a map")),
+                ..report
+            };
+            return;
+        };
+        let action = HookValue::Map(fields);
+        let Some(command) = action.get("command").and_then(HookValue::as_str) else {
+            registry.lifecycle = LifecyclePolicyReport {
+                status: "fault".into(),
+                error: Some(format!(
+                    "Twin loading policy action {index} has no string command"
+                )),
+                ..report
+            };
+            return;
+        };
+        let params = match action.get("params") {
+            Some(HookValue::Map(_)) => action.get("params").cloned().unwrap_or_default(),
+            Some(HookValue::Unit) | None => HookValue::Map(Vec::new()),
+            Some(value) => {
+                registry.lifecycle = LifecyclePolicyReport {
+                    status: "fault".into(),
+                    error: Some(format!(
+                        "Twin loading policy action {index} params must be a map, got {}",
+                        value.type_name()
+                    )),
+                    ..report
+                };
+                return;
+            }
+        };
+        parsed.push(TwinPolicyCommand {
+            twin: twin_id,
+            command: command.to_owned(),
+            params,
+        });
+    }
+    if let Some(message) = result
+        .get("info")
+        .and_then(HookValue::as_str)
+        .filter(|message| !message.is_empty())
+    {
+        info!("[twin-loading] {message}");
+    }
+    pending.0.extend(parsed);
+    registry.lifecycle = report;
+}
+
+/// Apply Rhai's ordered loader plan through the same reflected typed command
+/// bridge used by scripts. The executor knows no Twin fields or domain loaders.
+pub fn apply_twin_policy_commands(world: &mut World) {
+    let queued = std::mem::take(&mut world.resource_mut::<PendingTwinPolicyCommands>().0);
+    if queued.is_empty() {
+        return;
+    }
+    for action in queued {
+        let current = world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .is_some_and(|workspace| workspace.active_twin == Some(action.twin));
+        if !current {
+            continue;
+        }
+        let _scope = lunco_scripting_bridge_core::WorldScope::enter(world);
+        let result = lunco_scripting_bridge_core::cmd_value(&action.command, action.params);
+        match result.get("ok").and_then(HookValue::as_bool) {
+            Some(true) => {}
+            _ => {
+                let detail = result
+                    .get("error")
+                    .and_then(HookValue::as_str)
+                    .unwrap_or("typed command was rejected");
+                warn!(
+                    "[twin-loading] policy command `{}` failed: {detail}",
+                    action.command
+                );
             }
         }
     }
@@ -969,8 +1143,10 @@ pub fn sync_policies_on_twin_added(
 pub fn wind_down_policies_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     mut registry: ResMut<ScriptedPolicyRegistry>,
     journal: Option<Res<JournalResource>>,
+    mut commands: Commands,
     #[cfg(feature = "native-plugins")] mut native_plugins: ResMut<
         crate::native_plugins::NativeTwinPlugins,
     >,
@@ -1005,6 +1181,15 @@ pub fn wind_down_policies_on_twin_closed(
         registry.active_twin = Some(twin_id);
         registry.lifecycle = invoke_twin_lifecycle("startup", twin_id, &root, &report);
         log_report(&report);
+        if let Some(name) = roots
+            .as_deref()
+            .and_then(|roots| roots.name_for_root(&root).ok().flatten())
+        {
+            commands.trigger(lunco_assets_runtime::TwinAssetMounted {
+                twin: twin_id,
+                name,
+            });
+        }
     }
 }
 

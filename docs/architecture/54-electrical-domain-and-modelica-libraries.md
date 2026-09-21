@@ -365,18 +365,17 @@ library-specific installer or root-name branch.
   reprojects when that root is ready. Generated `source_roots` are dependency metadata
   and can prewarm roots, but class discovery does not depend on a generated document
   or on the string `LunCo`.
-- **A Twin's own `.mo`** loads through `[modelica].paths` in `twin.toml`. Paths are relative
-  to the Twin root and may use `"."` for that root. When the section is absent, the
-  Modelica owner derives package roots and flat-source directories from the authoritative
-  indexed Twin files; there is no hard-coded `<twin>/models` convention. Declared
-  `[modelica].externals` add existing relative or absolute library directories, while
-  `@bundled:source-bundle` is already owned by the bundled source-library inventory. Every admitted root
-  is sent through the existing `LoadSourceRoot { Disk }` worker command, which recursively
-  reads standard `package.mo`/`package.order` trees and uses the same input-default
-  normalization as other disk roots. **Why in `lunco-modelica-core`, not at the USD twin-mount
-  site?** Because `lunco-usd-commands` has no dependency on `lunco-modelica-core` and should not gain one
-  just to poke the worker; the crate that *owns* the Modelica worker is the right owner of
-  "load a Twin's Modelica," and it already sees the shared Twin asset authority.
+- **A Twin's own `.mo`** is selected by the authored `twin.lifecycle` loading
+  policy from `[modelica].paths`, `[modelica].externals`, or the indexed Twin
+  files. The policy requests each selected directory through the typed
+  `LoadTwinModelicaSourceRoot` command. Rust validates the Twin-scoped path,
+  registers the generic source root, and sends it through the existing
+  `LoadSourceRoot { Disk }` worker command, which recursively reads standard
+  `package.mo`/`package.order` trees and uses the same input-default
+  normalization as other disk roots. `@bundled:source-bundle` remains owned by
+  the bundled source-library inventory. The manifest is available to Rhai as
+  typed data; the Modelica package owns source-root admission and the worker,
+  while Rhai owns Twin-specific selection and ordering.
 
 `lunco_assets_runtime::models::model_files()` and `package_files()` read the
 runtime asset tree recursively through the storage boundary, so a package under

@@ -55,7 +55,6 @@ impl Plugin for UsdSceneRuntimePlugin {
             lunco_core::SceneTeardown,
             twin_projection::reset_scene_projection_state,
         );
-        app.add_observer(scene_runtime::open_usd_docs_on_twin_asset_mounted);
         app.add_observer(scene_runtime::execute_admitted_load_scene);
         app.add_observer(scene_runtime::on_restart_scene_refresh_active_document);
         app.add_observer(

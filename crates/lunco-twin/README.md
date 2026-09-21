@@ -65,7 +65,7 @@ remote-twin milestone.
 | `owns(handle)` | Returns `true` if `handle`'s path is under this Twin's folder or any sub-Twin's folder. **Core predicate for the Workspace's document-routing rule.** |
 | `find_owning(handle)` | Returns the **deepest** Twin in the subtree whose folder contains `handle` (sub-Twins win over their parent — matches Cargo's "nearest Cargo.toml" rule). |
 | `promote_to_twin(manifest)` | Writes `twin.toml` into a plain folder, registering it as a Twin. |
-| `discover_sysml_sources_checked()` | Returns the manifest-scoped SysML/KerML source set or explicit errors for missing/excluded declarations. |
+| `discover_sysml_sources_checked()` | Validation-time accessor for the manifest-scoped SysML/KerML set. Runtime source selection and loading belong to `twin.lifecycle` Rhai policy. |
 | `verification_registry_errors()` | Rejects unsafe, missing, duplicate, or mismatched Twin verification bindings. |
 | `component_registry_errors()` | Rejects components without unique indexed requirement sources and verification fixtures/scripts. |
 | `component_verification(name)` | Strictly resolves one component to its cloned manifest record and exact verification case, or returns all structural/selection errors. |
