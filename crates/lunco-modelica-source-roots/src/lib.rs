@@ -353,7 +353,7 @@ fn on_load_twin_modelica_source_root(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     channels: Option<Res<ModelicaChannels>>,
-    mut registry: Option<ResMut<SourceRootRegistry>>,
+    registry: Option<ResMut<SourceRootRegistry>>,
 ) -> Result<lunco_command_contracts::Ack, String> {
     let request = trigger.event();
     let twin_id = lunco_workspace::TwinId::new(request.twin_id);

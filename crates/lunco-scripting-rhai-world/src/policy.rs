@@ -372,9 +372,7 @@ pub fn plan_twin_asset_loading(
     let files = HookValue::Array(
         twin.files()
             .iter()
-            .map(|entry| {
-                HookValue::str(lunco_assets_core::asset_path::slashed(&entry.relative_path))
-            })
+            .map(|entry| HookValue::str(lunco_assets_path::slashed(&entry.relative_path)))
             .collect(),
     );
     let context = HookValue::map([
