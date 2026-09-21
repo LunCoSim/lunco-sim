@@ -12,14 +12,14 @@
 # Drop it anywhere with `prepend references` + `xformOp:translate`.
 def Xform "LandingLocationMarker" (
     doc = "Reusable landing-site marker with a non-solid trigger volume for touchdown guidance."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoPointerInteractionAPI"]
     kind = "component"
 )
 {
     uniform bool lunco:spawnable = true
     custom string lunco:landingLocation = "true"
-    custom string lunco:interaction:left = "pass_through"
-    custom string lunco:interaction:right = "context"
+    uniform token lunco:interaction:left = "pass_through"
+    uniform token lunco:interaction:right = "context"
 
     # Emission REQUIRES a material. `displayColor` is a real UsdGeomGprim
     # primvar and stays on the geometry; USD has no "display emissive", so the
@@ -50,11 +50,11 @@ def Xform "LandingLocationMarker" (
     # reusable visual from a misleading flame-like hemisphere to a flat target.
     # Purely visual — no collider.
     def Cylinder "Dome" (
-        prepend apiSchemas = ["MaterialBindingAPI"]
+        prepend apiSchemas = ["MaterialBindingAPI", "LunCoPointerInteractionAPI"]
     )
     {
-        custom string lunco:interaction:left = "pass_through"
-        custom string lunco:interaction:right = "context"
+        uniform token lunco:interaction:left = "pass_through"
+        uniform token lunco:interaction:right = "context"
         uniform token axis = "Y"
         double radius = 2.5
         double height = 0.04
