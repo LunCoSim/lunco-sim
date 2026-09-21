@@ -32,8 +32,8 @@ impl EphemerisProvider for StubEphemeris {
     }
 }
 
-/// Build the headless celestial app the tests share (see the notes in
-/// `test_celestial_startup_and_movement` for why each piece is here).
+/// Build the headless celestial app the integration tests share. These tests
+/// exercise the ECS/spatial mechanisms without loading visual assets or a GPU.
 ///
 /// Note the `CelestialBodyDecl` spawns: celestial content is **opt-in per scene**
 /// (doc 19 §11e). A scene declares its bodies in USD (`LunCoCelestialBodyAPI` →
@@ -50,9 +50,73 @@ fn celestial_test_app() -> App {
     app.init_asset::<Image>();
     install_test_input_bindings(&mut app);
     app.add_plugins(CelestialPlugin);
+    // Production loads the authored quality profile before celestial hierarchy
+    // creation. This mechanics fixture supplies the smallest valid profile so
+    // it exercises celestial propagation instead of render-policy loading.
+    app.world_mut()
+        .resource_mut::<lunco_render::RenderingQualitySettings>()
+        .apply_profile(celestial_test_quality_profile());
     // The scene asks for a sky: Sun, Earth, Moon.
     declare_test_bodies(app.world_mut());
     app
+}
+
+fn celestial_test_quality_profile() -> lunco_render::RenderQualityProfile {
+    let mut profile = lunco_render::RenderQualityProfile::default();
+    profile.directional_shadow_map_size = 16;
+    profile.point_shadow_map_size = 16;
+    profile.directional_cascades = 1;
+    profile.max_directional_shadow_casters = 1;
+    profile.max_point_shadow_casters = 1;
+    profile.max_spot_shadow_casters = 1;
+    profile.shadow_budget_bytes = 1_000_000;
+    profile.horizon_shadow_cache_sun_threshold_deg = 1.0;
+    profile.horizon_march_steps = 1;
+    profile.horizon_cache_samples_per_axis = 1;
+    profile.shadow_first_cascade_far_bound = 1.0;
+    profile.shadow_maximum_distance = 2.0;
+    profile.render_failure_quiet_period_secs = 1.0;
+    profile.render_failure_give_up_after_secs = 2.0;
+    profile.distant_light_default_illuminance = 1.0;
+    profile.local_light_default_intensity = 1.0;
+    profile.rect_light_default_intensity = 1.0;
+    profile.local_light_default_range = 1.0;
+    profile.dome_cubemap_face_size = 1;
+    profile.primitive_sphere_longitudes = 3;
+    profile.primitive_sphere_latitudes = 2;
+    profile.primitive_radial_segments = 3;
+    profile.primitive_capsule_longitudes = 3;
+    profile.primitive_capsule_latitudes = 2;
+    profile.terrain_mesh_cache_bytes = 1;
+    profile.terrain_derived_map_resolution = 1;
+    profile.terrain_derived_ao_directions = 1;
+    profile.terrain_derived_ao_steps = 1;
+    profile.terrain_derived_ao_radius_fraction = 0.1;
+    profile.terrain_derived_roughness_saturation_radians = 0.1;
+    profile.terrain_derived_texture_anisotropy = 1;
+    profile.terrain_rock_max_instances = 1;
+    profile.terrain_rock_mesh_buckets = 2;
+    profile.terrain_rock_mesh_cube_count = 1;
+    profile.terrain_rock_lod_fade_distance = 1.0;
+    profile.terrain_lod_tile_resolution = 3;
+    profile.terrain_lod_cinematic_resolution = 3;
+    profile.terrain_lod_pixel_error = 0.1;
+    profile.terrain_lod_max_depth = 1;
+    profile.terrain_lod_probe_resolution = 3;
+    profile.terrain_lod_bakes_per_frame = 1;
+    profile.terrain_lod_max_inflight_bakes = 1;
+    profile.terrain_lod_tile_budget = 1;
+    profile.terrain_lod_cover_edits_per_frame = 1;
+    profile.terrain_lod_hysteresis_ratio = 1.1;
+    profile.nurbs_surface_samples_per_control_span = 1;
+    profile.nurbs_surface_minimum_subdivisions = 1;
+    profile.nurbs_surface_maximum_subdivisions = 1;
+    profile.nurbs_trim_curve_samples = 1;
+    profile.nurbs_trim_minimum_subdivisions = 1;
+    profile.nurbs_trim_maximum_subdivisions = 1;
+    profile.curve_samples_per_segment = 1;
+    profile.curve_radial_segments = 3;
+    profile
 }
 
 fn install_test_input_bindings(app: &mut App) {
@@ -574,30 +638,7 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
 
 #[test]
 fn test_celestial_startup_and_movement() {
-    let mut app = App::new();
-
-    // Minimum plugins for headless simulation
-    app.add_plugins(MinimalPlugins);
-    app.add_plugins(bevy::input::InputPlugin);
-    app.add_plugins(bevy::transform::TransformPlugin);
-    // The plugin's asset-facing systems need Bevy's asset resources, but these
-    // mechanics tests use only in-memory mesh/image stores and load no files.
-    app.add_plugins(bevy::asset::AssetPlugin::default());
-    app.init_resource::<Assets<Mesh>>();
-    // NO material asset stores, and no `Shader` asset type, any more: the crate is
-    // render-free (2026-07-13). It states appearance as INTENT (`PbrLook` /
-    // `ShaderLook` components) and never `.add()`s a material or holds a
-    // `Handle<Shader>` — `lunco-render-bevy` does both, and this headless app simply
-    // never adds it. Which is exactly the property this test now also proves: the
-    // whole celestial hierarchy builds and steps with no GPU stack registered at all.
-    app.init_asset::<Image>();
-    // `GizmoPlugin` is likewise gone — it came from `bevy_gizmos` (a render feature),
-    // and nothing in this crate draws gizmos.
-    install_test_input_bindings(&mut app);
-    app.add_plugins(CelestialPlugin);
-    // The scene declares its bodies — celestial content is opt-in (doc 19 §11e), so
-    // without these there is no hierarchy, no globes and no ephemeris at all.
-    declare_test_bodies(app.world_mut());
+    let mut app = celestial_test_app();
     // Install the provider whose output depends on the epoch, so the clock seek
     // below actually repositions Earth's grid via `ephemeris_update_system`.
     app.insert_resource(EphemerisResource {

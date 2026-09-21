@@ -64,10 +64,9 @@ def Xform "SandboxScene" (
     # the renderer's fullscreen procedural path and therefore has no radius,
     # culling AABB, or far-plane coupling.
     def Xform "Sky" (
-        prepend apiSchemas = ["MaterialBindingAPI"]
+        prepend apiSchemas = ["LunCoProceduralSkyAPI", "MaterialBindingAPI"]
     )
     {
-        bool lunco:surface:skybox = true
         rel material:binding = </SandboxScene/Looks/Starfield>
     }
 

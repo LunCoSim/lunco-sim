@@ -84,9 +84,13 @@ pub fn close_scenarios_for_scene_transition(
     _trigger: On<lunco_core::SceneTransitionStarted>,
     mut gate: ResMut<ScenarioExecutionGate>,
     mut arm: ResMut<ScenarioReadinessArm>,
+    inbox: Option<ResMut<ScriptEventInbox>>,
 ) {
     gate.enabled = false;
     arm.0 = false;
+    if let Some(mut inbox) = inbox {
+        inbox.clear();
+    }
 }
 
 pub fn arm_scenarios_after_scene_composition(
@@ -990,6 +994,13 @@ impl Default for ScriptEventInbox {
 }
 
 impl ScriptEventInbox {
+    /// Discard scene-owned events and reset this scene's overflow accounting.
+    pub fn clear(&mut self) {
+        self.pending.clear();
+        self.overflowed = false;
+        self.dropped = 0;
+    }
+
     /// Enqueue one event while preserving FIFO order.
     ///
     /// `false` is an explicit overflow signal. The caller owns the policy for
@@ -1006,24 +1017,25 @@ impl ScriptEventInbox {
     }
 }
 
-/// Observer: mirror every fired `TelemetryEvent` into the scenario inbox. Reuses
+/// Observer: mirror live-scene `TelemetryEvent`s into the scenario inbox. Reuses
 /// the existing telemetry bus — scenarios are just another subscriber.
 ///
-/// Runs on EVERY peer. It collected only on the host originally, back when the
-/// driver was gated off on a predicting client (`scripts_run_here`) so nothing
-/// drained the inbox and `pending` would grow without bound (review H1). That
-/// gate is gone: client-scoped scenarios (`// @scope client`) now tick on the
-/// client, and [`ScenarioDriver::run`] drains the inbox UNCONDITIONALLY every
-/// pass (even with no active scenario), so there is no unbounded growth. A client
-/// scenario's `on_event` therefore sees the events that fire *on the client*
-/// (local input, client-side emits); host-authoritative game events reach it only
-/// once they are explicitly replicated — a scoped follow-up, not this collector's
-/// concern.
+/// Runs on EVERY peer while the scenario lifecycle gate is open. Events are not
+/// queued while the gate is closed because no scenario can consume them and the
+/// readiness gate also prevents the driver pass that drains the inbox. Scene
+/// transitions clear any already-pending events before the outgoing scene is
+/// replaced. Client-scoped scenarios (`// @scope client`) therefore see events
+/// fired on the client; host-authoritative events reach them only when explicitly
+/// replicated.
 pub fn collect_script_events(
     trigger: On<TelemetryEvent>,
+    gate: Res<ScenarioExecutionGate>,
     mut inbox: ResMut<ScriptEventInbox>,
     mut commands: Commands,
 ) {
+    if !gate.enabled {
+        return;
+    }
     if inbox.enqueue(trigger.event().clone()) {
         return;
     }

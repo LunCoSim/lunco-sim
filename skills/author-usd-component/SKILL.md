@@ -209,7 +209,7 @@ zero is a no-op, not a reset.
 
 Use the reusable `environment/starfield_sky.usda` pattern for a procedural
 camera background: author an `Xform` with `MaterialBindingAPI`, bind its
-`UsdShade` material, and set `bool lunco:surface:skybox = true`. This vendor
+`UsdShade` material, and apply `LunCoProceduralSkyAPI`. This registered API
 intent is needed because USD has no standard field for a renderer-specific
 procedural camera background. The projection stamps the existing
 render-free `ProceduralSkybox` intent and creates no mesh. Use

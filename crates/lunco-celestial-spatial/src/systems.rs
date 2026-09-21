@@ -3,11 +3,14 @@ use big_space::prelude::*;
 
 use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
-use lunco_celestial::geo::solar_tangent_frame;
+use lunco_celestial::geo::{solar_tangent_frame, GeodeticAnchor};
 use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
-use lunco_celestial_spatial_core::OrbitalViewPin;
+use lunco_celestial_spatial_core::{
+    CelestialSunPresentation, OrbitalViewPin, SolarSystemRoot, SurfacePoseQuery,
+};
 use lunco_materials::{ParamValue, ShaderLook};
-use lunco_spatial::coords::world_position_seeded;
+use lunco_render::SceneCamera;
+use lunco_spatial::coords::{pose_in_grid, world_position_seeded};
 use lunco_time::{CelestialTime, WorldTime};
 
 use crate::big_space_setup::CelestialPresentationGrid;
@@ -18,29 +21,126 @@ use crate::big_space_setup::CelestialPresentationGrid;
 /// [`body_rotation_system`]. A detached celestial clock is a presentation
 /// timeline: it may move the rendered Earth/Moon through the sky while the
 /// causal WorldTime branch continues to own physics, surface terrain, and
-/// picking. Keeping the marker out of `ReferenceFrame` makes that ownership
-/// boundary structural rather than dependent on a query filter convention.
+/// picking. When a surface observer remains on WorldTime, the presentation
+/// branch is rigidly mapped so the observer's body-fixed site coincides with
+/// that camera while relative celestial poses still come from CelestialTime.
+/// Keeping the marker out of `ReferenceFrame` makes that ownership boundary
+/// structural rather than dependent on a query filter convention.
+pub fn presentation_observer_needs_sync() -> impl bevy::ecs::schedule::SystemCondition<()> {
+    lunco_core_runtime::gate::tracked(
+        "celestial_presentation_observer_needs_sync",
+        presentation_observer_inputs_changed,
+    )
+}
+
+/// Recompute the sky direction when the active camera or its spatial ancestry changes.
+pub fn presentation_sun_observer_needs_sync() -> impl bevy::ecs::schedule::SystemCondition<()> {
+    lunco_core_runtime::gate::tracked(
+        "celestial_presentation_sun_observer_needs_sync",
+        presentation_observer_inputs_changed,
+    )
+}
+
+fn presentation_observer_inputs_changed(
+    orbital_pin: Option<Res<OrbitalViewPin>>,
+    ephemeris: Option<Res<EphemerisResource>>,
+    registry: Option<Res<CelestialBodyRegistry>>,
+    cameras: Query<
+        (Entity, &Camera),
+        (
+            With<SceneCamera>,
+            Or<(
+                Added<Camera>,
+                Changed<Camera>,
+                Changed<CellCoord>,
+                Changed<Transform>,
+                Changed<ChildOf>,
+            )>,
+        ),
+    >,
+    changed_ancestors: Query<
+        (),
+        (
+            Or<(
+                Added<GeodeticAnchor>,
+                Changed<GeodeticAnchor>,
+                Changed<CellCoord>,
+                Changed<Transform>,
+                Changed<ChildOf>,
+            )>,
+        ),
+    >,
+    parents: Query<&ChildOf>,
+    frames: Query<(), Added<CelestialPresentationGrid>>,
+) -> bool {
+    orbital_pin.is_some_and(|pin| pin.is_changed())
+        || ephemeris.is_some_and(|resource| resource.is_changed())
+        || registry.is_some_and(|resource| resource.is_changed())
+        || cameras.iter().any(|(camera, state)| {
+            state.is_active
+                && std::iter::successors(Some(camera), |entity| {
+                    parents.get(*entity).ok().map(ChildOf::parent)
+                })
+                .any(|entity| changed_ancestors.get(entity).is_ok())
+        })
+        || !frames.is_empty()
+}
+
 pub fn presentation_celestial_frame_system(
     celestial: Res<CelestialTime>,
+    world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
-    mut q_frames: Query<(
-        &CelestialPresentationGrid,
-        &mut CellCoord,
-        &mut Transform,
-        &ChildOf,
+    orbital_pin: Option<Res<OrbitalViewPin>>,
+    cameras: Query<(Entity, &Camera), With<SceneCamera>>,
+    solar_grids: Query<Entity, With<SolarSystemRoot>>,
+    mut presentation: ParamSet<(
+        Query<(
+            &CelestialPresentationGrid,
+            &mut CellCoord,
+            &mut Transform,
+            &ChildOf,
+        )>,
+        SurfacePoseQuery,
+        Query<(Option<&CellCoord>, &Transform), Without<CelestialPresentationGrid>>,
     )>,
+    q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
 ) {
-    let Some(ephemeris) = ephemeris else {
-        return;
+    let Some(ephemeris) = ephemeris else { return };
+
+    let surface_alignment = if orbital_pin.is_some_and(|pin| pin.active) {
+        None
+    } else {
+        let mut active_cameras = cameras.iter().filter(|(_, camera)| camera.is_active);
+        let active_camera = active_cameras.next();
+        if active_cameras.next().is_some() {
+            error_once!(
+                "[celestial] multiple active scene cameras; presentation remains heliocentric"
+            );
+            None
+        } else {
+            active_camera.and_then(|(camera, _)| {
+                let surface_pose = presentation.p1().get(camera)?;
+                let body = registry.get(surface_pose.body)?;
+                let solar_grid = solar_grids.single().ok()?;
+                let camera_world =
+                    pose_in_grid(camera, solar_grid, &q_parents, &q_grids, &presentation.p2())?.0;
+                let body_sky = ephemeris
+                    .provider
+                    .global_position(surface_pose.body, celestial.epoch_jd)?;
+                let sky_rotation = lunco_celestial::geo::body_rotation(body, celestial.epoch_jd);
+                let world_rotation = lunco_celestial::geo::body_rotation(body, world.epoch_jd);
+                let camera_sky = ecliptic_to_bevy(body_sky).raw()
+                    + sky_rotation * surface_pose.body_fixed_position.0;
+                let sky_to_world = world_rotation * sky_rotation.inverse();
+                Some((sky_to_world, camera_world - sky_to_world * camera_sky))
+            })
+        }
     };
 
-    for (presentation, mut cell, mut tf, child_of) in &mut q_frames {
-        let Some(rel_pos_au) = ephemeris
-            .provider
-            .position(presentation.body, celestial.epoch_jd)
-        else {
+    for (frame, mut cell, mut tf, child_of) in &mut presentation.p0() {
+        let Some(rel_pos_au) = ephemeris.provider.position(frame.body, celestial.epoch_jd) else {
             // The causal branch follows the same data contract: no ephemeris
             // means no new pose. Never substitute the parent's origin.
             continue;
@@ -48,12 +148,22 @@ pub fn presentation_celestial_frame_system(
         let Ok(parent_grid) = q_grids.get(child_of.parent()) else {
             error_once!(
                 "[celestial] presentation frame {} is not directly parented to a Grid",
-                presentation.body
+                frame.body
             );
             continue;
         };
 
-        let pos_bevy_m = ecliptic_to_bevy(rel_pos_au).raw();
+        let mut pos_bevy_m = ecliptic_to_bevy(rel_pos_au).raw();
+        if frame.body == lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER && !frame.body_fixed {
+            if let Some((sky_to_world, translation)) = surface_alignment {
+                pos_bevy_m = sky_to_world * pos_bevy_m + translation;
+                if tf.rotation != sky_to_world.as_quat() {
+                    tf.rotation = sky_to_world.as_quat();
+                }
+            } else if tf.rotation != Quat::IDENTITY {
+                tf.rotation = Quat::IDENTITY;
+            }
+        }
         let (new_cell, new_translation) = parent_grid.translation_to_grid(pos_bevy_m);
         if *cell != new_cell {
             *cell = new_cell;
@@ -62,15 +172,108 @@ pub fn presentation_celestial_frame_system(
             tf.translation = new_translation;
         }
 
-        let Some(desc) = registry.get(presentation.body) else {
+        let Some(desc) = registry.get(frame.body) else {
             continue;
         };
-        if presentation.body_fixed && desc.spins() {
+        if frame.body_fixed && desc.spins() {
             let next = lunco_celestial::geo::body_rotation(desc, celestial.epoch_jd).as_quat();
             if tf.rotation != next {
                 tf.rotation = next;
             }
         }
+    }
+}
+
+/// Project the detached-epoch solar direction into the active camera's view frame.
+/// The sky shader consumes view-space rays, so this conversion avoids mixing its
+/// camera-relative render frame with BigSpace's floating-origin world frame.
+pub fn presentation_sun_system(
+    celestial: Res<CelestialTime>,
+    world: Res<WorldTime>,
+    ephemeris: Option<Res<EphemerisResource>>,
+    registry: Res<CelestialBodyRegistry>,
+    surface_poses: SurfacePoseQuery,
+    cameras: Query<(Entity, &Camera), With<SceneCamera>>,
+    q_solar_grid: Query<Entity, With<SolarSystemRoot>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    mut sun_presentation: ResMut<CelestialSunPresentation>,
+) {
+    let Some(ephemeris) = ephemeris else {
+        sun_presentation.clear();
+        return;
+    };
+
+    let mut active_cameras = cameras.iter().filter(|(_, camera)| camera.is_active);
+    let Some((camera, _)) = active_cameras.next() else {
+        sun_presentation.clear();
+        return;
+    };
+    if active_cameras.next().is_some() {
+        error_once!("[celestial] multiple active scene cameras; solar sky disc is disabled");
+        sun_presentation.clear();
+        return;
+    }
+
+    let Ok(solar_grid) = q_solar_grid.single() else {
+        sun_presentation.clear();
+        return;
+    };
+    let Some((camera_position, camera_rotation)) =
+        pose_in_grid(camera, solar_grid, &q_parents, &q_grids, &q_spatial)
+    else {
+        sun_presentation.clear();
+        return;
+    };
+
+    let Some(sun_au) = ephemeris
+        .provider
+        .global_position(lunco_celestial::ephemeris_id::SUN, celestial.epoch_jd)
+    else {
+        sun_presentation.clear();
+        return;
+    };
+    let sun_position = ecliptic_to_bevy(sun_au).raw();
+    let (direction_world, distance) = if let Some(surface_pose) = surface_poses.get(camera) {
+        let Some(body) = registry.get(surface_pose.body) else {
+            sun_presentation.clear();
+            return;
+        };
+        let Some(body_au) = ephemeris
+            .provider
+            .global_position(surface_pose.body, celestial.epoch_jd)
+        else {
+            sun_presentation.clear();
+            return;
+        };
+        let body_position = ecliptic_to_bevy(body_au).raw();
+        let body_rotation_at_sky = lunco_celestial::geo::body_rotation(body, celestial.epoch_jd);
+        let to_sun_in_body_fixed = body_rotation_at_sky.inverse() * (sun_position - body_position)
+            - surface_pose.body_fixed_position.0;
+        let distance = to_sun_in_body_fixed.length();
+        (
+            lunco_celestial::geo::body_rotation(body, world.epoch_jd)
+                * to_sun_in_body_fixed.normalize_or_zero(),
+            distance,
+        )
+    } else {
+        let to_sun = sun_position - camera_position;
+        (to_sun.normalize_or_zero(), to_sun.length())
+    };
+
+    let Some(sun) = registry.get(lunco_celestial::ephemeris_id::SUN) else {
+        sun_presentation.clear();
+        return;
+    };
+    if !distance.is_finite() || distance <= sun.radius_m {
+        sun_presentation.clear();
+        return;
+    }
+    let angular_radius = (sun.radius_m / distance).asin();
+    let direction_view = camera_rotation.inverse() * direction_world;
+    if !sun_presentation.publish(direction_view, angular_radius.tan()) {
+        sun_presentation.clear();
     }
 }
 

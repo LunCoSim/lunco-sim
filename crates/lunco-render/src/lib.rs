@@ -19,7 +19,10 @@ pub mod quality;
 mod quality_policy;
 pub mod sun;
 
-pub use appearance::{PbrLook, PbrLookKey, PbrTextures, ProceduralSkybox, SurfaceAlpha};
+pub use appearance::{
+    PbrLook, PbrLookKey, PbrTextures, ProceduralSkybox, ScreenConstantMarker,
+    ScreenConstantMarkerVisibility, SurfaceAlpha,
+};
 pub use camera::{
     scene_camera_look_with_profile, usd_default_perspective_projection, BloomLook, CameraRetiring,
     GraphicsCameraDefaults, MsaaLevel, SceneCamera, ToneMap, WorldLabel,

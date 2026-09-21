@@ -9,8 +9,8 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::{
-    update_reference_frame_index, AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField,
-    OrbitalViewPin, ReferenceFrameIndex, SolarSystemRoot,
+    update_reference_frame_index, AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSunPresentation,
+    LocalGravityField, OrbitalViewPin, ReferenceFrameIndex, SolarSystemRoot,
 };
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
@@ -25,6 +25,7 @@ pub mod link;
 mod missions;
 pub mod placement;
 pub mod pose;
+mod presentation_markers;
 pub mod queries;
 mod soi;
 mod systems;
@@ -111,6 +112,10 @@ fn tag_existing_world_reference_frame(
     }
 }
 
+fn clear_celestial_sun_presentation(mut sun: ResMut<CelestialSunPresentation>) {
+    sun.clear();
+}
+
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
@@ -132,6 +137,8 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<CelestialConfig>();
+        app.init_resource::<CelestialSunPresentation>();
+        app.add_systems(lunco_core::SceneTeardown, clear_celestial_sun_presentation);
         app.init_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .init_resource::<lunco_port_core::ports::PortTopologyState>();
         // Globe LOD consumes the shared presentation binding, not Bevy's
@@ -367,7 +374,15 @@ impl Plugin for CelestialPlugin {
         app.add_systems(
             PreUpdate,
             (
-                presentation_celestial_frame_system.run_if(cadence::presentation_needs_solve()),
+                presentation_celestial_frame_system.run_if(
+                    cadence::presentation_needs_solve()
+                        .or_else(cadence::tracked_needs_solve())
+                        .or_else(presentation_observer_needs_sync()),
+                ),
+                presentation_sun_system.run_if(
+                    cadence::presentation_needs_solve()
+                        .or_else(presentation_sun_observer_needs_sync()),
+                ),
                 ephemeris_update_system.run_if(cadence::tracked_needs_solve()),
                 body_rotation_system.run_if(cadence::tracked_needs_solve()),
                 // The solar hierarchy stays inertial. Site content is mounted
@@ -383,6 +398,15 @@ impl Plugin for CelestialPlugin {
         );
 
         app.add_systems(Update, celestial_visuals_system);
+        app.add_systems(
+            Update,
+            presentation_markers::sync_presentation_markers
+                .run_if(presentation_markers::presentation_markers_need_sync),
+        );
+        app.add_systems(
+            Update,
+            presentation_markers::update_presentation_marker_visibility,
+        );
         // Hide the local scene (its whole subtree) while the orbital world-pin
         // is active — the celestial tree is slid away, so the scene would fill
         // the foreground of the orbital view.

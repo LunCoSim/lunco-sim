@@ -11,13 +11,11 @@
 def Xform "StarfieldSky" (
     doc = "Reusable opaque lunar procedural camera background."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "MaterialBindingAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoProceduralSkyAPI", "MaterialBindingAPI"]
 )
 {
-    # The sky is a camera background, not a finite enclosing gprim. This
-    # explicit owner marker selects the renderer's fullscreen procedural path;
-    # there is no radius, culling AABB, or mesh to couple to the camera range.
-    bool lunco:surface:skybox = true
+    # This applied schema selects the fullscreen camera-background path. The
+    # shader source and material inputs remain ordinary UsdShade authoring.
     rel material:binding = </StarfieldSky/Looks/Starfield>
 
     def Scope "Looks"

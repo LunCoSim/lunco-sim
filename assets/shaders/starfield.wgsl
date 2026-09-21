@@ -171,6 +171,10 @@ const EXTINCTION_RGB: vec3<f32> = vec3<f32>(0.72, 1.00, 1.35);
 //!@default pole_azimuth    20
 //!@ui      center_roll     0 360   "Galactic centre roll (deg)"
 //!@default center_roll     120
+//!@engine sun_dir_view
+//!@default sun_dir_view 0,0,-1
+//!@engine sun_tan_radius
+//!@default sun_tan_radius 0
 struct Material {
     core_color:      vec3<f32>,
     star_density:    f32,
@@ -190,6 +194,8 @@ struct Material {
     pole_tilt:       f32,
     pole_azimuth:    f32,
     center_roll:     f32,
+    sun_dir_view:    vec3<f32>,
+    sun_tan_radius:  f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -513,7 +519,22 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let px = max(length(fwidth(d)), 1.0e-7);
 
     let g = galactic_frame();
-    let color = stars(d, px) + milky_way(d, g);
+    var color = stars(d, px) + milky_way(d, g);
+    if (mat.sun_tan_radius > 0.0) {
+        let sun_angle = acos(clamp(
+            dot(normalize(view_ray_direction), normalize(mat.sun_dir_view)),
+            -1.0,
+            1.0,
+        ));
+        let sun_radius = atan(mat.sun_tan_radius);
+        let edge = max(px * 0.5, 1.0e-6);
+        let sun_disc = 1.0 - smoothstep(
+            max(sun_radius - edge, 0.0),
+            sun_radius + edge,
+            sun_angle,
+        );
+        color += vec3(14.0, 12.5, 10.0) * sun_disc;
+    }
     // Returned straight, with no `apply_pbr_lighting` and no fog: this is an
     // emissive backdrop, not a surface. Values above 1.0 are left ALONE so the
     // pipeline's bloom sees them — clamping here is what makes bright stars read

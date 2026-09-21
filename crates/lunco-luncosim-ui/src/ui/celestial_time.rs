@@ -12,8 +12,9 @@
 //! * **Independent** — the clock is re-parented onto the wall root, so the sky keeps
 //!   running at its own rate **while the simulation is paused**. A clock is frozen
 //!   because of *where it hangs*, so running one anyway is a re-parent, not a flag.
-//! * **Rate** — `scale` on that clock. `1000×` moves the Earth across the lunar sky
-//!   in a couple of minutes; the sim is untouched either way.
+//! * **Rate** — selecting a rate also re-parents that clock onto the wall root,
+//!   so a time-lapse keeps moving when the simulation is paused. `1000×` moves
+//!   the Earth across the lunar sky in a couple of minutes; the sim is untouched.
 //!
 //! Only drawn when the scene actually declared celestial bodies (§11e) — no sky, no
 //! sky clock.
@@ -31,7 +32,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use lunco_celestial::CelestialBody;
-use lunco_time::{ClockId, ClockParent, Clocks, SetClock, TimeDomain, WorldTime};
+use lunco_time::{CelestialTime, ClockId, ClockParent, Clocks, SetClock, TimeDomain};
 use lunco_workbench_core::MenuCtx;
 
 /// The sky-clock controls, drawn into whatever `Ui` is given.
@@ -163,10 +164,14 @@ fn sky_clock_ui(
             };
             if ui
                 .selectable_label((scale - m).abs() < f64::EPSILON, label)
+                .on_hover_text(
+                    "Run the sky at this rate on its own clock. The simulation and rover stay unchanged.",
+                )
                 .clicked()
             {
                 request = Some(SetClock {
                     clock: ClockId::Celestial,
+                    parent: Some(ClockParent::Real),
                     scale: Some(m),
                     ..default()
                 });
@@ -192,9 +197,9 @@ pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
         ui.label(egui::RichText::new("No sky in this scene").weak().small());
         return;
     }
-    let (Some(clocks), Some(time)) = (
+    let (Some(clocks), Some(celestial)) = (
         ctx.resource::<Clocks>().copied(),
-        ctx.resource::<WorldTime>().cloned(),
+        ctx.resource::<CelestialTime>().copied(),
     ) else {
         return;
     };
@@ -202,7 +207,8 @@ pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     let independent = domain.is_some_and(|d| d.parent == Some(clocks.real));
     let scale = domain.map(|d| d.scale).unwrap_or(1.0);
 
-    if let Some(req) = sky_clock_ui(ui, &time.utc_string(), time.epoch_jd, independent, scale) {
+    let utc = lunco_time::tdb_jd_to_utc_string(celestial.epoch_jd);
+    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, independent, scale) {
         ctx.trigger(req);
     }
 }
@@ -215,15 +221,16 @@ pub(crate) fn draw_celestial_time(
     q_bodies: Query<(), With<CelestialBody>>,
     clocks: Option<Res<Clocks>>,
     q_domains: Query<&TimeDomain>,
-    world: Option<Res<WorldTime>>,
+    celestial: Option<Res<CelestialTime>>,
     mut commands: Commands,
 ) {
     if q_bodies.is_empty() {
         return;
     }
-    let (Some(clocks), Some(world)) = (clocks, world) else {
+    let (Some(clocks), Some(celestial)) = (clocks, celestial) else {
         return;
     };
+    let utc = lunco_time::tdb_jd_to_utc_string(celestial.epoch_jd);
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
 
     // The sky is "independent" exactly when its clock hangs off the wall root.
@@ -240,7 +247,7 @@ pub(crate) fn draw_celestial_time(
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     if let Some(req) =
-                        sky_clock_ui(ui, &world.utc_string(), world.epoch_jd, independent, scale)
+                        sky_clock_ui(ui, &utc, celestial.epoch_jd, independent, scale)
                     {
                         commands.trigger(req);
                     }

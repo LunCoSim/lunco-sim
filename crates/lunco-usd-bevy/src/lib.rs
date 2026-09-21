@@ -650,26 +650,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // projection boundary and let the existing render-free marker carry it
         // to the shader binder. Geometry dispatch below is therefore never
         // entered for the background owner.
-        let procedural_skybox =
-            match read_authored_bool_strict(reader, &sdf_path, "lunco:surface:skybox") {
-                Ok(value) => value.unwrap_or(false),
-                Err(error) => {
-                    let message = format!(
-                        "{} has malformed authored attribute `lunco:surface:skybox`: {error}",
-                        sdf_path.as_str()
-                    );
-                    error!("[usd-bevy] {message}");
-                    commands.entity(entity).try_insert((
-                        UsdSceneProjectionFailed(message.clone()),
-                        Visibility::Hidden,
-                    ));
-                    lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
-                    return;
-                }
-            };
+        let procedural_skybox = reader.has_api_schema(&sdf_path, "LunCoProceduralSkyAPI");
         if procedural_skybox && prim_type.as_deref() != Some("Xform") {
             let message = format!(
-                "{} authors `lunco:surface:skybox` on `{}`; the intent must be on an Xform",
+                "{} applies `LunCoProceduralSkyAPI` to `{}`; the intent must be on an Xform",
                 sdf_path.as_str(),
                 prim_type.as_deref().unwrap_or("untyped prim")
             );

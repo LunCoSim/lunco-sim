@@ -16,15 +16,15 @@ mod tracking;
 mod trajectory;
 
 pub use components::{
-    AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField, OrbitalViewPin, SolarSystemRoot,
-    celestial_declared,
+    celestial_declared, AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSunPresentation,
+    LocalGravityField, OrbitalViewPin, SolarSystemRoot,
 };
 pub use connectivity::{
     LinkGeometryPeer, LinkGeometryState, LinkNode, LinkOccluder, LinkPeer, LinkState, WifiNode,
     WifiPeer, WifiState,
 };
 pub use frame_index::{
-    ReferenceFrameIndex, transform_pose_between_reference_frames, update_reference_frame_index,
+    transform_pose_between_reference_frames, update_reference_frame_index, ReferenceFrameIndex,
 };
 pub use mission::{MissionDecl, MissionSpacecraftDecl, MissionTrajectoryDecl};
 pub use surface_frame::{
@@ -32,7 +32,7 @@ pub use surface_frame::{
     surface_axes_in_grid,
 };
 pub use surface_pose::{
-    BodyFixedPosition, SitePosition, SurfacePose, SurfacePoseQuery, resolve_surface_pose,
+    resolve_surface_pose, BodyFixedPosition, SitePosition, SurfacePose, SurfacePoseQuery,
 };
 pub use tracking::SolarTracked;
 pub use trajectory::{TrajectoryFrame, TrajectoryPath, TrajectoryView};

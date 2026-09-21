@@ -38,6 +38,28 @@ runtime binder projects that intent to Bevy.
    readiness, or unstable lighting—not a reason to clamp the image in a
    shader. Find the owner and gate the work by asset/revision events.
 
+For celestial globes, verify the installed Earth/Moon imagery dataset and the
+composed USD body look. A body shader look may add shader parameters, but it
+must retain the installed dataset albedo unless USD supplies an explicit
+albedo layer or `AuthoredBodyAlbedo`. The accelerated `CelestialTime` clock
+owns globe and sky presentation; physical station, terrain, and link state
+remain on `WorldTime`. In surface view, align the render-only presentation
+hierarchy at the WorldTime camera while keeping relative body poses at
+CelestialTime, so the local sky stays correct as the clocks diverge. The sky
+clock readout must display the same celestial epoch that moves the
+presentation. A visible surface marker may be copied under the
+matching presentation body-fixed grid, but that copy is render-only. Show the
+causal marker on its own body's surface and the copy in orbit or other-body
+views so the fast globe has no stationary duplicate.
+Procedural sky materials opt into the live Sun disc by declaring both
+`sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
+the behavior. The direction is in the active camera's view coordinates, the
+same frame as the shader's view rays. Its provider composes the camera's
+`CellCoord` and `Transform` through `lunco_spatial::pose_in_grid`, while
+BigSpace owns `GlobalTransform` propagation. Camera pose changes refresh the
+direction even when CelestialTime is paused. Continuous renderer data stays in
+Rust; author the background and material binding in USD.
+
 Use `inspect-simulation`, `record-video`, or the API screenshot surface for
 visual evidence. Preserve authored shadow maps, terrain resolution, BigSpace,
 and physics settings. If an asset is missing, report the owning cache or

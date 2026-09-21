@@ -54,8 +54,8 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | :--- | :--- |
 | **`lunco-celestial`** | Headless celestial semantics: canonical body catalog/NAIF identities, ephemeris contracts, typed f64 frame transforms, geodesy, body rotation, and Kepler propagation. |
 | **`lunco-celestial-data`** | Dependency-free authoritative celestial constants shared by semantic and asset-processing packages without making the general core depend on the celestial domain. |
-| **`lunco-celestial-spatial-core`** | Lightweight Bevy/BigSpace contracts shared by celestial consumers: semantic frame lookup, canonical surface poses, surface axes, scene body declarations, orbital-view state, cached local-gravity facts, and render-independent connectivity state. |
-| **`lunco-celestial-spatial`** | Headless Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, links, cadence, and runtime celestial commands. It consumes the separate presentation package for trajectory rendering. |
+| **`lunco-celestial-spatial-core`** | Lightweight Bevy/BigSpace contracts shared by celestial consumers: semantic frame lookup, canonical surface poses, surface axes, scene body declarations, orbital-view state, cached local-gravity facts, detached celestial Sun presentation state, and render-independent connectivity state. |
+| **`lunco-celestial-spatial`** | Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, detached-time globe and Sun projection, render-only body-fixed marker copies, links, cadence, and runtime celestial commands. It consumes the separate presentation package for trajectory rendering. |
 | **`lunco-celestial-presentation`** | Render-facing trajectory sampling and presentation for celestial runtime facts. It depends on the spatial contracts but keeps mesh/material and presentation scheduling out of the semantic spatial runtime. |
 | **`lunco-celestial-ephemeris`** | Concrete high-fidelity ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
@@ -209,7 +209,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-luncosim-edit-inspector-core`** | Renderer-independent Inspector readout snapshot and change gate. It owns the bounded ECS queries for sun, camera, ambient, and joint facts; the rendered Inspector consumes this package without moving those scans into egui paint. |
 | **`lunco-luncosim-edit-inspector-ui`** | Domain-heavy Inspector and authored USD panels: standard USD joint/animation/mount/variant/parameter view models plus environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
-| **`lunco-render`** | Render-free appearance intent and typed graphics settings; `RenderQualityPolicyPlugin` resolves Rhai-owned profiles for graphical and headless scene projection. Names `Mesh3d`, never `MeshMaterial3d`. |
+| **`lunco-render`** | Render-free appearance intent, including screen-constant marker sizing and visibility, and typed graphics settings; `RenderQualityPolicyPlugin` resolves Rhai-owned profiles for graphical and headless scene projection. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
 | **`lunco-web`** | Shared web frontend for wasm apps: streaming loader, `WebReadyPlugin`, and the HTML/CSS/Rhai tool host routed through `lunco_rhai`. |
@@ -438,7 +438,8 @@ Headless celestial semantics. Owns the canonical body catalog and named semantic
 The lightweight ECS boundary for celestial spatial facts. It owns the semantic
 frame-to-grid index, canonical site/body-fixed pose query, ENU surface-frame
 helpers, scene body declarations, orbital-view state, the cached local gravity
-fact, authored mission declarations, the solar-tracking marker, and the
+fact, detached celestial Sun presentation state, authored mission declarations,
+the solar-tracking marker, and the
 published `LinkNode`, `LinkState`, `LinkGeometryState`, Wi-Fi, peer, and
 occluder components consumed by cameras, avatars, networking, scripting,
 telemetry, USD projection, and UI. It depends only on the semantic celestial
@@ -450,7 +451,7 @@ contracts consumed by both the spatial mission projector and the optional
 trajectory presentation package.
 
 **`lunco-celestial-spatial`**
-Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, globe/imagery integration, links, cadence, and runtime commands. Trajectory data contracts live in `lunco-celestial-spatial-core`; mesh sampling and trajectory alignment are installed by `lunco-celestial-presentation`. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
+Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, globe/imagery integration, detached-time globe and solar-disc projection, render-only body-fixed marker copies, links, cadence, and runtime commands. Physical stations and links remain on the causal `WorldTime` tree; only their marker geometry is copied beneath a detached presentation grid. Trajectory data contracts live in `lunco-celestial-spatial-core`; mesh sampling and trajectory alignment are installed by `lunco-celestial-presentation`. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
 
 **`lunco-celestial-presentation`**
 Presentation adapter for celestial runtime facts. It owns trajectory sampling,
@@ -1169,7 +1170,7 @@ owns no editor interaction implementation and can be installed by any
 workbench host that provides the shared viewport and selection contracts.
 
 **`lunco-render`**
-Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `ProceduralSkybox`, `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.
+Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `ProceduralSkybox`, `ScreenConstantMarker` and its view visibility gate, `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.
 
 **`lunco-render-bevy`**
 The **only** crate that names `bevy_pbr`. Binds the intent above to real Bevy materials: `PbrLook` → `StandardMaterial`, `ShaderLook` → `ShaderMaterial` (the one general self-describing `AsBindGroup`, any `.wgsl` per-instance), plus `SceneCamera` → camera bundle, `WorldLabel` → billboard text, environment light and horizon shading. Headless simply never adds this plugin — which is why `--no-ui` links **no wgpu, no `bevy_render`, no `bevy_pbr`, no egui, no winit**. See [architecture/render-decoupling.md](architecture/render-decoupling.md).

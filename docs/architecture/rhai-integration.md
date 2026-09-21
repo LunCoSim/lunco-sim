@@ -207,7 +207,10 @@ delivers at the next fixed pass, while a paused simulation uses the next
 `Update` pass without running fixed-step behavior. Inter-script interaction is
 bus-only (isolated VMs); see §7f. Events emitted while a pass is delivering its
 current batch remain queued for the following pass, so lifecycle hooks can
-publish a readiness edge without losing it at the dispatch boundary.
+publish a readiness edge without losing it at the dispatch boundary. While the
+scene-readiness lifecycle gate is closed, events are not buffered because no
+scenario can consume them and the gated driver cannot drain them. Scene
+transitions also clear pending events from the outgoing scene.
 
 ### Examples
 

@@ -1051,7 +1051,7 @@ fn process_usd_sim_prim_read(
     // authoring no `angularSizeDeg` is not a half-declared marker, it is simply
     // not one. Same opt-in shape as the billboard above.
     if reader.has_authored_attribute(&sdf_path, "lunco:marker:angularSizeDeg") {
-        let default = marker::ScreenConstantMarker::default();
+        let default = lunco_render::ScreenConstantMarker::default();
         let marker = (|| {
             let angular_deg = match reader.real_f32(&sdf_path, "lunco:marker:angularSizeDeg") {
                 Some(value) if value.is_finite() && value > 0.0 => value,
@@ -1064,7 +1064,7 @@ fn process_usd_sim_prim_read(
                 }
                 _ => return Err(()),
             };
-            Ok(marker::ScreenConstantMarker {
+            Ok(lunco_render::ScreenConstantMarker {
                 angular_deg,
                 show_beyond_m,
             })

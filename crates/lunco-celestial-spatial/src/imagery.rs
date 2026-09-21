@@ -24,9 +24,9 @@
 //!   installed, because the registry probes every read root, not just the one it
 //!   would have downloaded into
 //!
-//! Without any of them, a body renders its own colour (ocean blue, regolith
-//! grey). That is a complete appearance, not a degraded one — see
-//! `big_space_setup`'s note on why the untextured state is the default.
+//! Without an installed or authored raster, a body renders its authored base
+//! colour (ocean blue, regolith grey). That is the complete fallback appearance;
+//! the dataset raster is applied as the albedo when it is available.
 
 use bevy::image::{ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -66,7 +66,18 @@ pub(crate) struct BoundBodyImagery(
 #[derive(Debug, Clone)]
 enum BoundBodyImagerySource {
     Authored,
-    Dataset,
+    Dataset(Handle<Image>),
+}
+
+impl BoundBodyImagery {
+    /// Dataset raster that remains the globe's albedo when its authored
+    /// non-texture look is refreshed.
+    pub(crate) fn dataset_image(&self, globe: Entity) -> Option<Handle<Image>> {
+        match self.0.get(&globe) {
+            Some(BoundBodyImagerySource::Dataset(image)) => Some(image.clone()),
+            Some(BoundBodyImagerySource::Authored) | None => None,
+        }
+    }
 }
 
 /// Imagery requests that are still being decoded by Bevy's asset pipeline.
@@ -159,7 +170,7 @@ struct PendingBodyImage {
 /// whole reason the untextured path works — the texture then reproduces its own
 /// pixels. Both binding paths (authored map, dataset default) go through here so
 /// they cannot disagree.
-fn bind_albedo(
+pub(crate) fn bind_albedo(
     look: &lunco_materials::ShaderLook,
     image: Handle<Image>,
 ) -> lunco_materials::ShaderLook {
@@ -302,7 +313,7 @@ pub(crate) fn adopt_authored_body_albedo(
             pending.authored.push(request);
             continue;
         };
-        lod.look = bind_albedo(&lod.look, request.image);
+        lod.look = bind_albedo(&lod.look, request.image.clone());
         apply_look_to_tiles(&tiles, &lod.look, &mut commands);
         bound.0.insert(globe, BoundBodyImagerySource::Authored);
         info!(
@@ -494,9 +505,12 @@ pub(crate) fn bind_dataset_body_imagery(
         }
 
         let naif_id = request.naif_id;
-        lod.look = bind_albedo(&lod.look, request.image);
+        lod.look = bind_albedo(&lod.look, request.image.clone());
         apply_look_to_tiles(&tiles, &lod.look, &mut commands);
-        bound.0.insert(globe, BoundBodyImagerySource::Dataset);
+        bound.0.insert(
+            globe,
+            BoundBodyImagerySource::Dataset(request.image.clone()),
+        );
         info!(
             "[celestial] body {naif_id} took its ready imagery from dataset '{}'",
             request.dataset_key

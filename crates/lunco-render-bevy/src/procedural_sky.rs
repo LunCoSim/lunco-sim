@@ -1,7 +1,7 @@
 //! Camera-background binding for procedural shader looks.
 //!
 //! A [`ProceduralSkybox`] is a render-free marker on the same entity as a
-//! [`ShaderLook`]. The normal shader material binder still owns the material
+//! [`lunco_materials::ShaderLook`]. The normal shader material binder still owns the material
 //! asset and its reflected parameters; this module only adds the render path
 //! that queues that material as one non-mesh item in Bevy's built-in opaque
 //! phase, after opaque geometry. The normal phase owns the render pass and its
@@ -45,6 +45,8 @@ use bevy::render::{
 use bevy::shader::Shader;
 use bevy::shader::ShaderDefVal;
 use bevy::utils::default;
+use lunco_celestial_spatial_core::CelestialSunPresentation;
+use lunco_materials::ParamValue;
 use lunco_render::ProceduralSkybox;
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -153,7 +155,8 @@ impl SpecializedRenderPipeline for ProceduralSkyboxPipeline {
 
 pub(crate) fn build(app: &mut App) {
     app.add_plugins(ExtractComponentPlugin::<ProceduralSkyboxMaterial>::default())
-        .add_observer(remove_skybox_material);
+        .add_observer(remove_skybox_material)
+        .add_systems(Update, wire_celestial_sun_inputs);
 
     let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
         return;
@@ -171,6 +174,70 @@ pub(crate) fn build(app: &mut App) {
             queue_procedural_skybox.in_set(RenderSystems::QueueMeshes),
         );
     render_app.add_render_command::<Opaque3d, DrawProceduralSkyboxCommands>();
+}
+
+/// Feed the current celestial Sun state to procedural backgrounds that declare
+/// the matching engine parameters. The conversion to f32 happens at this
+/// shader-uniform boundary; shader asset identity is not part of the contract.
+fn wire_celestial_sun_inputs(
+    sun: Option<Res<CelestialSunPresentation>>,
+    skyboxes: Query<&ProceduralSkyboxMaterial>,
+    materials: Option<ResMut<Assets<super::ShaderMaterial>>>,
+) {
+    let Some(mut materials) = materials else {
+        return;
+    };
+    let (direction, tan_radius) = match sun.as_deref() {
+        Some(state) => match (state.direction_to_sun_view, state.tan_angular_radius) {
+            (Some(direction), Some(tan_radius))
+                if direction.is_finite()
+                    && tan_radius.is_finite()
+                    && tan_radius > 0.0
+                    && direction.length_squared() > 0.0 =>
+            {
+                let direction = direction.normalize().as_vec3();
+                let tan_radius = tan_radius as f32;
+                if !direction.is_finite() || !tan_radius.is_finite() || tan_radius <= 0.0 {
+                    (Vec3::NEG_Z, 0.0)
+                } else {
+                    (direction, tan_radius)
+                }
+            }
+            (None, None) => (Vec3::NEG_Z, 0.0),
+            _ => {
+                warn_once!("[render] incomplete celestial Sun presentation state; background disc is disabled");
+                (Vec3::NEG_Z, 0.0)
+            }
+        },
+        None => (Vec3::NEG_Z, 0.0),
+    };
+
+    for skybox in &skyboxes {
+        let Some(mut material) = materials.get_mut(&skybox.material) else {
+            continue;
+        };
+        let has_direction = material.schema.field("sun_dir_view").is_some();
+        let has_radius = material.schema.field("sun_tan_radius").is_some();
+        if !has_direction && !has_radius {
+            continue;
+        }
+        if !(has_direction && has_radius) {
+            warn_once!("[render] procedural sky declares only one of `sun_dir_view` and `sun_tan_radius`; celestial Sun inputs require both");
+            continue;
+        }
+        let current_direction = material.get_vec3("sun_dir_view");
+        let current_radius = material.get_scalar("sun_tan_radius");
+        if current_direction
+            .is_some_and(|current| (current - direction).length_squared() <= 1.0e-10)
+            && current_radius.is_some_and(|current| (current - tan_radius).abs() <= 1.0e-7)
+        {
+            continue;
+        }
+        material.set_many([
+            ("sun_dir_view", ParamValue::Vec3(direction.to_array())),
+            ("sun_tan_radius", ParamValue::F32(tan_radius)),
+        ]);
+    }
 }
 
 fn init_pipeline(

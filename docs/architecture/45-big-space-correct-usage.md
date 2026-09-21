@@ -300,6 +300,27 @@ reparented into it as a way to make a view look aligned. Keeping the ownership
 split in the component contract makes an invalid wiring a compile-time field
 initialization error rather than a runtime timing symptom.
 
+The detached sky also drives the rendered solar direction and globe pose. A
+surface station remains a causal entity on the physical body-fixed grid; its
+screen marker is mirrored as render-only geometry under the matching
+presentation grid, so the marker follows the fast globe without changing
+station, terrain, physics, or link coordinates. The physical marker is shown
+from its own body's surface view; orbit and other-body views use the moving
+copy, avoiding a stationary duplicate. Celestial body shader looks retain
+installed dataset albedo unless USD authors an explicit albedo map. If the
+camera stays on a WorldTime surface while CelestialTime advances, the detached
+solar presentation hierarchy is rigidly aligned at the active body-fixed camera
+pose; this preserves the CelestialTime Earth/Moon/Sun directions in the local
+sky without reposing the causal body or site.
+
+The procedural Sun disc uniform uses the active camera's view coordinates,
+matching the shader's view-space rays. The celestial projection composes the
+camera's `CellCoord` and `Transform` through the canonical
+`lunco_spatial::pose_in_grid` helper before publishing it; it never compares a
+floating-origin world vector with camera-relative rays. BigSpace still owns
+`GlobalTransform` propagation to the rendered camera and presentation grids.
+Camera pose changes reopen this projection even while CelestialTime is paused.
+
 Focused regression coverage lives beside the owning crates, notably
 `lunco-celestial` frame/placement tests, `lunco-usd-avian` bridge tests, and
 `lunco-core` world/lifecycle tests. The production check is:

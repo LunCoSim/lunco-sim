@@ -19,6 +19,48 @@ pub struct CelestialBodyDecl {
 #[derive(Component)]
 pub struct SolarSystemRoot;
 
+/// Render-facing solar direction in the active camera's view frame for the
+/// detached celestial presentation clock. The causal lighting state remains
+/// owned by `lunco-environment`.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
+pub struct CelestialSunPresentation {
+    /// Unit direction from the active camera toward the Sun in view coordinates.
+    pub direction_to_sun_view: Option<DVec3>,
+    /// Tangent of the Sun's angular radius at the active observer.
+    pub tan_angular_radius: Option<f64>,
+    /// Increments only when either published value changes.
+    pub revision: u64,
+}
+
+impl CelestialSunPresentation {
+    /// Publish one finite solar disc state without narrowing its coordinates.
+    pub fn publish(&mut self, direction_view: DVec3, tan_angular_radius: f64) -> bool {
+        if !direction_view.is_finite()
+            || direction_view.length_squared() == 0.0
+            || !tan_angular_radius.is_finite()
+            || tan_angular_radius <= 0.0
+        {
+            return false;
+        }
+        let direction_view = direction_view.normalize();
+        if self.direction_to_sun_view != Some(direction_view)
+            || self.tan_angular_radius != Some(tan_angular_radius)
+        {
+            self.direction_to_sun_view = Some(direction_view);
+            self.tan_angular_radius = Some(tan_angular_radius);
+            self.revision = self.revision.wrapping_add(1);
+        }
+        true
+    }
+
+    /// Clear the background disc when its observer or ephemeris is unavailable.
+    pub fn clear(&mut self) {
+        if self.direction_to_sun_view.take().is_some() || self.tan_angular_radius.take().is_some() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+}
+
 /// A body map authored on a celestial body prim.
 ///
 /// The value remains the authored asset reference. Resolution and loading are

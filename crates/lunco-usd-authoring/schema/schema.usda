@@ -105,6 +105,16 @@ class "LunCoDomeAPI" (
     )
 }
 
+class "LunCoProceduralSkyAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Marks an Xform as the scene's procedural camera background. Its appearance is authored by the bound UsdShade material; the background does not illuminate the scene."
+)
+{
+}
+
 class "LunCoPointerInteractionAPI" (
     inherits = </APISchemaBase>
     customData = {

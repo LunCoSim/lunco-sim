@@ -118,8 +118,10 @@ def Xform "SolarSystem" (
 
     # Default globe looks are ordinary USD Shade content. Celestial Rust owns
     # the generated high-precision body and LOD topology, then carries these
-    # authored looks onto the streamed tiles. A scene may override the binding
-    # or its shader inputs using normal USD composition.
+    # authored looks onto the streamed tiles. The same blueprint shader supplies
+    # the globe-direction vertex stage; without that stage, the tiles have no
+    # spherical coordinates for the albedo raster. A scene may override the
+    # binding or its shader inputs using normal USD composition.
     def Scope "Looks"
     {
         def Material "Earth"
@@ -130,6 +132,7 @@ def Xform "SolarSystem" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/blueprint.wgsl@
+                uniform asset info:wgsl:vertexAsset = @lunco://shaders/blueprint.wgsl@
                 color3f inputs:surface_color = (0.13, 0.32, 0.66)
                 float inputs:roughness = 0.5
                 color3f inputs:high_line_color = (0.0, 0.5, 1.0)
@@ -150,6 +153,7 @@ def Xform "SolarSystem" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/blueprint.wgsl@
+                uniform asset info:wgsl:vertexAsset = @lunco://shaders/blueprint.wgsl@
                 color3f inputs:surface_color = (0.5, 0.5, 0.5)
                 float inputs:roughness = 0.9
                 color3f inputs:high_line_color = (0.6, 0.6, 0.6)

@@ -281,6 +281,23 @@ easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
+Celestial `CelestialTime` may move a detached globe and sky for a time-lapse.
+Keep physical bodies, terrain, stations, and links on the causal `WorldTime`
+frames, and have the sky clock readout display the same `CelestialTime` epoch.
+When a surface camera remains on `WorldTime`, rigidly align the render-only
+celestial hierarchy at its body-fixed camera pose so Earth and Sun keep their
+correct local-sky directions as the epochs diverge.
+If a body-fixed station needs to appear on the accelerated globe,
+project a render-only marker copy beneath its presentation grid. Show its
+causal marker on its own surface and the copy from orbit or other-body views;
+never reparent the station or use presentation coordinates for physics or link
+calculations.
+
+Scenario telemetry is collected only while `ScenarioExecutionGate` is open.
+Events arriving before scene readiness cannot be delivered to a scenario, so
+they must not accumulate in the inbox; clear the outgoing scene's pending batch
+when a scene transition closes the gate.
+
 Workbench perspectives publish scene visibility as layout intent. A perspective
 that uses the full window as its 3D presentation must opt into
 `Perspective::scene_visible_when_docked()` so opening a transient side or

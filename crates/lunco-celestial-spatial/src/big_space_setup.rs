@@ -109,26 +109,45 @@ const CELESTIAL_PICKING_LAYERS: CollisionLayers =
 ///
 /// A celestial body is spawned in Rust (its radius, GM and rotation are physics,
 /// not art), but how it LOOKS is content. `lunco-usd-sim-shader` already turns a
-/// `UsdShade` Material binding on any prim into a [`ShaderLook`] — the same path
-/// the terrain layer maps and every prop use. This carries that look from the
-/// declaring prim to the globe it declared, so a scene that wants Earth imagery
-/// binds a Material with an `inputs:albedo_map`, and a scene that does not gets
-/// the body colour. No hardcoded texture path, no missing-file fallback to code.
-pub fn adopt_authored_body_look(
-    q_decl: Query<(&crate::CelestialBodyDecl, &ShaderLook), Changed<ShaderLook>>,
+/// `UsdShade` Material binding on any prim into a [`ShaderLook`]. This carries
+/// that look from the declaring prim to the globe. An authored albedo remains
+/// authoritative; otherwise the installed body-imagery dataset supplies the
+/// raster while this look continues to own its shader parameters.
+pub(crate) fn adopt_authored_body_look(
+    q_decl: Query<
+        (
+            &crate::CelestialBodyDecl,
+            &ShaderLook,
+            Option<&crate::AuthoredBodyAlbedo>,
+        ),
+        Changed<ShaderLook>,
+    >,
+    bound_imagery: Res<crate::imagery::BoundBodyImagery>,
     mut q_globes: Query<(
+        Entity,
         &CelestialBody,
         &mut crate::globe_lod::GlobeLod,
         &crate::globe_lod::GlobeTiles,
     )>,
     mut commands: Commands,
 ) {
-    for (decl, look) in &q_decl {
-        for (body, mut lod, tiles) in &mut q_globes {
+    for (decl, look, authored_albedo) in &q_decl {
+        for (globe, body, mut lod, tiles) in &mut q_globes {
             if body.ephemeris_id != decl.naif {
                 continue;
             }
-            lod.look = look.clone();
+            lod.look = if authored_albedo.is_none()
+                && !look
+                    .textures
+                    .contains_key(&lunco_materials::TextureLayer::Albedo)
+            {
+                bound_imagery
+                    .dataset_image(globe)
+                    .map(|image| crate::imagery::bind_albedo(look, image))
+                    .unwrap_or_else(|| look.clone())
+            } else {
+                look.clone()
+            };
             crate::imagery::apply_look_to_tiles(tiles, &lod.look, &mut commands);
             info!(
                 "[celestial] body {} adopted the look authored on its prim",
@@ -630,10 +649,9 @@ pub fn setup_big_space_hierarchy(
     // Earth terrain: camera-driven cube-sphere LOD (replaces the old fixed 24-tile
     // shell). `update_globe_lod` streams tiles parented to the detached Earth
     // Globe Presentation Surface, not the physical Earth Surface Grid.
-    // Earth reads as EARTH with no imagery at all: ocean blue under the
-    // graticule. Imagery, if a scene has any, arrives the ordinary way — a
-    // `UsdShade` Material bound to the body prim, adopted by
-    // `adopt_authored_body_look`.
+    // The authored `UsdShade` look supplies the base globe appearance. An
+    // installed body-imagery dataset supplies its albedo map unless the scene
+    // authors one, and `adopt_authored_body_look` carries both onto the tiles.
     commands.entity(earth_body).try_insert((
         crate::globe_lod::GlobeLod {
             radius_m: earth.radius_m,

@@ -38,9 +38,8 @@ def Xform "World"
         rel material:binding = </World/Mat>
         double size = 2
     }
-    def Xform "Sky" ( prepend apiSchemas = ["MaterialBindingAPI"] )
+    def Xform "Sky" ( prepend apiSchemas = ["LunCoProceduralSkyAPI", "MaterialBindingAPI"] )
     {
-        bool lunco:surface:skybox = true
         rel material:binding = </World/Mat>
     }
     def DistantLight "Sun"
@@ -493,9 +492,8 @@ fn procedural_skybox_requires_an_xform_owner() {
 )
 def Xform "World"
 {
-    def Sphere "Sky"
+    def Sphere "Sky" ( prepend apiSchemas = ["LunCoProceduralSkyAPI"] )
     {
-        bool lunco:surface:skybox = true
         double radius = 1000
     }
 }
@@ -539,9 +537,8 @@ fn procedural_skybox_projection_removes_existing_mesh_state() {
 (
     defaultPrim = "Sky"
 )
-def Xform "Sky"
+def Xform "Sky" ( prepend apiSchemas = ["LunCoProceduralSkyAPI"] )
 {
-    bool lunco:surface:skybox = true
 }
 "#;
 

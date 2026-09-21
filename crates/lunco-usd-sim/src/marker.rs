@@ -40,35 +40,7 @@
 
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_render::camera::SceneCamera;
-
-/// A prim that asked to be drawn at a constant apparent size.
-///
-/// The geometry it is authored on must be UNIT-sized (radius/half-extent 1),
-/// following the engine's "unit prim + scale" convention: this component owns
-/// `Transform.scale` outright and overwrites it every frame it is on screen.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct ScreenConstantMarker {
-    /// Apparent diameter, degrees.
-    pub angular_deg: f32,
-    /// Camera distance (m) below which the marker hides and the real geometry
-    /// takes over.
-    pub show_beyond_m: f32,
-}
-
-impl Default for ScreenConstantMarker {
-    fn default() -> Self {
-        Self {
-            // SIZE THIS AGAINST THE TARGET'S OWN DISC, not against the screen.
-            // Earth seen from the Moon is 1.9° wide, so anything approaching half
-            // a degree is a QUARTER OF THE PLANET — a blob, not a site marker.
-            // 0.15° is ~8% of that disc: a dot you can point at, on a globe that
-            // still reads as a globe. (In pixels: ~6 on a 1900-wide 50° view.)
-            angular_deg: 0.15,
-            show_beyond_m: 200_000.0,
-        }
-    }
-}
+use lunco_render::{camera::SceneCamera, ScreenConstantMarker, ScreenConstantMarkerVisibility};
 
 /// Scale (= radius, on unit geometry) that makes `angular_deg` of apparent
 /// DIAMETER at `distance`. Shared by the system and its tests so the size
@@ -101,6 +73,7 @@ pub fn scale_screen_constant_markers(
         Option<&CellCoord>,
         &mut Transform,
         &mut Visibility,
+        Option<&ScreenConstantMarkerVisibility>,
     )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -127,14 +100,16 @@ pub fn scale_screen_constant_markers(
         return;
     };
 
-    for (entity, marker, cell, mut tf, mut vis) in q_markers.iter_mut() {
+    for (entity, marker, cell, mut tf, mut vis, presentation_visibility) in q_markers.iter_mut() {
         let Ok(pos) = lunco_spatial::coords::world_position_seeded(
             entity, cell, &tf, &q_parents, &q_grids, &q_spatial,
         ) else {
             continue;
         };
         let distance = (pos.0 - cam.0).length();
-        if distance < marker.show_beyond_m as f64 {
+        if distance < marker.show_beyond_m as f64
+            || presentation_visibility.is_some_and(|state| !state.visible)
+        {
             if *vis != Visibility::Hidden {
                 *vis = Visibility::Hidden;
             }

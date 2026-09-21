@@ -150,7 +150,7 @@ runtime prim or caching an entity id.
 - **DUPLICATE NAMES ARE SILENT — check them before debugging unrelated rendering.** Two prims with the same name in one parent, or the same property authored twice on one prim, can be accepted without a diagnostic and change the composed result. Search the parent scope and property name before investigating shaders.
 - **A procedural camera background is not a sphere.** Author the existing
   `environment/starfield_sky.usda` pattern: an `Xform` with
-  `MaterialBindingAPI` and `bool lunco:surface:skybox = true`. USD projection
+  `LunCoProceduralSkyAPI` and `MaterialBindingAPI`. USD projection
   stamps `ProceduralSkybox` and the renderer uses its fullscreen background
   pass, so there is no radius, culling volume, collision surface, or mesh
   vertex shader to maintain. Use `UsdLuxDomeLight` for a textured environment

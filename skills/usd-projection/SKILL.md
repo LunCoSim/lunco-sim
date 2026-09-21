@@ -285,14 +285,14 @@ said.
 - `primvars:displayColor` / `displayOpacity` are the *only* Gprim display
   attributes. There is no "display emissive" — **emission requires a material**.
 - Genuinely new concepts get the `lunco:` vendor namespace (`lunco:dome:skybox`,
-  `lunco:surface:skybox`, `lunco:terrain:*`). That is the correct, spec-sanctioned way to extend USD. What
+  `LunCoProceduralSkyAPI`, `lunco:terrain:*`). That is the correct, spec-sanctioned way to extend USD. What
   is *not* correct is inventing a second spelling for something USD already has.
 
 The procedural camera-background contract is an `Xform` with
-`lunco:surface:skybox = true` and a standard `UsdShade` material binding. Read
-that intent once in `lunco-usd-bevy` and stamp the existing render-free
+`LunCoProceduralSkyAPI` and a standard `UsdShade` material binding. Read
+that API once in `lunco-usd-bevy` and stamp the existing render-free
 `ProceduralSkybox` component. Do not project a `UsdGeomGprim` for the
-background, carry `info:wgsl:vertexAsset`, or read the USD flag again in a
+background, carry `info:wgsl:vertexAsset`, or read the API again in a
 downstream shader projector. `UsdLuxDomeLight` remains the standard path for
 textured environment lighting.
 

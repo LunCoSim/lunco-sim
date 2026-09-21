@@ -62,6 +62,39 @@ pub enum SurfaceAlpha {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ProceduralSkybox;
 
+/// Keep a unit marker at a fixed apparent angular diameter once it is far
+/// enough from the active scene camera.
+///
+/// The USD simulation projection adds this intent from `LunCoMarkerAPI`.
+/// Render-independent scene systems may copy it onto presentation-only
+/// geometry without depending on the USD projection crate.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct ScreenConstantMarker {
+    /// Apparent diameter in degrees.
+    pub angular_deg: f32,
+    /// Camera distance in metres below which the marker is hidden.
+    pub show_beyond_m: f32,
+}
+
+impl Default for ScreenConstantMarker {
+    fn default() -> Self {
+        Self {
+            angular_deg: 0.15,
+            show_beyond_m: 200_000.0,
+        }
+    }
+}
+
+/// Runtime visibility gate for a screen-constant marker.
+///
+/// The marker scaler still applies `show_beyond_m`; this gate lets a domain
+/// presentation owner select which render copy is active in the current view.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScreenConstantMarkerVisibility {
+    /// Whether the marker may be shown once it is beyond its authored distance.
+    pub visible: bool,
+}
+
 /// The texture channels a PBR surface can carry.
 ///
 /// `Handle<Image>` is `bevy_image` — render-free — so a texture-bearing surface is

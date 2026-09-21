@@ -34,13 +34,26 @@ imagery). The physical scene sun, terrain shadow direction, active surface
 frame, body state, and other causal consumers read `WorldTime` and must never be
 driven by `CelestialTime`. Fast-forwarding the presentation clock therefore
 cannot rotate the physical sun or repeatedly invalidate a terrain shadow cache.
+The sky clock UI displays this same `CelestialTime` epoch, so its date readout
+tracks the globe and sky while the independent rate is active. Its per-frame
+delta comes from the resolved celestial clock sample, not from subtracting
+Julian-date projections; a step longer than one day is valid at presentation
+rates such as 100,000×.
 
 Rendered globe imagery is also presentation-owned. Earth and Moon globe tiles
 are placed under dedicated visual celestial frames that consume
 `CelestialTime`; the physical body, picking collider, surface terrain, and
 active BigSpace/Avian frame remain in the `WorldTime` hierarchy. This is the
 required boundary for a high-rate sky time-lapse: it moves the visible globe
-without teleporting the simulated body or invalidating the surface scene.
+without teleporting the simulated body or invalidating the surface scene. When
+the active camera remains on a physical surface, the render-only hierarchy is
+rigidly mapped so the CelestialTime body-fixed observer coincides with that
+WorldTime camera; relative celestial positions and body rotations still follow
+CelestialTime. This keeps Earth and the Sun in the right local sky as the two
+epochs diverge, without moving terrain, stations, links, or physics.
+The procedural Sun disc direction is published in the active camera's view
+coordinates, matching the starfield's view-space rays; camera motion also
+refreshes that direction while the celestial clock is paused.
 
 The rate ceiling and fixed-step catch-up budget live in `lunco-time`; consumers
 must not add another rate path or silently drain an unbounded fixed-step burst.

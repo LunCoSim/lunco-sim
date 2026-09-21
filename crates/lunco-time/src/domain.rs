@@ -1154,57 +1154,13 @@ pub fn write_celestial_time(
     resolved: Res<ResolvedDomains>,
     mission: Res<crate::MissionClock>,
     mut celestial_time: ResMut<CelestialTime>,
-    q_domain: Query<&TimeDomain>,
-    mut last_epoch: Local<f64>,
-    mut last_mission_origin: Local<Option<(u64, u64)>>,
 ) {
-    // A scene epoch is an intentional re-anchor. Compare the stable mission
-    // origin fields so the first value from a new anchor resets the diagnostic
-    // cursor instead of being reported as a discontinuity.
-    let mission_origin = (mission.mission_tick0, mission.mission_epoch0_jd.to_bits());
-    if last_mission_origin
-        .replace(mission_origin)
-        .is_some_and(|previous| previous != mission_origin)
-    {
-        *last_epoch = 0.0;
-    }
     let Some(clocks) = clocks else { return };
-    let Some(celestial_t) = resolved.get(clocks.celestial) else {
+    let Some(sample) = resolved.sample(clocks.celestial) else {
         return;
     };
-    let next = mission.mission_epoch0_jd + celestial_t / crate::SECS_PER_DAY;
-
-    // The sky is supposed to move CONTINUOUSLY unless something seeks it. A
-    // discontinuity here is visible as the sun teleporting across the sky, and
-    // It silently invalidates everything derived from the epoch: a scene
-    // rendered at the wrong date has the wrong sun, shadows, and ephemerides.
-    // A day per frame is far above the expected continuous transport step, so
-    // this reports discontinuities rather than ordinary fast-forward.
-    let jump = next - *last_epoch;
-    if last_epoch.is_finite() && *last_epoch != 0.0 && jump.abs() > 1.0 {
-        let d = q_domain.get(clocks.celestial).ok();
-        warn!(
-            "[time] celestial epoch DISCONTINUITY: {:.5} → {next:.5} JD ({jump:+.3} d) — \
-             celestial_t {celestial_t:.3}s, mission_epoch0 {:.5} JD, domain {:?}",
-            *last_epoch, mission.mission_epoch0_jd, d,
-        );
-    }
-    celestial_time.delta_secs = if *last_epoch != 0.0 {
-        (next - *last_epoch) * crate::SECS_PER_DAY
-    } else {
-        0.0
-    };
-    celestial_time.epoch_jd = next;
-    *last_epoch = next;
-}
-
-#[cfg(test)]
-fn mission_origin_changed(
-    previous: &mut Option<(u64, u64)>,
-    mission: &crate::MissionClock,
-) -> bool {
-    let current = (mission.mission_tick0, mission.mission_epoch0_jd.to_bits());
-    previous.replace(current).is_some_and(|old| old != current)
+    celestial_time.delta_secs = sample.dt;
+    celestial_time.epoch_jd = mission.mission_epoch0_jd + sample.t / crate::SECS_PER_DAY;
 }
 
 #[cfg(test)]
@@ -1239,21 +1195,6 @@ mod tests {
             playback: None,
             root: Some(kind),
         }
-    }
-
-    #[test]
-    fn mission_origin_detection_ignores_per_frame_clock_mutation() {
-        let mut previous = None;
-        let mut mission = crate::MissionClock::default();
-
-        assert!(!mission_origin_changed(&mut previous, &mission));
-        // Per-frame derived time does not change the mission origin and must
-        // not reset the detector.
-        assert!(!mission_origin_changed(&mut previous, &mission));
-
-        mission.mission_epoch0_jd += 10.0;
-        assert!(mission_origin_changed(&mut previous, &mission));
-        assert!(!mission_origin_changed(&mut previous, &mission));
     }
 
     #[test]
