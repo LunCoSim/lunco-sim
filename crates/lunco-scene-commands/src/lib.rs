@@ -10,10 +10,10 @@
 //! replicated identically. An edit that does not go through this layer escapes
 //! save/journal/undo/network.
 //!
-//! - [`commands`] — the command set itself (`SpawnEntity`, `MoveEntity`,
-//!   `TransformEntity`, `DeleteEntity`, and `SetUsdConnection`, …) plus
+//! - [`commands`] — scene-command observers and
 //!   [`commands::SpawnCommandPlugin`], the mutation plugin used by headless
-//!   and interactive composition roots.
+//!   and interactive composition roots. Shared payload definitions live in
+//!   `lunco-scene-command-contracts` so producers do not depend on handlers.
 //! - `lunco-scene-camera` — camera framing commands and their active-frame
 //!   focus transaction, installed by each application composition root that
 //!   exposes camera commands.
@@ -27,10 +27,9 @@
 //! ## Render-free, UI-free
 //!
 //! This crate names no material type and no egui/winit/picking/gizmo crate, so the
-//! headless server links it **without** linking either editor package. The editor
-//! packages depend on this crate rather than containing the command layer. The optional
-//! `ui` feature exposes shared USD UI types through the editor dependency graph;
-//! it does not change document resolution or authoring semantics.
+//! headless server links it **without** linking either editor package. Editor
+//! producers that only emit scene edits depend on the focused command-contract
+//! package; application composition depends on this crate to install handlers.
 //!
 //! ## Adding New Spawn Types
 //!

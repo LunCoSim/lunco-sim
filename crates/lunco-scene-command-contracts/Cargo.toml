@@ -1,0 +1,13 @@
+[package]
+name = "lunco-scene-command-contracts"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Typed scene command payloads shared by scene editors and runtime handlers"
+
+[dependencies]
+bevy.workspace = true
+lunco-core = { path = "../lunco-core" }
+
+[lints]
+workspace = true

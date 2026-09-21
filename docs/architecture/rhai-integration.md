@@ -259,7 +259,7 @@ Representative commands already covering the user's surface:
 | Camera | `FocusTarget`, `FollowTarget`, `ReturnFromOrbit`, `SetCameraInput`, `SetCameraLookAt` (`lunco-camera-core/src/commands.rs`) |
 | Control | `AcquireControl`, `ReleaseControlSource` (`lunco-control-core/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-bevy-runtime-core/src/scene.rs`) |
-| Scene editing | `SpawnEntity`, `MoveEntity`, `RotateEntity`, `TransformEntity`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`); `SetObjectProperty` (`lunco-scene-authoring/src/properties.rs`); `SelectUsdPrim` (`lunco-luncosim-edit-ui/src/selection.rs`) |
+| Scene editing | `SpawnEntity` (`lunco-core`); shared `MoveEntity`, `TransformEntity`, and `DeleteEntity` payloads (`lunco-scene-command-contracts`); runtime observers and other scene commands (`lunco-scene-commands`); `SetObjectProperty` (`lunco-scene-authoring/src/properties.rs`); `SelectUsdPrim` (`lunco-luncosim-edit-ui/src/selection.rs`) |
 | USD geometry editing | `ApplyUsdOp` with `UsdOp::SetAttribute` (`lunco-usd-commands`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this typed command |
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica-core/...`, UI adapters in `lunco-modelica-ui/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial-spatial/src/commands.rs`) |

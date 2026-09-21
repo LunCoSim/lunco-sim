@@ -42,7 +42,7 @@ pub struct SpawnCameraFrame<'w, 's> {
 /// `cmd("SetSpawnDiagnostics", #{enabled: true})` in the LunCo REPL (or the
 /// equivalent API command). It logs each material cursor move and every click
 /// decision, including render ray, chosen surface, canonical-world conversion,
-/// grid cell/local placement, and the final [`lunco_scene_commands::commands::SpawnEntity`].
+/// grid cell/local placement, and the final [`lunco_core::SpawnEntity`].
 ///
 /// The trace deliberately has no production fallback or parallel coordinate
 /// calculation: it observes the exact path that creates the ghost and command.

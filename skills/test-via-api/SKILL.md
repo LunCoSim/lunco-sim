@@ -460,11 +460,13 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
 When testing reveals a missing API surface, add the command immediately
 rather than asking the user:
 
-1. Put a shared command payload in `crates/lunco-modelica-ui-core/src/lib.rs`
-   when another UI package must emit it. Define the struct with the
-   `#[Command]` attribute. Keep the behavior-owning observer in the matching
-   file under `crates/lunco-modelica-ui/src/ui/commands/` and mark it with
-   `#[on_command(...)]` (both attributes come from `lunco_core`):
+1. Put a shared command payload in its domain's contract crate when another
+   package must emit it (for example, Modelica-facing payloads in
+   `lunco-modelica-ui-core`, or shared scene-edit payloads in
+   `lunco-scene-command-contracts`). Define it with `#[Command]`. Keep the
+   observer in the behavior-owning package and mark it with `#[on_command(...)]`
+   (both attributes come from `lunco_core`). For the Modelica UI, the observer
+   file is under `crates/lunco-modelica-ui/src/ui/commands/`:
    ```rust
    use lunco_core::{Command, on_command};
 

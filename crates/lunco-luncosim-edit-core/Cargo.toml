@@ -6,11 +6,9 @@ license.workspace = true
 
 [dependencies]
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
-# THE COMMAND LAYER, now its own crate. Spawn/move/delete/set-property, the spawn +
-# shader catalogs and runtime-layer USD persisters — everything
-# a `--no-ui` server needs and an editor is merely one caller of. The editor DEPENDS
-# on it; the direction never reverses. Editor modules import its command and
-# catalog types directly from the owning crate.
+# Runtime scene handlers and plugin composition used by the editor and headless
+# hosts. UI producers that only emit shared payloads depend on
+# `lunco-scene-command-contracts`, not this handler package.
 lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-scene-camera = { path = "../lunco-scene-camera" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }

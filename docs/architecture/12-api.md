@@ -161,6 +161,14 @@ pub struct OpenFile {                       //   #[derive(Event, Reflect, Clone,
 
 `#[Command]` (no `default`) when the struct can't sensibly default. Use `#[Command(default)]` (the common case) so the HTTP API can fill in omitted fields. Empty unit-style commands take an empty named-fields body: `pub struct Ping {}`.
 
+When UI or other producer packages need to emit a command without depending on
+its runtime implementation, put the `#[Command]` payload in a focused contract
+crate. The handler-owning package imports that type, declares its
+`#[on_command]` observer, and lists the observer in its own
+`register_commands!` call. That keeps reflection registration with the runtime
+behavior while producers depend only on the stable typed event. Do not re-export
+the payload through the handler crate.
+
 ### Defining the observer
 
 ```rust

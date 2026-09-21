@@ -25,6 +25,7 @@ use bevy::math::{DVec3, Rect};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use lunco_doc::DocumentId;
+use lunco_scene_command_contracts::TransformEntity;
 use lunco_usd_bevy_scene::{UsdPrimPath, is_preview_entity};
 use lunco_usd_document::document::LayerId;
 use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState};
@@ -692,7 +693,7 @@ fn capture_gizmo_start(
 
 /// Finish or cancel the active gizmo transactions and restore their pre-drag
 /// state. Live transactions emit the existing
-/// [`lunco_scene_commands::commands::TransformEntity`] command; USD preview
+/// [`TransformEntity`] command; USD preview
 /// transactions emit one existing [`lunco_usd_core::commands::ApplyUsdOps`]
 /// change set. Each owner keeps its authoritative persistence boundary.
 fn restore_gizmo_dynamic(
@@ -956,7 +957,7 @@ fn restore_gizmo_dynamic(
         // restoration contract as TransformEntity.
         if !cancel_transaction {
             if let Ok(gid) = q_gid.get(entity) {
-                commands.trigger(lunco_scene_commands::commands::TransformEntity {
+                commands.trigger(TransformEntity {
                     entity_id: gid.get(),
                     translation: drag.current_position.to_array(),
                     rotation: drag.current_rotation.to_array(),

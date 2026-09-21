@@ -25,6 +25,7 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_luncosim_edit_inspector_core::{InspectorView, JointReadout};
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::PbrLook;
+use lunco_scene_command_contracts::{DeleteEntity, MoveEntity};
 
 use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 use lunco_physics::joint::JOINT_ANGLE_PORT;
@@ -832,7 +833,7 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
 /// feedback and drops it from the selection. A non-document entity (a palette
 /// spawn the doc doesn't own) simply isn't authored — it just despawns.
 /// NOTE: there is no local `delete_entity` helper any more. It did the same three things
-/// the typed `commands::DeleteEntity` verb does (author the USD delete edit, despawn, drop
+/// the typed `DeleteEntity` verb does (author the USD delete edit, despawn, drop
 /// the selection), so it was a second delete path that the command bus — and hence the
 /// API, the journal and networked peers — never saw. The Inspector triggers the command.
 /// Delete the selected entity through the same typed command as the Inspector
@@ -848,7 +849,7 @@ pub fn delete_selected_on_intent(
         return;
     }
     if let Some(target) = selected.primary() {
-        commands.trigger(lunco_scene_commands::commands::DeleteEntity {
+        commands.trigger(DeleteEntity {
             target,
             intent: lunco_core::EditIntent::Persistent,
         });
@@ -1284,7 +1285,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                                 });
                                 return;
                             };
-                            ctx.trigger(lunco_scene_commands::commands::MoveEntity {
+                            ctx.trigger(MoveEntity {
                                 entity_id: gid.get(),
                                 translation: [x, y, z],
                             });
@@ -1440,7 +1441,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     // Delete button
     ui.separator();
     if ui.button("Delete Entity (Del)").clicked() {
-        ctx.trigger(lunco_scene_commands::commands::DeleteEntity {
+        ctx.trigger(DeleteEntity {
             target: entity,
             intent: lunco_core::EditIntent::Persistent,
         });

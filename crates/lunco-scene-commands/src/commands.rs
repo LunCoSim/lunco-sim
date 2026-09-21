@@ -18,6 +18,7 @@ use lunco_core::{on_command, register_commands, Command, SpawnEntity};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_scene_catalog::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
+use lunco_scene_command_contracts::{DeleteEntity, MoveEntity, TransformEntity};
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
@@ -598,36 +599,6 @@ pub fn apply_replicated_spawns(
     }
 }
 
-/// Move an existing entity to a position in the active physics frame.
-///
-/// Programmatic equivalent of grabbing the entity with the gizmo and
-/// dragging it. The handler:
-/// 1. Switches the body to `RigidBody::Kinematic` (if it has a
-///    `RigidBody`) so Avian treats the new pose as authoritative
-///    rather than fighting back via integration.
-/// 2. Converts the active-frame target once into the entity's actual parent
-///    and BigSpace cell/local storage.
-/// 3. Lets the BigSpace physics bridge derive Avian's pose from that one
-///    authoritative storage write.
-/// 4. Sets a one-tick `LinearVelocity` consistent with the move so
-///    any joint coupled to a dynamic body propagates the motion.
-///
-/// Designed for automated tests / MCP tool clients that need to
-/// drive the world without a mouse. Single-shot — body type stays
-/// Kinematic until another command (or a gizmo drag-end) restores it.
-#[Command(default)]
-pub struct MoveEntity {
-    /// API-stable global entity ID from `ListEntities`, resolved to the live
-    /// Bevy entity by `ApiEntityRegistry`.
-    pub entity_id: u64,
-    /// Target translation in the semantic [`lunco_spatial::ActivePhysicsFrame`].
-    /// The concrete BigSpace grid, the entity's actual parent, and the cell/local
-    /// split are internal storage details resolved by the observer. The wire
-    /// representation is f64 so positions retain precision across API/network
-    /// round trips.
-    pub translation: [f64; 3],
-}
-
 /// Maximum one-command displacement for a physics body.
 ///
 /// `MoveEntity` and `TransformEntity` are the scene-edit commit verbs, so an
@@ -963,26 +934,6 @@ pub fn on_rotate_entity_command(
         "ROTATE_ENTITY: {:?} → [{:.3}, {:.3}, {:.3}, {:.3}]",
         cmd.entity_id, cmd.rotation[0], cmd.rotation[1], cmd.rotation[2], cmd.rotation[3]
     );
-}
-
-/// Set an entity's complete active-frame pose as one scene edit.
-///
-/// This is the compound counterpart to [`MoveEntity`] and [`RotateEntity`].
-/// Interactive editors use it when translation and rotation are produced by
-/// one gesture, so live seating and document persistence share one semantic
-/// command and one undo/change-set boundary.
-/// For physics bodies, the live handler publishes bounded one-tick linear and
-/// angular pulses when the corresponding Avian components are present, allowing
-/// joint constraints to consume the complete pose edit before cleanup.
-#[Command(default)]
-pub struct TransformEntity {
-    /// API-stable global entity ID from `ListEntities`, resolved to the live
-    /// Bevy entity by `ApiEntityRegistry`.
-    pub entity_id: u64,
-    /// Target translation in the explicit active physics frame.
-    pub translation: [f64; 3],
-    /// Target orientation in the explicit active physics frame, `[x,y,z,w]`.
-    pub rotation: [f64; 4],
 }
 
 /// Live observer for [`TransformEntity`].
@@ -1492,28 +1443,6 @@ fn is_mount_component(
 // DeleteEntity — removal, authored
 // ─────────────────────────────────────────────────────────────────────
 
-/// Delete an entity from the scene.
-///
-/// The typed verb for "remove this" authors a journaled, replicated, undoable
-/// runtime-layer edit. Runtime-only prims use `RemovePrim`; base-authored and
-/// referenced prims use a stronger `active = false` override so the base scene
-/// and referenced asset remain intact.
-///
-/// This despawns AND (via [`persist_delete_to_runtime_layer`]) authors the
-/// corresponding USD edit, which is what makes deletion journaled and undoable.
-// Plain `#[Command]`, not `#[Command(default)]`: `default` derives `Default`, and
-// `Entity` has none — the same reason `DetachJoint` above is plain.
-#[Command]
-pub struct DeleteEntity {
-    /// Entity to remove.
-    pub target: Entity,
-    /// `Persistent` (the default) authors the removal into the document; an
-    /// `Interactive` delete is live-only and does not journal.
-    #[serde(default)]
-    #[reflect(default)]
-    pub intent: lunco_core::EditIntent,
-}
-
 /// Live leg: despawn the entity and drop it from the selection.
 #[on_command(DeleteEntity)]
 pub fn on_delete_entity(
@@ -1698,9 +1627,9 @@ pub fn on_set_usd_connection(
 /// Persist a `SetEnvironmentLight` sun tweak into the active USD document's
 /// runtime overlay — the environment twin of the shader-parameter authoring path.
 ///
-/// [`lunco_environment::on_set_environment_light`] mutates the live
-/// `DirectionalLight` for immediate feedback but writes nothing back to USD, so a
-/// sun tweak is lost on reload. This decoupled observer authors the changed
+/// `lunco-environment` mutates the live `DirectionalLight` for immediate
+/// feedback but writes nothing back to USD, so a sun tweak is lost on reload.
+/// This decoupled observer authors the changed
 /// fields as `SetAttribute`s onto the sun's `DistantLight` prim in
 /// `LayerId::runtime()`, using the SAME attribute names the loader
 /// (`lunco_usd_bevy_light::light`) already reads back — so illuminance / colour /

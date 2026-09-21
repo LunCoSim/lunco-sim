@@ -6,6 +6,7 @@ members = [
     "crates/lunco-core-runtime",
     "crates/lunco-id",
     "crates/lunco-command-contracts",
+    "crates/lunco-scene-command-contracts",
     "crates/lunco-port-core",
     "crates/lunco-spatial",
     "crates/lunco-core-session",

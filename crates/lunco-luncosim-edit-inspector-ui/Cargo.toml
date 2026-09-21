@@ -43,7 +43,7 @@ lunco-render = { path = "../lunco-render" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-scene-authoring = { path = "../lunco-scene-authoring" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
-lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-command-contracts = { path = "../lunco-scene-command-contracts" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-time = { path = "../lunco-time" }
