@@ -6,8 +6,42 @@ fn empty_menu_contribution() {
     #{ menus: [] }
 }
 
+fn tutorial_menu_contribution(items) {
+    let menu = #{};
+    menu.label = "Tutorials";
+    menu.items = items;
+    let menus = [];
+    menus.push(menu);
+    let result = #{};
+    result.menus = menus;
+    result
+}
+
+fn loading_menu_items(ctx) {
+    let items = [];
+    let loading = #{};
+    loading.label = "Loading…";
+    loading.enabled = false;
+    items.push(loading);
+    if ctx.scope == "twin" {
+        let wrapper = #{};
+        wrapper.label = ctx.twin_name;
+        wrapper.children = items;
+        let wrapped = [];
+        wrapped.push(wrapper);
+        return wrapped;
+    }
+    items
+}
+
+fn blank_text(text) {
+    let value = text;
+    value.trim();
+    value == ""
+}
+
 fn qualify_catalog_asset(root, reference) {
-    if reference.trim().is_empty() {
+    if blank_text(reference) {
         return "";
     }
     if reference.contains("://") {
@@ -16,16 +50,67 @@ fn qualify_catalog_asset(root, reference) {
     root + reference
 }
 
+fn is_tutorial_catalog(document) {
+    if document.type_of() != "map" { return false; }
+    if !document.contains("kind") { return false; }
+    document["kind"] == TUTORIAL_CATALOG_KIND
+}
+
+fn catalog_record(asset_uri, document) {
+    let record = #{};
+    record.asset_uri = asset_uri;
+    record.document = document;
+    record
+}
+
+fn require_lesson_fields(lesson, entry) {
+    for field in ["track", "title", "blurb", "difficulty", "source_asset"] {
+        let present = lesson.contains(field);
+        let is_string = present && lesson[field].type_of() == "string";
+        if !is_string {
+            throw(entry + " requires string " + field);
+        }
+    }
+}
+
+fn lesson_scene_asset(lesson, entry) {
+    let scene = "";
+    if lesson.contains("scene_asset") {
+        if lesson["scene_asset"].type_of() != "string" {
+            throw(entry + " scene_asset must be a string");
+        }
+        scene = lesson["scene_asset"];
+    }
+    scene
+}
+
+fn lesson_menu_item(lesson, source_asset, scene_asset) {
+    let args = #{};
+    args.source_asset = source_asset;
+    args.scene_asset = scene_asset;
+    args.reload_policy = "restart";
+    let item = #{};
+    item.label = lesson["title"] + "  ·  " + lesson["difficulty"];
+    item.tooltip = lesson["blurb"];
+    item.tool = "tutorials";
+    item.hook = "start";
+    item.args = args;
+    item
+}
+
+fn track_menu_item(name, items) {
+    let item = #{};
+    item.label = name + " (" + items.len().to_string() + ")";
+    item.children = items;
+    item
+}
+
 fn application_asset_lifecycle(event, ctx) {
     if event == "json_scope_loading" {
         if ctx.scope == "twin" && !ctx.payload.has_json_assets {
             return empty_menu_contribution();
         }
-        let items = [#{ label: "Loading…", enabled: false }];
-        if ctx.scope == "twin" {
-            items = [#{ label: ctx.twin_name, children: items }];
-        }
-        return #{ menus: [#{ label: "Tutorials", items: items }] };
+        return tutorial_menu_contribution(loading_menu_items(ctx));
     }
     if event != "json_scope_changed" {
         return empty_menu_contribution();
@@ -51,10 +136,8 @@ fn application_asset_lifecycle(event, ctx) {
         } catch (error) {
             valid_json = false;
         }
-        if valid_json && document.type_of() == "map"
-            && document.contains("kind")
-            && document["kind"] == TUTORIAL_CATALOG_KIND {
-            catalogs.push(#{ asset_uri: asset.asset_uri, document: document });
+        if valid_json && is_tutorial_catalog(document) {
+            catalogs.push(catalog_record(asset.asset_uri, document));
         }
     }
     if ctx.scope == "twin" && catalogs.len() == 0 && unreadable_assets == "" {
@@ -92,30 +175,20 @@ fn application_asset_lifecycle(event, ctx) {
         if lesson.type_of() != "map" {
             throw(entry + " must be an object");
         }
-        for field in ["track", "title", "blurb", "difficulty", "source_asset"] {
-            if !lesson.contains(field) || lesson[field].type_of() != "string" {
-                throw(entry + " requires string " + field);
-            }
-        }
-        let scene_asset = "";
-        if lesson.contains("scene_asset") {
-            if lesson["scene_asset"].type_of() != "string" {
-                throw(entry + " scene_asset must be a string");
-            }
-            scene_asset = lesson["scene_asset"];
-        }
+        require_lesson_fields(lesson, entry);
+        let scene_asset = lesson_scene_asset(lesson, entry);
 
         let track = lesson["track"];
-        if track.trim().is_empty() {
+        if blank_text(track) {
             throw(entry + " has an empty track");
         }
-        if lesson["title"].trim().is_empty() {
+        if blank_text(lesson["title"]) {
             throw(entry + " has an empty title");
         }
-        if lesson["difficulty"].trim().is_empty() {
+        if blank_text(lesson["difficulty"]) {
             throw(entry + " has an empty difficulty");
         }
-        if lesson["source_asset"].trim().is_empty() {
+        if blank_text(lesson["source_asset"]) {
             throw(entry + " has an empty source_asset");
         }
         let group = -1;
@@ -132,25 +205,12 @@ fn application_asset_lifecycle(event, ctx) {
         }
         let source_asset = qualify_catalog_asset(root, lesson["source_asset"]);
         let scene_asset = qualify_catalog_asset(root, scene_asset);
-        track_items[group].push(#{
-            label: lesson["title"] + "  ·  " + lesson["difficulty"],
-            tooltip: lesson["blurb"],
-            tool: "tutorials",
-            hook: "start",
-            args: #{
-                source_asset: source_asset,
-                scene_asset: scene_asset,
-                reload_policy: "restart",
-            },
-        });
+        track_items[group].push(lesson_menu_item(lesson, source_asset, scene_asset));
     }
 
     let tracks = [];
     for index in 0..track_names.len() {
-        tracks.push(#{
-            label: track_names[index] + " (" + track_items[index].len().to_string() + ")",
-            children: track_items[index],
-        });
+        tracks.push(track_menu_item(track_names[index], track_items[index]));
     }
 
     let items = tracks;
