@@ -4,8 +4,8 @@
 // -> Editor proposal round trip without editing its own mounted scene.
 const TEST_KIND = "editor";
 
-import "/scripting/tools/modelica_editor" as modelica_editor;
-import "/scripting/tools/sysml_modelica_constraints" as geometry_constraints;
+import "lunco://scripting/tools/modelica_editor" as modelica_editor;
+import "lunco://scripting/tools/sysml_modelica_constraints" as geometry_constraints;
 
 const ROOT = "/World";
 const ASSEMBLY = ROOT;
@@ -238,7 +238,7 @@ fn on_tick(me, ctx) {
             return;
         }
 
-        let sysml_path = "assets/scripting/tests/fixtures/sysml_constraint_projection.sysml";
+        let sysml_path = "lunco://scripting/tests/fixtures/sysml_constraint_projection.sysml";
         this.constraint_report = geometry_constraints::analyze_selected(
             sysml_path, ["movingAnchor", "fixedAnchor"]);
         if this.constraint_report == () || this.constraint_report.ok != true {

@@ -34,3 +34,7 @@ lesson, which belongs in the architecture doc for that subsystem.
   untrusted network.
 - [`open-2026-07-27-sandbox-windows-nightly.md`](open-2026-07-27-sandbox-windows-nightly.md) —
   defects found in the `sandbox-windows-x86_64` nightly during a tester session.
+- [`open-griffin-sysml-ir-migration.md`](open-griffin-sysml-ir-migration.md) —
+  Griffin's migration from flat SysML attributes and Rhai reconstruction to
+  standard typed topology, bindings, constraints, and provenance over the
+  neutral SysML IR.

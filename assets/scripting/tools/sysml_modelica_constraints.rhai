@@ -8,7 +8,14 @@ import "assembly_edit" as assembly_edit;
 import "engineering_units" as engineering_units;
 import "numerical_settings" as numerical_settings;
 
-fn analyze(path) { sysml_analysis(path) }
+fn analyze(path) {
+    let report = sysml_analysis(path);
+    if map_is(report) && report.ok == true {
+        let model = sysml_model(path);
+        if type_of(model) == "SysmlModel" { report.model = model; }
+    }
+    report
+}
 
 /// Request only the geometry attributes this policy consumes. The generic
 /// projection filters the immutable SysML snapshot before constructing Rhai
@@ -27,6 +34,8 @@ fn analyze_selected(path, attribute_names) {
         }
     }
     report.analysis.attributes = selected;
+    let model = sysml_model(path);
+    if type_of(model) == "SysmlModel" { report.model = model; }
     report
 }
 
@@ -41,6 +50,17 @@ fn _constraint_by_name(report, qualified_name, kind) {
             && (kind == "" || record.element.kind == kind) { return record; }
     }
     ()
+}
+
+/// Compile one selected constraint through the native neutral IR and the
+/// Rumoca Modelica boundary. Empty constraint definitions are legal semantic
+/// declarations (and remain useful for binding discovery), but they are not
+/// executable Modelica obligations until they have a body.
+fn _modelica_backend(report, qualified_name) {
+    if report.path == () || !string_is(report.path) {
+        return #{ok: false, error: "SysML source path is unavailable"};
+    }
+    sysml_modelica_constraint(report.path, qualified_name)
 }
 
 fn _element_name(report, handle) {
@@ -101,6 +121,13 @@ fn select(report, requested) {
     for identity in requested {
         let definition = _constraint_by_name(report, identity, "ConstraintDefinition");
         if definition == () { continue; }
+        let backend = _modelica_backend(report, identity);
+        if backend.ok != true && backend.ir.constraint != ()
+            && backend.ir.constraint.expressions.len() > 0 {
+            return #{ok: false, error: "constraint IR cannot cross the Rumoca Modelica boundary: "
+                + backend.error};
+        }
+        definition.modelica_backend = backend;
         let handle = definition.element.handle;
         if _contains_handle(definition_handles, handle) { continue; }
         definitions.push(definition);
@@ -315,6 +342,7 @@ fn assemble_segment(report, usage_name) {
     }
     let selection = select(report, [definition.element.qualified_name]);
     if selection.ok != true { return selection; }
+    let semantic_backend = selection.definitions[0].modelica_backend;
     let start = bound_vector(report, usage_name, "start");
     if start.ok != true { return start; }
     let finish = bound_vector(report, usage_name, "finish");
@@ -341,6 +369,8 @@ fn assemble_segment(report, usage_name) {
       start_binding: start.binding, end_binding: finish.binding,
       start_binding_name: _element_name(report, start.binding),
       end_binding_name: _element_name(report, finish.binding),
+      constraint_ir: semantic_backend.ir,
+      rumoca_modelica_source: semantic_backend.source,
       start: start.value, finish: finish.value}
 }
 

@@ -1,6 +1,6 @@
 # 24 — SysML Domain
 
-> Status: Bounded SysML v2 source/document loading, typed semantic values, and Rhai-owned requirement verification implemented · Audience: contributors extending SysML v2 structure & requirements
+> Status: Bounded SysML v2 source/document loading, typed semantic values, a typed neutral constraint IR, Rumoca/Modelica lowering, and Rhai-owned requirement verification implemented; full KerML execution remains out of scope · Audience: contributors extending SysML v2 structure & requirements
 >
 SysML v2 is the portable source for **logical system structure, requirements,
 and verification intent** — a peer domain inside a Twin alongside Modelica and
@@ -144,16 +144,18 @@ feature handles. Other parsed metamodel elements remain available as
 source-backed generic elements rather than being assigned invented runtime
 semantics.
 
-This is not a SysML/KerML execution engine. Constraint expressions, general
-derived-feature evaluation, N-dimensional non-Real collections, full quantity
-and unit conversion, redefinition/subsetting semantics, and state/behavior
-execution are not evaluated directly by the runtime. Rhai owns domain mappings
-and policies over the generic typed projection. A bounded Rhai policy may
-lower a resolved constraint expression into Modelica equations and use the
-existing Rumoca experiment path for numerical evaluation; this does not make
-arbitrary SysML expressions executable. Unsupported syntax and unresolved
-references remain explicit with source spans instead of being guessed from
-source text.
+This is not a SysML/KerML execution engine. The bounded constraint path below
+is deliberately explicit about that boundary: it compiles the resolved
+expression subset into a typed neutral IR, then lets a Rhai policy select
+bindings and a Modelica/Rumoca adapter lower the supported equations. It does
+not silently turn an unsupported expression into a scalar or a passing
+verification result. General derived-feature evaluation, feature-chain
+navigation, invocation/default-parameter semantics, N-dimensional non-Real
+collections and aggregate operations, full quantity and unit conversion,
+redefinition/subsetting semantics, temporal/behavioral execution, and
+applicability/configuration semantics still require generic language support.
+Unsupported syntax and unresolved references remain explicit with source
+spans instead of being guessed from source text.
 
 The Rhai functions `sysml_value(path, qualified_name)` and
 `sysml_value_from_report(report, qualified_name)` return a tagged result map.
@@ -167,6 +169,46 @@ successful read clears only the `sysml-query` warning for that same source
 path, preserving diagnostics from other sources.
 `sysml_requirements::native_value` unwraps successful native values and
 preserves failed results for the owning verification to report.
+
+### Constraint IR and transport boundary
+
+`lunco-sysml-ir` is the neutral semantic boundary between the source-backed
+SysML projection and downstream execution providers. It owns no Griffin names,
+USD paths, Modelica classes, or verification policy. For the currently
+supported subset it preserves the resolved constraint identity, source spans,
+feature handles, parameter direction, multiplicity, value category, quantity
+metadata, typed literals, operators, conditional expressions, dependencies,
+diagnostics, and a deterministic source fingerprint. Type and multiplicity
+errors are compile failures; an invalid compiled constraint cannot be passed
+to an evaluator.
+
+`lunco-sysml-modelica` is the only current lowering backend. It renders a
+valid typed IR into a standalone Modelica model and admits that source through
+the repository's Rumoca parser boundary before a solver is considered. Rumoca
+therefore supplies Modelica parsing/compilation and numerical execution; it
+does not supply SysML/KerML name resolution, feature navigation, requirement
+membership, unit semantics, or engineering intent. Those remain source
+projection and Rhai/provider responsibilities.
+
+There are two intentional Rhai surfaces. In-process authored policy may retain
+an immutable native `SysmlModel` handle for repeated selection. API/MCP and
+other transport-oriented callers use path-level structured functions:
+`sysml_constraint_ir(path, qualified_name)`,
+`sysml_modelica_constraint(path, qualified_name)`, and
+`sysml_evaluate_constraint(path, qualified_name, observations, abs_tol,
+rel_tol)`. The latter construct the source snapshot at the call boundary and
+return structured maps, so a client never has to serialize or retain a native
+Rust-backed handle. Authored source and fixture references use canonical
+`lunco://` asset URIs; a USD prim path inside a binding remains a USD path
+such as `/World/Griffin`, not an asset URI.
+
+The production contract is tested at the level where users consume it: Rhai
+assets cover valid evaluation, source-linked diagnostics, and transport-safe
+path calls, while a scene test exercises the native verdict channel and
+Rumoca-admitted lowering. Rust retains only mechanism tests for IR compilation
+and Modelica lowering. This split is important for Griffin: adding a new
+product-specific assertion in Rust would hide the missing authored SysML
+semantics instead of making them portable.
 
 The runtime accepts source-level replace/range edits through the
 `ApplySysmlOps { doc_id, ops, parent_generation? }` command. The command uses
@@ -451,9 +493,10 @@ server (and can be explicitly removed with `--no-default-features`): the pure AS
 canonical journal domain, `.sysml`/`.kerml` classification, `[sysml]` Twin
 manifest source roots, manifest-aware source discovery, pre-flight validation,
 read-only Rhai requirement/verification reports, structured evidence,
-verification registry, and CLI selector are available. Full KerML expression
-execution, a full editor, and automatic SysML-to-USD projection remain outside
-the supported subset.
+verification registry, CLI selector, typed constraint IR, and Rumoca-admitted
+Modelica constraint lowering are available. Full KerML expression execution,
+feature navigation/invocation, collection/aggregate semantics, a full editor,
+and automatic SysML-to-USD projection remain outside the supported subset.
 
 ## 8. What this does NOT do
 

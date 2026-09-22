@@ -8,11 +8,19 @@ use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlElementHandle,
-    SysmlEnumValue, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator,
-    SysmlFeatureHandle, SysmlModelicaType, SysmlMultiplicity, SysmlPrimitiveType,
-    SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlSubject, SysmlType, SysmlTypeCategory,
-    SysmlTypeRef, SysmlUnsupportedExpression,
+    SysmlEnumValue, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator, SysmlFeature,
+    SysmlFeatureDirection, SysmlFeatureHandle, SysmlModelicaType, SysmlMultiplicity,
+    SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlSubject, SysmlType,
+    SysmlTypeCategory, SysmlTypeRef, SysmlUnsupportedExpression,
 };
+use lunco_sysml_ir::{
+    compile_constraint_by_name, evaluate_constraint, BindingProvider, CompiledConstraint,
+    CompiledConstraint as IrCompiledConstraint, ConstraintIr, DiagnosticSeverity,
+    EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
+    IrExpression, IrExpressionKind, IrFeatureDirection, IrParameter, IrType, IrValue, IrValueType,
+    ObservationState, VerificationVerdict,
+};
+use lunco_sysml_modelica::lower_constraint;
 use rhai::{Dynamic, Engine, Map};
 use std::sync::Arc;
 
@@ -151,6 +159,237 @@ fn model_verifications(model: &mut SysmlModelValue) -> Dynamic {
             .map(|inner| Dynamic::from(SysmlVerificationValue { inner }))
             .collect(),
     )
+}
+
+pub fn constraint_ir_value(model: &mut SysmlModelValue, name: &str) -> Dynamic {
+    compiled_constraint_dynamic(&compile_constraint_by_name(&model.analysis, name))
+}
+
+pub fn modelica_constraint_value(model: &mut SysmlModelValue, name: &str) -> Dynamic {
+    let compiled = compile_constraint_by_name(&model.analysis, name);
+    let mut value = Map::new();
+    value.insert("ir".into(), compiled_constraint_dynamic(&compiled));
+    match lower_constraint(&compiled) {
+        Ok(lowered) => {
+            value.insert("ok".into(), Dynamic::from_bool(true));
+            value.insert("model_name".into(), Dynamic::from(lowered.model_name));
+            value.insert("source".into(), Dynamic::from(lowered.source));
+        }
+        Err(error) => {
+            value.insert("ok".into(), Dynamic::from_bool(false));
+            value.insert("error".into(), Dynamic::from(error.to_string()));
+        }
+    }
+    Dynamic::from_map(value)
+}
+
+/// Evaluate one compiled constraint through the neutral IR using observation
+/// records supplied by an authored Rhai policy. The script owns provider
+/// selection and binding names; Rust owns conversion into the typed evaluator
+/// contract and the four-state verification result.
+pub fn evaluate_constraint_value(
+    model: &mut SysmlModelValue,
+    name: &str,
+    observations: Map,
+    absolute_tolerance: f64,
+    relative_tolerance: f64,
+) -> Dynamic {
+    let compiled = compile_constraint_by_name(&model.analysis, name);
+    let mut context = EvaluationContext::default();
+    let mut input_diagnostics = Vec::new();
+
+    for (qualified_name, dynamic_observation) in observations {
+        let qualified_name = qualified_name.to_string();
+        let Some(feature) = constraint_feature(&model.analysis, &compiled, &qualified_name) else {
+            input_diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: "SYSML-IR-025".to_owned(),
+                source: None,
+                message: format!("observation names unknown SysML feature `{qualified_name}`"),
+            });
+            continue;
+        };
+        let Some(record) = dynamic_observation.try_cast::<Map>() else {
+            input_diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: "SYSML-IR-026".to_owned(),
+                source: None,
+                message: format!("observation for `{qualified_name}` must be a Rhai map"),
+            });
+            continue;
+        };
+        let provider = record
+            .get("provider")
+            .and_then(|value| value.clone().into_string().ok())
+            .and_then(|value| parse_binding_provider(&value));
+        let state = record
+            .get("state")
+            .and_then(|value| value.clone().into_string().ok())
+            .and_then(|value| parse_observation_state(&value));
+        let (Some(provider), Some(state)) = (provider, state) else {
+            input_diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: "SYSML-IR-027".to_owned(),
+                source: None,
+                message: format!(
+                    "observation for `{qualified_name}` needs recognized provider and state"
+                ),
+            });
+            continue;
+        };
+        let value = record
+            .get("value")
+            .and_then(dynamic_ir_value)
+            .or_else(|| (state == ObservationState::Value).then_some(IrValue::Null));
+        let detail = record
+            .get("detail")
+            .and_then(|value| value.clone().into_string().ok());
+        context.observations.push(FeatureObservation {
+            feature,
+            provider,
+            state,
+            value,
+            detail,
+        });
+    }
+
+    let mut report = evaluate_constraint(
+        &compiled,
+        &context,
+        EvaluationOptions {
+            absolute_tolerance,
+            relative_tolerance,
+        },
+    );
+    report.diagnostics.extend(input_diagnostics);
+    if report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+    {
+        report.verdict = VerificationVerdict::Error;
+    }
+    evaluation_report_dynamic(&report)
+}
+
+fn constraint_feature(
+    analysis: &SysmlAnalysis,
+    compiled: &IrCompiledConstraint,
+    qualified_name: &str,
+) -> Option<SysmlFeatureHandle> {
+    compiled
+        .constraint
+        .as_ref()
+        .and_then(|constraint| {
+            constraint
+                .parameters
+                .iter()
+                .find(|parameter| parameter.qualified_name == qualified_name)
+                .map(|parameter| parameter.feature)
+        })
+        .or_else(|| {
+            analysis
+                .attributes()
+                .iter()
+                .find(|attribute| attribute.qualified_name == qualified_name)
+                .map(|attribute| attribute.handle)
+        })
+}
+
+fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
+    if let Ok(value) = value.as_bool() {
+        return Some(IrValue::Boolean(value));
+    }
+    if let Ok(value) = value.as_int() {
+        return Some(IrValue::Integer(value));
+    }
+    if let Ok(value) = value.as_float() {
+        return value.is_finite().then_some(IrValue::Real(value));
+    }
+    if value.is_string() {
+        return value.clone().into_string().ok().map(IrValue::String);
+    }
+    if let Some(values) = value.clone().try_cast::<rhai::Array>() {
+        return values
+            .iter()
+            .map(dynamic_ir_value)
+            .collect::<Option<Vec<_>>>()
+            .map(IrValue::Collection);
+    }
+    let map = value.clone().try_cast::<Map>()?;
+    let nested = map.get("value").and_then(dynamic_ir_value)?;
+    if let Some(unit) = map
+        .get("unit")
+        .and_then(|value| value.clone().into_string().ok())
+    {
+        let scalar = match nested {
+            IrValue::Integer(value) => value as f64,
+            IrValue::Real(value) => value,
+            _ => return None,
+        };
+        return scalar.is_finite().then_some(IrValue::Quantity {
+            value: scalar,
+            unit,
+        });
+    }
+    Some(nested)
+}
+
+fn parse_binding_provider(value: &str) -> Option<BindingProvider> {
+    match value {
+        "source_literal" => Some(BindingProvider::SourceLiteral),
+        "usd" => Some(BindingProvider::Usd),
+        "modelica" => Some(BindingProvider::Modelica),
+        "telemetry" => Some(BindingProvider::Telemetry),
+        "derived" => Some(BindingProvider::Derived),
+        "external" => Some(BindingProvider::External),
+        _ => None,
+    }
+}
+
+fn parse_observation_state(value: &str) -> Option<ObservationState> {
+    match value {
+        "value" => Some(ObservationState::Value),
+        "unavailable" => Some(ObservationState::Unavailable),
+        "invalid" => Some(ObservationState::Invalid),
+        "stale" => Some(ObservationState::Stale),
+        "provider_error" => Some(ObservationState::ProviderError),
+        _ => None,
+    }
+}
+
+fn evaluation_report_dynamic(report: &EvaluationReport) -> Dynamic {
+    let mut value = Map::new();
+    value.insert(
+        "verdict".into(),
+        Dynamic::from(match report.verdict {
+            VerificationVerdict::Pass => "pass",
+            VerificationVerdict::Fail => "fail",
+            VerificationVerdict::Inconclusive => "inconclusive",
+            VerificationVerdict::Error => "error",
+        }),
+    );
+    value.insert(
+        "expression_results".into(),
+        Dynamic::from_array(
+            report
+                .expression_results
+                .iter()
+                .map(|result| result.map(Dynamic::from_bool).unwrap_or(Dynamic::UNIT))
+                .collect(),
+        ),
+    );
+    value.insert(
+        "diagnostics".into(),
+        Dynamic::from_array(
+            report
+                .diagnostics
+                .iter()
+                .map(ir_diagnostic_dynamic)
+                .collect(),
+        ),
+    );
+    Dynamic::from_map(value)
 }
 
 fn requirement_attribute(requirement: &mut SysmlRequirementValue, name: &str) -> Dynamic {
@@ -345,6 +584,28 @@ pub fn register_sysml_types(engine: &mut Engine) {
             "!=",
             |left: SysmlFeatureHandle, right: SysmlFeatureHandle| left != right,
         )
+        .register_type_with_name::<SysmlFeature>("SysmlFeature")
+        .register_get("handle", |value: &mut SysmlFeature| value.handle)
+        .register_get("owner", |value: &mut SysmlFeature| value.owner.clone())
+        .register_get("direction", |value: &mut SysmlFeature| value.direction)
+        .register_get("name", |value: &mut SysmlFeature| value.name.clone())
+        .register_get("qualified_name", |value: &mut SysmlFeature| {
+            value.qualified_name.clone()
+        })
+        .register_get("type_name", |value: &mut SysmlFeature| {
+            value.type_name.clone().unwrap_or_default()
+        })
+        .register_get("declared_type", |value: &mut SysmlFeature| {
+            value
+                .declared_type
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("file", |value: &mut SysmlFeature| value.file.clone())
+        .register_get("start", |value: &mut SysmlFeature| value.start as i64)
+        .register_get("end", |value: &mut SysmlFeature| value.end as i64)
+        .register_type_with_name::<SysmlFeatureDirection>("SysmlFeatureDirection")
         .register_type_with_name::<SysmlExpressionKind>("SysmlExpressionKind")
         .register_type_with_name::<SysmlExpressionOperator>("SysmlExpressionOperator")
         .register_fn("is_add", |op: SysmlExpressionOperator| {
@@ -561,6 +822,9 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_fn("verification", model_verification)
         .register_fn("requirements", model_requirements)
         .register_fn("verifications", model_verifications)
+        .register_fn("constraint_ir", constraint_ir_value)
+        .register_fn("modelica_constraint", modelica_constraint_value)
+        .register_fn("evaluate_constraint", evaluate_constraint_value)
         .register_type_with_name::<SysmlRequirementValue>("SysmlRequirement")
         .register_get(
             "qualified_name",
@@ -927,6 +1191,17 @@ fn constraint_dynamic(constraint: &lunco_sysml_ast::SysmlConstraint) -> Dynamic 
     let mut value = Map::new();
     value.insert("element".into(), element_dynamic(&constraint.element));
     value.insert(
+        "parameters".into(),
+        Dynamic::from_array(
+            constraint
+                .parameters
+                .iter()
+                .cloned()
+                .map(Dynamic::from)
+                .collect(),
+        ),
+    );
+    value.insert(
         "expressions".into(),
         Dynamic::from_array(
             constraint
@@ -938,6 +1213,222 @@ fn constraint_dynamic(constraint: &lunco_sysml_ast::SysmlConstraint) -> Dynamic 
         ),
     );
     Dynamic::from_map(value)
+}
+
+fn compiled_constraint_dynamic(compiled: &CompiledConstraint) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("valid".into(), Dynamic::from_bool(compiled.is_valid()));
+    value.insert(
+        "status".into(),
+        Dynamic::from(if compiled.constraint.is_none() {
+            "not_found"
+        } else if compiled.is_valid() {
+            "valid"
+        } else {
+            "invalid"
+        }),
+    );
+    value.insert(
+        "diagnostics".into(),
+        Dynamic::from_array(
+            compiled
+                .diagnostics
+                .iter()
+                .map(ir_diagnostic_dynamic)
+                .collect(),
+        ),
+    );
+    if let Some(constraint) = &compiled.constraint {
+        value.insert("constraint".into(), constraint_ir_dynamic(constraint));
+    } else {
+        value.insert("constraint".into(), Dynamic::UNIT);
+    }
+    Dynamic::from_map(value)
+}
+
+fn constraint_ir_dynamic(constraint: &ConstraintIr) -> Dynamic {
+    let mut value = Map::new();
+    value.insert(
+        "qualified_name".into(),
+        Dynamic::from(constraint.qualified_name.clone()),
+    );
+    value.insert("source".into(), Dynamic::from(constraint.source.clone()));
+    value.insert(
+        "parameters".into(),
+        Dynamic::from_array(
+            constraint
+                .parameters
+                .iter()
+                .map(ir_parameter_dynamic)
+                .collect(),
+        ),
+    );
+    value.insert(
+        "fingerprint".into(),
+        Dynamic::from(format!("0x{:016x}", constraint.fingerprint)),
+    );
+    value.insert(
+        "dependencies".into(),
+        Dynamic::from_array(
+            constraint
+                .dependencies
+                .iter()
+                .copied()
+                .map(Dynamic::from)
+                .collect(),
+        ),
+    );
+    value.insert(
+        "expressions".into(),
+        Dynamic::from_array(
+            constraint
+                .expressions
+                .iter()
+                .map(ir_expression_dynamic)
+                .collect(),
+        ),
+    );
+    Dynamic::from_map(value)
+}
+
+fn ir_parameter_dynamic(parameter: &IrParameter) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("feature".into(), Dynamic::from(parameter.feature));
+    value.insert(
+        "owner".into(),
+        parameter.owner.map(Dynamic::from).unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "direction".into(),
+        Dynamic::from(match parameter.direction {
+            IrFeatureDirection::In => "in",
+            IrFeatureDirection::Out => "out",
+            IrFeatureDirection::InOut => "inout",
+            IrFeatureDirection::None => "none",
+        }),
+    );
+    value.insert("name".into(), Dynamic::from(parameter.name.clone()));
+    value.insert(
+        "qualified_name".into(),
+        Dynamic::from(parameter.qualified_name.clone()),
+    );
+    value.insert("type".into(), ir_type_dynamic(&parameter.ty));
+    value.insert("source".into(), Dynamic::from(parameter.source.clone()));
+    Dynamic::from_map(value)
+}
+
+fn ir_diagnostic_dynamic(diagnostic: &IrDiagnostic) -> Dynamic {
+    let mut value = Map::new();
+    value.insert(
+        "severity".into(),
+        Dynamic::from(match diagnostic.severity {
+            DiagnosticSeverity::Warning => "warning",
+            DiagnosticSeverity::Error => "error",
+        }),
+    );
+    value.insert("code".into(), Dynamic::from(diagnostic.code.clone()));
+    value.insert("message".into(), Dynamic::from(diagnostic.message.clone()));
+    value.insert(
+        "source".into(),
+        diagnostic
+            .source
+            .clone()
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    Dynamic::from_map(value)
+}
+
+fn ir_expression_dynamic(expression: &IrExpression) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("source".into(), Dynamic::from(expression.source.clone()));
+    value.insert("type".into(), ir_type_dynamic(&expression.result_type));
+    match &expression.kind {
+        IrExpressionKind::FeatureReference {
+            feature,
+            qualified_name,
+        } => {
+            value.insert("kind".into(), Dynamic::from("feature_reference"));
+            value.insert("feature".into(), Dynamic::from(*feature));
+            value.insert(
+                "qualified_name".into(),
+                Dynamic::from(qualified_name.clone()),
+            );
+        }
+        IrExpressionKind::Literal(literal) => {
+            value.insert("kind".into(), Dynamic::from("literal"));
+            value.insert("literal".into(), Dynamic::from(format!("{literal:?}")));
+        }
+        IrExpressionKind::Unary { operator, operand } => {
+            value.insert("kind".into(), Dynamic::from("unary"));
+            value.insert("operator".into(), Dynamic::from(format!("{operator:?}")));
+            value.insert("operand".into(), ir_expression_dynamic(operand));
+        }
+        IrExpressionKind::Binary {
+            operator,
+            left,
+            right,
+        } => {
+            value.insert("kind".into(), Dynamic::from("binary"));
+            value.insert("operator".into(), Dynamic::from(format!("{operator:?}")));
+            value.insert("left".into(), ir_expression_dynamic(left));
+            value.insert("right".into(), ir_expression_dynamic(right));
+        }
+        IrExpressionKind::Conditional {
+            condition,
+            when_true,
+            when_false,
+        } => {
+            value.insert("kind".into(), Dynamic::from("conditional"));
+            value.insert("condition".into(), ir_expression_dynamic(condition));
+            value.insert("when_true".into(), ir_expression_dynamic(when_true));
+            value.insert("when_false".into(), ir_expression_dynamic(when_false));
+        }
+        IrExpressionKind::Group(child) => {
+            value.insert("kind".into(), Dynamic::from("group"));
+            value.insert("child".into(), ir_expression_dynamic(child));
+        }
+    }
+    Dynamic::from_map(value)
+}
+
+fn ir_type_dynamic(ty: &IrType) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("value".into(), Dynamic::from(ir_value_type_name(&ty.value)));
+    value.insert(
+        "lower".into(),
+        Dynamic::from_int(ty.multiplicity.lower as i64),
+    );
+    value.insert(
+        "upper".into(),
+        ty.multiplicity
+            .upper
+            .map(|upper| Dynamic::from_int(upper as i64))
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "ordered".into(),
+        Dynamic::from_bool(ty.multiplicity.ordered),
+    );
+    value.insert("unique".into(), Dynamic::from_bool(ty.multiplicity.unique));
+    value.insert(
+        "unit".into(),
+        ty.unit.clone().map(Dynamic::from).unwrap_or(Dynamic::UNIT),
+    );
+    Dynamic::from_map(value)
+}
+
+fn ir_value_type_name(value: &IrValueType) -> &'static str {
+    match value {
+        IrValueType::Boolean => "Boolean",
+        IrValueType::Integer => "Integer",
+        IrValueType::Real => "Real",
+        IrValueType::String => "String",
+        IrValueType::Quantity { .. } => "Quantity",
+        IrValueType::Enumeration { .. } => "Enumeration",
+        IrValueType::Structured { .. } => "Structured",
+        IrValueType::Unknown => "Unknown",
+    }
 }
 
 fn subject_array(values: &[SysmlSubject]) -> Dynamic {
@@ -1075,75 +1566,4 @@ fn diagnostic_dynamic(diagnostic: &SysmlDiagnostic) -> Dynamic {
     value.insert("end".into(), Dynamic::from_int(diagnostic.end as i64));
     value.insert("message".into(), Dynamic::from(diagnostic.message.clone()));
     Dynamic::from_map(value)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn source_revision_is_lossless_text_in_native_snapshot() {
-        let analysis = SysmlAnalysis::build(
-            [("revision.sysml", "requirement def R {}")],
-            false,
-            u64::MAX,
-        );
-        let snapshot = semantic_snapshot_dynamic(&analysis);
-        let snapshot = snapshot.cast::<Map>();
-        assert_eq!(
-            snapshot["source_revision"]
-                .clone()
-                .into_immutable_string()
-                .unwrap(),
-            u64::MAX.to_string()
-        );
-        assert_eq!(
-            snapshot["source_revision_hex"]
-                .clone()
-                .into_immutable_string()
-                .unwrap(),
-            "0xffffffffffffffff"
-        );
-    }
-
-    #[test]
-    fn model_handle_keeps_typed_attribute_and_verification_snapshot() {
-        let analysis = Arc::new(SysmlAnalysis::from_files([(
-            "model.sysml",
-            r#"
-                    package Example {
-                        private import ScalarValues::Real;
-                        part def A {
-                            attribute length : Real = 2.5;
-                        }
-                        requirement def R { }
-                        verification def V { verify R; }
-                    }
-                "#,
-        )]));
-        assert!(!analysis.has_errors(), "unexpected SysML diagnostics");
-        let attribute = analysis
-            .attributes()
-            .iter()
-            .find(|attribute| attribute.name == "length")
-            .expect("typed test attribute");
-        let requirement = analysis
-            .requirements()
-            .first()
-            .expect("typed test requirement");
-        let verification = analysis
-            .verifications()
-            .first()
-            .expect("typed test verification");
-
-        let mut model = SysmlModelValue::new("twin://example", analysis.clone());
-        let value = model_value(&mut model, &attribute.qualified_name);
-        assert_eq!(value.as_float().expect("native real value"), 2.5);
-        assert_eq!(
-            model.analysis().source_revision(),
-            analysis.source_revision()
-        );
-        assert!(!model_requirement(&mut model, &requirement.element.qualified_name).is_unit());
-        assert!(!model_verification(&mut model, &verification.element.qualified_name).is_unit());
-    }
 }

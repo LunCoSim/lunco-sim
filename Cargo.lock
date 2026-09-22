@@ -9568,6 +9568,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-sysml-ir"
+version = "0.1.0"
+dependencies = [
+ "lunco-hash",
+ "lunco-sysml-ast",
+ "serde",
+]
+
+[[package]]
+name = "lunco-sysml-modelica"
+version = "0.1.0"
+dependencies = [
+ "lunco-modelica-ast",
+ "lunco-sysml-ast",
+ "lunco-sysml-ir",
+]
+
+[[package]]
 name = "lunco-sysml-report"
 version = "0.1.0"
 dependencies = [
@@ -9583,6 +9601,8 @@ dependencies = [
  "lunco-core",
  "lunco-scripting-rhai-core",
  "lunco-sysml-ast",
+ "lunco-sysml-ir",
+ "lunco-sysml-modelica",
  "rhai",
 ]
 

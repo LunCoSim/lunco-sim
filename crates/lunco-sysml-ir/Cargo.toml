@@ -1,0 +1,14 @@
+[package]
+name = "lunco-sysml-ir"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Typed, source-pinned SysML/KerML constraint IR and evaluator"
+
+[dependencies]
+lunco-hash = { path = "../lunco-hash" }
+lunco-sysml-ast = { path = "../lunco-sysml-ast" }
+serde = { workspace = true }
+
+[lints]
+workspace = true
