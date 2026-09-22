@@ -636,7 +636,11 @@ pub fn register(engine: &mut Engine) {
     engine.register_fn(
         "clamp",
         |x: f64, lo: f64, hi: f64| {
-            if x.is_nan() { lo } else { x.clamp(lo, hi) }
+            if x.is_nan() {
+                lo
+            } else {
+                x.clamp(lo, hi)
+            }
         },
     );
 
@@ -971,11 +975,9 @@ mod tests {
     #[test]
     fn native_constructors_reject_non_finite_and_degenerate_values() {
         assert!(engine().eval::<Dynamic>("vec3(0.0/0.0, 0.0, 0.0)").is_err());
-        assert!(
-            engine()
-                .eval::<Dynamic>("quat(0.0, 0.0, 0.0, 0.0)")
-                .is_err()
-        );
+        assert!(engine()
+            .eval::<Dynamic>("quat(0.0, 0.0, 0.0, 0.0)")
+            .is_err());
         assert!(engine().eval::<Dynamic>("vnorm(vec3_zero())").is_err());
     }
 
