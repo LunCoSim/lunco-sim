@@ -2870,12 +2870,65 @@ mod tests {
         component.inputs.insert("guidance_throttle".into(), 0.75);
         component.inputs.insert("force_y".into(), 0.0);
 
-        copy_modelica_input_values(&mut model, &component, None);
+        assert!(copy_modelica_input_values(&mut model, &component, None));
 
         assert_eq!(model.inputs.get("guidance_throttle"), Some(&0.75));
         assert!(
             !model.inputs.contains_key("force_y"),
             "a physical sink must remain outside the Modelica input map"
+        );
+        assert!(
+            !copy_modelica_input_values(&mut model, &component, None),
+            "unchanged inputs must not be recopied"
+        );
+    }
+
+    #[test]
+    fn stable_modelica_outputs_do_not_dirty_the_shared_component() {
+        let mut world = World::new();
+        let mut model = ModelicaModel {
+            is_compiled: true,
+            current_time: 1.0,
+            ..Default::default()
+        };
+        model.variables.insert("force_y".into(), 4.0);
+        let mut component = SimComponent {
+            status: SimStatus::Running,
+            ..Default::default()
+        };
+        component.outputs.insert("force_y".into(), 4.0);
+        let entity = world.spawn((model, component, UsdSourcedCosim)).id();
+
+        world.clear_trackers();
+        world
+            .run_system_cached(sync::sync_modelica_outputs)
+            .expect("output sync system runs");
+        assert!(
+            !world
+                .entity(entity)
+                .get_ref::<SimComponent>()
+                .expect("shared component remains present")
+                .is_changed(),
+            "an identical output snapshot must not publish a false change"
+        );
+
+        world
+            .entity_mut(entity)
+            .get_mut::<ModelicaModel>()
+            .expect("model remains present")
+            .variables
+            .insert("force_y".into(), 5.0);
+        world.clear_trackers();
+        world
+            .run_system_cached(sync::sync_modelica_outputs)
+            .expect("output sync system runs");
+        assert!(
+            world
+                .entity(entity)
+                .get_ref::<SimComponent>()
+                .expect("shared component remains present")
+                .is_changed(),
+            "a changed output sample must still publish a change"
         );
     }
 
@@ -2890,10 +2943,18 @@ mod tests {
             ("heading".to_string(), -0.2),
         ]);
 
-        copy_modelica_input_values(&mut model, &component, Some(&command_surface));
+        assert!(copy_modelica_input_values(
+            &mut model,
+            &component,
+            Some(&command_surface)
+        ));
 
         assert_eq!(model.inputs.get("throttle"), Some(&0.75));
         assert!(!model.inputs.contains_key("heading"));
+        assert!(
+            !copy_modelica_input_values(&mut model, &component, Some(&command_surface)),
+            "unchanged authored command values must not be recopied"
+        );
     }
 
     #[test]

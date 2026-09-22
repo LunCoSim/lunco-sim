@@ -249,12 +249,15 @@ impl Plugin for UsdVisualPlugin {
                         .after(process_queued_usd_visuals)
                         .in_set(UsdVisualProjectionSet),
                     resolve_point_instancer_meshes
+                        .run_if(point_instance_render_inputs_changed)
                         .after(poll_pending_usd_meshes)
                         .in_set(UsdVisualProjectionSet),
                     hide_point_instancer_prototypes
+                        .run_if(point_instancer_visibility_inputs_changed)
                         .after(process_queued_usd_visuals)
                         .in_set(UsdVisualProjectionSet),
                     ensure_point_instancer_prototypes
+                        .run_if(point_instancer_structure_changed)
                         .after(process_queued_usd_visuals)
                         .in_set(UsdVisualProjectionSet),
                     retry_awaiting_usd_visuals_after_quality_change
@@ -1379,6 +1382,17 @@ fn resolve_point_instancer_meshes(
     }
 }
 
+/// Reconcile shared point-instance render handles only after an instance or
+/// one of its possible prototype render inputs changes. Stable frames must not
+/// rebuild a scene-wide prototype lookup or clone material handles.
+fn point_instance_render_inputs_changed(
+    instances: Query<(), Changed<UsdPointInstance>>,
+    live_instances: Query<(), With<UsdPointInstance>>,
+    prototypes: Query<(), (With<UsdPrimPath>, Or<(Changed<Mesh3d>, Changed<PbrLook>)>)>,
+) -> bool {
+    !instances.is_empty() || (!live_instances.is_empty() && !prototypes.is_empty())
+}
+
 /// Keep prototype source prims out of the visible scene traversal. OpenUSD
 /// permits prototypes anywhere in the scenegraph, so this is relationship-
 /// driven rather than a name/path convention. Descendants inherit the hidden
@@ -1402,6 +1416,18 @@ fn hide_point_instancer_prototypes(
             }
         }
     }
+}
+
+/// Reapply authored prototype visibility only after scene topology, an
+/// instancer relationship, or a prim's visibility changes.
+fn point_instancer_visibility_inputs_changed(
+    instancers: Query<(), Changed<UsdPointInstancer>>,
+    live_instancers: Query<(), With<UsdPointInstancer>>,
+    prims: Query<(), Changed<UsdPrimPath>>,
+    visibility: Query<(), (With<UsdPrimPath>, Changed<Visibility>)>,
+) -> bool {
+    !instancers.is_empty()
+        || (!live_instancers.is_empty() && (!prims.is_empty() || !visibility.is_empty()))
 }
 
 /// Materialize a hidden source projection when a relationship targets a prim
@@ -1445,6 +1471,17 @@ fn ensure_point_instancer_prototypes(
             );
         }
     }
+}
+
+/// A new or edited prim path can materialize a previously absent prototype;
+/// relationship edits can introduce a different target. No topology work is
+/// needed while both inputs remain stable.
+fn point_instancer_structure_changed(
+    instancers: Query<(), Changed<UsdPointInstancer>>,
+    live_instancers: Query<(), With<UsdPointInstancer>>,
+    prims: Query<(), Changed<UsdPrimPath>>,
+) -> bool {
+    !instancers.is_empty() || (!live_instancers.is_empty() && !prims.is_empty())
 }
 
 /// Project the authored catalog identity from one USD prim onto its ECS owner.

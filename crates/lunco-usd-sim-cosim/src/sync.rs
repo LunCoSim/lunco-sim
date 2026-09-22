@@ -36,25 +36,34 @@ pub(crate) fn modelica_status(model: &ModelicaModel) -> SimStatus {
     }
 }
 
-/// Copy `f64` port values into a destination map, allocating a `String`
-/// key only on the *first* tick a port appears. The cosim sync systems
-/// below run every `FixedUpdate`; the keys (`"height"`, `"netForce"`, …)
-/// are stable, so after the first step every port already exists and
-/// this updates in place with zero allocation. The old
-/// `dst.insert(name.clone(), v)` re-allocated every key every tick.
+/// Copy `f64` port values into a destination map. Stable names and values do
+/// not allocate, write, or invalidate the owning ECS component on each
+/// `FixedUpdate`; keys are allocated only when first admitted.
+#[inline]
+fn upsert_value(dst: &mut HashMap<String, f64>, name: &str, value: f64) -> bool {
+    match dst.get_mut(name) {
+        Some(slot) if slot.to_bits() != value.to_bits() => {
+            *slot = value;
+            true
+        }
+        Some(_) => false,
+        None => {
+            dst.insert(name.to_owned(), value);
+            true
+        }
+    }
+}
+
 #[inline]
 fn upsert_ports<'a>(
     dst: &mut HashMap<String, f64>,
     src: impl Iterator<Item = (&'a String, &'a f64)>,
-) {
+) -> bool {
+    let mut changed = false;
     for (name, val) in src {
-        match dst.get_mut(name) {
-            Some(slot) => *slot = *val,
-            None => {
-                dst.insert(name.clone(), *val);
-            }
-        }
+        changed |= upsert_value(dst, name, *val);
     }
+    changed
 }
 
 /// Per-tick: ModelicaModel.variables → SimComponent.outputs.
@@ -63,11 +72,25 @@ pub fn sync_modelica_outputs(
     mut q: Query<(&ModelicaModel, &mut SimComponent), With<UsdSourcedCosim>>,
 ) {
     for (model, mut comp) in &mut q {
-        upsert_ports(&mut comp.outputs, model.variables.iter());
-        for (k, v) in &model.inputs {
-            comp.inputs.entry(k.clone()).or_insert(*v);
+        let changed = {
+            let comp = comp.bypass_change_detection();
+            let mut changed = upsert_ports(&mut comp.outputs, model.variables.iter());
+            for (k, v) in &model.inputs {
+                if !comp.inputs.contains_key(k) {
+                    comp.inputs.insert(k.clone(), *v);
+                    changed = true;
+                }
+            }
+            let status = modelica_status(model);
+            if comp.status != status {
+                comp.status = status;
+                changed = true;
+            }
+            changed
+        };
+        if changed {
+            comp.set_changed();
         }
-        comp.status = modelica_status(model);
     }
 }
 
@@ -81,10 +104,11 @@ pub(crate) fn copy_modelica_input_values(
     model: &mut ModelicaModel,
     component: &SimComponent,
     command_surface: Option<&lunco_port_core::InputPorts>,
-) {
+) -> bool {
+    let mut changed = false;
     for (name, value) in &component.inputs {
         if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
-            model.inputs.insert(name.clone(), *value);
+            changed |= upsert_value(&mut model.inputs, name, *value);
         }
     }
 
@@ -97,10 +121,11 @@ pub(crate) fn copy_modelica_input_values(
     if let Some(command_surface) = command_surface {
         for (name, value) in &command_surface.values {
             if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
-                model.inputs.insert(name.clone(), *value);
+                changed |= upsert_value(&mut model.inputs, name, *value);
             }
         }
     }
+    changed
 }
 
 /// Per-tick: shared command/wire inputs → ModelicaModel.inputs.
@@ -119,7 +144,11 @@ pub fn sync_modelica_inputs(
     >,
 ) {
     for (comp, command_surface, mut model) in &mut q {
-        copy_modelica_input_values(&mut model, comp, command_surface);
+        let changed =
+            copy_modelica_input_values(model.bypass_change_detection(), comp, command_surface);
+        if changed {
+            model.set_changed();
+        }
     }
 }
 
@@ -128,7 +157,13 @@ pub fn sync_script_outputs(
     mut q: Query<(&ScriptedModel, &mut SimComponent), With<UsdSourcedCosim>>,
 ) {
     for (model, mut comp) in &mut q {
-        upsert_ports(&mut comp.outputs, model.outputs.iter());
+        let changed = upsert_ports(
+            &mut comp.bypass_change_detection().outputs,
+            model.outputs.iter(),
+        );
+        if changed {
+            comp.set_changed();
+        }
     }
 }
 
@@ -137,7 +172,13 @@ pub fn sync_script_inputs(
     mut q: Query<(&SimComponent, &mut ScriptedModel), With<UsdSourcedCosim>>,
 ) {
     for (comp, mut model) in &mut q {
-        upsert_ports(&mut model.inputs, comp.inputs.iter());
+        let changed = upsert_ports(
+            &mut model.bypass_change_detection().inputs,
+            comp.inputs.iter(),
+        );
+        if changed {
+            model.set_changed();
+        }
     }
 }
 

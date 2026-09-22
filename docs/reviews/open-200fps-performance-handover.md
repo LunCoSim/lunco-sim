@@ -807,12 +807,18 @@ contracts. `colliderDepth` and `colliderResolution` are authored physics
 inputs; renderer quality is not a physics input. Do not reintroduce coupling by
 using High LOD for colliders or by reading `GlobalTransform` as physics truth.
 
-After the propagation fix, measure Avian and its bridge again. If the normal
-physics cycle is still above the desired **1–1.5 ms** envelope, profile the
+After the propagation fix, measure Avian and its bridge again. The required
+normal-debug physics cycle is **under 0.5 ms**; profile the
 authoritative solver configuration and the physics telemetry/bridge separately.
 Do not remove diagnostics to make the number look smaller: the existing
 measurements show telemetry is secondary, and diagnostics are not the solver
 root cause.
+
+TODO: move from Avian 0.7.0 when a newer stable release compatible with this
+Bevy version is published. Migrate the direct Avian API call sites together,
+preserve f64 canonical physics state and the current solver/substep contract,
+then rerun the focused physics checks and normal-debug Apollo/sandbox profiles.
+Do not vendor Avian or adopt a precision-narrowing path as part of that update.
 
 ## Regression context
 
