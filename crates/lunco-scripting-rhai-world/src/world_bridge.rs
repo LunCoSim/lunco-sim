@@ -440,6 +440,28 @@ fn sysml_analysis_value(path: &str) -> Dynamic {
     Dynamic::from_map(result)
 }
 
+/// Open one revision-pinned SysML source session for Rhai.
+///
+/// The validated analysis is already cached by the SysML resolver. Returning
+/// the native model handle keeps repeated typed lookups on one immutable
+/// snapshot instead of rebuilding a dynamic report for every attribute.
+#[cfg(feature = "sysml")]
+fn sysml_model_value(path: &str) -> Dynamic {
+    let Some(report) = bridge_core::with_world(|world| {
+        lunco_scene_validation::validate::analyze_sysml_reference(world, path)
+    }) else {
+        return sysml_value_error(path, "", "SysML analysis requires an active world scope");
+    };
+    if !report.ok {
+        return sysml_value_error(path, "", report.errors.join("; "));
+    }
+    let Some(analysis) = report.sysml_analysis else {
+        return sysml_value_error(path, "", "SysML source analysis is unavailable");
+    };
+    publish_sysml_warning(path, None, None);
+    Dynamic::from(lunco_sysml_rhai::SysmlModelValue::new(path, analysis))
+}
+
 #[cfg(feature = "sysml")]
 fn sysml_attribute_value(path: &str, qualified_name: &str) -> Dynamic {
     let Some(report) = bridge_core::with_world(|world| {
@@ -1989,6 +2011,10 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     #[cfg(feature = "sysml")]
     engine.register_fn("sysml_analysis", |path: ImmutableString| -> Dynamic {
         sysml_analysis_value(path.as_str())
+    });
+    #[cfg(feature = "sysml")]
+    engine.register_fn("sysml_model", |path: ImmutableString| -> Dynamic {
+        sysml_model_value(path.as_str())
     });
     #[cfg(feature = "sysml")]
     engine.register_fn(

@@ -14,6 +14,7 @@ use lunco_sysml_ast::{
     SysmlTypeRef, SysmlUnsupportedExpression,
 };
 use rhai::{Dynamic, Engine, Map};
+use std::sync::Arc;
 
 /// A source-backed SysML record exposed as a native Rhai object.
 ///
@@ -22,6 +23,53 @@ use rhai::{Dynamic, Engine, Map};
 #[derive(Clone, Debug)]
 pub struct SysmlRecordValue {
     inner: SysmlRecord,
+}
+
+/// One immutable, revision-pinned SysML source session exposed to Rhai.
+///
+/// The session owns the already-resolved semantic snapshot instead of making
+/// every attribute lookup call back through the generic query bridge. This is
+/// deliberately read-only: source edits produce a new analysis and therefore
+/// a new session identity. Keeping the path and the analysis together also
+/// prevents a value from one Twin/source revision being silently reused with
+/// another report.
+#[derive(Clone, Debug)]
+pub struct SysmlModelValue {
+    path: String,
+    analysis: Arc<SysmlAnalysis>,
+}
+
+impl SysmlModelValue {
+    /// Create a source session from the validated analysis owned by the
+    /// document/Twin resolver.
+    pub fn new(path: impl Into<String>, analysis: Arc<SysmlAnalysis>) -> Self {
+        Self {
+            path: path.into(),
+            analysis,
+        }
+    }
+
+    /// Return the source URI/path used to resolve this session.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Return the immutable semantic snapshot behind this session.
+    pub fn analysis(&self) -> &SysmlAnalysis {
+        &self.analysis
+    }
+}
+
+/// A source-backed requirement record selected from a [`SysmlModelValue`].
+#[derive(Clone, Debug)]
+pub struct SysmlRequirementValue {
+    inner: lunco_sysml_ast::SysmlRequirementRecord,
+}
+
+/// A source-backed verification case selected from a [`SysmlModelValue`].
+#[derive(Clone, Debug)]
+pub struct SysmlVerificationValue {
+    inner: lunco_sysml_ast::SysmlVerificationRecord,
 }
 
 fn record_value(record: &mut SysmlRecordValue, name: &str) -> Dynamic {
@@ -36,6 +84,92 @@ fn record_value(record: &mut SysmlRecordValue, name: &str) -> Dynamic {
 
 fn record_has_field(record: &mut SysmlRecordValue, name: &str) -> bool {
     record.inner.fields.iter().any(|field| field.name == name)
+}
+
+fn model_attribute(model: &mut SysmlModelValue, name: &str) -> Dynamic {
+    model
+        .analysis
+        .attributes()
+        .iter()
+        .find(|attribute| attribute.qualified_name == name)
+        .cloned()
+        .map(Dynamic::from)
+        .unwrap_or(Dynamic::UNIT)
+}
+
+fn model_value(model: &mut SysmlModelValue, name: &str) -> Dynamic {
+    model
+        .analysis
+        .attributes()
+        .iter()
+        .find(|attribute| attribute.qualified_name == name)
+        .and_then(typed_attribute_value_dynamic)
+        .unwrap_or(Dynamic::UNIT)
+}
+
+fn model_requirement(model: &mut SysmlModelValue, name: &str) -> Dynamic {
+    model
+        .analysis
+        .requirements()
+        .iter()
+        .find(|record| record.element.qualified_name == name)
+        .cloned()
+        .map(|inner| Dynamic::from(SysmlRequirementValue { inner }))
+        .unwrap_or(Dynamic::UNIT)
+}
+
+fn model_verification(model: &mut SysmlModelValue, name: &str) -> Dynamic {
+    model
+        .analysis
+        .verifications()
+        .iter()
+        .find(|record| record.element.qualified_name == name)
+        .cloned()
+        .map(|inner| Dynamic::from(SysmlVerificationValue { inner }))
+        .unwrap_or(Dynamic::UNIT)
+}
+
+fn model_requirements(model: &mut SysmlModelValue) -> Dynamic {
+    Dynamic::from_array(
+        model
+            .analysis
+            .requirements()
+            .iter()
+            .cloned()
+            .map(|inner| Dynamic::from(SysmlRequirementValue { inner }))
+            .collect(),
+    )
+}
+
+fn model_verifications(model: &mut SysmlModelValue) -> Dynamic {
+    Dynamic::from_array(
+        model
+            .analysis
+            .verifications()
+            .iter()
+            .cloned()
+            .map(|inner| Dynamic::from(SysmlVerificationValue { inner }))
+            .collect(),
+    )
+}
+
+fn requirement_attribute(requirement: &mut SysmlRequirementValue, name: &str) -> Dynamic {
+    requirement
+        .inner
+        .attributes
+        .iter()
+        .find(|attribute| attribute.name == name || attribute.qualified_name == name)
+        .cloned()
+        .map(Dynamic::from)
+        .unwrap_or(Dynamic::UNIT)
+}
+
+fn requirement_has_attribute(requirement: &mut SysmlRequirementValue, name: &str) -> bool {
+    requirement
+        .inner
+        .attributes
+        .iter()
+        .any(|attribute| attribute.name == name || attribute.qualified_name == name)
 }
 
 /// Project all semantic facts as native Rhai values without copying the full
@@ -400,7 +534,73 @@ pub fn register_sysml_types(engine: &mut Engine) {
             value.inner.source.clone()
         })
         .register_fn("value", record_value)
-        .register_fn("has_field", record_has_field);
+        .register_fn("has_field", record_has_field)
+        .register_type_with_name::<SysmlModelValue>("SysmlModel")
+        .register_get("path", |model: &mut SysmlModelValue| model.path.clone())
+        .register_get("source_revision", |model: &mut SysmlModelValue| {
+            i64::try_from(model.analysis.source_revision()).unwrap_or(-1)
+        })
+        .register_get("source_revision_hex", |model: &mut SysmlModelValue| {
+            format!("0x{:016x}", model.analysis.source_revision())
+        })
+        .register_get("source_fingerprint", |model: &mut SysmlModelValue| {
+            format!("0x{:016x}", model.analysis.source_fingerprint())
+        })
+        .register_fn("attribute", model_attribute)
+        .register_fn("value", model_value)
+        .register_fn("requirement", model_requirement)
+        .register_fn("verification", model_verification)
+        .register_fn("requirements", model_requirements)
+        .register_fn("verifications", model_verifications)
+        .register_type_with_name::<SysmlRequirementValue>("SysmlRequirement")
+        .register_get(
+            "qualified_name",
+            |requirement: &mut SysmlRequirementValue| {
+                requirement.inner.element.qualified_name.clone()
+            },
+        )
+        .register_get(
+            "documentation",
+            |requirement: &mut SysmlRequirementValue| {
+                string_array(&requirement.inner.documentation)
+            },
+        )
+        .register_get("subjects", |requirement: &mut SysmlRequirementValue| {
+            subject_array(&requirement.inner.subjects)
+        })
+        .register_get("verifies", |requirement: &mut SysmlRequirementValue| {
+            string_array(&requirement.inner.verifies)
+        })
+        .register_get("satisfies", |requirement: &mut SysmlRequirementValue| {
+            string_array(&requirement.inner.satisfies)
+        })
+        .register_fn("attribute", requirement_attribute)
+        .register_fn("has_attribute", requirement_has_attribute)
+        .register_type_with_name::<SysmlVerificationValue>("SysmlVerification")
+        .register_get(
+            "qualified_name",
+            |verification: &mut SysmlVerificationValue| {
+                verification.inner.element.qualified_name.clone()
+            },
+        )
+        .register_get(
+            "documentation",
+            |verification: &mut SysmlVerificationValue| {
+                string_array(&verification.inner.documentation)
+            },
+        )
+        .register_get("subjects", |verification: &mut SysmlVerificationValue| {
+            subject_array(&verification.inner.subjects)
+        })
+        .register_get("verifies", |verification: &mut SysmlVerificationValue| {
+            string_array(&verification.inner.verifies)
+        })
+        .register_get(
+            "realizations",
+            |verification: &mut SysmlVerificationValue| {
+                string_array(&verification.inner.realizations)
+            },
+        );
 }
 
 /// Lower one resolved SysML literal into the native value used by Rhai and
@@ -895,5 +1095,46 @@ mod tests {
                 .unwrap(),
             "0xffffffffffffffff"
         );
+    }
+
+    #[test]
+    fn model_handle_keeps_typed_attribute_and_verification_snapshot() {
+        let analysis = Arc::new(SysmlAnalysis::from_files([(
+            "model.sysml",
+            r#"
+                    package Example {
+                        private import ScalarValues::Real;
+                        part def A {
+                            attribute length : Real = 2.5;
+                        }
+                        requirement def R { }
+                        verification def V { verify R; }
+                    }
+                "#,
+        )]));
+        assert!(!analysis.has_errors(), "unexpected SysML diagnostics");
+        let attribute = analysis
+            .attributes()
+            .iter()
+            .find(|attribute| attribute.name == "length")
+            .expect("typed test attribute");
+        let requirement = analysis
+            .requirements()
+            .first()
+            .expect("typed test requirement");
+        let verification = analysis
+            .verifications()
+            .first()
+            .expect("typed test verification");
+
+        let mut model = SysmlModelValue::new("twin://example", analysis.clone());
+        let value = model_value(&mut model, &attribute.qualified_name);
+        assert_eq!(value.as_float().expect("native real value"), 2.5);
+        assert_eq!(
+            model.analysis().source_revision(),
+            analysis.source_revision()
+        );
+        assert!(!model_requirement(&mut model, &requirement.element.qualified_name).is_unit());
+        assert!(!model_verification(&mut model, &verification.element.qualified_name).is_unit());
     }
 }

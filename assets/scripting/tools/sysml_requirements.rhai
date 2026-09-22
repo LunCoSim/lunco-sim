@@ -936,6 +936,17 @@ fn source() {
     _source_projection([], [], [], false, true)
 }
 
+/// Open the active Twin's immutable, revision-pinned Rust SysML session.
+///
+/// Use this for repeated typed lookups inside one builder or verifier. The
+/// session is source-backed and read-only; Rhai must not manufacture a second
+/// requirement-value table or read `.sysml` files directly.
+fn model() {
+    let name = twin_name();
+    if name == "" { return (); }
+    sysml_model("twin://" + name)
+}
+
 /// Select only the typed values needed by a requirement-policy pass.
 fn source_with_attributes(names) {
     // Numeric/typed consumers do not need the Twin-wide requirement and
