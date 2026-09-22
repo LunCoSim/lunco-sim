@@ -1,0 +1,15 @@
+<template>
+  <property name="title">Download resources</property>
+  <property name="description">Some declared resources are not installed.</property>
+  <property name="scope_label">scope</property>
+
+  <node id="asset-consent-root">
+    <node id="asset-consent-dialog">
+      <text id="asset-consent-title">{title}</text>
+      <text id="asset-consent-scope">{scope_label}</text>
+      <text id="asset-consent-description">{description}</text>
+      <node id="asset-consent-rows" />
+      <node id="asset-consent-actions" />
+    </node>
+  </node>
+</template>

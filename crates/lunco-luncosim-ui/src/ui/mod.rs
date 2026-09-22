@@ -5,6 +5,8 @@
 //! for a windowed run; the shared simulator core and headless runner do not
 //! compile this crate.
 
+use std::collections::BTreeMap;
+
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lunco_workbench_runtime_ui as runtime_ui;
@@ -199,11 +201,8 @@ impl Plugin for LunCoSimUiPlugin {
             .enabled = true;
         app.init_resource::<RuntimeUiDropdownState>()
             .add_systems(lunco_core::SceneTeardown, reset_runtime_ui_dropdowns)
-            .add_observer(reset_runtime_ui_dropdowns_on_twin_closed)
-            .init_resource::<dataset_provisioning::DatasetProvisioningState>()
-            .add_observer(dataset_provisioning::on_dataset_scope_ready)
-            .add_observer(dataset_provisioning::on_dataset_scope_removed)
-            .add_systems(Update, dataset_provisioning::poll_dataset_provisioning);
+            .add_observer(reset_runtime_ui_dropdowns_on_twin_closed);
+        dataset_provisioning::install(app);
         // `lunco_render_bevy::LuncoRenderPlugin` owns the wireframe pass used by
         // per-prim contour display. Keep it at the render boundary so this UI
         // composition does not install a duplicate Bevy plugin.
@@ -270,8 +269,7 @@ impl Plugin for LunCoSimUiPlugin {
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_dismiss_terrain_overlay)
                     .add_observer(scripted_menus::on_script_ui_request)
-                    .add_observer(scripted_menus::clear_scripted_menus_on_twin_closed)
-                    .add_observer(dataset_provisioning::on_set_missing_asset_prompt_suppressed);
+                    .add_observer(scripted_menus::clear_scripted_menus_on_twin_closed);
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
                 // Rhai behaviour editor (Editor). Its view-model is
@@ -503,22 +501,107 @@ fn on_runtime_ui_action(
                 dropdowns.toggle(&key);
                 return;
             }
+            let parameters = match runtime_ui_action_parameters_to_telemetry(
+                &trigger.event().parameters,
+                "runtime.ui.action.parameters",
+            ) {
+                Ok(parameters) => parameters,
+                Err(error) => {
+                    report_runtime_ui_failure(&mut commands, &error);
+                    return;
+                }
+            };
+            let action_args = lunco_telemetry_core::TelemetryValue::Map(BTreeMap::from([
+                (
+                    "action".to_owned(),
+                    lunco_telemetry_core::TelemetryValue::String(action.clone()),
+                ),
+                ("parameters".to_owned(), parameters),
+            ]));
             commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
                 tool: "runtime_ui".to_owned(),
                 hook: "on_action".to_owned(),
-                args: lunco_telemetry_core::TelemetryValue::String(action.clone()),
+                args: action_args.clone(),
             });
             commands.trigger(lunco_telemetry_core::TelemetryEvent {
                 name: "runtime.ui.action".to_owned(),
                 source: 0,
                 severity: lunco_telemetry_core::Severity::Info,
-                data: lunco_telemetry_core::TelemetryValue::String(action),
+                data: action_args,
                 timestamp: 0.0,
                 sim_secs: 0.0,
                 sim_tick: 0,
             });
         }
     }
+}
+
+fn runtime_ui_action_parameters_to_telemetry(
+    value: &lunco_hooks::HookValue,
+    path: &str,
+) -> Result<lunco_telemetry_core::TelemetryValue, String> {
+    use lunco_hooks::HookValue;
+    use lunco_telemetry_core::TelemetryValue;
+
+    let HookValue::Map(fields) = value else {
+        return Err(format!("{path} must be a map, got {}", value.type_name()));
+    };
+    let mut result = BTreeMap::new();
+    for (key, value) in fields {
+        if result
+            .insert(
+                key.clone(),
+                runtime_ui_action_value_to_telemetry(value, &format!("{path}.{key}"))?,
+            )
+            .is_some()
+        {
+            return Err(format!("{path} contains `{key}` more than once"));
+        }
+    }
+    Ok(TelemetryValue::Map(result))
+}
+
+fn runtime_ui_action_value_to_telemetry(
+    value: &lunco_hooks::HookValue,
+    path: &str,
+) -> Result<lunco_telemetry_core::TelemetryValue, String> {
+    use lunco_hooks::HookValue;
+    use lunco_telemetry_core::TelemetryValue;
+
+    Ok(match value {
+        HookValue::Unit => return Err(format!("{path} cannot contain unit values")),
+        HookValue::Int(value) => TelemetryValue::I64(*value),
+        HookValue::Float(value) => TelemetryValue::F64(*value),
+        HookValue::Bool(value) => TelemetryValue::Bool(*value),
+        HookValue::Str(value) => TelemetryValue::String(value.clone()),
+        HookValue::Array(values) => TelemetryValue::Array(
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    runtime_ui_action_value_to_telemetry(value, &format!("{path}[{index}]"))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        HookValue::Map(fields) => {
+            let mut result = BTreeMap::new();
+            for (key, value) in fields {
+                if result
+                    .insert(
+                        key.clone(),
+                        runtime_ui_action_value_to_telemetry(value, &format!("{path}.{key}"))?,
+                    )
+                    .is_some()
+                {
+                    return Err(format!("{path} contains `{key}` more than once"));
+                }
+            }
+            TelemetryValue::Map(result)
+        }
+        HookValue::Bytes(_) => {
+            return Err(format!("{path} cannot contain byte buffers"));
+        }
+    })
 }
 
 fn runtime_focus_body(
@@ -825,6 +908,7 @@ fn register_camera_menu(world: &mut World) {
                     ctx.trigger(runtime_ui::RuntimeUiAction {
                         action,
                         source: Entity::PLACEHOLDER,
+                        parameters: lunco_hooks::HookValue::Map(Vec::new()),
                     });
                     ui.close();
                 }
@@ -842,6 +926,7 @@ fn register_camera_menu(world: &mut World) {
                 ctx.trigger(runtime_ui::RuntimeUiAction {
                     action: action.to_owned(),
                     source: Entity::PLACEHOLDER,
+                    parameters: lunco_hooks::HookValue::Map(Vec::new()),
                 });
                 ui.close();
             }

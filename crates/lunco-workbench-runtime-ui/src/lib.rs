@@ -47,10 +47,13 @@ lunco_hooks::declare_hook! {
 ///
 /// The runtime transports the authored identifier without interpreting its
 /// domain meaning. The host or Rhai policy owns the resulting command/event.
-#[derive(Event, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Event, Clone, Debug, PartialEq)]
 pub struct RuntimeUiAction {
     /// Twin-authored semantic action identifier.
     pub action: String,
+    /// Typed parameter map attached by the authored node's tags. The runtime
+    /// transports this generic value without assigning domain meaning.
+    pub parameters: HookValue,
     /// HUI node that emitted the action.
     pub source: Entity,
 }
@@ -116,6 +119,7 @@ fn register_action(functions: &mut HtmlFunctions, callback: impl Into<String>, a
             world.trigger(RuntimeUiAction {
                 action: action.clone(),
                 source,
+                parameters: HookValue::Map(Vec::new()),
             });
         },
     );
@@ -128,12 +132,22 @@ fn register_dynamic_action(functions: &mut HtmlFunctions) {
     functions.register(
         "runtime_ui_authored_action",
         |In(source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
-            let action = world
-                .get::<Tags>(source)
-                .and_then(|tags| tags.tags().get("action"))
-                .cloned()
-                .unwrap_or_default();
-            world.trigger(RuntimeUiAction { action, source });
+            let Some(tags) = world.get::<Tags>(source) else {
+                return;
+            };
+            let action = tags.tags().get("action").cloned().unwrap_or_default();
+            let parameters = HookValue::Map(
+                tags.tags()
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != "action")
+                    .map(|(key, value)| (key.clone(), HookValue::str(value.clone())))
+                    .collect(),
+            );
+            world.trigger(RuntimeUiAction {
+                action,
+                source,
+                parameters,
+            });
         },
     );
 }
@@ -181,6 +195,12 @@ pub struct RuntimeUiSurfaceDefinition {
     pub setting_default: bool,
     #[serde(default)]
     pub interactive: bool,
+    /// A modal surface owns the full window while visible and may provide an
+    /// authored semantic dismissal action for Escape.
+    #[serde(default)]
+    pub modal: bool,
+    #[serde(default)]
+    pub dismiss_action: Option<String>,
     /// Whether the surface root can be moved with a primary-button drag.
     /// Only window surfaces may opt in; viewport and dock-panel roots own a
     /// larger layout boundary and cannot be moved as a whole.
@@ -335,6 +355,23 @@ impl RuntimeUiManifest {
                     "draggable runtime UI surface `{}` must use window placement",
                     surface.id
                 ));
+            }
+            if surface.modal && !surface.interactive {
+                return Err(format!(
+                    "modal runtime UI surface `{}` must be interactive",
+                    surface.id
+                ));
+            }
+            if surface.modal
+                && !matches!(&surface.placement, RuntimeUiPlacementDefinition::Viewport)
+            {
+                return Err(format!(
+                    "modal runtime UI surface `{}` must use viewport placement",
+                    surface.id
+                ));
+            }
+            if let Some(action) = &surface.dismiss_action {
+                require_non_empty("modal dismiss action", action)?;
             }
             validate_placement(&surface.placement)?;
 
@@ -532,6 +569,7 @@ impl Plugin for RuntimeUiPlugin {
                     .after(bevy_hui::HuiSystems::Build)
                     .before(bevy_hui::HuiSystems::Style),
                 register_runtime_ui_input_regions.after(apply_runtime_ui_exposures),
+                dismiss_modal_runtime_ui,
             ),
         )
         .add_systems(
@@ -726,6 +764,8 @@ pub struct RuntimeUiSurface {
     setting: Option<String>,
     setting_default: bool,
     interactive: bool,
+    modal: bool,
+    dismiss_action: Option<String>,
     draggable: bool,
     mounted: bool,
     /// For a surface required by offline recording, set after the retained tree
@@ -777,6 +817,8 @@ impl RuntimeUiSurface {
             setting: definition.setting.clone(),
             setting_default: definition.setting_default,
             interactive: definition.interactive,
+            modal: definition.modal,
+            dismiss_action: definition.dismiss_action.clone(),
             draggable: definition.draggable,
             mounted: false,
             presentation_ready: false,
@@ -2227,6 +2269,7 @@ fn register_runtime_ui_input_regions(
         Option<&OnUiPress>,
     )>,
     parents: Query<&ChildOf>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     mut gate: ResMut<ScenePickGate>,
 ) {
     let interactive_roots: HashSet<Entity> = roots
@@ -2240,6 +2283,19 @@ fn register_runtime_ui_input_regions(
         return;
     }
 
+    if roots
+        .iter()
+        .any(|(_, surface, visibility)| surface.modal && matches!(*visibility, Visibility::Visible))
+    {
+        if let Some(window) = windows.iter().next() {
+            let rect = egui::Rect::from_min_max(
+                egui::pos2(0.0, 0.0),
+                egui::pos2(window.width(), window.height()),
+            );
+            gate.record_chrome_panel(rect, rect);
+        }
+    }
+
     for (entity, node, transform, inherited_visibility, press) in &controls {
         if press.is_none()
             || !inherited_visibility.is_some_and(|visibility| visibility.get())
@@ -2251,6 +2307,34 @@ fn register_runtime_ui_input_regions(
             gate.record_chrome_panel(rect, rect);
         }
     }
+}
+
+/// Route Escape through the same authored semantic action path as a button.
+/// The runtime owns only the key-to-dismiss primitive; Rhai owns the resulting
+/// lifecycle decision.
+fn dismiss_modal_runtime_ui(
+    keys: Res<ButtonInput<KeyCode>>,
+    roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::Escape) {
+        return;
+    }
+    let Some((source, surface, _)) = roots.iter().find(|(_, surface, visibility)| {
+        surface.modal
+            && surface.dismiss_action.is_some()
+            && matches!(*visibility, Visibility::Visible)
+    }) else {
+        return;
+    };
+    let Some(action) = surface.dismiss_action.clone() else {
+        return;
+    };
+    commands.trigger(RuntimeUiAction {
+        action,
+        source,
+        parameters: HookValue::Map(Vec::new()),
+    });
 }
 
 fn is_descendant_of_runtime_surface(
@@ -2518,6 +2602,50 @@ mod tests {
     }
 
     #[test]
+    fn modal_surfaces_require_interactive_viewport_placement() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "modal",
+                    "template": "ui/a.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "modal",
+                    "modal": true,
+                    "dismiss_action": "dismiss",
+                    "placement": {"mode": "viewport"}
+                }]
+            }"#,
+        )
+        .expect("modal JSON should parse");
+        assert!(manifest.validate().is_err(), "modal must be interactive");
+
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "modal",
+                    "template": "ui/a.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "modal",
+                    "interactive": true,
+                    "modal": true,
+                    "dismiss_action": "dismiss",
+                    "placement": {
+                        "mode": "window",
+                        "anchor": "top_left",
+                        "width": 200.0,
+                        "height": 100.0
+                    }
+                }]
+            }"#,
+        )
+        .expect("modal JSON should parse");
+        assert!(
+            manifest.validate().is_err(),
+            "modal must use viewport placement"
+        );
+    }
+
+    #[test]
     fn draggable_window_layout_is_clamped_to_live_target() {
         let manifest: RuntimeUiManifest = serde_json::from_str(
             r#"{
@@ -2615,6 +2743,8 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: true,
+                    modal: false,
+                    dismiss_action: None,
                     draggable: false,
                     mounted: true,
                     presentation_ready: false,
@@ -2696,6 +2826,8 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: false,
+                    modal: false,
+                    dismiss_action: None,
                     draggable: false,
                     mounted: true,
                     // This surface is not part of the offline recording
@@ -2744,6 +2876,8 @@ mod tests {
             setting: None,
             setting_default: false,
             interactive: false,
+            modal: false,
+            dismiss_action: None,
             draggable: false,
             mounted: true,
             presentation_ready: true,
@@ -2807,6 +2941,8 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: false,
+                    modal: false,
+                    dismiss_action: None,
                     draggable: false,
                     mounted: true,
                     presentation_ready: false,
@@ -2870,6 +3006,8 @@ mod tests {
                     setting: None,
                     setting_default: false,
                     interactive: false,
+                    modal: false,
+                    dismiss_action: None,
                     draggable: false,
                     mounted: false,
                     presentation_ready: false,

@@ -980,19 +980,18 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
-/// Hook id for the user-facing decision made when an opened Twin declares
-/// datasets that are not installed. The engine supplies the facts; the Rhai
-/// policy returns `"prompt"` for an interactive consent window or
-/// `"skip"` when that interaction is not appropriate (for example in a
-/// headless run). The policy never authorises network traffic itself.
+/// Hook id for the authored view model used when an opened Twin declares
+/// datasets that are not installed. The engine supplies typed facts; Rhai
+/// returns the visible state, rows, and semantic actions. The policy never
+/// authorises network traffic itself.
 pub const DATASET_PROVISION_HOOK: &str = "assets.provision";
 
 lunco_hooks::declare_hook! {
     id: DATASET_PROVISION_HOOK,
     owner: "lunco-core-session",
-    description: "Choose whether missing Twin datasets should be requested or skipped.",
+    description: "Author the typed view model and actions for missing declared datasets.",
     signature: [ctx: Map],
-    output: String,
+    output: Map,
     deterministic: false,
     required: false,
     installable: true,
