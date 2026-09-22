@@ -187,6 +187,15 @@ The current supported subset is source-backed and deterministic:
   error and add a scene-scoped warning to `RuntimeDiagnostics`. A policy may
   request selected attributes through `AnalyzeSysml`; a successful read clears
   only the warning for the same source path;
+- `sysml_model(path)` returns a read-only, revision-pinned `SysmlModel` backed
+  by the cached Rust semantic snapshot. Use `model.value(qualified_name)` for
+  repeated typed reads in one builder/verifier, and use
+  `model.requirement(qualified_name)` or
+  `model.verification(qualified_name)` for source-owned traceability. This
+  keeps the parsed source set and its revision together and avoids rebuilding
+  a dynamic report for every attribute. The Rhai `sysml_requirements::model()`
+  helper opens the active Twin's `twin://` source; scripts must not read
+  `.sysml` files directly or manufacture a second requirement-value table;
 - the `luncosim test --verification QUALIFIED_NAME` selector; and
 - structured per-check evidence emitted by `report_structured_verdict`.  The
   summary event keeps small reports inline; larger reports emit one bounded
