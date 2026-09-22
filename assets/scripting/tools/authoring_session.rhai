@@ -4,11 +4,11 @@
 // document owner. Each transaction is explicit, dry-plannable, grouped into
 // one journal/undo entry, generation-checked, and followed by a checkpoint.
 
-import "assembly_edit" as usd;
-import "modelica_editor" as modelica;
-import "sysml_editor" as sysml;
-import "rhai_editor" as rhai;
-import "editor_workflow" as usd_workflow;
+import "lunco://scripting/tools/assembly_edit" as usd;
+import "lunco://scripting/tools/modelica_editor" as modelica;
+import "lunco://scripting/tools/sysml_editor" as sysml;
+import "lunco://scripting/tools/rhai_editor" as rhai;
+import "lunco://scripting/tools/editor_workflow" as usd_workflow;
 
 fn _error(stage, message) {
     #{ ok: false, kind: "authoring_session", stage: stage,

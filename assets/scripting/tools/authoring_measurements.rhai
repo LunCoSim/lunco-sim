@@ -5,8 +5,8 @@
 // evaluates caller-supplied requirements. It is deliberately independent of
 // vehicles, routes, Twin names, and a custom measurement schema.
 
-import "engineering_units" as engineering_units;
-import "mechanical_relations" as mechanical_relations;
+import "lunco://scripting/tools/engineering_units" as engineering_units;
+import "lunco://scripting/tools/mechanical_relations" as mechanical_relations;
 
 fn query_ok(record) {
     record != () && record.ok != false

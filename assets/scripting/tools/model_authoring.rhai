@@ -5,9 +5,9 @@
 // infer identities from names, or encode a vehicle. The returned plans are
 // dry until the caller submits `ops` through assembly_edit::batch or review.
 
-import "assembly_edit" as assembly_edit;
-import "assembly_builder" as assembly_builder;
-import "assembly_audit" as assembly_audit;
+import "lunco://scripting/tools/assembly_edit" as assembly_edit;
+import "lunco://scripting/tools/assembly_builder" as assembly_builder;
+import "lunco://scripting/tools/assembly_audit" as assembly_audit;
 
 fn failure(kind, message) {
     #{ ok: false, kind: kind, error: message, errors: [message], ops: [] }

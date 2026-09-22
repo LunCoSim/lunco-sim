@@ -7,7 +7,7 @@
 // Authored autosave is deliberately opt-in per Twin. The documented setting is
 // `usd.editor_autosave`; an absent key is the safe disabled default. Runtime
 // overlay persistence remains a separate `usd.runtime_persistence` setting.
-import "assembly_edit" as edit;
+import "lunco://scripting/tools/assembly_edit" as edit;
 
 fn editor_autosave_setting() {
     "usd.editor_autosave"
