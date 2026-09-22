@@ -79,6 +79,12 @@ source = "twin_lifecycle.rhai"
 entry = "twin_lifecycle"
 
 [[policies]]
+hook = "application.asset.lifecycle"
+source = "tutorial_catalog_menu.rhai"
+entry = "application_asset_lifecycle"
+required = true
+
+[[policies]]
 hook = "scripting.source.classify"
 source = "source_classification.rhai"
 entry = "classify_source"

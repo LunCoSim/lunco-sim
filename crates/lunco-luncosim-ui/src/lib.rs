@@ -1,8 +1,8 @@
 //! Interactive UI shell for the LunCoSim application.
 //!
 //! This crate owns application-specific presentation and editor composition:
-//! egui workbench panels, the interactive USD viewport, tutorial menu, and
-//! windowed-only update surface. The simulator core does not depend on these
+//! egui workbench panels, the interactive USD viewport, Rhai-contributed
+//! application menus, and windowed-only update surface. The simulator core does not depend on these
 //! modules, so editing the UI does not rebuild the headless application runtime.
 
 mod application;

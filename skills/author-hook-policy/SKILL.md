@@ -118,6 +118,16 @@ scene, tool libraries, timeline data, SysML/KerML sources, and Modelica roots
 from its typed manifest and indexed file inventory. Loader commands keep only
 generic ownership, safe-path, asset-read, and domain-registration mechanics.
 
+For application UI contributions, reuse the optional
+`application.asset.lifecycle(event, ctx)` hook. The shared asset layer emits
+JSON-scope loading/changed events after asynchronous reads, including the
+canonical `asset_root_uri`; the Rhai policy can parse each record with
+`parse_json(text)` and return a generic `menus` tree.
+The Rust workbench host validates and renders that tree and routes leaf actions
+through the existing Rhai tool hook. Keep asset selection and menu policy in
+Rhai; Rust owns only async asset delivery, menu-shape validation, rendering,
+provider replacement, and Twin-close cleanup.
+
 Put policy and observable runtime assertions in an authored Rhai production
 scene test. Cover the declared signature, successful binding/invocation,
 missing-policy status, rejected deterministic inline binding, and exact

@@ -69,7 +69,7 @@ fn load_input_bindings_defaults(
         state.candidates = catalog
             .entries()
             .iter()
-            .filter(|entry| entry.asset_path.ends_with(".json"))
+            .filter(|entry| entry.twin_id.is_none() && entry.asset_path.ends_with(".json"))
             .map(|entry| PendingInputBindingsAsset {
                 path: entry.asset_path.clone(),
                 handle: entry.handle.clone(),

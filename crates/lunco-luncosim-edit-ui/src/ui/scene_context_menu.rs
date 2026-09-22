@@ -38,6 +38,7 @@ pub fn on_script_ui_request(
                 dismiss_on_next_input: false,
             });
         }
+        _ => {}
     }
 }
 

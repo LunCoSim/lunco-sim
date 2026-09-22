@@ -257,11 +257,14 @@ pub(super) fn render_layout(
                 "View".to_owned(),
             ];
             direct_menu_labels.extend(menus.custom_menus.iter().map(|(name, _)| name.clone()));
+            direct_menu_labels.extend(menus.scripted_menu_labels().map(str::to_owned));
             direct_menu_labels.extend([
                 "Settings".to_owned(),
                 "Help".to_owned(),
                 "Time".to_owned(),
             ]);
+            let mut measured_labels = std::collections::HashSet::new();
+            direct_menu_labels.retain(|label| measured_labels.insert(label.clone()));
             let direct_menu_width =
                 measured_menu_row_width(ui, direct_menu_labels.iter().map(String::as_str));
             let menu_mode = top_menu_mode(

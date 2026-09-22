@@ -141,9 +141,53 @@ pub struct WorkbenchMenuRegistry {
     pub time_menu: Vec<MenuCallback>,
     /// Custom top-level menus.
     pub custom_menus: Vec<CustomMenu>,
+    /// Script-authored top-level menus keyed by their source provider and Twin scope.
+    pub scripted_menus: Vec<ScriptedMenu>,
+}
+
+/// One callback owned by a replaceable script menu contribution.
+pub struct ScriptedMenu {
+    /// Stable provider key that owns this contribution.
+    pub provider: String,
+    /// Twin identity for lifecycle cleanup, or `None` for application content.
+    pub twin_id: Option<u64>,
+    /// Top-level menu label.
+    pub label: String,
+    /// Generic renderer callback for this menu's current tree.
+    pub callback: MenuCallback,
 }
 
 impl WorkbenchMenuRegistry {
+    /// Replace all top-level menus contributed by one script provider.
+    pub fn replace_scripted_menus(
+        &mut self,
+        provider: impl Into<String>,
+        twin_id: Option<u64>,
+        menus: Vec<(String, MenuCallback)>,
+    ) {
+        let provider = provider.into();
+        self.scripted_menus
+            .retain(|existing| existing.provider != provider);
+        self.scripted_menus
+            .extend(menus.into_iter().map(|(label, callback)| ScriptedMenu {
+                provider: provider.clone(),
+                twin_id,
+                label,
+                callback,
+            }));
+    }
+
+    /// Clear all script-authored menus owned by one Twin identity.
+    pub fn clear_scripted_twin(&mut self, twin_id: u64) {
+        self.scripted_menus
+            .retain(|menu| menu.twin_id != Some(twin_id));
+    }
+
+    /// Top-level labels available to the responsive menu layout.
+    pub fn scripted_menu_labels(&self) -> impl Iterator<Item = &str> {
+        self.scripted_menus.iter().map(|menu| menu.label.as_str())
+    }
+
     /// Register a settings submenu.
     pub fn register_settings_submenu<F>(&mut self, label: impl Into<String>, callback: F)
     where

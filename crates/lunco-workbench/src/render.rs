@@ -886,15 +886,48 @@ pub(crate) fn render_custom_menus(
     mut anchors: Option<&mut Vec<(String, egui::Rect)>>,
 ) {
     let custom_menus = std::mem::take(&mut menus.custom_menus);
+    let scripted_menus = std::mem::take(&mut menus.scripted_menus);
     for (name, cb) in &custom_menus {
+        let mut contributions = scripted_menus
+            .iter()
+            .filter(|contribution| contribution.label == *name)
+            .collect::<Vec<_>>();
+        contributions.sort_by(|left, right| left.provider.cmp(&right.provider));
         let response = ui.menu_button(name, |ui| {
             run_menu_callback(ui, world, cb.as_ref());
+            for contribution in &contributions {
+                run_menu_callback(ui, world, contribution.callback.as_ref());
+            }
         });
         if let Some(anchors) = anchors.as_deref_mut() {
             anchors.push((name.clone(), response.response.rect));
         }
     }
+    let mut rendered_script_labels = Vec::new();
+    for menu in &scripted_menus {
+        if rendered_script_labels.contains(&menu.label)
+            || custom_menus.iter().any(|(name, _)| name == &menu.label)
+        {
+            continue;
+        }
+        rendered_script_labels.push(menu.label.clone());
+        let label = menu.label.clone();
+        let response = ui.menu_button(&label, |ui| {
+            let mut contributions = scripted_menus
+                .iter()
+                .filter(|contribution| contribution.label == label)
+                .collect::<Vec<_>>();
+            contributions.sort_by(|left, right| left.provider.cmp(&right.provider));
+            for contribution in contributions {
+                run_menu_callback(ui, world, contribution.callback.as_ref());
+            }
+        });
+        if let Some(anchors) = anchors.as_deref_mut() {
+            anchors.push((label, response.response.rect));
+        }
+    }
     menus.custom_menus = custom_menus;
+    menus.scripted_menus = scripted_menus;
 }
 
 /// The title-bar policy is based on measured widget widths and the same

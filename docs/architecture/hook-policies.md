@@ -105,6 +105,27 @@ hook for its own authored behavior. A missing optional lifecycle policy is a
 valid unconfigured state, and a lifecycle fault is reported without crashing
 or silently selecting another implementation.
 
+The generic asset layer owns asynchronous JSON reads and publishes
+`JsonAssetScopeLoading` and `JsonAssetScopeChanged` events for the engine
+library and each opened Twin. The application manifest installs the optional,
+installable `application.asset.lifecycle(event: String, ctx: Map) -> Map` hook
+before those events can fire; the shipped application manifest requires this
+policy to install successfully. Its context carries the stable `provider`, the
+`scope`, optional `twin_id` and `twin_name`, and a `payload`: loading events
+provide `has_json_assets`; changed events provide the complete array of
+`{asset_uri, text, error}` records for that scope. Both contexts include the
+asset owner's canonical `asset_root_uri` for scope-relative references.
+`parse_json(text)` is shared
+by the world-bound Rhai engine and Rhai policy hooks. Rhai returns
+`#{ menus: [...] }`; Rust validates the generic menu tree, the workbench
+replaces that provider's contribution, and selected actions route through the
+existing Rhai tool hook. Twin contributions are cleared on `TwinClosed`, and a
+late contribution for an already-closed Twin is discarded. An absent optional
+hook clears its contribution; a fault or malformed menu is warned and clears
+that provider instead of retaining stale UI. This is the startup-to-menu path
+used by the authored tutorial catalog policy, so no Rust tutorial menu or
+catalog parser is needed.
+
 Physics owns the required deterministic `physics.body_escape(ctx: Map) ->
 String` seam, installed by the application policy bootstrap during `PreStartup`
 and replaceable by an active Twin. Its map contains `kind` (`finite_world_exit`

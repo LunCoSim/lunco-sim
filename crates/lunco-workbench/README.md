@@ -53,6 +53,10 @@ navigation surfaces. Guided HUDs and coach-mark tours are likewise an optional
 host-level feature in `lunco-workbench-guided-ui`; the base shell publishes the
 generic anchor and render-set contracts but does not install guided behavior.
 
+`WorkbenchMenuRegistry` also stores replaceable script contributions by
+provider. The shell groups contributions with the same label into one menu;
+application adapters own the Rhai event bridge and leaf-action dispatch.
+
 | Type | Role |
 |------|------|
 | `lunco_workbench_core::Panel` / `PanelCtx` | Contract every dockable UI implements |
