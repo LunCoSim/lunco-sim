@@ -179,7 +179,7 @@ fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / 
 | `world_pos3(id)` / `world_forward3(id)` / `world_rotation_quat(id)` | native glam `Vec3`/`Quat` pose for hot loops; lower explicitly at wire boundaries |
 | `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, `usd_path` is canonical USD topology |
 | `owner_of(id)` / `controller(id)` / `is_controlled(id)` | who's driving (human vs AI vs unowned) |
-| `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` on the **next scenario pass**; events emitted during dispatch are retained for that pass; a paused simulation uses the next `Update` pass); scalar, array, and map payloads keep their typed structure |
+| `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` on the **next scenario pass**; events emitted during dispatch are retained for that pass; a paused simulation uses the next `Update` pass); scalar, array, and map payloads keep their typed structure. During scene readiness hold, the shared scenario gate is closed and events are not queued until execution can begin. |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | the fixed clock |
 | `rand()` / `rand_range(lo,hi)` | **deterministic** RNG (seeded per `(entity,tick,hook)`) |
 | `despawn(id)` / `add`/`remove`(id,"Comp",…) | structural. **Spawn:** `cmd("SpawnEntity", #{entry_id, position})` — no generic spawn |

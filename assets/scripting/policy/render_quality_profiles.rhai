@@ -201,14 +201,18 @@ fn render_quality_profile(id) {
             terrain_rock_mesh_cube_count: 8,
             terrain_rock_lod_start_distance: 4000.0,
             terrain_rock_lod_fade_distance: 800.0,
-            terrain_lod_tile_resolution: 49,
+            terrain_lod_tile_resolution: 65,
             terrain_lod_cinematic_resolution: 2049,
             terrain_lod_pixel_error: 2.0,
             terrain_lod_max_depth: 9,
             terrain_lod_probe_resolution: 9,
             terrain_lod_bakes_per_frame: 24,
             terrain_lod_max_inflight_bakes: 64,
-            terrain_lod_tile_budget: 1024,
+            // Keep the high profile's 65² vertex tiles close and crisp without
+            // admitting a thousand draw tiles plus hidden parent fallbacks at
+            // startup. That resident set exceeded the GPU budget on the Apollo
+            // scene and caused device loss before physics admission completed.
+            terrain_lod_tile_budget: 256,
             terrain_lod_cover_edits_per_frame: 64,
             terrain_lod_hysteresis_ratio: 1.30,
             terrain_lod_morph_start_ratio: 0.55,

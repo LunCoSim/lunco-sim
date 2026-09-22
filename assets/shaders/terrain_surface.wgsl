@@ -36,6 +36,7 @@
 // tight anti-aliasing ramp safe for both static and streamed terrain materials.
 const AA_CUT_PX: f32 = 5.0;
 const AA_RAMP_PX: f32 = 7.0;
+const BUMP_MAX_SLOPE: f32 = 0.65;
 
 /// Remap `x` from [lo, hi] to [0, 1], clamped. LINEAR on purpose — every terrain
 /// shader's bump strengths and albedo ramps are authored against this response,
@@ -391,9 +392,14 @@ fn bump_layer(
     surface_gradient.y = 0.0;
 #endif
     let tangent_gradient = surface_gradient - n * dot(n, surface_gradient);
-    let perturbed = n - strength * tangent_gradient;
-    // A large `strength` can flip or annihilate the normal; fall back rather than
-    // emit a NaN or an inward-facing normal that would read as a black speckle.
+    let bump_slope = strength * tangent_gradient;
+    // Smoothly saturate steep micro-relief slopes. Returning the base normal
+    // only where a gradient crossed the hemisphere boundary made the noise
+    // field break into visible patches under grazing light.
+    let slope_scale = inverseSqrt(
+        1.0 + dot(bump_slope, bump_slope) / (BUMP_MAX_SLOPE * BUMP_MAX_SLOPE),
+    );
+    let perturbed = n - bump_slope * slope_scale;
     if (length(perturbed) < 1e-3 || dot(perturbed, n) <= 0.0) {
         return n;
     }

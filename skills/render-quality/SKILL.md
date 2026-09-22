@@ -44,6 +44,13 @@ LOD approaches, consult the source-linked
    separately from its maximum shadow distance. Keep sub-DEM synthetic crater
    geometry within the terrain tile's resolved sampling; measured orthophoto
    albedo and footprint-filtered shader detail provide stable close texture.
+   Compare `TerrainLodStatus.focus_wanted` with `focus_resident`: a fully
+   resident cover can still leave the active camera outside the DEM crop, where
+   the near-field detail floor cannot refine the viewed ground. Verify the
+   camera's terrain-local position against the authored DEM window before
+   raising LOD budgets. For the `overzoom` layer, density zero disables
+   synthetic craterlets and leaves only FBM relief; choose feature radii and
+   density with High tile spacing in mind.
    Treat packed surface-map AO as indirect-light visibility: it belongs in
    Bevy's PBR diffuse-occlusion input, not in authored albedo or direct-sun
    multiplication. If broad terrain colour patches match a low-frequency AO
@@ -58,9 +65,10 @@ LOD approaches, consult the source-linked
 Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
 `budget_refused` before changing the High LOD. A resident count close to the
 budget does not by itself prove that detail was refused. High currently uses
-depth 9 with a 1024-tile budget and 49 vertices per tile (about 4 cm per
-interval at the deepest level over a 1 km crop). The shared terrain kernel evaluates bump gradients
-analytically and transfers unresolved slope variance into roughness. Apply lunar
+depth 9 with a 256-tile budget and 65 vertices per tile (about 3 cm per
+interval at the deepest level over a 1 km crop). The shared terrain kernel
+evaluates bump gradients analytically and transfers unresolved slope variance
+into roughness. Apply lunar
 photometry to the engine-selected Sun contribution only; putting it in
 `base_color` also changes fill and earthshine.
 

@@ -1021,9 +1021,18 @@ impl ScriptEventInbox {
 /// concern.
 pub fn collect_script_events(
     trigger: On<TelemetryEvent>,
+    gate: Res<ScenarioExecutionGate>,
     mut inbox: ResMut<ScriptEventInbox>,
     mut commands: Commands,
 ) {
+    // Scenario hooks cannot observe events while the scene readiness gate is
+    // closed. Do not accumulate producer traffic during that hold: the fixed
+    // and paused scenario passes are deliberately disabled until every
+    // participant is admitted, so accepting events here would only fill the
+    // bounded inbox and terminate the application before startup completes.
+    if !gate.enabled {
+        return;
+    }
     if inbox.enqueue(trigger.event().clone()) {
         return;
     }
