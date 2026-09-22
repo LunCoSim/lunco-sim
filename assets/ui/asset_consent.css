@@ -1,0 +1,89 @@
+@import "ui/runtime_fonts.css";
+@import "ui/runtime_theme.css";
+
+#asset-consent-root {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.58);
+  color: var(--text-color);
+  font-family: "LunCo UI";
+}
+
+#asset-consent-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 520px;
+  max-width: 90%;
+  max-height: 82%;
+  padding: 22px;
+  gap: 9px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 10px;
+  background-color: var(--panel-background);
+  overflow: hidden;
+}
+
+#asset-consent-title {
+  color: var(--accent-color);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+#asset-consent-scope,
+#asset-consent-description {
+  color: var(--muted-color);
+  font-size: 12px;
+}
+
+#asset-consent-rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 360px;
+  gap: 5px;
+  overflow: scroll;
+}
+
+#asset-consent-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 6px;
+  gap: 8px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 5px;
+}
+
+#asset-consent-row-copy {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  gap: 2px;
+  overflow: hidden;
+}
+
+#asset-consent-row-label { font-size: 12px; font-weight: 700; }
+#asset-consent-row-status { color: var(--muted-color); font-size: 10px; }
+
+#asset-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  padding-top: 6px;
+}
+
+#asset-consent-action {
+  padding: 7px 10px;
+  border-width: 1px;
+  border-color: var(--button-border);
+  border-radius: 5px;
+  background-color: var(--button-background);
+  color: var(--text-color);
+  font-size: 10px;
+  font-weight: 700;
+}

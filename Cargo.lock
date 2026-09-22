@@ -7186,6 +7186,7 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-assets-path",
  "lunco-assets-transport",
+ "lunco-hooks",
  "lunco-settings",
  "lunco-storage",
  "rayon",

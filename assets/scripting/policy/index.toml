@@ -35,6 +35,11 @@ source = "dataset_provisioning.rhai"
 entry = "dataset_provisioning"
 
 [[policies]]
+hook = "assets.download.prepare"
+source = "asset_download_prepare.rhai"
+entry = "asset_download_prepare"
+
+[[policies]]
 hook = "render.quality_profile"
 source = "render_quality_profiles.rhai"
 entry = "render_quality_profile"

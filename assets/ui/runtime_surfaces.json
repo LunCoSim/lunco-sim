@@ -326,6 +326,35 @@
       }
     },
     {
+      "id": "asset-consent",
+      "template": "ui/asset_consent.html",
+      "stylesheet": "ui/asset_consent.css",
+      "namespace": "asset-consent",
+      "bindings": {
+        "title": { "source": "title" },
+        "description": { "source": "description" },
+        "scope_label": { "source": "scope_label" }
+      },
+      "collections": [
+        {
+          "source": "rows",
+          "container": "asset-consent-rows",
+          "template": "ui/asset_consent_row.html",
+          "key": "id"
+        },
+        {
+          "source": "actions",
+          "container": "asset-consent-actions",
+          "template": "ui/asset_consent_action.html",
+          "key": "key"
+        }
+      ],
+      "interactive": true,
+      "modal": true,
+      "dismiss_action": "dismiss",
+      "placement": { "mode": "viewport" }
+    },
+    {
       "id": "scenario-download",
       "template": "ui/scenario_download.html",
       "stylesheet": "ui/scenario_download.css",

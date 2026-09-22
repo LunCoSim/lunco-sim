@@ -277,6 +277,7 @@ grows a "just fetch it at startup" line — the ephemeris crate had exactly that
 | manifest, URL, cache path, and lifecycle state | `lunco-assets-datasets` |
 | retry policy and resumable HTTP bytes | `lunco-assets-transport` |
 | manifest verification, extraction, and atomic source installation | `lunco-assets-download` |
+| per-transaction network/cache/replacement/backup decision | `assets.download.prepare` Rhai policy through `lunco-assets-download` |
 | decode, raster math, external glTF processing, and baked sidecars | `lunco-assets-processing` |
 | Bevy worker lifecycle and CLI composition | `lunco-assets` |
 | declaring datasets + reporting what it loaded | the domain crate |
@@ -351,6 +352,15 @@ only the missing suffix. If an origin ignores the range and returns a complete
 `Content-Range` is rejected. Browser fetches apply the same policy and retain
 received chunks across `fetch()` attempts. Final cache publication remains
 atomic/content-verified, so partial bytes are never exposed as an asset.
+
+The generic downloader invokes `assets.download.prepare` with typed facts before
+using the cache or opening the network. The authored policy returns the closed
+decision map (`allow_network`, cache mode, install mode, backup disposition,
+and bounded retained-backup count). Rhai owns mode behavior and consent; Rust
+only validates that decision and performs safe staging, integrity verification,
+atomic commit, rollback, and bounded cleanup under the install-backup prefix.
+An absent optional policy uses the downloader's documented generic default; an
+installed but malformed policy is a terminal transaction error.
 
 ### Domain metadata rides with the declaration
 

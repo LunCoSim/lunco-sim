@@ -1051,22 +1051,20 @@ lives in domain crates.
 
 ### Modal and authored-policy boundary
 
-`lunco-ui::modal` owns the single egui modal host and its queued outcomes. A
-modal body may be custom-painted, but the host owns the scrim, focus, Esc
-dismissal, button outcomes, and the `CloseModal` command. That command is
-available through the same API/Rhai command funnel as every other typed
-command, so dismissing a consent window never stops the simulation, download
-tasks, or API transport.
+`lunco-ui::modal` remains the egui owner for rich dialogs that need focus,
+queued outcomes, text input, or complex form semantics. The missing-dataset
+consent surface uses the generic runtime-authored modal contract instead:
+`runtime_surfaces.json` declares a viewport `modal`, HUI templates provide
+dynamic keyed rows and buttons, and the runtime blocks scene input while the
+surface is visible and routes Escape through its authored dismiss action.
 
-The dataset consent body remains egui because the retained HTML/Rhai UI layer
-does not yet provide the complete modal contract: a modal host with queue and
-outcome lifecycle, dynamic repeated rows, checkbox/input state events,
-viewport-aware scrolling, and typed command dispatch from the HTML surface.
-Rhai remains the policy owner (`assets/scripting/policy/dataset_provisioning.rhai`):
-it decides prompt versus skip from supplied facts;
-Rust owns only shared transport, persistence, and UI mechanics. An eventual
-HTML modal should add those host capabilities first, then move this body
-without duplicating the current command or policy paths.
+Rhai owns the complete consent view model in
+`assets/scripting/policy/dataset_provisioning.rhai`: whether the surface is
+visible, which rows/actions exist, labels, and the meaning of each semantic
+action. The application Rust bridge validates only the closed generic map,
+publishes it through `EngineExposures`, and forwards the typed action map to
+Rhai. It does not contain dataset-specific widget layout or action-name
+parsing.
 
 ## 12. Workbench apps and the headless launcher
 

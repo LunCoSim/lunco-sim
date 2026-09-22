@@ -6,8 +6,25 @@
 // actions remain available on the typed runtime.ui.action event bus to the
 // authored Twin policies that own them.
 
-fn on_action(action) {
-    if action == () || action == "" { return #{ ok: true, handled: false }; }
+fn on_action(ctx) {
+    if ctx == () || ctx.action == () || ctx.action == "" {
+        return #{ ok: true, handled: false };
+    }
+    let action = ctx.action;
+    let parameters = if ctx.parameters == () { #{} } else { ctx.parameters };
+    if action == "request_all" {
+        return assets::request_recommended(parameters.scope);
+    }
+    if action == "request" {
+        return assets::request(parameters.id);
+    }
+    if action == "dismiss" {
+        let scope = if parameters.scope == () { "" } else { parameters.scope };
+        return cmd("DismissDatasetProvisioning", #{ scope: scope });
+    }
+    if action == "suppress" {
+        return cmd("SuppressDatasetProvisioning", #{ scope: parameters.scope });
+    }
     if handle_camera_ui_action(action) {
         return #{ ok: true, handled: true };
     }

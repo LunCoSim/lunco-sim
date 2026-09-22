@@ -25,17 +25,17 @@ The shipped contract deliberately uses the smallest stable subset:
 | Capability | Runtime contract |
 |---|---|
 | HUI templates | `<template>`, typed recursive `<property>` values, retained `<node>`, `<text>`, `<button>`, and authored row templates |
-| HUI events | semantic `on_press` callbacks, including Rhai-authored `tag:action` values; `on_enter`, `on_exit`, `on_spawn`, and `on_change` remain available for a tested surface-specific need |
+| HUI events | semantic `on_press` callbacks, including Rhai-authored `tag:action` values and typed `tag:*` parameters; `on_enter`, `on_exit`, `on_spawn`, and `on_change` remain available for a tested surface-specific need |
 | Flair styling | authored `#id` selectors, flex/limited grid layout, overflow clipping, custom properties, transitions, animations, media queries, and bundled font imports where supported by the current Bevy style components |
 | LunCo bridge | revision-gated typed exposures, Rhai-owned view models, keyed collections, retained scrolling, explicit placement, and typed command/event dispatch |
 
 `bevy_hui_widgets 0.6.0` is a separate optional crate, not a dependency of
 LunCoSim. It supplies primitive text-input, slider, and select components, but
 not a browser form model, clipboard/caret editing, validation, keyboard
-navigation, accessibility tree, or modal outcome contract. Do not add it merely
-to make a HUD look like a web form. Rich source editing and dialogs remain
-owned by the existing egui workbench until LunCo defines and tests those
-semantics at the correct owner.
+navigation, accessibility tree, or rich modal outcome contract. Do not add it
+merely to make a HUD look like a web form. Simple authored viewport modals use
+the generic `modal`/`dismiss_action` surface fields; rich source editing and
+dialogs remain owned by the existing egui workbench.
 
 ## The boundary
 
@@ -52,7 +52,8 @@ HUI template properties + Flair CSS custom properties
         ▼
 retained Bevy UI tree ───────────► WorkbenchEguiHost / window
 
-HTML button ─► HUI callback ─► RuntimeUiAction ─► typed command observer
+HTML button ─► HUI callback ─► RuntimeUiAction(action, HookValue map)
+          ─► Rhai policy ─► typed command/event
 ```
 
 Each side owns one concern:
@@ -61,7 +62,7 @@ Each side owns one concern:
 |---|---|---|
 | Engine/domain producer | authoritative values, sampling, visibility, capability names | HTML ids, CSS, layout, widget-specific code |
 | `EngineExposures` | typed named snapshots and change revision | renderer or presentation policy |
-| `runtime_surfaces.json` | reusable surface registration, bindings, gates, actions, placement | simulation state, subject selection, and visibility policy |
+| `runtime_surfaces.json` | reusable surface registration, bindings, gates, actions, modal/input policy, placement | simulation state, subject selection, and visibility policy |
 | active Twin `LunCoPolicy` / Rhai | subject visibility, scalar presentation, recording selection | retained tree, simulation authority, and renderer details |
 | `.html` template | retained tree shape, declared properties, callback names | ECS queries, domain commands, CSS layout |
 | `.css` stylesheet | appearance, internal layout, transitions, custom-property mapping | engine state and command dispatch |
@@ -146,14 +147,18 @@ The fields are:
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
 | `setting_default` | Value used when `setting` is absent, including when no Twin is active. This is authored per surface; Rust has no per-setting field. |
 | `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
+| `modal` | Requires an interactive viewport surface and makes its visible root claim the full-window scene-pick gate. This is the generic simple-modal primitive, not a rich dialog queue. |
+| `dismiss_action` | Optional authored semantic action emitted by Escape while a modal surface is visible. Rhai owns what dismissal means. |
 | `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. The shipped `celestial-view` switcher opts in and also has a surface-specific reset in Settings ▸ HUD. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
 
 The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
 callbacks, unsafe relative paths, empty contract names, and non-finite or
-non-positive window geometry before any surface is mounted. Authored semantic
-actions are intentionally open-ended; their meaning belongs to the active Twin
-Rhai program, not to the runtime UI crate.
+non-positive window geometry before any surface is mounted. A `modal` surface
+must be interactive and use viewport placement; its optional `dismiss_action`
+is an authored semantic action. Authored semantic actions are intentionally
+open-ended; their meaning belongs to the active Twin Rhai program, not to the
+runtime UI crate.
 
 Window surfaces may opt into movement with `draggable: true`. The manifest
 remains the default and visibility authority; the workbench stores only a
@@ -314,15 +319,19 @@ For dynamic controls, HUI supports the project convention
 `on_press="runtime_ui_authored_action" tag:action="{action}"`. The
 `action` tag value is a dynamic scalar property supplied by the active
 exposure/Rhai policy, and the typed event resolves it from the pressed HUI
-node. This supports Twin-defined actions without JavaScript or a JSON payload.
+node. Other `tag:*` values form a typed `HookValue` map on the event. The
+runtime transports this map without concatenating it into the action name;
+Rhai owns the interpretation. This supports Twin-defined actions without
+JavaScript or a JSON payload.
 
 There is no DOM query, JavaScript execution, direct resource mutation, or
 widget-specific Rust callback in an authored template. Inputs, forms, text
-editing, lists with virtualisation, modal queue/outcome integration, and
-accessibility semantics are not part of the current surface contract; use
-egui/workbench panels or add an explicit engine capability before assuming
-those features exist. The shared `lunco-ui::modal` host remains the owner of
-scrim, focus, Esc dismissal, queued outcomes, and typed `CloseModal` dispatch.
+editing, rich modal queue/outcome integration, and accessibility semantics are
+not part of the current surface contract; use egui/workbench panels or add an
+explicit engine capability before assuming those features exist. A visible
+authored modal blocks the shared scene-pick gate and Escape emits its declared
+semantic dismiss action. The shared `lunco-ui::modal` host remains the owner of
+focus, queued rich-dialog outcomes, and typed `CloseModal` dispatch.
 
 ### 3. Style the contents
 
