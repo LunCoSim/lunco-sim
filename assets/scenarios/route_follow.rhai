@@ -593,8 +593,11 @@ fn refresh_route_view(me, state, snapshot) {
 
 // The runtime program HUD emits generic semantic actions. This route policy
 // owns the route-specific scope binding; the editor library remains generic.
-fn runtime_program_action(me, action, state) {
-    if action == () { return state; }
+fn runtime_program_action(me, payload, state) {
+    if type_of(payload) != "map" || type_of(payload["action"]) != "string" {
+        return state;
+    }
+    let action = payload["action"];
     let route = route_path(me);
     let doc = route_document(me);
     if route == () || doc == () { return state; }

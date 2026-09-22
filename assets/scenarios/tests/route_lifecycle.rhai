@@ -819,7 +819,7 @@ fn on_tick(me, ctx) {
             "visited route points turn gray while unvisited points stay green"));
         this.checks.push(t_true(this.reached_index == 0,
             "the sensor event advances the stable current route point"));
-        let hud_toggle = emit("runtime.ui.action", "program.toggle");
+        let hud_toggle = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         this.checks.push(t_true(hud_toggle,
             "the authored program HUD dispatches a generic toggle action"));
         this.phase = 12;
@@ -837,6 +837,26 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(is_controlled(this.subject)
             && owner_of(this.subject) == local_session_id(),
             "stopping the route releases program authority without dropping human possession"));
+        let started = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
+        this.checks.push(t_true(started, "the program HUD dispatches its on action"));
+        this.phase = 120;
+        return;
+    }
+
+    if this.phase == 120 {
+        let program_active = port(this.subject, "program_active");
+        if this.started < 2 || program_active == () || program_active < 0.5 { return; }
+        this.checks.push(t_true(true, "the program HUD toggles the route on"));
+        let stopped = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
+        this.checks.push(t_true(stopped, "the program HUD dispatches its off action"));
+        this.phase = 121;
+        return;
+    }
+
+    if this.phase == 121 {
+        let program_active = port(this.subject, "program_active");
+        if this.stopped < 2 || program_active == () || program_active > 0.5 { return; }
+        this.checks.push(t_true(true, "the program HUD toggles the route off again"));
         let points = direct_points(this.doc);
         if points.len() == 0 { return; }
         let delete_path = points[0];

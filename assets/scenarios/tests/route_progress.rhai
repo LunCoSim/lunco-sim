@@ -146,7 +146,7 @@ fn on_tick(me, ctx) {
         if this.start_entered == 0 { return; }
         this.checks.push(t_true(true,
             "Avian enter reaches the Rhai listener while the route is disabled"));
-        let toggled = emit("runtime.ui.action", "program.toggle");
+        let toggled = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         if !toggled { finish(this, false); return; }
         this.phase = 2;
         return;
@@ -177,7 +177,7 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(
             color_is(marker_color(this.doc, points[1]), [0.55, 0.55, 0.55]),
             "the next sensor event marks its route point visited"));
-        let stopped = emit("runtime.ui.action", "program.toggle");
+        let stopped = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         if !stopped { finish(this, false); return; }
         this.transition_elapsed = 0.0;
         this.phase = 4;
@@ -187,7 +187,7 @@ fn on_tick(me, ctx) {
     if this.phase == 4 {
         let active = port(this.subject, "program_active");
         if this.stopped == 0 || active == () || active > 0.5 { return; }
-        let started = emit("runtime.ui.action", "program.toggle");
+        let started = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         if !started { finish(this, false); return; }
         this.phase = 5;
         return;
