@@ -30,13 +30,13 @@ use lunco_usd_document::document::UsdDocument;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use bevy::math::DVec2;
+use bevy::math::{DVec2, DVec3};
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_api::executor::{finish_command_result, DeferredCommandAppExt, PendingApiRequest};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
+use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
 use lunco_api_core::ApiErrorCode;
 use lunco_command_contracts::{Ack, OpId};
-use lunco_core::{on_command, register_commands, ActiveCommandId, Command, CommandResults};
+use lunco_core::{ActiveCommandId, Command, CommandResults, on_command, register_commands};
 use lunco_doc::OpenOutcome;
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::DocumentRegistry;
@@ -49,12 +49,12 @@ use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use lunco_usd_core::commands::{
-    is_usd_path, ApplyUsdOp, ApplyUsdOps, ApplyUsdTransientOps, AttachComponent, AttachProgram,
-    CommitUsdProposal, CreateUsdProposal, DetachComponent, ReviewUsdProposal, UsdDocumentReady,
-    UsdProposalReviewAction, USD_DOCUMENT_KIND,
+    ApplyUsdOp, ApplyUsdOps, ApplyUsdTransientOps, AttachComponent, AttachProgram,
+    CommitUsdProposal, CreateUsdProposal, DetachComponent, ReviewUsdProposal, USD_DOCUMENT_KIND,
+    UsdDocumentReady, UsdProposalReviewAction, is_usd_path,
 };
 use lunco_usd_core::edit_session::{
-    validate_proposal, UsdEditSessions, UsdProposalId, UsdProposalState,
+    UsdEditSessions, UsdProposalId, UsdProposalState, validate_proposal,
 };
 use lunco_usd_data::usd_data::UsdDataExt;
 use lunco_usd_document::document::{LayerId, UsdOp};
@@ -791,8 +791,7 @@ fn on_new_document(trigger: On<NewDocument>, mut commands: Commands) {
 /// Minimal valid `.usda` source for File→New. One empty `World` Xform
 /// — enough that the parser is happy and the user has somewhere to
 /// add prims.
-const DEFAULT_USDA_SCAFFOLD: &str =
-    "#usda 1.0\n(\n    defaultPrim = \"World\"\n    upAxis = \"Y\"\n    metersPerUnit = 1.0\n)\n\ndef Xform \"World\"\n{\n}\n";
+const DEFAULT_USDA_SCAFFOLD: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    upAxis = \"Y\"\n    metersPerUnit = 1.0\n)\n\ndef Xform \"World\"\n{\n}\n";
 
 // ─────────────────────────────────────────────────────────────────────
 // SaveDocument — gated on registry membership
@@ -1354,9 +1353,7 @@ fn on_apply_usd_op(
                                 None => lunco_doc::Mutation::local(expanded_op),
                             },
                         )
-                        .map_err(|reject| {
-                            lunco_doc::DocumentError::Internal(reject.to_string())
-                        }),
+                        .map_err(|reject| lunco_doc::DocumentError::Internal(reject.to_string())),
                     Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
                 }
             }
@@ -1574,93 +1571,192 @@ fn usd_ack_data(
 fn expand_usd_geometry_ops(ops: Vec<UsdOp>) -> Result<Vec<UsdOp>, String> {
     let mut expanded = Vec::with_capacity(ops.len());
     for op in ops {
-        let UsdOp::RevolveProfileMesh {
-            edit_target,
-            path,
-            profile,
-            angular_segments,
-            display_color,
-            collision_enabled,
-        } = op
-        else {
-            expanded.push(op);
-            continue;
+        let (edit_target, path, mesh, display_color, collision_enabled) = match op {
+            UsdOp::RevolveProfileMesh {
+                edit_target,
+                path,
+                profile,
+                angular_segments,
+                display_color,
+                collision_enabled,
+            } => {
+                let mesh = lunco_geometry_core::profile_revolution::revolve_profile(
+                    &profile
+                        .into_iter()
+                        .map(|[radius, height]| DVec2::new(radius, height))
+                        .collect::<Vec<_>>(),
+                    angular_segments,
+                )
+                .map_err(|error| {
+                    format!("RevolveProfileMesh `{path}` profile is invalid: {error}")
+                })?;
+                (
+                    edit_target,
+                    path,
+                    MeshGeometry::Revolved(mesh),
+                    display_color,
+                    collision_enabled,
+                )
+            }
+            UsdOp::ExtrudeProfileMesh {
+                edit_target,
+                path,
+                profile,
+                length,
+                plane,
+                display_color,
+                collision_enabled,
+            } => {
+                let mesh = lunco_geometry_core::profile_extrusion::extrude_profile(
+                    &profile
+                        .into_iter()
+                        .map(|[x, y]| DVec2::new(x, y))
+                        .collect::<Vec<_>>(),
+                    length,
+                    plane,
+                )
+                .map_err(|error| {
+                    format!("ExtrudeProfileMesh `{path}` profile is invalid: {error}")
+                })?;
+                (
+                    edit_target,
+                    path,
+                    MeshGeometry::Extruded(mesh),
+                    display_color,
+                    collision_enabled,
+                )
+            }
+            UsdOp::TaperedBeamMesh {
+                edit_target,
+                path,
+                start,
+                end,
+                width_axis,
+                start_half_width,
+                end_half_width,
+                thickness,
+                display_color,
+                collision_enabled,
+            } => {
+                let mesh = lunco_geometry_core::tapered_beam::tapered_beam(
+                    DVec3::from_array(start),
+                    DVec3::from_array(end),
+                    DVec3::from_array(width_axis),
+                    start_half_width,
+                    end_half_width,
+                    thickness,
+                )
+                .map_err(|error| format!("TaperedBeamMesh `{path}` is invalid: {error}"))?;
+                (
+                    edit_target,
+                    path,
+                    MeshGeometry::Tapered(mesh),
+                    display_color,
+                    collision_enabled,
+                )
+            }
+            other => {
+                expanded.push(other);
+                continue;
+            }
         };
 
         if display_color.iter().any(|value| !value.is_finite()) {
             return Err(format!(
-                "RevolveProfileMesh `{path}` display color must be finite"
+                "procedural mesh `{path}` display color must be finite"
             ));
         }
-        let profile = profile
-            .into_iter()
-            .map(|[radius, height]| DVec2::new(radius, height))
-            .collect::<Vec<_>>();
-        let mesh = lunco_geometry_core::profile_revolution::revolve_profile(
-            &profile,
-            angular_segments,
-        )
-        .map_err(|error| format!("RevolveProfileMesh `{path}` profile is invalid: {error}"))?;
-
-        let attributes = [
-            (
-                "points",
-                "point3f[]",
-                usd_point3_array(mesh.points().iter().map(|point| {
-                    [point.x, point.y, point.z]
-                })),
-            ),
-            (
-                "faceVertexCounts",
-                "int[]",
-                usd_int_array(mesh.face_vertex_counts().iter().copied()),
-            ),
-            (
-                "faceVertexIndices",
-                "int[]",
-                usd_int_array(mesh.face_vertex_indices().iter().copied()),
-            ),
-            (
-                "normals",
-                "normal3f[]",
-                usd_point3_array(mesh.face_varying_normals().iter().map(|normal| {
-                    [normal.x, normal.y, normal.z]
-                })),
-            ),
-            (
-                "orientation",
-                "token",
-                "\"rightHanded\"".to_owned(),
-            ),
-            (
-                "subdivisionScheme",
-                "token",
-                "\"none\"".to_owned(),
-            ),
-            ("doubleSided", "bool", "false".to_owned()),
-            ("purpose", "token", "\"render\"".to_owned()),
-            (
-                "physics:collisionEnabled",
-                "bool",
-                collision_enabled.to_string(),
-            ),
-            (
-                "primvars:displayColor",
-                "color3f[]",
-                usd_point3_array(std::iter::once(display_color)),
-            ),
-        ];
-        expanded.extend(attributes.into_iter().map(|(name, type_name, value)| {
-            UsdOp::SetAttribute {
-                edit_target: edit_target.clone(),
-                path: path.clone(),
-                name: name.to_owned(),
-                type_name: type_name.to_owned(),
-                value,
-            }
-        }));
+        expanded.extend(mesh_attribute_ops(
+            edit_target,
+            path,
+            mesh,
+            display_color,
+            collision_enabled,
+        ));
     }
     Ok(expanded)
+}
+
+enum MeshGeometry {
+    Revolved(lunco_geometry_core::profile_revolution::RevolvedProfileMeshData),
+    Extruded(lunco_geometry_core::profile_extrusion::ProfileMeshData),
+    Tapered(lunco_geometry_core::tapered_beam::TaperedBeamMeshData),
+}
+
+fn mesh_attribute_ops(
+    edit_target: LayerId,
+    path: String,
+    mesh: MeshGeometry,
+    display_color: [f64; 3],
+    collision_enabled: bool,
+) -> Vec<UsdOp> {
+    let (points, counts, indices, normals) = match mesh {
+        MeshGeometry::Revolved(mesh) => (
+            mesh.points()
+                .iter()
+                .map(|point| [point.x, point.y, point.z])
+                .collect::<Vec<_>>(),
+            mesh.face_vertex_counts().to_vec(),
+            mesh.face_vertex_indices().to_vec(),
+            mesh.face_varying_normals()
+                .iter()
+                .map(|normal| [normal.x, normal.y, normal.z])
+                .collect::<Vec<_>>(),
+        ),
+        MeshGeometry::Extruded(mesh) => (
+            mesh.points()
+                .iter()
+                .map(|point| [point.x, point.y, point.z])
+                .collect::<Vec<_>>(),
+            mesh.face_vertex_counts().to_vec(),
+            mesh.face_vertex_indices().to_vec(),
+            mesh.face_varying_normals()
+                .iter()
+                .map(|normal| [normal.x, normal.y, normal.z])
+                .collect::<Vec<_>>(),
+        ),
+        MeshGeometry::Tapered(mesh) => (
+            mesh.points()
+                .iter()
+                .map(|point| [point.x, point.y, point.z])
+                .collect::<Vec<_>>(),
+            mesh.face_vertex_counts().to_vec(),
+            mesh.face_vertex_indices().to_vec(),
+            mesh.face_varying_normals()
+                .iter()
+                .map(|normal| [normal.x, normal.y, normal.z])
+                .collect::<Vec<_>>(),
+        ),
+    };
+    [
+        ("points", "point3f[]", usd_point3_array(points)),
+        ("faceVertexCounts", "int[]", usd_int_array(counts)),
+        ("faceVertexIndices", "int[]", usd_int_array(indices)),
+        ("normals", "normal3f[]", usd_point3_array(normals)),
+        ("orientation", "token", "\"rightHanded\"".to_owned()),
+        ("subdivisionScheme", "token", "\"none\"".to_owned()),
+        ("doubleSided", "bool", "false".to_owned()),
+        ("purpose", "token", "\"render\"".to_owned()),
+        (
+            "physics:collisionEnabled",
+            "bool",
+            collision_enabled.to_string(),
+        ),
+        (
+            "primvars:displayColor",
+            "color3f[]",
+            usd_point3_array(std::iter::once(display_color)),
+        ),
+    ]
+    .into_iter()
+    .map(|(name, type_name, value)| UsdOp::SetAttribute {
+        edit_target: edit_target.clone(),
+        path: path.clone(),
+        name: name.to_owned(),
+        type_name: type_name.to_owned(),
+        value,
+    })
+    .collect()
 }
 
 fn usd_number(value: f64) -> String {
@@ -2916,7 +3012,7 @@ mod change_set_tests {
     use super::*;
     use lunco_doc_bevy::JournalResource;
     use lunco_twin_journal::{AuthorTag, UndoManager, UndoScope};
-    use lunco_usd_core::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
+    use lunco_usd_core::attach::{AttachJoint, AttachSpec, Axis, attach_component_ops};
     use lunco_usd_document::document::LayerId;
 
     const RIG: &str =
