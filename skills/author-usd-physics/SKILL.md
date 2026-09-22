@@ -499,6 +499,13 @@ the USD-to-Avian mesh bridge, while `"dem"` and `"layered"` use the native
 `SurfaceOracle` collider from `lunco-terrain-surface`. Do not author or project a
 second mesh collider over DEM-backed terrain.
 
+Initial poses are admitted against the live terrain after the USD pose bridge has
+seeded every body. Convex colliders use their actual support geometry; composite
+and non-convex shapes retain the conservative AABB check. A persisted pose that
+overlaps after a terrain rebake is held as an authored error. Repair it with the
+typed `TransformEntity` command or remove it with `DeleteEntity`; do not clear the
+pending marker or silently translate the body in Rust.
+
 Every renderable gprim under a composed `kind = "assembly"` vehicle must also
 state who owns its collision contract. A supported enabled
 `PhysicsCollisionAPI` shape is the ordinary owner. A raycast

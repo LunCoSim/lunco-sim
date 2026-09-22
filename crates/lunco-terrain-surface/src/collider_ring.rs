@@ -26,6 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use avian3d::parry::math::Pose;
 use avian3d::prelude::{
     Collider, ColliderAabb, ColliderDisabled, ColliderOf, ColliderTransform, CollisionLayers,
     Position, RayHitData, RayHits, RigidBody, Rotation, Sensor, SimpleCollider, SpatialQueryFilter,
@@ -1494,6 +1495,38 @@ struct InitialCollider {
     layers: CollisionLayers,
 }
 
+/// Return actual support points of a convex collider in a handful of directions
+/// around the terrain normal. An AABB corner is only a broad-phase bound: on a
+/// sloped surface it can lie below the terrain while the collider itself is
+/// airborne. Admission must measure the authored shape, not that inflated box.
+fn collider_terrain_support_points(
+    collider: &InitialCollider,
+    terrain_up: DVec3,
+) -> Option<Vec<DVec3>> {
+    let support = collider.collider.shape_scaled().as_support_map()?;
+    let up = terrain_up.try_normalize()?;
+    let tangent = if up.x.abs() < 0.8 {
+        up.cross(DVec3::X).normalize()
+    } else {
+        up.cross(DVec3::Z).normalize()
+    };
+    let bitangent = up.cross(tangent).normalize();
+    let directions = [
+        -up,
+        (-up + tangent * 0.5).normalize(),
+        (-up - tangent * 0.5).normalize(),
+        (-up + bitangent * 0.5).normalize(),
+        (-up - bitangent * 0.5).normalize(),
+    ];
+    let pose = Pose::from_parts(collider.position, collider.rotation);
+    Some(
+        directions
+            .into_iter()
+            .map(|direction| support.support_point(&pose, direction))
+            .collect(),
+    )
+}
+
 #[derive(Debug)]
 enum InitialContactError {
     UnsupportedShape,
@@ -2051,12 +2084,33 @@ pub fn validate_initial_physics_poses(
                 continue;
             }
             for &m in &members {
+                let mut sampled_shape = false;
+                let mut requires_aabb_fallback = false;
+                for initial in initial_colliders.iter().filter(|initial| initial.body == m) {
+                    let Some(points) =
+                        collider_terrain_support_points(initial, terrain_up.unwrap_or(DVec3::Y))
+                    else {
+                        requires_aabb_fallback = true;
+                        continue;
+                    };
+                    sampled_shape = true;
+                    for point in points {
+                        let Some((local, surface)) = sample_height(point) else {
+                            continue;
+                        };
+                        over_terrain = true;
+                        rigid_penetration = rigid_penetration.max(surface - local.y);
+                    }
+                }
+                if sampled_shape && !requires_aabb_fallback {
+                    continue;
+                }
                 let Some((aabb_min, aabb_max)) = collider_bounds.get(&m).copied() else {
                     continue;
                 };
-                // A ColliderAabb is expressed in the same physics frame as
-                // Position. Test all corners in the terrain frame; using only
-                // its global-Y lower corner is wrong for a rotated terrain.
+                // Composite or non-convex shapes do not expose a support map.
+                // Keep the conservative fallback for those shapes; convex
+                // colliders use their actual support points above.
                 for &x in &[aabb_min.x, aabb_max.x] {
                     for &y in &[aabb_min.y, aabb_max.y] {
                         for &z in &[aabb_min.z, aabb_max.z] {
