@@ -1083,6 +1083,8 @@ fn process_usd_cosim_prim_read(
             severity: lunco_telemetry_core::Severity::Error,
             data: lunco_telemetry_core::TelemetryValue::String(reason),
             timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
         });
         return;
     }
@@ -1138,6 +1140,8 @@ fn process_usd_cosim_prim_read(
                 severity: lunco_telemetry_core::Severity::Error,
                 data: lunco_telemetry_core::TelemetryValue::String(reason),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
             return;
         }
@@ -1185,6 +1189,8 @@ fn process_usd_cosim_prim_read(
                 severity: lunco_telemetry_core::Severity::Error,
                 data: lunco_telemetry_core::TelemetryValue::String(reason),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
             // The terminal component still participates in topology resolution:
             // declared wires must see its published interface and its Error status
@@ -1566,6 +1572,8 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 severity: lunco_telemetry_core::Severity::Error,
                 data: lunco_telemetry_core::TelemetryValue::String(error),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
             continue;
         };
@@ -1647,6 +1655,8 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 severity: lunco_telemetry_core::Severity::Error,
                 data: lunco_telemetry_core::TelemetryValue::String(error),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
         }
 
@@ -1703,6 +1713,8 @@ pub fn dispatch_loaded_python_sources(
                 severity: lunco_telemetry_core::Severity::Error,
                 data: lunco_telemetry_core::TelemetryValue::String(error),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
             commands.entity(entity).try_remove::<PendingPythonSource>();
             continue;

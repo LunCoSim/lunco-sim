@@ -278,6 +278,8 @@ fn publish_stage_projected(world: &mut World, doc: lunco_doc::DocumentId, genera
         severity: lunco_telemetry_core::Severity::Info,
         data: lunco_telemetry_core::TelemetryValue::Map(data),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }
 

@@ -280,6 +280,8 @@ fn bridge_collision_events(
             severity: Severity::Info,
             data,
             timestamp,
+            sim_secs: 0.0,
+            sim_tick: 0,
         });
     };
     // Prefer the explicit `TriggerZone` name (short, stable), falling back to the

@@ -120,10 +120,11 @@ pub struct TelemetryResponse {
     /// resolution left, so differencing two of these destroys the precision. Use
     /// [`sim_secs`](Self::sim_secs).
     pub timestamp: f64,
-    /// Seconds on the sample's own time domain — starts near zero, keeps full `f64`
-    /// precision. **This is the field to plot against and to difference.** `None` for
-    /// discrete `TelemetryEvent`s, which are not sampled on a clock.
+    /// Seconds on the sample or event's simulation clock — starts near zero, keeps
+    /// full `f64` precision. **This is the field to plot against and to difference.**
     pub sim_secs: Option<f64>,
+    /// Fixed simulation tick for the produced sample or discrete event.
+    pub sim_tick: Option<u64>,
     /// The `api_id` of the entity that owns the channel. Parameter names are **not**
     /// unique — two rovers both report `"motor_current"` — so a subscriber needs this
     /// to tell them apart. `None` when the source entity has no global id.
@@ -143,6 +144,7 @@ impl TelemetryResponse {
             unit: param.unit.clone(),
             timestamp: param.timestamp,
             sim_secs: Some(param.sim_secs),
+            sim_tick: Some(param.sim_tick),
             source,
         }
     }
@@ -152,8 +154,8 @@ impl TelemetryResponse {
             value: telemetry_value_to_api_value(&event.data),
             unit: String::new(),
             timestamp: event.timestamp,
-            // A discrete event isn't sampled on a clock and has no domain time.
-            sim_secs: None,
+            sim_secs: Some(event.sim_secs),
+            sim_tick: Some(event.sim_tick),
             // `TelemetryEvent` already carries its emitter as a gid; 0 = "no entity".
             source: (event.source != 0).then_some(event.source),
         }

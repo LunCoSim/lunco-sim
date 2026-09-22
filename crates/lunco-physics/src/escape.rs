@@ -548,6 +548,8 @@ fn report_escaped_bodies(
             severity: Severity::Error,
             data: TelemetryValue::String(detail),
             timestamp,
+            sim_secs: 0.0,
+            sim_tick: 0,
         });
         match action_name {
             "pause_object" => warn!(

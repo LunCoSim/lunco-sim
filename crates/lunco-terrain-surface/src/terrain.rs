@@ -82,6 +82,8 @@ fn dem_failure_event(
         severity,
         data: lunco_telemetry_core::TelemetryValue::String(detail.into()),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     }
 }
 

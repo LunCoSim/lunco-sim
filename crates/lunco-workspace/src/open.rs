@@ -188,6 +188,8 @@ fn twin_open_failed(detail: impl Into<String>) -> TelemetryEvent {
         severity: Severity::Error,
         data: TelemetryValue::String(detail.into()),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     }
 }
 

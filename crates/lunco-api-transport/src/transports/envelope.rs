@@ -51,6 +51,7 @@ pub(crate) fn encode_response(response: ApiResponse) -> ApiResponseEnvelope {
             "unit": event.unit,
             "timestamp": event.timestamp,
             "sim_secs": event.sim_secs,
+            "sim_tick": event.sim_tick,
             "source": event.source,
         }))
         .map(|data| ApiResponseEnvelope {

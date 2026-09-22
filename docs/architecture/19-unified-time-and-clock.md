@@ -26,6 +26,10 @@ the transport anchor and tick; they are not independently accumulated by a
 consumer. A re-anchor is an explicit transport event and must remain
 host-authoritative in a networked run.
 
+Fixed-step producers use the shared `SimTickSet` ordering anchor. Telemetry
+records the tick and the `MissionClock` seconds derived from it, so collection
+does not use a render or wall-clock accumulator.
+
 `CelestialTime` is a separate presentation projection of the celestial clock.
 It normally equals `WorldTime.epoch_jd`, but a `SetClock` re-parent onto `Real`
 may advance it while the causal simulation is paused. Only explicitly

@@ -60,7 +60,10 @@ While scene readiness is holding the world, scenario fixed/update passes are
 closed and `TelemetryEvent`s are not copied into the bounded script inbox. This
 prevents startup producer traffic from filling the inbox before any scenario
 can consume it. Once readiness opens the gate, events follow the normal FIFO
-delivery and overflow diagnostic.
+delivery. If producers still exceed the fixed capacity, collection latches the
+`scripting-telemetry/telemetry-event-overflow` runtime diagnostic, clears the
+partial batch, and holds event delivery until the next scene transition resets
+the inbox; it never terminates the simulator from an observer.
 
 **Names are never inferred from the AST.** Zone events are `enter:<zone>` prefixes, and names can come from `switch` / `.contains` / computed strings — static inference would miss cases, and a missed name is a silently dropped event (a broken lesson). Subscription is therefore explicit-only.
 

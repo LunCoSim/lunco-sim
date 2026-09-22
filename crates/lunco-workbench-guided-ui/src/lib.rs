@@ -734,6 +734,8 @@ fn emit_tour(commands: &mut Commands, name: &str, data: lunco_telemetry_core::Te
         severity: lunco_telemetry_core::Severity::Info,
         data,
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }
 

@@ -253,6 +253,8 @@ pub fn dataset_failed(detail: impl Into<String>) -> lunco_telemetry_core::Teleme
         severity: lunco_telemetry_core::Severity::Error,
         data: lunco_telemetry_core::TelemetryValue::String(detail.into()),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     }
 }
 

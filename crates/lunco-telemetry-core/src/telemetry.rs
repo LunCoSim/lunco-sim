@@ -100,6 +100,14 @@ pub struct TelemetryEvent {
     pub data: TelemetryValue,
     /// The simulation TDB epoch of the event.
     pub timestamp: f64,
+    /// Seconds on the authoritative simulation clock at which the event was
+    /// observed. This is the precise ordering/differencing timebase; callers
+    /// must not difference the Julian-Date `timestamp`.
+    pub sim_secs: f64,
+    /// Fixed simulation tick that produced the event. Events raised between
+    /// fixed steps retain the latest completed tick, so delivery remains tied
+    /// to simulator time rather than render cadence.
+    pub sim_tick: u64,
 }
 
 /// Project a typed command occurrence onto the shared script event bus.
@@ -116,6 +124,8 @@ pub(crate) fn command_telemetry_event(name: impl Into<String>) -> TelemetryEvent
         severity: Severity::Info,
         data: TelemetryValue::String(name),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     }
 }
 
@@ -127,6 +137,8 @@ impl Default for TelemetryEvent {
             severity: Severity::Info,
             data: TelemetryValue::F64(0.0),
             timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
         }
     }
 }
@@ -147,6 +159,8 @@ pub(crate) fn trigger_error(
         severity: Severity::Error,
         data: TelemetryValue::String(message.into()),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }
 
@@ -305,6 +319,10 @@ pub struct SampledParameter {
     /// Seconds on the channel's own time domain — starts near zero, so it keeps full
     /// `f64` precision. **This is the timebase for Δt, plotting, and recording.**
     pub sim_secs: f64,
+    /// Fixed simulation tick at which this value was read. This lets consumers
+    /// correlate continuous samples with discrete events without reconstructing
+    /// a tick from a floating-point time.
+    pub sim_tick: u64,
     /// The entity whose value was measured. Names collide; entities don't.
     ///
     /// The channel's own entity is [`channel`](Self::channel); keeping both

@@ -55,6 +55,8 @@ pub(crate) fn report_unknown_perspective(commands: &mut Commands, id: &str) {
             "No workbench perspective named `{id}` is registered"
         )),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }
 

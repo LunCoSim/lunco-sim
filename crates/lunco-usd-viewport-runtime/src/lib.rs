@@ -2761,6 +2761,8 @@ fn report_preview_error(world: &mut World, name: &str, detail: String) {
         severity: lunco_telemetry_core::Severity::Error,
         data: lunco_telemetry_core::TelemetryValue::String(detail),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }
 
@@ -2964,6 +2966,8 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
                 severity: lunco_telemetry_core::Severity::Error,
                 data: lunco_telemetry_core::TelemetryValue::String(error.to_string()),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
             return None;
         }
@@ -2979,6 +2983,8 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
             severity: lunco_telemetry_core::Severity::Error,
             data: lunco_telemetry_core::TelemetryValue::String(error.to_string()),
             timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
         });
         if let Err(cleanup_error) = world.resource::<TwinRoots>().unregister_name(&name) {
             world.trigger(lunco_telemetry_core::TelemetryEvent {
@@ -2987,6 +2993,8 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
                 severity: lunco_telemetry_core::Severity::Error,
                 data: lunco_telemetry_core::TelemetryValue::String(cleanup_error.to_string()),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
         }
         return None;

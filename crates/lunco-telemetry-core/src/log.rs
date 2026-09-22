@@ -33,14 +33,14 @@ fn log_telemetry_events(trigger: On<TelemetryEvent>) {
         || evt.name.starts_with("link.")
     {
         debug!(
-            "[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}",
-            evt.name, evt.severity, evt.data, evt.timestamp
+            "[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}, sim_secs={:.6}, sim_tick={}",
+            evt.name, evt.severity, evt.data, evt.timestamp, evt.sim_secs, evt.sim_tick
         );
         return;
     }
     info!(
-        "[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}",
-        evt.name, evt.severity, evt.data, evt.timestamp
+        "[BLACKBOX] EVENT: name={}, severity={:?}, data={:?}, ts={:.4}, sim_secs={:.6}, sim_tick={}",
+        evt.name, evt.severity, evt.data, evt.timestamp, evt.sim_secs, evt.sim_tick
     );
 }
 
@@ -56,7 +56,7 @@ fn log_sampled_parameter(trigger: On<SampledParameter>) {
     // not the tracing log; this line is only a debug aid. Discrete EVENTs stay at
     // `info!` above — they are rare (touchdown, low-fuel) and worth seeing by default.
     debug!(
-        "[BLACKBOX] SAMPLE: name={}, value={:?}, unit={}, ts={:.4}",
-        param.name, param.value, param.unit, param.timestamp
+        "[BLACKBOX] SAMPLE: name={}, value={:?}, unit={}, ts={:.4}, sim_secs={:.6}, sim_tick={}",
+        param.name, param.value, param.unit, param.timestamp, param.sim_secs, param.sim_tick
     );
 }

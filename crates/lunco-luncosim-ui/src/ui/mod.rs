@@ -511,6 +511,8 @@ fn on_runtime_ui_action(
                 severity: lunco_telemetry_core::Severity::Info,
                 data: lunco_telemetry_core::TelemetryValue::String(action),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
         }
     }
@@ -749,6 +751,8 @@ fn draw_runtime_ui_dropdowns(
             severity: lunco_telemetry_core::Severity::Info,
             data: lunco_telemetry_core::TelemetryValue::String(action),
             timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
         });
     }
 }
@@ -1280,6 +1284,8 @@ fn report_scenario_registry_error(ctx: &mut MenuCtx, detail: impl Into<String>) 
             severity: lunco_telemetry_core::Severity::Error,
             data: lunco_telemetry_core::TelemetryValue::String(detail),
             timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
         });
     }
 }
@@ -1388,6 +1394,8 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                                     ),
                                                 ),
                                                 timestamp: 0.0,
+                                                sim_secs: 0.0,
+                                                sim_tick: 0,
                                             });
                                             continue;
                                         }

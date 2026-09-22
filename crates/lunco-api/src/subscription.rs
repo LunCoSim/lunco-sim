@@ -167,7 +167,10 @@ impl TelemetrySubscriptions {
 
         let key = (name.to_string(), source_bits);
         match self.last_sent.get(&key) {
-            Some(&last) if sim_secs - last < 1.0 / rate => false,
+            // A seek/replay can move the simulation clock backwards. Treat
+            // that as a new epoch for this subscription instead of suppressing
+            // every sample until the clock catches the old watermark.
+            Some(&last) if sim_secs >= last && sim_secs - last < 1.0 / rate => false,
             _ => self.mark_sent(name, source_bits, sim_secs),
         }
     }
@@ -376,6 +379,23 @@ mod tests {
             "still inside the period"
         );
         assert!(subs.should_send_sample("p", 1, 0.6), "0.6 s ≥ 0.5 s ⇒ sent");
+    }
+
+    #[test]
+    fn a_simulation_seek_restarts_subscription_decimation() {
+        let mut subs = TelemetrySubscriptions::default();
+        subs.subscribe(Some(TelemetryFilter {
+            names: vec![],
+            min_severity: None,
+            rate_hz: Some(2.0),
+        }));
+
+        assert!(subs.should_send_sample("p", 1, 10.0));
+        assert!(
+            subs.should_send_sample("p", 1, 2.0),
+            "a replay seek must not wait for the old forward-time watermark"
+        );
+        assert!(!subs.should_send_sample("p", 1, 2.1));
     }
 
     /// Decimation is keyed by (name, entity). Two rovers both reporting "motor_current"

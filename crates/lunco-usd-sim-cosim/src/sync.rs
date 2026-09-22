@@ -272,6 +272,8 @@ pub fn fire_connected_events(
                 severity: binding.severity,
                 data: lunco_telemetry_core::TelemetryValue::F64(value),
                 timestamp: world_time.epoch_jd,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
         }
     }

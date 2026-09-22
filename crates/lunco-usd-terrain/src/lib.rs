@@ -199,6 +199,8 @@ fn publish_terrain_schema_status(mut status: ResMut<TerrainSchemaStatus>, mut co
             error
         )),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }
 
@@ -1862,6 +1864,8 @@ fn bridge_dem_prim_read(
                     severity: lunco_telemetry_core::Severity::Warning,
                     data: lunco_telemetry_core::TelemetryValue::String(detail),
                     timestamp: 0.0,
+                    sim_secs: 0.0,
+                    sim_tick: 0,
                 });
                 return;
             }

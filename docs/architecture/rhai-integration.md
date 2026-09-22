@@ -207,7 +207,9 @@ delivers at the next fixed pass, while a paused simulation uses the next
 `Update` pass without running fixed-step behavior. Inter-script interaction is
 bus-only (isolated VMs); see §7f. Events emitted while a pass is delivering its
 current batch remain queued for the following pass, so lifecycle hooks can
-publish a readiness edge without losing it at the dispatch boundary.
+publish a readiness edge without losing it at the dispatch boundary. Every
+event carries the simulator's `sim_secs` and `sim_tick` stamp; the absolute
+`timestamp` is only the derived TDB epoch label.
 
 ### Examples
 
@@ -705,13 +707,16 @@ scripts react to — but **reuse existing infrastructure, don't reinvent.** It
 already exists in `crates/lunco-core/src/telemetry.rs` (XTCE/YAMCS-aligned — bonus
 ground-station/ROS interop):
 
-- `TelemetryEvent { name, severity: Severity, data: TelemetryValue, timestamp }`
-  (`:57`) — "discrete notification of a system state change." THIS is the sim event.
+- `TelemetryEvent { name, severity: Severity, data: TelemetryValue, timestamp, sim_secs, sim_tick }`
+  (`:57`) — "discrete notification of a system state change." `sim_secs` and
+  `sim_tick` are stamped from the shared simulation clock; `timestamp` is the
+  derived TDB epoch label.
 - `TelemetryValue` (F64/I64/Bool/String/Array/Map, serde) (`:41`) — the typed payload value; structured event parameters do not need string parsing.
 - `Severity` (YAMCS 5-tier) (`:25`); `SampledParameter` (`:101`) — continuous data;
   `Parameter { name, unit, path }` (`:87`) — reflection-path monitor source for the
   lunco-telemetry sampling engine.
-- timestamp = `WorldTime.epoch_jd` TDB epoch (Julian Date) — already the standard (`:14`).
+- timestamp = the `MissionClock` TDB epoch (Julian Date) at `sim_tick` — the
+  standard absolute label (`:14`); use `sim_secs` for differences and plots.
 - The docstring even names *"Command Ack"* as an example `TelemetryEvent` — it was
   designed for exactly this notification role.
 
