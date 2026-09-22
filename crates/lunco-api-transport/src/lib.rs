@@ -144,7 +144,7 @@ impl Plugin for LunCoApiPlugin {
         #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
         {
             use crate::{
-                http_bridge_request_router, http_response_observer, ApiHttpResponsePending,
+                ApiHttpResponsePending, http_bridge_request_router, http_response_observer,
             };
             use transports::HttpBridge;
 
@@ -183,7 +183,10 @@ impl Plugin for LunCoApiPlugin {
                 .insert_resource(ApiBridge(bridge.clone()))
                 .init_resource::<ApiHttpResponsePending>()
                 .add_observer(http_response_observer)
-                .add_systems(Update, http_bridge_request_router);
+                .add_systems(
+                    Update,
+                    http_bridge_request_router.in_set(lunco_core::RuntimeCycleSet::Command),
+                );
 
             // Native: spawn the blocking TcpListener HTTP server. wasm has no
             // `spawn_server` (axum/tokio-net are native-only) — the browser uses

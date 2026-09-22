@@ -599,6 +599,19 @@ pub fn project_sun_state_to_light(
     };
 }
 
+/// Keep the last committed render-sun sample while a scene transaction is
+/// still assembling its transforms. Scene teardown clears the resource at the
+/// ownership boundary; during a load, an incomplete frame is therefore a
+/// pending presentation product rather than a new "black" sun.
+fn clear_render_sun_if_scene_is_idle(
+    render_state: &mut SunRenderState,
+    coordinator: Option<&lunco_core::SceneTransitionCoordinator>,
+) {
+    if coordinator.is_none_or(|coordinator| coordinator.active().is_none()) {
+        render_state.clear();
+    }
+}
+
 /// Publish the render sun only after BigSpace has finalized the scene light's
 /// `GlobalTransform`.
 ///
@@ -619,6 +632,7 @@ pub fn finalize_sun_render_state(
         ),
     >,
     mut render_state: ResMut<SunRenderState>,
+    coordinator: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let Some(direction_to_sun) = sun
@@ -626,19 +640,19 @@ pub fn finalize_sun_render_state(
         .and_then(|state| state.direction_to_sun)
         .and_then(SunState::normalized_direction)
     else {
-        render_state.clear();
+        clear_render_sun_if_scene_is_idle(&mut render_state, coordinator.as_deref());
         return;
     };
     let Some(active_frame) = active_frame else {
-        render_state.clear();
+        clear_render_sun_if_scene_is_idle(&mut render_state, coordinator.as_deref());
         return;
     };
     let Ok(frame_gt) = q_frames.get(active_frame.0) else {
-        render_state.clear();
+        clear_render_sun_if_scene_is_idle(&mut render_state, coordinator.as_deref());
         return;
     };
     let Ok(sun_gt) = q_sun.single() else {
-        render_state.clear();
+        clear_render_sun_if_scene_is_idle(&mut render_state, coordinator.as_deref());
         return;
     };
 
@@ -663,7 +677,7 @@ pub fn finalize_sun_render_state(
                 }],
             );
         }
-        render_state.clear();
+        clear_render_sun_if_scene_is_idle(&mut render_state, coordinator.as_deref());
         return;
     }
 

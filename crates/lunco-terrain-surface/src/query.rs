@@ -31,8 +31,8 @@ use bevy::ecs::query::QueryState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{
-    api_param_array, api_param_f64, api_param_str, api_param_u64, ApiQueryError,
-    ApiQueryProvider, ApiQueryRegistry, ApiQueryResult,
+    api_param_array, api_param_f64, api_param_str, api_param_u64, ApiQueryError, ApiQueryProvider,
+    ApiQueryRegistry, ApiQueryResult,
 };
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
@@ -53,7 +53,10 @@ const FIELD_MAX_RES: usize = 256;
 /// Maximum points returned by one analytic terrain sample request.
 const HEIGHTS_MAX_POINTS: usize = 4096;
 
-fn height_terrains(world: &World, query_name: &str) -> Result<Vec<(Entity, Arc<SurfaceOracle>)>, ApiQueryError> {
+fn height_terrains(
+    world: &World,
+    query_name: &str,
+) -> Result<Vec<(Entity, Arc<SurfaceOracle>)>, ApiQueryError> {
     let Some(mut query) = QueryState::<(Entity, &DemHeightField)>::try_new(world) else {
         return Err(ApiQueryError::new(
             ApiErrorCode::InternalError,
@@ -156,8 +159,7 @@ impl ApiQueryProvider for TerrainHeightProvider {
         }
         let eps_override = optional_height_eps(params, "TerrainHeight")?;
         let terrains = height_terrains(world, "TerrainHeight")?;
-        let Some((entity, height, normal, slope)) =
-            sample_height(&terrains, x, z, eps_override)
+        let Some((entity, height, normal, slope)) = sample_height(&terrains, x, z, eps_override)
         else {
             return Ok(Some(api_value!({ "found": false })));
         };

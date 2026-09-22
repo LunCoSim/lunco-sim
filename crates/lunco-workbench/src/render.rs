@@ -4,8 +4,12 @@
 //! egui dock, menus, status presentation, and graphics/settings rendering.
 
 use super::*;
+use lunco_viz::{
+    cached_telemetry_sparkline_stats, render_telemetry_sparkline, SignalRef,
+    TelemetrySparklineOptions,
+};
 use lunco_workbench_core::{trigger_or_defer, DeferredWorldTriggers};
-use lunco_workbench_perf_ui::{frame_history, frame_ms_stats, PerfHudSettings, PerfStats};
+use lunco_workbench_perf_ui::{PerfHudSettings, PerfStats};
 
 #[derive(Resource)]
 pub(crate) struct WorkbenchVisualsCache {
@@ -1167,12 +1171,13 @@ pub(crate) fn render_status_bar_inner(
         (latest, history)
     };
     let perf_stats = world.resource::<PerfStats>().clone();
-    // Raw frame times straight out of Bevy's own `Diagnostic` ring buffer — `PerfStats`
-    // no longer shadows it with a second `VecDeque` holding the same values.
-    let frame_history: Vec<f32> = world
-        .get_resource::<bevy::diagnostic::DiagnosticsStore>()
-        .map(frame_history)
-        .unwrap_or_default();
+    // The status bar uses the ordinary retained telemetry channel. The
+    // sparkline is a generic signal widget; frame time is only its default
+    // selection, not a special diagnostics reader.
+    let frame_time_signal = SignalRef::global("engine.frame_time");
+    let signal_registry = world.get_resource::<lunco_viz::SignalRegistry>();
+    let frame_history =
+        signal_registry.and_then(|registry| registry.scalar_history(&frame_time_signal));
     let perf_enabled = world.resource::<PerfHudSettings>().enabled;
     // The networking chip only paints when not standalone; reserve room
     // for it on the right so the clickable status region doesn't overlap.
@@ -1191,6 +1196,7 @@ pub(crate) fn render_status_bar_inner(
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
     let recent_events_width = status_popup_width(ui.ctx().content_rect().width());
     let popup_width = recent_events_width;
+    let mut status_action = None;
 
     ui.horizontal(|ui| {
         let bar_width = ui.available_width();
@@ -1301,7 +1307,7 @@ pub(crate) fn render_status_bar_inner(
                 .filter(|event| event.level == StatusLevel::Attention)
                 .map(|event| event.source)
             {
-                trigger_or_defer(world, StatusBarAction { source });
+                status_action = Some(StatusBarAction { source });
             } else {
                 unreachable!("attention status button rendered without an attention event");
             }
@@ -1363,7 +1369,10 @@ pub(crate) fn render_status_bar_inner(
         if perf_enabled {
             let perf_width = status_bar_perf_width(ui.available_width(), right_widths.perf);
             if perf_width > 0.0 {
-                let p99 = frame_ms_stats(&frame_history).map(|(_, _, p99)| p99);
+                let sparkline_id = ui.id().with("engine_frame_time");
+                let p99 =
+                    cached_telemetry_sparkline_stats(ui.ctx(), sparkline_id, &frame_time_signal)
+                        .map(|stats| stats.p99 as f32);
                 let (required_text, perf_text) = perf_hud_text(
                     perf_stats.fps,
                     perf_stats.frame_ms,
@@ -1380,7 +1389,7 @@ pub(crate) fn render_status_bar_inner(
                             perf_width,
                             required_width,
                             item_spacing,
-                            !frame_history.is_empty(),
+                            frame_history.is_some_and(|history| !history.is_empty()),
                         );
                         let label_width =
                             (ui.available_width() - sparkline_width - item_spacing).max(1.0);
@@ -1397,7 +1406,21 @@ pub(crate) fn render_status_bar_inner(
                             ),
                         )
                         .on_hover_text(&perf_text);
-                        draw_frame_time_sparkline(ui, &frame_history, theme, sparkline_width);
+                        if let Some(registry) = signal_registry {
+                            render_telemetry_sparkline(
+                                ui,
+                                registry,
+                                &frame_time_signal,
+                                theme,
+                                TelemetrySparklineOptions {
+                                    id: sparkline_id,
+                                    width: sparkline_width,
+                                    height: 18.0,
+                                    reference_y: Some(16.67),
+                                    line_color: None,
+                                },
+                            );
+                        }
                     },
                 );
             }
@@ -1447,10 +1470,13 @@ pub(crate) fn render_status_bar_inner(
                         }
                     });
                 if let Some(source) = popup_attention_source {
-                    trigger_or_defer(world, StatusBarAction { source });
+                    status_action = Some(StatusBarAction { source });
                 }
             });
     });
+    if let Some(action) = status_action {
+        trigger_or_defer(world, action);
+    }
 }
 
 const STATUS_EVENT_LEVEL_WIDTH: f32 = 56.0;
@@ -1993,7 +2019,7 @@ fn status_bar_right_widths(
 /// - **Host**: green dot, `HOST :PORT · N peers` (this window's listen port).
 /// - **Client (connected)**: green dot, `CLIENT → host:port`.
 /// - **Client (connecting)**: amber dot, `connecting → host:port`.
-fn render_net_chip(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme, width: f32) {
+fn render_net_chip(ui: &mut egui::Ui, world: &World, theme: &lunco_theme::Theme, width: f32) {
     use lunco_core_session::{NetStatus, NetworkRole};
     let Some(status) = world.get_resource::<NetStatus>().cloned() else {
         return;
@@ -2032,78 +2058,6 @@ fn render_net_chip(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Th
         },
     );
     ui.separator();
-}
-
-/// Draws a small frame-time sparkline in the status bar so spikes
-/// the smoothed `FPS` number hides become visible. Y axis auto-
-/// scales to whatever the worst recent sample was; a faint reference
-/// line at 16.67 ms (60 FPS) anchors the eye.
-fn draw_frame_time_sparkline(
-    ui: &mut egui::Ui,
-    frame_history: &[f32],
-    theme: &lunco_theme::Theme,
-    width: f32,
-) {
-    if frame_history.is_empty() {
-        return;
-    }
-    // Plot dimensions chosen to fit the 18 px-tall status bar with
-    // a few px of breathing room.
-    let size = egui::vec2(width, 14.0);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let painter = ui.painter().with_clip_rect(rect);
-
-    // Auto-scale: top of the plot is the worst recent sample, but
-    // never below ~25 ms so a calm 60 FPS run doesn't make 1 ms
-    // jitter look like a spike.
-    let max_ms: f32 = frame_history
-        .iter()
-        .copied()
-        .fold(0.0_f32, f32::max)
-        .max(25.0_f32);
-
-    // 16.67 ms (60 FPS) reference line — pulls from `text_subdued`
-    // and softens with alpha so it doesn't compete with the trace.
-    let muted = theme.tokens.text_subdued;
-    let muted_soft = muted.alpha(80);
-    let ref_y = rect.bottom() - rect.height() * (16.67 / max_ms).min(1.0);
-    painter.line_segment(
-        [
-            egui::pos2(rect.left(), ref_y),
-            egui::pos2(rect.right(), ref_y),
-        ],
-        egui::Stroke::new(0.5, muted_soft),
-    );
-
-    let n = frame_history.len();
-    let step = rect.width() / (lunco_workbench_perf_ui::FRAME_HISTORY_LEN - 1).max(1) as f32;
-    let mut prev: Option<egui::Pos2> = None;
-    for (i, ms) in frame_history.iter().enumerate() {
-        let x = rect.left() + i as f32 * step;
-        let y = rect.bottom() - rect.height() * (*ms / max_ms).clamp(0.0, 1.0);
-        let here = egui::pos2(x, y);
-        // Per-sample colour: success ≤16.67 ms, warning ≤33 ms, error above.
-        let colour = if *ms <= 16.67 {
-            theme.tokens.success
-        } else if *ms <= 33.34 {
-            theme.tokens.warning
-        } else {
-            theme.tokens.error
-        };
-        if let Some(p) = prev {
-            painter.line_segment([p, here], egui::Stroke::new(1.0, colour));
-        }
-        prev = Some(here);
-    }
-    // Outline so the plot reads as a chart, not random pixels.
-    let outline = muted.alpha(100);
-    painter.rect_stroke(
-        rect,
-        0.0,
-        egui::Stroke::new(0.5, outline),
-        egui::StrokeKind::Inside,
-    );
-    let _ = n;
 }
 
 pub(crate) fn render_panel_solo(

@@ -50,6 +50,7 @@ lunco-workbench-state = { path = "../lunco-workbench-state" }
 lunco-workbench-layout = { path = "../lunco-workbench-layout" }
 lunco-workbench-help-ui = { path = "../lunco-workbench-help-ui" }
 lunco-workbench-window = { path = "../lunco-workbench-window" }
+lunco-viz = { path = "../lunco-viz", features = ["ui"] }
 lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-status-core = { path = "../lunco-status-core" }
 # Screenshot commands and GPU readback live in the production capture capability;
@@ -65,6 +66,7 @@ egui_dock = { version = "0.20", features = ["serde"] }
 # from `lunco-command-macro`). Brings shell picker/workflow verbs onto the
 # same typed-command bus that domain crates already use.
 lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-input-core = { path = "../lunco-input-core" }
 lunco-input-ui = { path = "../lunco-input-ui" }

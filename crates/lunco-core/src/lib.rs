@@ -16,6 +16,7 @@ pub mod assembly;
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
 pub mod commands;
+pub mod cycles;
 pub mod derived;
 pub mod faults;
 /// M1 — deterministic identity from `Provenance`. The only place network
@@ -48,6 +49,7 @@ pub use commands::{
     ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOutcome, CommandResults,
     EditIntent, MarkClientLocalExt, SpawnEntity,
 };
+pub use cycles::{RuntimeCycle, RuntimeCycleSet, RuntimeRoute, RuntimeScope};
 pub use derived::RebuildOnChange;
 pub use events::{trigger_runtime_error, CommandOccurred, RuntimeError, SubsystemStateChanged};
 pub use faults::{

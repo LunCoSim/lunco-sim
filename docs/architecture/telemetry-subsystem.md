@@ -6,7 +6,7 @@
 
 The built subsystem provides explicit `ChannelSource` declarations, per-channel rate and
 deadband, clock binding via `TimeBinding`, persisted `TelemetrySettings`, retained scalar
-history, the query/subscription API, engine diagnostics as channels, and
+history, the query/subscription API, engine diagnostics admitted as channels, and
 `SampledParameter::sim_secs`/`source` identity.
 
 The one-line thesis: telemetry history is shared, bounded, and policy-driven. Modelica runtime
@@ -133,7 +133,7 @@ ring buffers, a clock tree, and a timeseries type already exist.
 |---|---|---|
 | **Different clocks / cycles** | `lunco-time::domain` — `TimeDomain { parent, offset, scale, regime }` (affine child clock, USD `LayerOffset` semantics), `Playback { head, mode, rate, looping }` (independent playhead), **`TimeBinding { domain: Entity }` — a per-entity component**, `ResolvedDomains` resolved once per frame | **Use as-is.** "Sample this channel on another clock" = give the channel a `TimeBinding`. Nothing to build. |
 | **Retention / ring buffer** | `lunco_signal::SignalRegistry` — `ScalarHistory { VecDeque<ScalarSample>, capacity }` **per signal**, `push_scalar()` drops non-finite, and `SignalMeta { unit, provenance }` | **Use as-is.** Routing `SampledParameter → push_scalar` keeps retention and plotting on one path. |
-| **FPS / frame stats** | `bevy::diagnostic::Diagnostic` — named `DiagnosticPath` + ring buffer + `history_len` + `smoothed()` + `is_enabled`. Used in **exactly one file** (`perf_hud.rs`), which then **hand-rolls its own** `frame_history: VecDeque<f32>` (`FRAME_HISTORY_LEN = 240`) on top of it | **A `Diagnostic` IS a telemetry channel** (f64-only). Expose it as a channel *source*; delete perf_hud's duplicate buffer. |
+| **FPS / frame stats** | Bevy diagnostics provide the engine-owned measurements and short diagnostic ring. `lunco-telemetry` admits the selected paths, samples the typed `EngineHealthSnapshot`, and retains them in the global `SignalRegistry` history | **Use the diagnostic as an input, not as a UI data store.** The retained `SignalRegistry` series is the canonical history for HUDs, plots, APIs, and recording. |
 | **Timeseries / experiments** | `RunResult { times: Vec<f64>, series: BTreeMap<String, Vec<f64>> }` (columnar), `RunUpdate::Progress { delta }` (incremental stream), `RunBounds { dt, n_intervals }` (**the codebase's existing vocabulary for output sample spacing**), `REGISTRY_CAP_PER_TWIN = 20` | A telemetry **recording** should *be* a `RunResult` — it then plots and retains through machinery that already works. Rate vocabulary should rhyme with `RunBounds::dt`. |
 | **Physics observations and conversions** | Native Avian ports plus LunCoRaycastAPI raw-query outputs; Modelica IMU/altimeter/attitude conversions are ordinary SimComponent ports | **Use the same telemetry path.** No semantic Rust sensor registry is needed. |
 | **Channel address space** | `lunco_port_core::ports` — `PortRegistry`, `PortRef { name, direction, value: f64 }`, and crucially **`ResolvedPort { backend, slot }` — resolve the name ONCE, then read every tick with one call**. Backends: Modelica vars, Avian bodies, joints, FSW signals, USD sensors | The fast path. **Do not re-resolve a name at 60 Hz.** |
@@ -165,8 +165,8 @@ pub enum ChannelSource {
     /// Escape hatch: arbitrary component field by reflection path ("Port.value").
     /// The only source that can carry Bool/String. Slower — exclusive world access.
     Reflect(String),
-    /// A bevy `Diagnostic` (FPS, frame time, entity count). f64 only. Free ring buffer.
-    Diagnostic(DiagnosticPath),
+    /// A Bevy diagnostic path admitted by telemetry policy. f64 only.
+    Diagnostic(String),
 }
 ```
 
@@ -181,6 +181,23 @@ channels. Modelica runtime variables are a separate generic producer: the solver
 publishes its complete current variable map, and the Modelica core projects that map into the
 same `SignalRegistry` using `TelemetrySettings`. No USD output attribute, per-variable
 `Parameter`, or plot binding is required.
+
+### Engine diagnostics and generic visualization
+
+Bevy's `DiagnosticsStore` and diagnostic rings are an engine-owned measurement source. They are
+read once by the core health publisher and by the telemetry admission/sampling bridge; no HUD,
+status widget, plot, or API surface reads the store directly. The default admitted engine
+channels are FPS and frame time. Additional diagnostic paths require explicit channel metadata
+or policy so an internal diagnostic cannot silently become a public catalog entry.
+
+The bridge publishes the latest typed health facts through `EngineHealthSnapshot` and retains
+the selected scalar samples as global signals (`engine.fps`, `engine.frame_time`) in the shared
+`SignalRegistry`. The headline frame time is smoothed, while `engine.frame_time` retains the
+latest raw diagnostic value so short hitches remain visible. `lunco-viz` owns the generic
+telemetry sparkline: it consumes a `SignalRef` and the corresponding retained
+`ScalarHistory`, caches only derived display points/statistics, and does not create another
+history. The status bar merely selects the default frame-time signal; the same widget and
+history are available to plots, API clients, recording, and future HUDs.
 
 ---
 
@@ -455,10 +472,12 @@ The resolution rules are deliberately narrow:
 - **Phase 4 — DONE.** `lunco:telemetry:*` USD authoring. Avian observations and
   Modelica conversion outputs are ordinary ports, so tagging one for telemetry
   is just `lunco:telemetry:port` naming it. Recording = `ExportTelemetryRecording`.
-- **Phase 5 — DONE.** `ChannelSource::Diagnostic` makes FPS/frame-time real channels; the
-  hand-rolled `frame_history` ring buffer in `perf_hud` is **deleted** — `bevy::Diagnostic`
-  already IS a named ring buffer with a configurable depth, and `PerfStats` was shadowing
-  it with a second `VecDeque` holding the identical values.
+- **Phase 5 — DONE.** `ChannelSource::Diagnostic` admits FPS/frame-time as real channels. The
+  status bar no longer owns a diagnostic-specific `VecDeque`: the typed engine-health publisher
+  samples the engine facts once, `SignalRegistry` retains the canonical global series, and the
+  generic `lunco-viz` sparkline reads that history. Bevy's diagnostic ring remains a bounded
+  engine measurement source and smoothing aid; it is not the application's UI or recording
+  history.
 
 ### There is no separate "recorder"
 

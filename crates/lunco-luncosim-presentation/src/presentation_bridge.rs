@@ -56,7 +56,16 @@ pub(crate) fn register(app: &mut App) {
     terrain_horizon::register(app);
     app.init_resource::<AuthoredEnv>();
     app.add_systems(lunco_core::SceneTeardown, reset_authored_env);
-    app.add_systems(Update, (project_env_settings, apply_authored_env).chain());
+    app.add_systems(
+        Update,
+        project_env_settings.in_set(lunco_core::RuntimeCycleSet::Visualization),
+    );
+    app.add_systems(
+        Update,
+        apply_authored_env
+            .in_set(lunco_core::RuntimeCycleSet::Visualization)
+            .run_if(authored_env_apply_due),
+    );
 }
 
 /// **Environment-settings projection** — the read half of persisting
@@ -96,11 +105,19 @@ fn reset_authored_env(mut authored: ResMut<AuthoredEnv>) {
     *authored = AuthoredEnv::default();
 }
 
-/// Apply the authored environment exposure to every camera that exists RIGHT NOW.
-///
-/// Runs every frame and is a no-op when the values already match, so a camera
-/// spawned (or respawned, or reparented on possession) long after the scene
-/// loaded still gets the scene's exposure.
+/// Apply the authored environment exposure when the authored value or a camera
+/// exposure target appears. This is a visualization event consumer, not a
+/// per-frame UI/render scan.
+fn authored_env_apply_due(
+    authored: Option<Res<AuthoredEnv>>,
+    added_camera: Query<(), Added<bevy::camera::Camera>>,
+    added_exposure: Query<(), Added<bevy::camera::Exposure>>,
+) -> bool {
+    authored.is_some_and(|value| value.is_changed())
+        || !added_camera.is_empty()
+        || !added_exposure.is_empty()
+}
+
 fn apply_authored_env(
     authored: Option<Res<AuthoredEnv>>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,

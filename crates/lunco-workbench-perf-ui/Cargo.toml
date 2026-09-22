@@ -9,6 +9,8 @@ description = "Reusable Workbench performance diagnostics and HUD state"
 bevy = { workspace = true }
 bevy_egui = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-exposure-core = { path = "../lunco-exposure-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 serde = { workspace = true }

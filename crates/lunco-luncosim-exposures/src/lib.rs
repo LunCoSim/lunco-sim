@@ -20,10 +20,11 @@ use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_control_core::ControlLink;
 use lunco_core::GlobalEntityId;
 use lunco_core::SceneMountState;
+use lunco_core_runtime::{ApplicationCadence, EngineHealthSnapshot, PhysicsHealthSnapshot};
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_exposure_core::{
-    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
+    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
 };
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
@@ -32,7 +33,7 @@ use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use lunco_usd_bevy_stage::read::UsdReadObject;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
@@ -62,8 +63,95 @@ impl Plugin for RuntimeExposuresPlugin {
                 publish_exposure
                     .after(mark_exposure_dirty)
                     .run_if(exposure_publish_due),
+            )
+            .add_systems(
+                PostUpdate,
+                publish_engine_health_exposure
+                    .after(lunco_core_runtime::health::publish_engine_health)
+                    .in_set(lunco_core::RuntimeCycleSet::Presentation),
             );
+        app.add_systems(
+            PostUpdate,
+            publish_application_cadence_exposure.in_set(lunco_core::RuntimeCycleSet::Presentation),
+        );
     }
+}
+
+/// Publish engine health through the same generic retained exposure boundary
+/// used by authored HUDs and remote presentation clients.
+///
+/// The status-bar performance widget is only one consumer. Twin-authored HUI,
+/// egui panels, API queries, and recorders can bind to the `engine-health`
+/// namespace without adding another diagnostics reader or a product-specific
+/// HUD bridge. Missing measurements stay absent; no fake zero is exposed.
+fn publish_engine_health_exposure(
+    engine: Res<EngineHealthSnapshot>,
+    physics: Res<PhysicsHealthSnapshot>,
+    mut exposures: ResMut<EngineExposures>,
+) {
+    if !engine.is_changed() && !physics.is_changed() {
+        return;
+    }
+
+    let mut surface = exposures.writer("engine-health");
+    surface.clear_properties();
+    if let Some(fps) = engine.fps {
+        surface.property("fps", fps);
+    }
+    if let Some(frame_time_ms) = engine.frame_time_ms {
+        surface.property("frame_time_ms", frame_time_ms);
+    }
+    if let Some(raw_frame_time_ms) = engine.raw_frame_time_ms {
+        surface.property("frame_time_raw_ms", raw_frame_time_ms);
+    }
+    if let Some(step_time_ms) = physics.step_time_ms {
+        surface.property("physics_step_ms", step_time_ms);
+        surface.property("physics_step_number", physics.step_number as f64);
+    }
+    // Revisions are diagnostic identity, not measurements. Keep them typed as
+    // strings so a large u64 can never be narrowed through a presentation
+    // value just to make it fit a numeric HUD property.
+    surface.property("engine_revision", engine.revision.to_string());
+    surface.property("physics_revision", physics.revision.to_string());
+    surface.visible(
+        engine.fps.is_some() || engine.frame_time_ms.is_some() || physics.step_time_ms.is_some(),
+    );
+}
+
+/// Publish command and REPL timing through the same generic application
+/// namespace as other presentation-ready facts. The two clocks are kept
+/// separate: command admission/dispatch is not script evaluation, and neither
+/// is allowed to borrow simulation time.
+fn publish_application_cadence_exposure(
+    cadence: Option<Res<ApplicationCadence>>,
+    mut exposures: ResMut<EngineExposures>,
+) {
+    let Some(cadence) = cadence else {
+        return;
+    };
+    if !cadence.is_changed() {
+        return;
+    }
+
+    let mut surface = exposures.writer("application-cadence");
+    surface.clear_properties();
+    surface.property("command_sequence", cadence.command.sequence.to_string());
+    surface.property("command_elapsed_s", cadence.command.elapsed_secs);
+    surface.property("repl_sequence", cadence.repl.sequence.to_string());
+    surface.property("repl_elapsed_s", cadence.repl.elapsed_secs);
+    if let Some(interval) = cadence.command.interval_secs {
+        surface.property("command_interval_ms", interval * 1000.0);
+    }
+    if let Some(rate) = cadence.command.rate_hz {
+        surface.property("command_rate_hz", rate);
+    }
+    if let Some(interval) = cadence.repl.interval_secs {
+        surface.property("repl_interval_ms", interval * 1000.0);
+    }
+    if let Some(rate) = cadence.repl.rate_hz {
+        surface.property("repl_rate_hz", rate);
+    }
+    surface.visible(cadence.command.sequence > 0 || cadence.repl.sequence > 0);
 }
 
 const LUNAR_MAP_SETTING_KEY: &str = "ui.lunar_map";
@@ -1142,6 +1230,76 @@ mod exposure_schedule_tests {
             &mut timer,
             Duration::from_millis(2)
         ));
+    }
+}
+
+#[cfg(test)]
+mod engine_health_exposure_tests {
+    use super::*;
+
+    #[test]
+    fn engine_health_is_a_generic_typed_exposure() {
+        let mut app = App::new();
+        app.insert_resource(EngineHealthSnapshot {
+            fps: Some(60.0),
+            frame_time_ms: Some(16.666),
+            raw_frame_time_ms: Some(20.0),
+            revision: 7,
+        })
+        .insert_resource(PhysicsHealthSnapshot {
+            step_time_ms: Some(0.5),
+            step_number: 42,
+            revision: 9,
+        })
+        .init_resource::<EngineExposures>()
+        .add_systems(PostUpdate, publish_engine_health_exposure);
+
+        app.update();
+
+        let exposures = app.world().resource::<EngineExposures>();
+        let surface = exposures
+            .surfaces
+            .get("engine-health")
+            .expect("engine health exposure");
+        assert!(surface.visible);
+        assert_eq!(surface.properties["fps"].render(), "60");
+        assert_eq!(surface.properties["physics_step_ms"].render(), "0.5");
+        assert_eq!(surface.properties["frame_time_raw_ms"].render(), "20");
+        assert_eq!(surface.properties["physics_step_number"].render(), "42");
+        assert_eq!(surface.properties["engine_revision"].render(), "7");
+        assert_eq!(surface.properties["physics_revision"].render(), "9");
+    }
+}
+
+#[cfg(test)]
+mod application_cadence_exposure_tests {
+    use super::*;
+
+    #[test]
+    fn application_cadence_is_a_separate_generic_exposure() {
+        let mut command = lunco_core_runtime::CadenceClock::default();
+        command.sequence = 4;
+        command.elapsed_secs = 1.5;
+        command.interval_secs = Some(0.25);
+        command.rate_hz = Some(4.0);
+        let mut repl = lunco_core_runtime::CadenceClock::default();
+        repl.sequence = 2;
+        repl.elapsed_secs = 0.5;
+        repl.interval_secs = Some(0.5);
+        repl.rate_hz = Some(2.0);
+        let mut app = App::new();
+        app.insert_resource(ApplicationCadence { command, repl })
+            .init_resource::<EngineExposures>()
+            .add_systems(PostUpdate, publish_application_cadence_exposure);
+
+        app.update();
+
+        let surface = &app.world().resource::<EngineExposures>().surfaces["application-cadence"];
+        assert!(surface.visible);
+        assert_eq!(surface.properties["command_sequence"].render(), "4");
+        assert_eq!(surface.properties["repl_sequence"].render(), "2");
+        assert_eq!(surface.properties["command_interval_ms"].render(), "250");
+        assert_eq!(surface.properties["repl_rate_hz"].render(), "2");
     }
 }
 

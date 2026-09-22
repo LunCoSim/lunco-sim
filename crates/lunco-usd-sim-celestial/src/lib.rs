@@ -996,18 +996,15 @@ fn project_celestial_comms_prims(
     canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
 ) {
     for (entity, prim_path) in query.iter() {
-        // A scene mounted without an explicit root uses the empty path as the
-        // documented defaultPrim-resolution sentinel. The USD visual
-        // projector replaces it with the concrete composed path once the stage
-        // is loaded. Do not consume the marker while that path is unresolved:
-        // the root carries the scene's SiteAnchor.
-        if prim_path.path.is_empty() {
-            continue;
-        }
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
+        // An ordinary scene mount keeps the empty path as a documented
+        // defaultPrim sentinel until the visual projector writes the concrete
+        // root path. Resolve that sentinel here from the same loaded plan so
+        // the root's authored mission epoch is projected before child domains
+        // (notably terrain) begin building from the default clock epoch.
         let (reader, _generation) = canonical.reader_for(id, stage_asset);
         let Some(resolved_path) =
             lunco_usd_bevy_stage::resolve_stage_prim_path(&reader, &prim_path.path)

@@ -38,7 +38,8 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::{CellCoord, Grid, Stationary};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Command, HorizonShadowTerrain};
+use lunco_environment::HorizonMap;
 use lunco_materials::{
     ParamValue, ShaderLook, ShaderLookReady, TextureLayer, ATTRIBUTE_MORPH_EDGE,
     ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
@@ -2169,6 +2170,8 @@ pub fn update_lod_tiles(
                 Option<&TerrainDerivedMaps>,
                 Option<&TerrainAuthoredMaps>,
                 Option<&TileShadowCache>,
+                Option<&HorizonShadowTerrain>,
+                Option<&HorizonMap>,
                 Option<&ShaderLook>,
                 Has<LodFrozen>,
             ),
@@ -2257,10 +2260,21 @@ pub fn update_lod_tiles(
             maps,
             authored,
             shadow,
+            horizon_shadow,
+            horizon_map,
             template,
             frozen,
         ) in &mut terrains
         {
+            // Horizon-shadow terrain has one complete lighting contract: its
+            // heightfield must be present before the first streamed tile is
+            // admitted. The horizon bake is an off-thread visual product, but
+            // exposing tiles before it lands changes the material inputs after
+            // the terrain is already visible. Non-opted-in DEMs keep the normal
+            // path.
+            if horizon_shadow.is_some() && horizon_map.is_none() {
+                continue;
+            }
             let Some(template) = template else {
                 bevy::log::error!(
                     target: "terrain",
@@ -3250,7 +3264,7 @@ pub fn update_lod_tiles(
 
     if !stitch_applied.is_empty() {
         let mut terrains = terrain_queries.p0();
-        for (_, _, _, mut tiles, _, _, _, _, _, _, _) in &mut terrains {
+        for (_, _, _, mut tiles, _, _, _, _, _, _, _, _, _) in &mut terrains {
             for slot in tiles.tiles.values_mut() {
                 if let Some(edges) = stitch_applied.get(&slot.entity) {
                     slot.stitch_edges = *edges;

@@ -19,6 +19,9 @@ use bevy::prelude::*;
 /// the same support decision that gates its first physics step.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TerrainSurfaceSet {
+    /// Build or recompose the authoritative DEM/oracle before visual products
+    /// consume its surface identity.
+    Build,
     /// Project changed Avian bodies/colliders/joints into terrain support data.
     PhysicsSupportCache,
     /// Apply streamed-tile shadow intent after the finalized BigSpace render
@@ -141,7 +144,8 @@ impl Plugin for TerrainSurfacePlugin {
                 // event fired this frame (stays in `Update` so its
                 // `RemovedComponents` reader drains every frame).
                 crate::stream_viz::despawn_orphaned_lod_tiles,
-            ),
+            )
+                .in_set(lunco_core::RuntimeCycleSet::Visualization),
         );
         // Tile shadow intent is a render-frame consumer. It must see the final
         // floating-origin transforms, and is kept in a public phase so the
@@ -149,7 +153,8 @@ impl Plugin for TerrainSurfacePlugin {
         app.add_systems(
             PostUpdate,
             crate::stream_viz::bind_shadow_cache_to_tiles
-                .in_set(TerrainSurfaceSet::RenderShadowBinding),
+                .in_set(TerrainSurfaceSet::RenderShadowBinding)
+                .in_set(lunco_core::RuntimeCycleSet::Visualization),
         );
         // Composable TERRAIN LAYER stack (authored as USD child layer prims; craters
         // stamp into the grid, rocks scatter on the surface). The parser registry maps

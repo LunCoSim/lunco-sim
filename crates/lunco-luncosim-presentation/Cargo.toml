@@ -12,6 +12,7 @@ lunco-capture = { path = "../lunco-capture", features = ["api"] }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-celestial-presentation = { path = "../lunco-celestial-presentation" }
 lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-render = { path = "../lunco-render" }

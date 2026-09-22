@@ -137,7 +137,12 @@ pub enum UsdTerrainSet {
 
 impl Plugin for UsdTerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(Update, UsdTerrainSet::Schema.before(UsdTerrainSet::Bridge));
+        app.configure_sets(
+            Update,
+            UsdTerrainSet::Schema
+                .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
+                .before(UsdTerrainSet::Bridge),
+        );
         app.init_resource::<TerrainSchemaStatus>();
         app.add_systems(
             Update,

@@ -45,6 +45,7 @@ lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime", features = ["cosim"] }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
+lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial" }
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-scene-camera = { path = "../lunco-scene-camera" }

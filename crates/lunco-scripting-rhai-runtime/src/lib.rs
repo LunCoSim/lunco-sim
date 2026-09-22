@@ -93,6 +93,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             .add_systems(
                 Update,
                 lunco_scripting_rhai_world::world_bridge::drain_world_scripts
+                    .in_set(lunco_core::RuntimeCycleSet::Repl)
                     .run_if(scripts_run_here),
             )
             .add_systems(

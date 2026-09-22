@@ -13,6 +13,7 @@ winit = ["bevy/bevy_winit"]
 [dependencies]
 lunco-api = { path = "../lunco-api" }
 lunco-api-core = { path = "../lunco-api-core" }
+lunco-core = { path = "../lunco-core" }
 lunco-api-codec = { path = "../lunco-api-codec" }
 lunco-api-contracts = { path = "../lunco-api-contracts" }
 bevy = { workspace = true }

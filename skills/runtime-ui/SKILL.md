@@ -114,6 +114,19 @@ and remote consumers. Do not add `domain_to_view`, `vessel_exposure`, or a
 widget-specific Rust registry. Resolve source state in the engine producer;
 keep markup unaware of ECS/domain types.
 
+Engine health follows the same generic path. Read the typed
+`EngineHealthSnapshot`/`PhysicsHealthSnapshot` publication and expose named
+properties through the ordinary `engine-health` namespace; do not add a HUD
+reader for `DiagnosticsStore`, an Avian timing query, or another source-specific
+bridge. Native UI, HUI, API, telemetry, and recording consumers all read the
+common publication. For scalar participant state, use the shared
+`PortRegistry`; do not create a parallel port reader for a HUD.
+
+Command and one-shot REPL timing is also generic presentation data. Read the
+`application-cadence` exposure for command and REPL sequence/interval/rate
+values; do not attach a HUD timer to `Time<Virtual>`, count API requests as
+completed script evaluations, or read the command/REPL owners directly.
+
 Producers must use change detection, revisions, or dirty flags. Continuous
 values are coalesced to the current bounded presentation cadence (20 Hz).
 `EngineExposures.revision` changes only when a value or visibility flag changes;

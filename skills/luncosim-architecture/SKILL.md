@@ -104,6 +104,32 @@ the spatial runtime owns cadence and headless-safe scene projection, gravity,
 links, and commands. Do not add a forwarding module or public re-export in the
 host crate when the owning presentation package can be installed directly.
 
+### Runtime scopes, cycles, and publication boundaries
+
+Use the shared `lunco_core::RuntimeScope` and `RuntimeCycleSet` vocabulary when
+placing a cross-cutting system. `Core`, `Application`, and `Twin` describe
+ownership; `Lifecycle`, `Simulation`, `Interaction`, `Command`, `Repl`, `Ui`, `Presentation`, and
+`Visualization` describe cadence. These are schedule labels and typed route
+metadata, not a new global event bus. Twin-owned resources and completions must
+carry their mount generation and be retired at Twin teardown.
+
+Commands and one-shot Rhai/REPL evaluations have independent application
+clocks. Record command cadence from the shared `CommandOccurred` publication
+and REPL cadence from actual `drain_world_scripts` evaluation. Both use the
+wall clock, never simulation time; a queued script is not counted as evaluated
+until the exclusive REPL owner runs it. Publish their sequence and timing
+through `ApplicationCadence`/`application-cadence` so consumers do not add
+their own timers or infer cadence from render frames.
+
+Publish each fact through its one domain boundary before adding a consumer:
+scalar co-simulation endpoints use `PortRegistry`; presentation-ready values
+use `EngineExposures`; lifecycle occurrences use typed events or revisioned
+resources. Status bars, authored HUDs, telemetry adapters, API readers, and
+recorders consume those publications. They must not independently scan engine
+diagnostics, query a physics owner, or introduce a widget-specific registry.
+The fixed-step and rollback co-simulation paths share one propagation function
+and compiled cache; transform propagation remains a separate spatial owner.
+
 For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources as
 one linked material contract: both stages read the same `@binding(0)` uniform
 block, so their `Material` fields, order, and WGSL types must agree. The

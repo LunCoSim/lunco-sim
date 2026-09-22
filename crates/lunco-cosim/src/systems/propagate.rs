@@ -166,6 +166,15 @@ pub struct CompiledWiring {
     loops: Vec<DetectedLoop>,
 }
 
+/// Shared propagation state for every schedule that replays the co-simulation
+/// transaction. The normal fixed step and rollback replay call the same
+/// propagation function; keeping the change detector and compiled fabric in a
+/// resource prevents each schedule from maintaining a second wiring cache.
+#[derive(Resource, Default)]
+pub struct PropagationCache {
+    wiring: RebuildOnChange<BoundConnection, CompiledWiring>,
+}
+
 impl CompiledWiring {
     /// Recompile the fabric from the live [`SimConnection`] set. Runs only when
     /// the wiring changed (driven by [`RebuildOnChange`]). Resolves every
@@ -445,7 +454,8 @@ impl CompiledWiring {
 /// 1. **Recompile-if-changed** — [`RebuildOnChange`] rebuilds the fabric only
 ///    when the `SimConnection` set changes (`Changed`/`Added`/`Removed`, plus a
 ///    forced first run), so this system stays self-contained yet allocation-free
-///    on the steady path.
+///    on the steady path. The cache is shared by the fixed and rollback
+///    schedules, so neither schedule creates a second compiled reader table.
 /// 2. **Seed** — every target's accumulator slot to `0.0`, so a target whose
 ///    source vanished cleanly returns to zero.
 /// 3. **Accumulate** — read each source via [`PortRegistry::read_output_port`],
@@ -465,17 +475,23 @@ impl CompiledWiring {
 /// entity such as the bare `Port` nodes of a rover's actuation graph) and skips
 /// only targets that are replicated from the host and merely rendered. Host and
 /// standalone propagate into everything.
-pub fn propagate_connections(
+pub fn propagate_connections(world: &mut World, mut acc: Local<Vec<f64>>) {
+    world.resource_scope(|world, mut cache: Mut<PropagationCache>| {
+        propagate_connections_with_cache(world, &mut cache.wiring, &mut acc);
+    });
+}
+
+fn propagate_connections_with_cache(
     world: &mut World,
-    mut wiring: Local<RebuildOnChange<BoundConnection, CompiledWiring>>,
-    mut acc: Local<Vec<f64>>,
+    wiring: &mut RebuildOnChange<BoundConnection, CompiledWiring>,
+    acc: &mut Vec<f64>,
 ) {
     // Registry is a `Vec` of `Copy` backend fn-pointers; clone it out so the
     // write phase can take `&mut World` without holding a resource borrow.
     let registry = world.resource::<PortRegistry>().clone();
 
     // Phase 1: recompile the fabric iff the connection set changed. The compiled
-    // fabric is owned by the `Local` (no world borrow), so the phases below keep
+    // fabric is owned by the shared cache (no world borrow), so the phases below keep
     // `&mut World` for the resolver.
     let mut rewired = false;
     let compiled = wiring.get_or_rebuild(world, |compiled, world| {

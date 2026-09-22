@@ -501,6 +501,31 @@ impl Plugin for LunCoSimSimulationPlugin {
         // Core (not GUI-gated): the headless server needs the collider for
         // deterministic physics, and the crate links no render code.
         app.add_plugins(lunco_usd_terrain::UsdTerrainPlugin);
+        // A site-authored mission epoch is part of scene admission, not a late
+        // terrain side effect. Celestial projection must seed the causal clock
+        // before terrain starts its DEM/georef build; otherwise the first
+        // renderable terrain is produced at the default epoch and the sun then
+        // jumps when the authored epoch arrives.
+        app.configure_sets(
+            Update,
+            (
+                lunco_usd_sim_celestial::CelestialProjectionSet::Projection,
+                lunco_usd_terrain::UsdTerrainSet::Bridge,
+                lunco_celestial_spatial::CelestialTerrainSet::Curvature,
+                lunco_terrain_surface::TerrainSurfaceSet::Build,
+            )
+                .chain(),
+        );
+        // Curvature is a resource inserted by the celestial coupling system.
+        // Apply that deferred insertion before the DEM build set so the first
+        // oracle captures the final body radius instead of being restamped from
+        // a provisional flat surface one frame later.
+        app.add_systems(
+            Update,
+            ApplyDeferred
+                .after(lunco_celestial_spatial::CelestialTerrainSet::Curvature)
+                .before(lunco_terrain_surface::TerrainSurfaceSet::Build),
+        );
         // The activation gate stays here — it is the assembly point that sees both the
         // terrain request and the USD simulation readiness contract.
         app.add_systems(

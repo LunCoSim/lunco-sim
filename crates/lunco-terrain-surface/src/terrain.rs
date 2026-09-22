@@ -2893,7 +2893,8 @@ pub(crate) fn register(app: &mut App) {
                 finish_dem_collider.after(start_dem_collider),
                 remove_late_ring_owner_colliders,
                 update_terrain_gen_status,
-            ),
+            )
+                .in_set(crate::plugin::TerrainSurfaceSet::Build),
         );
     // WEB: register the off-thread DEM bake worker URL (staged by build_web.sh next
     // to the wasm) and the reply-draining system that applies the coarse-then-full

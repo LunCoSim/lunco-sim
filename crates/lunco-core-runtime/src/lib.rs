@@ -7,11 +7,15 @@
 //! and diagnostic contracts remain in `lunco_core` because shared domains use
 //! them without requiring this runtime plugin.
 
+pub mod cadence;
 pub mod gate;
+pub mod health;
 pub mod pacing;
 pub mod subsystems;
 pub mod sync;
 
+pub use cadence::{ApplicationCadence, CadenceClock};
+pub use health::{ENGINE_HEALTH_HISTORY_LEN, EngineHealthSnapshot, PhysicsHealthSnapshot};
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };
@@ -93,9 +97,16 @@ impl Plugin for LunCoCoreRuntimePlugin {
             .register_type::<lunco_core::MobilityRoot>()
             .register_type::<lunco_core::GlobalEntityId>()
             .register_type::<lunco_core::Provenance>()
-            .register_type::<SimTick>();
+            .register_type::<SimTick>()
+            .register_type::<health::EngineHealthSnapshot>()
+            .register_type::<health::PhysicsHealthSnapshot>();
 
         register_core_resources(app);
+        app.add_observer(record_command_cadence);
+        app.add_systems(
+            PostUpdate,
+            health::publish_engine_health.in_set(lunco_core::RuntimeCycleSet::Presentation),
+        );
         app.add_systems(
             lunco_core::SceneTeardown,
             (
@@ -103,9 +114,33 @@ impl Plugin for LunCoCoreRuntimePlugin {
                 reset_core_scene_state,
             ),
         );
+        app.configure_sets(
+            lunco_core::SceneTeardown,
+            lunco_core::RuntimeCycleSet::Lifecycle,
+        );
         subsystems::build_subsystems(app);
-        app.configure_sets(FixedUpdate, SimTickSet)
-            .add_systems(FixedUpdate, advance_sim_tick.in_set(SimTickSet));
+        app.configure_sets(
+            FixedUpdate,
+            (lunco_core::RuntimeCycleSet::Simulation, SimTickSet).chain(),
+        )
+        .add_systems(FixedUpdate, advance_sim_tick.in_set(SimTickSet));
+        app.configure_sets(
+            Update,
+            (
+                lunco_core::RuntimeCycleSet::Command,
+                lunco_core::RuntimeCycleSet::Repl,
+                lunco_core::RuntimeCycleSet::Ui,
+            )
+                .chain(),
+        );
+        app.configure_sets(
+            PostUpdate,
+            (
+                lunco_core::RuntimeCycleSet::Presentation,
+                lunco_core::RuntimeCycleSet::Ui,
+            )
+                .chain(),
+        );
         app.init_resource::<RollbackInProgress>();
     }
 }
@@ -118,7 +153,21 @@ fn register_core_resources(app: &mut App) {
         .init_resource::<lunco_core::RuntimeFaults>()
         .init_resource::<lunco_core::RuntimeDiagnostics>()
         .init_resource::<SimulationBarrier>()
-        .init_resource::<SimulationBarrierParticipants>();
+        .init_resource::<SimulationBarrierParticipants>()
+        .init_resource::<health::EngineHealthSnapshot>()
+        .init_resource::<health::PhysicsHealthSnapshot>()
+        .init_resource::<ApplicationCadence>();
+}
+
+fn record_command_cadence(
+    _trigger: On<lunco_core::CommandOccurred>,
+    time: Option<Res<Time<Real>>>,
+    mut cadence: ResMut<ApplicationCadence>,
+) {
+    let Some(time) = time else {
+        return;
+    };
+    cadence.observe_command(&time);
 }
 
 fn reset_core_scene_state(mut rollback: ResMut<RollbackInProgress>) {
@@ -148,5 +197,27 @@ mod tests {
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 1);
+    }
+
+    #[test]
+    fn command_occurrence_advances_only_the_command_clock() {
+        let mut app = App::new();
+        app.add_plugins(LunCoCoreRuntimePlugin)
+            .insert_resource(Time::<Real>::default());
+
+        app.world_mut().trigger(lunco_core::CommandOccurred {
+            name: "First".to_owned(),
+        });
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_millis(250));
+        app.world_mut().trigger(lunco_core::CommandOccurred {
+            name: "Second".to_owned(),
+        });
+
+        let cadence = app.world().resource::<ApplicationCadence>();
+        assert_eq!(cadence.command.sequence, 2);
+        assert_eq!(cadence.repl.sequence, 0);
+        assert_eq!(cadence.command.interval_secs, Some(0.25));
     }
 }

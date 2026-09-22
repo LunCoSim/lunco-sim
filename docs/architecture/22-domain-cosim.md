@@ -91,6 +91,30 @@ vehicle/lander modeling that builds on this surface is in
 
 ## Execution pipeline
 
+### One propagation fabric and one reader path
+
+`lunco-cosim::systems::propagate::propagate_connections` is the sole scalar
+connection transaction. It reads source endpoints and writes target endpoints
+through the shared `PortRegistry`; it does not query Modelica, Avian, or a
+particular vehicle directly. `SimConnection` topology is compiled into one
+generation-aware `PropagationCache` and resolved endpoint handles are reused
+until the bound connection set changes. The fixed simulation schedule and
+rollback replay schedule invoke this same function and share that cache, so
+replay does not introduce a second wiring table or a second source-reader
+implementation.
+
+Participant adapters have explicit edges around this transaction: they publish
+their outputs before propagation and consume their inputs after propagation.
+`PortRegistry` is the only scalar endpoint reader/writer; API, inspector,
+telemetry, and scripts use its resolved readers as well. `bind_connections`
+remains the topology-admission step and is not a second propagation path.
+
+Spatial transform propagation (BigSpace and Avian collider transforms) is a
+different owner: it maintains world-space hierarchy and physics transforms,
+not named scalar `SimConnection` wires. Keeping that distinction prevents a
+second scalar propagation implementation while preserving the transform
+system's own schedule and invalidation rules.
+
 All cosim and physics systems run in `FixedUpdate` at a shared fixed timestep
 so every engine advances with the same `dt`:
 

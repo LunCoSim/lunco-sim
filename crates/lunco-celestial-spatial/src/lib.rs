@@ -90,6 +90,15 @@ pub struct CelestialEpochSet;
 
 pub struct CelestialPlugin;
 
+/// Update phase that publishes the body-curvature input consumed by DEM
+/// construction. It is separate from authored celestial projection because
+/// terrain georeferencing must exist before the curvature owner can resolve its
+/// body, while the DEM build must not capture the previous (flat) value.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CelestialTerrainSet {
+    Curvature,
+}
+
 /// Give the persistent BigSpace root an explicit semantic frame as soon as it
 /// exists. This lets generic camera/network state use the same framed-pose
 /// path in non-celestial scenes instead of falling back to an unnamed parent
@@ -443,7 +452,10 @@ impl Plugin for CelestialPlugin {
 
         // Site-anchored scenes: hand the DEM terrain the body radius so it
         // curves onto the globe sphere (see `placement::sync_terrain_body_curvature`).
-        app.add_systems(Update, placement::sync_terrain_body_curvature);
+        app.add_systems(
+            Update,
+            placement::sync_terrain_body_curvature.in_set(CelestialTerrainSet::Curvature),
+        );
 
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate

@@ -64,6 +64,19 @@ Only use unconditional-every-frame systems for genuinely continuous
 work: the renderer, physics stepping, tool animation ticks, smooth
 camera easing. Everything else is reactive.
 
+### Application interaction clocks are separate
+
+Command dispatch and one-shot REPL evaluation are application work, not
+simulation work and not UI painting. `RuntimeCycleSet::Command` orders the
+typed command ingress; `RuntimeCycleSet::Repl` orders the exclusive
+`drain_world_scripts` evaluation that follows it. The core runtime maintains
+independent wall-clock `ApplicationCadence` clocks for those phases. The
+command clock advances on the shared `CommandOccurred` publication, while the
+REPL clock advances once per script actually evaluated. Do not use
+`Time<Virtual>`/`FixedUpdate` for either path, and do not count a queued REPL
+request as completed evaluation. The resulting `application-cadence`
+exposure is the common reader for UI, telemetry, API, and recording consumers.
+
 The render camera binder applies the same rule to Bevy's clustered-light
 infrastructure. `Camera3d` requires a `Clusters` component, but directional
 lights do not use it and Bevy's default allocates a 4,096-cell grid even when
@@ -199,6 +212,11 @@ The same ownership rule applies to the measured presentation paths:
   owner, keyed by the history fingerprint. A plot host may clone points at the
   `egui_plot` owned-data boundary, but it must not recopy the SignalRegistry
   ring buffer merely because the panel painted again.
+- **Status sparklines** use the same retained `SignalRegistry` history as every
+  other telemetry visualization. `lunco-viz` derives and caches decimated points
+  and summary statistics from a `(SignalRef, history fingerprint, width)` key;
+  the status bar does not read `DiagnosticsStore` or maintain an FPS-specific
+  ring.
 - **Canvas edges** retain projected screen geometry by scene generation and
   viewport key. Scene edits, viewport movement, and panel resizing invalidate
   that geometry; selection and tool state remain live draw inputs and do not

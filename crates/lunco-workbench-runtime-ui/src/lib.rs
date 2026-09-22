@@ -532,7 +532,8 @@ impl Plugin for RuntimeUiPlugin {
                     .after(bevy_hui::HuiSystems::Build)
                     .before(bevy_hui::HuiSystems::Style),
                 register_runtime_ui_input_regions.after(apply_runtime_ui_exposures),
-            ),
+            )
+                .in_set(lunco_core::RuntimeCycleSet::Ui),
         )
         .add_systems(
             PostUpdate,
@@ -547,7 +548,8 @@ impl Plugin for RuntimeUiPlugin {
                     .after(update_runtime_ui_recording_contract)
                     .after(apply_runtime_ui_placement_after_style)
                     .after(bevy::ui::UiSystems::PostLayout),
-            ),
+            )
+                .in_set(lunco_core::RuntimeCycleSet::Ui),
         );
         install_runtime_ui_render_readiness(app);
     }

@@ -54,7 +54,6 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_dock::{widgets::tab_viewer::OnCloseResponse, DockArea, Style, TabViewer};
 use lunco_core::{on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
-use lunco_theme::ColorAlpha;
 use lunco_workbench_core::commands::{CloseTab, FocusPanel, OpenTab, OpenTabPreserveFocus};
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
@@ -784,7 +783,9 @@ impl Plugin for WorkbenchPlugin {
         drain_registered_panels(app.world_mut());
         app.add_systems(
             EguiPrimaryContextPass,
-            render_workbench.in_set(WorkbenchRenderSet),
+            render_workbench
+                .in_set(WorkbenchRenderSet)
+                .in_set(lunco_core::RuntimeCycleSet::Ui),
         )
         // Scene picking is handled by bevy_picking (egui occlusion via
         // bevy_egui's picking backend) — no scene-pointer resource, no gate.

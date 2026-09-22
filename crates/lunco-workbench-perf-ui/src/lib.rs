@@ -23,9 +23,10 @@
 //! `Option<f32>` that another crate (e.g. `lunco-luncosim-edit-ui`)
 //! populates when avian is in the build.
 
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
+use lunco_exposure_core::{EngineExposures, ExposureValue};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 
@@ -41,18 +42,6 @@ impl SettingsSection for PerfHudSettings {
     const KEY: &'static str = "perf_hud";
 }
 
-/// How many frame-time samples to keep for the status-bar sparkline.
-/// At 60 FPS that's about 4 seconds — long enough to spot a hitch
-/// in your peripheral vision, short enough that the plot redraws
-/// quickly when conditions change.
-///
-/// This is now the history depth of Bevy's OWN `Diagnostic` ring buffer
-/// (`FrameTimeDiagnosticsPlugin::new`), not of a second buffer we keep beside it. A
-/// `Diagnostic` already IS a named ring buffer with a configurable depth and built-in
-/// smoothing; `PerfStats` used to shadow it with a hand-rolled `VecDeque<f32>` that
-/// stored exactly the same values.
-pub const FRAME_HISTORY_LEN: usize = 240;
-
 /// Live, per-frame perf samples. Not persisted — these are reset
 /// when the HUD is disabled and resampled while it's on.
 #[derive(Resource, Default, Debug, Clone)]
@@ -64,32 +53,6 @@ pub struct PerfStats {
     /// Wall-clock cost of the avian physics step, ms. `None` when no
     /// physics-aware plugin is publishing.
     pub physics_ms: Option<f32>,
-}
-
-/// Recent RAW frame times (ms), oldest first — straight out of Bevy's own `Diagnostic`
-/// history. Raw, not smoothed, so a spike the headline number hides still shows.
-///
-/// There is no second ring buffer: `Diagnostic` is one already.
-pub fn frame_history(diags: &DiagnosticsStore) -> Vec<f32> {
-    diags
-        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
-        .map(|d| d.values().map(|v| *v as f32).collect())
-        .unwrap_or_default()
-}
-
-/// `(min, max, p99)` over a frame-time history, all in ms. `None` when empty, so callers
-/// can skip drawing.
-pub fn frame_ms_stats(history: &[f32]) -> Option<(f32, f32, f32)> {
-    if history.is_empty() {
-        return None;
-    }
-    let mut sorted: Vec<f32> = history.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let min = *sorted.first().unwrap();
-    let max = *sorted.last().unwrap();
-    let p99_idx = ((sorted.len() as f32) * 0.99) as usize;
-    let p99 = sorted[p99_idx.min(sorted.len() - 1)];
-    Some((min, max, p99))
 }
 
 /// Flip the perf HUD on/off. Persisted via `lunco-settings`.
@@ -109,10 +72,25 @@ fn on_toggle_perf_hud(trigger: On<TogglePerfHud>, mut settings: ResMut<PerfHudSe
 
 register_commands!(on_toggle_perf_hud,);
 
-/// Read smoothed FPS / frame time from the diagnostics store into
-/// [`PerfStats`]. Bails when the HUD is disabled.
-fn sample_frame_time(
-    diags: Res<DiagnosticsStore>,
+fn exposure_number(exposures: Option<&EngineExposures>, property: &str) -> Option<f64> {
+    exposures?
+        .surfaces
+        .get("engine-health")?
+        .properties
+        .get(property)
+        .and_then(|value| match value {
+            ExposureValue::Number(value) => Some(*value),
+            _ => None,
+        })
+}
+
+/// Copy the common engine-health publication into the UI-facing view model.
+///
+/// The UI owns this small adapter, but it is not a second producer: the
+/// runtime publishes typed snapshots once, the exposure layer commits the
+/// `engine-health` capability, and every HUD surface reads that boundary.
+fn sync_perf_stats(
+    exposures: Option<Res<EngineExposures>>,
     settings: Res<PerfHudSettings>,
     mut stats: ResMut<PerfStats>,
 ) {
@@ -122,19 +100,11 @@ fn sample_frame_time(
         }
         return;
     }
-    if let Some(d) = diags.get(&FrameTimeDiagnosticsPlugin::FPS) {
-        if let Some(v) = d.smoothed() {
-            stats.fps = v as f32;
-        }
-    }
-    if let Some(d) = diags.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME) {
-        // The smoothed value for the headline number, where stability is preferred. The
-        // RAW history the sparkline needs is already kept by the `Diagnostic` itself —
-        // read it with `frame_history()` rather than shadowing it in a second buffer.
-        if let Some(v) = d.smoothed() {
-            stats.frame_ms = v as f32;
-        }
-    }
+    stats.fps = exposure_number(exposures.as_deref(), "fps").unwrap_or_default() as f32;
+    stats.frame_ms =
+        exposure_number(exposures.as_deref(), "frame_time_ms").unwrap_or_default() as f32;
+    stats.physics_ms =
+        exposure_number(exposures.as_deref(), "physics_step_ms").map(|value| value as f32);
 }
 
 /// Push the perf HUD's row into the workbench Settings menu.
@@ -162,30 +132,31 @@ fn register_settings_submenu(world: &mut World) {
     });
 }
 
-/// Adds [`PerfStats`] (live samples), [`PerfHudSettings`] (persisted
+/// Adds [`PerfStats`] (live view samples), [`PerfHudSettings`] (persisted
 /// pref via `lunco-settings`), the [`TogglePerfHud`] command, Bevy's
 /// frame-time diagnostics, and the Settings-menu row. Idempotent.
 ///
-/// `FrameTimeDiagnosticsPlugin` and the per-frame sampler are registered
-/// unconditionally — they cost only a few µs/frame and the sampler
-/// (`sample_frame_time`) early-bails when the HUD pref is off, so leaving
-/// them on means toggling the HUD at runtime works immediately (no restart)
-/// because the diagnostic data is already being collected.
+/// `FrameTimeDiagnosticsPlugin` is registered unconditionally so toggling the
+/// HUD works immediately. The HUD does not independently sample or publish
+/// diagnostics; it only copies the shared `engine-health` exposure.
 pub struct PerfHudPlugin;
 
 impl Plugin for PerfHudPlugin {
     fn build(&self, app: &mut App) {
         app.register_settings_section::<PerfHudSettings>();
         app.init_resource::<PerfStats>();
-        // FrameTime diagnostics + frame sampler are always registered
-        // — they're cheap (a few µs/frame), and toggling the HUD at
-        // runtime needs the data to be there already. The sampler
-        // bails early when the HUD is off.
+        // Frame diagnostics are the raw source retained by Bevy. The runtime
+        // snapshot publisher consumes them once for all application surfaces.
         if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
             // Deep enough for the sparkline — this IS the sparkline's buffer now.
-            app.add_plugins(FrameTimeDiagnosticsPlugin::new(FRAME_HISTORY_LEN));
+            app.add_plugins(FrameTimeDiagnosticsPlugin::new(
+                lunco_core_runtime::ENGINE_HEALTH_HISTORY_LEN,
+            ));
         }
-        app.add_systems(Update, sample_frame_time);
+        app.add_systems(
+            PostUpdate,
+            sync_perf_stats.in_set(lunco_core::RuntimeCycleSet::Ui),
+        );
         app.add_systems(Startup, register_settings_submenu);
         register_all_commands(app);
     }

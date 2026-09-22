@@ -215,6 +215,11 @@ impl Plugin for CoSimPlugin {
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
         app.init_resource::<CosimDiagnostics>();
+        // One compiled wiring/read path is shared by the normal fixed step and
+        // rollback replay. The schedules invoke the same transaction, while
+        // this resource keeps their change detector and dense endpoint table
+        // singular.
+        app.init_resource::<systems::propagate::PropagationCache>();
         // Manual control intents that outrank the wiring fabric until an
         // explicit release — without it, a `SetPorts` write on a WIRED input
         // lives less than one tick.
@@ -300,8 +305,10 @@ impl Plugin for CoSimPlugin {
         app.configure_sets(
             FixedUpdate,
             (
-                lunco_cosim_core::schedule::CosimSet::Propagate,
-                lunco_cosim_core::schedule::CosimApplySet::ApplyForces,
+                lunco_cosim_core::schedule::CosimSet::Propagate
+                    .in_set(lunco_core::RuntimeCycleSet::Simulation),
+                lunco_cosim_core::schedule::CosimApplySet::ApplyForces
+                    .in_set(lunco_core::RuntimeCycleSet::Simulation),
             )
                 .chain(),
         );

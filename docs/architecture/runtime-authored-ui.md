@@ -72,6 +72,36 @@ The generic exposure namespace is the contract. Do not create a special
 telemetry, physics, scripts, and derived capabilities all publish through the
 same registry.
 
+The same rule applies to engine health. The core runtime publishes the latest
+frame and physics facts once as typed `EngineHealthSnapshot` and
+`PhysicsHealthSnapshot` resources. The renderer-independent exposure layer
+projects those facts into the ordinary `engine-health` namespace. Native egui,
+authored HUI, API readers, telemetry adapters, and recorders consume that
+publication; none of them scans `DiagnosticsStore` or the physics schedule for
+their own copy. A new HUD value therefore requires a producer-side exposure
+property and a normal authored binding, not a HUD-specific reader.
+
+Application interaction has two distinct wall-clock cadences. Typed commands
+advance the application `command` clock when the shared `CommandOccurred` fact
+is published. One-shot Rhai/REPL work advances the independent `repl` clock
+when the queued script is actually evaluated by `drain_world_scripts`. A queued
+`RunRhai` request therefore appears once in each relevant phase, with no
+simulation-time or UI-time substitution. Their sequence, elapsed time, last
+interval, and rate are published through the generic `application-cadence`
+namespace for status, HUD, telemetry, and recording consumers.
+
+This is a set of owned publication boundaries, not a catch-all event bus:
+
+| Fact class | One publication owner | Readers |
+|---|---|---|
+| Scalar participant inputs/outputs | `PortRegistry` | co-simulation, commands, inspector, telemetry, scripts, API |
+| Presentation-ready engine/domain facts | `EngineExposures` | HUI, egui adapters, API, telemetry/recording views, remote clients |
+| Lifecycle and discrete occurrences | typed events and revisioned resources | the owning schedule's observers |
+| Application command/REPL cadence | `ApplicationCadence` → `EngineExposures` | status, HUI, telemetry, recording |
+
+Readers must use the boundary for their fact class and must not recreate a
+parallel cache or direct source query for a presentation surface.
+
 Subject-scoped surfaces are discovered from composed USD. A prim opts in with
 `lunco:ui:surfaceId`, and `lunco:ui:visibilityMode` supplies the mode consumed
 by the built-in Rhai policy (`possessed` or `always`). The surface ID is the

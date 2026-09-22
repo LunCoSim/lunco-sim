@@ -32,6 +32,8 @@ pub mod signal;
 #[cfg(feature = "ui")]
 pub mod telemetry_browser;
 #[cfg(feature = "ui")]
+pub mod telemetry_sparkline;
+#[cfg(feature = "ui")]
 pub mod view;
 #[cfg(feature = "ui")]
 pub mod viz;
@@ -54,6 +56,11 @@ pub use telemetry_browser::{
     bind_dropped_channel, drain_plot_drops, plot_node_at, ChannelDragPayload, PlotDropRequest,
     SetTelemetryBrowserView, TelemetryBrowserPanel, TelemetryBrowserView, TelemetryDisplaySettings,
     TELEMETRY_BROWSER_PANEL_ID,
+};
+#[cfg(feature = "ui")]
+pub use telemetry_sparkline::{
+    cached_telemetry_sparkline_stats, render_telemetry_sparkline, telemetry_history_stats,
+    TelemetrySparklineOptions, TelemetrySparklineStats,
 };
 #[cfg(feature = "ui")]
 pub use view::{Panel2DCtx, ViewKind, ViewTarget};

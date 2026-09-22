@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 anyhow = { workspace = true }
 bevy = { workspace = true }
 rhai = { workspace = true }

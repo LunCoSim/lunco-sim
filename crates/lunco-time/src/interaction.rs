@@ -279,7 +279,10 @@ pub(crate) fn build_interaction_cadence(app: &mut App) {
         )
         .configure_sets(
             InteractionSchedule,
-            InteractionRestoreSet.before(InteractionRecordSet),
+            (
+                lunco_core::RuntimeCycleSet::Interaction,
+                InteractionRestoreSet.before(InteractionRecordSet),
+            ),
         )
         .add_systems(
             PostUpdate,
@@ -290,6 +293,7 @@ pub(crate) fn build_interaction_cadence(app: &mut App) {
                 ease_interaction_poses.in_set(InteractionRenderSet),
             )
                 .chain()
+                .in_set(lunco_core::RuntimeCycleSet::Presentation)
                 .before(bevy::transform::TransformSystems::Propagate),
         );
 }

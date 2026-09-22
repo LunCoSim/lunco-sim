@@ -8,12 +8,12 @@ use avian3d::diagnostics::{
     PhysicsDiagnosticsPlugin, PhysicsTotalDiagnostics, PhysicsTotalDiagnosticsPlugin,
 };
 use bevy::prelude::*;
-use lunco_workbench_perf_ui::{PerfHudSettings, PerfStats};
+use lunco_core_runtime::PhysicsHealthSnapshot;
 
 /// Adds avian's diagnostics plugins (the framework one + the
 /// total-step one that actually inserts `PhysicsTotalDiagnostics`)
-/// and a sampler that copies `step_time` into `PerfStats.physics_ms`
-/// when the HUD is enabled.
+/// and a physics-cycle publisher that writes the shared
+/// [`PhysicsHealthSnapshot`]. HUD and telemetry consume that same snapshot.
 ///
 /// Cost note (don't be fooled by profiles): `PhysicsTotalDiagnosticsPlugin`
 /// *appears* as a ~30 ms per-step spike, but it does not cause it. Its systems
@@ -26,8 +26,8 @@ use lunco_workbench_perf_ui::{PerfHudSettings, PerfStats};
 /// run-condition-gated from outside without gating real physics, and Bevy
 /// plugins can't be removed post-startup. A prior build-time gate on the HUD
 /// flag also broke runtime toggling ("phys reads zero", no data on flip).
-/// Conclusion: keep the plugin always-on; gate only our own `sample_physics_step`
-/// below (which reads the always-live resource, so it's correct-on-toggle).
+/// Conclusion: keep the plugin always-on. Publishing the timing fact is cheap
+/// and must not depend on whether a particular UI is currently visible.
 pub struct PerfBridgePlugin;
 
 impl Plugin for PerfBridgePlugin {
@@ -38,34 +38,32 @@ impl Plugin for PerfBridgePlugin {
         if !app.is_plugin_added::<PhysicsTotalDiagnosticsPlugin>() {
             app.add_plugins(PhysicsTotalDiagnosticsPlugin);
         }
-        app.add_systems(Update, sample_physics_step);
+        app.add_systems(
+            FixedPostUpdate,
+            publish_physics_step
+                .after(avian3d::schedule::PhysicsSystems::StepSimulation)
+                .in_set(lunco_core::RuntimeCycleSet::Simulation),
+        );
     }
 }
 
-fn sample_physics_step(
+fn publish_physics_step(
     diags: Option<Res<PhysicsTotalDiagnostics>>,
-    // `Option<Res>` so binaries that don't include the workbench
-    // (and therefore don't init `PerfHudSettings`) can still use
-    // `SceneEditPlugin` for selection/gizmo. When the resource is
-    // missing, behave as if the perf HUD is off.
-    settings: Option<Res<PerfHudSettings>>,
-    // Same rationale: optional so the system tolerates a missing
-    // workbench.
-    stats: Option<ResMut<PerfStats>>,
+    snapshot: Option<ResMut<PhysicsHealthSnapshot>>,
 ) {
-    let Some(mut stats) = stats else {
+    let Some(mut snapshot) = snapshot else {
         return;
     };
-    let enabled = settings.as_deref().map(|s| s.enabled).unwrap_or(false);
-    if !enabled {
-        if stats.physics_ms.is_some() {
-            stats.physics_ms = None;
-        }
-        return;
-    }
     let Some(d) = diags else {
-        stats.physics_ms = None;
+        snapshot.step_time_ms = None;
         return;
     };
-    stats.physics_ms = Some(d.step_time.as_secs_f32() * 1000.0);
+    let step_time_ms = d.step_time.as_secs_f64() * 1000.0;
+    if snapshot.step_time_ms != Some(step_time_ms)
+        || snapshot.step_number != u64::from(d.step_number)
+    {
+        snapshot.step_time_ms = Some(step_time_ms);
+        snapshot.step_number = u64::from(d.step_number);
+        snapshot.revision = snapshot.revision.wrapping_add(1);
+    }
 }

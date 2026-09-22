@@ -323,16 +323,18 @@ pub struct EngineHealthChannel;
 ///
 /// FPS was previously a number that could only ever reach a HUD. As a channel it is
 /// subscribable, retained, plottable, and queryable by a ground system — exactly like a
-/// motor current. That is the "reuse FPS" the perf HUD's hand-rolled ring buffer was
-/// standing in the way of.
+/// motor current. That is the shared publication path used by the perf HUD and other
+/// consumers; the HUD does not own a separate history.
 ///
 /// **Self-gating:** only spawns a channel whose `Diagnostic` actually exists. A headless
 /// server links `bevy_diagnostic` but nobody adds `FrameTimeDiagnosticsPlugin` there (it
 /// comes with the perf HUD), so a `--no-ui` run publishes no FPS channel rather than an
 /// always-silent one that clutters the catalog.
 ///
-/// Rate is deliberately low (2 Hz). Frame time is already smoothed by the `Diagnostic`;
-/// sampling it at 60 Hz would spend 30× the bandwidth to convey the same trend.
+/// Frame time is admitted at the fixed ceiling so its raw samples preserve short hitches in
+/// the shared history. The headline remains smoothed through `EngineHealthSnapshot`; the
+/// extra two scalar samples per fixed step are bounded by the same SignalRegistry retention
+/// policy and replace the old HUD-owned ring.
 fn spawn_engine_health_channels(
     diags: Option<Res<bevy::diagnostic::DiagnosticsStore>>,
     existing: Query<(), With<EngineHealthChannel>>,
@@ -357,11 +359,15 @@ fn spawn_engine_health_channels(
                 unit: unit.to_string(),
                 description: None,
                 source: ChannelSource::Diagnostic(path.to_string()),
-                rate_hz: Some(2.0),
-                target: None,
+                // Diagnostics are process-wide facts, not facts owned by the
+                // channel entity. Use the global signal identity so every
+                // consumer can select the retained series without discovering
+                // a synthetic owner entity.
+                target: Some(Entity::PLACEHOLDER),
+                rate_hz: Some(lunco_core_runtime::FIXED_HZ),
                 enabled: true,
                 deadband: None,
-                retention: None,
+                retention: Some(lunco_core_runtime::ENGINE_HEALTH_HISTORY_LEN),
             },
         ));
     }
@@ -960,12 +966,24 @@ fn read_value(
 ///
 /// Reads the SMOOTHED value: a diagnostic's raw per-frame value is spiky by nature (one
 /// slow frame is not a change in frame rate), and a subscriber plotting FPS wants the
-/// trend. Anything that genuinely needs the spikes is looking at frame *time*, which the
-/// perf HUD reads raw from the same store.
+/// trend. The core health publisher is the canonical reader for FPS and frame time; other
+/// admitted diagnostic paths use the generic store lookup below.
 ///
-/// Not entity-scoped — a diagnostic is global. The channel still carries its owning entity
-/// so it keys and plots like any other, but the entity is just where you hung the tag.
+/// Not entity-scoped — a diagnostic is global. Diagnostic channels use the global signal
+/// identity, so their retained history is not duplicated once per channel-tag entity.
 fn read_diagnostic(world: &World, path: &str) -> Option<TelemetryValue> {
+    // Engine health is published once at the runtime boundary. These two
+    // canonical paths never fall back to a second diagnostics reader: the
+    // snapshot is the owner that HUD, telemetry, and API consumers share.
+    if matches!(path, "fps" | "frame_time") {
+        let snapshot = world.get_resource::<lunco_core_runtime::EngineHealthSnapshot>()?;
+        let value = match path {
+            "fps" => snapshot.fps,
+            "frame_time" => snapshot.raw_frame_time_ms,
+            _ => unreachable!("matched engine-health paths above"),
+        }?;
+        return Some(TelemetryValue::F64(value));
+    }
     let diags = world.get_resource::<bevy::diagnostic::DiagnosticsStore>()?;
     // Matched by string, so a domain crate can name a diagnostic without depending on
     // whichever crate registered it. `iter()` is over a handful of entries.
@@ -2195,43 +2213,45 @@ mod tests {
         );
     }
 
-    /// PHASE 5: a bevy `Diagnostic` is a telemetry channel. FPS stops being a number that
-    /// can only ever reach a HUD, and becomes subscribable / retained / plottable /
-    /// queryable like any other channel.
+    /// PHASE 5: the shared engine-health publication is a telemetry channel. FPS stops
+    /// being a number that can only ever reach a HUD, and becomes subscribable /
+    /// retained / plottable / queryable like any other channel.
     #[test]
-    fn a_diagnostic_can_be_a_telemetry_channel() {
-        use bevy::diagnostic::{Diagnostic, DiagnosticPath, DiagnosticsStore};
-
+    fn published_engine_health_can_be_a_telemetry_channel() {
         let mut app = app();
         let seen = capture(&mut app);
-        app.init_resource::<DiagnosticsStore>();
-        const PATH: DiagnosticPath = DiagnosticPath::const_new("fps");
-        {
-            let mut store = app.world_mut().resource_mut::<DiagnosticsStore>();
-            store.add(Diagnostic::new(PATH));
-            store.get_mut(&PATH).unwrap().add_measurement(
-                bevy::diagnostic::DiagnosticMeasurement {
-                    time: std::time::Instant::now(),
-                    value: 59.5,
-                },
-            );
-        }
-        app.world_mut().spawn(Parameter {
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::EngineHealthSnapshot>()
+            .fps = Some(59.5);
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::EngineHealthSnapshot>()
+            .raw_frame_time_ms = Some(23.5);
+        app.world_mut().spawn((Parameter {
             name: "engine.fps".to_string(),
             unit: "1/s".to_string(),
             source: ChannelSource::Diagnostic("fps".to_string()),
             rate_hz: Some(lunco_core_runtime::FIXED_HZ),
+            target: Some(Entity::PLACEHOLDER),
             ..Default::default()
-        });
+        },));
+        app.world_mut().spawn((Parameter {
+            name: "engine.frame_time".to_string(),
+            unit: "ms".to_string(),
+            source: ChannelSource::Diagnostic("frame_time".to_string()),
+            rate_hz: Some(lunco_core_runtime::FIXED_HZ),
+            target: Some(Entity::PLACEHOLDER),
+            ..Default::default()
+        },));
 
         step_fixed(&mut app, 2);
 
         let seen = seen.lock().unwrap();
-        let s = seen
-            .first()
-            .expect("a diagnostic-sourced channel must emit");
-        assert_eq!(s.name, "engine.fps");
-        assert_eq!(s.value, TelemetryValue::F64(59.5));
+        assert!(seen.iter().any(|sample| {
+            sample.name == "engine.fps" && sample.value == TelemetryValue::F64(59.5)
+        }));
+        assert!(seen.iter().any(|sample| {
+            sample.name == "engine.frame_time" && sample.value == TelemetryValue::F64(23.5)
+        }));
     }
 
     /// A diagnostic that doesn't exist must not spam or panic — the channel is simply
@@ -2286,8 +2306,7 @@ mod tests {
             "consecutive samples must be separated by a real, positive Δt, got {dt}"
         );
         assert!(seen.windows(2).all(|samples| {
-            samples[1].sim_tick > samples[0].sim_tick
-                && samples[1].sim_secs > samples[0].sim_secs
+            samples[1].sim_tick > samples[0].sim_tick && samples[1].sim_secs > samples[0].sim_secs
         }));
     }
 }

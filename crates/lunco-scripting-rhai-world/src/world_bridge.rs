@@ -3699,7 +3699,17 @@ pub fn drain_world_scripts(world: &mut World) {
     if pending.is_empty() {
         return;
     }
+    let wall_secs = world
+        .get_resource::<Time<Real>>()
+        .map(|time| time.elapsed_secs_f64());
     for request in pending {
+        if let Some(wall_secs) = wall_secs {
+            if let Some(mut cadence) =
+                world.get_resource_mut::<lunco_core_runtime::ApplicationCadence>()
+            {
+                cadence.observe_repl_at(wall_secs);
+            }
+        }
         let (id, correlation_id, outcome) = match request {
             PendingWorldScript::Code {
                 id,

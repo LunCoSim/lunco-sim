@@ -91,19 +91,12 @@ pub(crate) fn start_streamed_horizon_bakes(
             Some(_) => {}
             // Map present and nothing armed → it is current; nothing to do.
             None if has_map => continue,
-            // No map and nothing armed → arm the first bake behind the same
-            // composition debounce as a live edit. A DEM is initially assembled
-            // before late scene inputs such as body curvature have necessarily
-            // reached its oracle; baking immediately captures that provisional
-            // surface, then forces a second heightfield upload and visible shadow
-            // transition when composition settles. Waiting makes initial terrain
-            // construction and the first shadow map one transaction.
-            None => {
-                commands
-                    .entity(entity)
-                    .try_insert(StreamedHorizonStale { since: now });
-                continue;
-            }
+            // No map and nothing armed → this is the initial visual product. The
+            // DEM oracle is only published after its complete build, so start the
+            // first bake immediately. Delaying it behind the live-edit debounce
+            // lets the LOD streamer expose terrain without its final heightfield
+            // lighting inputs, producing a visible second appearance at startup.
+            None => {}
         }
         let oracle = hf.0.clone();
         if cfg.resolution < 2 {
@@ -306,7 +299,9 @@ pub(crate) fn register(app: &mut App) {
             start_streamed_horizon_bakes,
             finish_streamed_horizon_bakes,
         )
-            .chain(),
+            .chain()
+            .before(lunco_terrain_surface::stream_viz::update_lod_tiles)
+            .in_set(lunco_core::RuntimeCycleSet::Visualization),
     );
     // The cache validity test converts the semantic sun into terrain-local
     // render space. Run it only after BigSpace has finalized GlobalTransform,
@@ -316,6 +311,7 @@ pub(crate) fn register(app: &mut App) {
         wire_tile_shadow_cache
             .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
             .after(lunco_environment::finalize_sun_render_state)
-            .before(lunco_terrain_surface::TerrainSurfaceSet::RenderShadowBinding),
+            .before(lunco_terrain_surface::TerrainSurfaceSet::RenderShadowBinding)
+            .in_set(lunco_core::RuntimeCycleSet::Visualization),
     );
 }
