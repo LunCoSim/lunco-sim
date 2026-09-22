@@ -18,7 +18,6 @@ use lunco_api_core::{ApiValue, api_value};
 use lunco_hooks::HookValue;
 use rhai::Engine;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard};
 
@@ -48,15 +47,13 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
-/// Process-global tool registries still need an ECS lifecycle owner. This
-/// resource records exactly which names the active Twin installed and what
-/// each name replaced, so closing that Twin restores the previous authoritative
-/// registry instead of leaving a stale source library callable.
+/// The active Twin's tool scope is an ECS lifecycle owner. The low-level tool
+/// registry keeps standard/core/application/Twin layers separately; this
+/// resource only selects the active Twin and retires its registrations.
 #[derive(Resource, Default)]
 pub struct TwinToolLibraries {
     owner: Option<lunco_workspace::TwinId>,
     loaded: HashSet<String>,
-    replaced: HashMap<String, Option<Arc<dyn lunco_tools::Tool>>>,
 }
 
 impl TwinToolLibraries {
@@ -65,10 +62,10 @@ impl TwinToolLibraries {
         self.owner
     }
 
-    /// Replace the active Twin scope and restore all names from the prior
-    /// scope before admitting the new one.
+    /// Replace the active Twin scope before admitting the new one.
     pub fn activate(&mut self, twin: lunco_workspace::TwinId) {
         self.wind_down();
+        lunco_tools::set_active_twin(Some(twin.raw().to_string()));
         self.owner = Some(twin);
     }
 
@@ -80,8 +77,8 @@ impl TwinToolLibraries {
         }
     }
 
-    /// Install one library into the active Twin scope, snapshotting the
-    /// previous definition exactly once for restoration on close.
+    /// Install one library into the active Twin scope. A Twin may shadow a
+    /// standard, core, or application tool without overwriting that layer.
     pub fn register(
         &mut self,
         twin: lunco_workspace::TwinId,
@@ -94,11 +91,11 @@ impl TwinToolLibraries {
                 self.owner, twin
             ));
         }
-        if !self.replaced.contains_key(name) {
-            self.replaced
-                .insert(name.to_string(), lunco_tools::get(name));
-        }
-        register_tool_library(name, source);
+        lunco_tools_rhai::register_rhai_tool_in_scope(
+            lunco_tools::ToolScope::Twin(twin.raw().to_string()),
+            name,
+            source,
+        );
         self.loaded.insert(name.to_string());
         Ok(())
     }
@@ -114,15 +111,11 @@ impl TwinToolLibraries {
     }
 
     fn wind_down(&mut self) {
-        for name in self.loaded.drain() {
-            match self.replaced.remove(&name).flatten() {
-                Some(previous) => lunco_tools::register(previous),
-                None => {
-                    lunco_tools::unregister(&name);
-                }
-            }
+        if let Some(twin) = self.owner {
+            lunco_tools::unregister_scope(&lunco_tools::ToolScope::Twin(twin.raw().to_string()));
+            lunco_tools::set_active_twin(None);
         }
-        self.replaced.clear();
+        self.loaded.clear();
         self.owner = None;
     }
 }
@@ -424,11 +417,16 @@ pub fn register_twin_tool_loading(app: &mut App) {
 /// Register the small native tool that is part of the generic scripting
 /// substrate. Source-defined tools are installed by the Bevy asset pipeline.
 pub fn register_native_builtins() {
-    lunco_tools_rhai::register_native_tool("mathx", vec!["lerp/3".into()], |_engine| {
-        let mut m = rhai::Module::new();
-        m.set_native_fn("lerp", |a: f64, b: f64, t: f64| Ok(a + (b - a) * t));
-        Ok(m)
-    });
+    lunco_tools_rhai::register_native_tool_in_scope(
+        lunco_tools::ToolScope::Core,
+        "mathx",
+        vec!["lerp/3".into()],
+        |_engine| {
+            let mut m = rhai::Module::new();
+            m.set_native_fn("lerp", |a: f64, b: f64, t: f64| Ok(a + (b - a) * t));
+            Ok(m)
+        },
+    );
 }
 
 /// Register / hot-replace a rhai-source tool library (the `RegisterToolLibrary`
@@ -436,6 +434,17 @@ pub fn register_native_builtins() {
 /// [`lunco_tools_rhai`] from host code, not over this string command.
 pub fn register_tool_library(name: &str, source: &str) {
     lunco_tools_rhai::register_rhai_tool(name, source);
+}
+
+/// Register a source-defined standard library tool from the `lunco://` asset
+/// tree. Standard assets are lower precedence than application and Twin state.
+pub fn register_standard_tool_library(name: &str, source: &str) {
+    lunco_tools_rhai::register_rhai_tool_in_scope(lunco_tools::ToolScope::Standard, name, source);
+}
+
+/// Retire a standard library tool selected by the application source policy.
+pub fn unregister_standard_tool_library(name: &str) {
+    lunco_tools::unregister_scoped(&lunco_tools::ToolScope::Standard, name);
 }
 
 /// Apply the authored source-classification policy to one loaded source.
@@ -535,7 +544,7 @@ pub fn library_names() -> Vec<String> {
 // exist (with their backend), and read source for source-defined ones — the
 // tool analogue of `DiscoverSchema` for commands.
 
-/// `ListToolLibraries` → `{ count, libraries: [{ name, backend, functions }] }`.
+/// `ListToolLibraries` → `{ count, libraries: [{ name, backend, functions, scope }] }`.
 struct ListToolLibrariesProvider;
 impl ApiQueryProvider for ListToolLibrariesProvider {
     fn name(&self) -> &'static str {
@@ -550,6 +559,7 @@ impl ApiQueryProvider for ListToolLibrariesProvider {
                     "name": i.name,
                     "backend": i.backend,
                     "functions": i.functions,
+                    "scope": i.scope,
                 })
             })
             .collect();
@@ -587,11 +597,14 @@ impl ApiQueryProvider for GetToolLibraryProvider {
                     }
                 };
                 let binding = lunco_tools_rhai::inspect_tool_with_engine(&tool, &engine);
-                let scope = world
-                    .get_resource::<TwinToolLibraries>()
-                    .and_then(TwinToolLibraries::owner)
-                    .map(|twin| api_value!({ "kind": "twin", "id": twin.raw() }))
-                    .unwrap_or_else(|| api_value!({ "kind": "session" }));
+                let scope = lunco_tools::active_scope(name)
+                    .map(|scope| {
+                        api_value!({
+                            "kind": scope.as_str(),
+                            "id": scope.identity(),
+                        })
+                    })
+                    .unwrap_or_else(|| api_value!({ "kind": "unresolved" }));
                 let functions = lunco_api_core::api_value_from_serializable(&binding.functions)?;
                 let diagnostics =
                     lunco_api_core::api_value_from_serializable(&binding.diagnostics)?;
@@ -599,6 +612,8 @@ impl ApiQueryProvider for GetToolLibraryProvider {
                     "name": name,
                     "backend": tool.backend().to_string(),
                     "source": tool.source().map(str::to_string),
+                    "scope": lunco_tools::active_scope(name)
+                        .map(|scope| scope.identity()),
                     "active_twin": world
                         .get_resource::<TwinToolLibraries>()
                         .and_then(TwinToolLibraries::owner)

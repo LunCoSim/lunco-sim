@@ -326,9 +326,14 @@ pub fn bind_registered_tools(engine: &mut Engine) -> Vec<(String, String)> {
     errors
 }
 
-/// Convenience: register a rhai-source tool into the global registry.
+/// Convenience: register a Rhai-source tool into the application layer.
 pub fn register_rhai_tool(name: &str, source: &str) {
-    lunco_tools::register(Arc::new(RhaiTool::new(name, source)));
+    register_rhai_tool_in_scope(lunco_tools::ToolScope::Application, name, source);
+}
+
+/// Register a Rhai-source tool in an explicit lifecycle layer.
+pub fn register_rhai_tool_in_scope(scope: lunco_tools::ToolScope, name: &str, source: &str) {
+    lunco_tools::register_scoped(scope, Arc::new(RhaiTool::new(name, source)));
 }
 
 /// Convenience: register a native (Rust) tool whose `build` closure populates a
@@ -338,9 +343,20 @@ pub fn register_native_tool(
     functions: Vec<String>,
     build: impl Fn(&Engine) -> Result<Module, String> + Send + Sync + 'static,
 ) {
-    lunco_tools::register(Arc::new(NativeRhaiTool::new(
-        name, "rust", functions, build,
-    )));
+    register_native_tool_in_scope(lunco_tools::ToolScope::Application, name, functions, build);
+}
+
+/// Register a native Rhai module in an explicit lifecycle layer.
+pub fn register_native_tool_in_scope(
+    scope: lunco_tools::ToolScope,
+    name: &str,
+    functions: Vec<String>,
+    build: impl Fn(&Engine) -> Result<Module, String> + Send + Sync + 'static,
+) {
+    lunco_tools::register_scoped(
+        scope,
+        Arc::new(NativeRhaiTool::new(name, "rust", functions, build)),
+    );
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use lunco_core::DTransform;
@@ -2718,6 +2719,7 @@ pub fn prepare_builtin_rhai_assets(
     asset_server: Option<Res<AssetServer>>,
     sources: Option<Res<lunco_assets_runtime::script_source::ScriptSources>>,
     driver: Option<ResMut<lunco_scripting::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
+    mut asset_events: MessageReader<AssetEvent<crate::source_asset::RhaiSource>>,
     mut status: ResMut<RhaiRuntimeStatus>,
 ) {
     let (
@@ -2735,22 +2737,70 @@ pub fn prepare_builtin_rhai_assets(
         return;
     }
 
-    let mut prelude_handles = Vec::new();
-    for (rel, handle) in builtins.handles.clone() {
-        let role = match crate::tool_libs::classify_source(&rel) {
+    let asset_changed = asset_events.read().any(|event| {
+        matches!(
+            event,
+            AssetEvent::Added { .. }
+                | AssetEvent::Modified { .. }
+                | AssetEvent::Removed { .. }
+                | AssetEvent::Unused { .. }
+                | AssetEvent::LoadedWithDependencies { .. }
+        )
+    });
+    if !asset_changed && builtins.prepared_revision == builtins.admission_revision {
+        return;
+    }
+
+    let mut roles = HashMap::new();
+    let mut classification_error = None;
+    for rel in builtins.handles.keys() {
+        let role = match crate::tool_libs::classify_source(rel) {
             Ok(role) => role,
             Err(error) => {
                 let message = format!("Rhai source classification rejected {rel}: {error}");
                 if status.error.as_deref() != Some(&message) {
                     error!("[rhai] {message}");
                 }
-                status.ready = false;
-                status.error = Some(message);
-                return;
+                classification_error = Some(message);
+                None
             }
         };
+        roles.insert(rel.clone(), role);
+    }
+    let desired_tool_names = roles
+        .values()
+        .filter_map(|role| match role {
+            Some(crate::tool_libs::ScriptSourceRole::Tool(name)) => Some(name.clone()),
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+    for (rel, processed) in builtins.processed.clone() {
+        let next_role = roles.get(&rel).cloned().unwrap_or(None);
+        if let Some(crate::tool_libs::ScriptSourceRole::Tool(name)) = processed.role {
+            if !matches!(
+                next_role,
+                Some(crate::tool_libs::ScriptSourceRole::Tool(ref next)) if next == &name
+            ) && !desired_tool_names.contains(&name)
+            {
+                crate::tool_libs::unregister_standard_tool_library(&name);
+            }
+        }
+        if !builtins.handles.contains_key(&rel) {
+            builtins.processed.remove(&rel);
+        }
+    }
+    builtins.prepared_revision = builtins.admission_revision;
+    if let Some(message) = classification_error {
+        status.ready = false;
+        status.error = Some(message);
+        return;
+    }
+
+    let mut prelude_handles = Vec::new();
+    for (rel, handle) in builtins.handles.clone() {
+        let role = roles.get(&rel).cloned().unwrap_or(None);
         if matches!(role, Some(crate::tool_libs::ScriptSourceRole::Prelude)) {
-            prelude_handles.push((rel.clone(), handle.clone()));
+            prelude_handles.push((lunco_assets_core::engine_asset_uri(&rel), handle.clone()));
         }
         let Some(source) = assets.get(handle.id()) else {
             if asset_server
@@ -2761,7 +2811,10 @@ pub fn prepare_builtin_rhai_assets(
             }
             continue;
         };
-        sources.insert(rel.clone(), source.text.clone());
+        sources.insert(
+            lunco_assets_core::engine_asset_uri(&rel),
+            source.text.clone(),
+        );
         if builtins
             .processed
             .get(&rel)
@@ -2771,7 +2824,7 @@ pub fn prepare_builtin_rhai_assets(
         }
         match &role {
             Some(crate::tool_libs::ScriptSourceRole::Tool(name)) => {
-                crate::tool_libs::register_tool_library(&name, &source.text);
+                crate::tool_libs::register_standard_tool_library(&name, &source.text);
                 info!("[rhai] activated tool library '{name}' from {rel}");
             }
             Some(crate::tool_libs::ScriptSourceRole::Prelude) | None => {}

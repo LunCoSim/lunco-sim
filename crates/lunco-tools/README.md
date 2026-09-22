@@ -9,7 +9,7 @@ rhai source, in native Rust, or (later) in any other runtime — all are the sam
 `Tool` to this crate.
 
 That extensibility is why this crate is deliberately **dependency-free**: it
-owns only the *abstraction* + the global registry + discovery. The actual
+owns only the *abstraction* + the layered registry + discovery. The actual
 binding of a tool into a script runtime lives in an adapter crate (e.g.
 `lunco-tools-rhai`), so non-rhai consumers can still enumerate and describe
 tools without pulling rhai in.
@@ -19,7 +19,9 @@ tools without pulling rhai in.
 - **`Tool`** — trait: a named bundle of callable functions, language-neutral.
   Metadata methods are runtime-neutral (for discovery); a runtime adapter
   downcasts via `Tool::as_any` or reads `Tool::source` to actually bind it.
-- **`register(Arc<dyn Tool>)`** + the global registry / discovery functions.
+- **`register(Arc<dyn Tool>)`** + the application-layer registry / discovery
+  functions; explicit `ToolScope` registration is used for standard, core,
+  and Twin-owned state.
 
 ```rust
 // a native Rust adapter registers a tool…

@@ -118,6 +118,12 @@ pub(crate) struct ProcessedRhaiSource {
 pub struct BuiltinRhaiAssets {
     pub(crate) handles: BTreeMap<String, Handle<RhaiSource>>,
     pub(crate) processed: HashMap<String, ProcessedRhaiSource>,
+    /// Monotonic admission revision. The source policy is evaluated only when
+    /// the manifest or its hook implementation changes, not once per update.
+    pub(crate) admission_revision: u64,
+    pub(crate) prepared_revision: u64,
+    manifest_revision: u64,
+    policy_generation: u64,
 }
 
 /// Discover authored Rhai candidates from the authoritative asset manifest and
@@ -142,6 +148,18 @@ fn request_builtin_rhai_assets(
         return;
     };
 
+    let policy_generation = lunco_hooks::generation();
+    let manifest_revision = manifest.revision();
+    if builtins.admission_revision != 0
+        && builtins.manifest_revision == manifest_revision
+        && builtins.policy_generation == policy_generation
+    {
+        return;
+    }
+    builtins.manifest_revision = manifest_revision;
+    builtins.policy_generation = policy_generation;
+    builtins.admission_revision = builtins.admission_revision.wrapping_add(1);
+
     // The manifest is only an inventory. The authored policy owns the
     // extension and path decision, so this loop does not grow a Rust-side
     // allow-list as new source classes are authored.
@@ -164,19 +182,19 @@ fn request_builtin_rhai_assets(
             continue;
         }
         admitted_ids.insert(rel.clone());
-        builtins
-            .handles
-            .entry(rel.clone())
-            .or_insert_with(|| asset_server.load::<RhaiSource>(rel.clone()));
+        builtins.handles.entry(rel.clone()).or_insert_with(|| {
+            asset_server.load::<RhaiSource>(lunco_assets_core::engine_asset_uri(&rel))
+        });
     }
 
     // Policy replacement is a real lifecycle change: release built-in handles
     // that the new policy no longer admits. Explicit scenario handles are
     // owned by their requesting entities and are unaffected by this pruning.
     builtins.handles.retain(|rel, _| admitted_ids.contains(rel));
-    builtins
-        .processed
-        .retain(|rel, _| admitted_ids.contains(rel));
+    // Keep processed entries for one preparation pass. That pass owns the
+    // standard-tool retirement after it can compare the old role with the new
+    // policy result; dropping the record here would leave a retired tool in
+    // the visible registry.
 }
 
 /// Publish every loaded `.rhai` asset into the registry that backs `import`.

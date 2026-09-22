@@ -56,9 +56,12 @@ stays in the asset and its `defaultPrim`.
 
 The application policy manifest is identified by
 `kind = "lunco.policy.v1"`. Its `scripting.source.classify` policy assigns
-authored Rhai sources to the prelude, tool libraries, or ordinary scenario
-content. Rust loads the source tree through the asset/storage layer and applies
-that decision; source directories are not repeated in Rust registries.
+authored Rhai sources to the prelude, standard tool libraries, or ordinary
+scenario content. Rust loads the source tree through the asset/storage layer
+and applies that decision; source directories are not repeated in Rust
+registries. Standard tools live in the lower `lunco://` layer, while a Twin's
+`tools/*.rhai` files are loaded into its own scoped overlay and are removed on
+Twin close.
 
 ## Canonical reusable entrypoints
 

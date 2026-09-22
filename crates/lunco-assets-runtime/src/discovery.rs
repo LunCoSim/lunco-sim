@@ -72,6 +72,7 @@ pub struct AssetFile {
 pub struct AssetManifest {
     rels: Vec<String>,
     ready: bool,
+    revision: u64,
 }
 
 impl AssetManifest {
@@ -90,10 +91,16 @@ impl AssetManifest {
         &self.rels
     }
 
+    /// Monotonic revision of the authored library inventory.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Seed the listing directly. For tests and for the native walk.
     pub fn set(&mut self, rels: Vec<String>) {
         self.rels = rels;
         self.ready = true;
+        self.revision = self.revision.wrapping_add(1);
     }
 }
 

@@ -84,12 +84,13 @@ body, or hide a missing port. Those are model defects or capability gaps.
 
 ## Tool registration and scope
 
-`assets/scripting/tools/*.rhai` are shared built-in libraries. A Twin's
-`tools/*.rhai` are scoped to the active Twin; its `twin.lifecycle` policy
-selects indexed tool files when the Twin mounts. `RegisterToolLibrary`
-hot-replaces a named Rhai library and, with an active Twin, persists it under
-the Twin's `tools/` directory. The registry is process-global but its
-ownership is scoped so closing a Twin restores the previous definitions.
+`assets/scripting/tools/*.rhai` are standard `lunco://` libraries selected by
+the application source policy. A Twin's own `tools/*.rhai` files are scoped to
+the active Twin; its `twin.lifecycle` policy selects indexed tool files when
+the Twin mounts. `RegisterToolLibrary` hot-replaces an application or active
+Twin library and, with an active Twin, persists it under the Twin's `tools/`
+directory. The layered registry keeps those owners separate, so closing a
+Twin removes only its overlay and reveals the lower definition again.
 
 Use `ListToolLibraries` to see the current registry and `GetToolLibrary` to
 inspect one library's source, scope, generation, callable status, and

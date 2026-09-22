@@ -595,6 +595,7 @@ fn tool_surface() -> Vec<ApiValue> {
                 "name": info.name,
                 "backend": info.backend,
                 "functions": info.functions,
+                "scope": info.scope,
             })
         })
         .collect()

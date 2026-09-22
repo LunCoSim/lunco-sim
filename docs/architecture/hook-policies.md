@@ -186,6 +186,25 @@ the engine. The `scripting.source.classify` policy classifies engine-library
 sources as preludes or unrelated scenario content; Twin tool libraries are
 selected and loaded by the `twin.lifecycle` action plan.
 
+### Tool layers and shutdown
+
+Tools use the same lifecycle distinction as policies. The runtime tool registry
+keeps four independent layers: `standard` for shared `lunco://` libraries,
+`core` for always-on native substrate tools, `application` for process-owned
+dynamic registrations, and `twin:<id>` for authored Twin libraries. Resolution
+is broad-to-narrow, with the active Twin winning over application, core, and
+standard definitions of the same short library name. Discovery reports the
+winning owner instead of flattening the source provenance.
+
+The standard and Twin layers are selected by policy and are therefore
+revocable. When `scripting.source.classify` stops admitting a standard tool,
+the source owner retires that standard registration; when `TwinClosed` fires,
+the Twin layer is removed and the lower layers become visible again. No
+snapshot restore is used, so a Twin shutdown cannot resurrect an older tool
+over a newer application registration. A rebuilt Rhai engine observes the
+registry generation and removes retired static modules from subsequent script
+execution.
+
 The same process supports a large behavior surface: each subsystem declares
 its own seam beside its owner, and the link-collected catalog exposes all
 declared signatures to Rhai and API clients. A policy can compose existing
