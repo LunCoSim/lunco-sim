@@ -7,7 +7,7 @@
 //! the shared program runtime. Keeping this work at the runtime boundary means
 //! visual-only consumers do not compile or install control behavior.
 
-use crate::program_runtime::refresh_program_owner;
+use crate::program_runtime::refresh_program_owner_with_network_members;
 use bevy::prelude::{Added, Entity, Without, World};
 use lunco_camera_core::{CameraFollow, parse_camera_follow};
 use lunco_control_core::ControlBinding;
@@ -15,6 +15,7 @@ use lunco_port_core::InputPorts;
 use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjected};
 use lunco_usd_bevy_stage::{UsdRead, canonical::CanonicalStages};
 use openusd::sdf::Path as SdfPath;
+use std::collections::{HashMap, HashSet};
 
 /// A control surface prepared from one composed USD owner.
 struct AuthoredControlSurface {
@@ -64,6 +65,20 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         .iter(world)
         .map(|(entity, path)| (entity, path.stage_handle.id(), path.path.clone()))
         .collect();
+    let mut network_members_by_stage: HashMap<_, HashSet<String>> = HashMap::new();
+    for (_, stage_id, _) in &owners {
+        network_members_by_stage
+            .entry(*stage_id)
+            .or_insert_with(|| {
+                let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+                    return HashSet::new();
+                };
+                let Some(stage) = stages.get(*stage_id) else {
+                    return HashSet::new();
+                };
+                lunco_usd_bevy_core::program::modelica_network_member_paths(&stage.view())
+            });
+    }
 
     for (entity, stage_id, owner_path) in owners {
         let surface = {
@@ -97,6 +112,9 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         // Generic executable programs use the same resolver for initial
         // projection and live structural/source edits. This is the only owner
         // path, so a visual refresh cannot create a second program attachment.
-        refresh_program_owner(world, stage_id, entity);
+        let Some(network_members) = network_members_by_stage.get(&stage_id) else {
+            continue;
+        };
+        refresh_program_owner_with_network_members(world, stage_id, entity, network_members);
     }
 }

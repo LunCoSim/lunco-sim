@@ -8,6 +8,7 @@
 use bevy::asset::AssetId;
 use bevy::prelude::{Entity, World, warn};
 use openusd::sdf::Path as SdfPath;
+use std::collections::HashSet;
 
 use lunco_usd_bevy_core::program;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -22,6 +23,29 @@ pub(crate) fn refresh_program_owner(
     world: &mut World,
     stage_id: AssetId<UsdStageAsset>,
     owner: Entity,
+) {
+    let network_members = {
+        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+            return;
+        };
+        let Some(stage) = stages.get(stage_id) else {
+            return;
+        };
+        program::modelica_network_member_paths(&stage.view())
+    };
+    refresh_program_owner_with_network_members(world, stage_id, owner, &network_members);
+}
+
+/// Refresh one owner using a membership snapshot shared by a projection batch.
+///
+/// Network membership is a stage-wide fact. Initial scene projection can admit
+/// many owners in one update, so the caller must share that fact instead of
+/// rescanning the composed stage once per owner.
+pub(crate) fn refresh_program_owner_with_network_members(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    owner: Entity,
+    network_members: &HashSet<String>,
 ) {
     let Some(owner_path) = world
         .get::<UsdPrimPath>(owner)
@@ -38,7 +62,6 @@ pub(crate) fn refresh_program_owner(
         };
         let view = stage.view();
         let owner = SdfPath::new(&owner_path).expect("projected USD path is valid");
-        let network_members = program::modelica_network_member_paths(&view);
         let mut candidates: Vec<SdfPath> = UsdRead::children(&view, &owner)
             .into_iter()
             .filter(|child| UsdRead::is_active(&view, child))

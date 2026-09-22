@@ -2735,7 +2735,6 @@ pub fn prepare_builtin_rhai_assets(
         return;
     }
 
-    let hook_generation = lunco_hooks::generation();
     let mut prelude_handles = Vec::new();
     for (rel, handle) in builtins.handles.clone() {
         let role = match crate::tool_libs::classify_source(&rel) {
@@ -2766,22 +2765,24 @@ pub fn prepare_builtin_rhai_assets(
         if builtins
             .processed
             .get(&rel)
-            .is_some_and(|(text, generation)| {
-                text == &source.text && *generation == hook_generation
-            })
+            .is_some_and(|processed| processed.text == source.text && processed.role == role)
         {
             continue;
         }
-        match role {
+        match &role {
             Some(crate::tool_libs::ScriptSourceRole::Tool(name)) => {
                 crate::tool_libs::register_tool_library(&name, &source.text);
                 info!("[rhai] activated tool library '{name}' from {rel}");
             }
             Some(crate::tool_libs::ScriptSourceRole::Prelude) | None => {}
         }
-        builtins
-            .processed
-            .insert(rel.clone(), (source.text.clone(), hook_generation));
+        builtins.processed.insert(
+            rel.clone(),
+            crate::source_asset::ProcessedRhaiSource {
+                text: source.text.clone(),
+                role,
+            },
+        );
     }
 
     if prelude_handles.is_empty() {

@@ -14,6 +14,9 @@ use bevy::prelude::*;
 #[cfg(feature = "rhai")]
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+#[cfg(feature = "rhai")]
+use crate::tool_libs::ScriptSourceRole;
+
 /// Raw text of a `.rhai` file — the file-backed twin of
 /// [`lunco_core::EmbeddedScenarioSource`] (inline `info:sourceCode`). Lets a scene
 /// reference a scenario by `info:sourceAsset` and keep the source as an
@@ -104,10 +107,17 @@ fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, an
 /// runtime install edits without a compiled snapshot. The manifest supplies
 /// candidates; the policy decides which sources belong to the startup runtime.
 #[cfg(feature = "rhai")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProcessedRhaiSource {
+    pub(crate) text: String,
+    pub(crate) role: Option<ScriptSourceRole>,
+}
+
+#[cfg(feature = "rhai")]
 #[derive(Resource, Default)]
 pub struct BuiltinRhaiAssets {
     pub(crate) handles: BTreeMap<String, Handle<RhaiSource>>,
-    pub(crate) processed: HashMap<String, (String, u64)>,
+    pub(crate) processed: HashMap<String, ProcessedRhaiSource>,
 }
 
 /// Discover authored Rhai candidates from the authoritative asset manifest and
