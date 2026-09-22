@@ -122,9 +122,17 @@ pub struct BuiltinRhaiAssets {
     /// the manifest or its hook implementation changes, not once per update.
     pub(crate) admission_revision: u64,
     pub(crate) prepared_revision: u64,
+    pub(crate) prepared_asset_revision: u64,
     manifest_revision: u64,
     policy_generation: u64,
 }
+
+/// Monotonic asset-event revision consumed by the application-level prelude
+/// preparation pass. Publishing remains event-driven; consumers can use this
+/// revision as a cheap run condition without each owning another message scan.
+#[cfg(feature = "rhai")]
+#[derive(Resource, Default)]
+pub struct RhaiSourceAssetRevision(pub(crate) u64);
 
 /// Discover authored Rhai candidates from the authoritative asset manifest and
 /// request only sources that the startup classification policy admits. This
@@ -221,10 +229,13 @@ fn publish_rhai_sources(
     asset_server: Res<AssetServer>,
     sources: Res<lunco_assets_runtime::script_source::ScriptSources>,
     mut registry: ResMut<lunco_scripting::ScriptRegistry>,
+    mut revision: ResMut<RhaiSourceAssetRevision>,
 ) {
+    let mut changed = false;
     for ev in events.read() {
         match ev {
             AssetEvent::Added { id } | AssetEvent::Modified { id } => {
+                changed = true;
                 // The root and every dependency are held by real ECS owners. A
                 // missing value here is an engine lifecycle violation, not a cache
                 // miss to paper over.
@@ -244,6 +255,7 @@ fn publish_rhai_sources(
                 publish_rhai_source(&canonical, &src.text, &sources, &mut registry);
             }
             AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                changed = true;
                 let Some(path) = asset_server.get_path(*id) else {
                     warn!(
                         "[rhai] unloaded script {id:?} has no asset path; \
@@ -256,8 +268,11 @@ fn publish_rhai_sources(
                     debug!("[rhai] retired script source: {canonical}");
                 }
             }
-            _ => {}
+            AssetEvent::LoadedWithDependencies { .. } => changed = true,
         }
+    }
+    if changed {
+        revision.0 = revision.0.wrapping_add(1);
     }
 }
 
@@ -325,6 +340,7 @@ impl Plugin for RhaiSourceAssetPlugin {
         app.init_asset::<RhaiSource>()
             .init_asset_loader::<RhaiSourceLoader>()
             .init_resource::<BuiltinRhaiAssets>()
+            .init_resource::<RhaiSourceAssetRevision>()
             .add_systems(Update, request_builtin_rhai_assets)
             .add_systems(
                 Update,

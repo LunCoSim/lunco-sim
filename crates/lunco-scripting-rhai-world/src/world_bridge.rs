@@ -2719,7 +2719,7 @@ pub fn prepare_builtin_rhai_assets(
     asset_server: Option<Res<AssetServer>>,
     sources: Option<Res<lunco_assets_runtime::script_source::ScriptSources>>,
     driver: Option<ResMut<lunco_scripting::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
-    mut asset_events: MessageReader<AssetEvent<crate::source_asset::RhaiSource>>,
+    asset_revision: Option<Res<crate::source_asset::RhaiSourceAssetRevision>>,
     mut status: ResMut<RhaiRuntimeStatus>,
 ) {
     let (
@@ -2729,7 +2729,16 @@ pub fn prepare_builtin_rhai_assets(
         Some(asset_server),
         Some(sources),
         Some(mut driver),
-    ) = (manifest, builtins, assets, asset_server, sources, driver)
+        Some(asset_revision),
+    ) = (
+        manifest,
+        builtins,
+        assets,
+        asset_server,
+        sources,
+        driver,
+        asset_revision,
+    )
     else {
         return;
     };
@@ -2737,17 +2746,9 @@ pub fn prepare_builtin_rhai_assets(
         return;
     }
 
-    let asset_changed = asset_events.read().any(|event| {
-        matches!(
-            event,
-            AssetEvent::Added { .. }
-                | AssetEvent::Modified { .. }
-                | AssetEvent::Removed { .. }
-                | AssetEvent::Unused { .. }
-                | AssetEvent::LoadedWithDependencies { .. }
-        )
-    });
-    if !asset_changed && builtins.prepared_revision == builtins.admission_revision {
+    if asset_revision.0 == builtins.prepared_asset_revision
+        && builtins.prepared_revision == builtins.admission_revision
+    {
         return;
     }
 
@@ -2790,6 +2791,7 @@ pub fn prepare_builtin_rhai_assets(
         }
     }
     builtins.prepared_revision = builtins.admission_revision;
+    builtins.prepared_asset_revision = asset_revision.0;
     if let Some(message) = classification_error {
         status.ready = false;
         status.error = Some(message);
