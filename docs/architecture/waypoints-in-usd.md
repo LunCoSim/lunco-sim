@@ -130,11 +130,14 @@ local route cursor. Physics reports the sensor event; it does not publish a rout
 “target reached” fact and it does not decide mission progression.
 
 Route progress is keyed by canonical USD point path and survives disabling and
-re-enabling the program. Each start resumes at the first unvisited point. The
-start transaction also marks a consecutive visited prefix from sensor enters
-observed while disabled and a one-time occupancy read for a rover already
-inside a route sensor; those paths receive the same visited marker state. After
-that snapshot, Avian sensor events remain the arrival authority.
+re-enabling the program. Avian's `SensorOccupants` query reads current touching
+moving bodies by stable sensor id. At `on_start`, the route checks the occupied
+sensors and marks their points visited before autopilot is enabled. Later `enter:<zone>`
+events mark visits while the program is disabled and advance the active cursor
+when enabled. Each start resumes at the first unvisited point from the recorded
+visits, including contacts established before the script started.
+The transient marker state follows those route visits; no visit is authored to
+the USD asset.
 
 The route task remains live while the scene is running. Editing point placement,
 point order, or the subject relationship is observed through the normal USD

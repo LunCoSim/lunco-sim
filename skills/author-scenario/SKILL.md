@@ -51,12 +51,12 @@ authored subject instead of adding a route-specific child relationship.
 The reusable route marker is a translucent, unlit, shadowless annotation. Its
 unvisited colour is bright green and its visited colour is gray in standard
 `primvars:displayColor`; `route_follow` applies the visited colour through
-`waypoint_editor`'s transient USD view operation when the generic sensor event
-reaches the point. Route progress is keyed by USD point path and survives
-autopilot stop/start; if the rover is already inside the initial route sensor,
-the start transaction marks that occupied prefix visited before sensor events
-drive later progression. This is presentation state, not a vessel component or
-a second route fact.
+`waypoint_editor`'s transient USD view operation. Route progress is keyed by USD
+point path and survives autopilot stop/start. At `on_start`, the program reads
+the current Avian contacts through the generic `SensorOccupants` query and
+marks the occupied route points visited before autopilot is enabled. Later
+sensor enters mark visits while disabled and advance an active route. This is
+presentation state, not a vessel component or a second route fact.
 The route context gesture opens its authored menu without selecting the point;
 selection and gizmo activation require the menu's explicit select action. User
 possession is a `ControlLink`/`SessionRegistry` lifecycle, while a route program

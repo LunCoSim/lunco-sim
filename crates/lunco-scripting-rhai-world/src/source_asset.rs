@@ -128,6 +128,10 @@ pub struct BuiltinRhaiAssets {
     /// not the low-level hook registry generation: one policy transaction may
     /// replace many hooks, but it must admit assets only once.
     policy_revision: u64,
+    /// A policy-layer handoff can temporarily remove the classifier without
+    /// changing the final effective policy revision. Re-admit sources when the
+    /// hook returns after a transient empty classification retires tools.
+    classifier_present: bool,
 }
 
 /// Monotonic asset-event revision consumed by the application-level prelude
@@ -162,14 +166,17 @@ fn request_builtin_rhai_assets(
 
     let policy_revision = policy.as_deref().map_or(0, |policy| policy.revision);
     let manifest_revision = manifest.revision();
+    let classifier_present = lunco_hooks::get(crate::tool_libs::SOURCE_CLASSIFY_HOOK).is_some();
     if builtins.admission_revision != 0
         && builtins.manifest_revision == manifest_revision
         && builtins.policy_revision == policy_revision
+        && builtins.classifier_present == classifier_present
     {
         return;
     }
     builtins.manifest_revision = manifest_revision;
     builtins.policy_revision = policy_revision;
+    builtins.classifier_present = classifier_present;
     builtins.admission_revision = builtins.admission_revision.wrapping_add(1);
 
     // The manifest is only an inventory. The authored policy owns the
